@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+target/
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.vitest/
+playwright-report/
+test-results/
+
+# Local runtime data
+*.db
+*.db-wal
+*.db-shm
+attachments/
+.env
+.env.local
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code files (snapshotted separately, never in public history)
+.claude/
+
+# Superpowers brainstorming session artifacts
+.superpowers/
