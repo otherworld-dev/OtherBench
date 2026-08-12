@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/*
+ * Quiet, dense, long-session tool -- not a landing page. Two tokens
+ * (surface layering + one accent) instead of a big palette, redefined for
+ * dark under `prefers-color-scheme` so the OS preference is honoured
+ * without a manual toggle (out of scope for this task).
+ */
+:root {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --bg-raised: #ffffff;
+  --bg-sunken: #eef0f2;
+  --border: #dfe2e6;
+  --text: #1a1d21;
+  --text-muted: #62676e;
+  --text-faint: #9096a0;
+  --accent: #2f6fed;
+  --accent-text: #ffffff;
+  --danger: #c4392a;
+  --success: #1c8a4c;
+  --warn: #b8860b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #17181b;
+    --bg-raised: #1f2125;
+    --bg-sunken: #101113;
+    --border: #2c2f34;
+    --text: #e7e8ea;
+    --text-muted: #9aa0a8;
+    --text-faint: #62676e;
+    --accent: #5b8ef7;
+    --accent-text: #0b1220;
+    --danger: #ef6a5a;
+    --success: #4bc17f;
+    --warn: #e0ab34;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Minimal hljs token palette that tracks the theme tokens above rather than
+   a fixed light- or dark-only stylesheet, so code blocks stay legible in
+   both. Deliberately restrained -- a handful of hues, not a full theme. */
+.hljs {
+  color: var(--text);
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--text-faint);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-type {
+  color: var(--accent);
+}
+.hljs-string,
+.hljs-attr,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+  color: var(--success);
+}
+.hljs-number,
+.hljs-title,
+.hljs-section {
+  color: var(--warn);
+}
+.hljs-deletion,
+.hljs-name,
+.hljs-tag {
+  color: var(--danger);
+}

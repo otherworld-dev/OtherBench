@@ -18,6 +18,21 @@ function defaultSecretsPath(dbPath: string): string {
   return dbPath === ':memory:' ? join(homedir(), '.grunt', 'secrets.json') : join(dirname(dbPath), 'secrets.json');
 }
 
+/**
+ * `@grunt/web`'s built bundle lives at `packages/web/dist` -- a sibling of
+ * this package, `packages/server`, regardless of the working directory
+ * `grunt serve` is launched from. Computed from `import.meta.url` (this
+ * file's own compiled location, `packages/server/dist/cli.js`) rather than
+ * `process.cwd()`, since a globally-installed `grunt` binary may be
+ * invoked from anywhere. `static.ts` degrades to a placeholder page if
+ * nothing has been built there yet -- this function only computes the
+ * path, it never asserts the bundle exists.
+ */
+function defaultWebDistDir(): string {
+  const serverDistDir = dirname(fileURLToPath(import.meta.url));
+  return join(serverDistDir, '..', '..', 'web', 'dist');
+}
+
 export interface ServeOptions {
   port: number;
   host: string;
@@ -114,7 +129,7 @@ export async function runServe(argv: string[], deps: Partial<ServeDeps> = {}): P
   assertServeSecurity(options);
 
   const container = await buildContainer({ dbPath: options.dbPath, secretsPath: defaultSecretsPath(options.dbPath) });
-  const app = buildApp(container, { token: options.token });
+  const app = buildApp(container, { token: options.token, webDistDir: defaultWebDistDir() });
   const server = startServer({ fetch: app.fetch, port: options.port, hostname: options.host });
 
   return {

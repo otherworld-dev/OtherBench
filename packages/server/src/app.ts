@@ -7,6 +7,7 @@ import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
 import { turnsRoutes } from './routes/turns.js';
+import { mountStatic } from './static.js';
 
 export interface AppOptions {
   /**
@@ -17,6 +18,14 @@ export interface AppOptions {
    * enforces before this app is ever constructed for a non-loopback host.
    */
   token?: string | null;
+  /**
+   * Absolute path to the built `@grunt/web` bundle's directory. When set,
+   * every non-`/api` path serves that app (or a placeholder if it hasn't
+   * been built yet -- see static.ts). Unset (the default in tests) mounts
+   * no static handling at all, so `/` is a plain 404 -- tests that only
+   * exercise `/api/*` are unaffected either way.
+   */
+  webDistDir?: string;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
@@ -50,6 +59,10 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', turnsRoutes(container));
   authed.route('/', searchRoutes(container));
   app.route('/api', authed);
+
+  if (options.webDistDir) {
+    mountStatic(app, { webDistDir: options.webDistDir });
+  }
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
