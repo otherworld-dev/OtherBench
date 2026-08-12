@@ -204,16 +204,36 @@ async function assistantContentFromParts(
   return { assistantContent, toolResults };
 }
 
+/**
+ * Shared placeholder-or-bytes decision behind both image-part converters:
+ * without vision support, a caption naming the (attachment-id-derived) file
+ * stands in for the image; with it, the real bytes are loaded. Each caller
+ * (user-turn image vs. assistant-authored image) still owns the final
+ * object shape, since `ai`'s `ImagePart` and `FilePart` differ in field
+ * names (`image` vs. `data`) and only one of the two is valid per role.
+ */
+async function resolveImageContent(
+  part: Extract<Part, { type: 'image' }>,
+  caps: ModelCapabilities,
+  loadAttachment: (id: string) => Promise<Buffer>
+): Promise<{ type: 'placeholder'; text: string } | { type: 'bytes'; data: Buffer; mediaType: string }> {
+  if (!caps.vision) {
+    return { type: 'placeholder', text: imagePlaceholder(part.attachmentId, part.mime) };
+  }
+  const data = await loadAttachment(part.attachmentId);
+  return { type: 'bytes', data, mediaType: part.mime };
+}
+
 async function convertImagePart(
   part: Extract<Part, { type: 'image' }>,
   caps: ModelCapabilities,
   loadAttachment: (id: string) => Promise<Buffer>
 ): Promise<TextPart | ImagePart> {
-  if (!caps.vision) {
-    return { type: 'text', text: imagePlaceholder(part.attachmentId, part.mime) };
+  const resolved = await resolveImageContent(part, caps, loadAttachment);
+  if (resolved.type === 'placeholder') {
+    return { type: 'text', text: resolved.text };
   }
-  const data = await loadAttachment(part.attachmentId);
-  return { type: 'image', image: data, mediaType: part.mime };
+  return { type: 'image', image: resolved.data, mediaType: resolved.mediaType };
 }
 
 async function convertImagePartAsAssistantBlock(
@@ -221,11 +241,11 @@ async function convertImagePartAsAssistantBlock(
   caps: ModelCapabilities,
   loadAttachment: (id: string) => Promise<Buffer>
 ): Promise<TextPart | FilePart> {
-  if (!caps.vision) {
-    return { type: 'text', text: imagePlaceholder(part.attachmentId, part.mime) };
+  const resolved = await resolveImageContent(part, caps, loadAttachment);
+  if (resolved.type === 'placeholder') {
+    return { type: 'text', text: resolved.text };
   }
-  const data = await loadAttachment(part.attachmentId);
-  return { type: 'file', data, mediaType: part.mime };
+  return { type: 'file', data: resolved.data, mediaType: resolved.mediaType };
 }
 
 async function convertFilePart(

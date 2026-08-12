@@ -42,18 +42,46 @@ interface CacheEntry {
 }
 
 /**
- * Hashes the parts of a connection's credentials that, if edited, should
- * invalidate a cached provider instance (an existing instance has already
- * captured the old apiKey/baseURL/headers in its closure, so it must be
- * rebuilt rather than reused). `connection.id` is deliberately NOT part of
- * this hash -- it is the cache key itself, hashed separately -- since a
- * connection's id never changes across an edit.
+ * Hashes the parts of a connection that, if edited, should invalidate a
+ * cached provider instance (an existing instance has already captured the
+ * old values in its closure, so it must be rebuilt rather than reused).
+ * `connection.id` is deliberately NOT part of this hash -- it is the cache
+ * key itself, hashed separately -- since a connection's id never changes
+ * across an edit.
+ *
+ * Included fields, and why each one can change the resulting provider
+ * instance:
+ *  - `kind` -- selects which AI SDK factory (`createAnthropic`,
+ *    `createOpenAI`, etc.) builds the instance. Editing just the provider
+ *    dropdown on an otherwise-untouched connection (baseUrl/apiKey/headers
+ *    all unchanged) must still invalidate the cache, or `resolve()` hands
+ *    back an instance built from the WRONG SDK for the new kind.
+ *  - `baseUrl`, `apiKey`, `extraHeaders` -- baked directly into every
+ *    factory call.
+ *  - `name` -- for `openai_compatible` and `ollama`, `buildProvider` passes
+ *    `connection.name` as the `name` option to `createOpenAICompatible`,
+ *    which the AI SDK bakes into the model's `provider` string and derives
+ *    `providerOptionsName` from (the namespace it reads per-call
+ *    `providerOptions` under). A rename with everything else unchanged
+ *    would otherwise keep serving an instance that still answers to the old
+ *    name, silently dropping any provider-specific options callers pass
+ *    under the new name.
+ *
+ * `secretRef`, `status`, `statusMessage`, and `checkedAt` are NOT included:
+ * none of them are read by `buildProvider`, so they cannot affect the
+ * resulting instance.
  */
-function hashCredentials(baseUrl: string | null, apiKey: string | null, extraHeaders: Record<string, string>): string {
+function hashCredentials(
+  kind: Connection['kind'],
+  name: string,
+  baseUrl: string | null,
+  apiKey: string | null,
+  extraHeaders: Record<string, string>
+): string {
   const sortedHeaders = Object.keys(extraHeaders)
     .sort()
     .map((key) => [key, extraHeaders[key]]);
-  const payload = JSON.stringify({ baseUrl, apiKey, headers: sortedHeaders });
+  const payload = JSON.stringify({ kind, name, baseUrl, apiKey, headers: sortedHeaders });
   return createHash('sha256').update(payload).digest('hex');
 }
 
@@ -142,17 +170,24 @@ function buildProvider(connection: Connection, apiKey: string | null): ProviderH
  * same provider object -- important because provider instances hold open
  * fetch configuration, not because construction is expensive.
  *
- * The cache is invalidated per-connection whenever the credentials that
- * were baked into the cached instance change (base URL, API key, or extra
- * headers), so editing a connection's key in the UI and retrying
- * immediately picks up the new key rather than replaying a stale instance
- * built from the old one.
+ * The cache is invalidated per-connection whenever anything baked into the
+ * cached instance changes -- kind, name, base URL, API key, or extra
+ * headers (see {@link hashCredentials} for why each of those, specifically,
+ * can change the resulting instance) -- so editing a connection's provider
+ * kind or key in the UI and retrying immediately picks up the change rather
+ * than replaying a stale instance built from the old one.
  */
 export class ProviderRegistry {
   private readonly cache = new Map<string, CacheEntry>();
 
   resolve(connection: Connection, apiKey: string | null): ProviderHandle {
-    const credentialHash = hashCredentials(connection.baseUrl, apiKey, connection.extraHeaders);
+    const credentialHash = hashCredentials(
+      connection.kind,
+      connection.name,
+      connection.baseUrl,
+      apiKey,
+      connection.extraHeaders
+    );
     const cached = this.cache.get(connection.id);
     if (cached && cached.credentialHash === credentialHash) {
       return cached.handle;

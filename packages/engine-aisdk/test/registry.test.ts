@@ -96,4 +96,33 @@ describe('ProviderRegistry', () => {
     const second = registry.resolve(updated, 'key');
     expect(second).not.toBe(first);
   });
+
+  it('editing only the connection kind returns a provider built for the new kind, not the cached old one', () => {
+    const registry = new ProviderRegistry();
+    const connection = makeConnection({ kind: 'openai' });
+    const first = registry.resolve(connection, 'sk-key');
+    expect(first.kind).toBe('aisdk');
+
+    // Same id, same baseUrl/apiKey/extraHeaders -- only kind changes, exactly
+    // what happens when a user flips the provider dropdown on an existing
+    // connection. The cache must not hand back the stale openai instance.
+    const updated = { ...connection, kind: 'mock' as const };
+    const second = registry.resolve(updated, 'sk-key');
+
+    expect(second.kind).toBe('mock');
+    expect(second).not.toBe(first);
+  });
+
+  it('editing the connection name produces a new provider instance for openai_compatible (name is baked into the provider)', () => {
+    const registry = new ProviderRegistry();
+    const connection = makeConnection({
+      kind: 'openai_compatible',
+      name: 'Original Name',
+      baseUrl: 'https://example.com/v1',
+    });
+    const first = registry.resolve(connection, 'key');
+    const updated = { ...connection, name: 'Renamed' };
+    const second = registry.resolve(updated, 'key');
+    expect(second).not.toBe(first);
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EncryptedFileSecretStore, createSecretStore } from '../src/secret-store.js';
@@ -59,6 +59,27 @@ describe('EncryptedFileSecretStore', () => {
 
     const reader = new EncryptedFileSecretStore(path, 'wrong-passphrase');
     await expect(reader.get('ref')).rejects.toThrow();
+  });
+
+  it('rejects tampered ciphertext even with the correct passphrase (GCM auth tag)', async () => {
+    const path = freshPath();
+    const store = new EncryptedFileSecretStore(path, 'correct-passphrase');
+    await store.set('ref', 'top-secret');
+
+    // Flip one bit of one byte in the stored ciphertext, on disk, leaving
+    // the passphrase, salt, IV, and auth tag untouched. GCM's auth tag is
+    // computed over the ciphertext, so this must be caught as a decrypt
+    // failure rather than silently producing corrupted plaintext.
+    const envelope = JSON.parse(readFileSync(path, 'utf8')) as {
+      entries: Record<string, { ciphertext: string }>;
+    };
+    const entry = envelope.entries['ref'];
+    const ciphertext = Buffer.from(entry.ciphertext, 'base64');
+    ciphertext[0] = ciphertext[0] ^ 0x01;
+    entry.ciphertext = ciphertext.toString('base64');
+    writeFileSync(path, JSON.stringify(envelope));
+
+    await expect(store.get('ref')).rejects.toThrow();
   });
 
   it('never writes the plaintext value into the file bytes', async () => {
