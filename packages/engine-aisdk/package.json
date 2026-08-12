@@ -1,0 +1,21 @@
+{
+  "name": "@grunt/engine-aisdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@grunt/core": "*",
+    "@ai-sdk/anthropic": "3.0.110",
+    "@ai-sdk/google": "3.0.108",
+    "@ai-sdk/openai": "3.0.96",
+    "@ai-sdk/openai-compatible": "2.0.67",
+    "ai": "6.0.253",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,4 +1,8 @@
 {
   "files": [],
-  "references": [{ "path": "packages/core" }, { "path": "packages/store-sqlite" }]
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/store-sqlite" },
+    { "path": "packages/engine-aisdk" }
+  ]
 }
