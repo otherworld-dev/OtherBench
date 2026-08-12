@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./ports/*.js": { "types": "./dist/ports/*.d.ts", "default": "./dist/ports/*.js" },
+    "./types/*.js": { "types": "./dist/types/*.d.ts", "default": "./dist/types/*.js" },
+    "./testing/*.js": { "types": "./dist/testing/*.d.ts", "default": "./dist/testing/*.js" },
+    "./domain/*.js": { "types": "./dist/domain/*.d.ts", "default": "./dist/domain/*.js" }
+  },
   "scripts": {
     "build": "tsc -b"
   },
