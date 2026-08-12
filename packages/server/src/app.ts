@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
+import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
@@ -37,13 +38,17 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/connections', connectionsRoutes(container));
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));
+  authed.route('/chats', chatsRoutes(container));
   // turnsRoutes defines full paths under both /chats/... and /messages/...
   // (a turn spans both namespaces: POST .../turns, GET .../stream, POST
   // .../head live under /chats/:id/..., while POST .../cancel lives under
   // /messages/:id/...) so it mounts at the authed app's own root rather
-  // than a single fixed prefix like the routers above. chatsRoutes (task
-  // 18) will mount at '/chats' alongside it with no path collisions.
+  // than a single fixed prefix like the routers above. It has no path
+  // collisions with chatsRoutes: that owns /chats, /chats/:id,
+  // /chats/:id/messages; this owns /chats/:id/turns, /chats/:id/stream,
+  // /chats/:id/head, /messages/:id/cancel.
   authed.route('/', turnsRoutes(container));
+  authed.route('/', searchRoutes(container));
   app.route('/api', authed);
 
   app.onError((err, c) => {

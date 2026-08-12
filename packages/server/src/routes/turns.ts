@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Part } from '@grunt/core/types/messages.js';
-import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import type { Container } from '../container.js';
+import { resolveProfile } from '../profile-resolution.js';
 import { sseStream } from '../stream/sse.js';
 import { requireNonEmptyString } from '../validation.js';
 
@@ -35,32 +35,6 @@ function parseProfileIds(value: unknown): string[] {
 function parseParentId(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   return requireNonEmptyString(value, 'parentId');
-}
-
-/**
- * Resolves a stored `Profile` into the `ResolvedProfile` a `ChatEngine`
- * request needs: its `Connection` row, decrypted API key (via `SecretStore`
- * -- never read from SQLite directly, per the global "API keys never in
- * SQLite" constraint), and matching `ModelInfo` row if one was ever
- * discovered/added for this connection (`profile.modelId` is free text --
- * see packages/store-sqlite/src/repos/profiles.ts -- so a match is not
- * guaranteed and `model: null` is a normal, valid outcome).
- */
-async function resolveProfile(container: Container, profileId: string): Promise<ResolvedProfile> {
-  const profile = container.store.profiles.get(profileId);
-  if (!profile) throw new HTTPException(404, { message: `Profile "${profileId}" not found.` });
-
-  const connection = container.store.connections.get(profile.connectionId);
-  if (!connection) {
-    throw new HTTPException(500, {
-      message: `Profile "${profileId}" references connection "${profile.connectionId}", which no longer exists.`,
-    });
-  }
-
-  const apiKey = connection.secretRef ? await container.secrets.get(connection.secretRef) : null;
-  const model = container.store.models.list(profile.connectionId).find((m) => m.modelId === profile.modelId) ?? null;
-
-  return { ...profile, connection, apiKey, model };
 }
 
 function getChatOrThrow(container: Container, chatId: string) {

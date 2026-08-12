@@ -11,6 +11,7 @@ import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { subscribeAutoTitle } from './routes/chats.js';
 import { StreamRegistry } from './stream/registry.js';
 
 /** The wired-up dependency set every route handler is given. */
@@ -85,7 +86,7 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   const turnRunner = new TurnRunner(store, engine);
   const streamRegistry = new StreamRegistry(turnRunner);
 
-  return {
+  const container: Container = {
     store,
     secrets,
     engine,
@@ -94,4 +95,9 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     streamRegistry,
     close: () => store.close(),
   };
+  // Exactly once per container -- see subscribeAutoTitle's doc comment for
+  // why calling it more than once would be a bug (duplicate title-gen races).
+  subscribeAutoTitle(container);
+
+  return container;
 }
