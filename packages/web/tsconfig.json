@@ -6,7 +6,7 @@
     "outDir": "dist",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
-    "types": ["vite/client"],
+    "types": ["vite/client", "@testing-library/jest-dom/vitest"],
     "noEmit": false
   },
   "include": ["src"],

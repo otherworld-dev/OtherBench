@@ -1,34 +1,33 @@
 import { useMemo, type JSX } from 'react';
 import { activePath, siblingsOf } from '@grunt/core/domain/tree.js';
 import type { Chat } from '@grunt/core/ports/store.js';
+import { Composer } from '../components/Composer.js';
+import { Message } from '../components/Message.js';
+import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 
-function textOf(parts: { type: string; text?: string }[]): string {
-  return parts
-    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-    .map((p) => p.text)
-    .join('\n\n');
-}
-
 /**
- * Centre pane -- task 19 ships a plain-text placeholder that can display a
- * message tree (including one with siblings from a compare turn) without
- * breaking; task 20 replaces the message rendering with Markdown, a
- * streaming caret, and the composer. `siblingsOf` is exercised here
- * specifically so a compare turn's sibling set never throws -- see
- * packages/core/src/domain/tree.ts.
+ * Centre pane: the active branch (head -> root) plus the composer.
+ * `siblingsOf` runs for every message on the path, so a compare turn
+ * anywhere in history renders its variant count without throwing --
+ * switching which variant is active is only wired for the tail message
+ * (the current leaf), where "move `head` to this sibling" is unambiguous;
+ * an interior sibling's own subtree is a task 27 concern (see Message.tsx's
+ * doc comment on the seam this leaves).
  */
 export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const messages = useGruntStore((s) => s.messages);
+  const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
 
+  const allMessages = useMemo(() => Object.values(messages), [messages]);
   const path = useMemo(() => {
     if (!chat?.headMessageId) return [];
     try {
-      return activePath(Object.values(messages), chat.headMessageId);
+      return activePath(allMessages, chat.headMessageId);
     } catch {
-      return [];
+      return []; // an inconsistent/partially-loaded slice -- render nothing rather than throw.
     }
-  }, [chat, messages]);
+  }, [chat?.headMessageId, allMessages]);
 
   if (!chat) {
     return (
@@ -38,42 +37,46 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     );
   }
 
+  async function switchSibling(siblingId: string): Promise<void> {
+    setHeadMessageId(chat!.id, siblingId);
+    try {
+      await api.turns.setHead(chat!.id, siblingId);
+    } catch (err) {
+      console.error('[grunt-web] failed to persist head after switching variant:', err);
+    }
+  }
+
   return (
-    <main className="flex h-full w-full flex-1 flex-col overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl flex-1 space-y-4 px-4 py-6">
-        {path.length === 0 ? (
-          <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
-        ) : (
-          path.map((m) => {
-            const allMessages = Object.values(messages);
-            const siblingCount = (() => {
+    <main className="flex h-full w-full flex-1 flex-col overflow-hidden">
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
+          {path.length === 0 ? (
+            <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
+          ) : (
+            path.map((m, i) => {
+              let siblings = [m];
               try {
-                return siblingsOf(allMessages, m.id).length;
+                siblings = siblingsOf(allMessages, m.id);
               } catch {
-                return 1;
+                // m not found in allMessages (shouldn't happen -- it came from activePath over the same set) -- fall back to "no siblings".
               }
-            })();
-            return (
-              <article key={m.id} data-role={m.role} data-status={m.status} className="space-y-1">
-                <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                  <span className="font-medium">{m.role === 'user' ? 'You' : m.producedBy?.profileName ?? 'Assistant'}</span>
-                  {m.status === 'streaming' && <span aria-label="streaming">…</span>}
-                  {m.status === 'error' && <span className="text-[var(--danger)]">error</span>}
-                  {siblingCount > 1 && (
-                    // Seam for task 27's tab strip: for now just a plain
-                    // count so a compare turn is visible and doesn't break
-                    // the thread renderer.
-                    <span data-testid="compare-seam" className="rounded border border-[var(--border)] px-1">
-                      {siblingCount} variants
-                    </span>
-                  )}
-                </div>
-                <p className="whitespace-pre-wrap text-sm">{textOf(m.parts) || (m.status === 'streaming' ? '' : '(no text)')}</p>
-              </article>
-            );
-          })
-        )}
+              const siblingIndex = Math.max(0, siblings.findIndex((s) => s.id === m.id));
+              const isTail = i === path.length - 1;
+              return (
+                <Message
+                  key={m.id}
+                  message={m}
+                  siblingCount={siblings.length}
+                  siblingIndex={siblingIndex}
+                  onPrevSibling={isTail && siblingIndex > 0 ? () => void switchSibling(siblings[siblingIndex - 1]!.id) : undefined}
+                  onNextSibling={isTail && siblingIndex < siblings.length - 1 ? () => void switchSibling(siblings[siblingIndex + 1]!.id) : undefined}
+                />
+              );
+            })
+          )}
+        </div>
       </div>
+      <Composer chat={chat} />
     </main>
   );
 }
