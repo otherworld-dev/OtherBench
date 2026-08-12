@@ -1,18 +1,56 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { ConnectionTestResult, DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
+import type { Connection } from '@grunt/core/types/config.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
+/**
+ * Same scriptable behaviour as `FakeChatEngine`, plus the ability to make
+ * `listModels` throw -- needed to exercise `discover-models`' error path,
+ * which `FakeChatEngine` itself has no hook for (it always resolves with
+ * `.models`). Kept local to this test file rather than added to
+ * `@grunt/core`'s shared fakes since that file is out of scope for this fix.
+ */
+class ThrowingModelsEngine extends FakeChatEngine {
+  listModelsError: unknown = null;
+
+  override async listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]> {
+    if (this.listModelsError) throw this.listModelsError;
+    return super.listModels(conn, apiKey);
+  }
+}
+
+/** Shaped like the real `APICallError` (`@ai-sdk/provider`) that `AiSdkChatEngine.listRealModels` throws on a non-2xx response -- `classifyProviderError` duck-types on exactly these fields (see packages/core/src/types/errors.ts). */
+function fakeAuthError(): Error {
+  const err = new Error('Request failed with status 401.') as Error & {
+    statusCode: number;
+    isRetryable: boolean;
+    responseBody: string;
+  };
+  err.name = 'AI_APICallError';
+  err.statusCode = 401;
+  err.isRetryable = false;
+  err.responseBody = '{"error":{"message":"Invalid API key provided."}}';
+  return err;
+}
+
+/** Shaped like a raw `fetch` network failure (DNS/connection-refused/etc.) -- no AI SDK name marker, classified by `classifyProviderError`'s network-pattern fallback. */
+function fakeNetworkError(): TypeError {
+  const err = new TypeError('fetch failed');
+  (err as unknown as { cause: unknown }).cause = { code: 'ECONNREFUSED' };
+  return err;
+}
+
 let container: Container;
 let secrets: FakeSecretStore;
-let engine: FakeChatEngine;
+let engine: ThrowingModelsEngine;
 
 beforeEach(() => {
   secrets = new FakeSecretStore();
-  engine = new FakeChatEngine([]);
+  engine = new ThrowingModelsEngine([]);
   const store = new InMemoryStore();
   const turnRunner = new TurnRunner(store, engine);
   container = {
@@ -305,5 +343,56 @@ describe('POST /api/connections/:id/discover-models', () => {
   it('returns 404 for an unknown connection', async () => {
     const res = await app().request('/api/connections/nope/discover-models', { method: 'POST' });
     expect(res.status).toBe(404);
+  });
+
+  it('returns a classified, non-500 error (not a stack trace) when discovery fails on a bad API key', async () => {
+    const created = await json(
+      await app().request('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Bad Key', kind: 'openai', apiKey: 'sk-wrong' }),
+      })
+    );
+    const id = created['id'] as string;
+    engine.listModelsError = fakeAuthError();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+
+    expect(res.status).not.toBe(500);
+    const body = await json(res);
+    expect(body).toMatchObject({ kind: 'auth', retryable: false });
+    expect(typeof body['message']).toBe('string');
+    expect((body['message'] as string).length).toBeGreaterThan(0);
+    // The generic catch-all in app.ts's onError (console.error + {error:
+    // 'Internal server error.'}) must never fire for this -- proves the
+    // route classified the failure itself rather than letting it fall
+    // through.
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(body)).not.toBe('{"error":"Internal server error."}');
+
+    // Nothing should have been persisted -- discovery produced no models.
+    expect(container.store.models.list(id)).toHaveLength(0);
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('returns a classified, retryable error when discovery fails on a network/transient error', async () => {
+    const created = await json(
+      await app().request('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Unreachable', kind: 'openai_compatible', baseUrl: 'https://unreachable.example.com' }),
+      })
+    );
+    const id = created['id'] as string;
+    engine.listModelsError = fakeNetworkError();
+
+    const res = await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+
+    expect(res.status).not.toBe(500);
+    const body = await json(res);
+    expect(body).toMatchObject({ kind: 'transient', retryable: true });
+    expect(typeof body['message']).toBe('string');
   });
 });

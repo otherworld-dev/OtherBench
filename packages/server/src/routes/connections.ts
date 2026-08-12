@@ -3,6 +3,8 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
 import type { Connection, ConnectionKind, ModelInfo } from '@grunt/core/types/config.js';
+import { classifyProviderError } from '@grunt/core/types/errors.js';
+import type { ErrorKind } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
@@ -27,6 +29,29 @@ function getConnectionOrThrow(container: Container, id: string): Connection {
   const conn = container.store.connections.get(id);
   if (!conn) throw new HTTPException(404, { message: `Connection "${id}" not found.` });
   return conn;
+}
+
+/**
+ * Maps a `classifyProviderError` kind to an HTTP status a client can act on,
+ * mirroring `/test` (which already turns the same underlying failure into a
+ * helpful `{ok: false, message}` instead of letting it throw). `auth` is a
+ * 400: the POST itself was fine, but this connection's *stored* credential
+ * is wrong, retrying it verbatim will never succeed, and the client's actual
+ * next step is to rotate the key via `PATCH .../:id` -- not retry, so 401/403
+ * (which would read as *this* API's own bearer-token auth failing, per
+ * app.ts's gate) would be misleading. `rate_limit` passes the provider's own
+ * 429 straight through since it is the one kind worth a client
+ * retry-with-backoff. Everything else (network failures, upstream 5xxs, and
+ * kinds that don't really apply to a bare "list models" call --
+ * content_filter/context_overflow/capability are turn-completion concepts --
+ * but are still handled defensively) is reported as 502: Grunt is acting as
+ * a gateway to the provider here, and it is the provider's response that
+ * failed, not this request.
+ */
+function statusForClassifiedError(kind: ErrorKind): 400 | 429 | 502 {
+  if (kind === 'auth') return 400;
+  if (kind === 'rate_limit') return 429;
+  return 502;
 }
 
 /**
@@ -169,7 +194,22 @@ export function connectionsRoutes(container: Container): Hono {
     const id = c.req.param('id');
     const conn = getConnectionOrThrow(container, id);
     const apiKey = conn.secretRef ? await container.secrets.get(conn.secretRef) : null;
-    const discovered = await container.engine.listModels(conn, apiKey);
+
+    let discovered: DiscoveredModel[];
+    try {
+      discovered = await container.engine.listModels(conn, apiKey);
+    } catch (err) {
+      // AiSdkChatEngine.listRealModels throws (APICallError on any non-2xx
+      // response, a raw network error on a connection failure) rather than
+      // returning a result object -- unlike testConnection, which already
+      // catches and reports {ok: false, message}. Without this, a bad API
+      // key or unreachable host surfaced here as an opaque 500 with a stack
+      // trace to stderr (app.ts's onError catch-all), instead of a response
+      // the client could act on.
+      const classified = classifyProviderError(err);
+      return c.json(classified, statusForClassifiedError(classified.kind));
+    }
+
     const saved = upsertDiscoveredModels(container, id, discovered);
     return c.json(saved);
   });

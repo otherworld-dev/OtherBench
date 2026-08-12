@@ -43,13 +43,28 @@ function isEnoent(err: unknown): boolean {
  * `GRUNT_SECRETS_PASSPHRASE` wins if set -- an operator or the desktop shell
  * can supply and manage it explicitly. Otherwise a random 256-bit passphrase
  * is generated once and persisted next to the secrets file
- * (`<secretsPath>.key`, mode 0600) so the same key is reused across
- * restarts without requiring Grunt's single local user to remember or type
- * one anywhere -- `grunt serve` has no `--secrets-passphrase` flag in the
- * brief, and the global constraint that API keys must never sit in SQLite
- * still needs *something* to key the encrypted file with. This is a
- * pragmatic default for a local, single-user tool, not a substitute for a
- * real secret manager; see task-14-15-report.md for the full reasoning.
+ * (`<secretsPath>.key`, mode 0600 *on POSIX*; Node's `mode` option is a
+ * documented no-op on Windows, whose ACL model `fs.chmod`/`fs.writeFile`'s
+ * `mode` cannot express -- verified empirically on this machine, the
+ * resulting file is 644-equivalent there. Stated here explicitly rather than
+ * silently claimed as fact; see `EncryptedFileSecretStore`'s docstring in
+ * secret-store.ts for the same caveat on the secrets file itself) so the
+ * same key is reused across restarts without requiring Grunt's single local
+ * user to remember or type one anywhere -- `grunt serve` has no
+ * `--secrets-passphrase` flag in the brief, and the global constraint that
+ * API keys must never sit in SQLite still needs *something* to key the
+ * encrypted file with. This is a pragmatic default for a local, single-user
+ * tool, not a substitute for a real secret manager; see
+ * task-14-15-report.md for the full reasoning.
+ *
+ * Also worth being honest about: keeping this key file beside the ciphertext
+ * it unlocks, under the same OS-user access boundary, adds no
+ * confidentiality against anyone who can already read the encrypted secrets
+ * file or the SQLite database on this machine -- whoever can read one can
+ * read the other and decrypt everything. It only protects against casual
+ * disclosure (e.g. the secrets file leaking on its own, without its key) and
+ * backup/copy leakage where the key file is left behind by accident; it is
+ * not a defense against local filesystem access.
  */
 export async function resolveSecretsPassphrase(secretsPath: string): Promise<string> {
   const envPassphrase = process.env['GRUNT_SECRETS_PASSPHRASE'];
@@ -65,6 +80,8 @@ export async function resolveSecretsPassphrase(secretsPath: string): Promise<str
 
   const generated = randomBytes(32).toString('base64');
   await mkdir(dirname(keyPath), { recursive: true });
+  // mode 0600 is honored on POSIX; a documented no-op on Windows -- see this
+  // function's docstring above.
   await writeFile(keyPath, generated, { mode: 0o600 });
   return generated;
 }

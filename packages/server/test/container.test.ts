@@ -26,7 +26,7 @@ describe('resolveSecretsPassphrase', () => {
     await expect(stat(`${secretsPath}.key`)).rejects.toThrow();
   });
 
-  it('generates and persists a random passphrase on first call, mode 0600', async () => {
+  it('generates and persists a random passphrase on first call', async () => {
     const secretsPath = join(dir, 'secrets.json');
 
     const passphrase = await resolveSecretsPassphrase(secretsPath);
@@ -34,11 +34,24 @@ describe('resolveSecretsPassphrase', () => {
     expect(passphrase.length).toBeGreaterThan(20);
     const keyFileContents = (await readFile(`${secretsPath}.key`, 'utf8')).trim();
     expect(keyFileContents).toBe(passphrase);
-    if (process.platform !== 'win32') {
+  });
+
+  // Split out from the test above (rather than an `if (platform !== win32)`
+  // inside it) so the Windows skip is visible in the test-runner's own
+  // output -- a conditional assertion buried inside a passing test would
+  // quietly stop checking anything on this platform without saying so
+  // anywhere a reader would notice.
+  it.skipIf(process.platform === 'win32')(
+    'creates the key file with mode 0600 on POSIX -- a documented no-op on Windows',
+    async () => {
+      const secretsPath = join(dir, 'secrets.json');
+
+      await resolveSecretsPassphrase(secretsPath);
+
       const mode = (await stat(`${secretsPath}.key`)).mode & 0o777;
       expect(mode).toBe(0o600);
     }
-  });
+  );
 
   it('reuses the persisted passphrase on subsequent calls instead of generating a new one', async () => {
     const secretsPath = join(dir, 'secrets.json');
