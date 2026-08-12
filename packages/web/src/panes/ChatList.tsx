@@ -82,7 +82,7 @@ export function ChatList(): JSX.Element {
           onChange={(e) => void runSearch(e.target.value)}
           placeholder="Search chats..."
           aria-label="Search chats"
-          className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
+          className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
         />
       </div>
 

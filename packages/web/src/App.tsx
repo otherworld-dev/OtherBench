@@ -39,26 +39,41 @@ export function App(): JSX.Element {
   // instant the window narrows.
   const [narrowOverlayOpen, setNarrowOverlayOpen] = useState(false);
 
-  // Initial reference-data + chat-list load. Errors are logged, not thrown --
-  // a transient failure here shouldn't blank the whole shell; panes render
-  // their own empty states off whatever did load.
+  // Set only when EVERY bootstrap fetch below fails -- a cold load with the
+  // server unreachable renders otherwise-identically to a genuinely fresh
+  // install ("No chats yet...", "+ New chat" disabled): both are just empty
+  // arrays sitting in the store. A single failed fetch alongside others that
+  // succeeded is left alone (console.error only, as before) since that's a
+  // partial/transient hiccup, not "there is no server to talk to" -- see
+  // task 19/20 brief.
+  const [unreachable, setUnreachable] = useState(false);
+
+  // Initial reference-data + chat-list load. Individual failures are logged,
+  // not thrown -- a transient failure here shouldn't blank the whole shell;
+  // panes render their own empty states off whatever did load. But if ALL
+  // FOUR fail, that's not "nothing configured yet", it's "can't reach the
+  // server at all", and the banner above says so explicitly instead of
+  // silently rendering the fresh-install empty state.
   useEffect(() => {
-    void api.connections
-      .list()
-      .then(setConnections)
-      .catch((err: unknown) => console.error('[grunt-web] failed to load connections:', err));
-    void api.models
-      .list()
-      .then(setModels)
-      .catch((err: unknown) => console.error('[grunt-web] failed to load models:', err));
-    void api.profiles
-      .list()
-      .then(setProfiles)
-      .catch((err: unknown) => console.error('[grunt-web] failed to load profiles:', err));
-    void api.chats
-      .list()
-      .then(setChats)
-      .catch((err: unknown) => console.error('[grunt-web] failed to load chats:', err));
+    let cancelled = false;
+
+    void Promise.allSettled([
+      api.connections.list().then(setConnections),
+      api.models.list().then(setModels),
+      api.profiles.list().then(setProfiles),
+      api.chats.list().then(setChats),
+    ]).then((results) => {
+      if (cancelled) return;
+      const labels = ['connections', 'models', 'profiles', 'chats'] as const;
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') console.error(`[grunt-web] failed to load ${labels[i]}:`, r.reason);
+      });
+      setUnreachable(results.every((r) => r.status === 'rejected'));
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [setConnections, setModels, setProfiles, setChats]);
 
   useChatSync(activeChatId);
@@ -67,8 +82,27 @@ export function App(): JSX.Element {
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
 
   return (
-    <div className="grid h-screen grid-cols-[260px_1fr] grid-rows-[auto_1fr]" data-narrow={isNarrow || undefined}>
-      <header className="col-span-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
+    <div className="grid h-screen grid-cols-[260px_1fr] grid-rows-[auto_auto_1fr]" data-narrow={isNarrow || undefined}>
+      {unreachable && (
+        <div
+          role="alert"
+          data-testid="server-unreachable-banner"
+          className="col-span-2 row-start-1 flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-3 py-2 text-sm text-[var(--danger)]"
+        >
+          <span>
+            Can&rsquo;t reach the Grunt server. It may not be running -- start <code>grunt serve</code> and reload this page.
+          </span>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="shrink-0 rounded border border-[var(--danger)] px-2 py-1 text-xs font-medium"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      <header className="col-span-2 row-start-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
         <div className="flex items-baseline gap-2">
           <span className="text-sm font-semibold">Grunt</span>
           {activeChat && <span className="text-sm text-[var(--text-muted)]">{activeChat.title}</span>}
@@ -88,11 +122,11 @@ export function App(): JSX.Element {
         </div>
       </header>
 
-      <div className="row-start-2 h-full min-h-0">
+      <div className="row-start-3 h-full min-h-0">
         <ChatList />
       </div>
 
-      <div className="relative row-start-2 grid h-full min-h-0 grid-cols-[1fr_auto]">
+      <div className="relative row-start-3 grid h-full min-h-0 grid-cols-[1fr_auto]">
         <Thread chat={activeChat} />
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}

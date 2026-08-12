@@ -180,7 +180,7 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
           aria-label="Message"
           placeholder="Message... (Enter to send, Shift+Enter for a newline)"
           rows={2}
-          className="min-h-[2.5rem] flex-1 resize-y rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+          className="min-h-[2.5rem] flex-1 resize-y rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
         />
         {isStreaming ? (
           <button
