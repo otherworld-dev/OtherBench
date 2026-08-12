@@ -1,19 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join, sep, parse } from 'node:path';
 import { containPath, PathEscapeError } from '../src/domain/paths.js';
 
-let root: string, outside: string;
+let root: string, outside: string, base: string;
 
 beforeAll(() => {
-  const base = mkdtempSync(join(tmpdir(), 'grunt-paths-'));
+  base = mkdtempSync(join(tmpdir(), 'grunt-paths-'));
   root = join(base, 'ws'); outside = join(base, 'outside');
   mkdirSync(root); mkdirSync(outside);
   writeFileSync(join(root, 'ok.txt'), 'ok');
   writeFileSync(join(outside, 'secret.txt'), 'secret');
 });
-afterAll(() => { try { rmSync(root, { recursive: true, force: true }); } catch {} });
+// Remove the whole temp base, not just root: root's sibling `outside` and
+// `secret.txt` were leaking into the OS tmpdir on every run otherwise,
+// which also meant runs weren't independent of leftovers from prior runs.
+afterAll(() => { try { rmSync(base, { recursive: true, force: true }); } catch {} });
 
 describe('containPath', () => {
   it('accepts a file directly inside the workspace', () => {
@@ -63,22 +66,80 @@ describe('containPath', () => {
   });
 
   it('rejects a candidate containing an embedded NUL byte', () => {
-    // An embedded NUL is treated as a string terminator by some OS-level path
-    // probes (e.g. existsSync on Windows) but not by others, so a candidate
-    // like "<root>\ok.txt\0<absolute outside path>" can look validly
-    // contained under naive string comparison while its OS-level meaning is
-    // ambiguous. Reject outright rather than trust it.
+    // A NUL byte makes every OS-level existence probe on the segment that
+    // contains it report "not present" (Node validates and rejects NUL
+    // paths internally) even though the segment is, character for
+    // character, part of the string. That is the SAME defect the
+    // dangling-link tests below exercise: the nearest-existing-ancestor
+    // climb walks past whatever it cannot confirm and blindly copies it
+    // into the resolved tail, unvalidated, rather than treating "cannot
+    // confirm" as "cannot trust". The upfront guard below stays even after
+    // the climb walks through lstat: lstat rejects NUL paths the same way,
+    // so without this explicit check the climb would still walk past the
+    // NUL-bearing segment and reconstruct it into an ostensibly-contained
+    // path via the very same mechanism.
     const smuggled = join(root, 'ok.txt') + '\0' + join(outside, 'secret.txt');
     expect(() => containPath(root, smuggled)).toThrow(PathEscapeError);
   });
 
-  it('throws PathEscapeError (not a raw Node error) for an unresolvable candidate', () => {
-    // A Windows extended-length-prefixed path to a real in-workspace file
-    // trips a Node realpathSync quirk (EISDIR) rather than resolving. The
-    // security boundary must fail closed with its own typed error, not leak
-    // an arbitrary internal exception to callers that only catch
-    // PathEscapeError.
-    const extendedLength = '\\\\?\\' + join(root, 'ok.txt');
-    expect(() => containPath(root, extendedLength)).toThrow(PathEscapeError);
+  it.skipIf(process.platform !== 'win32')(
+    'throws PathEscapeError (not a raw Node error) for a Windows extended-length-prefixed candidate',
+    () => {
+      // Regression test for a specific Windows/Node quirk: realpathSync
+      // throws a raw EISDIR for \\?\-prefixed paths instead of resolving
+      // them, even for a real in-workspace file. Windows-only because on
+      // POSIX '\\?\...' has no special meaning and is just a relative path
+      // whose components don't exist, which correctly falls into the
+      // ordinary "write to a new path" acceptance case instead. The
+      // platform-neutral form of the underlying contract -- that any
+      // internal resolution failure surfaces as PathEscapeError and never a
+      // raw error -- is covered by the dangling-link tests below, which
+      // exercise the same catch-all on every platform.
+      const extendedLength = '\\\\?\\' + join(root, 'ok.txt');
+      expect(() => containPath(root, extendedLength)).toThrow(PathEscapeError);
+    }
+  );
+
+  it('rejects a dangling junction/symlink candidate, even though its literal path text looks contained', () => {
+    // Critical regression: existsSync follows links and reports false for
+    // one whose target doesn't currently exist, so the ancestor climb used
+    // to walk straight past a dangling link and copy its name verbatim into
+    // the resolved tail -- never once handing it to realpathSync. The
+    // returned path was blessed as "contained" while being, by the
+    // function's own contract, unresolved: a real write/read using that
+    // exact returned value follows the link at the OS level and lands
+    // outside the workspace. npm-workspaces repos routinely have
+    // node_modules junctions/symlinks that dangle mid-install or mid-rename,
+    // so this isn't a contrived input.
+    const link = join(root, 'dangling');
+    const missingTarget = join(outside, 'not-created-yet');
+    try { symlinkSync(missingTarget, link, 'junction'); } catch { return; } // needs privilege on Windows
+    expect(() => containPath(root, join(link, 'owned.txt'))).toThrow(PathEscapeError);
+  });
+
+  it('accepts a symlink/junction that points inside the workspace, including a new file reached through it', () => {
+    // Regression guard for the fix above: stopping the climb at any present
+    // link (instead of walking past it) must not over-rotate into denying
+    // links whose target is legitimately inside the workspace -- including
+    // the not-yet-existing-file case the brief requires (a write through
+    // such a link to a brand new file must still succeed).
+    const realDir = join(root, 'realdir');
+    mkdirSync(realDir);
+    const link = join(root, 'inlink');
+    try { symlinkSync(realDir, link, 'junction'); } catch { return; } // needs privilege on Windows
+    const target = join(link, 'brand-new.txt'); // does not exist yet
+    expect(containPath(root, target)).toBe(join(realDir, 'brand-new.txt'));
+  });
+
+  it('does not corrupt the filename when the workspace root is a filesystem root', () => {
+    // dirname() returns a path WITH a trailing separator at every root form
+    // (drive root, UNC share root, POSIX root) but nowhere else. Slicing
+    // `cur` at `parent.length + 1` assumed a separator always needs
+    // skipping, which ate the candidate's first character whenever the
+    // parent was itself a root (e.g. containPath('C:\\', 'newfile.txt') used
+    // to return 'C:\\ewfile.txt'). basename() has no such assumption.
+    const driveRoot = parse(root).root;
+    const uniqueName = `grunt-root-probe-${Date.now()}.txt`;
+    expect(containPath(driveRoot, uniqueName)).toBe(join(driveRoot, uniqueName));
   });
 });
