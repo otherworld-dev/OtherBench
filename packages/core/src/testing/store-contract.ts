@@ -335,6 +335,23 @@ export function runStoreContract(
         expect(store.messages.children('parent').map((m) => m.id)).toEqual(['child-1', 'child-3', 'child-2']);
       });
 
+      // A compare turn queries several models for the same user turn at
+      // once, so their replies routinely land in the same millisecond --
+      // `createdAt` alone cannot order them, and an implementation that only
+      // sorts by `createdAt` would return them in whatever order they
+      // happen to be stored, not a deterministic one. Ids are deliberately
+      // created out of alphabetical order here so a correct id tie-break is
+      // the only way to pass.
+      it('children breaks a created_at tie by id (the compare-turn case: several replies in the same millisecond)', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(makeMessageInput({ id: 'parent', chatId: chat.id, createdAt: 1 }));
+        store.messages.create(makeMessageInput({ id: 'reply-c', chatId: chat.id, parentId: 'parent', createdAt: 5 }));
+        store.messages.create(makeMessageInput({ id: 'reply-a', chatId: chat.id, parentId: 'parent', createdAt: 5 }));
+        store.messages.create(makeMessageInput({ id: 'reply-b', chatId: chat.id, parentId: 'parent', createdAt: 5 }));
+
+        expect(store.messages.children('parent').map((m) => m.id)).toEqual(['reply-a', 'reply-b', 'reply-c']);
+      });
+
       it('roots returns only the given chat\'s root messages', () => {
         const { chat: chatA } = seedChat(store, 'chat-a');
         const { chat: chatB } = seedChat(store, 'chat-b');
@@ -415,11 +432,81 @@ export function runStoreContract(
         expect(results.every((r) => r.chatId === chatA.id)).toBe(true);
       });
 
+      // Every one of these is an ordinary thing a person might type into a
+      // search box, not an adversarial payload -- a lone quote, a trailing
+      // boolean operator, an unclosed paren, a leading dash, and a
+      // `col:value` form. Against a raw FTS5 MATCH these throw a syntax
+      // error; the fix must escape/tolerate them instead of crashing the
+      // search. Kept permissive on purpose (no snippet/ranking assertions)
+      // per the brief -- the point is "doesn't throw", not "matches exactly
+      // this way".
+      it.each([
+        ['a lone double quote', '"'],
+        ['a dangling boolean operator', 'banana AND'],
+        ['an unclosed parenthesis', '(unclosed'],
+        ['a leading dash (NOT-prefix syntax)', '-banana'],
+        ['column-filter syntax', 'col:banana'],
+      ])('searchText does not throw for %s (%j)', (_label, query) => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(
+          makeMessageInput({
+            id: 'msg-a',
+            chatId: chat.id,
+            parts: [{ type: 'text', text: 'ordinary message content' }],
+          })
+        );
+
+        expect(() => store.messages.searchText(query, 10)).not.toThrow();
+      });
+
+      it('searchText still finds a message by an ordinary word after tricky queries have run', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(
+          makeMessageInput({
+            id: 'msg-mango',
+            chatId: chat.id,
+            parts: [{ type: 'text', text: 'The mango recipe needs banana and honey' }],
+          })
+        );
+
+        // Run the same tricky queries as above first, to prove they leave
+        // ordinary search working rather than merely not crashing in isolation.
+        for (const query of ['"', 'banana AND', '(unclosed', '-banana', 'col:banana']) {
+          store.messages.searchText(query, 10);
+        }
+
+        const results = store.messages.searchText('mango', 10);
+        expect(results.some((r) => r.messageId === 'msg-mango')).toBe(true);
+      });
+
+      it('searchText treats a dangling "AND" as a literal word, finding a message containing both words', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(
+          makeMessageInput({
+            id: 'msg-both-words',
+            chatId: chat.id,
+            parts: [{ type: 'text', text: 'banana and honey on toast' }],
+          })
+        );
+
+        const results = store.messages.searchText('banana AND', 10);
+
+        expect(results.some((r) => r.messageId === 'msg-both-words')).toBe(true);
+      });
+
       it('create throws on a duplicate id', () => {
         const { chat } = seedChat(store, 'chat-a');
         store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
 
         expect(() => store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }))).toThrow(Error);
+      });
+
+      it('create throws on a self-referencing parentId', () => {
+        const { chat } = seedChat(store, 'chat-a');
+
+        expect(() =>
+          store.messages.create(makeMessageInput({ id: 'msg-self', chatId: chat.id, parentId: 'msg-self' }))
+        ).toThrow(Error);
       });
 
       it('pathToRoot returns [] for an unknown id', () => {

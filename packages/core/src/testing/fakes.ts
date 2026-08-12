@@ -344,12 +344,28 @@ class InMemoryAuditRepo implements AuditRepo {
  * so this repo is not a thin wrapper over `InMemoryCrudRepo` like the others
  * -- it needs parent/child traversal, not just id lookup.
  */
+/**
+ * Hard cap on how many ancestor hops `pathToRoot` will follow -- kept in
+ * step with `MAX_PATH_DEPTH` in packages/store-sqlite/src/repos/messages.ts
+ * (see that constant's comment for the full reasoning). `create()` below
+ * rejects the one cycle vector it can prevent (`parentId === id`), but nothing
+ * stops a caller from mutating `byId` directly (tests do this deliberately
+ * to exercise the cap) to build a longer cycle, and this fake's `pathToRoot`
+ * used to walk parent links with an unbounded `while`, exactly like the
+ * unbounded recursive CTE this mirrors -- so it needs the same backstop or
+ * the fake and the real adapter diverge on the fix.
+ */
+const MAX_PATH_DEPTH = 10_000;
+
 class InMemoryMessageRepo implements MessageRepo {
   private readonly byId = new Map<string, CanonMessage>();
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
     if (this.byId.has(m.id)) {
       throw new Error(`Duplicate id: ${m.id}`);
+    }
+    if (m.parentId === m.id) {
+      throw new Error(`message: parentId cannot equal id (self-referencing message): ${m.id}`);
     }
     const full: CanonMessage = { ...m, createdAt: m.createdAt ?? Date.now() };
     this.byId.set(full.id, structuredClone(full));
@@ -361,26 +377,33 @@ class InMemoryMessageRepo implements MessageRepo {
     return m ? structuredClone(m) : null;
   }
 
+  // `id` breaks ties so that messages sharing a createdAt (same-millisecond
+  // inserts, which a compare turn produces routinely) still come back in a
+  // stable, deterministic order rather than whichever order they happen to
+  // sit in `byId` -- this mirrors SqliteMessageRepo's `ORDER BY created_at
+  // ASC, id ASC` (packages/store-sqlite/src/repos/messages.ts).
   children(parentId: string): CanonMessage[] {
     return [...this.byId.values()]
       .filter((m) => m.parentId === parentId)
-      .sort((a, b) => a.createdAt - b.createdAt)
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .map((m) => structuredClone(m));
   }
 
   roots(chatId: string): CanonMessage[] {
     return [...this.byId.values()]
       .filter((m) => m.chatId === chatId && m.parentId === null)
-      .sort((a, b) => a.createdAt - b.createdAt)
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .map((m) => structuredClone(m));
   }
 
   pathToRoot(messageId: string): CanonMessage[] {
     const path: CanonMessage[] = [];
     let current = this.byId.get(messageId);
-    while (current) {
+    let depth = 0;
+    while (current && depth <= MAX_PATH_DEPTH) {
       path.push(structuredClone(current));
       current = current.parentId === null ? undefined : this.byId.get(current.parentId);
+      depth++;
     }
     return path.reverse();
   }

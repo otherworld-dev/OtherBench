@@ -51,6 +51,52 @@ describe('SqliteMessageRepo', () => {
     db.close();
   });
 
+  it('create throws when parentId equals id (self-referencing message)', () => {
+    const db = freshDb();
+    seedChat(db);
+    const repo = new SqliteMessageRepo(db);
+
+    expect(() =>
+      repo.create({ id: 'msg-self', chatId: 'chat-a', parentId: 'msg-self', role: 'user', parts: [], status: 'complete', error: null, producedBy: null })
+    ).toThrow(Error);
+    // And it must never have reached the INSERT: a stray row here would
+    // itself be the exact cycle pathToRoot needs to be defended against.
+    expect(repo.get('msg-self')).toBeNull();
+    db.close();
+  });
+
+  // Reproduces the reviewer's exact finding: `PRAGMA foreign_keys = ON`
+  // does NOT reject `parent_id = id`, because SQLite checks an immediate FK
+  // only after the INSERT completes, by which point the row already exists
+  // and satisfies its own constraint. Raw SQL bypasses this repo's create()
+  // guard (the application-level defence) so this test exercises the
+  // second layer: the recursive CTE's depth cap in pathToRoot. An explicit
+  // timeout means a regression here fails fast with a clear timeout error
+  // instead of hanging the whole CI run the way the reviewer's manual
+  // 30-second reproduction did.
+  it(
+    'pathToRoot terminates instead of hanging on a self-referencing row inserted via raw SQL',
+    () => {
+      const db = freshDb();
+      seedChat(db);
+      const repo = new SqliteMessageRepo(db);
+      db.prepare(
+        `INSERT INTO message (id, chat_id, parent_id, role, parts, status, error, produced_by, search_text, created_at)
+         VALUES ('cyclic', 'chat-a', 'cyclic', 'user', '[]', 'complete', NULL, NULL, '', 1)`
+      ).run();
+
+      const start = Date.now();
+      const path = repo.pathToRoot('cyclic');
+      const elapsed = Date.now() - start;
+
+      expect(elapsed).toBeLessThan(5_000);
+      expect(path.length).toBeGreaterThan(0);
+      expect(path.every((m) => m.id === 'cyclic')).toBe(true);
+      db.close();
+    },
+    10_000
+  );
+
   it('children returns messages ordered by createdAt ascending, not insertion order', () => {
     const db = freshDb();
     seedChat(db);

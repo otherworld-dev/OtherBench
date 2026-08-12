@@ -26,6 +26,31 @@ import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at';
 
 /**
+ * Hard cap on how many ancestor hops `pathToRoot`'s recursive CTE will
+ * follow. This is a backstop against cycles, not a realistic limit: SQLite
+ * enforces `parent_id` foreign keys only *after* an INSERT completes, so a
+ * self-reference (`parent_id = id`) satisfies the constraint (the row
+ * already exists by the time the check runs) even with `PRAGMA foreign_keys
+ * = ON` -- `create()` below rejects that specific case explicitly, but a
+ * longer cycle (A -> B -> A) could still be introduced by something other
+ * than this repo's `create()`, e.g. a raw-SQL data import or future
+ * reparenting code. Without a cap, `ORDER BY depth DESC` forces SQLite to
+ * fully materialise the recursive CTE before any row can be returned, so a
+ * cycle recurses forever and hangs this synchronous, single-threaded
+ * process.
+ *
+ * 10,000 is chosen to sit far above any real conversation: it is roughly
+ * two orders of magnitude beyond a plausible single-lineage chat depth (a
+ * conversation with thousands of sequential turns is already impractical to
+ * scroll through in the UI long before it gets anywhere near this), while
+ * still resolving in single-digit milliseconds even when it IS hit (a
+ * 2-node cycle capped at this depth returns ~10k rows in ~10ms -- measured
+ * while choosing this value). So genuine conversations never notice the
+ * cap, but a cycle is bounded rather than unbounded.
+ */
+const MAX_PATH_DEPTH = 10_000;
+
+/**
  * The FTS5 sync target. SQLite triggers cannot conveniently pick the `text`
  * parts out of the JSON `parts` array, so the repository derives the indexed
  * text on every write and the triggers index that plain column instead.
@@ -37,6 +62,42 @@ function deriveSearchText(parts: Part[]): string {
     .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
     .map((p) => p.text)
     .join('\n');
+}
+
+/**
+ * Turns a raw user search-box query into a safe FTS5 `MATCH` expression, or
+ * `null` if there is nothing to search for.
+ *
+ * FTS5's default query syntax is not plain text -- `"`, unbalanced `(`/`)`,
+ * a leading `-` (the NOT-prefix operator), a dangling boolean operator
+ * (`AND`/`OR`/`NOT`) and `col:` (column-filter syntax) are all *syntax*
+ * there, not literal characters. Every one of those is something a person
+ * can type into an ordinary search box without meaning anything special by
+ * it, and passing the raw string straight to `MATCH` throws
+ * (`fts5: syntax error ...`, `unterminated string`, `no such column`) for
+ * exactly those inputs.
+ *
+ * The fix is to quote: split on whitespace and wrap each token in double
+ * quotes (doubling any embedded `"`, FTS5's own escape for a literal quote
+ * inside a string literal). An FTS5 string literal is always a phrase, never
+ * an operator, so `col:banana` becomes a phrase search for the tokens `col`
+ * then `banana` instead of a column filter, `-banana` searches for the word
+ * `banana` instead of negating the (nonexistent) preceding term, and a lone
+ * `"` becomes a phrase search for a literal quote character instead of an
+ * unterminated string. Multiple quoted phrases separated by whitespace are
+ * ANDed by FTS5's default query syntax, so `banana AND` becomes "message
+ * contains both banana and AND" -- exactly what a user typing a dangling
+ * operator meant -- rather than a syntax error.
+ */
+function toFtsMatchExpression(query: string): string | null {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  return tokens.map((token) => `"${token.replace(/"/g, '""')}"`).join(' ');
+}
+
+/** True for the error node:sqlite throws when a prepared statement fails at the SQLite level. */
+function isSqliteError(err: unknown): boolean {
+  return err instanceof Error && (err as NodeJS.ErrnoException).code === 'ERR_SQLITE_ERROR';
 }
 
 function fromRow(row: Record<string, unknown>): CanonMessage {
@@ -57,6 +118,15 @@ export class SqliteMessageRepo implements MessageRepo {
   constructor(private readonly db: DatabaseSync) {}
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
+    if (m.parentId === m.id) {
+      // Caught here, not left to the FK constraint: SQLite checks
+      // `parent_id` (an immediate, non-deferred FK) only after the INSERT
+      // completes, by which point the new row already exists -- so a
+      // self-reference satisfies the constraint instead of violating it,
+      // and would go on to send `pathToRoot` into an unbounded recursion
+      // (see MAX_PATH_DEPTH above).
+      throw new Error(`message: parentId cannot equal id (self-referencing message): ${m.id}`);
+    }
     const full: CanonMessage = { ...m, createdAt: m.createdAt ?? Date.now() };
     this.db
       .prepare(
@@ -116,6 +186,7 @@ export class SqliteMessageRepo implements MessageRepo {
            UNION ALL
            SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, a.depth + 1
              FROM message m JOIN ancestry a ON m.id = a.parent_id
+            WHERE a.depth < ${MAX_PATH_DEPTH}
          )
          SELECT ${COLUMNS} FROM ancestry ORDER BY depth DESC`
       )
@@ -144,17 +215,30 @@ export class SqliteMessageRepo implements MessageRepo {
   }
 
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
-    const rows = this.db
-      .prepare(
-        `SELECT m.id AS id, m.chat_id AS chat_id,
-                snippet(message_fts, 0, '[', ']', '...', 12) AS snippet
-           FROM message_fts f
-           JOIN message m ON m.rowid = f.rowid
-          WHERE message_fts MATCH ?
-          ORDER BY rank
-          LIMIT ?`
-      )
-      .all(query, limit) as Record<string, unknown>[];
+    const match = toFtsMatchExpression(query);
+    if (match === null) return [];
+
+    let rows: Record<string, unknown>[];
+    try {
+      rows = this.db
+        .prepare(
+          `SELECT m.id AS id, m.chat_id AS chat_id,
+                  snippet(message_fts, 0, '[', ']', '...', 12) AS snippet
+             FROM message_fts f
+             JOIN message m ON m.rowid = f.rowid
+            WHERE message_fts MATCH ?
+            ORDER BY rank
+            LIMIT ?`
+        )
+        .all(match, limit) as Record<string, unknown>[];
+    } catch (err) {
+      // Secondary guard, not the primary defence (that's the quoting above):
+      // an FTS5 edge case we haven't enumerated should degrade to "no
+      // results" rather than crash a search box, but only for an actual
+      // SQLite-level failure -- anything else (a real bug) still propagates.
+      if (isSqliteError(err)) return [];
+      throw err;
+    }
     return rows.map((r) => ({
       messageId: r.id as string,
       chatId: r.chat_id as string,
