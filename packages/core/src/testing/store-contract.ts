@@ -204,6 +204,17 @@ function seedChat(store: Store, id: string): SeededChat {
   return { chat, ...seededProfile };
 }
 
+/**
+ * Asserts a defaulted timestamp is a real "now"-ish value, not just any
+ * number -- `expect.any(Number)` alone would also pass for a default of `0`
+ * or `-1`, which is exactly the kind of bug this contract is meant to catch.
+ */
+function expectRecentTimestamp(value: number): void {
+  expect(value).toBeGreaterThan(0);
+  expect(value).toBeLessThanOrEqual(Date.now());
+  expect(Date.now() - value).toBeLessThan(5_000);
+}
+
 // ---------------------------------------------------------------------------
 // The shared contract
 // ---------------------------------------------------------------------------
@@ -261,8 +272,8 @@ export function runStoreContract(
       const { profileId } = seedProfile(store, 'profile-a');
       const created = store.chats.create(makeChatInput({ id: 'chat-a', profileId, title: 'My Chat' }));
 
-      expect(created.createdAt).toEqual(expect.any(Number));
-      expect(created.updatedAt).toEqual(expect.any(Number));
+      expectRecentTimestamp(created.createdAt);
+      expectRecentTimestamp(created.updatedAt);
       expect(store.chats.get('chat-a')).toMatchObject({ id: 'chat-a', title: 'My Chat', profileId });
     });
 
@@ -299,7 +310,7 @@ export function runStoreContract(
       const message = store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
       const created = store.audit.create(makeAuditInput({ id: 'audit-a', chatId: chat.id, messageId: message.id }));
 
-      expect(created.createdAt).toEqual(expect.any(Number));
+      expectRecentTimestamp(created.createdAt);
       expect(store.audit.get('audit-a')).toMatchObject({ id: 'audit-a', chatId: chat.id });
     });
 
@@ -308,7 +319,7 @@ export function runStoreContract(
         const { chat } = seedChat(store, 'chat-a');
         const created = store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
 
-        expect(created.createdAt).toEqual(expect.any(Number));
+        expectRecentTimestamp(created.createdAt);
         expect(store.messages.get('msg-a')).toMatchObject({ id: 'msg-a', chatId: chat.id });
         expect(store.messages.get('does-not-exist')).toBeNull();
       });
@@ -403,6 +414,25 @@ export function runStoreContract(
         expect(results.map((r) => r.messageId)).toEqual(['msg-chat-a']);
         expect(results.every((r) => r.chatId === chatA.id)).toBe(true);
       });
+
+      it('create throws on a duplicate id', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
+
+        expect(() => store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }))).toThrow(Error);
+      });
+
+      it('pathToRoot returns [] for an unknown id', () => {
+        expect(store.messages.pathToRoot('does-not-exist')).toEqual([]);
+      });
+
+      it('updateParts throws when the id does not exist', () => {
+        expect(() => store.messages.updateParts('does-not-exist', [{ type: 'text', text: 'x' }])).toThrow(Error);
+      });
+
+      it('updateStatus throws when the id does not exist', () => {
+        expect(() => store.messages.updateStatus('does-not-exist', 'complete')).toThrow(Error);
+      });
     });
 
     describe('grants', () => {
@@ -423,6 +453,22 @@ export function runStoreContract(
     });
 
     describe('update / delete semantics shared across the simple repos', () => {
+      // Exercised via `connections` as a representative of the simple,
+      // non-tree repos (models/profiles/attachments/usage/mcpServers/grants/
+      // audit all share this same InMemoryCrudRepo-backed behaviour). This
+      // is the exact policy documented at the top of fakes.ts -- it was
+      // previously only documented, never asserted, which is precisely the
+      // drift the shared contract exists to catch: a SQLite adapter (Task 9)
+      // that throws a different shape on a missing-id update, or throws
+      // instead of no-op-ing on a missing-id delete, or accepts a duplicate
+      // id silently, must fail these.
+
+      it('create throws on a duplicate id', () => {
+        store.connections.create(makeConnection({ id: 'conn-a' }));
+
+        expect(() => store.connections.create(makeConnection({ id: 'conn-a' }))).toThrow(Error);
+      });
+
       it('update persists a patch and returns the updated entity', () => {
         store.connections.create(makeConnection({ id: 'conn-a', name: 'Before' }));
 
@@ -432,12 +478,21 @@ export function runStoreContract(
         expect(store.connections.get('conn-a')?.name).toBe('After');
       });
 
+      it('update throws when the id does not exist', () => {
+        expect(() => store.connections.update('does-not-exist', { name: 'x' })).toThrow(Error);
+      });
+
       it('delete removes the entity so a subsequent get returns null', () => {
         store.connections.create(makeConnection({ id: 'conn-a' }));
 
         store.connections.delete('conn-a');
 
         expect(store.connections.get('conn-a')).toBeNull();
+      });
+
+      it('delete is a no-op when the id does not exist (idempotent)', () => {
+        expect(() => store.connections.delete('does-not-exist')).not.toThrow();
+        expect(store.connections.get('does-not-exist')).toBeNull();
       });
     });
   });
