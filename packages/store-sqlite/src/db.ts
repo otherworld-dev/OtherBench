@@ -75,9 +75,16 @@ function assertLocalWindows(path: string): void {
 
   const ancestor = findExistingAncestor(path);
   if (ancestor === null) {
+    // Deliberate fail-open on a detection FAILURE (not "platform
+    // unsupported" — win32 is fully supported, this branch just couldn't
+    // find anything to resolve). Per decision #2, a false positive that
+    // blocks startup on a real local database is worse than a missed
+    // network-drive case, so this allows rather than throws. It's called
+    // out explicitly, rather than folded silently into the happy path,
+    // because it means the locality check did NOT actually run.
     console.warn(
-      `[@grunt/store-sqlite] Could not find any existing ancestor directory of "${path}" ` +
-        'to verify it is local; allowing. A false positive that blocks startup is worse than a missed exotic case.'
+      `[@grunt/store-sqlite] Could not find any existing ancestor directory of "${path}"; ` +
+        'the locality check could not be completed. Allowing without verifying locality.'
     );
     return;
   }
@@ -86,9 +93,14 @@ function assertLocalWindows(path: string): void {
   try {
     real = realpathSync.native(ancestor);
   } catch {
+    // Deliberate fail-open on a detection FAILURE, same reasoning as above:
+    // this can fire on a fully-supported platform (e.g. a transient I/O
+    // error resolving the native real path), not just on an exotic one, so
+    // it is broader than "detection is impossible on this platform" and is
+    // therefore documented here rather than assumed obvious.
     console.warn(
-      `[@grunt/store-sqlite] Could not resolve the real (native) path of "${path}" ` +
-        'to verify it is local; allowing.'
+      `[@grunt/store-sqlite] Could not resolve the real (native) path of "${path}"; ` +
+        'the locality check could not be completed. Allowing without verifying locality.'
     );
     return;
   }
@@ -146,24 +158,50 @@ export function isNetworkFsType(fsType: string): boolean {
   return NETWORK_FS_TYPES.has(fsType);
 }
 
-function assertLocalLinux(path: string): void {
+/**
+ * Linux network-mount rejection logic, decoupled from reading the real
+ * `/proc/mounts` (that's {@link assertLocalLinuxOnDisk}) so it can be driven
+ * directly with a fixture string in tests and therefore run — and be
+ * verified to actually THROW for a network mount, not just parse a fixture
+ * — on any platform, not only Linux.
+ *
+ * Unlike the Windows check, this needs no real filesystem access: mount-
+ * point matching is pure string-prefix matching against `dbPath` (the file
+ * itself need not exist yet, so there's no ancestor-climb/`realpathSync`
+ * step here the way there is on Windows), which is what makes this
+ * deterministic enough to unit-test against a fixture.
+ */
+export function assertLocalLinux(dbPath: string, mountsContent: string): void {
+  const fsType = findMountFsType(mountsContent, dbPath);
+  if (fsType && isNetworkFsType(fsType)) {
+    throw new NonLocalDatabaseError(
+      `Database path "${dbPath}" is on a network filesystem (type "${fsType}"); refusing to open it.`
+    );
+  }
+}
+
+function assertLocalLinuxOnDisk(path: string): void {
   let mounts: string;
   try {
     mounts = readFileSync('/proc/mounts', 'utf8');
   } catch {
+    // Deliberate fail-open on a detection FAILURE (not "platform
+    // unsupported" — linux is fully supported, /proc/mounts is just
+    // unreadable right now, e.g. a restrictive container/sandbox). This is
+    // broader than the authorised "detection is impossible on this
+    // platform" case: it means a real Linux deployment with a broken
+    // /proc/mounts would silently allow a path the spec calls a hard
+    // startup failure. Kept as fail-open anyway (blocking startup on a
+    // transient read failure is worse), but made explicit here rather than
+    // left implicit.
     console.warn(
-      `[@grunt/store-sqlite] Could not read /proc/mounts to verify "${path}" is local; allowing.`
+      `[@grunt/store-sqlite] Could not read /proc/mounts for "${path}"; ` +
+        'the locality check could not be completed. Allowing without verifying locality.'
     );
     return;
   }
 
-  const target = findExistingAncestor(path) ?? path;
-  const fsType = findMountFsType(mounts, target);
-  if (fsType && isNetworkFsType(fsType)) {
-    throw new NonLocalDatabaseError(
-      `Database path "${path}" is on a network filesystem (type "${fsType}"); refusing to open it.`
-    );
-  }
+  assertLocalLinux(path, mounts);
 }
 
 // --- entry point -----------------------------------------------------------
@@ -183,7 +221,7 @@ export function assertLocalDatabasePath(path: string): void {
   if (process.platform === 'win32') {
     assertLocalWindows(path);
   } else if (process.platform === 'linux') {
-    assertLocalLinux(path);
+    assertLocalLinuxOnDisk(path);
   } else {
     console.warn(
       `[@grunt/store-sqlite] Local-database-path verification is not implemented for platform ` +

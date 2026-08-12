@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "@grunt/core": "*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
   }
 }
