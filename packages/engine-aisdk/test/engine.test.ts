@@ -70,6 +70,8 @@ function makeRequest(over: Partial<EngineRequest> = {}): EngineRequest {
     messages: [userMessage('hello')],
     tools: [],
     signal: new AbortController().signal,
+    chatId: 'chat-1',
+    messageId: 'msg-req-1',
     ...over,
   };
 }

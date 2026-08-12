@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { APICallError } from '@ai-sdk/provider';
 import { jsonSchema, stepCountIs, streamText, tool } from 'ai';
 import type { JSONSchema7, LanguageModel, LanguageModelUsage, TextStreamPart, ToolSet } from 'ai';
@@ -95,19 +94,10 @@ export class AiSdkChatEngine implements ChatEngine {
     }
 
     // Tool executions need a ToolContext, which wants a chatId and a
-    // messageId. chatId comes from the conversation itself (every message
-    // in a request shares one chat). messageId has no real counterpart yet:
-    // `EngineRequest` (packages/core, already committed) carries no id for
-    // the assistant message currently being produced -- it doesn't exist
-    // until the caller persists it, which happens *after* this stream
-    // starts. Synthesizing one here is safe for this call's own tool
-    // bookkeeping (every tool call within one stream() invocation shares
-    // the same id) but will NOT match whatever id the caller eventually
-    // gives that message; a real correlation id would require
-    // `EngineRequest` to grow a field, which is out of scope for task 14
-    // (see task-14-15-report.md).
-    const chatId = req.messages.at(-1)?.chatId ?? '';
-    const messageId = randomUUID();
+    // messageId -- both now carried directly on EngineRequest (task 16
+    // decision #1), supplied by the TurnRunner, which allocates and
+    // persists the assistant message row before calling stream().
+    const { chatId, messageId } = req;
 
     try {
       const caps = {

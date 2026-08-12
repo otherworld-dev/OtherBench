@@ -8,6 +8,16 @@ export interface EngineRequest {
   messages: CanonMessage[];
   tools: ToolSpec[];
   signal: AbortSignal;
+  /** The chat this turn belongs to -- every message in `messages` shares it. */
+  chatId: string;
+  /**
+   * The id of the assistant message this stream is producing. The caller
+   * (the TurnRunner) allocates this id and persists the row *before*
+   * calling `stream()`, so it is always available here -- unlike `chatId`,
+   * it cannot be derived from `messages` (the message doesn't exist yet).
+   * Tool executions need this for `ToolContext.messageId` correlation.
+   */
+  messageId: string;
 }
 
 export type EngineEvent =

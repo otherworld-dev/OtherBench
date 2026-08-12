@@ -55,6 +55,8 @@ function makeRequest(prompt: string, over: Partial<EngineRequest> = {}): EngineR
     messages: [userMessage(prompt)],
     tools: [],
     signal: new AbortController().signal,
+    chatId: 'chat-1',
+    messageId: 'msg-req-1',
     ...over,
   };
 }
