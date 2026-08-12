@@ -1,5 +1,6 @@
 import type { TurnEvent, TurnRunner } from '@grunt/core/domain/turn.js';
-import type { MessageStatus } from '@grunt/core/types/messages.js';
+import type { Store } from '@grunt/core/ports/store.js';
+import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
 
 export interface StreamBuffer {
   chatId: string;
@@ -15,6 +16,51 @@ export interface StreamRegistryOptions {
 }
 
 const DEFAULT_RETENTION_MS = 60_000;
+
+/**
+ * Turns one persisted message's `parts` (already coalesced by
+ * TurnRunner.appendDelta -- consecutive same-kind deltas merge into a single
+ * part) back into the `TurnEvent`s that would replay to produce them, plus a
+ * trailing `error` event when the row carries one and a final `status`
+ * event. `image`/`file` parts are never produced by a streaming delta (they
+ * only ever arrive as part of a user message's initial parts, and user
+ * messages are never assistant/streamed), so there is nothing to reconstruct
+ * for those kinds.
+ */
+function reconstructEvents(message: CanonMessage): TurnEvent[] {
+  const events: TurnEvent[] = [];
+  for (const part of message.parts) {
+    switch (part.type) {
+      case 'text':
+        events.push({ messageId: message.id, type: 'text-delta', text: part.text });
+        break;
+      case 'reasoning':
+        events.push({ messageId: message.id, type: 'reasoning-delta', text: part.text });
+        break;
+      case 'tool-call':
+        events.push({ messageId: message.id, type: 'tool-call', id: part.id, name: part.name, args: part.args });
+        break;
+      case 'tool-result':
+        events.push({
+          messageId: message.id,
+          type: 'tool-result',
+          id: part.id,
+          name: part.name,
+          result: part.result,
+          isError: part.isError,
+        });
+        break;
+      case 'image':
+      case 'file':
+        break;
+    }
+  }
+  if (message.error) {
+    events.push({ messageId: message.id, type: 'error', error: message.error });
+  }
+  events.push({ messageId: message.id, type: 'status', status: message.status });
+  return events;
+}
 
 /**
  * Keeps one in-memory buffer of `TurnEvent`s per message id, fed by
@@ -40,6 +86,12 @@ const DEFAULT_RETENTION_MS = 60_000;
  * registry has no source of truth for which chat a message belongs to
  * other than what it's told (see task-16-18-report.md for why `TurnEvent`
  * deliberately carries no `chatId` of its own).
+ *
+ * The in-memory log is necessarily lossy across two boundaries: a server
+ * restart (every buffer is gone -- it never persisted anywhere) and the
+ * retention window (a completed buffer is evicted `retentionMs` after it
+ * stops streaming). `snapshot()` covers both by falling back to the `Store`
+ * for any message id it has no live buffer for -- see `snapshotFromStore`.
  */
 export class StreamRegistry {
   private readonly buffers = new Map<string, StreamBuffer>();
@@ -47,7 +99,11 @@ export class StreamRegistry {
   private readonly evictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly retentionMs: number;
 
-  constructor(turnRunner: TurnRunner, options: StreamRegistryOptions = {}) {
+  constructor(
+    turnRunner: TurnRunner,
+    private readonly store: Store,
+    options: StreamRegistryOptions = {}
+  ) {
     this.retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS;
     turnRunner.on((event) => this.handleEvent(event));
   }
@@ -70,9 +126,24 @@ export class StreamRegistry {
       if (event.status !== 'streaming') this.scheduleEviction(buffer);
     }
 
+    // Each subscriber is invoked in its own try/catch so one bad callback
+    // (e.g. `controller.enqueue()` in the SSE transport, racing a client
+    // disconnect against its own unsubscribe) can neither stop the other
+    // subscribers from receiving this event nor propagate up into
+    // `TurnRunner.emit`'s caller -- see turn.ts's `emit()` for the matching
+    // fix on the producer side of this same event bus.
     const subscribers = this.chatSubscribers.get(buffer.chatId);
     if (subscribers) {
-      for (const cb of subscribers) cb(event);
+      for (const cb of subscribers) {
+        try {
+          cb(event);
+        } catch (err) {
+          console.error(
+            `[StreamRegistry] subscriber threw while handling '${event.type}' for message ${event.messageId} (chat ${buffer.chatId}):`,
+            err
+          );
+        }
+      }
     }
   }
 
@@ -88,9 +159,52 @@ export class StreamRegistry {
     this.evictionTimers.set(buffer.messageId, timer);
   }
 
-  /** Every buffer (in-flight, or completed within the retention window) belonging to `chatId`. */
+  /**
+   * Every buffer (in-flight, or completed within the retention window)
+   * belonging to `chatId`, plus one reconstructed from the persisted
+   * message row for every assistant message in this chat that has no live
+   * buffer -- e.g. a server restart lost every in-memory buffer, or this
+   * one aged out of the retention window. A message id is always served
+   * from exactly one of the two sources (in-memory is preferred whenever
+   * both exist, via `excludeIds` below), so a reconnecting client never
+   * sees duplicated content at this seam.
+   */
   snapshot(chatId: string): StreamBuffer[] {
-    return [...this.buffers.values()].filter((b) => b.chatId === chatId);
+    const live = [...this.buffers.values()].filter((b) => b.chatId === chatId);
+    const excludeIds = new Set(live.map((b) => b.messageId));
+    return [...live, ...this.snapshotFromStore(chatId, excludeIds)];
+  }
+
+  /**
+   * Reconstructs a `StreamBuffer` for every assistant message in `chatId`
+   * that isn't already covered by an in-memory buffer, straight from
+   * `Store.messages`. `parts` (as of the last checkpoint -- TurnRunner
+   * checkpoints every 500ms while streaming, and unconditionally at
+   * completion) is turned back into the `TurnEvent`s that would have
+   * produced it: one delta/tool event per part, in order, plus a trailing
+   * `error` event if the row has one and a `status` event carrying the
+   * row's current status. Replaying that reconstructed list reproduces
+   * exactly the persisted parts -- no gap, no duplication -- the same
+   * guarantee the live in-memory path provides, just built from a single
+   * coalesced snapshot instead of the original delta-by-delta history.
+   */
+  private snapshotFromStore(chatId: string, excludeIds: Set<string>): StreamBuffer[] {
+    const buffers: StreamBuffer[] = [];
+    const queue = [...this.store.messages.roots(chatId)];
+    while (queue.length > 0) {
+      const message = queue.shift();
+      if (!message) continue;
+      queue.push(...this.store.messages.children(message.id));
+      if (message.role !== 'assistant' || excludeIds.has(message.id)) continue;
+
+      buffers.push({
+        chatId,
+        messageId: message.id,
+        events: reconstructEvents(message),
+        status: message.status,
+      });
+    }
+    return buffers;
   }
 
   /** Subscribes to live events for every message in `chatId`. Returns an unsubscribe function. */

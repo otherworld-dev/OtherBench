@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
@@ -107,7 +107,7 @@ beforeEach(() => {
     engine: manual.engine,
     registry: {} as never,
     turnRunner,
-    streamRegistry: new StreamRegistry(turnRunner),
+    streamRegistry: new StreamRegistry(turnRunner, store),
     close: () => {},
   };
   subscribeAutoTitle(container);
@@ -411,6 +411,42 @@ describe('auto-title', () => {
     expect(container.store.chats.get(chatId)?.title).toBe(longUserText.slice(0, 48));
     // The turn itself is unaffected by the title-generation failure.
     expect(container.store.messages.get(mainMessageId)?.status).toBe('complete');
+  });
+
+  it('uses the fallback title when the 10s timer aborts a title generation that already streamed partial text (no finish, no error)', async () => {
+    vi.useFakeTimers();
+    try {
+      const created = await createChat();
+      const chatId = created['id'] as string;
+      const userText = 'Please explain quantum entanglement in simple terms suitable for a curious beginner';
+      const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], userText);
+      const mainMessageId = assistantMessageIds[0] as string;
+
+      push(mainMessageId, FINISH);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const titleReq = requests.find((r) => r.messageId !== mainMessageId);
+      expect(titleReq).toBeDefined();
+
+      // The title-generation stream produces some partial text, then just
+      // hangs -- no `finish`, no `error` -- exactly like a slow/unresponsive
+      // provider that the 10s watchdog is meant to catch.
+      push(titleReq!.messageId, { type: 'text-delta', text: 'Quantum ent' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The 10s timeout fires and aborts the stream. `manualEngine` ends the
+      // stream cleanly on abort (no `error` event), mirroring every real
+      // engine observed so far -- so the loop exits with `generated` holding
+      // partial text. The documented behaviour (chats.ts:196-204) is that
+      // ANY failure, including a timeout, uses the fallback -- never a
+      // garbled partial title. (10_000 = chats.ts's private
+      // TITLE_GENERATION_TIMEOUT_MS -- not exported, so duplicated here.)
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(container.store.chats.get(chatId)?.title).toBe(userText.slice(0, 48));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never re-triggers on a second turn in the same chat', async () => {

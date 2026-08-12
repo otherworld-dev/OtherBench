@@ -15,7 +15,7 @@ function makeContainer(): Container {
     engine,
     registry: {} as never,
     turnRunner,
-    streamRegistry: new StreamRegistry(turnRunner),
+    streamRegistry: new StreamRegistry(turnRunner, store),
     close: () => {},
   };
 }

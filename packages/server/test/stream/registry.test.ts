@@ -121,7 +121,7 @@ describe('StreamRegistry', () => {
     const store = new InMemoryStore();
     const { engine } = manualEngine();
     const runner = new TurnRunner(store, engine);
-    const registry = new StreamRegistry(runner);
+    const registry = new StreamRegistry(runner, store);
 
     const result = await runner.run({
       chatId: 'chat-1',
@@ -140,7 +140,7 @@ describe('StreamRegistry', () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
     const runner = new TurnRunner(store, engine);
-    const registry = new StreamRegistry(runner);
+    const registry = new StreamRegistry(runner, store);
 
     const result = await runner.run({
       chatId: 'chat-1',
@@ -169,7 +169,7 @@ describe('StreamRegistry', () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
     const runner = new TurnRunner(store, engine);
-    const registry = new StreamRegistry(runner);
+    const registry = new StreamRegistry(runner, store);
 
     const result = await runner.run({
       chatId: 'chat-1',
@@ -208,7 +208,7 @@ describe('StreamRegistry', () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
     const runner = new TurnRunner(store, engine);
-    const registry = new StreamRegistry(runner);
+    const registry = new StreamRegistry(runner, store);
 
     const result = await runner.run({
       chatId: 'chat-1',
@@ -237,13 +237,118 @@ describe('StreamRegistry', () => {
     unsubscribe();
   });
 
-  it('retains a completed buffer for late subscribers within the retention window, then evicts it', async () => {
+  it('a throwing subscriber does not stop fan-out or block the other subscriber from receiving every event', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const registry = new StreamRegistry(runner, store);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    registry.registerTurn('chat-1', result.assistantMessageIds);
+    const messageId = result.assistantMessageIds[0] as string;
+
+    // Registered first, so (if unwrapped) its throw would abort the fan-out
+    // loop in `handleEvent` before the healthy subscriber below ever runs.
+    registry.subscribe('chat-1', () => {
+      throw new Error('subscriber boom');
+    });
+    const received: TurnEvent[] = [];
+    registry.subscribe('chat-1', (e) => received.push(e));
+
+    push(messageId, { type: 'text-delta', text: 'Hello' });
+    await flush();
+    push(messageId, FINISH);
+    await flush();
+
+    expect(received.map((e) => e.type)).toEqual(['text-delta', 'finish', 'status']);
+    // The variant's own persisted state is unaffected by the throwing subscriber.
+    expect(store.messages.get(messageId)?.status).toBe('complete');
+  });
+
+  it('falls back to the persisted message row when the in-memory log is lost (e.g. a server restart mid-turn), with a correct terminal status and no duplicated content', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const registry = new StreamRegistry(runner, store);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    registry.registerTurn('chat-1', result.assistantMessageIds);
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Hello ' });
+    await flush();
+    push(messageId, { type: 'text-delta', text: 'world' });
+    await flush();
+    push(messageId, FINISH);
+    await flush();
+
+    // Simulate a server restart: a brand-new registry over the SAME store,
+    // with no subscription history and therefore no in-memory buffer at all
+    // for this message id.
+    const freshRunner = new TurnRunner(store, engine);
+    const freshRegistry = new StreamRegistry(freshRunner, store);
+
+    const snapshot = freshRegistry.snapshot('chat-1');
+    const buffer = snapshot.find((b) => b.messageId === messageId);
+    expect(buffer).toBeDefined();
+    // The row's current (terminal) status, not a stuck 'streaming'.
+    expect(buffer?.status).toBe('complete');
+
+    // Replaying the reconstructed events reproduces exactly the checkpointed
+    // content -- no gap, no duplication -- the same property the in-memory
+    // path already satisfies (see the "no gap and no duplication" test
+    // above).
+    const textDeltas = buffer!.events.filter(
+      (e): e is TurnEvent & { type: 'text-delta' } => e.type === 'text-delta'
+    );
+    expect(textDeltas.map((e) => e.text).join('')).toBe('Hello world');
+  });
+
+  it('prefers the in-memory buffer over the DB fallback when both exist, so a message is never served from both at once', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const registry = new StreamRegistry(runner, store);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    registry.registerTurn('chat-1', result.assistantMessageIds);
+    const messageId = result.assistantMessageIds[0] as string;
+
+    // Two deltas within one checkpoint window: the DB row's `parts` reflects
+    // only what's been checkpointed, but the in-memory buffer has both raw
+    // events.
+    push(messageId, { type: 'text-delta', text: 'One ' });
+    await flush();
+    push(messageId, { type: 'text-delta', text: 'Two' });
+    await flush();
+
+    const snapshot = registry.snapshot('chat-1');
+    expect(snapshot).toHaveLength(1); // not duplicated across both sources
+    expect(snapshot[0]?.status).toBe('streaming');
+  });
+
+  it('evicts a completed buffer from memory after the retention window; snapshot() still reflects it correctly via the DB fallback', async () => {
     vi.useFakeTimers();
     try {
       const store = new InMemoryStore();
       const { engine, push } = manualEngine();
       const runner = new TurnRunner(store, engine);
-      const registry = new StreamRegistry(runner, { retentionMs: 60_000 });
+      const registry = new StreamRegistry(runner, store, { retentionMs: 60_000 });
 
       const result = await runner.run({
         chatId: 'chat-1',
@@ -258,12 +363,24 @@ describe('StreamRegistry', () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(registry.snapshot('chat-1')).toHaveLength(1);
+      // Still the live buffer -- its full event history includes `finish`.
+      expect(registry.snapshot('chat-1')[0]?.events.map((e) => e.type)).toContain('finish');
 
       await vi.advanceTimersByTimeAsync(59_000);
       expect(registry.snapshot('chat-1')).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(registry.snapshot('chat-1')).toHaveLength(0);
+      // The in-memory buffer is now evicted (bounding memory is still the
+      // retention window's job) -- but the persisted row is still
+      // 'complete', so snapshot() falls back to it (see IMPORTANT 4, task
+      // 16-18 report) rather than reporting nothing. Its events are
+      // reconstructed from the row, not the original live history, so there
+      // is no `finish` event in it -- proof this came from the DB fallback,
+      // not a buffer that (bug) never actually got evicted.
+      const afterEviction = registry.snapshot('chat-1');
+      expect(afterEviction).toHaveLength(1);
+      expect(afterEviction[0]?.status).toBe('complete');
+      expect(afterEviction[0]?.events.map((e) => e.type)).not.toContain('finish');
     } finally {
       vi.useRealTimers();
     }

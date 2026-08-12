@@ -380,6 +380,69 @@ describe('TurnRunner.run', () => {
 
     // The sibling is untouched by the cancellation.
     expect(store.messages.get(otherId)?.status).toBe('streaming');
+
+    // Usage is retained too: the engine never emitted a `finish` for the
+    // cancelled variant (manualEngine ends the stream cleanly on abort, like
+    // every real engine observed so far -- see the comment in turn.ts), so
+    // there is no source of partial token counts. A zeroed usage row is
+    // written anyway so the cancellation is never invisible to
+    // usage.list()/billing views -- this is a documented limitation of the
+    // current ChatEngine port (no incremental-usage event), not an estimate.
+    const usageRows = store.usage.list('chat-1');
+    const cancelledUsage = usageRows.find((u) => u.messageId === cancelledId);
+    expect(cancelledUsage).toBeDefined();
+    expect(cancelledUsage).toMatchObject({
+      chatId: 'chat-1',
+      messageId: cancelledId,
+      profileId: 'profile-a',
+      tokensIn: 0,
+      tokensOut: 0,
+      tokensCached: 0,
+      tokensReasoning: 0,
+    });
+    // The still-streaming sibling has no usage row yet -- it hasn't finished
+    // or been cancelled, so nothing should have been written for it.
+    expect(usageRows.some((u) => u.messageId === otherId)).toBe(false);
+  });
+
+  it('a throwing listener does not corrupt the variant or block other listeners from receiving every event', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+
+    // Registered first, so (if unwrapped) its throw would abort `emit`'s
+    // loop before the healthy listener below ever runs -- and, because
+    // `emit()` is called from inside `runVariant`'s own try block, the
+    // synchronous throw would propagate out and be misclassified as a
+    // provider error via `classifyProviderError`.
+    runner.on(() => {
+      throw new Error('listener boom');
+    });
+    const healthyEvents: TurnEvent[] = [];
+    runner.on((e) => healthyEvents.push(e));
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Hello' });
+    await flush();
+    push(messageId, { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' });
+    await flush();
+
+    // The variant completed normally -- the throwing listener never leaked
+    // into runVariant's own error handling.
+    const finalMessage = store.messages.get(messageId);
+    expect(finalMessage?.status).toBe('complete');
+    expect(textParts(finalMessage!.parts)).toBe('Hello');
+
+    // The healthy listener still received every event, in order.
+    expect(healthyEvents.map((e) => e.type)).toEqual(['text-delta', 'finish', 'status']);
   });
 
   it('does not move head_message_id even after every variant completes', async () => {

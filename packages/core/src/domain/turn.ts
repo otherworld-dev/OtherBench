@@ -40,6 +40,13 @@ export interface TurnRunnerOptions {
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
 
 /**
+ * Written for a variant cancelled before the engine ever reported usage --
+ * see the comment at this file's only use site (the end of `runVariant`) for
+ * why zero, rather than an estimate, is the honest answer here.
+ */
+const ZERO_USAGE: Usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
+
+/**
  * Appends streamed text (or reasoning) onto `parts`, merging into the
  * trailing part when it is already the same kind (the common case -- a
  * run of `text-delta` events building up one paragraph) rather than
@@ -91,8 +98,25 @@ export class TurnRunner {
     };
   }
 
+  /**
+   * Each listener is invoked in its own try/catch: `emit()` is called from
+   * inside `runVariant`'s own try block (see `run()`'s call site below), so
+   * an uncaught throw from any one subscriber -- plausibly `controller.enqueue()`
+   * in the SSE transport when a client disconnect races its unsubscribe --
+   * would otherwise propagate out of `emit()`, be caught by `runVariant`'s
+   * `catch`, and mis-persist that variant as a provider error via
+   * `classifyProviderError`. A broadcast fault must never corrupt the
+   * variant's own state, nor stop the remaining listeners from seeing the
+   * event.
+   */
   private emit(event: TurnEvent): void {
-    for (const cb of this.listeners) cb(event);
+    for (const cb of this.listeners) {
+      try {
+        cb(event);
+      } catch (err) {
+        console.error(`[TurnRunner] listener threw while handling '${event.type}' for message ${event.messageId}:`, err);
+      }
+    }
   }
 
   async run(input: TurnInput): Promise<TurnResult> {
@@ -243,8 +267,22 @@ export class TurnRunner {
     // final status: a cancellation that happens to race a `finish` event
     // (or, in the ordinary case, a `complete` run) both keep whatever
     // usage the engine actually reported.
+    //
+    // A cancellation that DIDN'T race a `finish` -- the common case, since
+    // an abort ends the stream cleanly with no terminal event at all (see
+    // the comment above) -- has no usage to keep: the `ChatEngine` port has
+    // no incremental-usage event, only a terminal `finish { usage }`, so
+    // there is genuinely no partial token count available here. Rather than
+    // silently writing nothing (which made every cancellation invisible to
+    // `usage.list()`/billing views), a zeroed usage row is written instead
+    // so the cancellation is still recorded. The zeros are a known,
+    // documented limitation of the current engine port -- not an estimate
+    // of tokens actually consumed -- and should be revisited if `ChatEngine`
+    // ever grows a way to report partial usage before completion.
     if (usage) {
       this.writeUsage(chatId, messageId, profile, usage, this.now() - startedAt);
+    } else if (status === 'cancelled') {
+      this.writeUsage(chatId, messageId, profile, ZERO_USAGE, this.now() - startedAt);
     }
   }
 

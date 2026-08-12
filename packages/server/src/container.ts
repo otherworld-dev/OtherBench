@@ -101,7 +101,7 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   const registry = new ProviderRegistry();
   const engine = new AiSdkChatEngine(registry);
   const turnRunner = new TurnRunner(store, engine);
-  const streamRegistry = new StreamRegistry(turnRunner);
+  const streamRegistry = new StreamRegistry(turnRunner, store);
 
   const container: Container = {
     store,

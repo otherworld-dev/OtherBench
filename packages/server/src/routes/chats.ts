@@ -215,7 +215,16 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     const prompt = buildTitlePrompt(userText, assistantText);
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TITLE_GENERATION_TIMEOUT_MS);
+    // This controller is only ever aborted by the timer below, so this flag
+    // is currently equivalent to `controller.signal.aborted` -- but naming
+    // it explicitly "the 10s watchdog fired" (rather than "aborted", a
+    // broader concept) keeps the fallback decision below correct by
+    // construction even if this function ever grows another abort source.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TITLE_GENERATION_TIMEOUT_MS);
     let generated = '';
     try {
       for await (const event of container.engine.stream({
@@ -231,6 +240,20 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
       }
     } finally {
       clearTimeout(timer);
+    }
+
+    // The engine can end a stream cleanly with no `error` event when the
+    // signal it was given aborts (mirrors TurnRunner.runVariant's own
+    // handling of the same behaviour, turn.ts) -- so a timeout leaves
+    // `generated` holding whatever partial text streamed before the 10s
+    // watchdog fired, not an empty string. Per this function's documented
+    // contract (ANY failure -- engine error, empty result, OR timeout --
+    // uses the fallback), a timeout must win over partial text
+    // unconditionally, rather than falling through to `truncateTitle`
+    // whenever `generated` happens to be non-empty.
+    if (timedOut) {
+      container.store.chats.update(chatId, { title: fallback });
+      return;
     }
 
     const title = truncateTitle(generated);

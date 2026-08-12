@@ -17,7 +17,7 @@ beforeEach(() => {
     engine,
     registry: {} as never,
     turnRunner,
-    streamRegistry: new StreamRegistry(turnRunner),
+    streamRegistry: new StreamRegistry(turnRunner, store),
     close: () => {},
   };
   container.store.connections.create({
