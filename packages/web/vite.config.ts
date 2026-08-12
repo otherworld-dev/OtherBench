@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
@@ -20,5 +20,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
     css: true,
+    // `e2e/**` holds @playwright/test specs (playwright.config.ts's own
+    // testDir), which use a different `test`/`expect` -- vitest's default
+    // include pattern (`**/*.spec.ts`) would otherwise try to collect them
+    // too and fail on the import.
+    exclude: [...configDefaults.exclude, 'e2e/**'],
   },
 });
