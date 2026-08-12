@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { ConnectionTestResult, DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
+import { StreamRegistry } from '../../src/stream/registry.js';
 
 let container: Container;
 let secrets: FakeSecretStore;
@@ -11,7 +13,17 @@ let engine: FakeChatEngine;
 beforeEach(() => {
   secrets = new FakeSecretStore();
   engine = new FakeChatEngine([]);
-  container = { store: new InMemoryStore(), secrets, engine, registry: {} as never, close: () => {} };
+  const store = new InMemoryStore();
+  const turnRunner = new TurnRunner(store, engine);
+  container = {
+    store,
+    secrets,
+    engine,
+    registry: {} as never,
+    turnRunner,
+    streamRegistry: new StreamRegistry(turnRunner),
+    close: () => {},
+  };
 });
 
 function app() {

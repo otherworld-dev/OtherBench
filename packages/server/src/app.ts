@@ -5,6 +5,7 @@ import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
+import { turnsRoutes } from './routes/turns.js';
 
 export interface AppOptions {
   /**
@@ -36,6 +37,13 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/connections', connectionsRoutes(container));
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));
+  // turnsRoutes defines full paths under both /chats/... and /messages/...
+  // (a turn spans both namespaces: POST .../turns, GET .../stream, POST
+  // .../head live under /chats/:id/..., while POST .../cancel lives under
+  // /messages/:id/...) so it mounts at the authed app's own root rather
+  // than a single fixed prefix like the routers above. chatsRoutes (task
+  // 18) will mount at '/chats' alongside it with no path collisions.
+  authed.route('/', turnsRoutes(container));
   app.route('/api', authed);
 
   app.onError((err, c) => {

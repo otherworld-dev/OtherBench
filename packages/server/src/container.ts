@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store } from '@grunt/core/ports/store.js';
@@ -10,6 +11,7 @@ import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { StreamRegistry } from './stream/registry.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -17,6 +19,10 @@ export interface Container {
   secrets: SecretStore;
   engine: ChatEngine;
   registry: ProviderRegistry;
+  /** The turn lifecycle state machine (packages/core/src/domain/turn.ts) -- one instance per server process, shared by every chat. */
+  turnRunner: TurnRunner;
+  /** Live/recently-completed SSE buffers, fed by `turnRunner`'s events -- see src/stream/registry.ts. */
+  streamRegistry: StreamRegistry;
   close(): void;
 }
 
@@ -76,12 +82,16 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 
   const registry = new ProviderRegistry();
   const engine = new AiSdkChatEngine(registry);
+  const turnRunner = new TurnRunner(store, engine);
+  const streamRegistry = new StreamRegistry(turnRunner);
 
   return {
     store,
     secrets,
     engine,
     registry,
+    turnRunner,
+    streamRegistry,
     close: () => store.close(),
   };
 }

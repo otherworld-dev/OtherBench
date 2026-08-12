@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
+import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { Container } from '../src/container.js';
+import { StreamRegistry } from '../src/stream/registry.js';
 import {
   assertServeSecurity,
   isLoopbackHost,
@@ -11,7 +13,18 @@ import {
 } from '../src/cli.js';
 
 function fakeContainer(): Container {
-  return { store: new InMemoryStore(), secrets: new FakeSecretStore(), engine: new FakeChatEngine([]), registry: {} as never, close: () => {} };
+  const store = new InMemoryStore();
+  const engine = new FakeChatEngine([]);
+  const turnRunner = new TurnRunner(store, engine);
+  return {
+    store,
+    secrets: new FakeSecretStore(),
+    engine,
+    registry: {} as never,
+    turnRunner,
+    streamRegistry: new StreamRegistry(turnRunner),
+    close: () => {},
+  };
 }
 
 function fakeDeps() {

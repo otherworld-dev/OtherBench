@@ -1,12 +1,25 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
+import { StreamRegistry } from '../../src/stream/registry.js';
 
 let container: Container;
 
 beforeEach(() => {
-  container = { store: new InMemoryStore(), secrets: new FakeSecretStore(), engine: new FakeChatEngine([]), registry: {} as never, close: () => {} };
+  const store = new InMemoryStore();
+  const engine = new FakeChatEngine([]);
+  const turnRunner = new TurnRunner(store, engine);
+  container = {
+    store,
+    secrets: new FakeSecretStore(),
+    engine,
+    registry: {} as never,
+    turnRunner,
+    streamRegistry: new StreamRegistry(turnRunner),
+    close: () => {},
+  };
   container.store.connections.create({
     id: 'conn-1',
     name: 'Conn',
