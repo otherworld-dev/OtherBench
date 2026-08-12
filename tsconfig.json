@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/store-sqlite" },
-    { "path": "packages/engine-aisdk" }
+    { "path": "packages/engine-aisdk" },
+    { "path": "packages/server" }
   ]
 }

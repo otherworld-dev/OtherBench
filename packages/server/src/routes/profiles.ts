@@ -1,0 +1,116 @@
+import { randomUUID } from 'node:crypto';
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import type { Container } from '../container.js';
+import { optionalBoolean, optionalNullableString, requireNonEmptyString } from '../validation.js';
+
+const DEFAULT_TOOL_POLICY: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' };
+
+interface ProfileBody {
+  name?: unknown;
+  description?: unknown;
+  colour?: unknown;
+  connectionId?: unknown;
+  modelId?: unknown;
+  systemPrompt?: unknown;
+  params?: unknown;
+  toolPolicy?: unknown;
+  isDefault?: unknown;
+  archivedAt?: unknown;
+}
+
+function parseParams(value: unknown): ModelParams {
+  if (value === undefined) return {};
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HTTPException(400, { message: '"params" must be an object.' });
+  }
+  // ModelParams' fields are all optional numbers; trust the shape rather
+  // than re-deriving a bespoke schema for four passthrough numeric knobs.
+  return value as ModelParams;
+}
+
+function parseToolPolicy(value: unknown): ToolPolicy {
+  if (value === undefined) return DEFAULT_TOOL_POLICY;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new HTTPException(400, { message: '"toolPolicy" must be an object.' });
+  }
+  const v = value as Record<string, unknown>;
+  const fs = v['fs'];
+  if (fs !== undefined && fs !== 'off' && fs !== 'read' && fs !== 'readwrite') {
+    throw new HTTPException(400, { message: '"toolPolicy.fs" must be one of: off, read, readwrite.' });
+  }
+  const approvalMode = v['approvalMode'];
+  if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
+    throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
+  }
+  return {
+    fs: (fs as ToolPolicy['fs']) ?? DEFAULT_TOOL_POLICY.fs,
+    shell: typeof v['shell'] === 'boolean' ? v['shell'] : DEFAULT_TOOL_POLICY.shell,
+    mcpServerIds: Array.isArray(v['mcpServerIds']) ? (v['mcpServerIds'] as string[]) : DEFAULT_TOOL_POLICY.mcpServerIds,
+    approvalMode: (approvalMode as ToolPolicy['approvalMode']) ?? DEFAULT_TOOL_POLICY.approvalMode,
+  };
+}
+
+function getProfileOrThrow(container: Container, id: string): Profile {
+  const profile = container.store.profiles.get(id);
+  if (!profile) throw new HTTPException(404, { message: `Profile "${id}" not found.` });
+  return profile;
+}
+
+export function profilesRoutes(container: Container): Hono {
+  const app = new Hono();
+
+  app.get('/', (c) => c.json(container.store.profiles.list()));
+
+  app.post('/', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as ProfileBody;
+    const created = container.store.profiles.create({
+      id: randomUUID(),
+      name: requireNonEmptyString(body.name, 'name'),
+      description: optionalNullableString(body.description, 'description') ?? null,
+      colour: optionalNullableString(body.colour, 'colour') ?? null,
+      connectionId: requireNonEmptyString(body.connectionId, 'connectionId'),
+      modelId: requireNonEmptyString(body.modelId, 'modelId'),
+      systemPrompt: optionalNullableString(body.systemPrompt, 'systemPrompt') ?? null,
+      params: parseParams(body.params),
+      toolPolicy: parseToolPolicy(body.toolPolicy),
+      isDefault: optionalBoolean(body.isDefault, 'isDefault', false),
+      archivedAt: null,
+    });
+    return c.json(created, 201);
+  });
+
+  app.get('/:id', (c) => c.json(getProfileOrThrow(container, c.req.param('id'))));
+
+  app.patch('/:id', async (c) => {
+    const id = c.req.param('id');
+    getProfileOrThrow(container, id);
+    const body = (await c.req.json().catch(() => ({}))) as ProfileBody;
+
+    const patch: Partial<Omit<Profile, 'id'>> = {};
+    if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');
+    if (body.description !== undefined) patch.description = optionalNullableString(body.description, 'description') ?? null;
+    if (body.colour !== undefined) patch.colour = optionalNullableString(body.colour, 'colour') ?? null;
+    if (body.connectionId !== undefined) patch.connectionId = requireNonEmptyString(body.connectionId, 'connectionId');
+    if (body.modelId !== undefined) patch.modelId = requireNonEmptyString(body.modelId, 'modelId');
+    if (body.systemPrompt !== undefined) patch.systemPrompt = optionalNullableString(body.systemPrompt, 'systemPrompt') ?? null;
+    if (body.params !== undefined) patch.params = parseParams(body.params);
+    if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(body.toolPolicy);
+    if (body.isDefault !== undefined) patch.isDefault = optionalBoolean(body.isDefault, 'isDefault', false);
+    if (body.archivedAt !== undefined) {
+      patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
+    }
+
+    return c.json(container.store.profiles.update(id, patch));
+  });
+
+  app.delete('/:id', (c) => {
+    const id = c.req.param('id');
+    getProfileOrThrow(container, id);
+    container.store.profiles.delete(id);
+    return c.body(null, 204);
+  });
+
+  return app;
+}

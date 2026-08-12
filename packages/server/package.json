@@ -1,0 +1,23 @@
+{
+  "name": "@grunt/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "grunt": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b && node dist/cli.js serve"
+  },
+  "dependencies": {
+    "@grunt/core": "*",
+    "@grunt/engine-aisdk": "*",
+    "@grunt/store-sqlite": "*",
+    "@hono/node-server": "2.1.0",
+    "hono": "4.13.1"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}
