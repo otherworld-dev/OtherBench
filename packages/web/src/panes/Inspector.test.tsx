@@ -263,6 +263,15 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByTestId('grant-g1')).toBeInTheDocument();
   });
 
+  it('shows the pinned command for a commandExact grant (the default shape for an "Always allow" shell grant)', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g3', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandExact: 'npm test' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await within(grantsSection()).findByTestId('grant-g3');
+    expect(within(grantsSection()).getByText(/npm test/)).toBeInTheDocument();
+  });
+
   it('shows an honest empty state with no chat selected, and never calls the API', () => {
     render(<Inspector chat={null} profile={null} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(grantsSection()).getByText('No chat selected.')).toBeInTheDocument();

@@ -55,11 +55,34 @@ describe('ApprovalPrompt', () => {
     expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { pathPrefix: 'notes/a.txt' } });
   });
 
-  it('Always allow derives a commandPrefix constraint from a shell request\'s own "command" arg', async () => {
+  it('Always allow defaults to a commandExact constraint from a shell request\'s own "command" arg -- NOT commandPrefix (controller ruling: shell grants default to exact command)', async () => {
     const shellRequest = request({ toolName: 'run_command', source: 'shell', risk: 'execute', args: { command: 'npm test' }, summary: 'run_command: npm test' });
     const onResolve = vi.fn().mockResolvedValue(undefined);
     render(<ApprovalPrompt request={shellRequest} onResolve={onResolve} />);
     await userEvent.setup().click(screen.getByTestId('approval-always'));
+    expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { commandExact: 'npm test' } });
+  });
+
+  it('does not show the "allow with any arguments" opt-in for a non-shell (fs) request', () => {
+    render(<ApprovalPrompt request={request()} onResolve={vi.fn()} />);
+    expect(screen.queryByTestId('approval-allow-any-args-toggle')).not.toBeInTheDocument();
+  });
+
+  it('shows a plain-language warning and switches to a commandPrefix constraint only when the explicit "allow with any arguments" opt-in is checked', async () => {
+    const shellRequest = request({ toolName: 'run_command', source: 'shell', risk: 'execute', args: { command: 'npm test' }, summary: 'run_command: npm test' });
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalPrompt request={shellRequest} onResolve={onResolve} />);
+    const user = userEvent.setup();
+
+    // Opting in surfaces a plain-language warning about the scope of what's being granted.
+    const toggle = screen.getByTestId('approval-allow-any-args-toggle');
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    const warning = screen.getByTestId('approval-any-args-warning');
+    expect(warning).toHaveTextContent(/any arguments/i);
+    expect(warning).toHaveTextContent('npm test');
+
+    await user.click(screen.getByTestId('approval-always'));
     expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { commandPrefix: 'npm test' } });
   });
 

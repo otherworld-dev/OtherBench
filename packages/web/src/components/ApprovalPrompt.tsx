@@ -23,16 +23,36 @@ const RISK_LABEL: Record<ApprovalRequest['risk'], string> = {
  * for `source: 'shell'` -- see `PermissionBroker.resolve`'s own guard, which
  * this function's shell case exists specifically to satisfy rather than let
  * the request throw server-side.
+ *
+ * Controller ruling (`.superpowers/sdd/2026-08-12-grunt-v1/progress.md`):
+ * *"shell grants DEFAULT TO EXACT COMMAND. `commandPrefix` remains available
+ * but must be an explicit opt-in with a visible warning, never the default
+ * offered by the UI."* `allowAnyArgs` is that opt-in -- it is `false` unless
+ * the human has explicitly checked the warned checkbox below, so the default
+ * path through this function always produces `commandExact` for shell. A
+ * `commandPrefix` grant matches the approved program with ANY trailing
+ * arguments, which for most real programs is equivalent to arbitrary code
+ * execution (see `commandPrefixMatches`'s doc in permissions.ts for concrete
+ * examples) -- it must never be what a single click produces.
  */
-function deriveAlwaysConstraint(request: ApprovalRequest): Extract<ApprovalChoice, { choice: 'always' }>['constraint'] {
+function deriveAlwaysConstraint(
+  request: ApprovalRequest,
+  allowAnyArgs: boolean
+): Extract<ApprovalChoice, { choice: 'always' }>['constraint'] {
   const args = request.args as Record<string, unknown> | null;
   if (request.source === 'shell' && args && typeof args['command'] === 'string') {
-    return { commandPrefix: args['command'] };
+    return allowAnyArgs ? { commandPrefix: args['command'] } : { commandExact: args['command'] };
   }
   if (request.source === 'fs' && args && typeof args['path'] === 'string') {
     return { pathPrefix: args['path'] };
   }
   return null;
+}
+
+/** True when this request's args carry a shell `command` string -- the only case `deriveAlwaysConstraint` has a prefix/exact choice to make at all. */
+function isShellCommandRequest(request: ApprovalRequest): boolean {
+  const args = request.args as Record<string, unknown> | null;
+  return request.source === 'shell' && !!args && typeof args['command'] === 'string';
 }
 
 /**
@@ -47,6 +67,12 @@ function deriveAlwaysConstraint(request: ApprovalRequest): Extract<ApprovalChoic
 export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Explicit, secondary opt-in for a `commandPrefix` "always" grant -- see
+  // deriveAlwaysConstraint's doc for the ruling this defaults `false` to
+  // satisfy. Only ever consulted for a shell request with a `command` arg;
+  // meaningless (and hidden) otherwise.
+  const [allowAnyArgs, setAllowAnyArgs] = useState(false);
+  const isShellCommand = isShellCommandRequest(request);
 
   async function choose(choice: ApprovalChoice): Promise<void> {
     setPending(true);
@@ -78,6 +104,26 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
         </span>
       </div>
       <p className="text-xs text-[var(--text-muted)]">{request.summary}</p>
+      {isShellCommand && (
+        <div className="space-y-1">
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+            <input
+              type="checkbox"
+              data-testid="approval-allow-any-args-toggle"
+              checked={allowAnyArgs}
+              onChange={(e) => setAllowAnyArgs(e.target.checked)}
+            />
+            Let &ldquo;Always allow&rdquo; permit this program with any arguments, instead of only this exact command
+          </label>
+          {allowAnyArgs && (
+            <p data-testid="approval-any-args-warning" className="text-xs text-[var(--warning,#b58900)]">
+              Warning: this permits <strong>{(request.args as Record<string, unknown>)['command'] as string}</strong> to run with
+              any arguments, for every future chat, with no further approval. For most programs that is equivalent to letting it
+              run arbitrary code (e.g. via flags like <code>--node-options</code>, <code>-c core.pager=...</code>, or <code>-v /:/host</code>).
+            </p>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -110,7 +156,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           type="button"
           data-testid="approval-always"
           disabled={pending}
-          onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request) })}
+          onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
           className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-raised)] disabled:opacity-50"
         >
           Always allow
