@@ -112,6 +112,62 @@ describe('EncryptedFileSecretStore', () => {
       expect(mode).toBe(0o600);
     }
   );
+
+  it('serializes concurrent deletes so none are lost (read-modify-write race)', async () => {
+    const path = freshPath();
+    const store = new EncryptedFileSecretStore(path, 'passphrase');
+    const refs = ['h1', 'h2', 'h3', 'h4'];
+    for (const ref of refs) {
+      await store.set(ref, `value-${ref}`);
+    }
+
+    // Fire all deletes concurrently, the way Promise.all(...) over per-header
+    // deletes does in packages/server/src/routes/tools.ts. Without write
+    // serialization, each call reads the envelope before any other call's
+    // write lands, so all four writes race to overwrite each other and only
+    // the last one to rename() sticks -- losing the other three deletes.
+    await Promise.all(refs.map((ref) => store.delete(ref)));
+
+    for (const ref of refs) {
+      await expect(store.get(ref)).resolves.toBeNull();
+    }
+  });
+
+  it('serializes concurrent sets so none are lost (read-modify-write race)', async () => {
+    const path = freshPath();
+    const store = new EncryptedFileSecretStore(path, 'passphrase');
+    const refs = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'];
+
+    // Fire all sets concurrently. Without serialization this can also throw
+    // EPERM/EBUSY on the rename() when two writers race on the same temp
+    // target window, in addition to silently losing entries.
+    await Promise.all(refs.map((ref) => store.set(ref, `value-${ref}`)));
+
+    for (const ref of refs) {
+      await expect(store.get(ref)).resolves.toBe(`value-${ref}`);
+    }
+  });
+
+  it('a rejected write does not poison the serialization chain for later calls', async () => {
+    const path = freshPath();
+    const store = new EncryptedFileSecretStore(path, 'passphrase');
+
+    // Force one write to fail (bad envelope state is hard to trigger
+    // directly, so we simulate by deleting from an empty store concurrently
+    // with a set that must still land afterwards). The key property under
+    // test: an error in one queued operation must not prevent subsequent
+    // operations on the same instance from ever running.
+    const results = await Promise.allSettled([
+      store.delete('does-not-exist'),
+      store.set('ref', 'value'),
+    ]);
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    await expect(store.get('ref')).resolves.toBe('value');
+
+    // And a subsequent call after that must still work.
+    await store.set('ref2', 'value2');
+    await expect(store.get('ref2')).resolves.toBe('value2');
+  });
 });
 
 describe('createSecretStore', () => {

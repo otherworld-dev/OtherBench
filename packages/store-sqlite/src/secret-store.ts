@@ -78,6 +78,21 @@ function decryptValue(entry: EncryptedEntry, key: Buffer): string {
  * an OS-keychain-with-fallback factory.
  */
 export class EncryptedFileSecretStore implements SecretStore {
+  /**
+   * Tail of the write-serialization chain. `set`/`delete` are each a
+   * read-envelope -> mutate -> write-temp -> rename sequence with no lock of
+   * their own, so two concurrent calls on the same instance can interleave:
+   * both read the same envelope, and whichever write/rename lands second
+   * silently clobbers the first (losing an entry), or the two renames race
+   * each other outright (EPERM on Windows). Chaining every mutation onto
+   * `writeQueue` forces them to run one at a time. `.catch(() => {})` before
+   * appending the next link is required so a rejected operation doesn't
+   * permanently wedge the chain (a promise chain built with `.then` off a
+   * rejected promise stays rejected forever) -- each call still gets its own
+   * un-swallowed result via the `queued` promise below.
+   */
+  private writeQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly filePath: string,
     private readonly passphrase: string
@@ -92,21 +107,34 @@ export class EncryptedFileSecretStore implements SecretStore {
   }
 
   async set(ref: string, value: string): Promise<void> {
-    const envelope = (await this.readEnvelope()) ?? {
-      version: 1,
-      salt: randomBytes(SALT_LENGTH).toString('base64'),
-      entries: {},
-    };
-    const key = deriveKey(this.passphrase, envelope.salt);
-    envelope.entries[ref] = encryptValue(value, key);
-    await this.writeEnvelope(envelope);
+    return this.enqueue(async () => {
+      const envelope = (await this.readEnvelope()) ?? {
+        version: 1,
+        salt: randomBytes(SALT_LENGTH).toString('base64'),
+        entries: {},
+      };
+      const key = deriveKey(this.passphrase, envelope.salt);
+      envelope.entries[ref] = encryptValue(value, key);
+      await this.writeEnvelope(envelope);
+    });
   }
 
   async delete(ref: string): Promise<void> {
-    const envelope = await this.readEnvelope();
-    if (!envelope || !(ref in envelope.entries)) return;
-    delete envelope.entries[ref];
-    await this.writeEnvelope(envelope);
+    return this.enqueue(async () => {
+      const envelope = await this.readEnvelope();
+      if (!envelope || !(ref in envelope.entries)) return;
+      delete envelope.entries[ref];
+      await this.writeEnvelope(envelope);
+    });
+  }
+
+  /** Runs `task` after every previously-enqueued task has settled. */
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const queued = this.writeQueue.then(task);
+    // Swallow so a rejection doesn't poison the chain for later callers;
+    // `queued` (returned below) still carries the real result/rejection.
+    this.writeQueue = queued.catch(() => {});
+    return queued;
   }
 
   private async readEnvelope(): Promise<FileEnvelope | null> {
