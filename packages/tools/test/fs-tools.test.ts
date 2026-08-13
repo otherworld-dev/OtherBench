@@ -23,6 +23,7 @@ import {
   fsTools,
   HardLinkError,
   ToctouGuardError,
+  AlreadyExistsError,
   __testing,
 } from '../src/fs-tools.js';
 
@@ -359,10 +360,21 @@ describe('hard links defeat path containment unless refused outright', () => {
     expect(readFileSync(target, 'utf8')).toBe(SECRET_MARKER);
   });
 
-  it('search_files does not grep content out of a hard-linked outside file', async () => {
+  it('search_files does not grep content out of a hard-linked outside file, and reports the refusal instead of a silent empty result', async () => {
     hardLinkOutsideFileIntoWorkspace('grepped', SECRET_MARKER);
     const result = (await searchFilesTool.execute({ query: SECRET_MARKER }, ctx())) as Record<string, unknown>;
     expect(result.matches).toEqual([]);
+    // Not just "no match" -- the refused file must show up as a signal the
+    // model can reason about, distinct from the file genuinely not
+    // containing the term. See fs-tools.ts grepFile()/GrepOutcome.
+    const skipped = result.skipped as { path: string; code: string }[];
+    expect(skipped).toEqual([{ path: 'grepped-link.txt', code: 'hard_link', message: expect.any(String) }]);
+  });
+
+  it('a normal grep with nothing refused reports an empty skipped list', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'findme');
+    const result = (await searchFilesTool.execute({ query: 'findme' }, ctx())) as Record<string, unknown>;
+    expect(result.skipped).toEqual([]);
   });
 
   it('a genuinely in-workspace file with a single link is unaffected', async () => {
@@ -423,6 +435,70 @@ describe('write_file must not destroy the target before the guard refuses', () =
     ).rejects.toBeInstanceOf(ToctouGuardError);
 
     expect(readFileSync(join(outside, 'file.txt'), 'utf8')).toBe(ATTACKER_MARKER);
+  });
+});
+
+describe('EEXIST from O_EXCL is disambiguated, not collapsed into io_error', () => {
+  // The create-narrowing in openVerified adds O_EXCL whenever nothing named
+  // the target at the containment check, so a create can lose that race two
+  // different ways: a second legitimate creator got there first (benign), or
+  // the parent got redirected in between and the create landed on a
+  // pre-existing file OUTSIDE the workspace (the exact case O_EXCL exists to
+  // catch -- see openVerified's create-narrowing comment). Both raise EEXIST
+  // from the same open() call; only the parent directory's identity tells
+  // them apart.
+
+  it('a benign concurrent create (target now exists, parent unchanged) maps to already_exists via the internal guard', async () => {
+    const target = join(ws, 'race.txt');
+    const promise = __testing.openVerified(ws, 'race.txt', fsConstants.O_WRONLY | fsConstants.O_CREAT, {
+      __raceHooksForTests: {
+        // Simulates a second, entirely legitimate write_file call finishing
+        // first for the same new in-workspace path: the parent ('ws') is
+        // untouched, only the target materialised.
+        afterSnapshot: () => {
+          writeFileSync(target, 'WON-THE-RACE');
+        },
+      },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(AlreadyExistsError);
+    // The winner's content must survive -- our O_EXCL create never touched it.
+    expect(readFileSync(target, 'utf8')).toBe('WON-THE-RACE');
+  });
+
+  it('two real concurrent write_file calls to the same new path: one succeeds, the other gets already_exists (not io_error)', async () => {
+    const [a, b] = (await Promise.all([
+      writeFileTool.execute({ path: 'concurrent.txt', content: 'A' }, ctx()),
+      writeFileTool.execute({ path: 'concurrent.txt', content: 'B' }, ctx()),
+    ])) as Record<string, unknown>[];
+
+    const succeeded = [a, b].filter((r) => r.error === undefined);
+    const failed = [a, b].filter((r) => r.error === true);
+    expect(succeeded).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.code).toBe('already_exists');
+    expect(failed[0]?.code).not.toBe('io_error');
+  });
+
+  it('a create redirected onto a pre-existing OUTSIDE file maps to toctou_guard (a security code), not already_exists', async () => {
+    const sub = join(ws, 'sub'); // absent at snapshot time, so existed === false
+    const outsideTarget = join(outside, 'new.txt');
+    writeFileSync(outsideTarget, ATTACKER_MARKER); // pre-existing file at the redirect's destination
+
+    let materialised = false;
+    const promise = __testing.openVerified(ws, 'sub/new.txt', fsConstants.O_WRONLY | fsConstants.O_CREAT, {
+      __raceHooksForTests: {
+        afterSnapshot: () => {
+          makeJunctionOrThrow(outside, sub);
+          materialised = true;
+        },
+      },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(ToctouGuardError);
+    expect(materialised).toBe(true);
+    // EEXIST means open() never got far enough to write anything.
+    expect(readFileSync(outsideTarget, 'utf8')).toBe(ATTACKER_MARKER);
   });
 });
 
@@ -560,12 +636,25 @@ describe('TOCTOU guard (openVerified)', () => {
 // calls the shipped tools in a loop -- exactly the shape of attack a model
 // with `run_command` can mount from a background process during its own turn.
 //
-// Against the previous implementation this leaked: read_file returned
-// attacker-controlled content, write_file landed writes on a file outside the
-// workspace, and list_dir enumerated an outside directory on roughly 2.4% of
-// attempts. The assertions below are about OUTCOMES (did attacker bytes reach
-// the caller / did our bytes reach the attacker's file), not about which
-// internal check happened to fire.
+// Against the previous implementation, read_file returned attacker-controlled
+// content and list_dir enumerated an outside directory on roughly 2.4% of
+// attempts -- both checked PER ATTEMPT below (`leaks` increments on every
+// leaking call), so those two are genuine reproductions: they would have
+// failed against the old code and now don't.
+//
+// The write_file test below is a different shape and proves a different,
+// weaker thing. It does not check each attempt; it checks only the outside
+// file's final content once the whole race is over, plus a non-vacuity floor
+// on `race.swaps` (proof the racer did something, not proof a write ever
+// raced). That is a real regression fence -- a write that lands and stays
+// landed would fail it -- but it is not a per-attempt reproduction the way
+// the other two are, and passing it is not proof this run ever actually
+// raced a write against a swap: it would also pass on a run where the racer
+// never won that particular window. The "landed 184 write_file writes on an
+// outside file" figure cited in the containment comment near the top of
+// fs-tools.ts came from a separate, unthrottled reproduction, not from this
+// test. Treat a pass here as "no corruption observed this run", not as this
+// test having reproduced the old bug.
 // ---------------------------------------------------------------------------
 
 interface RaceSetup {

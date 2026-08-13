@@ -66,6 +66,25 @@ class HardLinkError extends Error {
   }
 }
 
+/**
+ * Raised when O_EXCL loses a benign race: the target did not exist at the
+ * containment check (C) but something now occupies it at open() time, and
+ * the parent directory's identity is unchanged since (C) -- so this is a
+ * second legitimate creator (e.g. two concurrent write_file calls to the
+ * same new path), not a redirect. See openVerified()'s create-narrowing
+ * comment for the sibling case (parent identity CHANGED), which is a
+ * ToctouGuardError instead because that one is security-relevant.
+ */
+class AlreadyExistsError extends Error {
+  constructor(candidate: string) {
+    super(
+      `"${candidate}" was created by another operation between the check and the open (a concurrent create, not ` +
+        'an attack). Re-read it if you need to see what is there now, or retry if you still need to create it.'
+    );
+    this.name = 'AlreadyExistsError';
+  }
+}
+
 async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
   try {
     return await fn();
@@ -73,6 +92,7 @@ async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
     if (err instanceof PathEscapeError) return toolError('path_escape', err.message);
     if (err instanceof ToctouGuardError) return toolError('toctou_guard', err.message);
     if (err instanceof HardLinkError) return toolError('hard_link', err.message);
+    if (err instanceof AlreadyExistsError) return toolError('already_exists', err.message);
     if (err instanceof ArgsError) return toolError('bad_args', err.message);
     if (err instanceof BinaryFileError) return toolError('binary_file', err.message);
     if (err instanceof NotUniqueError) return toolError('not_unique', err.message);
@@ -82,6 +102,15 @@ async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
     if (code === 'ENOENT') return toolError('not_found', message);
     if (code === 'EISDIR') return toolError('is_a_directory', message);
     if (code === 'ELOOP') return toolError('toctou_guard', `Refused to follow a symlink at the final path component: ${message}`);
+    if (code === 'EEXIST') {
+      // Reachable here only if something outside openVerified's own EEXIST
+      // handling (below) raced a create -- e.g. mkdir(dirname(...), {
+      // recursive: true }) losing a race to a concurrent rmdir+mkdir. Same
+      // "benign concurrent operation" character as the case openVerified
+      // disambiguates; without that disambiguation available here, the
+      // honest default is "not an attack" rather than an opaque io_error.
+      return toolError('already_exists', message);
+    }
     return toolError('io_error', message);
   }
 }
@@ -333,14 +362,42 @@ async function openVerified(
   //     write to) a PRE-EXISTING file outside the workspace. With it, that
   //     case fails EEXIST and touches nothing -- and anything the open does
   //     create is guaranteed to be ours, which is what makes the cleanup
-  //     below safe.
+  //     below safe. (The EEXIST that reaches the catch immediately below is
+  //     then split back into "benign race" vs "redirect landed on an
+  //     existing file", since collapsing both into one opaque error is
+  //     exactly what left the redirect case indistinguishable from a
+  //     harmless retry.)
   const wantsCreate = (flags & fsConstants.O_CREAT) !== 0;
   const openFlags = wantsCreate
     ? existed
       ? flags & ~fsConstants.O_CREAT
       : flags | fsConstants.O_EXCL
     : flags;
-  const handle = await open(resolved, openFlags | NOFOLLOW);
+  let handle: FileHandle;
+  try {
+    handle = await open(resolved, openFlags | NOFOLLOW);
+  } catch (err) {
+    // O_EXCL (added above precisely because nothing named `resolved` at (C))
+    // just refused because something now does. Two different things produce
+    // that signature and they are not equally serious:
+    //   - a second legitimate creator won the same race to the same
+    //     in-workspace path (e.g. two concurrent write_file calls) -- benign,
+    //     and the parent directory's identity is unchanged since (C).
+    //   - the parent was swapped between (C) and here, so the create landed
+    //     on a PRE-EXISTING file outside the workspace -- exactly the case
+    //     O_EXCL was added to catch (see the comment above). The parent's
+    //     identity will disagree with `midParent`.
+    // The parent identity captured at (C) is what tells them apart; nothing
+    // else distinguishes an EEXIST from a racing sibling from an EEXIST from
+    // a redirect.
+    if (wantsCreate && !existed && (err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+      if (sameIdentity(identityOf(dirname(resolved)), midParent)) {
+        throw new AlreadyExistsError(candidate);
+      }
+      throw new ToctouGuardError(candidate);
+    }
+    throw err;
+  }
   const createdByUs = wantsCreate && !existed;
   let openedIdentity: Identity | null = null;
 
@@ -642,11 +699,18 @@ interface SearchMatch {
   preview?: string;
 }
 
+interface SkippedFile {
+  path: string;
+  code: string;
+  message: string;
+}
+
 export const searchFilesTool: ToolSpec = {
   name: 'search_files',
   description:
     'Searches the workspace for files. Supply "glob" to match filenames (supports *, **, ?), "query" to grep ' +
-    'file contents (plain substring), or both. Binary files are silently skipped when grepping content.',
+    'file contents (plain substring), or both. Binary files are silently skipped when grepping content. Files ' +
+    'refused by security checks (e.g. hard links) are reported in "skipped", not silently dropped.',
   parameters: {
     type: 'object',
     properties: {
@@ -669,6 +733,7 @@ export const searchFilesTool: ToolSpec = {
       const root = containPath(ctx.workspaceRoot, path);
       const globRegExp = glob ? globToRegExp(glob) : null;
       const matches: SearchMatch[] = [];
+      const skipped: SkippedFile[] = [];
       let scanned = 0;
       let truncated = false;
 
@@ -712,7 +777,8 @@ export const searchFilesTool: ToolSpec = {
           if (!query) {
             matches.push({ path: relPath });
           } else {
-            const found = await grepFile(ctx.workspaceRoot, full, query);
+            const { matches: found, refusal } = await grepFile(ctx.workspaceRoot, full, query);
+            if (refusal) skipped.push({ path: relPath, code: refusal.code, message: refusal.message });
             for (const m of found) {
               matches.push({ path: relPath, line: m.line, preview: m.preview });
               if (matches.length >= maxResults) {
@@ -729,26 +795,46 @@ export const searchFilesTool: ToolSpec = {
       }
 
       await walk(root);
-      return { matches: matches.slice(0, maxResults), truncated };
+      return { matches: matches.slice(0, maxResults), truncated, skipped };
     });
   },
 };
 
-/** Greps one file's content for `query`, reusing openVerified for the same TOCTOU protection read_file gets. */
-async function grepFile(
-  workspaceRoot: string | null,
-  absolutePath: string,
-  query: string
-): Promise<{ line: number; preview: string }[]> {
+interface GrepOutcome {
+  matches: { line: number; preview: string }[];
+  /**
+   * Set when the file was not merely absent/unreadable but explicitly
+   * REFUSED by openVerified's policy checks (hard link, TOCTOU redirect).
+   * Distinguishing this from "no match" is the point: a refusal is a signal
+   * the model can act on (the structured-error contract this whole module
+   * exists to uphold), and collapsing it into an empty result is exactly the
+   * silent-omission bug this type exists to prevent.
+   */
+  refusal?: { code: string; message: string };
+}
+
+/**
+ * Greps one file's content for `query`, reusing openVerified for the same
+ * TOCTOU protection read_file gets. A HardLinkError or ToctouGuardError from
+ * openVerified is an explicit refusal, not an ordinary vanished-mid-walk
+ * file, and is reported back via `refusal` rather than swallowed -- see
+ * GrepOutcome. Any other error (ENOENT because the file vanished between the
+ * directory listing and the open, a permissions error, ...) still means
+ * "skip this one file, don't fail the whole search" and is dropped silently,
+ * same as before.
+ */
+async function grepFile(workspaceRoot: string | null, absolutePath: string, query: string): Promise<GrepOutcome> {
   let handle: FileHandle;
   try {
     ({ handle } = await openVerified(workspaceRoot, absolutePath, fsConstants.O_RDONLY));
-  } catch {
-    return []; // vanished/swapped mid-walk -- skip this file rather than fail the whole search
+  } catch (err) {
+    if (err instanceof HardLinkError) return { matches: [], refusal: { code: 'hard_link', message: err.message } };
+    if (err instanceof ToctouGuardError) return { matches: [], refusal: { code: 'toctou_guard', message: err.message } };
+    return { matches: [] }; // vanished/swapped mid-walk, or genuinely unreadable -- skip this file rather than fail the whole search
   }
   try {
     const stat = await handle.stat();
-    if (stat.size > MAX_READ_BYTES || (await sniffBinary(handle))) return [];
+    if (stat.size > MAX_READ_BYTES || (await sniffBinary(handle))) return { matches: [] };
     const buf = Buffer.alloc(stat.size);
     await handle.read(buf, 0, stat.size, 0);
     const lines = buf.toString('utf8').split('\n');
@@ -758,7 +844,7 @@ async function grepFile(
         out.push({ line: idx + 1, preview: lineText.trim().slice(0, 200) });
       }
     });
-    return out;
+    return { matches: out };
   } finally {
     await handle.close();
   }
@@ -885,7 +971,7 @@ export const editFileTool: ToolSpec = {
 export const fsTools: ToolSpec[] = [readFileTool, listDirTool, searchFilesTool, writeFileTool, editFileTool];
 
 // Re-exported for tests that want to assert on these guards specifically.
-export { ToctouGuardError, HardLinkError };
+export { ToctouGuardError, HardLinkError, AlreadyExistsError };
 
 /**
  * Test-only access to internals that have no seam on the public `ToolSpec`
