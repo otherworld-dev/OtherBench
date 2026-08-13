@@ -190,15 +190,39 @@ export class TurnRunner {
    * routes/turns.ts).
    *
    * Rejects if `messageId` is unknown, has no `parentId` to rebuild history
-   * from (a retried message is always a reply, never a root), or is
-   * currently `'streaming'` (retrying an in-flight variant makes no sense --
-   * cancel it first).
+   * from (a retried message is always a reply, never a root), or is not
+   * currently `'error'`. `'error'` is the only retryable status:
+   *
+   *   - `'streaming'` is already in flight -- retrying it makes no sense
+   *     (cancel it first).
+   *   - `'complete'` already holds a real answer with a real usage row; the
+   *     defect this guard closes is exactly a retry silently discarding that
+   *     content and writing a *second* usage row for the same logical
+   *     variant, double-counting spend.
+   *   - `'cancelled'` is deliberately excluded too, even though a user
+   *     re-running a stream they themselves cancelled is a reasonable thing
+   *     to want: a cancellation always writes a zeroed usage row (see
+   *     `ZERO_USAGE` below) so the cancellation itself is never invisible to
+   *     `usage.list()`. That row is keyed by this same `messageId`, and the
+   *     usage rollup (`usage-rollup.ts`) attributes a usage row's bucket
+   *     (measured vs. cancelled) from the *current* status of the message it
+   *     points to, not from anything stored on the row itself. If retry
+   *     reused this id and the message went on to complete, that old zeroed
+   *     row would silently flip from "cancelled" into "measured" and inflate
+   *     `completeCount` for a call that never happened -- not a cost error
+   *     (the row is zero), but a phantom call. `'error'` doesn't have this
+   *     problem: the ordinary error path (no `finish` ever raced the error)
+   *     writes no usage row at all, so there is nothing stale left to
+   *     misattribute. Re-running a cancelled turn is still possible -- it
+   *     just goes through `run()` as a new turn, same as any other resend.
    */
   async retry(chatId: string, messageId: string, profile: ResolvedProfile): Promise<void> {
     const message = this.store.messages.get(messageId);
     if (!message) throw new Error(`retry: unknown message "${messageId}"`);
     if (!message.parentId) throw new Error(`retry: message "${messageId}" has no parent to rebuild history from`);
-    if (message.status === 'streaming') throw new Error(`retry: message "${messageId}" is already streaming`);
+    if (message.status !== 'error') {
+      throw new Error(`retry: message "${messageId}" is ${message.status}, not error -- only an errored message can be retried`);
+    }
 
     this.store.messages.updateParts(messageId, []);
     this.store.messages.updateStatus(messageId, 'streaming'); // omitting `error` clears it -- see MessageRepo.updateStatus's doc.

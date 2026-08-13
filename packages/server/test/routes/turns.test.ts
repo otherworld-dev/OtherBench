@@ -348,6 +348,91 @@ describe('POST /api/messages/:id/retry', () => {
     expect(retryRes.status).toBe(409);
   });
 
+  // CRITICAL fix: retry used to accept 'complete' (and 'cancelled') too,
+  // which silently discarded a finished answer and wrote a second usage row
+  // for the same variant -- an exact doubling of measuredCost/tokens for one
+  // logical call. These assert on GET /api/usage's totals before and after
+  // the rejected retry, not just the response status, since the doubling
+  // (not the status code) is the actual harm being closed here.
+  it('409s when retrying a complete message, leaving content and GET /api/usage totals unchanged', async () => {
+    const { chatId, profileIds } = seedChat();
+    container.store.models.create({
+      id: 'model-row-0',
+      connectionId: 'conn-0',
+      modelId: 'model-x',
+      displayName: 'Model X',
+      source: 'manual',
+      supportsVision: false,
+      supportsTools: false,
+      supportsReasoning: false,
+      contextWindow: null,
+      maxOutput: null,
+      priceInPer1m: 3,
+      priceOutPer1m: 15,
+      priceCachedPer1m: 0,
+      currency: 'USD',
+    });
+
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const messageId = assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'The finished answer' });
+    push(messageId, { type: 'finish', usage: { tokensIn: 2, tokensOut: 32, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' });
+    await flush();
+    expect(container.store.messages.get(messageId)?.status).toBe('complete');
+
+    const usageBefore = await (await app().request(`/api/usage?chatId=${chatId}`)).json();
+    expect((usageBefore as { totalMeasuredCost: number }).totalMeasuredCost).toBeGreaterThan(0);
+
+    const retryRes = await app().request(`/api/messages/${messageId}/retry`, { method: 'POST' });
+    expect(retryRes.status).toBe(409);
+    expect(await retryRes.text()).toMatch(/complete/i);
+
+    // The completed content is untouched -- not reset, not re-streamed.
+    expect(container.store.messages.get(messageId)).toMatchObject({
+      status: 'complete',
+      parts: [{ type: 'text', text: 'The finished answer' }],
+    });
+
+    // No second usage row was written: the rollup is byte-for-byte the same,
+    // in particular no doubling of measuredCost/tokensIn/tokensOut/completeCount.
+    const usageAfter = await (await app().request(`/api/usage?chatId=${chatId}`)).json();
+    expect(usageAfter).toEqual(usageBefore);
+  });
+
+  it('409s when retrying a cancelled message, leaving its zeroed usage row as the only one', async () => {
+    const { chatId, profileIds } = seedChat();
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const messageId = assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Partial before cancel' });
+    await flush();
+    const cancelRes = await app().request(`/api/messages/${messageId}/cancel`, { method: 'POST' });
+    await flush();
+    expect(cancelRes.status).toBe(204);
+    expect(container.store.messages.get(messageId)?.status).toBe('cancelled');
+
+    const usageBefore = await (await app().request(`/api/usage?chatId=${chatId}`)).json();
+
+    // Deliberately disallowed -- a user is free to re-run a cancelled turn,
+    // but not via retry() on this same message id: see TurnRunner.retry's
+    // doc comment for why that would leave the cancellation's zeroed usage
+    // row stranded (misattributed) once the retry finished.
+    const retryRes = await app().request(`/api/messages/${messageId}/retry`, { method: 'POST' });
+    expect(retryRes.status).toBe(409);
+    expect(await retryRes.text()).toMatch(/cancelled/i);
+
+    expect(container.store.messages.get(messageId)).toMatchObject({
+      status: 'cancelled',
+      parts: [{ type: 'text', text: 'Partial before cancel' }],
+    });
+
+    const usageAfter = await (await app().request(`/api/usage?chatId=${chatId}`)).json();
+    expect(usageAfter).toEqual(usageBefore);
+  });
+
   it('400s for a user message', async () => {
     const { chatId, profileIds } = seedChat();
     const res = await postTurn(chatId, profileIds);

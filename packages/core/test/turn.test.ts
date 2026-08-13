@@ -554,7 +554,106 @@ describe('TurnRunner.retry', () => {
     await flush();
     const messageId = result.assistantMessageIds[0] as string;
 
-    await expect(runner.retry('chat-1', messageId, makeResolvedProfile())).rejects.toThrow(/already streaming/i);
+    await expect(runner.retry('chat-1', messageId, makeResolvedProfile())).rejects.toThrow(/is streaming, not error/i);
+  });
+
+  // CRITICAL fix: retry() used to reject only unknown-id and 'streaming',
+  // which meant a 'complete' (or 'cancelled') message could be silently
+  // re-run in place -- discarding its finished content and writing a SECOND
+  // usage row for the same logical variant, double-counting spend. These
+  // two tests assert on the usage totals, not just the rejection, because
+  // the doubling -- not the wrong status code -- is the actual harm.
+  it('rejects retrying a complete message, leaving its content and usage totals unchanged', async () => {
+    const store = new InMemoryStore();
+    store.connections.create(makeConnection());
+    const model = store.models.create({
+      id: 'model-row-1',
+      connectionId: 'conn-1',
+      modelId: 'model-1',
+      displayName: 'Test Model',
+      source: 'manual',
+      supportsVision: false,
+      supportsTools: false,
+      supportsReasoning: false,
+      contextWindow: null,
+      maxOutput: null,
+      priceInPer1m: 10,
+      priceOutPer1m: 30,
+      priceCachedPer1m: 1,
+      currency: 'USD',
+    });
+    const profile = makeResolvedProfile({ model });
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [profile],
+    });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Final answer' });
+    push(messageId, { type: 'finish', usage: { tokensIn: 2, tokensOut: 32, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' });
+    await flush();
+    expect(store.messages.get(messageId)?.status).toBe('complete');
+
+    const usageBefore = store.usage.list('chat-1').filter((u) => u.messageId === messageId);
+    expect(usageBefore).toHaveLength(1);
+    const costBefore = usageBefore[0]?.costEstimate;
+
+    await expect(runner.retry('chat-1', messageId, profile)).rejects.toThrow(/is complete, not error/i);
+
+    // Content untouched -- not reset, not re-streamed.
+    const afterMessage = store.messages.get(messageId);
+    expect(afterMessage?.status).toBe('complete');
+    expect(textParts(afterMessage!.parts)).toBe('Final answer');
+
+    // No second usage row, and the total is exactly what it was before the
+    // rejected retry -- no doubling.
+    const usageAfter = store.usage.list('chat-1').filter((u) => u.messageId === messageId);
+    expect(usageAfter).toHaveLength(1);
+    expect(usageAfter[0]?.costEstimate).toBe(costBefore);
+    expect(usageAfter[0]).toMatchObject({ tokensIn: 2, tokensOut: 32 });
+  });
+
+  it('rejects retrying a cancelled message, leaving its zeroed usage row as the only one', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Partial' });
+    await flush();
+    runner.cancel(messageId);
+    await flush();
+    expect(store.messages.get(messageId)?.status).toBe('cancelled');
+
+    const usageBefore = store.usage.list('chat-1').filter((u) => u.messageId === messageId);
+    expect(usageBefore).toHaveLength(1);
+    expect(usageBefore[0]).toMatchObject({ tokensIn: 0, tokensOut: 0 });
+
+    // Deliberately disallowed -- see retry()'s doc comment for why reusing
+    // this id would leave the cancellation's zeroed usage row stranded
+    // under whatever status the retry ends up with. Re-running a cancelled
+    // turn is still possible via run(), just not via retry() on this id.
+    await expect(runner.retry('chat-1', messageId, makeResolvedProfile())).rejects.toThrow(/is cancelled, not error/i);
+
+    expect(store.messages.get(messageId)?.status).toBe('cancelled');
+    expect(textParts(store.messages.get(messageId)!.parts)).toBe('Partial');
+    const usageAfter = store.usage.list('chat-1').filter((u) => u.messageId === messageId);
+    expect(usageAfter).toHaveLength(1);
+    expect(usageAfter[0]?.costEstimate).toBe(usageBefore[0]?.costEstimate);
   });
 
   it('a compare sibling is unaffected by retrying its neighbour (per-variant isolation still holds)', async () => {

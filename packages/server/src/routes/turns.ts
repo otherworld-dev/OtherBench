@@ -87,8 +87,18 @@ export function turnsRoutes(container: Container): Hono {
     if (message.role !== 'assistant' || !message.producedBy) {
       throw new HTTPException(400, { message: `Message "${messageId}" is not a retryable assistant variant.` });
     }
-    if (message.status === 'streaming') {
-      throw new HTTPException(409, { message: `Message "${messageId}" is already streaming.` });
+    // 'error' is the only retryable status -- see TurnRunner.retry's doc for
+    // why 'complete' (would silently discard a real answer and double-write
+    // its usage row -- the defect this guard closes) and 'cancelled' (would
+    // leave a stale zeroed usage row misattributed once the retry finishes)
+    // are deliberately excluded too, not just 'streaming'. This route is
+    // only one caller of `TurnRunner.retry`, which enforces the same
+    // invariant itself; the check is duplicated here so the client gets a
+    // clean HTTP error without ever reaching the domain layer.
+    if (message.status !== 'error') {
+      throw new HTTPException(409, {
+        message: `Message "${messageId}" is ${message.status}; only an errored message can be retried.`,
+      });
     }
 
     const profile = await resolveProfile(container, message.producedBy.profileId);
