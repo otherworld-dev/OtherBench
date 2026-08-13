@@ -82,7 +82,21 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   }
 
   app.onError((err, c) => {
-    if (err instanceof HTTPException) return err.getResponse();
+    if (err instanceof HTTPException) {
+      // `err.getResponse()` (Hono's own default) returns the message as a
+      // bare `text/plain` body when no `res` override was given -- every
+      // validator in validation.ts throws exactly that shape. The web
+      // client's `extractErrorMessage` (state/api.ts) only ever looks for a
+      // JSON body with an `error` string field, falling back to
+      // `res.statusText` (which is `''` for a manually-constructed
+      // `Response`, per the fetch spec) when parsing fails -- so every
+      // actionable validation message written anywhere in this codebase was
+      // silently discarded client-side and replaced with a bare "HTTP 400"
+      // before this. Wrapping it in the same `{error}` shape the 500
+      // catch-all below already uses is what actually gets it in front of
+      // the user.
+      return c.json({ error: err.message }, err.status);
+    }
     console.error('[grunt-server] unhandled error:', err);
     return c.json({ error: 'Internal server error.' }, 500);
   });

@@ -122,3 +122,57 @@ export function optionalStringArray(value: unknown, field: string): string[] {
   }
   return value;
 }
+
+/** Windows treats a single leading slash (`/foo`) as "absolute" (drive-relative) too, which is exactly the shape a Git-Bash-mangled Windows path takes -- so `looksWindowsAbsolute` deliberately requires a drive letter or a UNC prefix, not just a leading separator. Mirrors the client's identically-named helper (packages/web/src/panes/Inspector.tsx), which this is the server-side backstop for. */
+function looksWindowsAbsolute(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
+}
+
+/** Matches the shape Git Bash/MSYS mangles a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. Mirrors the client's `gitBashMangledMatch` (Inspector.tsx). */
+function gitBashMangledMatch(value: string): RegExpMatchArray | null {
+  return value.match(/^\/([a-zA-Z])(\/|$)/);
+}
+
+/**
+ * Server-side backstop for `workspaceRoot` (POST/PATCH /chats). Once set,
+ * this value is handed straight to `containPath`
+ * (packages/core/src/domain/paths.ts) as the root every subsequent fs/shell
+ * tool call for that chat is contained within -- and `containPath` itself
+ * treats a NON-absolute root as relative to the SERVER PROCESS's own cwd
+ * (`resolve()`), not as an error. Without a gate here, an unvalidated ".."
+ * silently becomes "every sibling directory of wherever `grunt serve`
+ * happened to be launched from", and "demo-workspace" becomes some
+ * arbitrary subdirectory of it. The web client's own validator
+ * (`validateWorkspaceRoot`, Inspector.tsx) is thorough, but it is
+ * client-side only -- a direct API call (curl, another client) bypasses it
+ * entirely -- so this is the hard gate the product's whole filesystem/shell
+ * tool boundary actually rests on, not a UX nicety duplicated for its own
+ * sake. Whitespace-only is rejected outright (a bare string of spaces is
+ * truthy and was previously stored verbatim, uncaught by any check).
+ */
+export function optionalWorkspaceRoot(value: unknown, field: string): string | null | undefined {
+  const parsed = optionalNullableString(value, field);
+  if (parsed === undefined || parsed === null) return parsed;
+
+  const trimmed = parsed.trim();
+  if (trimmed.length === 0) {
+    throw new HTTPException(400, { message: `"${field}" must not be blank -- clear it with null instead, or enter a native absolute path.` });
+  }
+
+  if (process.platform === 'win32') {
+    if (looksWindowsAbsolute(trimmed)) return trimmed;
+    const mangled = gitBashMangledMatch(trimmed);
+    if (mangled) {
+      const drive = mangled[1]!.toUpperCase();
+      throw new HTTPException(400, {
+        message: `"${field}" looks like a Git-Bash-style path ("${trimmed}") -- this server runs on Windows and needs the native form, e.g. "${drive}:\\...".`,
+      });
+    }
+    throw new HTTPException(400, { message: `"${field}" must be a native absolute Windows path, e.g. "E:\\Git\\Grunt" -- got "${trimmed}".` });
+  }
+
+  if (!trimmed.startsWith('/')) {
+    throw new HTTPException(400, { message: `"${field}" must be a native absolute path, e.g. "/home/user/project" -- got "${trimmed}".` });
+  }
+  return trimmed;
+}
