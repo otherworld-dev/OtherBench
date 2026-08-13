@@ -60,6 +60,20 @@ export interface AiSdkChatEngineOptions {
 const MAX_TOOL_STEPS = 20;
 
 /**
+ * Bounds `seedOllamaCapabilities`'s own `/api/tags` fetch (see that
+ * method's doc for why a failure there is swallowed rather than propagated).
+ * A `try/catch` alone does not catch a HANG -- a host that answers
+ * `/v1/models` but never responds on `/api/tags` left `POST
+ * /discover-models` open indefinitely, turning an optional capability
+ * *hint* into a hard dependency for the whole discovery call. Built from an
+ * `AbortController` + `setTimeout` (not `AbortSignal.timeout`) so it is
+ * driven by the same fake-timer-friendly primitive as `chats.ts`'s
+ * `applyAutoTitle` watchdog, rather than a native timer vitest's fake
+ * timers cannot see.
+ */
+const OLLAMA_TAGS_TIMEOUT_MS = 3_000;
+
+/**
  * `ChatEngine` implementation backed by AI SDK v6 (`ai@6.0.253`). Real
  * (non-mock) connections go through `streamText`; `mock`-kind connections
  * are delegated to `MockChatEngine` (or a test double) so the same interface
@@ -301,23 +315,26 @@ export class AiSdkChatEngine implements ChatEngine {
    * `/v1/models` was just fetched relative to) is de-suffixed first.
    *
    * A capability hint is not worth breaking model discovery over: any
-   * failure here -- unreachable host, non-2xx, malformed/unexpected JSON --
-   * is swallowed and `models` is returned exactly as discovered, still
-   * carrying the conservative `null` ("unknown", not "no") defaults every
-   * other connection kind gets. Matching is by exact name (`details.name`
-   * from `/api/tags` against `DiscoveredModel.modelId` from `/v1/models`,
-   * confirmed identical -- e.g. both report `"qwen2.5vl:7b"`); a model
-   * present in one listing but not the other is left untouched rather than
-   * guessed at.
+   * failure here -- unreachable host, non-2xx, malformed/unexpected JSON,
+   * OR a request that just never comes back within
+   * `OLLAMA_TAGS_TIMEOUT_MS` -- is swallowed and `models` is returned
+   * exactly as discovered, still carrying the conservative `null`
+   * ("unknown", not "no") defaults every other connection kind gets.
+   * Matching is by exact name (`details.name` from `/api/tags` against
+   * `DiscoveredModel.modelId` from `/v1/models`, confirmed identical --
+   * e.g. both report `"qwen2.5vl:7b"`); a model present in one listing but
+   * not the other is left untouched rather than guessed at.
    */
   private async seedOllamaCapabilities(
     openAiBase: string,
     headers: Record<string, string>,
     models: DiscoveredModel[]
   ): Promise<DiscoveredModel[]> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OLLAMA_TAGS_TIMEOUT_MS);
     try {
       const nativeBase = deriveOllamaNativeBaseUrl(openAiBase);
-      const response = await this.fetchImpl(`${nativeBase}/api/tags`, { headers });
+      const response = await this.fetchImpl(`${nativeBase}/api/tags`, { headers, signal: controller.signal });
       if (!response.ok) return models;
       const body = (await response.json()) as Record<string, unknown>;
       const capabilitiesByName = new Map<string, { capabilities: Set<string>; contextLength: number | null }>();
@@ -343,7 +360,13 @@ export class AiSdkChatEngine implements ChatEngine {
         };
       });
     } catch {
+      // Covers a non-2xx-shaped network failure, malformed JSON, AND the
+      // `AbortError` the timer above raises on a hang -- all three are
+      // exactly the same "couldn't get a capability hint in time" case from
+      // this method's contract, and all three fall back the same way.
       return models;
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

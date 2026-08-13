@@ -604,6 +604,40 @@ describe('AiSdkChatEngine.listModels (Ollama capability seeding from /api/tags)'
     expect(models[0]).toMatchObject({ contextWindow: null, supportsVision: null, supportsTools: null });
   });
 
+  // Finding 7 regression: a try/catch alone does not catch a HANG. Against a
+  // host that answers /v1/models but never responds on /api/tags, discovery
+  // used to stay open indefinitely -- a capability *hint* must not become a
+  // hard dependency for the whole call.
+  it('does not hang forever when /api/tags never responds -- bounded by the ~3s timeout, falling back to conservative defaults', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
+        if (String(url) === 'http://127.0.0.1:11434/v1/models') {
+          return Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }] }), { status: 200 }));
+        }
+        if (String(url) === 'http://127.0.0.1:11434/api/tags') {
+          // Never resolves on its own -- rejects only when the signal
+          // aborts, exactly like a real fetch would once the timeout fires.
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+          });
+        }
+        throw new Error(`unexpected fetch: ${String(url)}`);
+      });
+      const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+      const resultPromise = engine.listModels(makeConnection({ kind: 'ollama', baseUrl: null }), null);
+      await vi.advanceTimersByTimeAsync(3_000);
+      const models = await resultPromise;
+
+      expect(models).toEqual([
+        { modelId: 'qwen2.5vl:7b', displayName: 'qwen2.5vl:7b', contextWindow: null, supportsVision: null, supportsTools: null },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does NOT query /api/tags for a plain openai_compatible connection (only ollama is special-cased)', async () => {
     const fetchImpl = vi.fn(async (url: string | URL) => {
       expect(String(url)).toBe('https://my-endpoint.example.com/v1/models');
