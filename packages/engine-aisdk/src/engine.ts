@@ -237,7 +237,7 @@ export class AiSdkChatEngine implements ChatEngine {
         }
         const headers: Record<string, string> = { ...conn.extraHeaders };
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-        return this.fetchJsonModels(`${trimTrailingSlash(base)}/models`, headers, (body) =>
+        const models = await this.fetchJsonModels(`${trimTrailingSlash(base)}/models`, headers, (body) =>
           asArray(body['data']).map((m) => ({
             modelId: stringField(m, 'id') ?? 'unknown',
             displayName: stringField(m, 'id') ?? 'unknown',
@@ -246,6 +246,13 @@ export class AiSdkChatEngine implements ChatEngine {
             supportsTools: null,
           }))
         );
+        // Capabilities stay declared-not-probed for every other kind (a
+        // custom endpoint can claim to be anything -- see ModelsPanel's own
+        // doc, packages/web/src/views/settings/ModelsPanel.tsx). Ollama is
+        // the one deliberate exception: its native API genuinely reports
+        // per-model capabilities and context length, unlike its OpenAI-
+        // compatible `/v1/models` surface above, which returns bare ids.
+        return conn.kind === 'ollama' ? this.seedOllamaCapabilities(base, headers, models) : models;
       }
 
       case 'mock':
@@ -282,6 +289,76 @@ export class AiSdkChatEngine implements ChatEngine {
     const body = (await response.json()) as Record<string, unknown>;
     return map(body);
   }
+
+  /**
+   * Enriches `models` (already listed from Ollama's OpenAI-compatible
+   * `/v1/models`, which returns bare ids and nothing else) with
+   * `supportsVision`/`supportsTools`/`contextWindow` read from Ollama's own
+   * `GET /api/tags` -- verified against a real instance to return, per
+   * model, a `capabilities` array (`"vision"`, `"tools"`, `"completion"`,
+   * `"insert"`, `"embedding"`) and `details.context_length`. `/api/tags`
+   * lives at the host root, not under `/v1`, so `openAiBase` (the URL
+   * `/v1/models` was just fetched relative to) is de-suffixed first.
+   *
+   * A capability hint is not worth breaking model discovery over: any
+   * failure here -- unreachable host, non-2xx, malformed/unexpected JSON --
+   * is swallowed and `models` is returned exactly as discovered, still
+   * carrying the conservative `null` ("unknown", not "no") defaults every
+   * other connection kind gets. Matching is by exact name (`details.name`
+   * from `/api/tags` against `DiscoveredModel.modelId` from `/v1/models`,
+   * confirmed identical -- e.g. both report `"qwen2.5vl:7b"`); a model
+   * present in one listing but not the other is left untouched rather than
+   * guessed at.
+   */
+  private async seedOllamaCapabilities(
+    openAiBase: string,
+    headers: Record<string, string>,
+    models: DiscoveredModel[]
+  ): Promise<DiscoveredModel[]> {
+    try {
+      const nativeBase = deriveOllamaNativeBaseUrl(openAiBase);
+      const response = await this.fetchImpl(`${nativeBase}/api/tags`, { headers });
+      if (!response.ok) return models;
+      const body = (await response.json()) as Record<string, unknown>;
+      const capabilitiesByName = new Map<string, { capabilities: Set<string>; contextLength: number | null }>();
+      for (const row of asArray(body['models'])) {
+        const name = stringField(row, 'name');
+        if (!name) continue;
+        const rawCapabilities = row['capabilities'];
+        const capabilities = Array.isArray(rawCapabilities) ? rawCapabilities.filter((c): c is string => typeof c === 'string') : [];
+        const details = row['details'];
+        const contextLength =
+          typeof details === 'object' && details !== null ? numberField(details as Record<string, unknown>, 'context_length') : null;
+        capabilitiesByName.set(name, { capabilities: new Set(capabilities), contextLength });
+      }
+
+      return models.map((model) => {
+        const hit = capabilitiesByName.get(model.modelId);
+        if (!hit) return model;
+        return {
+          ...model,
+          supportsVision: hit.capabilities.has('vision'),
+          supportsTools: hit.capabilities.has('tools'),
+          contextWindow: hit.contextLength,
+        };
+      });
+    } catch {
+      return models;
+    }
+  }
+}
+
+/**
+ * Ollama serves its native API (`/api/tags`, etc.) at the host root, but
+ * Grunt talks to it through the OpenAI-compatible surface at `/v1`
+ * (`DEFAULT_OLLAMA_BASE_URL`, or a user-supplied `baseUrl` ending the same
+ * way) -- so the native root is derived by stripping that suffix. A
+ * `baseUrl` that was never given a `/v1` suffix (already pointing at the
+ * root) is returned unchanged rather than mangled.
+ */
+function deriveOllamaNativeBaseUrl(base: string): string {
+  const trimmed = trimTrailingSlash(base);
+  return trimmed.endsWith('/v1') ? trimmed.slice(0, -'/v1'.length) : trimmed;
 }
 
 // ---------------------------------------------------------------------------
