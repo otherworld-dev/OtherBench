@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
+import { ModelsPanel } from './settings/ModelsPanel.js';
 
 type Tab = 'connections' | 'models' | 'profiles';
 
@@ -53,7 +54,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
 
       <div className="flex-1 overflow-y-auto p-4">
         {tab === 'connections' && <ConnectionsPanel />}
-        {tab === 'models' && <p className="text-sm text-[var(--text-faint)]">Models editing lands in the next piece of this task.</p>}
+        {tab === 'models' && <ModelsPanel />}
         {tab === 'profiles' && <p className="text-sm text-[var(--text-faint)]">Profiles editing lands in the next piece of this task.</p>}
       </div>
     </div>
