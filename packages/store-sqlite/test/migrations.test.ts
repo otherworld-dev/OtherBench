@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
 import { runMigrations, MIGRATIONS, type Migration } from '../src/migrations/index.js';
 import type { DatabaseSync } from 'node:sqlite';
@@ -64,6 +67,79 @@ describe('runMigrations', () => {
     } finally {
       db.close();
     }
+  });
+
+  it('003 warns, by server name and variable name, about every plaintext env value it drops', () => {
+    const db = freshDb();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      runMigrations(db, [MIGRATIONS[0]!]);
+      db.exec(`INSERT INTO mcp_server (id, name, transport, env, header_refs)
+               VALUES ('legacy', 'Legacy Srv', 'stdio', '{"GITHUB_TOKEN":"ghp_secret","KEEP":"also-secret"}', '{}')`);
+      db.exec(`INSERT INTO mcp_server (id, name, transport, env, header_refs)
+               VALUES ('empty', 'Empty Srv', 'stdio', '{}', '{}')`);
+      runMigrations(db);
+
+      const warnings = warnSpy.mock.calls.map((call) => String(call[0]));
+      const legacyWarning = warnings.find((w) => w.includes('Legacy Srv'));
+      expect(legacyWarning).toBeDefined();
+      expect(legacyWarning).toContain('legacy');
+      expect(legacyWarning).toContain('GITHUB_TOKEN');
+      expect(legacyWarning).toContain('KEEP');
+      // A server with nothing to drop gets no warning.
+      expect(warnings.some((w) => w.includes('Empty Srv'))).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+      db.close();
+    }
+  });
+
+  describe('003 plaintext residue', () => {
+    let dir: string;
+    afterEach(() => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup races
+      }
+    });
+
+    /**
+     * Real file-backed DB (not `:memory:`) seeded with a plaintext secret,
+     * checkpointed to disk to simulate a pre-existing production database
+     * (not just something still sitting in the WAL from this same
+     * process) -- reproduces exactly what the bug report verified: `grep`
+     * the raw .db (and .db-wal) file for the secret after migrating.
+     */
+    function seedLegacyDbWithPlaintextSecret(): { dbPath: string; walPath: string; db: DatabaseSync } {
+      dir = mkdtempSync(join(tmpdir(), 'grunt-migration-003-'));
+      const dbPath = join(dir, 'grunt.db');
+      const db = openDatabase(dbPath);
+      runMigrations(db, [MIGRATIONS[0]!]);
+      db.exec(`INSERT INTO mcp_server (id, name, transport, env, header_refs)
+               VALUES ('legacy', 'Legacy Srv', 'stdio', '{"GITHUB_TOKEN":"ghp_SuperSecretPlaintextToken1234567890"}', '{}')`);
+      db.exec('PRAGMA wal_checkpoint(FULL)');
+      return { dbPath, walPath: `${dbPath}-wal`, db };
+    }
+
+    function fileContainsSecret(path: string): boolean {
+      if (!existsSync(path)) return false;
+      return readFileSync(path).includes('ghp_SuperSecretPlaintextToken1234567890');
+    }
+
+    it('no longer leaves the dropped plaintext readable in the database file (or its WAL) immediately after migrating', () => {
+      const { dbPath, walPath, db } = seedLegacyDbWithPlaintextSecret();
+      try {
+        expect(fileContainsSecret(dbPath) || fileContainsSecret(walPath)).toBe(true); // sanity: the secret really is on disk before migrating
+
+        runMigrations(db);
+
+        expect(fileContainsSecret(dbPath)).toBe(false);
+        expect(fileContainsSecret(walPath)).toBe(false);
+      } finally {
+        db.close();
+      }
+    });
   });
 
   it('creates every table the data model specifies', () => {
