@@ -457,8 +457,12 @@ describe('TOCTOU guard (openVerified)', () => {
     await expect(promise).rejects.toBeInstanceOf(ToctouGuardError);
     // Non-vacuity: the attack must actually have been carried out.
     expect(swapped).toBe(true);
-    // And nothing must have come back that could carry the attacker's bytes.
-    await expect(promise).rejects.not.toHaveProperty('handle');
+    // And the attacker's bytes must be unreachable through the shipped tool
+    // as well, not merely through the internal helper -- with the junction
+    // still in place, read_file must refuse rather than return them.
+    const viaTool = (await readFileTool.execute({ path: 'sub/file.txt' }, ctx())) as Record<string, unknown>;
+    expect(viaTool.error).toBe(true);
+    expect(JSON.stringify(viaTool)).not.toContain(ATTACKER_MARKER);
   }
 
   it('refuses when the swap lands AFTER containPath -- the window the previous guard silently missed', async () => {
