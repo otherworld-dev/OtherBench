@@ -466,7 +466,7 @@ describe('EEXIST from O_EXCL is disambiguated, not collapsed into io_error', () 
     expect(readFileSync(target, 'utf8')).toBe('WON-THE-RACE');
   });
 
-  it('two real concurrent write_file calls to the same new path: one succeeds, the other gets already_exists (not io_error)', async () => {
+  it('two real concurrent write_file calls to the same new path: one succeeds, the other is refused with a disambiguated code (never io_error)', async () => {
     const [a, b] = (await Promise.all([
       writeFileTool.execute({ path: 'concurrent.txt', content: 'A' }, ctx()),
       writeFileTool.execute({ path: 'concurrent.txt', content: 'B' }, ctx()),
@@ -476,7 +476,24 @@ describe('EEXIST from O_EXCL is disambiguated, not collapsed into io_error', () 
     const failed = [a, b].filter((r) => r.error === true);
     expect(succeeded).toHaveLength(1);
     expect(failed).toHaveLength(1);
-    expect(failed[0]?.code).toBe('already_exists');
+    // Which of the two legitimate refusals the loser gets is itself a real
+    // race, not something this test can pin down: `already_exists` if its
+    // O_EXCL open simply loses to the winner's create (parent identity
+    // unchanged -- see "a benign concurrent create ... maps to
+    // already_exists" above, which drives that exact branch deterministically
+    // via a hook), or `toctou_guard` if the loser's own post-open identity
+    // check fires because the file materialised between its snapshot and its
+    // open (see "a create redirected onto a pre-existing OUTSIDE file maps to
+    // toctou_guard" above, likewise driven deterministically). Both mean
+    // exactly one call created the file and the other wrote nothing, so both
+    // are correct; reproduced live, this assertion has been seen to hit
+    // either one (see the code history for this test if you doubt it). What
+    // this test -- run through the real public write_file tool under actual
+    // concurrency, not the internal openVerified seam the two deterministic
+    // tests above drive directly -- exists to prove is that the loser always
+    // gets ONE of those two disambiguated codes, and never the generic
+    // io_error that the O_EXCL create-narrowing exists to prevent.
+    expect(['already_exists', 'toctou_guard']).toContain(failed[0]?.code);
     expect(failed[0]?.code).not.toBe('io_error');
   });
 
