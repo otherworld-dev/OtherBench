@@ -264,6 +264,48 @@ describe('MCP server routes', () => {
     expect(await secrets.get(headerRef)).toBeNull();
   });
 
+  it('an explicit env/headers in the SAME PATCH that flips transport is ignored for the now-irrelevant side, not applied -- a transport is a mode, not two independent field sets', async () => {
+    // Regression coverage: the transport-conditioning logic used to gate
+    // cleanup of the OTHER side's refs on `transportChanged`, but applied
+    // an explicitly-provided `env`/`headers` unconditionally -- so
+    // `{"transport":"http","env":{...}}` in one request stored env refs on
+    // an http row, contradicting the surrounding comment's own claim that
+    // switching to http clears env. Not reachable from the UI (the form
+    // only ever sends `env` for stdio / `headers` for http), but a real gap
+    // in what the API itself allows.
+    const stdioRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Mode Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH] }),
+    });
+    const created = (await stdioRes.json()) as { id: string };
+
+    // Flips to http AND supplies `env` in the very same request.
+    const toHttpWithEnv = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ transport: 'http', url: 'https://example.com/mcp', env: { LEFTOVER: 'should-not-be-stored' } }),
+    });
+    expect(toHttpWithEnv.status).toBe(200);
+    const afterToHttp = (await toHttpWithEnv.json()) as { transport: string; envRefs: Record<string, string> };
+    expect(afterToHttp.transport).toBe('http');
+    // Meaningless on an http row -- must be empty, not carrying LEFTOVER.
+    expect(afterToHttp.envRefs).toEqual({});
+    expect(store.mcpServers.get(created.id)!.envRefs).toEqual({});
+
+    // Flips back to stdio AND supplies `headers` in the very same request.
+    const toStdioWithHeaders = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], headers: { 'X-Leftover': 'should-not-be-stored' } }),
+    });
+    expect(toStdioWithHeaders.status).toBe(200);
+    const afterToStdio = (await toStdioWithHeaders.json()) as { transport: string; headerRefs: Record<string, string> };
+    expect(afterToStdio.transport).toBe('stdio');
+    expect(afterToStdio.headerRefs).toEqual({});
+    expect(store.mcpServers.get(created.id)!.headerRefs).toEqual({});
+  });
+
   it('GET /mcp-servers/:id returns the full stored config (refs, not plaintext), 404s for an unknown id', async () => {
     const createRes = await app().request('/api/mcp-servers', {
       method: 'POST',

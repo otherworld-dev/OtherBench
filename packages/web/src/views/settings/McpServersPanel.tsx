@@ -19,10 +19,43 @@ function errorMessage(err: unknown, fallback: string): string {
 interface KvRow {
   key: string;
   value: string;
+  /**
+   * The name this row was pre-seeded from by `keysToRows` (an existing
+   * secret's name), or `null` for a brand-new row added via "+ Add". Stays
+   * fixed while `key` changes as the user types, purely so a rename can be
+   * detected -- see `blankRenamedRows`.
+   */
+  originalKey: string | null;
 }
 
 function keysToRows(keys: string[]): KvRow[] {
-  return keys.map((key) => ({ key, value: '' }));
+  return keys.map((key) => ({ key, value: '', originalKey: key }));
+}
+
+/**
+ * Pre-seeded rows (`originalKey` set) whose key has been changed to a new,
+ * non-blank name while the value is still blank. This is the case
+ * `rowsToSecretPatch` cannot handle safely: the OLD name is absent from the
+ * resulting patch (deleted server-side -- touching the field replaces the
+ * whole set), and the NEW name isn't in `keepableNames` either (it never
+ * existed under that name), so its blank value is dropped rather than kept.
+ * Nothing ends up stored under EITHER name -- the secret is gone.
+ *
+ * There is no client-side way to carry the value across automatically: a
+ * stored secret is never rendered back (see `McpServerForm`'s docstring),
+ * so there is no plaintext here to re-send under the new name. Rather than
+ * silently losing it, `validate()` refuses to save while any row is in
+ * this state and tells the user to re-enter the value or remove the row --
+ * the same "an ordinary edit must never silently destroy a secret"
+ * discipline `rowsToSecretPatch`'s keep/drop split already applies to the
+ * untouched-row case, extended to cover the renamed case it didn't.
+ */
+function blankRenamedRows(rows: KvRow[]): KvRow[] {
+  return rows.filter((row) => {
+    if (row.originalKey === null) return false;
+    const key = row.key.trim();
+    return key.length > 0 && key !== row.originalKey && row.value.length === 0;
+  });
 }
 
 /**
@@ -48,6 +81,12 @@ function keysToRows(keys: string[]): KvRow[] {
  * `extraHeaders` (`ConnectionsPanel`'s equivalent) doesn't need any of this
  * -- it's plain non-secret metadata with no keep/replace distinction to
  * make, so an empty string there is just a legitimate value sent as-is.
+ *
+ * This function does NOT handle a pre-seeded row whose key was RENAMED
+ * while its value stayed blank -- that combination is refused before save
+ * ever calls this (`McpServerForm.validate`, via `blankRenamedRows`), since
+ * neither the keep-by-name nor drop-when-new-and-empty rule above is safe
+ * for it (see `blankRenamedRows`'s docstring for why).
  */
 function rowsToSecretPatch(rows: KvRow[], keepableNames: ReadonlySet<string>): Record<string, string | null> {
   const result: Record<string, string | null> = {};
@@ -145,7 +184,7 @@ function KvRowsEditor({
       ))}
       <button
         type="button"
-        onClick={() => onChange([...rows, { key: '', value: '' }])}
+        onClick={() => onChange([...rows, { key: '', value: '', originalKey: null }])}
         className="rounded border border-dashed border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
       >
         + Add {keyLabel.toLowerCase()}
@@ -225,10 +264,32 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
     setHeaderClear(false);
   }
 
+  /**
+   * A rename-left-blank error message for the first offending row (see
+   * `blankRenamedRows`), or `null` if `rows` has none. `label` is "env var"
+   * / "header" purely for wording.
+   */
+  function renamedRowError(rows: KvRow[], label: string): string | null {
+    const offender = blankRenamedRows(rows)[0];
+    if (!offender) return null;
+    return (
+      `"${offender.originalKey}" was renamed to "${offender.key.trim()}" but its ${label} value is still blank -- ` +
+      `re-enter the value for "${offender.key.trim()}", or remove the row (✕) to delete "${offender.originalKey}".`
+    );
+  }
+
   function validate(): string | null {
     if (name.trim().length === 0) return '"Name" is required.';
     if (transport === 'stdio' && command.trim().length === 0) return 'A command is required for a stdio server.';
     if (transport === 'http' && url.trim().length === 0) return 'A URL is required for an http (Streamable HTTP) server.';
+    if (transport === 'stdio' && envTouched && !envClear) {
+      const err = renamedRowError(envRows, 'env var');
+      if (err) return err;
+    }
+    if (transport === 'http' && headerTouched && !headerClear) {
+      const err = renamedRowError(headerRows, 'header');
+      if (err) return err;
+    }
     return null;
   }
 
@@ -391,7 +452,9 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
             {envTouched ? (
               <>
                 <p className="mb-1.5 text-xs text-[var(--text-muted)]">
-                  A blank value is left unchanged from before. Type a new value to replace one, or remove its row (✕) to delete it.
+                  A blank value is left unchanged from before -- but only under the SAME name: renaming a row also
+                  requires re-entering its value, since a stored value is never shown back here to carry over.
+                  Remove a row (✕) to delete it.
                 </p>
                 <KvRowsEditor rows={envRows} onChange={setEnvRows} keyPlaceholder="API_KEY" valuePlaceholder="value" keyLabel="Env var name" valueLabel="Env var value" />
               </>
@@ -444,7 +507,9 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
             {headerTouched ? (
               <>
                 <p className="mb-1.5 text-xs text-[var(--text-muted)]">
-                  A blank value is left unchanged from before. Type a new value to replace one, or remove its row (✕) to delete it.
+                  A blank value is left unchanged from before -- but only under the SAME name: renaming a row also
+                  requires re-entering its value, since a stored value is never shown back here to carry over.
+                  Remove a row (✕) to delete it.
                 </p>
                 <KvRowsEditor
                   rows={headerRows}

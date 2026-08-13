@@ -246,6 +246,57 @@ describe('McpServersPanel', () => {
     expect(body.env).toEqual({ API_KEY: null });
   });
 
+  it('refuses to save when a pre-seeded env row is renamed but its value is left blank, instead of silently losing the old secret', async () => {
+    // Reproduces the real bug: envRefs went from {GITHUB_TOKEN, KEEP} to
+    // {KEEP} after renaming GITHUB_TOKEN's row without retyping its value --
+    // the old name is dropped from the patch (deleted server-side) and the
+    // new name is dropped too (blank value, not a recognised keepable
+    // name), so the secret vanishes under both names. Saving must now be
+    // refused, not silently accepted.
+    mockedList.mockResolvedValue([makeHealth()]);
+    mockedGet.mockResolvedValue(makeServer({ envRefs: { GITHUB_TOKEN: 'ref-1', KEEP: 'ref-2' } }));
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('button', { name: /edit environment variables/i }));
+
+    const nameInputs = screen.getAllByLabelText('Env var name');
+    expect(nameInputs.map((el) => (el as HTMLInputElement).value)).toEqual(['GITHUB_TOKEN', 'KEEP']);
+    await user.clear(nameInputs[0]!);
+    await user.type(nameInputs[0]!, 'RENAMED_TOKEN');
+    // Value left blank -- this is the destructive case.
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(/renamed to "RENAMED_TOKEN".*still blank/i)).toBeInTheDocument();
+    expect(mockedPatch).not.toHaveBeenCalled();
+  });
+
+  it('a rename WITH a freshly typed value saves normally -- replaces the old name with the new one', async () => {
+    mockedList.mockResolvedValue([makeHealth()]);
+    mockedGet.mockResolvedValue(makeServer({ envRefs: { GITHUB_TOKEN: 'ref-1', KEEP: 'ref-2' } }));
+    mockedPatch.mockResolvedValue(makeServer());
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('button', { name: /edit environment variables/i }));
+
+    const nameInputs = screen.getAllByLabelText('Env var name');
+    await user.clear(nameInputs[0]!);
+    await user.type(nameInputs[0]!, 'RENAMED_TOKEN');
+    const valueInputs = screen.getAllByLabelText('Env var value');
+    await user.type(valueInputs[0]!, 'freshly-typed-value');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    const body = mockedPatch.mock.calls[0]?.[1] as { env?: Record<string, unknown> };
+    // GITHUB_TOKEN is absent (deleted), RENAMED_TOKEN carries the new value, KEEP is kept.
+    expect(body.env).toEqual({ RENAMED_TOKEN: 'freshly-typed-value', KEEP: null });
+  });
+
   it('clearing env vars sends an empty object', async () => {
     mockedList.mockResolvedValue([makeHealth()]);
     mockedGet.mockResolvedValue(makeServer({ envRefs: { API_KEY: 'ref' } }));

@@ -203,6 +203,54 @@ describe('runMigrations', () => {
     }
   });
 
+  it('a throwing postCommit does not abort startup: the migration stays committed, the error is logged by name, and postCommit is not retried on the next run', () => {
+    // Regression coverage: postCommit used to run outside any try/catch, so
+    // a failure there (disk pressure, or a second process holding the
+    // database for migration 003's wal_checkpoint/VACUUM) propagated out of
+    // runMigrations and failed createContainer/server startup entirely --
+    // even though the migration's own transaction had already committed.
+    const db = freshDb();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let postCommitCalls = 0;
+    try {
+      const withFlakyPostCommit: Migration[] = [
+        MIGRATIONS[0]!,
+        {
+          version: 100,
+          name: '100-flaky-post-commit',
+          sql: 'CREATE TABLE flaky_marker (id TEXT PRIMARY KEY);',
+          postCommit: () => {
+            postCommitCalls += 1;
+            throw new Error('simulated: disk pressure during VACUUM');
+          },
+        },
+      ];
+
+      expect(() => runMigrations(db, withFlakyPostCommit)).not.toThrow();
+      // The migration itself is fully applied -- version advanced, table created --
+      // even though its postCommit step blew up.
+      expect(userVersion(db)).toBe(100);
+      expect(tableNames(db)).toContain('flaky_marker');
+      expect(postCommitCalls).toBe(1);
+
+      // Logged clearly enough to identify which migration and that its
+      // postCommit was skipped, not swallowed silently.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const logged = String(errorSpy.mock.calls[0]?.[0]);
+      expect(logged).toContain('100');
+      expect(logged).toContain('100-flaky-post-commit');
+      expect(logged).toContain('postCommit');
+
+      // Re-running does NOT retry postCommit: the migration's version is
+      // already <= user_version, so the loop skips it entirely.
+      runMigrations(db, withFlakyPostCommit);
+      expect(postCommitCalls).toBe(1);
+    } finally {
+      errorSpy.mockRestore();
+      db.close();
+    }
+  });
+
   it('applies only migrations newer than the current user_version', () => {
     const db = freshDb();
     try {

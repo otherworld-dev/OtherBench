@@ -254,19 +254,25 @@ export function toolsRoutes(container: Container): Hono {
     // applies rather than leaving it stale: `envRefs`/`headerRefs` orphaned
     // in `SecretStore` with nothing left pointing at them, or a `url`/
     // `command` that silently starts applying again if the transport is
-    // flipped back later. Only touches a field the caller didn't ALSO set
-    // explicitly in this same request -- an explicit value in the same
-    // PATCH that just changed transport is respected, not clobbered.
+    // flipped back later. A transport is a MODE, not two independent field
+    // sets: `env` only ever applies to the RESULTING transport being
+    // `stdio`, `headers` only to it being `http` -- enforced below by
+    // gating each on `newTransport`, not merely on whether the caller also
+    // set `transport` in this same request. Without that gate, an explicit
+    // `env`/`headers` in the very request that flips transport (e.g.
+    // `{"transport":"http","env":{"LEFTOVER":"x"}}`) would still be applied
+    // and store env refs on an http row -- meaningless, and not what a
+    // transport switch's cleanup below is supposed to guarantee.
     const newTransport = patch.transport ?? existing.transport;
     const transportChanged = patch.transport !== undefined && patch.transport !== existing.transport;
 
-    if (body.env !== undefined) {
+    if (newTransport === 'stdio' && body.env !== undefined) {
       patch.envRefs = await applySecretPatch(container, id, 'env', existing.envRefs, optionalSecretPatchRecord(body.env, 'env'));
     } else if (transportChanged && newTransport === 'http') {
       await deleteSecretRefs(container, existing.envRefs);
       patch.envRefs = {};
     }
-    if (body.headers !== undefined) {
+    if (newTransport === 'http' && body.headers !== undefined) {
       patch.headerRefs = await applySecretPatch(container, id, 'header', existing.headerRefs, optionalSecretPatchRecord(body.headers, 'headers'));
     } else if (transportChanged && newTransport === 'stdio') {
       await deleteSecretRefs(container, existing.headerRefs);
