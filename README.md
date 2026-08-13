@@ -27,6 +27,14 @@ There is no desktop app (yet — see `docs/HANDOVER.md`). Grunt today is
   if `node:sqlite` on your machine lacks FTS5, search will error. It's
   present on the Node 24.16.0 build this was developed and verified against;
   if you hit `no such module: fts5` when searching, that's what's missing.
+  One behavioural surprise worth knowing: search deliberately escapes FTS5's
+  query syntax rather than passing it through, so a quoted `"credit card"`
+  matches messages containing both words *anywhere*, not the exact adjacent
+  phrase — a conscious tradeoff (every query is split on whitespace and each
+  token is individually phrase-quoted) against FTS5 throwing a syntax error
+  on ordinary things people type into a search box (a lone `"`, a trailing
+  `AND`, a leading `-`, `col:value`). See `toFtsMatchExpression` in
+  `packages/store-sqlite/src/repos/messages.ts` for the exact behaviour.
 - **npm** (this repo uses npm workspaces, not pnpm — see `docs/HANDOVER.md`
   for why).
 
@@ -177,7 +185,7 @@ real `modelId`, same as above.
 ## Tests
 
 ```sh
-npx vitest run              # unit + integration, ~720 tests (721 pass, 2 skipped as of this writing)
+npx vitest run              # unit + integration, ~750 tests (751 pass, 2 skipped as of this writing)
 npm run typecheck
 cd packages/web && npx playwright test   # e2e, requires npm run build first
 ```

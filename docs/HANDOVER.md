@@ -2,14 +2,16 @@
 
 This replaces an earlier handover written when the project was two
 milestones in ("there is no runnable app yet"). That is no longer true. This
-version reflects the state at the end of Task 31 plus two post-31 security
-fixes (commits `6839cb1`, `020051e` — see Security posture below), branch
-`feat/grunt-v1`.
+version reflects the state at the end of Task 31, two post-31 security fixes
+(commits `6839cb1`, `020051e` — see Security posture below), and a final
+whole-branch review's fix wave (commits `65f195d`, `0d99ae2`, `476c503` —
+secret-store write serialization, a `/connections/:id/test` 500, and
+orphaned `streaming` message reconciliation), branch `feat/grunt-v1`.
 
-**Status:** 730 unit/integration tests pass, 9/9 Playwright e2e specs pass,
-`npm run typecheck` and `npm run build` are clean. `README.md` has a
-verified install → build → run → mock-provider walkthrough — follow that
-first if you just want to see it work.
+**Status:** 751 unit/integration tests pass (2 skipped), 9/9 Playwright e2e
+specs pass, `npm run typecheck` and `npm run build` are clean. `README.md`
+has a verified install → build → run → mock-provider walkthrough — follow
+that first if you just want to see it work.
 
 ## What works today, milestone by milestone
 
@@ -54,10 +56,18 @@ plus a browser — say that plainly, don't imply a desktop app exists.**
 `packages/web/src/App.tsx` is an ordinary web app; nothing about it assumes
 or benefits from a native shell.
 
-There is also no Settings UI of any kind — not just for MCP servers, but for
-connections and profiles too. Every one of those is created directly against
-the REST API today (`README.md`'s mock-provider walkthrough uses `curl`
-because that's genuinely the only way).
+There is no Settings UI for **connections, profiles, or MCP servers** —
+every one of those is created directly against the REST API today
+(`README.md`'s mock-provider walkthrough uses `curl` because that's
+genuinely the only way). There IS one real settings surface, though:
+`packages/web/src/views/UsageView.tsx` (opened via the "Usage" button in the
+header) is a pricing settings view — its `PricingRow` component lets you
+edit a model's `priceInPer1m`/`priceOutPer1m`/`priceCachedPer1m`/`currency`
+inline and saves via `PATCH /api/models/:id`. So "no Settings UI of any
+kind" overstated it; the accurate claim is narrower: nothing to configure
+*where a model talks to* (connections) or *how a chat uses one* (profiles,
+MCP servers), but pricing on an already-discovered model is editable from
+the UI today.
 
 ## Security posture, stated without euphemism
 
@@ -94,8 +104,22 @@ reach both:
   `packages/tools/src/fs-tools.ts`'s `openVerified` refuses any opened
   handle reporting `nlink > 1`. That refusal is blunt (it also refuses
   legitimately hard-linked files) and accepted as such — a false refusal is
-  recoverable, a false accept is not. It is also not complete: a filesystem
-  that doesn't report link counts (some network mounts) silently passes.
+  recoverable, a false accept is not. It is not complete, and the re-review
+  found the residual broader than the original fix report claimed: besides
+  a filesystem that doesn't report link counts (some network mounts)
+  silently passing, the `nlink > 1` check itself can be defeated even on a
+  reporting filesystem — by deleting the outside directory entry after
+  creating the hard link (the count drops back to 1), or by moving an
+  outside file directly into the workspace (same effect, no hard link
+  needed). Both require `run_command` (already the precondition for this
+  whole attack class) and, critically, both **destroy the outside name** —
+  the file is gone from where it was, not merely readable from a second
+  place. That's a materially different, much less useful attack than the
+  original: reading or clobbering `~/.ssh/id_rsa` through an in-workspace
+  alias while it sits completely undisturbed at its real path is genuinely
+  closed; what's left is "an attacker who can already move arbitrary files
+  can move one into the workspace," which is its own, much smaller problem.
+  Treat this as defense-in-depth, not as the check being pointless.
 - **TOCTOU** — a directory component gets swapped for a junction pointing
   outside the workspace between the containment check and the tool actually
   using the path. Not theoretical: an unprivileged racer reproduced it live
@@ -230,9 +254,17 @@ this on startup.
   repeating it here because it's the sharpest instance of "narrowed, not
   closed": Node has no fd-based `readdir`, so this one is structural, not a
   matter of writing a tighter check.
-- **MCP settings are REST-only, with no UI** — full CRUD exists at
-  `packages/server/src/routes/tools.ts` (`GET/POST/DELETE /mcp-servers`,
-  `POST /mcp-servers/:id/refresh`), nothing in `packages/web/src` calls it.
+- **MCP servers have no *management* UI — but the Inspector does call the
+  MCP API.** Full CRUD exists at `packages/server/src/routes/tools.ts`
+  (`GET/POST/PATCH/DELETE /mcp-servers`, `POST /mcp-servers/:id/refresh`).
+  `packages/web/src/panes/Inspector.tsx` calls `api.mcpServers.list()`
+  (polled) to show live server health and `api.mcpServers.refresh(id)` as a
+  per-server action (lines ~103, ~109) — so status/health IS visible and
+  refreshable from the shipped UI, and an earlier version of this document
+  was wrong to say nothing in `packages/web/src` calls the MCP API. What's
+  still missing is *configuration*: `create`/`patch`/`delete` exist on the
+  web API client (`packages/web/src/state/api.ts`) but no component calls
+  them, so adding, editing, or removing an MCP server still requires REST.
   Same story as connections/profiles (see "What is NOT built" above) — this
   one's just also explicitly called out in the T25/26 report as a follow-up.
 - **The Inspector polls every 4s rather than pushing.** Deliberate, per its
@@ -241,6 +273,42 @@ this on startup.
   channel to piggyback on, unlike the thread itself (SSE-driven). A Revoke
   action removes its row optimistically so it doesn't *look* laggy, but the
   other two sections can be up to 4s stale.
+- **The tool runtime is currently unreachable from the shipped UI.** A
+  chat's `workspaceRoot` is what scopes fs/shell tools to a directory
+  (`packages/core/src/ports/tool-provider.js` et al.), but nothing in
+  `packages/web/src` ever sets one — it exists there only as a type
+  (`packages/web/src/state/api.ts`'s `CreateChatBody`/patch-body shapes).
+  The one UI call site that creates a chat, `packages/web/src/panes/
+  ChatList.tsx`, calls `api.chats.create({ profileId: defaultProfile.id })`
+  with no `workspaceRoot` at all, so every chat created through the app has
+  `workspaceRoot: null` and can never satisfy a tool's containment check.
+  The only place `workspaceRoot` is actually exercised end to end is the
+  Playwright e2e specs (`packages/web/e2e/smoke.spec.ts`,
+  `tool-approval.spec.ts`), which set it via a direct `POST /api/chats`
+  call through Playwright's `request` fixture, bypassing the UI entirely —
+  proof the wiring works, not that a user can reach it.
+- **Attachment uploads are capped at 25MB, but not streamed.**
+  `packages/server/src/routes/attachments.ts`'s `MAX_ATTACHMENT_BYTES`
+  cap is enforced by first trusting the multipart `File`'s self-reported
+  `.size`, then re-checking the real byte length — but that second check
+  only happens after `Buffer.from(await file.arrayBuffer())` has already
+  read the entire file into memory. The cap bounds how much memory one
+  upload can ultimately hold, but does not stop the bytes from being
+  buffered in full before the size is verified; a true streaming
+  implementation would enforce the limit while reading, not after.
+- **`undici@5.29.0` carries a HIGH-severity advisory in the production
+  dependency tree**, pulled in transitively via `@ai-sdk/anthropic` ->
+  `@ai-sdk/provider-utils` -> `undici` (confirmed with `npm audit
+  --omit=dev`; the same chain also reaches `@ai-sdk/openai`,
+  `@ai-sdk/google`, and `@ai-sdk/openai-compatible`). `npm audit fix
+  --force` resolves it only by installing `@ai-sdk/anthropic@4.0.38` and,
+  with it, a semver-major `ai` v7 — a bump this project deliberately pinned
+  away from (`ai@6.0.253` in every package that depends on it; see
+  `task-10-13-report.md`, which notes `ai@7` was already `latest` on npm and
+  chose to pin `ai-v6` per the plan's stated target instead). Not remediated
+  for that reason; revisit once a v6-compatible `@ai-sdk/provider-utils`
+  release exists or the project is ready to evaluate the v7 migration on its
+  own terms.
 
 ## Deviations from the original spec
 
