@@ -11,7 +11,7 @@ export const INTERRUPTED_BY_RESTART_ERROR: SerializedError = {
   kind: 'transient',
   message:
     'This response was interrupted when Grunt restarted before the turn finished. ' +
-    'Any partial output above was kept; you can retry.',
+    'Any partial output above is still there, but retrying will clear it and start over.',
   retryable: true,
 };
 
@@ -37,11 +37,27 @@ export const INTERRUPTED_BY_RESTART_ERROR: SerializedError = {
  *
  * Called once, synchronously after a `Store` is opened and before anything
  * else can start a new turn (see `createContainer` in
- * packages/server/src/container.ts). By construction every `streaming` row
- * found here is orphaned, never a race with a still-live stream: a single
- * Grunt server process holds `TurnRunner.controllers` only in memory, so
- * that map -- and therefore every stream it could still be driving -- is
- * necessarily empty the instant a fresh process opens its database.
+ * packages/server/src/container.ts). This assumes a single Grunt server
+ * process per database: `TurnRunner.controllers` -- the only thing that
+ * could still be driving a `streaming` row -- lives only in that process's
+ * memory, so it is necessarily empty the instant a fresh process opens its
+ * database, making every `streaming` row that lone process finds here truly
+ * orphaned.
+ *
+ * Nothing enforces that assumption. `openDatabase` (`packages/store-sqlite/
+ * src/db.ts`) only checks that the path is local; it doesn't guard against a
+ * second process, and actively enables concurrent access to the same file
+ * (WAL journaling, a `busy_timeout`). This function also runs before the
+ * port bind, so even a second launch destined to fail with `EADDRINUSE`
+ * moments later still gets here first. If a second process does open the
+ * same database while the first is mid-stream, this can flip a genuinely
+ * live `streaming` row to `error` out from under it. The damage is bounded --
+ * the first process's own terminal `updateStatus` call overwrites the row
+ * with the real outcome once that stream finishes -- but inside the window a
+ * reconnecting client sees a false error, and a Retry that lands in that same
+ * window passes the `status === 'error'` gate, wipes `parts`, and starts a
+ * second concurrent run against the same row: interleaved content and a
+ * second billed call.
  *
  * Terminal state chosen: `error`, not `cancelled`. `retry()` deliberately
  * excludes `cancelled` (see its own doc: a user's deliberate cancellation

@@ -152,19 +152,36 @@ describe('EncryptedFileSecretStore', () => {
     const path = freshPath();
     const store = new EncryptedFileSecretStore(path, 'passphrase');
 
-    // Force one write to fail (bad envelope state is hard to trigger
-    // directly, so we simulate by deleting from an empty store concurrently
-    // with a set that must still land afterwards). The key property under
-    // test: an error in one queued operation must not prevent subsequent
-    // operations on the same instance from ever running.
-    const results = await Promise.allSettled([
-      store.delete('does-not-exist'),
-      store.set('ref', 'value'),
-    ]);
-    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
-    await expect(store.get('ref')).resolves.toBe('value');
+    // Force the queued task itself to reject. Deleting a ref that was never
+    // set is NOT enough to prove this: EncryptedFileSecretStore.delete()
+    // returns early without ever calling writeEnvelope when the ref isn't
+    // present, so it never rejects -- a test built on that (the previous
+    // version of this test) passes vacuously without ever exercising the
+    // failure path. Instead, make the underlying write itself reject once,
+    // the way a real disk/permission error would, from inside an
+    // already-queued task.
+    const writeSpy = vi
+      .spyOn(store as unknown as { writeEnvelope(envelope: unknown): Promise<void> }, 'writeEnvelope')
+      .mockImplementationOnce(() => Promise.reject(new Error('simulated write failure')));
 
-    // And a subsequent call after that must still work.
+    const failing = store.set('poisoned', 'value');
+    const following = store.set('ref', 'value');
+
+    // The failing operation must reject to its own caller -- not be
+    // swallowed by the queue.
+    await expect(failing).rejects.toThrow('simulated write failure');
+    // The operation queued behind it must still fulfil and actually
+    // persist -- this is the property the old test never exercised, since
+    // nothing in it ever rejected in the first place.
+    await expect(following).resolves.toBeUndefined();
+    await expect(store.get('ref')).resolves.toBe('value');
+    // And the failed write must not have left a partial entry behind.
+    await expect(store.get('poisoned')).resolves.toBeNull();
+
+    writeSpy.mockRestore();
+
+    // A subsequent call, queued after both of the above have settled, must
+    // still work too.
     await store.set('ref2', 'value2');
     await expect(store.get('ref2')).resolves.toBe('value2');
   });

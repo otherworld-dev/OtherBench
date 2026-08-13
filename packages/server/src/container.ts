@@ -118,14 +118,25 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   runMigrations(db);
   const store = new SqliteStore(db);
 
-  // A message row left `status: 'streaming'` can only mean the process that
-  // was writing it is gone -- this process's own `TurnRunner.controllers`
-  // (the only thing that could still be driving one) is empty on every
-  // fresh start, so any such row found here is orphaned, not a live stream.
+  // A message row left `status: 'streaming'` means the process that was
+  // writing it is gone -- ASSUMING a single Grunt server process per
+  // database: this process's own `TurnRunner.controllers` (the only thing
+  // that could still be driving one) is empty on every fresh start, so any
+  // such row found here looks orphaned to it. That assumption isn't
+  // enforced anywhere -- `openDatabase`'s WAL mode and `busy_timeout`
+  // actively allow a second process to open the same database, and this
+  // runs before the port bind, so a second launch (even one about to fail
+  // with `EADDRINUSE`) can reconcile out from under a still-live first
+  // process's stream, flipping its row to `error` while it's genuinely
+  // streaming. The first process's own terminal `updateStatus` call
+  // overwrites that with the real outcome once its stream finishes, but in
+  // the window before then a client can see a false error, and a
+  // same-window Retry can start a second concurrent run on the same row.
   // Reconciled synchronously, before anything else can reach the store, so
-  // no route or SSE client ever observes a `streaming` row this process
-  // did not itself just start. See reconcile.ts for why the dead end this
-  // closes has no in-app escape otherwise.
+  // within a single well-behaved process no route or SSE client ever
+  // observes a `streaming` row that process did not itself just start. See
+  // reconcile.ts for the full reasoning and for why the dead end this closes
+  // has no in-app escape otherwise.
   const reconciled = reconcileInterruptedTurns(store);
   if (reconciled.length > 0) {
     console.warn(

@@ -275,7 +275,7 @@ this on startup.
   other two sections can be up to 4s stale.
 - **The tool runtime is currently unreachable from the shipped UI.** A
   chat's `workspaceRoot` is what scopes fs/shell tools to a directory
-  (`packages/core/src/ports/tool-provider.js` et al.), but nothing in
+  (`packages/core/src/ports/tool-provider.ts` et al.), but nothing in
   `packages/web/src` ever sets one — it exists there only as a type
   (`packages/web/src/state/api.ts`'s `CreateChatBody`/patch-body shapes).
   The one UI call site that creates a chat, `packages/web/src/panes/
