@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -176,5 +176,53 @@ describe('run_command', () => {
     // 100KB of 'x' plus the notice text -- comfortably under 200000, proving
     // it was actually capped rather than passed through whole.
     expect((result.output as string).length).toBeLessThan(150_000);
+  });
+});
+
+describe('cancellation before the command starts', () => {
+  it('does not run the command at all when ctx.signal is already aborted, and says so', async () => {
+    // An AbortSignal that is ALREADY aborted never fires an 'abort' event, so
+    // the listener the tool attaches after spawning never runs -- the command
+    // executed to completion, side effects included, after the turn it
+    // belonged to had been cancelled. This asserts on the SIDE EFFECT, not on
+    // the return value, because that is what actually leaked.
+    const marker = join(ws, `side-effect-${randomUUID()}.txt`);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = (await runCommandTool.execute(
+      { command: `node -e "require('fs').writeFileSync(process.argv[1], 'ran')" ${JSON.stringify(marker)}` },
+      ctx({ signal: controller.signal })
+    )) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ error: true, code: 'aborted' });
+    // Give a command that WAS started time to finish, so this cannot pass by
+    // merely checking too early.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('still runs normally when the signal is live', async () => {
+    const marker = join(ws, `side-effect-${randomUUID()}.txt`);
+    const result = (await runCommandTool.execute(
+      { command: `node -e "require('fs').writeFileSync(process.argv[1], 'ran')" ${JSON.stringify(marker)}` },
+      ctx()
+    )) as Record<string, unknown>;
+
+    expect(result.error).toBeUndefined();
+    expect(existsSync(marker)).toBe(true);
+  });
+});
+
+describe('tool description honesty', () => {
+  it('does not promise that every child is killed on timeout', async () => {
+    // The description told the model "the process (and any children it
+    // spawns) is killed if the timeout is reached". A fully detached
+    // grandchild survives (demonstrated), and a model that believes the
+    // promise will reason wrongly about what it has left running.
+    const { description } = runCommandTool;
+    expect(description).toMatch(/best-effort/i);
+    expect(description).toMatch(/detach/i);
+    expect(description).not.toMatch(/and any children it spawns\) is killed/i);
   });
 });
