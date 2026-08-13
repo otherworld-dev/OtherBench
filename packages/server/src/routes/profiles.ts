@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { Container } from '../container.js';
-import { optionalBoolean, optionalNullableString, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalNullableString, optionalStringArray, requireNonEmptyString } from '../validation.js';
 
 const DEFAULT_TOOL_POLICY: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' };
 
@@ -47,7 +47,13 @@ function parseToolPolicy(value: unknown): ToolPolicy {
   return {
     fs: (fs as ToolPolicy['fs']) ?? DEFAULT_TOOL_POLICY.fs,
     shell: typeof v['shell'] === 'boolean' ? v['shell'] : DEFAULT_TOOL_POLICY.shell,
-    mcpServerIds: Array.isArray(v['mcpServerIds']) ? (v['mcpServerIds'] as string[]) : DEFAULT_TOOL_POLICY.mcpServerIds,
+    // Every entry must be a string -- a non-string (e.g. `null`) survives
+    // the old `Array.isArray` check unchanged and round-trips into storage,
+    // where it defeats PermissionBroker's `mcpServerIds.length === 0`
+    // fast-deny path (see permissions.ts) without ever matching a real
+    // server id. `undefined` (the field omitted) still means "default to
+    // the harmless empty policy", same as before.
+    mcpServerIds: v['mcpServerIds'] === undefined ? DEFAULT_TOOL_POLICY.mcpServerIds : optionalStringArray(v['mcpServerIds'], 'toolPolicy.mcpServerIds'),
     approvalMode: (approvalMode as ToolPolicy['approvalMode']) ?? DEFAULT_TOOL_POLICY.approvalMode,
   };
 }

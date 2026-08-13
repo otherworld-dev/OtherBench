@@ -6,6 +6,7 @@ import { Thread } from './panes/Thread.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
 import { useChatSync } from './state/useChatSync.js';
+import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
 
 /** Below this width the inspector can no longer sit as a third docked column -- it collapses (task 19 brief). */
@@ -43,6 +44,9 @@ export function App(): JSX.Element {
   // overlay, ephemeral like the narrow inspector overlay above (there is no
   // "docked" mode for it, and no reason to remember it across reloads).
   const [usageViewOpen, setUsageViewOpen] = useState(false);
+  // Connections/models/profiles settings -- same ephemeral full-screen
+  // overlay pattern as usageViewOpen above (see SettingsView's doc comment).
+  const [settingsViewOpen, setSettingsViewOpen] = useState(false);
 
   // Set only when EVERY bootstrap fetch below fails -- a cold load with the
   // server unreachable renders otherwise-identically to a genuinely fresh
@@ -114,6 +118,9 @@ export function App(): JSX.Element {
         </div>
         <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
           {activeChatId && <span data-testid="stream-status">{STREAM_STATUS_LABEL[streamStatus] ?? streamStatus}</span>}
+          <button type="button" onClick={() => setSettingsViewOpen(true)} className="rounded border border-[var(--border)] px-2 py-1">
+            Settings
+          </button>
           <button type="button" onClick={() => setUsageViewOpen(true)} className="rounded border border-[var(--border)] px-2 py-1">
             Usage
           </button>
@@ -169,6 +176,7 @@ export function App(): JSX.Element {
       </div>
 
       {usageViewOpen && <UsageView onClose={() => setUsageViewOpen(false)} />}
+      {settingsViewOpen && <SettingsView onClose={() => setSettingsViewOpen(false)} />}
     </div>
   );
 }

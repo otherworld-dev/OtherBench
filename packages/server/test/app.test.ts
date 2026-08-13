@@ -64,3 +64,28 @@ describe('createApp auth gate', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('createApp onError', () => {
+  // Regression: HTTPException's own default getResponse() returns the
+  // message as a bare text/plain body, which extractErrorMessage
+  // (packages/web/src/state/api.ts) cannot parse as JSON -- it falls back
+  // to res.statusText (empty for a manually-built Response), so every
+  // validator's carefully-written message was silently replaced with a bare
+  // "HTTP 400" client-side. This must come back as {error: <message>} JSON,
+  // exactly like the 500 catch-all already does, for any of it to actually
+  // reach a user.
+  it('wraps a validator-thrown HTTPException as {error: <message>} JSON, not a bare text/plain body', async () => {
+    const app = createApp(makeContainer());
+
+    const res = await app.request('/api/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'anthropic' }), // missing required "name"
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/"name" is required/i);
+  });
+});

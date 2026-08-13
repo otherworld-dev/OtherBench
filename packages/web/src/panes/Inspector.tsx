@@ -3,7 +3,8 @@ import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
-import { api } from '../state/api.js';
+import { usePolled } from '../lib/usePolled.js';
+import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 
 export interface InspectorProps {
@@ -43,48 +44,243 @@ function formatCost(cost: number): string {
  * decision #3) is about never rendering an empty state that HIDES real
  * activity, not about sub-second live-ness.
  */
-const POLL_INTERVAL_MS = 4000;
+// `usePolled` moved to ../lib/usePolled.js so the Settings > MCP servers
+// panel can reuse the exact same "no push channel, poll and don't flash to
+// loading on a routine re-fetch" behaviour for its own health list.
+
+// ---------------------------------------------------------------------------
+// Workspace root -- the single setting that unblocks the whole tool runtime.
+// `PermissionBroker.decide` hard-denies every fs/shell tool call when
+// `ctx.workspaceRoot` is null (packages/core/src/domain/permissions.ts), and
+// before this section existed nothing in the web client ever set it: the
+// tools, approval flow, and audit trail were all built and tested, but
+// unreachable from the app because there was no UI path to the one field
+// that turns them on.
+// ---------------------------------------------------------------------------
+
+const WORKSPACE_ROOT_HELP =
+  'Must be a native absolute path on the SERVER machine -- e.g. "E:\\Git\\Grunt" on Windows, "/home/user/project" ' +
+  'on Linux/macOS. Not a relative path, and not a Git-Bash-style "/e/Git/Grunt": that form resolves to a path ' +
+  'Windows has no notion of, which fails with a confusing ENOENT at tool-call time instead of a clear error here.';
+
+function looksWindowsAbsolute(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
+}
+
+/** Matches the shape Git Bash/MSYS translates a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. */
+function gitBashMangledMatch(value: string): RegExpMatchArray | null {
+  return value.match(/^\/([a-zA-Z])(\/|$)/);
+}
 
 /**
- * Polls `fetcher` every `POLL_INTERVAL_MS`, starting immediately and
- * restarting whenever `deps` changes (e.g. switching chats). Deliberately
- * does NOT clear `data` back to `null` between ticks of the SAME poll loop
- * -- only on a genuine restart -- so a routine re-poll updates numbers in
- * place instead of flashing back to a loading state every few seconds.
+ * Validates a workspace root against the SERVER's OWN OS convention, read
+ * from `GET /api/health`'s `platform` field (never the browser's -- a
+ * workspace root is resolved server-side by `containPath`, so only the
+ * server's platform can say what "native absolute" means here). While the
+ * platform hasn't loaded yet (`null`), still catches the one shape that is
+ * never valid input regardless of platform -- a Git-Bash-mangled Windows
+ * path -- but otherwise accepts either native absolute form so a slow/failed
+ * health fetch doesn't block entering a path outright.
  */
-function usePolled<T>(fetcher: () => Promise<T>, deps: unknown[]): { data: T | null; failed: boolean } {
-  const [data, setData] = useState<T | null>(null);
-  const [failed, setFailed] = useState(false);
+function validateWorkspaceRoot(raw: string, serverPlatform: string | null): string | null {
+  const value = raw.trim();
+  if (value.length === 0) return 'Enter a workspace path.';
+
+  const windowsAbsolute = looksWindowsAbsolute(value);
+  const gitBashMangled = gitBashMangledMatch(value);
+  const posixAbsolute = value.startsWith('/') && !gitBashMangled;
+
+  if (serverPlatform === 'win32') {
+    if (windowsAbsolute) return null;
+    if (gitBashMangled) {
+      const drive = gitBashMangled[1]!.toUpperCase();
+      return `That is a Git-Bash-style path -- the server (running Windows) needs the native form, e.g. "${drive}:\\..." instead of "${value}".`;
+    }
+    return 'Enter a native absolute Windows path, e.g. "E:\\Git\\Grunt".';
+  }
+
+  if (serverPlatform !== null) {
+    if (posixAbsolute) return null;
+    return 'Enter a native absolute path, e.g. "/home/user/project".';
+  }
+
+  if (windowsAbsolute || posixAbsolute) return null;
+  if (gitBashMangled) {
+    const drive = gitBashMangled[1]!.toUpperCase();
+    return `That looks like a Git-Bash-style path. If the server runs on Windows, use "${drive}:\\..." instead of "${value}".`;
+  }
+  return 'Enter a native absolute path (e.g. "E:\\Git\\Grunt" on Windows, "/home/user/project" on Linux/macOS).';
+}
+
+/** Plain-language consequence of the current tool policy against a workspace that IS set -- makes real access legible, not just "a path is configured". */
+function workspaceConsequence(profile: Profile | null): string {
+  const fs = profile?.toolPolicy.fs ?? 'off';
+  const shell = profile?.toolPolicy.shell ?? false;
+  if (fs === 'off' && !shell) {
+    return "This chat's profile currently has filesystem and shell access turned off by policy, so tools still won't run here -- enable them for this profile in Settings > Profiles.";
+  }
+  const fsPart = fs === 'readwrite' ? 'read and write files' : fs === 'read' ? 'read files' : null;
+  const parts = [fsPart, shell ? 'run shell commands' : null].filter((p): p is string => p !== null);
+  return `This chat's profile can ${parts.join(' and ')} under this folder, subject to approval for each call.`;
+}
+
+function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | null }): JSX.Element {
+  const upsertChat = useGruntStore((s) => s.upsertChat);
+  const [serverPlatform, setServerPlatform] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(chat.workspaceRoot ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Optimistic override of `chat.workspaceRoot`, exactly like GrantsSection's
+  // `localGrants` above: `upsertChat` below updates the SAME store App.tsx
+  // reads `chats` from, so a real render eventually flows this component a
+  // fresh `chat` prop -- but that is at least one more render tick away, and
+  // "Save" doing visibly nothing for a moment reads as broken. `undefined` =
+  // no override yet, defer to the prop.
+  const [localWorkspaceRoot, setLocalWorkspaceRoot] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setData(null);
-    setFailed(false);
-
-    async function tick(): Promise<void> {
-      try {
-        const result = await fetcher();
-        if (!cancelled) {
-          setData(result);
-          setFailed(false);
-        }
-      } catch (err) {
-        console.error('[grunt-web] Inspector poll failed:', err);
-        if (!cancelled) setFailed(true);
-      }
-      if (!cancelled) timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
-    }
-
-    void tick();
+    api
+      .health()
+      .then((h) => {
+        if (!cancelled) setServerPlatform(h.platform);
+      })
+      .catch((err: unknown) => console.error('[grunt-web] failed to fetch server platform for workspace validation:', err));
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps is the caller's own explicit restart list, not derivable from `fetcher`'s identity.
-  }, deps);
+  }, []);
 
-  return { data, failed };
+  // A genuine chat switch resets the form and drops the optimistic override
+  // -- but NOT a re-render mid-edit, which would otherwise wipe out whatever
+  // the user is currently typing.
+  useEffect(() => {
+    setEditing(false);
+    setError(null);
+    setLocalWorkspaceRoot(undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- draft is intentionally NOT synced on every keystroke of chat.workspaceRoot's own updater below.
+  }, [chat.id]);
+
+  const displayedWorkspaceRoot = localWorkspaceRoot !== undefined ? localWorkspaceRoot : chat.workspaceRoot;
+
+  function openEdit(): void {
+    setDraft(displayedWorkspaceRoot ?? '');
+    setError(null);
+    setEditing(true);
+  }
+
+  async function commit(nextWorkspaceRoot: string | null): Promise<void> {
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await api.chats.patch(chat.id, { workspaceRoot: nextWorkspaceRoot });
+      upsertChat(updated);
+      setLocalWorkspaceRoot(updated.workspaceRoot);
+      setEditing(false);
+      setDraft(updated.workspaceRoot ?? '');
+    } catch (err) {
+      console.error(`[grunt-web] failed to update workspace root for chat ${chat.id}:`, err);
+      setError(err instanceof ApiError ? err.message : 'Save failed -- please try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSave(): Promise<void> {
+    const validationError = validateWorkspaceRoot(draft, serverPlatform);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    await commit(draft.trim());
+  }
+
+  if (editing) {
+    return (
+      <div className="space-y-2" data-testid="workspace-section">
+        <label className="block text-xs font-medium text-[var(--text-muted)]" htmlFor="workspace-root-input">
+          Workspace folder (native absolute path)
+        </label>
+        <input
+          id="workspace-root-input"
+          aria-label="Workspace folder"
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setError(null);
+          }}
+          placeholder={serverPlatform === 'win32' ? 'E:\\Git\\Grunt' : '/home/user/project'}
+          className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 font-mono text-sm"
+        />
+        <p className="text-xs text-[var(--text-muted)]">{WORKSPACE_ROOT_HELP}</p>
+        {error && (
+          <p data-testid="workspace-root-error" className="text-xs text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving}
+            className="rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setDraft(displayedWorkspaceRoot ?? '');
+              setError(null);
+            }}
+            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!displayedWorkspaceRoot) {
+    return (
+      <div className="space-y-2" data-testid="workspace-section">
+        <p className="text-sm text-[var(--text-faint)]">No workspace folder is set. Filesystem and shell tools are unavailable in this chat until one is.</p>
+        <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">
+          Set workspace…
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2" data-testid="workspace-section">
+      <p data-testid="workspace-root-value" className="rounded bg-[var(--bg-sunken)] px-2 py-1 font-mono text-sm break-all">
+        {displayedWorkspaceRoot}
+      </p>
+      <p className="text-xs text-[var(--text-muted)]">{workspaceConsequence(profile)}</p>
+      <div className="flex gap-2">
+        <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">
+          Change…
+        </button>
+        <button
+          type="button"
+          onClick={() => void commit(null)}
+          disabled={saving}
+          className="rounded border border-[var(--danger)] px-2 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+        >
+          Clear
+        </button>
+      </div>
+      {error && (
+        <p data-testid="workspace-root-error" className="text-xs text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 const MCP_STATUS_COLOR: Record<McpServerHealth['status'], string> = {
@@ -396,6 +592,10 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
           ✕
         </button>
       </div>
+
+      <Section title="Workspace">
+        {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}
+      </Section>
 
       <Section title="Profile parameters">
         {!chat ? (

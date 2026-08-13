@@ -286,6 +286,111 @@ describe('chats CRUD', () => {
 });
 
 // ---------------------------------------------------------------------------
+// workspaceRoot validation (server-side backstop -- Finding 4). `containPath`
+// (packages/core/src/domain/paths.ts) resolves a non-absolute root relative
+// to the SERVER's own cwd rather than erroring, so an unvalidated relative
+// or blank value here becomes a real, silently-wrong containment boundary
+// for every fs/shell tool call in that chat. The client's own validator
+// (Inspector.tsx's validateWorkspaceRoot) is not a substitute -- these go
+// straight at the route, bypassing it entirely, the way a direct API call
+// would.
+// ---------------------------------------------------------------------------
+
+describe('workspaceRoot validation', () => {
+  const NATIVE_ABSOLUTE = process.platform === 'win32' ? 'C:\\Users\\Test\\project' : '/home/test/project';
+
+  it('rejects a bare relative-looking workspaceRoot on create', async () => {
+    const res = await app().request('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: 'demo-workspace' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a path-escape attempt ("../..") on create', async () => {
+    const res = await app().request('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: '../..' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a whitespace-only workspaceRoot on create', async () => {
+    const res = await app().request('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: '   ' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('accepts a genuine native absolute path on create', async () => {
+    const res = await app().request('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: NATIVE_ABSOLUTE }),
+    });
+    expect(res.status).toBe(201);
+    expect((await json(res))['workspaceRoot']).toBe(NATIVE_ABSOLUTE);
+  });
+
+  it('still allows omitting workspaceRoot entirely, and explicitly clearing it with null', async () => {
+    const created = await createChat();
+    expect(created['workspaceRoot']).toBeNull();
+
+    const res = await app().request(`/api/chats/${created['id'] as string}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceRoot: null }),
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res))['workspaceRoot']).toBeNull();
+  });
+
+  it('rejects an invalid workspaceRoot on PATCH too, not just create', async () => {
+    const created = await createChat();
+    const res = await app().request(`/api/chats/${created['id'] as string}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceRoot: '../..' }),
+    });
+    expect(res.status).toBe(400);
+    // Nothing was written -- the chat's workspaceRoot is unchanged.
+    expect(container.store.chats.get(created['id'] as string)?.workspaceRoot).toBeNull();
+  });
+
+  it.skipIf(process.platform !== 'win32')(
+    'rejects a Git-Bash-mangled Windows path ("/c/Users/Adam/project") with an actionable message, on a Windows server',
+    async () => {
+      const res = await app().request('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: '/c/Users/Adam/project' }),
+      });
+      expect(res.status).toBe(400);
+      const body = await json(res);
+      expect(String(body['error'])).toMatch(/git-bash/i);
+      expect(String(body['error'])).toMatch(/C:\\/);
+      // Never silently discarded to a bare "Bad Request" -- see app.test.ts's onError regression test.
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a Windows-style absolute path on a non-Windows server (it is not a native absolute POSIX path)',
+    async () => {
+      const res = await app().request('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId: 'profile-1', workspaceRoot: 'E:\\Git\\Grunt' }),
+      });
+      expect(res.status).toBe(400);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
 // GET /:id/messages
 // ---------------------------------------------------------------------------
 

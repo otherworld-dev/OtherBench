@@ -31,7 +31,7 @@ describe('GET /api/health', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toMatchObject({ status: 'ok' });
+    expect(body).toMatchObject({ status: 'ok', platform: process.platform });
   });
 
   it('is reachable without a token even when the app requires one for other routes', async () => {

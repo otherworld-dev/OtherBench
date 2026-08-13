@@ -7,7 +7,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
-import { optionalBoolean, optionalNullableString, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
 
 interface ChatBody {
   title?: unknown;
@@ -68,7 +68,7 @@ export function chatsRoutes(container: Container): Hono {
     requireExistingProfile(container, profileId);
 
     const title = typeof body.title === 'string' && body.title.length > 0 ? body.title : DEFAULT_TITLE;
-    const workspaceRoot = optionalNullableString(body.workspaceRoot, 'workspaceRoot') ?? null;
+    const workspaceRoot = optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null;
 
     const created = container.store.chats.create({
       id: randomUUID(),
@@ -100,7 +100,7 @@ export function chatsRoutes(container: Container): Hono {
       requireExistingProfile(container, profileId);
       patch.profileId = profileId;
     }
-    if (body.workspaceRoot !== undefined) patch.workspaceRoot = optionalNullableString(body.workspaceRoot, 'workspaceRoot') ?? null;
+    if (body.workspaceRoot !== undefined) patch.workspaceRoot = optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null;
     if (body.pinned !== undefined) patch.pinned = optionalBoolean(body.pinned, 'pinned', false);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);

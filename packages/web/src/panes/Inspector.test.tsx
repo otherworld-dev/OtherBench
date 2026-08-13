@@ -8,26 +8,34 @@ import type { Profile } from '@grunt/core/types/config.js';
 import { Inspector } from './Inspector.js';
 import { useGruntStore } from '../state/store.js';
 
-vi.mock('../state/api.js', () => ({
-  api: {
-    usage: {
-      get: vi.fn(),
+vi.mock('../state/api.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../state/api.js')>();
+  return {
+    ...actual,
+    api: {
+      usage: {
+        get: vi.fn(),
+      },
+      mcpServers: {
+        list: vi.fn(),
+        refresh: vi.fn(),
+      },
+      grants: {
+        list: vi.fn(),
+        revoke: vi.fn(),
+      },
+      audit: {
+        list: vi.fn(),
+      },
+      health: vi.fn(),
+      chats: {
+        patch: vi.fn(),
+      },
     },
-    mcpServers: {
-      list: vi.fn(),
-      refresh: vi.fn(),
-    },
-    grants: {
-      list: vi.fn(),
-      revoke: vi.fn(),
-    },
-    audit: {
-      list: vi.fn(),
-    },
-  },
-}));
+  };
+});
 
-import { api } from '../state/api.js';
+import { ApiError, api } from '../state/api.js';
 
 const mockedUsageGet = vi.mocked(api.usage.get);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
@@ -35,6 +43,8 @@ const mockedMcpRefresh = vi.mocked(api.mcpServers.refresh);
 const mockedGrantsList = vi.mocked(api.grants.list);
 const mockedGrantsRevoke = vi.mocked(api.grants.revoke);
 const mockedAuditList = vi.mocked(api.audit.list);
+const mockedHealth = vi.mocked(api.health);
+const mockedChatsPatch = vi.mocked(api.chats.patch);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -105,6 +115,8 @@ beforeEach(() => {
   mockedGrantsList.mockReset().mockResolvedValue([]);
   mockedGrantsRevoke.mockReset().mockResolvedValue(undefined);
   mockedAuditList.mockReset().mockResolvedValue([]);
+  mockedHealth.mockReset().mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
+  mockedChatsPatch.mockReset();
 });
 
 describe('Inspector session spend', () => {
@@ -207,6 +219,95 @@ function grantsSection(): HTMLElement {
 function auditSection(): HTMLElement {
   return screen.getByRole('heading', { name: 'Audit trail' }).closest('section')!;
 }
+function workspaceSection(): HTMLElement {
+  return screen.getByRole('heading', { name: 'Workspace' }).closest('section')!;
+}
+
+describe('Inspector workspace root', () => {
+  afterEach(cleanup);
+
+  it('shows an honest empty state, and that tools are unavailable, when no workspace is set', async () => {
+    render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(workspaceSection()).findByText(/no workspace folder is set/i)).toBeInTheDocument();
+    expect(within(workspaceSection()).getByText(/filesystem and shell tools are unavailable/i)).toBeInTheDocument();
+  });
+
+  it('shows the current workspace path and the concrete consequence for this profile when one is set', async () => {
+    render(
+      <Inspector
+        chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })}
+        profile={makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'always_ask' } })}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+      />
+    );
+    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\Grunt');
+    expect(within(workspaceSection()).getByText(/can read and write files.*run shell commands/i)).toBeInTheDocument();
+  });
+
+  it('flags when the profile has fs/shell turned off by policy even though a workspace is configured', async () => {
+    render(
+      <Inspector
+        chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })}
+        profile={makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' } })}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+      />
+    );
+    expect(await within(workspaceSection()).findByText(/turned off by policy/i)).toBeInTheDocument();
+  });
+
+  it('rejects a Git-Bash-style path on a Windows server with a specific, actionable message, and never saves it', async () => {
+    mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
+    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), '/e/Git/Grunt');
+    await user.click(within(workspaceSection()).getByRole('button', { name: /^save$/i }));
+
+    expect(await within(workspaceSection()).findByTestId('workspace-root-error')).toHaveTextContent(/git-bash/i);
+    expect(within(workspaceSection()).getByTestId('workspace-root-error')).toHaveTextContent(/E:\\/);
+    expect(mockedChatsPatch).not.toHaveBeenCalled();
+  });
+
+  it('accepts a native Windows absolute path and saves it', async () => {
+    mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
+    mockedChatsPatch.mockResolvedValue(makeChat({ workspaceRoot: 'E:\\Git\\Grunt' }));
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
+    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), 'E:\\Git\\Grunt');
+    await user.click(within(workspaceSection()).getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { workspaceRoot: 'E:\\Git\\Grunt' }));
+    expect(await within(workspaceSection()).findByTestId('workspace-root-value')).toHaveTextContent('E:\\Git\\Grunt');
+  });
+
+  it('Clear removes the workspace root without requiring the edit form', async () => {
+    mockedChatsPatch.mockResolvedValue(makeChat({ workspaceRoot: null }));
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /^clear$/i }));
+
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { workspaceRoot: null }));
+    expect(await within(workspaceSection()).findByText(/no workspace folder is set/i)).toBeInTheDocument();
+  });
+
+  it('surfaces a server-rejected save instead of throwing', async () => {
+    mockedChatsPatch.mockRejectedValue(new ApiError(400, 'workspaceRoot must be an absolute path'));
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
+    await user.type(within(workspaceSection()).getByLabelText('Workspace folder'), 'E:\\Git\\Grunt');
+    await user.click(within(workspaceSection()).getByRole('button', { name: /^save$/i }));
+
+    expect(await within(workspaceSection()).findByTestId('workspace-root-error')).toHaveTextContent('workspaceRoot must be an absolute path');
+  });
+});
 
 describe('Inspector MCP server health', () => {
   afterEach(cleanup);

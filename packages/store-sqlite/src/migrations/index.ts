@@ -1,25 +1,43 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { MIGRATION_001_INITIAL } from './001-initial.js';
 import { MIGRATION_002_GRANT_SOURCE } from './002-grant-source.js';
+import { MIGRATION_003_MCP_ENV_REFS } from './003-mcp-env-refs.js';
+import type { Migration } from './types.js';
 
-export interface Migration {
-  version: number;
-  name: string;
-  sql: string;
-}
+export type { Migration } from './types.js';
 
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: '001-initial', sql: MIGRATION_001_INITIAL },
   { version: 2, name: '002-grant-source', sql: MIGRATION_002_GRANT_SOURCE },
+  MIGRATION_003_MCP_ENV_REFS,
 ];
 
 /**
  * Applies every migration in `migrations` (defaults to {@link MIGRATIONS})
  * whose version is greater than the database's current `PRAGMA user_version`,
- * in ascending version order. Each migration runs inside its own transaction:
- * a failure rolls back that migration's statements entirely and the error
- * propagates, leaving `user_version` at whatever it was before that
- * migration started. Re-running with nothing pending is a no-op.
+ * in ascending version order. Each migration's `sql`/`run` (see
+ * {@link Migration}) execute inside their own transaction: a failure rolls
+ * back that migration's statements entirely and the error propagates,
+ * leaving `user_version` at whatever it was before that migration started.
+ * A migration's `postCommit`, if any, then runs immediately after --
+ * outside that transaction, since SQLite refuses some statements
+ * (`VACUUM`, `PRAGMA wal_checkpoint`) inside one. Re-running with nothing
+ * pending is a no-op.
+ *
+ * A `postCommit` failure (disk pressure, or another process holding the
+ * database for `VACUUM`/`wal_checkpoint`) is caught and logged rather than
+ * left to propagate: the migration's own transaction already committed by
+ * this point (`user_version` was already advanced), so throwing here would
+ * fail `createContainer`/server startup for something that, unlike the
+ * migration itself, is NOT required for correctness of the schema -- e.g.
+ * migration 003's postCommit only scrubs plaintext residue left behind by
+ * the migration, it doesn't change any row's live value. Re-running
+ * `runMigrations` after a `postCommit` failure will NOT retry it: the
+ * migration's version is already <= the database's `user_version`, so the
+ * loop skips it entirely on the next run. That's why this is logged loudly
+ * (naming the migration and what was skipped) instead of swallowed --
+ * silently sailing through would otherwise leave a user with no way to
+ * know the scrub never happened.
  */
 export function runMigrations(db: DatabaseSync, migrations: Migration[] = MIGRATIONS): void {
   const sorted = [...migrations].sort((a, b) => a.version - b.version);
@@ -31,12 +49,29 @@ export function runMigrations(db: DatabaseSync, migrations: Migration[] = MIGRAT
 
     db.exec('BEGIN');
     try {
-      db.exec(migration.sql);
+      if (migration.sql) db.exec(migration.sql);
+      migration.run?.(db);
       db.exec(`PRAGMA user_version = ${migration.version}`);
       db.exec('COMMIT');
     } catch (err) {
       db.exec('ROLLBACK');
       throw err;
+    }
+    if (migration.postCommit) {
+      try {
+        migration.postCommit(db);
+      } catch (err) {
+        console.error(
+          `[migrations] Migration ${migration.version} (${migration.name}) committed successfully, but its ` +
+            `postCommit step failed and was skipped: ${err instanceof Error ? err.message : String(err)}. ` +
+            'Startup is continuing -- the migration itself is applied -- but whatever postCommit does for this ' +
+            'migration (see its own comments) did NOT run, and will NOT be retried automatically: the migration ' +
+            'will not re-apply on a future startup. If this is migration 003, plaintext env values dropped by the ' +
+            'rename may still be recoverable from the database/WAL files on disk until something else reclaims ' +
+            'that space -- investigate the error above, then re-run its postCommit manually if needed.',
+          err
+        );
+      }
     }
   }
 }

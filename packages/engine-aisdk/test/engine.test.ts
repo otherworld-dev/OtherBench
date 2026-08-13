@@ -477,3 +477,177 @@ describe('AiSdkChatEngine.listModels (real providers, injectable fetch)', () => 
     expect(result.ok).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ollama-specific capability seeding (task: settings UI part 4) -- Ollama's
+// native `/api/tags` genuinely reports per-model capabilities/context length,
+// unlike every other connection kind (declared, not probed -- see
+// ModelsPanel's doc). A realistic payload below is copied verbatim from a
+// real local Ollama instance's response shape.
+// ---------------------------------------------------------------------------
+
+describe('AiSdkChatEngine.listModels (Ollama capability seeding from /api/tags)', () => {
+  function engineWithFetch(fetchImpl: typeof fetch) {
+    const resolver: ProviderResolver = { resolve: () => ({ kind: 'aisdk', provider: (() => null) as never }) };
+    return new AiSdkChatEngine(resolver, { fetchImpl });
+  }
+
+  /** A realistic `GET /api/tags` payload, trimmed to the fields this code reads. */
+  const REALISTIC_TAGS_PAYLOAD = {
+    models: [
+      {
+        name: 'qwen2.5vl:7b',
+        model: 'qwen2.5vl:7b',
+        details: { family: 'qwen25vl', parameter_size: '8.3B', context_length: 128000, embedding_length: 3584 },
+        capabilities: ['vision', 'completion'],
+      },
+      {
+        name: 'qwen3-coder:30b',
+        model: 'qwen3-coder:30b',
+        details: { family: 'qwen3moe', parameter_size: '30.5B', context_length: 262144, embedding_length: 2048 },
+        capabilities: ['completion', 'tools'],
+      },
+      {
+        name: 'nomic-embed-text:latest',
+        model: 'nomic-embed-text:latest',
+        details: { family: 'nomic-bert', parameter_size: '137M', context_length: 2048, embedding_length: 768 },
+        capabilities: ['embedding'],
+      },
+    ],
+  };
+
+  it('seeds supportsVision/supportsTools/contextWindow from /api/tags, matched by model id', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'http://127.0.0.1:11434/v1/models') {
+        return new Response(
+          JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }, { id: 'qwen3-coder:30b' }, { id: 'nomic-embed-text:latest' }] }),
+          { status: 200 }
+        );
+      }
+      if (String(url) === 'http://127.0.0.1:11434/api/tags') {
+        return new Response(JSON.stringify(REALISTIC_TAGS_PAYLOAD), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'ollama', baseUrl: null }), null);
+
+    expect(models).toEqual([
+      { modelId: 'qwen2.5vl:7b', displayName: 'qwen2.5vl:7b', contextWindow: 128000, supportsVision: true, supportsTools: false },
+      { modelId: 'qwen3-coder:30b', displayName: 'qwen3-coder:30b', contextWindow: 262144, supportsVision: false, supportsTools: true },
+      { modelId: 'nomic-embed-text:latest', displayName: 'nomic-embed-text:latest', contextWindow: 2048, supportsVision: false, supportsTools: false },
+    ]);
+  });
+
+  it('derives the native API root from a custom baseUrl ending in /v1', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'http://my-ollama-box:11434/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }] }), { status: 200 });
+      }
+      if (String(url) === 'http://my-ollama-box:11434/api/tags') {
+        return new Response(JSON.stringify(REALISTIC_TAGS_PAYLOAD), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'ollama', baseUrl: 'http://my-ollama-box:11434/v1' }), null);
+
+    expect(models[0]).toMatchObject({ supportsVision: true, contextWindow: 128000 });
+  });
+
+  it('falls back to the conservative defaults, without throwing, when /api/tags is unreachable', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'http://127.0.0.1:11434/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }] }), { status: 200 });
+      }
+      if (String(url) === 'http://127.0.0.1:11434/api/tags') {
+        throw new Error('ECONNREFUSED');
+      }
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'ollama', baseUrl: null }), null);
+
+    expect(models).toEqual([
+      { modelId: 'qwen2.5vl:7b', displayName: 'qwen2.5vl:7b', contextWindow: null, supportsVision: null, supportsTools: null },
+    ]);
+  });
+
+  it('falls back to the conservative defaults when /api/tags returns a non-2xx status', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'http://127.0.0.1:11434/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }] }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'ollama', baseUrl: null }), null);
+
+    expect(models[0]).toMatchObject({ contextWindow: null, supportsVision: null, supportsTools: null });
+  });
+
+  it('falls back to the conservative defaults when /api/tags returns unexpected JSON shape', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'http://127.0.0.1:11434/v1/models') {
+        return new Response(JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ unexpected: 'shape' }), { status: 200 });
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'ollama', baseUrl: null }), null);
+
+    expect(models[0]).toMatchObject({ contextWindow: null, supportsVision: null, supportsTools: null });
+  });
+
+  // Finding 7 regression: a try/catch alone does not catch a HANG. Against a
+  // host that answers /v1/models but never responds on /api/tags, discovery
+  // used to stay open indefinitely -- a capability *hint* must not become a
+  // hard dependency for the whole call.
+  it('does not hang forever when /api/tags never responds -- bounded by the ~3s timeout, falling back to conservative defaults', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
+        if (String(url) === 'http://127.0.0.1:11434/v1/models') {
+          return Promise.resolve(new Response(JSON.stringify({ data: [{ id: 'qwen2.5vl:7b' }] }), { status: 200 }));
+        }
+        if (String(url) === 'http://127.0.0.1:11434/api/tags') {
+          // Never resolves on its own -- rejects only when the signal
+          // aborts, exactly like a real fetch would once the timeout fires.
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+          });
+        }
+        throw new Error(`unexpected fetch: ${String(url)}`);
+      });
+      const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+      const resultPromise = engine.listModels(makeConnection({ kind: 'ollama', baseUrl: null }), null);
+      await vi.advanceTimersByTimeAsync(3_000);
+      const models = await resultPromise;
+
+      expect(models).toEqual([
+        { modelId: 'qwen2.5vl:7b', displayName: 'qwen2.5vl:7b', contextWindow: null, supportsVision: null, supportsTools: null },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT query /api/tags for a plain openai_compatible connection (only ollama is special-cased)', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      expect(String(url)).toBe('https://my-endpoint.example.com/v1/models');
+      return new Response(JSON.stringify({ data: [{ id: 'some-model' }] }), { status: 200 });
+    });
+    const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
+
+    const models = await engine.listModels(makeConnection({ kind: 'openai_compatible', baseUrl: 'https://my-endpoint.example.com/v1' }), null);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(models).toEqual([{ modelId: 'some-model', displayName: 'some-model', contextWindow: null, supportsVision: null, supportsTools: null }]);
+  });
+});

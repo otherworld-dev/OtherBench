@@ -123,10 +123,19 @@ export interface CreateMcpServerBody {
   transport: 'stdio' | 'http';
   command?: string | null;
   args?: string[];
-  env?: Record<string, string>;
+  /**
+   * Plaintext env VAR VALUES -- the server stores each as a SecretStore ref
+   * (`McpServer.envRefs`) and never echoes the value back, identically to
+   * `headers` below (see routes/tools.ts). On `PATCH` only, a value may
+   * also be `null`, meaning "keep whatever is already stored under this
+   * name" -- see `optionalSecretPatchRecord` (server) and
+   * `McpServerForm.rowsToSecretPatch` (client). `POST` (create) has nothing
+   * to keep and rejects `null` with a 400.
+   */
+  env?: Record<string, string | null>;
   url?: string | null;
-  /** Plaintext header VALUES -- the server stores each as a SecretStore ref and never echoes the value back (see routes/tools.ts). */
-  headers?: Record<string, string>;
+  /** Plaintext header VALUES -- same rules as `env` above, including the PATCH-only `null` ("keep") sentinel. */
+  headers?: Record<string, string | null>;
   enabled?: boolean;
 }
 
@@ -137,7 +146,8 @@ export interface CreateMcpServerBody {
  * reconstructed from the briefs.
  */
 export const api = {
-  health: () => request<{ status: string; time: string }>('/health'),
+  /** `platform` is the SERVER's `process.platform` (e.g. "win32"), not the browser's -- see routes/health.ts. Used to validate a chat's workspace root against the OS that will actually resolve it. */
+  health: () => request<{ status: string; time: string; platform: string }>('/health'),
 
   connections: {
     list: () => request<Connection[]>('/connections'),
@@ -192,7 +202,10 @@ export const api = {
   },
 
   mcpServers: {
+    /** Live health only (status/toolCount/lastError) -- NOT full config (no command/args/url/env/headers). See `get` below for that. */
     list: () => request<McpServerHealth[]>('/mcp-servers'),
+    /** Full stored config for one server, for the edit form -- `envRefs`/`headerRefs` are reference ids, never the plaintext values they point at. */
+    get: (id: string) => request<McpServer>(`/mcp-servers/${id}`),
     create: (body: CreateMcpServerBody) => post<McpServer>('/mcp-servers', body),
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),

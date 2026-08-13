@@ -131,7 +131,17 @@ export interface McpServer {
   transport: 'stdio' | 'http';
   command: string | null;
   args: string[];
-  env: Record<string, string>;
+  /**
+   * `SecretStore` references, keyed by env var name -- NOT plaintext values.
+   * A stdio server's environment variables are exactly as likely to carry a
+   * credential as an HTTP server's headers (`headerRefs`, right below), so
+   * this follows the identical "never plaintext at rest" discipline
+   * `Connection.secretRef` established: the route layer
+   * (routes/tools.ts) writes each value to `SecretStore` and persists only
+   * the resulting reference here. Resolved back to real values only at
+   * connect time (`McpServerManager.resolveTransportConfig`).
+   */
+  envRefs: Record<string, string>;
   url: string | null;
   headerRefs: Record<string, string>;
   enabled: boolean;

@@ -22,6 +22,27 @@ export interface GruntState {
   setConnections(connections: Connection[]): void;
   setModels(models: ModelInfo[]): void;
   setProfiles(profiles: Profile[]): void;
+  /** Inserts or replaces one connection by id -- lets the Settings UI reflect a create/patch/test result immediately, without a full list refetch. */
+  upsertConnection(connection: Connection): void;
+  /**
+   * Removes a connection AND every model/profile/chat that referenced it
+   * (transitively, for chats: connection -> profile -> chat), mirroring the
+   * database's own `ON DELETE CASCADE` (see migrations/001-initial.ts) so
+   * local state doesn't keep showing rows the server just cascaded away.
+   * Also clears `activeChatId` when the active chat was one of them --
+   * otherwise the thread pane and Inspector would go on treating a chat the
+   * server just deleted as still selected (dead composer, Inspector polling
+   * `/grants` and `/audit` for an id that now 404s forever). See
+   * `removeProfile` below for the identical one-hop version of this.
+   */
+  removeConnection(id: string): void;
+  /** Inserts or replaces one model by id (also used to fold in freshly `discoverModels`-ed rows). */
+  upsertModel(model: ModelInfo): void;
+  upsertModels(models: ModelInfo[]): void;
+  /** Inserts or replaces one profile by id. */
+  upsertProfile(profile: Profile): void;
+  /** Removes a profile AND every chat built on it, clearing `activeChatId` if the active chat was one of them -- see `removeConnection`'s doc, which shares this exact cascade for the one-more-hop connection -> profile -> chat case. */
+  removeProfile(id: string): void;
 
   // --- chats -----------------------------------------------------------------
   chats: Chat[];
@@ -108,6 +129,67 @@ export const useGruntStore = create<GruntState>()((set) => ({
   setConnections: (connections) => set({ connections }),
   setModels: (models) => set({ models }),
   setProfiles: (profiles) => set({ profiles }),
+  upsertConnection: (connection) =>
+    set((state) => {
+      const idx = state.connections.findIndex((c) => c.id === connection.id);
+      if (idx === -1) return { connections: [...state.connections, connection] };
+      const next = [...state.connections];
+      next[idx] = connection;
+      return { connections: next };
+    }),
+  removeConnection: (id) =>
+    set((state) => {
+      // INVARIANT: what counts as "still my chat" is decided by whether the
+      // server would still hand it back, never by what this store already
+      // happened to have rendered. A chat whose profile (and so whose
+      // connection) no longer exists is not "unchanged" merely because
+      // nothing has told this store otherwise yet -- it must be dropped in
+      // the SAME update as its profile, not left for a future refetch to
+      // notice.
+      const removedProfileIds = new Set(state.profiles.filter((p) => p.connectionId === id).map((p) => p.id));
+      const chats = state.chats.filter((c) => !removedProfileIds.has(c.profileId));
+      const activeChatId = chats.some((c) => c.id === state.activeChatId) ? state.activeChatId : null;
+      return {
+        connections: state.connections.filter((c) => c.id !== id),
+        models: state.models.filter((m) => m.connectionId !== id),
+        profiles: state.profiles.filter((p) => p.connectionId !== id),
+        chats,
+        activeChatId,
+      };
+    }),
+  upsertModel: (model) =>
+    set((state) => {
+      const idx = state.models.findIndex((m) => m.id === model.id);
+      if (idx === -1) return { models: [...state.models, model] };
+      const next = [...state.models];
+      next[idx] = model;
+      return { models: next };
+    }),
+  upsertModels: (models) =>
+    set((state) => {
+      const next = [...state.models];
+      for (const model of models) {
+        const idx = next.findIndex((m) => m.id === model.id);
+        if (idx === -1) next.push(model);
+        else next[idx] = model;
+      }
+      return { models: next };
+    }),
+  upsertProfile: (profile) =>
+    set((state) => {
+      const idx = state.profiles.findIndex((p) => p.id === profile.id);
+      if (idx === -1) return { profiles: [...state.profiles, profile] };
+      const next = [...state.profiles];
+      next[idx] = profile;
+      return { profiles: next };
+    }),
+  removeProfile: (id) =>
+    set((state) => {
+      // Same invariant as removeConnection above, one hop shorter.
+      const chats = state.chats.filter((c) => c.profileId !== id);
+      const activeChatId = chats.some((c) => c.id === state.activeChatId) ? state.activeChatId : null;
+      return { profiles: state.profiles.filter((p) => p.id !== id), chats, activeChatId };
+    }),
 
   chats: [],
   activeChatId: null,

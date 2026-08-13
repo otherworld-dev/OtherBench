@@ -1,7 +1,75 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { Chat } from '@grunt/core/ports/store.js';
+import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import { useGruntStore } from './store.js';
+
+function makeConnection(overrides: Partial<Connection> = {}): Connection {
+  return {
+    id: 'conn-1',
+    name: 'Local Ollama',
+    kind: 'ollama',
+    baseUrl: null,
+    secretRef: null,
+    extraHeaders: {},
+    status: 'unknown',
+    statusMessage: null,
+    checkedAt: null,
+    ...overrides,
+  };
+}
+
+function makeModel(overrides: Partial<ModelInfo> = {}): ModelInfo {
+  return {
+    id: 'model-1',
+    connectionId: 'conn-1',
+    modelId: 'llama3.2',
+    displayName: 'llama3.2',
+    source: 'discovered',
+    supportsVision: false,
+    supportsTools: false,
+    supportsReasoning: false,
+    contextWindow: null,
+    maxOutput: null,
+    priceInPer1m: null,
+    priceOutPer1m: null,
+    priceCachedPer1m: null,
+    currency: 'USD',
+    ...overrides,
+  };
+}
+
+function makeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    id: 'profile-1',
+    name: 'Default',
+    description: null,
+    colour: null,
+    connectionId: 'conn-1',
+    modelId: 'llama3.2',
+    systemPrompt: null,
+    params: {},
+    toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+    isDefault: false,
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function makeChat(overrides: Partial<Chat> = {}): Chat {
+  return {
+    id: 'chat-1',
+    title: 'Hello',
+    profileId: 'p1',
+    headMessageId: null,
+    workspaceRoot: null,
+    pinned: false,
+    archivedAt: null,
+    createdAt: 1,
+    updatedAt: 1,
+    ...overrides,
+  };
+}
 
 function stubAssistant(id: string, overrides: Partial<CanonMessage> = {}): CanonMessage {
   return {
@@ -187,5 +255,120 @@ describe('useGruntStore', () => {
     useGruntStore.getState().setChats([chat]);
     useGruntStore.getState().setHeadMessageId('chat-1', 'm1');
     expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('m1');
+  });
+
+  it('upsertConnection inserts a new connection and replaces an existing one by id', () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().upsertConnection(makeConnection({ name: 'Renamed' }));
+    expect(useGruntStore.getState().connections).toHaveLength(1);
+    expect(useGruntStore.getState().connections[0]?.name).toBe('Renamed');
+
+    useGruntStore.getState().upsertConnection(makeConnection({ id: 'conn-2', name: 'Second' }));
+    expect(useGruntStore.getState().connections).toHaveLength(2);
+  });
+
+  // Load-bearing: the database cascades a connection delete onto its models
+  // and profiles (ON DELETE CASCADE, migrations/001-initial.ts) -- local
+  // state must mirror that or the Settings UI keeps showing rows the server
+  // just deleted.
+  it('removeConnection also drops every model and profile that referenced it, mirroring the DB cascade', () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' }), makeConnection({ id: 'conn-2' })]);
+    useGruntStore.getState().setModels([makeModel({ id: 'm1', connectionId: 'conn-1' }), makeModel({ id: 'm2', connectionId: 'conn-2' })]);
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p1', connectionId: 'conn-1' }), makeProfile({ id: 'p2', connectionId: 'conn-2' })]);
+
+    useGruntStore.getState().removeConnection('conn-1');
+
+    expect(useGruntStore.getState().connections.map((c) => c.id)).toEqual(['conn-2']);
+    expect(useGruntStore.getState().models.map((m) => m.id)).toEqual(['m2']);
+    expect(useGruntStore.getState().profiles.map((p) => p.id)).toEqual(['p2']);
+  });
+
+  // Load-bearing (Finding 5): the DB cascade goes connection -> profile ->
+  // chat, but the previous removeConnection only mirrored the first hop.
+  // Left as-is, a chat built on a deleted connection's profile stayed in
+  // `chats` and, if it was the active one, stayed selected -- a dead
+  // composer still offering Send, and the Inspector polling
+  // /grants and /audit for an id the server would now 404 on forever.
+  it('removeConnection also drops every chat built on one of its profiles, and clears activeChatId if the active chat was one of them', () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' }), makeConnection({ id: 'conn-2' })]);
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p1', connectionId: 'conn-1' }), makeProfile({ id: 'p2', connectionId: 'conn-2' })]);
+    useGruntStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' }), makeChat({ id: 'chat-2', profileId: 'p2' })]);
+    useGruntStore.getState().setActiveChatId('chat-1');
+
+    useGruntStore.getState().removeConnection('conn-1');
+
+    expect(useGruntStore.getState().chats.map((c) => c.id)).toEqual(['chat-2']);
+    expect(useGruntStore.getState().activeChatId).toBeNull();
+  });
+
+  it('removeConnection leaves activeChatId alone when the active chat survives (not built on the deleted connection)', () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' }), makeConnection({ id: 'conn-2' })]);
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p1', connectionId: 'conn-1' }), makeProfile({ id: 'p2', connectionId: 'conn-2' })]);
+    useGruntStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' }), makeChat({ id: 'chat-2', profileId: 'p2' })]);
+    useGruntStore.getState().setActiveChatId('chat-2');
+
+    useGruntStore.getState().removeConnection('conn-1');
+
+    expect(useGruntStore.getState().chats.map((c) => c.id)).toEqual(['chat-2']);
+    expect(useGruntStore.getState().activeChatId).toBe('chat-2');
+  });
+
+  it('upsertModel inserts a new model and replaces an existing one by id', () => {
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().upsertModel(makeModel({ supportsTools: true }));
+    expect(useGruntStore.getState().models).toHaveLength(1);
+    expect(useGruntStore.getState().models[0]?.supportsTools).toBe(true);
+
+    useGruntStore.getState().upsertModel(makeModel({ id: 'model-2' }));
+    expect(useGruntStore.getState().models).toHaveLength(2);
+  });
+
+  it('upsertModels folds a batch of discovered models in, inserting new ids and replacing known ones', () => {
+    useGruntStore.getState().setModels([makeModel({ id: 'm1', displayName: 'Old name' })]);
+    useGruntStore.getState().upsertModels([makeModel({ id: 'm1', displayName: 'New name' }), makeModel({ id: 'm2' })]);
+
+    const models = useGruntStore.getState().models;
+    expect(models).toHaveLength(2);
+    expect(models.find((m) => m.id === 'm1')?.displayName).toBe('New name');
+  });
+
+  it('upsertProfile inserts a new profile and replaces an existing one by id', () => {
+    useGruntStore.getState().setProfiles([makeProfile()]);
+    useGruntStore.getState().upsertProfile(makeProfile({ name: 'Renamed profile' }));
+    expect(useGruntStore.getState().profiles).toHaveLength(1);
+    expect(useGruntStore.getState().profiles[0]?.name).toBe('Renamed profile');
+
+    useGruntStore.getState().upsertProfile(makeProfile({ id: 'profile-2' }));
+    expect(useGruntStore.getState().profiles).toHaveLength(2);
+  });
+
+  it('removeProfile drops just that profile', () => {
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p1' }), makeProfile({ id: 'p2' })]);
+    useGruntStore.getState().removeProfile('p1');
+    expect(useGruntStore.getState().profiles.map((p) => p.id)).toEqual(['p2']);
+  });
+
+  // Load-bearing (Finding 5): same gap as removeConnection above, one hop
+  // shorter -- deleting a profile directly (not via its connection) must
+  // also drop every chat built on it and clear activeChatId if needed.
+  it('removeProfile also drops every chat built on it, and clears activeChatId if the active chat was one of them', () => {
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p1' }), makeProfile({ id: 'p2' })]);
+    useGruntStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' }), makeChat({ id: 'chat-2', profileId: 'p2' })]);
+    useGruntStore.getState().setActiveChatId('chat-1');
+
+    useGruntStore.getState().removeProfile('p1');
+
+    expect(useGruntStore.getState().chats.map((c) => c.id)).toEqual(['chat-2']);
+    expect(useGruntStore.getState().activeChatId).toBeNull();
+  });
+
+  it('removeProfile leaves activeChatId alone when the active chat survives', () => {
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p1' }), makeProfile({ id: 'p2' })]);
+    useGruntStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' }), makeChat({ id: 'chat-2', profileId: 'p2' })]);
+    useGruntStore.getState().setActiveChatId('chat-2');
+
+    useGruntStore.getState().removeProfile('p1');
+
+    expect(useGruntStore.getState().activeChatId).toBe('chat-2');
   });
 });
