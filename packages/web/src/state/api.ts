@@ -1,4 +1,5 @@
 import type { Chat } from '@grunt/core/ports/store.js';
+import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 
@@ -109,6 +110,10 @@ export const api = {
   models: {
     list: (connectionId?: string) => request<ModelInfo[]>(`/models${connectionId ? `?connectionId=${encodeURIComponent(connectionId)}` : ''}`),
     get: (id: string) => request<ModelInfo>(`/models/${id}`),
+    patch: (
+      id: string,
+      body: Partial<Pick<ModelInfo, 'displayName' | 'priceInPer1m' | 'priceOutPer1m' | 'priceCachedPer1m' | 'currency' | 'supportsVision' | 'supportsTools' | 'supportsReasoning' | 'contextWindow' | 'maxOutput'>>
+    ) => patch<ModelInfo>(`/models/${id}`, body),
   },
 
   profiles: {
@@ -131,6 +136,11 @@ export const api = {
 
   search: (q: string, limit?: number) =>
     request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ''}`),
+
+  usage: {
+    /** Omit `chatId` for the global (every-chat) rollup the usage/pricing settings view shows. */
+    get: (chatId?: string) => request<UsageRollup>(`/usage${chatId ? `?chatId=${encodeURIComponent(chatId)}` : ''}`),
+  },
 
   turns: {
     create: (chatId: string, body: CreateTurnBody) => post<TurnResult>(`/chats/${chatId}/turns`, body),

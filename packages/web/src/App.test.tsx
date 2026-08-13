@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGruntStore } from './state/store.js';
 import { App } from './App.js';
@@ -9,6 +10,7 @@ vi.mock('./state/api.js', () => ({
     models: { list: vi.fn() },
     profiles: { list: vi.fn() },
     chats: { list: vi.fn() },
+    usage: { get: vi.fn() },
   },
 }));
 
@@ -18,6 +20,7 @@ const mockedConnections = vi.mocked(api.connections.list);
 const mockedModels = vi.mocked(api.models.list);
 const mockedProfiles = vi.mocked(api.profiles.list);
 const mockedChats = vi.mocked(api.chats.list);
+const mockedUsage = vi.mocked(api.usage.get);
 
 function reset(): void {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
@@ -25,6 +28,7 @@ function reset(): void {
   mockedModels.mockReset();
   mockedProfiles.mockReset();
   mockedChats.mockReset();
+  mockedUsage.mockReset();
 
   // jsdom doesn't implement matchMedia -- App's narrow-layout breakpoint
   // (useMediaQuery, lib/useMediaQuery.ts) needs it just to mount.
@@ -84,5 +88,23 @@ describe('App bootstrap', () => {
 
     await screen.findByText(/no chats yet/i);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('opens the usage/pricing overlay from the header button, and closes it again', async () => {
+    mockedConnections.mockResolvedValue([]);
+    mockedModels.mockResolvedValue([]);
+    mockedProfiles.mockResolvedValue([]);
+    mockedChats.mockResolvedValue([]);
+    mockedUsage.mockResolvedValue({ profiles: [], chats: [], buckets: [], totalMeasuredCost: 0, totalCancelledCount: 0, totalUnmeasuredErrorCount: 0 });
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByText(/no chats yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'Usage' }));
+    expect(await screen.findByTestId('usage-view')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /close usage view/i }));
+    expect(screen.queryByTestId('usage-view')).not.toBeInTheDocument();
   });
 });

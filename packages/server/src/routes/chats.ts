@@ -39,8 +39,13 @@ function requireExistingProfile(container: Container, profileId: string): void {
  * point (see packages/core/src/domain/tree.ts): a flat table scan would
  * have to exist alongside the recursive parent/child queries for no benefit
  * here, so the walk is done at this call site instead of growing the port.
+ *
+ * Exported for routes/usage.ts, which needs the same "every assistant
+ * message in this chat, not just the active branch" walk to find variants
+ * whose usage row is missing entirely (task 28's errored-with-no-usage-row
+ * honesty requirement -- see buildUsageRollup's doc).
  */
-function collectMessageTree(store: Store, chatId: string): CanonMessage[] {
+export function collectMessageTree(store: Store, chatId: string): CanonMessage[] {
   const result: CanonMessage[] = [];
   const queue = [...store.messages.roots(chatId)];
   while (queue.length > 0) {

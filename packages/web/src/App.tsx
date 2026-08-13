@@ -6,6 +6,7 @@ import { Thread } from './panes/Thread.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
 import { useChatSync } from './state/useChatSync.js';
+import { UsageView } from './views/UsageView.js';
 
 /** Below this width the inspector can no longer sit as a third docked column -- it collapses (task 19 brief). */
 const NARROW_BREAKPOINT = '(max-width: 1099.98px)';
@@ -38,6 +39,10 @@ export function App(): JSX.Element {
   // preference's value, or the inspector would pop over the thread the
   // instant the window narrows.
   const [narrowOverlayOpen, setNarrowOverlayOpen] = useState(false);
+  // Task 28: the global usage/pricing settings view -- a full-screen
+  // overlay, ephemeral like the narrow inspector overlay above (there is no
+  // "docked" mode for it, and no reason to remember it across reloads).
+  const [usageViewOpen, setUsageViewOpen] = useState(false);
 
   // Set only when EVERY bootstrap fetch below fails -- a cold load with the
   // server unreachable renders otherwise-identically to a genuinely fresh
@@ -109,6 +114,9 @@ export function App(): JSX.Element {
         </div>
         <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
           {activeChatId && <span data-testid="stream-status">{STREAM_STATUS_LABEL[streamStatus] ?? streamStatus}</span>}
+          <button type="button" onClick={() => setUsageViewOpen(true)} className="rounded border border-[var(--border)] px-2 py-1">
+            Usage
+          </button>
           {isNarrow && (
             <button
               type="button"
@@ -159,6 +167,8 @@ export function App(): JSX.Element {
           </>
         )}
       </div>
+
+      {usageViewOpen && <UsageView onClose={() => setUsageViewOpen(false)} />}
     </div>
   );
 }

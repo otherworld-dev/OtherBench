@@ -7,6 +7,7 @@ import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
 import { turnsRoutes } from './routes/turns.js';
+import { usageRoutes } from './routes/usage.js';
 import { mountStatic } from './static.js';
 
 export interface AppOptions {
@@ -58,6 +59,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // /chats/:id/head, /messages/:id/cancel.
   authed.route('/', turnsRoutes(container));
   authed.route('/', searchRoutes(container));
+  authed.route('/usage', usageRoutes(container));
   app.route('/api', authed);
 
   if (options.webDistDir) {
