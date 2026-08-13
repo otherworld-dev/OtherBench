@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { MIGRATION_001_INITIAL } from './001-initial.js';
+import { MIGRATION_002_GRANT_SOURCE } from './002-grant-source.js';
 
 export interface Migration {
   version: number;
@@ -7,7 +8,10 @@ export interface Migration {
   sql: string;
 }
 
-export const MIGRATIONS: Migration[] = [{ version: 1, name: '001-initial', sql: MIGRATION_001_INITIAL }];
+export const MIGRATIONS: Migration[] = [
+  { version: 1, name: '001-initial', sql: MIGRATION_001_INITIAL },
+  { version: 2, name: '002-grant-source', sql: MIGRATION_002_GRANT_SOURCE },
+];
 
 /**
  * Applies every migration in `migrations` (defaults to {@link MIGRATIONS})

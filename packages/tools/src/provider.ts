@@ -189,7 +189,7 @@ export class GruntToolProvider implements ToolProvider {
 
   private mcpToolSpecs(serverIds: string[]): ToolSpec[] {
     const specs: ToolSpec[] = [];
-    for (const { name, client } of this.mcp.listFor(serverIds)) {
+    for (const { id, name, client } of this.mcp.listFor(serverIds)) {
       for (const tool of client.tools) {
         const namespacedName = `mcp__${sanitizeNameSegment(name)}__${sanitizeNameSegment(tool.name)}`;
         specs.push({
@@ -198,6 +198,11 @@ export class GruntToolProvider implements ToolProvider {
           parameters: tool.inputSchema,
           risk: mapMcpRisk(tool),
           source: 'mcp',
+          // The SERVER id, not the display name: `PermissionBroker` checks
+          // this against `ToolPolicy.mcpServerIds` so a tool from a server
+          // this profile never enabled is denied rather than riding on the
+          // fact that some other server is enabled.
+          serverId: id,
           execute: async (args: unknown) => {
             try {
               const result = await client.callTool(tool.name, args);

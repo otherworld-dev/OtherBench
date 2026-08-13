@@ -8,6 +8,7 @@ function makeGrant(over: Partial<Grant> & { id: string }): Grant {
     chatId: null,
     profileId: null,
     toolName: 'fs.read',
+    source: 'fs',
     scope: 'chat',
     constraint: null,
     expiresAt: null,
@@ -27,6 +28,7 @@ describe('SqliteGrantRepo', () => {
         chatId: 'chat-a',
         profileId: 'p1',
         toolName: 'fs.write',
+        source: 'fs',
         scope: 'always',
         constraint: { pathPrefix: '/workspace' },
         expiresAt: 99999,
@@ -38,6 +40,7 @@ describe('SqliteGrantRepo', () => {
       chatId: 'chat-a',
       profileId: 'p1',
       toolName: 'fs.write',
+      source: 'fs',
       scope: 'always',
       constraint: { pathPrefix: '/workspace' },
       expiresAt: 99999,
@@ -55,6 +58,16 @@ describe('SqliteGrantRepo', () => {
 
     expect(repo.list('chat-a').map((g) => g.id)).toEqual(['grant-a']);
     expect(repo.list().map((g) => g.id).sort()).toEqual(['grant-a', 'grant-b']);
+    db.close();
+  });
+
+  it('round-trips a shell-source grant distinctly from an fs-source one (grants are keyed on source too)', () => {
+    const db = freshDb();
+    const repo = new SqliteGrantRepo(db);
+    repo.create(makeGrant({ id: 'grant-shell', toolName: 'run_command', source: 'shell' }));
+    repo.create(makeGrant({ id: 'grant-mcp', toolName: 'run_command', source: 'mcp' }));
+    expect(repo.get('grant-shell')).toMatchObject({ toolName: 'run_command', source: 'shell' });
+    expect(repo.get('grant-mcp')).toMatchObject({ toolName: 'run_command', source: 'mcp' });
     db.close();
   });
 

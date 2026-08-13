@@ -56,7 +56,12 @@ function isShellTool(tool: ToolSpec): boolean {
  *      only within what policy already permits).
  *   2. Auto-approval is a narrow, deliberate exception to "always ask":
  *      read-risk filesystem tools (workspace-scoped) and read-risk MCP
- *      tools (server already explicitly enabled) skip the prompt when
+ *      tools from a server this profile has actually enabled (tier 1 above
+ *      verifies `tool.serverId` is in `policy.mcpServerIds`, so by the time
+ *      this shortcut is reached the "already explicitly enabled" claim it
+ *      rests on is a fact rather than an assumption -- it used to be an
+ *      assumption, checked only as "at least one server is enabled
+ *      somewhere") skip the prompt when
  *      `approvalMode` is `'ask_on_mutate'`. Shell is carved out of this
  *      entirely and by name (`tool.source === 'shell'`), not merely by risk
  *      class, precisely so a mis-declared shell `ToolSpec` (risk `'read'`
@@ -181,8 +186,9 @@ export class PermissionBroker {
       this.store.grants.create({
         id: randomUUID(),
         chatId: pending.ctx.chatId,
-        profileId: null,
+        profileId: pending.ctx.profileId,
         toolName: pending.tool.name,
+        source: pending.tool.source,
         scope: 'chat',
         constraint,
         expiresAt: null,
@@ -211,8 +217,9 @@ export class PermissionBroker {
     this.store.grants.create({
       id: randomUUID(),
       chatId: null,
-      profileId: null,
+      profileId: pending.ctx.profileId,
       toolName: pending.tool.name,
+      source: pending.tool.source,
       scope: 'always',
       constraint: choice.constraint,
       expiresAt: null,
@@ -223,10 +230,22 @@ export class PermissionBroker {
     const now = Date.now();
     for (const grant of this.store.grants.list()) {
       if (grant.toolName !== tool.name) continue;
+      // Name AND source, never name alone: an MCP server can call its tool
+      // anything it likes, including `run_command`. Keying on the name alone
+      // let such a tool obtain a grant that the real, unsandboxed shell tool
+      // then matched in a different chat -- exactly the blanket always-grant
+      // the shell guard in resolve() exists to prevent, through a side door.
+      if (grant.source !== tool.source) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
       // null chatId = a global ('always') grant; a non-null chatId must
       // match this exact chat ('chat'-scope grants, or a scoped 'once').
       if (grant.chatId !== null && grant.chatId !== ctx.chatId) continue;
+      // Likewise per profile: tool permission is a profile-level property
+      // ("shell is default-deny PER PROFILE with per-command approval"), so
+      // a grant made while running a locked-down profile must not apply when
+      // the same chat is re-run under a permissive one. null = a grant that
+      // was never profile-stamped (see Grant.profileId) and matches any.
+      if (grant.profileId !== null && grant.profileId !== ctx.profileId) continue;
       if (!grantConstraintMatches(grant, args, ctx)) continue;
       return grant;
     }
@@ -247,9 +266,23 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
     case 'shell':
       if (!policy.shell) return 'Shell execution is disabled by policy.';
       return null;
-    case 'mcp':
+    case 'mcp': {
       if (policy.mcpServerIds.length === 0) return 'No MCP servers are enabled by policy.';
+      // "Some server is enabled" is not "THIS tool's server is enabled".
+      // Checking only the former meant a tool from a server the user had
+      // never enabled was allowed the moment any other server was -- and
+      // read-risk MCP tools then took the auto-approval shortcut below on
+      // the strength of that same non-check. A tool that does not say where
+      // it came from cannot be checked at all, so it is denied rather than
+      // given the benefit of the doubt.
+      if (!tool.serverId) {
+        return `"${tool.name}" does not declare which MCP server it came from, so it cannot be checked against the enabled-server list.`;
+      }
+      if (!policy.mcpServerIds.includes(tool.serverId)) {
+        return `"${tool.name}" comes from MCP server "${tool.serverId}", which this profile does not enable.`;
+      }
       return null;
+    }
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

@@ -246,8 +246,8 @@ describe('Inspector tool grants', () => {
 
   it('lists active grants for the chat and revoking one removes it immediately, without waiting for the next poll', async () => {
     mockedGrantsList.mockResolvedValue([
-      { id: 'g1', chatId: 'chat-1', profileId: null, toolName: 'write_file', scope: 'chat', constraint: null, expiresAt: null },
-      { id: 'g2', chatId: null, profileId: null, toolName: 'run_command', scope: 'always', constraint: { commandPrefix: 'npm test' }, expiresAt: null },
+      { id: 'g1', chatId: 'chat-1', profileId: null, toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null },
+      { id: 'g2', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandPrefix: 'npm test' }, expiresAt: null },
     ]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 

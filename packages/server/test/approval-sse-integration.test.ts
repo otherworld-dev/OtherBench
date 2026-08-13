@@ -184,7 +184,7 @@ describe('approval events over the real SSE channel', () => {
     // ctx mirrors what it would construct from this same EngineRequest.
     const execPromise = writeFile!.execute(
       { path: 'note.txt', content: 'hello from the model' },
-      { chatId: 'chat-1', messageId, workspaceRoot: ws, signal: new AbortController().signal }
+      { chatId: 'chat-1', messageId, profileId: 'profile-1', workspaceRoot: ws, signal: new AbortController().signal }
     );
 
     let requestEvent: { event: string | null; data: unknown } | null = null;

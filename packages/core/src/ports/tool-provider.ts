@@ -1,11 +1,22 @@
 import type { Grant } from './store.js';
-import type { ToolPolicy } from '../types/config.js';
+import type { ToolPolicy, ToolSource } from '../types/config.js';
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
 export interface ToolContext {
   chatId: string;
   messageId: string;
+  /**
+   * The profile this turn is running under (`ResolvedProfile.id`). Present
+   * because tool permission is a per-PROFILE property: the project-wide rule
+   * is "shell is default-deny per profile with per-command approval", and a
+   * grant recorded without a profile silently applied under every profile,
+   * so approving a command while using a locked-down profile also approved
+   * it for a permissive one. `PermissionBroker` stamps every grant it
+   * creates with this id and refuses to match a grant belonging to a
+   * different profile.
+   */
+  profileId: string;
   workspaceRoot: string | null;
   signal: AbortSignal;
 }
@@ -15,7 +26,17 @@ export interface ToolSpec {
   description: string;
   parameters: Record<string, unknown>;   // JSON Schema
   risk: RiskClass;
-  source: 'fs' | 'shell' | 'mcp';
+  source: ToolSource;
+  /**
+   * For `source: 'mcp'`, the id of the MCP server this tool came from --
+   * i.e. the id that appears (or does not) in `ToolPolicy.mcpServerIds`.
+   * Required in practice for MCP tools: `PermissionBroker` denies an MCP
+   * tool that does not declare one, because without it the policy gate can
+   * only check that SOME server is enabled, not that THIS tool's server is,
+   * and a tool from a server the user never enabled would be auto-allowed.
+   * Undefined for built-in fs/shell tools, which have no server.
+   */
+  serverId?: string;
   execute(args: unknown, ctx: ToolContext): Promise<unknown>;
 }
 

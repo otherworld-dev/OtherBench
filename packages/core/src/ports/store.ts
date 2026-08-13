@@ -1,5 +1,5 @@
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
-import type { Connection, ModelInfo, Profile } from '../types/config.js';
+import type { Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 
 // --- connections ---------------------------------------------------------
@@ -144,8 +144,22 @@ export interface McpServerRepo {
 export interface Grant {
   id: string;
   chatId: string | null;
+  /**
+   * The profile the grant was made under, or `null` for a grant that is
+   * deliberately not profile-scoped. `PermissionBroker` always stamps the
+   * calling profile's id here; `null` matches every profile and exists only
+   * for grants created outside the broker (fixtures, hand-written rows).
+   */
   profileId: string | null;
   toolName: string;
+  /**
+   * The `ToolSpec.source` of the tool this grant was made for. Matched
+   * alongside `toolName`, never instead of it: keying on the name alone let
+   * a tool from one source (say, one an MCP server chose to call
+   * `run_command`) obtain a grant that a completely different tool with the
+   * same name then satisfied.
+   */
+  source: ToolSource;
   scope: 'once' | 'chat' | 'always';
   /**
    * Narrows what the grant authorises. `null` means "no narrowing" -- only

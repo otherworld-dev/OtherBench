@@ -18,12 +18,31 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('runMigrations', () => {
-  it('brings a fresh database to version 1', () => {
+  it('brings a fresh database to the latest migration version', () => {
     const db = freshDb();
     try {
       expect(userVersion(db)).toBe(0);
       runMigrations(db);
-      expect(userVersion(db)).toBe(1);
+      expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('002 gives every grant row a source column, defaulting pre-existing rows to the harmless value', () => {
+    // Grants are matched on source as well as tool name (see
+    // domain/permissions.ts); a row that predates the column must not come
+    // back as a shell grant. 'fs' is the deliberate default: it can never
+    // authorise a shell or mcp tool, so an old shell grant simply stops
+    // matching and the next call asks again.
+    const db = freshDb();
+    try {
+      runMigrations(db, [MIGRATIONS[0]!]);
+      db.exec(`INSERT INTO "grant" (id, chat_id, profile_id, tool_name, scope, "constraint", expires_at)
+               VALUES ('legacy', NULL, NULL, 'run_command', 'always', NULL, NULL)`);
+      runMigrations(db);
+      const row = db.prepare(`SELECT source FROM "grant" WHERE id = 'legacy'`).get() as { source: string };
+      expect(row.source).toBe('fs');
     } finally {
       db.close();
     }
@@ -54,13 +73,14 @@ describe('runMigrations', () => {
     }
   });
 
-  it('re-running is a no-op: version stays at 1 and nothing throws', () => {
+  it('re-running is a no-op: the version stays put and nothing throws', () => {
     const db = freshDb();
     try {
       runMigrations(db);
+      const versionBefore = userVersion(db);
       const namesBefore = tableNames(db).sort();
       expect(() => runMigrations(db)).not.toThrow();
-      expect(userVersion(db)).toBe(1);
+      expect(userVersion(db)).toBe(versionBefore);
       expect(tableNames(db).sort()).toEqual(namesBefore);
     } finally {
       db.close();
@@ -99,8 +119,8 @@ describe('runMigrations', () => {
       const extended: Migration[] = [
         MIGRATIONS[0]!,
         {
-          version: 2,
-          name: '002-marker',
+          version: 99,
+          name: '099-marker',
           sql: 'CREATE TABLE marker_table (id TEXT PRIMARY KEY);',
         },
       ];
@@ -108,7 +128,7 @@ describe('runMigrations', () => {
       runMigrations(db, extended);
 
       expect(secondApplied).toBe(true);
-      expect(userVersion(db)).toBe(2);
+      expect(userVersion(db)).toBe(99);
       expect(tableNames(db)).toContain('marker_table');
     } finally {
       db.close();

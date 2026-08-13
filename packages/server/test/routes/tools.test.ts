@@ -150,9 +150,9 @@ describe('MCP server routes', () => {
 
 describe('Grant routes', () => {
   it('lists chat-scoped and always-scoped grants together, and revoking one is immediately reflected', async () => {
-    store.grants.create({ id: 'g-chat', chatId: 'chat-1', profileId: null, toolName: 'write_file', scope: 'chat', constraint: null, expiresAt: null });
-    store.grants.create({ id: 'g-always', chatId: null, profileId: null, toolName: 'run_command', scope: 'always', constraint: { commandPrefix: 'npm test' }, expiresAt: null });
-    store.grants.create({ id: 'g-other-chat', chatId: 'chat-2', profileId: null, toolName: 'write_file', scope: 'chat', constraint: null, expiresAt: null });
+    store.grants.create({ id: 'g-chat', chatId: 'chat-1', profileId: null, toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
+    store.grants.create({ id: 'g-always', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandPrefix: 'npm test' }, expiresAt: null });
+    store.grants.create({ id: 'g-other-chat', chatId: 'chat-2', profileId: null, toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
 
     const res = await app().request('/api/chats/chat-1/grants');
     const grants = (await res.json()) as { id: string }[];
@@ -199,7 +199,13 @@ describe('Approval routes', () => {
 
     const execPromise = writeFile.execute(
       { path: 'x.txt', content: 'hi' },
-      { chatId: 'chat-1', messageId: 'msg-1', workspaceRoot: '/does-not-matter-not-awaited-yet', signal: new AbortController().signal }
+      {
+        chatId: 'chat-1',
+        messageId: 'msg-1',
+        profileId: 'profile-1',
+        workspaceRoot: '/does-not-matter-not-awaited-yet',
+        signal: new AbortController().signal,
+      }
     );
     await Promise.resolve();
     await Promise.resolve();

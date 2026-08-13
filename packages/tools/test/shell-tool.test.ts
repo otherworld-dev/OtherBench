@@ -16,6 +16,7 @@ function ctx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     chatId: 'chat-1',
     messageId: 'msg-1',
+    profileId: 'profile-1',
     workspaceRoot: ws,
     signal: new AbortController().signal,
     ...overrides,

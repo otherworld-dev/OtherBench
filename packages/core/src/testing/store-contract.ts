@@ -159,6 +159,7 @@ function makeGrant(over: Partial<Grant> & { id: string }): Grant {
     chatId: null,
     profileId: null,
     toolName: 'fs.read',
+    source: 'fs',
     scope: 'chat',
     constraint: null,
     expiresAt: null,

@@ -13,7 +13,14 @@ import type { McpServerManager } from '../src/mcp/manager.js';
 let ws: string;
 
 function ctx(overrides: Partial<ToolContext> = {}): ToolContext {
-  return { chatId: 'chat-1', messageId: 'msg-1', workspaceRoot: ws, signal: new AbortController().signal, ...overrides };
+  return {
+    chatId: 'chat-1',
+    messageId: 'msg-1',
+    profileId: 'profile-1',
+    workspaceRoot: ws,
+    signal: new AbortController().signal,
+    ...overrides,
+  };
 }
 
 function policy(overrides: Partial<ToolPolicy> = {}): ToolPolicy {
@@ -87,6 +94,27 @@ describe('GruntToolProvider.listTools', () => {
     const { provider } = makeProvider();
     expect((await provider.listTools(policy({ shell: true }))).some((t) => t.name === 'run_command')).toBe(true);
     expect((await provider.listTools(policy({ shell: false }))).some((t) => t.name === 'run_command')).toBe(false);
+  });
+
+  it('stamps every MCP tool with the id of the server it came from', async () => {
+    // PermissionBroker checks this against ToolPolicy.mcpServerIds. Without
+    // it the policy gate could only verify that SOME server was enabled, so
+    // a tool from a server the user never enabled was allowed (and, being
+    // read-risk, auto-approved) on the strength of an unrelated one.
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const mcp = fakeMcpManager([
+      { id: 'srv-1', name: 'One', tools: [{ name: 'search' }] },
+      { id: 'srv-2', name: 'Two', tools: [{ name: 'search' }] },
+    ]);
+    const provider = new GruntToolProvider(store, broker, mcp);
+    const tools = await provider.listTools(policy({ mcpServerIds: ['srv-1', 'srv-2'] }));
+
+    expect(tools.find((t) => t.name === 'mcp__One__search')?.serverId).toBe('srv-1');
+    expect(tools.find((t) => t.name === 'mcp__Two__search')?.serverId).toBe('srv-2');
+    // Built-ins have no server, and must not accidentally claim one.
+    expect(tools.find((t) => t.name === 'read_file')?.serverId).toBeUndefined();
+    expect(tools.find((t) => t.name === 'run_command')?.serverId).toBeUndefined();
   });
 
   it('namespaces MCP tools as mcp__<server>__<tool>', async () => {

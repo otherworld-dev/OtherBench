@@ -8,13 +8,14 @@ import { fromJsonNullable, toJsonNullable } from './util.js';
 // grammar (see migrations/001-initial.ts). Quoting carries through here.
 const mapping: CrudMapping<Grant> = {
   table: '"grant"',
-  columns: ['id', 'chat_id', 'profile_id', 'tool_name', 'scope', '"constraint"', 'expires_at'],
-  toRow: (g) => [g.id, g.chatId, g.profileId, g.toolName, g.scope, toJsonNullable(g.constraint), g.expiresAt],
+  columns: ['id', 'chat_id', 'profile_id', 'tool_name', 'source', 'scope', '"constraint"', 'expires_at'],
+  toRow: (g) => [g.id, g.chatId, g.profileId, g.toolName, g.source, g.scope, toJsonNullable(g.constraint), g.expiresAt],
   fromRow: (row) => ({
     id: row.id as string,
     chatId: row.chat_id as string | null,
     profileId: row.profile_id as string | null,
     toolName: row.tool_name as string,
+    source: row.source as Grant['source'],
     scope: row.scope as Grant['scope'],
     constraint: fromJsonNullable(row.constraint as string | null),
     expiresAt: row.expires_at as number | null,

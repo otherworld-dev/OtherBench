@@ -111,7 +111,7 @@ export class AiSdkChatEngine implements ChatEngine {
         tools: req.profile.model?.supportsTools ?? true,
       };
       const messages = await toModelMessages(req.messages, caps, loadAttachmentUnavailable);
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.workspaceRoot);
+      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -314,6 +314,7 @@ function buildToolSet(
   signal: AbortSignal,
   chatId: string,
   messageId: string,
+  profileId: string,
   workspaceRoot: string | null
 ): ToolSet {
   const toolSet: ToolSet = {};
@@ -325,6 +326,10 @@ function buildToolSet(
         const ctx: ToolContext = {
           chatId,
           messageId,
+          // The profile decides what tools may do (ToolPolicy) AND scopes
+          // the grants recorded for them, so every tool execution has to
+          // carry it -- see ToolContext.profileId.
+          profileId,
           workspaceRoot,
           signal: opts.abortSignal ?? signal,
         };

@@ -236,6 +236,7 @@ export class MockChatEngine implements ChatEngine {
       const ctx: ToolContext = {
         chatId: req.chatId,
         messageId: req.messageId,
+        profileId: req.profile.id,
         workspaceRoot: req.workspaceRoot,
         signal: req.signal,
       };

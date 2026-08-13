@@ -199,13 +199,18 @@ export function toolsRoutes(container: Container): Hono {
 
   app.get('/chats/:id/grants', (c) => {
     const chatId = c.req.param('id');
-    if (!container.store.chats.get(chatId)) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
+    const chat = container.store.chats.get(chatId);
+    if (!chat) throw new HTTPException(404, { message: `Chat "${chatId}" not found.` });
     // Chat-scoped grants for THIS chat, plus every global ('always', chatId:
-    // null) grant -- matches exactly what PermissionBroker.findMatchingGrant
-    // considers eligible for a call in this chat (see permissions.ts), so
-    // this view never omits a grant that is actually in effect here.
+    // null) grant that this chat's PROFILE could actually match -- the same
+    // two filters PermissionBroker.findMatchingGrant applies (see
+    // permissions.ts: grants are profile-scoped, because tool permission is
+    // a per-profile property). Listing a grant belonging to another profile
+    // would show the user a permission that is not in effect here.
     const chatScoped = container.store.grants.list(chatId);
-    const alwaysScoped = container.store.grants.list().filter((g) => g.chatId === null);
+    const alwaysScoped = container.store.grants
+      .list()
+      .filter((g) => g.chatId === null && (g.profileId === null || g.profileId === chat.profileId));
     return c.json([...chatScoped, ...alwaysScoped]);
   });
 
