@@ -1,0 +1,28 @@
+# Normalise line endings.
+#
+# Without this, a machine with core.autocrlf=true rewrites every text file to
+# CRLF on checkout. That silently broke the MCP fixture server
+# (packages/tools/test/fixtures/echo-server.js): its `#!/usr/bin/env node`
+# shebang followed by CRLF fails to parse when the module is loaded, taking the
+# whole test suite for that package down with a "SyntaxError: Invalid or
+# unexpected token" pointing at an unrelated import. It reproduced on a clean
+# checkout and vanished when the file was converted back to LF.
+#
+# Store and check out text as LF everywhere, so the working tree matches what
+# the tooling was developed and tested against regardless of the developer's
+# git config.
+* text=auto eol=lf
+
+# Windows batch files genuinely require CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never touch binaries.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.db binary
