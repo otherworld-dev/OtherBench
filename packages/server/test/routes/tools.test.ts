@@ -137,6 +137,133 @@ describe('MCP server routes', () => {
     expect(await secrets.get(tokenRef)).toBeNull();
   });
 
+  it('CRITICAL: a PATCH that explicitly keeps every existing env var (null) leaves every one still resolvable from SecretStore -- an "edit, change nothing, save" must never destroy a secret', async () => {
+    // This is the server-side half of the destroy-on-noop-save bug: the
+    // client (`McpServerForm`) pre-seeds a row per existing name with a
+    // blank value and, if the user never types into it, now sends `null`
+    // for that name (see `rowsToSecretPatch`) instead of either omitting it
+    // (which `PATCH` treats as "delete") or the old bug's `""` (which
+    // deleted just as surely). The real regression check is that the value
+    // still RESOLVES from SecretStore afterwards, not merely that the refs
+    // map looks non-empty in the response body.
+    const res = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Keep Srv',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [FIXTURE_PATH],
+        env: { GITHUB_TOKEN: 'gh-secret-value', KEEP: 'keep-secret-value' },
+      }),
+    });
+    const created = (await res.json()) as { id: string; envRefs: Record<string, string> };
+
+    const patchRes = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ env: { GITHUB_TOKEN: null, KEEP: null } }),
+    });
+    expect(patchRes.status).toBe(200);
+    const updated = (await patchRes.json()) as { envRefs: Record<string, string> };
+
+    expect(Object.keys(updated.envRefs).sort()).toEqual(['GITHUB_TOKEN', 'KEEP']);
+    expect(await secrets.get(updated.envRefs['GITHUB_TOKEN']!)).toBe('gh-secret-value');
+    expect(await secrets.get(updated.envRefs['KEEP']!)).toBe('keep-secret-value');
+  });
+
+  it('the identical "keep" (null) semantics apply to headers on an http server', async () => {
+    const res = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Keep Headers Srv', transport: 'http', url: 'http://127.0.0.1:1/mcp', headers: { Authorization: 'Bearer keep-me' } }),
+    });
+    const created = (await res.json()) as { id: string; headerRefs: Record<string, string> };
+
+    const patchRes = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ headers: { Authorization: null } }),
+    });
+    const updated = (await patchRes.json()) as { headerRefs: Record<string, string> };
+    expect(await secrets.get(updated.headerRefs['Authorization']!)).toBe('Bearer keep-me');
+  });
+
+  it('IMPORTANT 6: rejects an empty-string secret value with 400, on both POST and PATCH, for env and headers', async () => {
+    const createEmptyEnv = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bad Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { GITHUB_TOKEN: '' } }),
+    });
+    expect(createEmptyEnv.status).toBe(400);
+
+    const createEmptyHeader = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Bad Srv 2', transport: 'http', url: 'http://127.0.0.1:1/mcp', headers: { Authorization: '' } }),
+    });
+    expect(createEmptyHeader.status).toBe(400);
+
+    const goodRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Good Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { GITHUB_TOKEN: 'real-value' } }),
+    });
+    const good = (await goodRes.json()) as { id: string };
+
+    const patchEmptyEnv = await app().request(`/api/mcp-servers/${good.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ env: { GITHUB_TOKEN: '' } }),
+    });
+    expect(patchEmptyEnv.status).toBe(400);
+    // Rejected -- the previously-stored value must be untouched.
+    expect(store.mcpServers.get(good.id)!.envRefs).toEqual({ GITHUB_TOKEN: expect.any(String) });
+  });
+
+  it('MINOR 10: PATCH re-applies transport conditioning -- switching stdio->http cleans up envRefs/secrets, http->stdio cleans up headerRefs/secrets and the stale url', async () => {
+    const stdioRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Switchy', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { TOKEN: 'will-be-orphaned' } }),
+    });
+    const created = (await stdioRes.json()) as { id: string; envRefs: Record<string, string> };
+    const orphanedRef = created.envRefs['TOKEN']!;
+    expect(await secrets.get(orphanedRef)).toBe('will-be-orphaned');
+
+    const toHttp = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ transport: 'http', url: 'https://example.com/mcp' }),
+    });
+    expect(toHttp.status).toBe(200);
+    const afterToHttp = (await toHttp.json()) as { envRefs: Record<string, string>; headerRefs: Record<string, string>; command: string | null };
+    expect(afterToHttp.envRefs).toEqual({});
+    expect(afterToHttp.command).toBeNull();
+    // The old env secret is gone, not orphaned in SecretStore.
+    expect(await secrets.get(orphanedRef)).toBeNull();
+
+    const toHttpWithHeader = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ headers: { Authorization: 'Bearer switched' } }),
+    });
+    const withHeader = (await toHttpWithHeader.json()) as { headerRefs: Record<string, string> };
+    const headerRef = withHeader.headerRefs['Authorization']!;
+    expect(await secrets.get(headerRef)).toBe('Bearer switched');
+
+    const backToStdio = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH] }),
+    });
+    expect(backToStdio.status).toBe(200);
+    const afterBackToStdio = (await backToStdio.json()) as { headerRefs: Record<string, string>; url: string | null };
+    expect(afterBackToStdio.headerRefs).toEqual({});
+    expect(afterBackToStdio.url).toBeNull();
+    expect(await secrets.get(headerRef)).toBeNull();
+  });
+
   it('GET /mcp-servers/:id returns the full stored config (refs, not plaintext), 404s for an unknown id', async () => {
     const createRes = await app().request('/api/mcp-servers', {
       method: 'POST',
