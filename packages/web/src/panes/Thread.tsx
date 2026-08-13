@@ -191,7 +191,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           )}
         </div>
       </div>
-      <Composer chat={chat} />
+      <Composer chat={chat} parentId={tailId} />
     </main>
   );
 }

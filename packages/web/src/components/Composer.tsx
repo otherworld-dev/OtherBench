@@ -60,7 +60,34 @@ function filesFromDataTransfer(data: DataTransfer | null | undefined): File[] {
     .filter((f): f is File => f !== null);
 }
 
-export function Composer({ chat }: { chat: Chat }): JSX.Element {
+export interface ComposerProps {
+  chat: Chat;
+  /**
+   * The message id the next turn should be parented on -- the conversation's
+   * effective tail, already extended forward through any run of single-child
+   * replies (mirrors Thread.tsx's own `tailId`, computed the same way
+   * `extendForward` walks a lone reply into `displayPath` for display).
+   * Falls back to `chat.headMessageId` when omitted (e.g. call sites, tests
+   * included, that don't need the distinction).
+   *
+   * This has to be separate from `chat.headMessageId` and NOT derived from
+   * it in here: `chat.headMessageId` deliberately stays pinned to the
+   * previous turn's USER message (never auto-advanced to an assistant reply
+   * -- picking a reply is always an explicit "Keep", task 27), but nothing
+   * ever shows a Keep control for a single-profile reply (Thread only renders
+   * one once `openVariants.length > 1`), so there is no way to advance head
+   * itself past a lone reply. Sending the NEXT turn against the raw,
+   * un-extended `chat.headMessageId` therefore parents the new user message
+   * as a SIBLING of the previous assistant reply rather than a child of it --
+   * demoting a real reply to a "⤺ 1 other variant" chip and hiding it from
+   * the thread. Found via the task-31 end-to-end smoke path, which is the
+   * first place two ordinary single-profile turns were ever sent back to
+   * back against a live server in the same chat.
+   */
+  parentId?: string | null;
+}
+
+export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
   const messages = useGruntStore((s) => s.messages);
   const registerMessage = useGruntStore((s) => s.registerMessage);
@@ -137,10 +164,13 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
       ...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []),
       ...attachments.map(attachmentToPart),
     ];
+    // The effective tail to parent this turn on -- see ComposerProps.parentId's
+    // doc for why this must NOT just be chat.headMessageId.
+    const effectiveParentId = parentId ?? chat.headMessageId;
     try {
-      const result = await api.turns.create(chat.id, { parentId: chat.headMessageId, parts, profileIds: selectedProfileIds });
+      const result = await api.turns.create(chat.id, { parentId: effectiveParentId, parts, profileIds: selectedProfileIds });
 
-      registerMessage(buildUserStub(chat, result.userMessageId, chat.headMessageId, parts));
+      registerMessage(buildUserStub(chat, result.userMessageId, effectiveParentId, parts));
       result.assistantMessageIds.forEach((id, i) => {
         const profile = profiles.find((p) => p.id === selectedProfileIds[i]);
         if (!profile) return;

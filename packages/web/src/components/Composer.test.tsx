@@ -128,6 +128,43 @@ describe('Composer', () => {
     });
   });
 
+  // Bug found via the task-31 e2e smoke path: chat.headMessageId lands on the
+  // new USER message and stays there (by design -- see the test below), but
+  // for a single-profile turn nothing ever advances it past the lone
+  // assistant reply, because the only thing that can move it (`keepVariant`)
+  // is wired to a "Keep this one" button that Thread only renders when there
+  // is more than one variant to choose between. If the NEXT turn is parented
+  // on the raw `chat.headMessageId` (the previous turn's USER message, as
+  // 'sending posts the right body to the turns API' above demonstrates is
+  // the current default), the new user message becomes a SIBLING of the
+  // previous assistant reply instead of a child of it -- silently demoting a
+  // real reply to a "1 other variant" chip and hiding it from the thread.
+  // The caller (Thread.tsx) is expected to compute the already-extended tail
+  // (through any single-child run, exactly like `extendForward` does for
+  // display) and pass it down explicitly; Composer must use that over its
+  // own `chat.headMessageId` whenever it is supplied.
+  it('sends the next turn parented on an explicitly-supplied parentId, not the raw chat.headMessageId, when the two differ', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u2', assistantMessageIds: ['a2'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    // chat.headMessageId ('user-1') deliberately differs from the extended
+    // tail ('assistant-1') a caller would compute -- exactly the post-reply
+    // state the bug above describes.
+    const chat = makeChat({ headMessageId: 'user-1' });
+    const user = userEvent.setup();
+
+    render(<Composer chat={chat} parentId="assistant-1" />);
+
+    const textbox = screen.getByRole('textbox', { name: /message/i });
+    await user.type(textbox, 'Follow-up');
+    await user.keyboard('{Enter}');
+
+    expect(mockedCreate).toHaveBeenCalledWith('chat-1', {
+      parentId: 'assistant-1',
+      parts: [{ type: 'text', text: 'Follow-up' }],
+      profileIds: ['p1'],
+    });
+  });
+
   // Task 27: head always advances to the new USER message, never straight to
   // an assistant reply -- picking a reply is always an explicit "Keep"
   // action, even when there's only one profile (Thread's `extendForward`
