@@ -37,14 +37,45 @@ function realpathNearest(p: string): string {
   return join(realpathSync(cur), ...tail);
 }
 
-// TOCTOU note (accepted risk for v1, not fixed here): containPath validates
-// and returns a path; nothing stops the filesystem underneath that exact
-// path from changing between this check and whatever the caller does with
-// the return value next (e.g. a directory component swapped for a symlink
-// after the check). Treated as acceptable defense-in-depth for now because
-// nothing in this codebase yet creates links or shells out. Revisit this
-// once link-creating or shell-executing tools land -- at that point a
-// TOCTOU window here stops being purely theoretical.
+// TOCTOU note -- REVISITED (was: "accepted risk for v1, not fixed here,
+// because nothing in this codebase yet creates links or shells out"; that
+// condition stopped holding the moment the shell tool landed, see below).
+//
+// containPath validates and returns a path; nothing stops the filesystem
+// underneath that exact path from changing between this check and whatever
+// the caller does with the return value next (e.g. a directory component
+// swapped for a symlink/junction after the check). The shell tool
+// (packages/tools/src/shell-tool.ts, task 24) means a model can now run
+// `run_command`, which can create a symlink or race the filesystem from a
+// background process during the same turn -- the assumption that made this
+// "purely theoretical" (hostile path STRINGS but no primitive to act on the
+// filesystem between check and use) no longer holds.
+//
+// This function's own contract (validate-and-return-a-path) is unchanged --
+// closing the window requires the CALLER to collapse "resolve, then
+// separately act" into "resolve, snapshot an identity immediately, act, and
+// verify the identity didn't change", which needs an open file handle this
+// function has no reason to hold. That mitigation now lives at every call
+// site that touches file content: packages/tools/src/fs-tools.ts's
+// openVerified() resolves via containPath, immediately snapshots the
+// target's (or nearest existing ancestor's) device+inode, opens with
+// O_NOFOLLOW where the platform defines it, and verifies the opened
+// handle's identity against the snapshot before any read/write proceeds --
+// refusing (ToctouGuardError) on a mismatch. Empirically verified (see
+// task-22-24-report.md) to detect exactly the scenario described above,
+// including on this project's Windows Node build where O_NOFOLLOW itself is
+// undefined and the identity check is doing the entire job alone.
+//
+// Residual, precisely scoped (not "accepted because nothing exercises it"):
+// a swap landing strictly between openVerified's own snapshot and its own
+// open()/fstat() calls -- a handful of synchronous statements, no
+// attacker-reachable scheduling point in between, and no portable
+// "resolve-and-open-atomically-beneath-a-root" primitive exists in Node to
+// close it further. Also residual: list_dir and the filename-glob side of
+// search_files, which list names via readdir without ever holding a handle
+// to verify against -- can misdirect a LISTING but not leak or corrupt file
+// CONTENT, since content access always goes through openVerified regardless
+// of how the path was discovered.
 export function containPath(workspaceRoot: string | null, candidate: string): string {
   if (!workspaceRoot) throw new PathEscapeError(candidate);
   // An embedded NUL makes every OS-level presence probe on the segment that
