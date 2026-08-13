@@ -25,6 +25,19 @@ export type TurnEvent = { messageId: string } & (
   | { type: 'status'; status: MessageStatus }
   | { type: 'approval-request'; request: ApprovalRequest }
   | { type: 'approval-resolved'; requestId: string; choice: ApprovalChoice['choice'] }
+  /**
+   * The capability-fallback disclosure (task 21 decision #3), synthesised by
+   * `runVariant` itself -- like `approval-request`/`approval-resolved`, this
+   * never originates from `ChatEngine.stream()`. Emitted once, synchronously,
+   * before the engine is ever called, whenever this variant's `image` parts
+   * had to be degraded to text because `profile.model.supportsVision` is
+   * false. The SAME text is also appended to `parts` as a `{ type: 'notice' }`
+   * Part, so a client that only hydrates from `GET .../messages` (never saw
+   * the live event) still sees it -- this event exists purely so a client
+   * that IS watching the live stream sees the disclosure immediately, before
+   * the first token, rather than only after its next full reload.
+   */
+  | { type: 'notice'; text: string }
 );
 
 export interface TurnInput {
@@ -60,6 +73,16 @@ export interface TurnRunnerOptions {
    * type's doc for why per-variant isolation falls out of that for free).
    */
   toolProvider?: ToolProvider;
+  /**
+   * Loads an attachment's raw bytes by id; threaded straight through onto
+   * every `EngineRequest.loadAttachment` this runner builds (task 21).
+   * Omitted (the default) preserves the pre-task-21 behaviour of every
+   * existing caller: `EngineRequest.loadAttachment` stays `undefined`, and
+   * `AiSdkChatEngine` falls back to its own "attachment loading not wired
+   * up" stub -- fine for any request whose messages carry no `image`/`file`
+   * parts, which is every test and caller before this task.
+   */
+  loadAttachment?: (id: string) => Promise<Buffer>;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -89,6 +112,19 @@ function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): P
 }
 
 /**
+ * The honest, human-readable disclosure text for `degradeImagesForVision`'s
+ * result -- task 21 decision #3 ("the user must be told which happened, not
+ * silently downgraded"). Lists every degraded attachment's real filename
+ * (from the `AttachmentRepo` row, not any guess derived from the id) so the
+ * note is actually useful, not just "something was changed".
+ */
+function degradedAttachmentsNotice(degraded: { filename: string }[], modelId: string): string {
+  const names = degraded.map((d) => `"${d.filename}"`).join(', ');
+  const noun = degraded.length === 1 ? 'image attachment' : 'image attachments';
+  return `${degraded.length} ${noun} (${names}) sent as text to "${modelId}" because this model does not support image input.`;
+}
+
+/**
  * Runs the lifecycle of one user turn: persists the user message, fans it
  * out to one assistant message per profile (a "compare turn" when there is
  * more than one), and streams each variant from the `ChatEngine`
@@ -103,6 +139,7 @@ export class TurnRunner {
   private readonly generateId: () => string;
   private readonly checkpointIntervalMs: number;
   private readonly toolProvider?: ToolProvider;
+  private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
 
@@ -115,6 +152,7 @@ export class TurnRunner {
     this.generateId = options.generateId ?? randomUUID;
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
+    this.loadAttachment = options.loadAttachment;
     this.toolProvider?.onApprovalEvent((event) => {
       if (event.type === 'request') {
         this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
@@ -300,17 +338,71 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const tools = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
+
+      // Capability fallback (task 21): degrade every `image` part in THIS
+      // variant's own copy of history when its profile's model doesn't
+      // declare vision support -- never mutates the messages another
+      // variant's request (or the persisted conversation) sees, since
+      // `buildRequestMessages` already returns a fresh array/clone per call.
+      // Conservative default matches AiSdkChatEngine's own
+      // (`model?.supportsVision ?? false`): an unknown model is assumed NOT
+      // to accept images, since sending bytes it silently drops would be
+      // worse than a placeholder it can at least read as text.
+      const vision = profile.model?.supportsVision ?? false;
+      const { messages: requestMessages, degraded } = this.degradeImagesForVision(history, vision);
+      // The LIVE emit of this notice is deliberately deferred to inside the
+      // loop below (its first iteration), NOT fired here -- see the comment
+      // at that call site for why emitting it this early loses a real race
+      // against `routes/turns.ts`'s `registerTurn()`. The persisted copy
+      // (`parts`/`checkpoint`) has no such race -- a direct store write, not
+      // a broadcast -- so that part happens right away regardless.
+      let pendingNoticeText: string | null = null;
+      if (degraded.length > 0) {
+        pendingNoticeText = degradedAttachmentsNotice(degraded, profile.modelId);
+        parts = [{ type: 'notice', text: pendingNoticeText }];
+        // Forced (not throttled): the disclosure must be visible even if the
+        // stream that follows errors out before its first checkpoint-worthy
+        // event -- see this method's `checkpoint` doc.
+        checkpoint(true);
+      }
+
       const request: EngineRequest = {
         profile,
-        messages: history,
+        messages: requestMessages,
         tools,
         signal: controller.signal,
         chatId,
         messageId,
         workspaceRoot,
+        loadAttachment: this.loadAttachment,
       };
 
       for await (const event of this.engine.stream(request)) {
+        if (pendingNoticeText !== null) {
+          // Fired on this variant's FIRST live-emitted event, not
+          // immediately after computing it above. `runVariant` reaches the
+          // point above after just one microtask hop past
+          // `toolProvider.listTools()` (which typically resolves with no
+          // internal `await` of its own) -- comfortably BEFORE the turns
+          // route's `await turnRunner.run(...)` continuation has had a
+          // chance to call `registerTurn()`. `StreamRegistry.handleEvent`
+          // silently drops any event for a message id it doesn't have a
+          // buffer for yet (by design -- it has no chatId to file an
+          // unknown message under, see registry.ts's class doc), so an
+          // eager emit here doesn't error, it just silently vanishes from
+          // every live subscriber. Every OTHER event type never had this
+          // problem pre-task-21 because NOTHING was emitted until the
+          // engine itself produced a value -- a real network call, or even
+          // `MockChatEngine`'s own per-chunk delay, both genuinely slower
+          // than a bare microtask hop -- which is exactly what this `for
+          // await`'s first iteration also waits on, restoring the same
+          // safety margin. Found via a real-browser Playwright test
+          // (packages/web/e2e/attachments.spec.ts); the FakeChatEngine unit
+          // tests in this file never exercise StreamRegistry at all, so
+          // they could not have caught it.
+          this.emit({ messageId, type: 'notice', text: pendingNoticeText });
+          pendingNoticeText = null;
+        }
         this.emit({ messageId, ...event });
 
         switch (event.type) {
@@ -411,6 +503,66 @@ export class TurnRunner {
       createdAt: 0,
     };
     return [systemMessage, ...history];
+  }
+
+  /**
+   * Task 21's capability fallback, hoisted up to THIS layer rather than left
+   * solely inside `toModelMessages` (engine-aisdk/convert.ts, which already
+   * has an equivalent `caps.vision` branch): `AiSdkChatEngine` only ever
+   * calls `toModelMessages` for a REAL (non-mock) connection -- a `mock`-kind
+   * connection (and therefore `FakeChatEngine` in every test) is handed the
+   * request as-is, bypassing convert.ts entirely. Doing the degrade here
+   * instead means every `ChatEngine` implementation -- mock or real --
+   * receives the same already-degraded `messages`, which is what makes it
+   * possible to assert the fallback happened by inspecting
+   * `FakeChatEngine.requests` (see packages/core/test/turn.test.ts).
+   *
+   * Returns a NEW array (and new per-message objects where changed);
+   * `messages` itself is never mutated, so a sibling variant with a
+   * vision-capable model still sees the original `image` parts untouched.
+   *
+   * `vision: true` is a no-op (bytes are loaded later, inside convert.ts,
+   * via `EngineRequest.loadAttachment`). `vision: false` replaces every
+   * `image` part with a `text` part: the attachment's own `extractedText`
+   * (task 21 decision #2) when the store has one -- populated on upload for
+   * `text/*`, `.md`, `.csv` and PDF, never for a genuine photo, so this is
+   * the common case only for a document that happened to be sent as an
+   * `image` part -- or else a generic placeholder naming the file when there
+   * is no extracted text (the overwhelmingly common case for an actual
+   * image: nothing here does OCR).
+   */
+  private degradeImagesForVision(
+    messages: CanonMessage[],
+    vision: boolean
+  ): { messages: CanonMessage[]; degraded: { attachmentId: string; filename: string }[] } {
+    if (vision) return { messages, degraded: [] };
+
+    const degraded: { attachmentId: string; filename: string }[] = [];
+    const seen = new Set<string>();
+
+    const next = messages.map((message) => {
+      if (!message.parts.some((p) => p.type === 'image')) return message;
+
+      const parts = message.parts.map((part): Part => {
+        if (part.type !== 'image') return part;
+
+        const attachment = this.store.attachments.get(part.attachmentId);
+        const filename = attachment?.filename ?? part.attachmentId;
+        if (!seen.has(part.attachmentId)) {
+          seen.add(part.attachmentId);
+          degraded.push({ attachmentId: part.attachmentId, filename });
+        }
+
+        const text = attachment?.extractedText
+          ? `[Image "${filename}" is not supported by this model; showing its extracted text instead.]\n\n${attachment.extractedText}`
+          : `[Image "${filename}" (${part.mime}) is not supported by this model, and no extracted text is available for it.]`;
+        return { type: 'text', text };
+      });
+
+      return { ...message, parts };
+    });
+
+    return { messages: next, degraded };
   }
 
   /** Re-reads the model row at finish time (not the possibly-stale `ResolvedProfile.model` captured when the request began) so pricing reflects whatever is current right now. */

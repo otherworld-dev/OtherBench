@@ -125,7 +125,7 @@ async function systemTextFromParts(parts: Part[], loadAttachment: (id: string) =
       void loadAttachment; // never loaded for a system message -- see docstring
       chunks.push(imagePlaceholder(part.attachmentId, part.mime));
     }
-    // reasoning, file, tool-call, tool-result: dropped from system content.
+    // reasoning, file, tool-call, tool-result, notice: dropped from system content.
   }
   return chunks.join('\n\n');
 }
@@ -150,8 +150,12 @@ async function userContentFromParts(
       case 'reasoning':
       case 'tool-call':
       case 'tool-result':
+      case 'notice':
         // Not valid content for a user turn; defensively dropped rather
-        // than forwarded to the model.
+        // than forwarded to the model. `notice` also never legitimately
+        // appears on a user message in practice (TurnRunner only ever adds
+        // one to an assistant message's own parts) -- handled here anyway
+        // for exhaustiveness.
         break;
     }
   }
@@ -174,6 +178,12 @@ async function assistantContentFromParts(
         break;
       case 'reasoning':
         // Dropped entirely -- not replayable across providers/models.
+        break;
+      case 'notice':
+        // Dropped entirely, same reasoning as `reasoning`: a capability-
+        // fallback disclosure describes what GRUNT did, not something the
+        // model said, so replaying it as this message's own content in a
+        // later turn would misattribute it as assistant output.
         break;
       case 'image':
         // AssistantContent has no ImagePart variant; a model-authored

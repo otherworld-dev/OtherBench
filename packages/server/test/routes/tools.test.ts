@@ -36,6 +36,7 @@ beforeEach(() => {
     mcpManager,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
+    blobStore: {} as never,
     close: () => {},
   };
   store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'p1', headMessageId: null, workspaceRoot: '/ws', pinned: false, archivedAt: null });

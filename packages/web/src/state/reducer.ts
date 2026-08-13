@@ -78,6 +78,14 @@ export function applyEventToMessage(
     }
     case 'status':
       return { message: { ...message, status: event.status }, extras };
+    case 'notice':
+      // Task 21's capability-fallback disclosure -- appended as its own
+      // Part (never merged into an adjacent text part, unlike
+      // text-delta/reasoning-delta above), matching exactly what
+      // TurnRunner.runVariant persists server-side, so a client that only
+      // hydrates from GET .../messages later reconstructs an identical
+      // parts array.
+      return { message: { ...message, parts: [...message.parts, { type: 'notice', text: event.text }] }, extras };
     case 'approval-request':
       return { message, extras: { ...extras, pendingApprovals: [...extras.pendingApprovals, event.request] } };
     case 'approval-resolved':

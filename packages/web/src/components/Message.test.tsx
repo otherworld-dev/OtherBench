@@ -81,6 +81,50 @@ describe('Message', () => {
     expect(screen.queryByText('world')).not.toBeInTheDocument();
   });
 
+  // --- capability-fallback disclosure + attachment chips (task 21) ---------
+
+  it('renders a notice part as a visible, honest banner -- not silence -- on the degraded message', () => {
+    const message = base({
+      parts: [
+        { type: 'notice', text: '1 image attachment ("photo.png") sent as text to "local-llava" because this model does not support image input.' },
+        { type: 'text', text: 'Here is what I can tell from the description.' },
+      ],
+    });
+    render(<Message message={message} />);
+
+    expect(screen.getByRole('note')).toHaveTextContent(/sent as text to "local-llava"/);
+    expect(screen.getByText('Here is what I can tell from the description.')).toBeInTheDocument();
+  });
+
+  it('renders an attachment chip for an image part on an assistant message', () => {
+    const message = base({ parts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }] });
+    render(<Message message={message} />);
+
+    expect(screen.getByTestId('attachment-chip')).toBeInTheDocument();
+  });
+
+  it('renders an attachment chip (with its real filename) for a file part on an assistant message', () => {
+    const message = base({ parts: [{ type: 'file', attachmentId: 'att-1', mime: 'application/pdf', filename: 'report.pdf' }] });
+    render(<Message message={message} />);
+
+    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('report.pdf');
+  });
+
+  it('renders an attachment chip for a user message that included an image, alongside its plain text', () => {
+    const message = base({
+      role: 'user',
+      producedBy: null,
+      parts: [
+        { type: 'text', text: 'What is in this photo?' },
+        { type: 'image', attachmentId: 'att-1', mime: 'image/png' },
+      ],
+    });
+    render(<Message message={message} />);
+
+    expect(screen.getByText('What is in this photo?')).toBeInTheDocument();
+    expect(screen.getByTestId('attachment-chip')).toBeInTheDocument();
+  });
+
   it('renders a pending approval inline, wired to onResolveApproval, and renders none when the list is empty', () => {
     const { rerender } = render(<Message message={base()} pendingApprovals={[]} onResolveApproval={async () => {}} />);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

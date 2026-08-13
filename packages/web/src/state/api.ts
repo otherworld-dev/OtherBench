@@ -1,4 +1,4 @@
-import type { AuditEntry, Chat, Grant, McpServer } from '@grunt/core/ports/store.js';
+import type { Attachment, AuditEntry, Chat, Grant, McpServer } from '@grunt/core/ports/store.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
@@ -40,6 +40,22 @@ function patch<T>(path: string, body: unknown): Promise<T> {
 }
 function del(path: string): Promise<void> {
   return request<void>(path, { method: 'DELETE' });
+}
+
+/**
+ * Uploads a single file as `multipart/form-data`. Deliberately NOT built on
+ * `request()`/`post()` above: those force `Content-Type: application/json`,
+ * which would be wrong here -- a `FormData` body needs the browser's own
+ * `multipart/form-data; boundary=...` header, set automatically only when
+ * `fetch` is left to infer it from the body (i.e. when `Content-Type` is
+ * NOT set explicitly at all).
+ */
+async function uploadFile<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api${path}`, { method: 'POST', body: form });
+  if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
+  return (await res.json()) as T;
 }
 
 export interface CreateConnectionBody {
@@ -183,6 +199,13 @@ export const api = {
 
   approvals: {
     resolve: (requestId: string, choice: ApprovalChoice) => post<{ resolved: boolean }>(`/approvals/${requestId}/resolve`, choice),
+  },
+
+  attachments: {
+    upload: (chatId: string, file: File) => uploadFile<Attachment>(`/chats/${chatId}/attachments`, file),
+    list: (chatId: string) => request<Attachment[]>(`/chats/${chatId}/attachments`),
+    /** Not fetched via `request` -- consumed directly as an `<img src>`/download URL. */
+    contentUrl: (id: string) => `/api/attachments/${id}/content`,
   },
 
   /** Not fetched via `request` -- consumed directly by `state/sse.ts` as an `EventSource` URL. */

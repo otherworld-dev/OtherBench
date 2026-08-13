@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -14,6 +14,11 @@ vi.mock('../state/api.js', () => ({
       cancel: vi.fn(),
       setHead: vi.fn(),
     },
+    attachments: {
+      upload: vi.fn(),
+      list: vi.fn(),
+      contentUrl: (id: string) => `/api/attachments/${id}/content`,
+    },
   },
 }));
 
@@ -22,6 +27,7 @@ import { api } from '../state/api.js';
 const mockedCreate = vi.mocked(api.turns.create);
 const mockedCancel = vi.mocked(api.turns.cancel);
 const mockedSetHead = vi.mocked(api.turns.setHead);
+const mockedUpload = vi.mocked(api.attachments.upload);
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -70,11 +76,27 @@ function streamingMessage(id: string, overrides: Partial<CanonMessage> = {}): Ca
   };
 }
 
+function makeAttachment(overrides: Partial<Awaited<ReturnType<typeof api.attachments.upload>>> = {}) {
+  return {
+    id: 'att-1',
+    chatId: 'chat-1',
+    messageId: null,
+    filename: 'photo.png',
+    mime: 'image/png',
+    size: 1234,
+    sha256: 'deadbeef',
+    storagePath: '/data/attachments/de/deadbeef',
+    extractedText: null,
+    ...overrides,
+  };
+}
+
 function reset(): void {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   mockedCreate.mockReset();
   mockedCancel.mockReset();
   mockedSetHead.mockReset();
+  mockedUpload.mockReset();
 }
 
 describe('Composer', () => {
@@ -187,5 +209,110 @@ describe('Composer', () => {
 
     expect(screen.queryByRole('button', { name: /stop/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /send/i })).toBeInTheDocument();
+  });
+
+  // --- attachments (task 21): drag-and-drop, paste, chip, remove, send -----
+
+  describe('attachments', () => {
+    it('dropping a file onto the composer uploads it and renders a chip', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment());
+      const chat = makeChat();
+      render(<Composer chat={chat} />);
+      const file = new File(['fake image bytes'], 'photo.png', { type: 'image/png' });
+
+      fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [file] } });
+
+      await waitFor(() => expect(mockedUpload).toHaveBeenCalledWith('chat-1', file));
+      expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('photo.png');
+    });
+
+    it('pasting a file into the message box uploads it and renders a chip', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment({ id: 'att-2', filename: 'clip.png' }));
+      const chat = makeChat();
+      render(<Composer chat={chat} />);
+      const file = new File(['fake image bytes'], 'clip.png', { type: 'image/png' });
+
+      fireEvent.paste(screen.getByRole('textbox', { name: /message/i }), { clipboardData: { files: [file] } });
+
+      await waitFor(() => expect(mockedUpload).toHaveBeenCalledWith('chat-1', file));
+      expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('clip.png');
+    });
+
+    it('removes an attachment chip before sending when its remove button is clicked', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment());
+      const chat = makeChat();
+      const user = userEvent.setup();
+      render(<Composer chat={chat} />);
+      const file = new File(['x'], 'photo.png', { type: 'image/png' });
+      fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [file] } });
+      await screen.findByTestId('attachment-chip');
+
+      await user.click(screen.getByRole('button', { name: /remove photo.png/i }));
+
+      expect(screen.queryByTestId('attachment-chip')).not.toBeInTheDocument();
+    });
+
+    it('sending includes an uploaded image as an image part alongside the text part', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment());
+      mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+      mockedSetHead.mockResolvedValue(makeChat());
+      const chat = makeChat({ headMessageId: 'existing-head' });
+      const user = userEvent.setup();
+      render(<Composer chat={chat} />);
+      const file = new File(['x'], 'photo.png', { type: 'image/png' });
+      fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [file] } });
+      await screen.findByTestId('attachment-chip');
+
+      await user.type(screen.getByRole('textbox', { name: /message/i }), 'Look at this{Enter}');
+
+      expect(mockedCreate).toHaveBeenCalledWith('chat-1', {
+        parentId: 'existing-head',
+        parts: [
+          { type: 'text', text: 'Look at this' },
+          { type: 'image', attachmentId: 'att-1', mime: 'image/png' },
+        ],
+        profileIds: ['p1'],
+      });
+      // The composer clears its attachments after a successful send.
+      expect(screen.queryByTestId('attachment-chip')).not.toBeInTheDocument();
+    });
+
+    it('a non-image attachment becomes a file part, carrying its filename', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment({ id: 'att-3', filename: 'report.pdf', mime: 'application/pdf' }));
+      mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+      mockedSetHead.mockResolvedValue(makeChat());
+      const chat = makeChat();
+      render(<Composer chat={chat} />);
+      const file = new File(['%PDF'], 'report.pdf', { type: 'application/pdf' });
+      fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [file] } });
+      await screen.findByTestId('attachment-chip');
+
+      fireEvent.keyDown(screen.getByRole('textbox', { name: /message/i }), { key: 'Enter' });
+
+      await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+      expect(mockedCreate).toHaveBeenCalledWith('chat-1', {
+        parentId: null,
+        parts: [{ type: 'file', attachmentId: 'att-3', mime: 'application/pdf', filename: 'report.pdf' }],
+        profileIds: ['p1'],
+      });
+    });
+
+    it('lets a message with only an attachment (no text) be sent', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment());
+      mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+      mockedSetHead.mockResolvedValue(makeChat());
+      const chat = makeChat();
+      render(<Composer chat={chat} />);
+      const file = new File(['x'], 'photo.png', { type: 'image/png' });
+      fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [file] } });
+      await screen.findByTestId('attachment-chip');
+
+      const sendButton = screen.getByRole('button', { name: /send/i });
+      expect(sendButton).not.toBeDisabled();
+      await userEvent.setup().click(sendButton);
+
+      await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
+      expect(mockedCreate.mock.calls[0]?.[1]?.parts).toEqual([{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }]);
+    });
   });
 });

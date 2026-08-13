@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { Attachment } from '../src/ports/store.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
-import type { Connection, ResolvedProfile } from '../src/types/config.js';
+import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config.js';
 import type { Part } from '../src/types/messages.js';
-import { InMemoryStore } from '../src/testing/fakes.js';
+import { FakeChatEngine, InMemoryStore } from '../src/testing/fakes.js';
 import { TurnRunner, type TurnEvent } from '../src/domain/turn.js';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,39 @@ function makeResolvedProfile(overrides: Partial<ResolvedProfile> = {}): Resolved
     connection: makeConnection(),
     apiKey: null,
     model: null,
+    ...overrides,
+  };
+}
+
+function makeModel(overrides: Partial<ModelInfo> = {}): ModelInfo {
+  return {
+    id: 'model-1',
+    connectionId: 'conn-1',
+    modelId: 'test-model',
+    displayName: 'Test Model',
+    source: 'manual',
+    supportsVision: false,
+    supportsTools: false,
+    supportsReasoning: false,
+    contextWindow: null,
+    maxOutput: null,
+    priceInPer1m: null,
+    priceOutPer1m: null,
+    priceCachedPer1m: null,
+    currency: 'USD',
+    ...overrides,
+  };
+}
+
+function makeAttachment(overrides: Partial<Attachment> & { id: string; chatId: string }): Attachment {
+  return {
+    messageId: null,
+    filename: 'holiday-photo.png',
+    mime: 'image/png',
+    size: 1234,
+    sha256: 'deadbeef',
+    storagePath: '/tmp/deadbeef',
+    extractedText: null,
     ...overrides,
   };
 }
@@ -474,6 +508,188 @@ describe('TurnRunner.run', () => {
 
     expect(store.messages.get(messageId)?.status).toBe('complete');
     expect(store.chats.get(chat.id)?.headMessageId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Capability fallback (task 21) -- an `image` part must reach a vision-
+// capable model's request untouched, and must be degraded to a text
+// placeholder (drawn from the attachment's own `extractedText` when the
+// store has one) for a model that doesn't declare vision support. Asserted
+// directly on `FakeChatEngine.requests`, deliberately NOT via `manualEngine`
+// above: this is what proves the degrade happens before `ChatEngine.stream()`
+// is ever called (see `TurnRunner.degradeImagesForVision`'s doc for why that
+// matters -- a mock/fake engine never goes through engine-aisdk's own
+// convert.ts fallback at all).
+// ---------------------------------------------------------------------------
+
+describe('TurnRunner capability fallback for image attachments', () => {
+  it('leaves an image part untouched when the profile model supports vision', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1' }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const profile = makeResolvedProfile({ model: makeModel({ supportsVision: true }) });
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [
+        { type: 'text', text: 'What is in this photo?' },
+        { type: 'image', attachmentId: 'att-1', mime: 'image/png' },
+      ],
+      profiles: [profile],
+    });
+    await flush();
+
+    expect(engine.requests).toHaveLength(1);
+    const sentParts = engine.requests[0]!.messages.at(-1)!.parts;
+    expect(sentParts).toContainEqual({ type: 'image', attachmentId: 'att-1', mime: 'image/png' });
+  });
+
+  it('degrades an image part to its extracted text, and discloses the degradation as a notice, when the model has no vision support', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({
+      id: 'att-1', chatId: 'chat-1', filename: 'notes.png', extractedText: 'The quarterly numbers are up 12%.',
+    }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const profile = makeResolvedProfile({ modelId: 'no-vision-model', model: makeModel({ modelId: 'no-vision-model', supportsVision: false }) });
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [
+        { type: 'text', text: 'What is in this photo?' },
+        { type: 'image', attachmentId: 'att-1', mime: 'image/png' },
+      ],
+      profiles: [profile],
+    });
+    await flush();
+
+    // The engine never sees an `image` part at all -- it was replaced with
+    // the attachment's own extracted text before `stream()` was called.
+    const sentParts = engine.requests[0]!.messages.at(-1)!.parts;
+    expect(sentParts.some((p) => p.type === 'image')).toBe(false);
+    const textPart = sentParts.find((p): p is Extract<Part, { type: 'text' }> => p.type === 'text' && p.text.includes('quarterly'));
+    expect(textPart?.text).toContain('The quarterly numbers are up 12%.');
+    expect(textPart?.text).toContain('notes.png');
+
+    // The disclosure is honest, not silent: a live `notice` TurnEvent fires
+    // before the engine is ever invoked...
+    const noticeEvent = events.find((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
+    expect(noticeEvent?.text).toContain('notes.png');
+    expect(noticeEvent?.text).toContain('no-vision-model');
+
+    // ...and it is also persisted on the assistant message itself, so a
+    // client that only hydrates from the store (never saw the live event)
+    // still sees it.
+    const assistantMessageId = result.assistantMessageIds[0] as string;
+    const assistantMessage = store.messages.get(assistantMessageId);
+    expect(assistantMessage?.parts[0]).toMatchObject({ type: 'notice' });
+    expect((assistantMessage?.parts[0] as Extract<Part, { type: 'notice' }>).text).toContain('notes.png');
+  });
+
+  it('falls back to a generic placeholder (no notice of extracted text) when the attachment has none', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'holiday.jpg', mime: 'image/jpeg', extractedText: null }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const profile = makeResolvedProfile({ model: makeModel({ supportsVision: false }) });
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/jpeg' }],
+      profiles: [profile],
+    });
+    await flush();
+
+    const sentParts = engine.requests[0]!.messages.at(-1)!.parts;
+    const textPart = sentParts.find((p): p is Extract<Part, { type: 'text' }> => p.type === 'text');
+    expect(textPart?.text).toContain('holiday.jpg');
+    expect(textPart?.text).toContain('no extracted text is available');
+  });
+
+  it('a model with no discovered ModelInfo row (model: null) is treated as vision-less -- the conservative default', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1' }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const profile = makeResolvedProfile({ model: null });
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profiles: [profile],
+    });
+    await flush();
+
+    const sentParts = engine.requests[0]!.messages.at(-1)!.parts;
+    expect(sentParts.some((p) => p.type === 'image')).toBe(false);
+  });
+
+  it('each variant of a compare turn degrades independently, based on its OWN profile model -- one sibling untouched, the other degraded', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1' }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const visionProfile = makeResolvedProfile({ id: 'profile-vision', model: makeModel({ supportsVision: true }) });
+    const noVisionProfile = makeResolvedProfile({ id: 'profile-no-vision', model: makeModel({ supportsVision: false }) });
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profiles: [visionProfile, noVisionProfile],
+    });
+    await flush();
+
+    expect(engine.requests).toHaveLength(2);
+    const visionReq = engine.requests.find((r) => r.profile.id === 'profile-vision')!;
+    const noVisionReq = engine.requests.find((r) => r.profile.id === 'profile-no-vision')!;
+    expect(visionReq.messages.at(-1)!.parts.some((p) => p.type === 'image')).toBe(true);
+    expect(noVisionReq.messages.at(-1)!.parts.some((p) => p.type === 'image')).toBe(false);
+  });
+
+  it('threads TurnRunnerOptions.loadAttachment through onto every EngineRequest', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const runner = new TurnRunner(store, engine, { loadAttachment });
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+
+    expect(engine.requests[0]?.loadAttachment).toBe(loadAttachment);
   });
 });
 

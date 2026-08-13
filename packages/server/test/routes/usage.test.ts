@@ -21,6 +21,7 @@ beforeEach(() => {
     mcpManager: {} as never,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
+    blobStore: {} as never,
     close: () => {},
   };
 });

@@ -16,7 +16,8 @@
     "@grunt/store-sqlite": "*",
     "@grunt/tools": "*",
     "@hono/node-server": "2.1.0",
-    "hono": "4.13.1"
+    "hono": "4.13.1",
+    "unpdf": "1.8.0"
   },
   "devDependencies": {
     "vitest": "^2.1.0"

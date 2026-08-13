@@ -75,6 +75,23 @@ describe('applyEventToMessage', () => {
     expect(message.status).toBe('complete');
   });
 
+  it('appends a notice event as its own Part (task 21 capability-fallback disclosure), never merged into an adjacent text part', () => {
+    let acc = applyEventToMessage(baseMessage(), emptyExtras, {
+      messageId: 'm1',
+      type: 'notice',
+      text: '1 image attachment ("photo.png") sent as text to "local-llava" because this model does not support image input.',
+    });
+    expect(acc.message.parts).toEqual([
+      { type: 'notice', text: '1 image attachment ("photo.png") sent as text to "local-llava" because this model does not support image input.' },
+    ]);
+
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'text-delta', text: 'Based on the description...' });
+    expect(acc.message.parts).toEqual([
+      { type: 'notice', text: expect.stringContaining('does not support image input') },
+      { type: 'text', text: 'Based on the description...' },
+    ]);
+  });
+
   it('an approval-request adds to pendingApprovals without touching parts/status', () => {
     const request = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: { path: 'a.txt' }, summary: 'write_file(a.txt)' };
     const { message, extras } = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request });

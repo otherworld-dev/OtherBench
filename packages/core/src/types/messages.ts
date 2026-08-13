@@ -4,7 +4,19 @@ export type Part =
   | { type: 'image'; attachmentId: string; mime: string }
   | { type: 'file'; attachmentId: string; mime: string; filename: string }
   | { type: 'tool-call'; id: string; name: string; args: unknown }
-  | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean };
+  | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean }
+  /**
+   * A UI-only, non-model-authored annotation -- e.g. TurnRunner's honest
+   * disclosure that an `image` part in this variant's request was degraded
+   * to a text placeholder because the profile's model does not declare
+   * vision support (task 21 decision #3: "the user must be told which
+   * happened, not silently downgraded"). Never produced by a `ChatEngine`,
+   * and deliberately dropped by `toModelMessages` (engine-aisdk/convert.ts)
+   * rather than replayed into any provider -- it describes what Grunt did,
+   * not something the model said, so forwarding it as conversation history
+   * would misattribute it as assistant output.
+   */
+  | { type: 'notice'; text: string };
 
 export type Role = 'system' | 'user' | 'assistant';
 export type MessageStatus = 'streaming' | 'complete' | 'error' | 'cancelled';

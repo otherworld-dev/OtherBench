@@ -1,8 +1,9 @@
-import { useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import type { Chat } from '@grunt/core/ports/store.js';
+import { useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
+import type { Attachment, Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
+import { AttachmentChip } from './AttachmentChip.js';
 
 /**
  * Fabricates the local stubs for a just-created turn's messages so the
@@ -31,6 +32,34 @@ function buildAssistantStub(chat: Chat, id: string, parentId: string, profile: {
   };
 }
 
+/**
+ * The `Part` an uploaded attachment becomes on the outgoing message (task
+ * 21): `image` for anything with an `image/*` MIME type -- the only shape
+ * `toModelMessages`/`TurnRunner`'s capability fallback knows how to embed as
+ * real visual content or degrade -- `file` for everything else (PDFs, text,
+ * CSVs, ...), which `toModelMessages` sends as file content unconditionally.
+ */
+function attachmentToPart(attachment: Attachment): Part {
+  return attachment.mime.startsWith('image/')
+    ? { type: 'image', attachmentId: attachment.id, mime: attachment.mime }
+    : { type: 'file', attachmentId: attachment.id, mime: attachment.mime, filename: attachment.filename };
+}
+
+/**
+ * Reads dropped/pasted files off a `DataTransfer`. Prefers `.files` (what a
+ * `drop` event, and a browser pasting an image, both populate) and falls
+ * back to walking `.items` (`DataTransferItemList`) for anything that only
+ * populated that -- some browsers only fill `.items` on `paste`, not `.files`.
+ */
+function filesFromDataTransfer(data: DataTransfer | null | undefined): File[] {
+  if (!data) return [];
+  if (data.files && data.files.length > 0) return Array.from(data.files);
+  return Array.from(data.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((f): f is File => f !== null);
+}
+
 export function Composer({ chat }: { chat: Chat }): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
   const messages = useGruntStore((s) => s.messages);
@@ -42,6 +71,8 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [comparePickerOpen, setComparePickerOpen] = useState(false);
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>(() => (chat.profileId ? [chat.profileId] : []));
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
@@ -60,12 +91,52 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
     await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[grunt-web] failed to cancel ${id}:`, err))));
   }
 
+  /** Uploads each file in turn, appending it to `attachments` as soon as its own upload resolves -- so a chip for a fast file appears immediately rather than waiting on a slower sibling in the same drop/paste. A file that fails to upload is dropped silently from the composer (logged, not surfaced as a blocking error) rather than left in limbo with no attachment id to send. */
+  async function uploadFiles(files: File[]): Promise<void> {
+    for (const file of files) {
+      try {
+        const created = await api.attachments.upload(chat.id, file);
+        setAttachments((prev) => [...prev, created]);
+      } catch (err) {
+        console.error(`[grunt-web] failed to upload attachment "${file.name}":`, err);
+      }
+    }
+  }
+
+  function handleDragOver(e: DragEvent<HTMLDivElement>): void {
+    e.preventDefault();
+    setDragOver(true);
+  }
+
+  function handleDragLeave(): void {
+    setDragOver(false);
+  }
+
+  function handleDrop(e: DragEvent<HTMLDivElement>): void {
+    e.preventDefault();
+    setDragOver(false);
+    const files = filesFromDataTransfer(e.dataTransfer);
+    if (files.length > 0) void uploadFiles(files);
+  }
+
+  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>): void {
+    const files = filesFromDataTransfer(e.clipboardData);
+    if (files.length > 0) void uploadFiles(files);
+  }
+
+  function removeAttachment(id: string): void {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
   async function handleSend(): Promise<void> {
     const trimmed = text.trim();
-    if (trimmed.length === 0 || sending || selectedProfileIds.length === 0) return;
+    if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
 
     setSending(true);
-    const parts: Part[] = [{ type: 'text', text: trimmed }];
+    const parts: Part[] = [
+      ...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []),
+      ...attachments.map(attachmentToPart),
+    ];
     try {
       const result = await api.turns.create(chat.id, { parentId: chat.headMessageId, parts, profileIds: selectedProfileIds });
 
@@ -88,6 +159,7 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
       void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
 
       setText('');
+      setAttachments([]);
       textareaRef.current?.focus();
     } catch (err) {
       console.error('[grunt-web] failed to send turn:', err);
@@ -108,7 +180,13 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
   }
 
   return (
-    <div className="border-t border-[var(--border)] bg-[var(--bg-raised)] p-3">
+    <div
+      data-testid="composer-dropzone"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`border-t p-3 ${dragOver ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border)] bg-[var(--bg-raised)]'}`}
+    >
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <div className="relative">
           <button
@@ -176,14 +254,30 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
         </div>
       </div>
 
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          {attachments.map((a) => (
+            <AttachmentChip
+              key={a.id}
+              filename={a.filename}
+              mime={a.mime}
+              size={a.size}
+              previewUrl={a.mime.startsWith('image/') ? api.attachments.contentUrl(a.id) : undefined}
+              onRemove={() => removeAttachment(a.id)}
+            />
+          ))}
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           aria-label="Message"
-          placeholder="Message... (Enter to send, Shift+Enter for a newline)"
+          placeholder="Message... (Enter to send, Shift+Enter for a newline) -- drag & drop or paste to attach a file"
           rows={2}
           className="min-h-[2.5rem] flex-1 resize-y rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
         />
@@ -199,7 +293,7 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
           <button
             type="button"
             onClick={() => void handleSend()}
-            disabled={sending || text.trim().length === 0 || selectedProfileIds.length === 0}
+            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0}
             className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
           >
             Send

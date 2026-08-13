@@ -1,8 +1,46 @@
 import type { JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { api } from '../state/api.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
+import { AttachmentChip } from './AttachmentChip.js';
 import { MarkdownBody } from './MarkdownBody.js';
+
+function NoticeBlock({ text }: { text: string }): JSX.Element {
+  return (
+    <div
+      role="note"
+      className="my-1 flex items-start gap-1.5 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs text-[var(--text-muted)]"
+    >
+      <span aria-hidden="true">ℹ️</span>
+      <span>{text}</span>
+    </div>
+  );
+}
+
+/**
+ * A stand-in display name for an `image` Part, which -- unlike `file` --
+ * carries no `filename` field (see `Part`'s doc in
+ * packages/core/src/types/messages.ts): just an opaque `attachmentId` and a
+ * MIME type. Mirrors the same id+extension convention `convert.ts`'s
+ * `imagePlaceholder` uses for the model-facing placeholder, so the chip
+ * shown here and the text a vision-less model actually saw agree with each
+ * other. A real upload's OWN chip (rendered live in the Composer, before
+ * sending) shows the true filename instead -- this fallback is only reached
+ * once a message has round-tripped through the store, which persists no
+ * filename for an `image` part.
+ */
+function imageDisplayName(attachmentId: string, mime: string): string {
+  const subtype = mime.split('/')[1] ?? '';
+  const ext = (subtype.split('+')[0] ?? '').replace(/[^a-zA-Z0-9]/g, '') || 'bin';
+  return `${attachmentId}.${ext}`;
+}
+
+function AttachmentPartChip({ part }: { part: Extract<Part, { type: 'image' | 'file' }> }): JSX.Element {
+  const filename = part.type === 'file' ? part.filename : imageDisplayName(part.attachmentId, part.mime);
+  const previewUrl = part.mime.startsWith('image/') ? api.attachments.contentUrl(part.attachmentId) : undefined;
+  return <AttachmentChip filename={filename} mime={part.mime} previewUrl={previewUrl} />;
+}
 
 function ReasoningBlock({ text }: { text: string }): JSX.Element {
   return (
@@ -41,11 +79,13 @@ function renderPart(part: Part, key: number): JSX.Element | null {
       return <ToolCallBlock key={key} name={part.name} args={part.args} />;
     case 'tool-result':
       return <ToolResultBlock key={key} name={part.name} result={part.result} isError={part.isError} />;
+    case 'notice':
+      return <NoticeBlock key={key} text={part.text} />;
     case 'image':
     case 'file':
       return (
-        <div key={key} className="my-1 text-xs text-[var(--text-muted)] italic">
-          [{part.type}: {part.mime}]
+        <div key={key} className="my-1">
+          <AttachmentPartChip part={part} />
         </div>
       );
     default:
@@ -86,6 +126,14 @@ export function Message({
 }: MessageProps): JSX.Element {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
+  // Assistant messages already render image/file parts inline, in order,
+  // via `renderPart` below -- this is only for the user side, which renders
+  // its text as one plain (non-markdown) block rather than part-by-part
+  // (see the "renders user messages as plain text" test), so its
+  // attachments need their own pass here instead.
+  const userAttachmentParts = isUser
+    ? message.parts.filter((p): p is Extract<Part, { type: 'image' | 'file' }> => p.type === 'image' || p.type === 'file')
+    : [];
 
   return (
     <article data-role={message.role} data-status={message.status} className="space-y-1">
@@ -110,6 +158,14 @@ export function Message({
         {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : message.parts.map((p, i) => renderPart(p, i))}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
+
+      {userAttachmentParts.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {userAttachmentParts.map((p, i) => (
+            <AttachmentPartChip key={i} part={p} />
+          ))}
+        </div>
+      )}
 
       {pendingApprovals.length > 0 && onResolveApproval && (
         <div className="space-y-1">

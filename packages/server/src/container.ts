@@ -9,6 +9,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
+import { createBlobStore, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
@@ -32,12 +33,25 @@ export interface Container {
   toolProvider: ToolProvider;
   /** Owns live MCP server connections; `toolProvider` reads its cached tools, routes/tools.ts calls `sync()` after any write to the `mcp_server` table. */
   mcpManager: McpServerManager;
+  /** Content-addressed blob storage for attachments (task 21) -- `routes/attachments.ts` writes to it on upload; `TurnRunner`'s `loadAttachment` (wired below) reads from it to embed real bytes for a vision-capable model. */
+  blobStore: BlobStore;
   close(): void;
 }
 
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
+  /**
+   * Root directory attachment blobs are stored under, as
+   * `<dataDir>/attachments/<sha256[0:2]>/<sha256>`. Defaults to
+   * `dirname(secretsPath)` -- unlike `dbPath`, `secretsPath` is never
+   * `:memory:`, so it always names a real directory on disk to anchor
+   * attachment storage next to (alongside `grunt.db` and `secrets.json` in
+   * the ordinary case). Override when a caller wants attachments kept
+   * somewhere else, e.g. a test using a real blob store against an
+   * in-memory database.
+   */
+  dataDir?: string;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -106,6 +120,9 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   const passphrase = await resolveSecretsPassphrase(options.secretsPath);
   const secrets = createSecretStore(options.secretsPath, passphrase);
 
+  const dataDir = options.dataDir ?? dirname(options.secretsPath);
+  const blobStore = createBlobStore(dataDir);
+
   const registry = new ProviderRegistry();
   const engine = new AiSdkChatEngine(registry);
 
@@ -121,7 +138,21 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     console.error('[grunt-server] initial MCP server sync failed:', err);
   });
 
-  const turnRunner = new TurnRunner(store, engine, { toolProvider });
+  const turnRunner = new TurnRunner(store, engine, {
+    toolProvider,
+    // Closes the gap `engine.ts`'s own docstring calls out (task 14):
+    // `AiSdkChatEngine` has no filesystem/store access of its own, so
+    // without this every real (vision-on) image/file part would fail with
+    // "attachment loading not wired up" the moment a non-mock provider
+    // actually tried to send one. Re-reads the `Attachment` row fresh on
+    // every call rather than caching anything -- attachments are immutable
+    // content-addressed blobs once written, so there's nothing to go stale.
+    loadAttachment: async (id: string): Promise<Buffer> => {
+      const attachment = store.attachments.get(id);
+      if (!attachment) throw new Error(`loadAttachment: unknown attachment "${id}".`);
+      return blobStore.get(attachment.sha256);
+    },
+  });
   const streamRegistry = new StreamRegistry(turnRunner, store);
 
   const container: Container = {
@@ -133,6 +164,7 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     streamRegistry,
     toolProvider,
     mcpManager,
+    blobStore,
     close: () => {
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method

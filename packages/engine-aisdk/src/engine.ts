@@ -110,7 +110,7 @@ export class AiSdkChatEngine implements ChatEngine {
         vision: req.profile.model?.supportsVision ?? false,
         tools: req.profile.model?.supportsTools ?? true,
       };
-      const messages = await toModelMessages(req.messages, caps, loadAttachmentUnavailable);
+      const messages = await toModelMessages(req.messages, caps, req.loadAttachment ?? loadAttachmentUnavailable);
       const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
@@ -280,13 +280,17 @@ export class AiSdkChatEngine implements ChatEngine {
 // ---------------------------------------------------------------------------
 
 /**
- * `EngineRequest` (packages/core) carries no way to load attachment bytes --
- * there is no `loadAttachment` field, and `engine-aisdk` has no dependency
- * on `@grunt/store-sqlite`/filesystem access to fetch them itself. Wiring
- * real attachment bytes through is therefore out of scope for task 14; it
- * belongs to whatever assembles `EngineRequest` (the TurnRunner, tasks
- * 16-18). Text-only conversations (everything task 14's tests cover) never
- * call this. See task-14-15-report.md for the full writeup of this gap.
+ * The fallback used when a request carries no `EngineRequest.loadAttachment`
+ * at all (every pre-task-21 caller, and any task-21+ caller that genuinely
+ * has nowhere to load attachment bytes from). `engine-aisdk` still has no
+ * dependency on `@grunt/store-sqlite`/filesystem access of its own -- task 21
+ * wires a real loader through from the TurnRunner
+ * (`TurnRunnerOptions.loadAttachment`, populated by the server's `Container`
+ * from the content-addressed blob store) onto `req.loadAttachment`, and
+ * `stream()` above prefers that when present. This stub is only ever reached
+ * if a caller both omits `loadAttachment` AND sends a request whose messages
+ * contain a real `image`/`file` part to a vision-capable model -- text-only
+ * conversations (everything task 14's tests cover) never call this.
  */
 async function loadAttachmentUnavailable(id: string): Promise<Buffer> {
   throw new Error(

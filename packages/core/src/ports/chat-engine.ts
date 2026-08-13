@@ -28,6 +28,18 @@ export interface EngineRequest {
    * cannot be derived from `messages`.
    */
   workspaceRoot: string | null;
+  /**
+   * Loads an attachment's raw bytes by id, for `toModelMessages`
+   * (engine-aisdk/convert.ts) to embed real image/file content when the
+   * target model's declared capabilities allow it. Optional -- and
+   * deliberately never called when it's absent -- because plenty of callers
+   * (every pre-task-21 test, any request whose messages carry no `image`/
+   * `file` parts) have no attachments to load at all. Populated by whoever
+   * assembles the request (`TurnRunner`, via `TurnRunnerOptions.loadAttachment`)
+   * from the same `AttachmentRepo` + content-addressed blob store that
+   * `routes/attachments.ts` writes to on upload.
+   */
+  loadAttachment?: (id: string) => Promise<Buffer>;
 }
 
 export type EngineEvent =

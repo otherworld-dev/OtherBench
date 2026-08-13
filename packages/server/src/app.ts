@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
+import { attachmentsRoutes } from './routes/attachments.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
@@ -68,6 +69,12 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // chatsRoutes/turnsRoutes: those own /chats, /chats/:id, /chats/:id/messages,
   // /chats/:id/turns, /chats/:id/stream, /chats/:id/head, /messages/:id/cancel.
   authed.route('/', toolsRoutes(container));
+  // attachmentsRoutes, like turnsRoutes/toolsRoutes, defines full paths under
+  // two different prefixes (/chats/:id/attachments, /attachments/:id[/content])
+  // rather than one fixed one, so it also mounts at the authed app's own
+  // root. No path collisions with chatsRoutes/turnsRoutes/toolsRoutes: none
+  // of those own /chats/:id/attachments or /attachments/*.
+  authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
 
   if (options.webDistDir) {

@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
+import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
+import type { Connection, ModelInfo, ResolvedProfile } from '@grunt/core/types/config.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,26 @@ function makeResolvedProfile(overrides: Partial<ResolvedProfile> = {}): Resolved
     connection: makeConnection(),
     apiKey: null,
     model: null,
+    ...overrides,
+  };
+}
+
+function makeModel(overrides: Partial<ModelInfo> = {}): ModelInfo {
+  return {
+    id: 'model-1',
+    connectionId: 'conn-1',
+    modelId: 'test-model',
+    displayName: 'Test Model',
+    source: 'manual',
+    supportsVision: false,
+    supportsTools: false,
+    supportsReasoning: false,
+    contextWindow: null,
+    maxOutput: null,
+    priceInPer1m: null,
+    priceOutPer1m: null,
+    priceCachedPer1m: null,
+    currency: 'USD',
     ...overrides,
   };
 }
@@ -312,6 +333,103 @@ describe('StreamRegistry', () => {
       (e): e is TurnEvent & { type: 'text-delta' } => e.type === 'text-delta'
     );
     expect(textDeltas.map((e) => e.text).join('')).toBe('Hello world');
+  });
+
+  it('reconstructs a notice event (task 21 capability-fallback disclosure) from a persisted notice part -- not silently dropped in the DB-fallback path', () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.messages.create({
+      id: 'assistant-1',
+      chatId: 'chat-1',
+      parentId: null,
+      role: 'assistant',
+      parts: [
+        { type: 'notice', text: '1 image attachment ("photo.png") sent as text because this model does not support image input.' },
+        { type: 'text', text: 'Based on the description, it looks like a sunset.' },
+      ],
+      status: 'complete',
+      error: null,
+      producedBy: null,
+    });
+    const { engine } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    // No live buffer at all for 'assistant-1' -- this registry never saw a
+    // `run()`/`registerTurn()` for it, forcing `snapshot()` down the
+    // DB-fallback (`reconstructEvents`) path exclusively, same as the
+    // "falls back to the persisted message row" test above.
+    const registry = new StreamRegistry(runner, store);
+
+    const buffer = registry.snapshot('chat-1').find((b) => b.messageId === 'assistant-1');
+
+    expect(buffer).toBeDefined();
+    // Order preserved: the notice comes before the text, matching `parts`.
+    expect(buffer!.events.map((e) => e.type)).toEqual(['notice', 'text-delta', 'status']);
+    const notice = buffer!.events.find((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
+    expect(notice?.text).toContain('does not support image input');
+  });
+
+  it('the LIVE capability-fallback notice reaches StreamRegistry through a toolProvider-bearing TurnRunner, in the same run()-then-registerTurn() sequence routes/turns.ts uses', async () => {
+    // NOTE ON WHAT THIS TEST DOES AND DOES NOT PROVE: building task 21
+    // surfaced a real bug where this notice was silently dropped in
+    // production -- `runVariant` emitted it eagerly, immediately after
+    // `toolProvider.listTools()` resolved, which could beat
+    // `routes/turns.ts`'s `registerTurn()` call in the real server
+    // (`StreamRegistry.handleEvent` silently drops an event for a message
+    // id it has no buffer for yet). That race depends on genuine
+    // event-loop/I/O timing (a real `@hono/node-server` HTTP round trip) that
+    // this in-process test -- and an equivalent one added directly against
+    // `createApp()`'s real routes -- both turned out NOT to reproduce even
+    // WITH the eager-emit bug deliberately reintroduced while verifying this
+    // test (confirmed by hand, not left as an assertion here, since a test
+    // that cannot fail is worse than none). The ONLY reproduction that
+    // reliably catches this class of bug is a real browser against a real
+    // running server: packages/web/e2e/attachments.spec.ts. This test still
+    // has standalone value -- it exercises the deferred-emit code path
+    // (TurnRunner.runVariant) end to end through a real `ToolProvider` shape
+    // and a real `StreamRegistry`, verifying the notice is delivered
+    // correctly under normal conditions -- it is just not a regression
+    // guard for the specific timing bug.
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create({
+      id: 'att-1', chatId: 'chat-1', messageId: null, filename: 'photo.png',
+      mime: 'image/png', size: 10, sha256: 'x', storagePath: '/x', extractedText: null,
+    });
+    const { engine, push } = manualEngine();
+    const toolProvider: ToolProvider = {
+      listTools: async () => [],
+      refreshMcp: async () => {},
+      shutdown: async () => {},
+      onApprovalEvent: () => () => {},
+      resolveApproval: () => false,
+    };
+    const runner = new TurnRunner(store, engine, { toolProvider });
+    const registry = new StreamRegistry(runner, store);
+    const profile = makeResolvedProfile({ model: makeModel({ supportsVision: false }) });
+
+    // Mirrors routes/turns.ts EXACTLY -- `await run()`, THEN
+    // `registerTurn()` -- since that ordering (not test setup timing) is
+    // what the real bug depended on.
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profiles: [profile],
+    });
+    registry.registerTurn('chat-1', result.assistantMessageIds);
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, FINISH);
+    await flush();
+
+    const buffer = registry.snapshot('chat-1').find((b) => b.messageId === messageId);
+    expect(buffer?.events.map((e) => e.type)).toContain('notice');
   });
 
   it('prefers the in-memory buffer over the DB fallback when both exist, so a message is never served from both at once', async () => {

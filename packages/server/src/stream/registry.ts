@@ -50,6 +50,21 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
           isError: part.isError,
         });
         break;
+      case 'notice':
+        // Task 21's capability-fallback disclosure -- reconstructed the same
+        // way as a live `notice` TurnEvent (TurnRunner.runVariant), so a
+        // client reconnecting/re-hydrating after the fact sees the exact
+        // same disclosure a client watching live would have. Omitting this
+        // case is exactly the kind of silent downgrade decision #3 is about:
+        // a client that loaded via GET .../messages would still see it (that
+        // path reads `parts` directly), but any client whose message state
+        // instead gets rebuilt from THIS reconstructed buffer -- which is
+        // every client on `hello`/reconnect, and is the ONLY source for a
+        // buffer that already aged out of StreamRegistry's live retention --
+        // would silently lose the disclosure, which is worse than never
+        // having sent it.
+        events.push({ messageId: message.id, type: 'notice', text: part.text });
+        break;
       case 'image':
       case 'file':
         break;
