@@ -319,11 +319,27 @@ async function openVerified(
 
     if (existed && !sameIdentity(midTarget, openedIdentity)) throw new ToctouGuardError(candidate);
 
+    // The path named NOTHING at (C) and yet the open found a file, without us
+    // asking to create one. Something materialised in between -- which is
+    // exactly what a racer's cycle produces: the directory is briefly absent
+    // (so A and C both see nothing and every identity comparison is vacuous),
+    // then a junction to somewhere outside appears in time for the open, then
+    // it is gone again before the second containment verdict. Measured: this
+    // path leaked attacker content under contention while every other check
+    // in this function passed. A concurrent process legitimately creating the
+    // file produces the same signature and is refused too; retry succeeds.
+    if (!existed && (flags & fsConstants.O_CREAT) === 0) throw new ToctouGuardError(candidate);
+
     // (F) The path must still name the file we bound. A swap that was
     // reverted after we opened shows up here (the path now names the
     // original in-workspace file, our handle names the attacker's).
     if (!sameIdentity(identityOf(resolved), openedIdentity)) throw new ToctouGuardError(candidate);
-    if (!existed && preParent !== null && !sameIdentity(identityOf(dirname(resolved)), midParent)) {
+    // For a create, the parent is the anchor, and it is checked against (C)
+    // unconditionally -- NOT only when it also existed at (A). Gating it on
+    // `preParent !== null` meant that a create whose parent was absent at (A)
+    // (the racer's own "briefly missing" window, or an ordinary mkdir -p) had
+    // no post-open anchor check at all.
+    if (!existed && !sameIdentity(identityOf(dirname(resolved)), midParent)) {
       throw new ToctouGuardError(candidate);
     }
 
@@ -358,10 +374,16 @@ async function readdirVerified(
   if (opts.__raceHooksForTests?.afterContainPath) await opts.__raceHooksForTests.afterContainPath();
 
   const mid = identityOf(resolved);
-  if (!sameIdentity(pre, mid)) throw new ToctouGuardError(candidate);
+  // Both null = the directory simply is not there; let readdir report that as
+  // the ordinary ENOENT it is, rather than dressing a missing path up as an
+  // attack. Any other disagreement between (A) and (C) is one.
+  if (!(pre === null && mid === null) && !sameIdentity(pre, mid)) throw new ToctouGuardError(candidate);
 
   const dirents = await readdir(resolved, { withFileTypes: true });
 
+  // Having listed it, it must still be the same directory -- and it must be a
+  // directory that existed at (C), so a listing cannot be served out of
+  // something that materialised in between.
   if (!sameIdentity(identityOf(resolved), mid)) throw new ToctouGuardError(candidate);
   containPath(workspaceRoot, candidate);
 
