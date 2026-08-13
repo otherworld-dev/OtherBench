@@ -95,6 +95,31 @@ describe('POST /api/profiles', () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it('MINOR 13: rejects a non-string entry in toolPolicy.mcpServerIds with 400 instead of letting it round-trip into storage', async () => {
+    // A `null`/number/object entry survives a bare `Array.isArray` check
+    // and, once stored, defeats PermissionBroker's `mcpServerIds.length ===
+    // 0` fast-deny path (see permissions.ts) without ever matching a real
+    // server id -- harmless in effect, but the array should never have
+    // been allowed to hold it in the first place.
+    const res = await app().request('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...basicProfileBody, toolPolicy: { mcpServerIds: ['real-server', 42, null, { a: 1 }] } }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('still accepts an all-string mcpServerIds array', async () => {
+    const res = await app().request('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...basicProfileBody, toolPolicy: { mcpServerIds: ['srv-1', 'srv-2'] } }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { toolPolicy: { mcpServerIds: string[] } };
+    expect(body.toolPolicy.mcpServerIds).toEqual(['srv-1', 'srv-2']);
+  });
 });
 
 describe('GET /api/profiles', () => {
