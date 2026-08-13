@@ -1,5 +1,5 @@
 import { constants as fsConstants, lstatSync, statSync, type Dirent } from 'node:fs';
-import { mkdir, open, readdir, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, readdir, unlink, type FileHandle } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
 import { containPath, PathEscapeError } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
@@ -158,15 +158,37 @@ async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
 //     say it is inside the workspace. A swap that lands anywhere in A..F
 //     changes one of those identities; a swap that is still in place at G
 //     fails containment; a swap that is reverted before G disagrees with E.
-//     To win, an attacker must now toggle the filesystem at least four times
-//     with precise placement so that A, C, E, F all see the outside file
-//     while B and G both see a clean tree -- instead of the single
-//     well-placed swap that used to suffice.
 //
-//     RESIDUAL, stated plainly: that four-toggle interleaving is not
-//     prevented, it is only made much harder to hit. A model that can retry
-//     in a loop can retry this too. The honest claim is "materially
-//     narrowed", not "closed".
+//     Identity comparisons are not enough on their own, though, and this is
+//     worth spelling out because the first version of this bracketing still
+//     leaked. Comparing identities says nothing when there are no identities
+//     to compare. A racer's cycle passes through a window where the
+//     directory is simply ABSENT (between the rename that stashes it and the
+//     junction that replaces it), and a path that names NOTHING at both A
+//     and C makes every comparison between them vacuously agree:
+//
+//        ws/sub absent    -> A: null, C: null, parent: null. All vacuous.
+//        junction appears -> D: the open succeeds against the attacker's
+//                            file; E's comparison is skipped because there
+//                            was nothing at C to compare it to; F compares
+//                            the attacker's file to itself and agrees.
+//        junction removed -> G: containPath sees a clean tree and passes.
+//
+//     One ordinary pass of the racer's own loop, not an exotic interleaving
+//     -- and it leaked attacker content in a live run. Hence two further
+//     rules: a successful open of a path that named nothing at C, when the
+//     caller did not ask to create anything, is refused outright; and the
+//     post-open parent-directory check for creates runs unconditionally
+//     rather than only when the parent happened to exist at A.
+//
+//     RESIDUAL, stated plainly: an attacker who can place four toggles
+//     precisely -- outside file visible at A, clean tree at B, outside file
+//     again at C, D, E, F, clean tree again at G -- is still not stopped.
+//     That is much harder to hit than a single well-placed swap, but a model
+//     that can retry in a loop can retry this too. The honest claim is
+//     "materially narrowed", not "closed". Measure it on a LOADED machine:
+//     the first measurement of this code showed zero leaks on an idle one
+//     and was wrong.
 //
 // DIRECTORY LISTINGS. list_dir and the filename-glob side of search_files
 // hold no handle -- Node's readdir offers no fd-based equivalent and no
@@ -300,12 +322,32 @@ async function openVerified(
   // read and written, so nothing that happens to the path can redirect the
   // actual I/O -- it can only make us wrong about WHICH file we bound, which
   // is what E/F/G are for.
-  const handle = await open(resolved, flags | NOFOLLOW);
+  //
+  // O_CREAT is narrowed to exactly what the caller needs, because open() is
+  // the one step here that can have an effect before any check has run:
+  //   - the target existed at (C): drop O_CREAT entirely. If it has vanished
+  //     since, the open fails ENOENT rather than quietly creating a new file
+  //     at a path that may no longer mean what it meant.
+  //   - the target did not exist at (C): add O_EXCL. Without it, a create
+  //     whose parent has just been redirected opens (and would go on to
+  //     write to) a PRE-EXISTING file outside the workspace. With it, that
+  //     case fails EEXIST and touches nothing -- and anything the open does
+  //     create is guaranteed to be ours, which is what makes the cleanup
+  //     below safe.
+  const wantsCreate = (flags & fsConstants.O_CREAT) !== 0;
+  const openFlags = wantsCreate
+    ? existed
+      ? flags & ~fsConstants.O_CREAT
+      : flags | fsConstants.O_EXCL
+    : flags;
+  const handle = await open(resolved, openFlags | NOFOLLOW);
+  const createdByUs = wantsCreate && !existed;
+  let openedIdentity: Identity | null = null;
 
   try {
     // (E) What did we actually get?
     const opened = await handle.stat();
-    const openedIdentity: Identity = { dev: opened.dev, ino: opened.ino };
+    openedIdentity = { dev: opened.dev, ino: opened.ino };
 
     // Hard links: see the module comment. A second directory entry for the
     // same file is indistinguishable from the file itself by every
@@ -349,6 +391,15 @@ async function openVerified(
     containPath(workspaceRoot, candidate);
   } catch (err) {
     await handle.close().catch(() => {});
+    // A refusal must not leave debris where it was refused. O_EXCL above
+    // guarantees a `createdByUs` file is ours, and the identity check makes
+    // sure we are unlinking THAT file and not something the path has since
+    // come to mean -- if the tree reverted under us, `resolved` now names a
+    // legitimate in-workspace file that we did not create and must not
+    // delete.
+    if (createdByUs && openedIdentity !== null && sameIdentity(identityOf(resolved), openedIdentity)) {
+      await unlink(resolved).catch(() => {});
+    }
     throw err;
   }
 

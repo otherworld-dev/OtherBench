@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   constants as fsConstants,
+  existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
@@ -474,6 +475,61 @@ describe('TOCTOU guard (openVerified)', () => {
 
   it('refuses when the swap lands between the snapshot and the open', async () => {
     await expectRefusalWithSwapIn('afterSnapshot');
+  });
+
+  it('refuses a read of a path that named nothing at snapshot time and then materialised', async () => {
+    // The interleaving that beat the first version of the bracketing, and it
+    // is one ordinary pass of a racer's cycle rather than an exotic
+    // multi-toggle: the directory is briefly ABSENT (so the pre- and
+    // post-containPath identities are both null and every comparison between
+    // them is vacuous), then a junction to somewhere outside appears in time
+    // for the open, then it is gone again by the second containment verdict.
+    // Reproduced live under load before it was reproduced deterministically
+    // here.
+    writeFileSync(join(outside, 'inside.txt'), ATTACKER_MARKER);
+    const sub = join(ws, 'sub'); // deliberately absent at snapshot time
+
+    let materialised = false;
+    const promise = __testing.openVerified(ws, 'sub/inside.txt', fsConstants.O_RDONLY, {
+      __raceHooksForTests: {
+        afterSnapshot: () => {
+          makeJunctionOrThrow(outside, sub);
+          materialised = true;
+        },
+      },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(ToctouGuardError);
+    expect(materialised).toBe(true);
+  });
+
+  it('refuses a create whose parent materialised between the snapshot and the open', async () => {
+    // Same interleaving on the write side, where O_CREAT makes "it was not
+    // there a moment ago" the normal case and the parent directory is the
+    // only anchor left.
+    const sub = join(ws, 'sub'); // absent at snapshot time
+
+    let materialised = false;
+    const promise = __testing.openVerified(ws, 'sub/new.txt', fsConstants.O_WRONLY | fsConstants.O_CREAT, {
+      __raceHooksForTests: {
+        afterSnapshot: () => {
+          makeJunctionOrThrow(outside, sub);
+          materialised = true;
+        },
+      },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(ToctouGuardError);
+    expect(materialised).toBe(true);
+    expect(existsSync(join(outside, 'new.txt'))).toBe(false);
+  });
+
+  it('still reports a plainly missing file as not_found, not as an attack', async () => {
+    // The check above must not turn every ENOENT into a scary security error.
+    const result = (await readFileTool.execute({ path: 'nowhere/at/all.txt' }, ctx())) as Record<string, unknown>;
+    expect(result.code).toBe('not_found');
+    const listing = (await listDirTool.execute({ path: 'no-such-dir' }, ctx())) as Record<string, unknown>;
+    expect(listing.code).toBe('not_found');
   });
 
   it('refuses a directory listing whose directory is swapped after containPath', async () => {
