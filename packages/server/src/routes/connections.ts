@@ -79,8 +79,14 @@ function statusForClassifiedError(kind: ErrorKind): 400 | 429 | 502 {
  * stored for this connection: a model id never seen before is inserted as
  * `source: 'discovered'`; one already stored with `source: 'discovered'` is
  * refreshed in place (same row, same id) rather than duplicated; one a user
- * added by hand (`source: 'manual'`) is left completely untouched, so
- * re-running discovery can never clobber a manual edit.
+ * added by hand OR has ever edited and saved via the Models panel
+ * (`source: 'manual'` -- see the promotion in routes/models.ts's PATCH
+ * handler) is left completely untouched, so re-running discovery can never
+ * clobber a manual edit. This matters beyond the "added by hand" case: for
+ * a connection kind whose discovery reports real values (currently only
+ * Ollama, via `AiSdkChatEngine.seedOllamaCapabilities`), a `discovered` row
+ * left unedited keeps tracking the provider on every re-run -- only an
+ * edited row opts out.
  */
 function upsertDiscoveredModels(container: Container, connectionId: string, discovered: DiscoveredModel[]): ModelInfo[] {
   const existingByModelId = new Map(container.store.models.list(connectionId).map((m) => [m.modelId, m]));

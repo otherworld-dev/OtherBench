@@ -59,7 +59,7 @@ export function modelsRoutes(container: Container): Hono {
 
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
-    getModelOrThrow(container, id);
+    const existing = getModelOrThrow(container, id);
     const body = (await c.req.json().catch(() => ({}))) as ModelBody;
 
     const patch: Partial<Omit<ModelInfo, 'id'>> = {};
@@ -73,6 +73,25 @@ export function modelsRoutes(container: Container): Hono {
     if (body.priceOutPer1m !== undefined) patch.priceOutPer1m = optionalNumber(body.priceOutPer1m, 'priceOutPer1m') ?? null;
     if (body.priceCachedPer1m !== undefined) patch.priceCachedPer1m = optionalNumber(body.priceCachedPer1m, 'priceCachedPer1m') ?? null;
     if (typeof body.currency === 'string') patch.currency = body.currency;
+
+    // INVARIANT: an edit is only "mine" once something durable records that
+    // a human made it -- not because the Models panel's local draft happens
+    // to show it right now. Before this, a `discovered` row's stored state
+    // carried no trace that anyone had ever hand-edited it, so the very next
+    // "Discover models" run (upsertDiscoveredModels, routes/connections.ts)
+    // had no way to tell "this row still matches what the provider reports"
+    // apart from "a human just declared these values on purpose" -- for
+    // Ollama, whose native API returns definite true/false (not the null
+    // every other kind returns), that meant a saved edit was silently
+    // clobbered by the next re-discovery. `source` is never accepted
+    // straight from the request body (a client cannot claim
+    // `manual`/`discovered` for itself); promoting a `discovered` row to
+    // `manual` the moment it is saved through this endpoint is the one
+    // server-decided path that changes it, and `upsertDiscoveredModels`
+    // already leaves any `manual` row completely untouched.
+    if (existing.source === 'discovered' && Object.keys(patch).length > 0) {
+      patch.source = 'manual';
+    }
 
     return c.json(container.store.models.update(id, patch));
   });

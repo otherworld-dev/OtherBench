@@ -110,6 +110,92 @@ describe('PATCH /api/models/:id', () => {
   });
 });
 
+describe('PATCH /api/models/:id promotes a discovered row to manual on edit', () => {
+  it('changes source from discovered to manual when a discovered row is edited', async () => {
+    const model = container.store.models.create({
+      id: 'model-1',
+      connectionId: 'conn-1',
+      modelId: 'qwen2.5-coder:3b-base',
+      displayName: 'qwen2.5-coder:3b-base',
+      source: 'discovered',
+      supportsVision: false,
+      supportsTools: false,
+      supportsReasoning: false,
+      contextWindow: 32768,
+      maxOutput: null,
+      priceInPer1m: null,
+      priceOutPer1m: null,
+      priceCachedPer1m: null,
+      currency: 'USD',
+    });
+
+    const res = await app().request(`/api/models/${model.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supportsTools: true, supportsVision: true, contextWindow: 4096 }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({ source: 'manual', supportsTools: true, supportsVision: true, contextWindow: 4096 });
+    expect(container.store.models.get(model.id)?.source).toBe('manual');
+  });
+
+  it('leaves an already-manual row manual', async () => {
+    const model = container.store.models.create({
+      id: 'model-2',
+      connectionId: 'conn-1',
+      modelId: 'hand-added',
+      displayName: 'Hand Added',
+      source: 'manual',
+      supportsVision: false,
+      supportsTools: false,
+      supportsReasoning: false,
+      contextWindow: null,
+      maxOutput: null,
+      priceInPer1m: null,
+      priceOutPer1m: null,
+      priceCachedPer1m: null,
+      currency: 'USD',
+    });
+
+    const res = await app().request(`/api/models/${model.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Renamed' }),
+    });
+
+    expect((await res.json())).toMatchObject({ source: 'manual', displayName: 'Renamed' });
+  });
+
+  it('an empty PATCH body does not promote source (no-op edit)', async () => {
+    const model = container.store.models.create({
+      id: 'model-3',
+      connectionId: 'conn-1',
+      modelId: 'no-op',
+      displayName: 'No Op',
+      source: 'discovered',
+      supportsVision: false,
+      supportsTools: false,
+      supportsReasoning: false,
+      contextWindow: null,
+      maxOutput: null,
+      priceInPer1m: null,
+      priceOutPer1m: null,
+      priceCachedPer1m: null,
+      currency: 'USD',
+    });
+
+    const res = await app().request(`/api/models/${model.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    expect((await res.json())).toMatchObject({ source: 'discovered' });
+  });
+});
+
 describe('DELETE /api/models/:id', () => {
   it('deletes the model', async () => {
     const created = await (

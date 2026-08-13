@@ -50,10 +50,16 @@ interface ModelRowProps {
 
 /**
  * One model's editable row. Discovery (`POST /connections/:id/discover-models`,
- * driven from the Connections panel's "Discover models" button) always
- * comes back with every capability flag `false` -- Grunt has no reliable
- * handshake for "do you accept images" against an arbitrary endpoint, so
- * capabilities are declared here by a human, not probed. Leaving
+ * driven from the Connections panel's "Discover models" button) declares
+ * capability flags conservatively (`false`/unknown) for most connection
+ * kinds -- Grunt has no reliable handshake for "do you accept images"
+ * against an arbitrary endpoint. Ollama is the one exception: its native
+ * API genuinely reports per-model capabilities, so discovery seeds real
+ * `true`/`false` values for it (`AiSdkChatEngine.seedOllamaCapabilities`,
+ * packages/engine-aisdk/src/engine.ts). Either way, saving an edit here
+ * (`PATCH /models/:id`) marks the row `source: 'manual'` server-side, so a
+ * later re-discovery can never silently overwrite what a human just
+ * declared -- see the promotion in routes/models.ts. Leaving
  * `supportsVision` off for a model that actually accepts images means an
  * attached image silently degrades to text for any profile using it
  * (`degradedAttachmentsNotice`, packages/core/src/domain/turn.ts) -- the
@@ -253,10 +259,12 @@ export function ModelsPanel(): JSX.Element {
   return (
     <div className="mx-auto max-w-3xl">
       <p className="mb-3 text-xs text-[var(--text-muted)]">
-        Capabilities are declared here, not probed -- a custom endpoint can claim to be anything, and there is no reliable handshake to check
-        what it actually accepts. Leave &ldquo;Vision&rdquo; off and an attached image silently degrades to text for any profile using this
-        model; leave &ldquo;Tools&rdquo; off and tool calls are never offered to it. A blank price means unknown (shown as &ldquo;—&rdquo;
-        elsewhere) -- zero means genuinely free, which is normal for a local model.
+        Capabilities are declared, not probed, for most connections -- a custom endpoint can claim to be anything, and there is no reliable
+        handshake to check what it actually accepts. Ollama is the one exception: its native API reports real per-model capabilities, so
+        discovery seeds genuine values there. Either way, saving an edit below marks that row as manually managed, so a later &ldquo;Discover
+        models&rdquo; run can never silently overwrite what you just set. Leave &ldquo;Vision&rdquo; off and an attached image silently
+        degrades to text for any profile using this model; leave &ldquo;Tools&rdquo; off and tool calls are never offered to it. A blank price
+        means unknown (shown as &ldquo;—&rdquo; elsewhere) -- zero means genuinely free, which is normal for a local model.
       </p>
 
       <div className="mb-3">

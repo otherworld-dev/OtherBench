@@ -512,6 +512,50 @@ describe('POST /api/connections/:id/discover-models', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it(
+    'a hand-edited capability flag survives a re-run of discovery, even when the provider reports the same ' +
+      'definite (non-null) values it always did -- Finding 3 regression: upsertDiscoveredModels used to rely on ' +
+      '`d.supportsTools ?? current.supportsTools`, which only protected an edit while discovery returned null; ' +
+      'Ollama-style discovery reporting definite true/false clobbered it right back',
+    async () => {
+      const created = await json(
+        await app().request('/api/connections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Ollama box', kind: 'ollama' }),
+        })
+      );
+      const id = created['id'] as string;
+      engine.models = [
+        { modelId: 'qwen2.5-coder:3b-base', displayName: 'qwen2.5-coder:3b-base', contextWindow: 32768, supportsVision: false, supportsTools: false },
+      ];
+
+      const firstRes = await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+      const [discovered] = (await firstRes.json()) as Array<Record<string, unknown>>;
+      expect(discovered).toMatchObject({ source: 'discovered', supportsTools: false, supportsVision: false });
+
+      // The user hand-edits capabilities in the Models panel.
+      const patched = await json(
+        await app().request(`/api/models/${discovered!['id']}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ supportsTools: true, supportsVision: true, contextWindow: 4096 }),
+        })
+      );
+      expect(patched).toMatchObject({ source: 'manual', supportsTools: true, supportsVision: true, contextWindow: 4096 });
+
+      // Re-discovery reports the exact same provider values as before (not
+      // null -- the whole point of the bug this reproduces).
+      engine.models = [
+        { modelId: 'qwen2.5-coder:3b-base', displayName: 'qwen2.5-coder:3b-base', contextWindow: 32768, supportsVision: false, supportsTools: false },
+      ];
+      const secondRes = await app().request(`/api/connections/${id}/discover-models`, { method: 'POST' });
+      const [afterRediscover] = (await secondRes.json()) as Array<Record<string, unknown>>;
+
+      expect(afterRediscover).toMatchObject({ source: 'manual', supportsTools: true, supportsVision: true, contextWindow: 4096 });
+    }
+  );
+
   it('returns a classified, retryable error when discovery fails on a network/transient error', async () => {
     const created = await json(
       await app().request('/api/connections', {
