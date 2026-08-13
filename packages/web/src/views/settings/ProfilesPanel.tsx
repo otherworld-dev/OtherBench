@@ -1,5 +1,6 @@
-import { useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import type { FsMode, ModelParams, Profile } from '@grunt/core/types/config.js';
+import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { ApiError, api, type CreateProfileBody } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
 
@@ -30,6 +31,8 @@ function paramsToDraft(params: ModelParams): { temperature: string; topP: string
 interface ProfileFormProps {
   /** `null` means "creating a new profile". */
   profile: Profile | null;
+  /** Every configured MCP server (enabled or not -- see the allowlist checklist below for why disabled ones stay visible), for the `toolPolicy.mcpServerIds` checklist. */
+  mcpServers: McpServerHealth[];
   onSaved: (profile: Profile) => void;
   onDeleted: (id: string) => void;
   onCancel: () => void;
@@ -38,9 +41,10 @@ interface ProfileFormProps {
 /**
  * Add/edit form for one profile -- name, description, colour, the
  * connection + model it runs against, system prompt, sampling params, tool
- * policy, and default status. Keyed by `profile?.id` from the parent (see
- * `ProfilesPanel`) so switching the selected profile remounts with fresh
- * local state instead of resyncing a pile of `useState` via an effect.
+ * policy, MCP server allowlist, and default status. Keyed by `profile?.id`
+ * from the parent (see `ProfilesPanel`) so switching the selected profile
+ * remounts with fresh local state instead of resyncing a pile of `useState`
+ * via an effect.
  *
  * The model select stores `ModelInfo.modelId` (the provider's own model
  * string, e.g. "llama3.2"), NOT `ModelInfo.id` (Grunt's row id) --
@@ -48,7 +52,7 @@ interface ProfileFormProps {
  * (see `resolveProfile`, packages/server/src/profile-resolution.ts), so
  * storing the row id here would silently fail to resolve a model at all.
  */
-function ProfileForm({ profile, onSaved, onDeleted, onCancel }: ProfileFormProps): JSX.Element {
+function ProfileForm({ profile, mcpServers, onSaved, onDeleted, onCancel }: ProfileFormProps): JSX.Element {
   const connections = useGruntStore((s) => s.connections);
   const models = useGruntStore((s) => s.models);
 
@@ -62,7 +66,12 @@ function ProfileForm({ profile, onSaved, onDeleted, onCancel }: ProfileFormProps
   const [fs, setFs] = useState<FsMode>(profile?.toolPolicy.fs ?? 'off');
   const [shell, setShell] = useState(profile?.toolPolicy.shell ?? false);
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
+  const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
+
+  function toggleMcpServer(id: string): void {
+    setMcpServerIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +125,7 @@ function ProfileForm({ profile, onSaved, onDeleted, onCancel }: ProfileFormProps
       modelId,
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
-      toolPolicy: { fs, shell, approvalMode, mcpServerIds: profile?.toolPolicy.mcpServerIds ?? [] },
+      toolPolicy: { fs, shell, approvalMode, mcpServerIds },
       isDefault,
     };
 
@@ -343,6 +352,27 @@ function ProfileForm({ profile, onSaved, onDeleted, onCancel }: ProfileFormProps
         </div>
       </div>
 
+      <div>
+        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">MCP servers this profile may use</span>
+        <p className="mb-1.5 text-xs text-[var(--text-muted)]">
+          This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
+          having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
+        </p>
+        {mcpServers.length === 0 ? (
+          <p className="text-xs text-[var(--text-faint)]">No MCP servers configured yet -- add one in Settings &gt; MCP Servers.</p>
+        ) : (
+          <div data-testid="mcp-server-allowlist" className="space-y-1">
+            {mcpServers.map((s) => (
+              <label key={s.id} className="flex items-center gap-1.5 text-sm">
+                <input type="checkbox" aria-label={`Allow MCP server ${s.name}`} checked={mcpServerIds.includes(s.id)} onChange={() => toggleMcpServer(s.id)} />
+                {s.name}
+                {!s.enabled && <span className="text-xs text-[var(--text-muted)]">(disabled -- contributes no tools until re-enabled)</span>}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
       <label className="flex items-center gap-1.5 text-sm">
         <input type="checkbox" aria-label="Default profile" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} />
         Default profile (used for new chats)
@@ -408,7 +438,14 @@ function ProfileRow({ profile, connectionName, active, onSelect }: { profile: Pr
  * Profiles panel (task: settings UI, brief item 3). Full CRUD over the
  * named profiles that drive every chat -- name/description/colour, which
  * connection + model to run against, system prompt, sampling params, tool
- * policy, and default status.
+ * policy (including the MCP server allowlist, `toolPolicy.mcpServerIds`),
+ * and default status.
+ *
+ * MCP servers aren't reference data in the global store the way
+ * connections/models/profiles are (see McpServersPanel's doc for why: its
+ * health is genuinely live/polled data, not a CRUD row cache) -- so this
+ * panel fetches the health-shaped list itself, once, purely to populate
+ * `ProfileForm`'s allowlist checklist with names + enabled state.
  */
 export function ProfilesPanel(): JSX.Element {
   const connections = useGruntStore((s) => s.connections);
@@ -417,6 +454,20 @@ export function ProfilesPanel(): JSX.Element {
   const removeProfile = useGruntStore((s) => s.removeProfile);
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
+  const [mcpServers, setMcpServers] = useState<McpServerHealth[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.mcpServers
+      .list()
+      .then((servers) => {
+        if (!cancelled) setMcpServers(servers);
+      })
+      .catch((err: unknown) => console.error('[grunt-web] failed to load MCP servers for the profile allowlist:', err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selected = editingId && editingId !== 'new' ? (profiles.find((p) => p.id === editingId) ?? null) : null;
   const showForm = editingId === 'new' || selected !== null;
@@ -460,6 +511,7 @@ export function ProfilesPanel(): JSX.Element {
           <ProfileForm
             key={editingId === 'new' ? 'new' : (selected?.id ?? 'new')}
             profile={editingId === 'new' ? null : selected}
+            mcpServers={mcpServers}
             onSaved={handleSaved}
             onDeleted={handleDeleted}
             onCancel={() => setEditingId(null)}

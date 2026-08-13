@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
+import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { useGruntStore } from '../../state/store.js';
 import { ProfilesPanel } from './ProfilesPanel.js';
 
@@ -11,6 +12,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       profiles: { list: vi.fn(), create: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+      mcpServers: { list: vi.fn() },
     },
   };
 });
@@ -20,6 +22,20 @@ import { api } from '../../state/api.js';
 const mockedCreate = vi.mocked(api.profiles.create);
 const mockedPatch = vi.mocked(api.profiles.patch);
 const mockedDelete = vi.mocked(api.profiles.delete);
+const mockedMcpList = vi.mocked(api.mcpServers.list);
+
+function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
+  return {
+    id: 'mcp-1',
+    name: 'Filesystem MCP',
+    transport: 'stdio',
+    enabled: true,
+    status: 'ok',
+    lastError: null,
+    toolCount: 2,
+    ...overrides,
+  };
+}
 
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
   return {
@@ -78,6 +94,7 @@ function reset(): void {
   mockedCreate.mockReset();
   mockedPatch.mockReset();
   mockedDelete.mockReset();
+  mockedMcpList.mockReset().mockResolvedValue([]);
 }
 
 describe('ProfilesPanel', () => {
@@ -237,5 +254,73 @@ describe('ProfilesPanel', () => {
     expect(await screen.findByText(/delete failed/i)).toBeInTheDocument();
     // The row must still be there -- the delete did not silently succeed client-side.
     expect(screen.getByTestId('profile-row-profile-1')).toBeInTheDocument();
+  });
+
+  describe('MCP server allowlist (toolPolicy.mcpServerIds)', () => {
+    it('shows an honest empty state when no MCP servers are configured', async () => {
+      useGruntStore.getState().setConnections([makeConnection()]);
+      useGruntStore.getState().setModels([makeModel()]);
+      const user = userEvent.setup();
+
+      render(<ProfilesPanel />);
+      await user.click(screen.getByRole('button', { name: '+ New profile' }));
+
+      expect(await screen.findByText(/no mcp servers configured yet/i)).toBeInTheDocument();
+    });
+
+    it('lists configured MCP servers, including disabled ones, and includes checked ids on save', async () => {
+      useGruntStore.getState().setConnections([makeConnection()]);
+      useGruntStore.getState().setModels([makeModel()]);
+      mockedMcpList.mockResolvedValue([
+        makeMcpServerHealth({ id: 'mcp-1', name: 'Filesystem MCP', enabled: true }),
+        makeMcpServerHealth({ id: 'mcp-2', name: 'Disabled Server', enabled: false }),
+      ]);
+      mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile', toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['mcp-1'], approvalMode: 'always_ask' } }));
+      const user = userEvent.setup();
+
+      render(<ProfilesPanel />);
+      await user.click(screen.getByRole('button', { name: '+ New profile' }));
+
+      const allowlist = await screen.findByTestId('mcp-server-allowlist');
+      expect(allowlist).toHaveTextContent('Filesystem MCP');
+      expect(allowlist).toHaveTextContent('Disabled Server');
+      expect(allowlist).toHaveTextContent(/disabled/i); // the disabled server is annotated, not hidden
+
+      await user.type(screen.getByLabelText('Profile name'), 'Uses MCP');
+      await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+      await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+      await user.click(screen.getByLabelText('Allow MCP server Filesystem MCP'));
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() =>
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'] } }))
+      );
+    });
+
+    it('pre-checks the servers already in an existing profile\'s allowlist, and unchecking one removes it on save', async () => {
+      useGruntStore.getState().setConnections([makeConnection()]);
+      useGruntStore.getState().setModels([makeModel()]);
+      useGruntStore.getState().setProfiles([
+        makeProfile({ id: 'profile-1', toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['mcp-1', 'mcp-2'], approvalMode: 'always_ask' } }),
+      ]);
+      mockedMcpList.mockResolvedValue([
+        makeMcpServerHealth({ id: 'mcp-1', name: 'Server One' }),
+        makeMcpServerHealth({ id: 'mcp-2', name: 'Server Two' }),
+      ]);
+      mockedPatch.mockResolvedValue(makeProfile({ id: 'profile-1' }));
+      const user = userEvent.setup();
+
+      render(<ProfilesPanel />);
+      await user.click(screen.getByTestId('profile-row-profile-1'));
+      await screen.findByTestId('mcp-server-allowlist');
+
+      expect(screen.getByLabelText('Allow MCP server Server One')).toBeChecked();
+      expect(screen.getByLabelText('Allow MCP server Server Two')).toBeChecked();
+
+      await user.click(screen.getByLabelText('Allow MCP server Server Two'));
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ mcpServerIds: ['mcp-1'] }) })));
+    });
   });
 });
