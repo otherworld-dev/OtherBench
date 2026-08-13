@@ -182,9 +182,14 @@ describe('McpServersPanel', () => {
     expect(mockedPatch.mock.calls[0]?.[1]).not.toHaveProperty('env');
   });
 
-  it('editing env vars replaces the whole set, dropping blank-value rows', async () => {
+  it('editing ONE env var sends a real replacement for it, and an explicit KEEP (not a drop) for a pre-seeded row left blank', async () => {
+    // Regression coverage for the "opening the editor and saving destroys
+    // every secret" bug: a pre-seeded row's blank value must never be
+    // dropped from the patch body -- dropping it is indistinguishable, to
+    // the server, from the user having deleted that row, and
+    // `PATCH /mcp-servers/:id` deletes any name absent from the map.
     mockedList.mockResolvedValue([makeHealth()]);
-    mockedGet.mockResolvedValue(makeServer({ envRefs: { API_KEY: 'ref', UNCHANGED_BUT_BLANK: 'ref2' } }));
+    mockedGet.mockResolvedValue(makeServer({ envRefs: { API_KEY: 'ref', KEPT_BECAUSE_UNTOUCHED: 'ref2' } }));
     mockedPatch.mockResolvedValue(makeServer());
     const user = userEvent.setup();
 
@@ -197,11 +202,48 @@ describe('McpServersPanel', () => {
     const envValueInputs = screen.getAllByLabelText('Env var value');
     expect(envValueInputs).toHaveLength(2);
     await user.type(envValueInputs[0]!, 'new-secret-value');
-    // Leave the second row's value blank -- it must be dropped, not sent as "".
+    // Leave the second row's value blank -- untouched, so it must be KEPT.
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
-    expect(mockedPatch.mock.calls[0]?.[1]).toMatchObject({ env: { API_KEY: 'new-secret-value' } });
+    expect(mockedPatch.mock.calls[0]?.[1]).toMatchObject({ env: { API_KEY: 'new-secret-value', KEPT_BECAUSE_UNTOUCHED: null } });
+  });
+
+  it('opening the env var editor and saving with NOTHING changed sends an explicit keep for every existing var, never an empty/dropping patch (the critical destroy-on-noop-save bug)', async () => {
+    mockedList.mockResolvedValue([makeHealth()]);
+    mockedGet.mockResolvedValue(makeServer({ envRefs: { GITHUB_TOKEN: 'ref-1', KEEP: 'ref-2' } }));
+    mockedPatch.mockResolvedValue(makeServer({ envRefs: { GITHUB_TOKEN: 'ref-1', KEEP: 'ref-2' } }));
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('button', { name: /edit environment variables/i }));
+    // No typing at all -- click Save immediately.
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    const body = mockedPatch.mock.calls[0]?.[1] as { env?: Record<string, unknown> };
+    expect(body.env).toEqual({ GITHUB_TOKEN: null, KEEP: null });
+  });
+
+  it('a brand new, never-filled-in env row is dropped silently (not a keep -- there is nothing to keep)', async () => {
+    mockedList.mockResolvedValue([makeHealth()]);
+    mockedGet.mockResolvedValue(makeServer({ envRefs: { API_KEY: 'ref' } }));
+    mockedPatch.mockResolvedValue(makeServer());
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('button', { name: /edit environment variables/i }));
+    await user.click(screen.getByRole('button', { name: /\+ add env var name/i }));
+    await user.type(screen.getAllByLabelText('Env var name')[1]!, 'NEVER_FILLED_IN');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    const body = mockedPatch.mock.calls[0]?.[1] as { env?: Record<string, unknown> };
+    expect(body.env).toEqual({ API_KEY: null });
   });
 
   it('clearing env vars sends an empty object', async () => {
@@ -217,6 +259,64 @@ describe('McpServersPanel', () => {
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('srv-1', expect.objectContaining({ env: {} })));
+  });
+
+  // --- headers (http transport) -- the identical bug/fix as env vars above ---
+
+  it('opening the headers editor and saving with NOTHING changed sends an explicit keep for every existing header, never an empty/dropping patch', async () => {
+    mockedList.mockResolvedValue([makeHealth({ transport: 'http' })]);
+    mockedGet.mockResolvedValue(
+      makeServer({ transport: 'http', command: null, args: [], url: 'https://example.com/mcp', headerRefs: { Authorization: 'ref-1', 'X-Extra': 'ref-2' } })
+    );
+    mockedPatch.mockResolvedValue(makeServer({ transport: 'http' }));
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('button', { name: /edit headers/i }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    const body = mockedPatch.mock.calls[0]?.[1] as { headers?: Record<string, unknown> };
+    expect(body.headers).toEqual({ Authorization: null, 'X-Extra': null });
+  });
+
+  it('editing ONE header sends a real replacement for it, and an explicit KEEP for a pre-seeded row left blank', async () => {
+    mockedList.mockResolvedValue([makeHealth({ transport: 'http' })]);
+    mockedGet.mockResolvedValue(
+      makeServer({ transport: 'http', command: null, args: [], url: 'https://example.com/mcp', headerRefs: { Authorization: 'ref-1', 'X-Extra': 'ref-2' } })
+    );
+    mockedPatch.mockResolvedValue(makeServer({ transport: 'http' }));
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('button', { name: /edit headers/i }));
+
+    const headerValueInputs = screen.getAllByLabelText('Header value');
+    expect(headerValueInputs).toHaveLength(2);
+    await user.type(headerValueInputs[0]!, 'Bearer new-token');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    expect(mockedPatch.mock.calls[0]?.[1]).toMatchObject({ headers: { Authorization: 'Bearer new-token', 'X-Extra': null } });
+  });
+
+  it('clearing headers sends an empty object', async () => {
+    mockedList.mockResolvedValue([makeHealth({ transport: 'http' })]);
+    mockedGet.mockResolvedValue(makeServer({ transport: 'http', command: null, args: [], url: 'https://example.com/mcp', headerRefs: { Authorization: 'ref' } }));
+    mockedPatch.mockResolvedValue(makeServer({ transport: 'http', headerRefs: {} }));
+    const user = userEvent.setup();
+
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-1'));
+    await screen.findByTestId('mcp-server-form');
+    await user.click(screen.getByRole('checkbox', { name: /clear all headers/i }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('srv-1', expect.objectContaining({ headers: {} })));
   });
 
   it('toggling enable/disable from the list calls patch and never renders a secret', async () => {

@@ -123,11 +123,19 @@ export interface CreateMcpServerBody {
   transport: 'stdio' | 'http';
   command?: string | null;
   args?: string[];
-  /** Plaintext env VAR VALUES -- the server stores each as a SecretStore ref (`McpServer.envRefs`) and never echoes the value back, identically to `headers` below (see routes/tools.ts). */
-  env?: Record<string, string>;
+  /**
+   * Plaintext env VAR VALUES -- the server stores each as a SecretStore ref
+   * (`McpServer.envRefs`) and never echoes the value back, identically to
+   * `headers` below (see routes/tools.ts). On `PATCH` only, a value may
+   * also be `null`, meaning "keep whatever is already stored under this
+   * name" -- see `optionalSecretPatchRecord` (server) and
+   * `McpServerForm.rowsToSecretPatch` (client). `POST` (create) has nothing
+   * to keep and rejects `null` with a 400.
+   */
+  env?: Record<string, string | null>;
   url?: string | null;
-  /** Plaintext header VALUES -- the server stores each as a SecretStore ref and never echoes the value back (see routes/tools.ts). */
-  headers?: Record<string, string>;
+  /** Plaintext header VALUES -- same rules as `env` above, including the PATCH-only `null` ("keep") sentinel. */
+  headers?: Record<string, string | null>;
   enabled?: boolean;
 }
 

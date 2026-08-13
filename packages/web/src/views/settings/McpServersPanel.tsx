@@ -26,21 +26,38 @@ function keysToRows(keys: string[]): KvRow[] {
 }
 
 /**
- * Collapses draft rows into a `Record<string,string>` for submission.
- * Drops a row with a blank key (same as `ConnectionsPanel.rowsToHeaders`)
- * AND, unlike that one, a row with a blank VALUE too: `extraHeaders` (that
- * panel's equivalent) is plain non-secret metadata where an empty string is
- * a legitimate value, but env vars and auth headers stand in for
- * credentials -- a row a user added but never actually filled in is far
- * more likely to be an unfinished edit than an intentional empty secret, and
- * silently sending `""` would overwrite (or newly set) that entry with a
- * blank value the user never typed.
+ * Collapses draft rows into a `Record<string, string|null>` PATCH/create
+ * payload. Drops a row with a blank key (same as
+ * `ConnectionsPanel.rowsToHeaders`) -- an incomplete row is never sent.
+ *
+ * A row with a blank VALUE is handled two different ways depending on
+ * where its NAME came from, and this distinction is the fix for a bug
+ * where opening the editor and saving without changing anything silently
+ * deleted every existing secret:
+ *  - if its name is in `keepableNames` (an existing name `startEnvEdit`/
+ *    `startHeaderEdit` pre-seeded this row from -- see `McpServerForm`'s
+ *    docstring), the blank value means the user never actually typed into
+ *    this row, so it is sent as an explicit KEEP (`null`) -- "leave
+ *    whatever is already stored under this name untouched". Dropping it
+ *    instead (the old behaviour) reads identically to the user having
+ *    deleted the row, which is not what happened.
+ *  - otherwise (a brand new row the user added via "+ Add" but never
+ *    filled in) it is dropped, same as before: an unfinished new row isn't
+ *    an intentional empty secret.
+ *
+ * `extraHeaders` (`ConnectionsPanel`'s equivalent) doesn't need any of this
+ * -- it's plain non-secret metadata with no keep/replace distinction to
+ * make, so an empty string there is just a legitimate value sent as-is.
  */
-function rowsToSecretMap(rows: KvRow[]): Record<string, string> {
-  const result: Record<string, string> = {};
+function rowsToSecretPatch(rows: KvRow[], keepableNames: ReadonlySet<string>): Record<string, string | null> {
+  const result: Record<string, string | null> = {};
   for (const row of rows) {
     const key = row.key.trim();
-    if (key.length === 0 || row.value.length === 0) continue;
+    if (key.length === 0) continue;
+    if (row.value.length === 0) {
+      if (keepableNames.has(key)) result[key] = null;
+      continue;
+    }
     result[key] = row.value;
   }
   return result;
@@ -158,11 +175,21 @@ interface McpServerFormProps {
  * NAMES are currently set (safe metadata, not a secret) but never their
  * values, and a name typed into "current names" pre-seeds an empty row
  * purely as a convenience so re-adding a variable doesn't require retyping
- * its name too. Leaving the whole section untouched omits it from the
- * PATCH body entirely (existing secrets stay exactly as they are); touching
- * it at all REPLACES the complete set, because that is genuinely what a
- * PATCH carrying `env`/`headers` does server-side -- there is no partial-
- * merge endpoint to build a nicer illusion on top of.
+ * its name too. Leaving the whole section untouched (never clicking
+ * "Edit...") omits it from the PATCH body entirely (existing secrets stay
+ * exactly as they are).
+ *
+ * Touching it DOES replace the complete set of names -- a row removed via
+ * its "✕" (or the whole section cleared) is genuinely deleted -- but a
+ * pre-seeded row the user never typed a value into is NOT treated as
+ * deleted: its blank value means "unedited", and `rowsToSecretPatch` sends
+ * an explicit keep (`null`) for it rather than dropping it, which is what
+ * `PATCH /mcp-servers/:id` (`applySecretPatch`, routes/tools.ts) needs to
+ * carry that name's existing secret over untouched. Without this, opening
+ * "Edit environment variables…" and clicking Save without changing
+ * anything silently deleted every existing env var/header -- a pre-seeded
+ * row's blank value looked identical to "the user wants this empty" and
+ * was dropped the same way an unfinished new row is.
  */
 function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormProps): JSX.Element {
   const [name, setName] = useState(server?.name ?? '');
@@ -224,12 +251,12 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
       };
       if (transport === 'stdio') {
         if (envClear) body.env = {};
-        else if (envTouched) body.env = rowsToSecretMap(envRows);
+        else if (envTouched) body.env = rowsToSecretPatch(envRows, new Set(Object.keys(server?.envRefs ?? {})));
         // else: omit -- existing env vars (if any) are left untouched.
       }
       if (transport === 'http') {
         if (headerClear) body.headers = {};
-        else if (headerTouched) body.headers = rowsToSecretMap(headerRows);
+        else if (headerTouched) body.headers = rowsToSecretPatch(headerRows, new Set(Object.keys(server?.headerRefs ?? {})));
         // else: omit -- existing headers (if any) are left untouched.
       }
 
@@ -358,15 +385,13 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
             <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Environment variables</span>
             {server && !envTouched && !envClear && (
               <p data-testid="mcp-env-status" className="mb-1.5 text-xs text-[var(--text-muted)]">
-                {Object.keys(server.envRefs).length > 0
-                  ? `Currently set: ${Object.keys(server.envRefs).join(', ')}. Values are never shown -- edit to replace the whole set.`
-                  : 'None set.'}
+                {Object.keys(server.envRefs).length > 0 ? `Currently set: ${Object.keys(server.envRefs).join(', ')}. Values are never shown.` : 'None set.'}
               </p>
             )}
             {envTouched ? (
               <>
                 <p className="mb-1.5 text-xs text-[var(--text-muted)]">
-                  Editing replaces the ENTIRE set of environment variables -- re-enter every one you want to keep.
+                  A blank value is left unchanged from before. Type a new value to replace one, or remove its row (✕) to delete it.
                 </p>
                 <KvRowsEditor rows={envRows} onChange={setEnvRows} keyPlaceholder="API_KEY" valuePlaceholder="value" keyLabel="Env var name" valueLabel="Env var value" />
               </>
@@ -413,14 +438,14 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
             <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Headers</span>
             {server && !headerTouched && !headerClear && (
               <p data-testid="mcp-headers-status" className="mb-1.5 text-xs text-[var(--text-muted)]">
-                {Object.keys(server.headerRefs).length > 0
-                  ? `Currently set: ${Object.keys(server.headerRefs).join(', ')}. Values are never shown -- edit to replace the whole set.`
-                  : 'None set.'}
+                {Object.keys(server.headerRefs).length > 0 ? `Currently set: ${Object.keys(server.headerRefs).join(', ')}. Values are never shown.` : 'None set.'}
               </p>
             )}
             {headerTouched ? (
               <>
-                <p className="mb-1.5 text-xs text-[var(--text-muted)]">Editing replaces the ENTIRE set of headers -- re-enter every one you want to keep.</p>
+                <p className="mb-1.5 text-xs text-[var(--text-muted)]">
+                  A blank value is left unchanged from before. Type a new value to replace one, or remove its row (✕) to delete it.
+                </p>
                 <KvRowsEditor
                   rows={headerRows}
                   onChange={setHeaderRows}
