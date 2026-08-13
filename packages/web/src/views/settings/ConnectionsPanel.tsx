@@ -74,6 +74,9 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
   const [deleting, setDeleting] = useState(false);
 
   const upsertModels = useGruntStore((s) => s.upsertModels);
+  const models = useGruntStore((s) => s.models);
+  const profiles = useGruntStore((s) => s.profiles);
+  const chats = useGruntStore((s) => s.chats);
 
   function validate(): string | null {
     if (name.trim().length === 0) return '"Name" is required.';
@@ -151,9 +154,26 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
 
   async function handleDelete(): Promise<void> {
     if (!connection) return;
-    const ok = window.confirm(
-      `Delete connection "${connection.name}"? This also deletes every model and profile that uses it, and any chat built on one of those profiles. This cannot be undone.`
-    );
+    // The store already holds the exact counts a cascade delete would take
+    // out (see removeConnection, state/store.ts, which mirrors the DB's own
+    // ON DELETE CASCADE) -- putting the real numbers in THIS confirmation
+    // is what makes it a decision the user can actually make, instead of
+    // "any chat built on one of those profiles", which they'd have to
+    // reconstruct in their head. No second confirmation step; the numbers
+    // just go in the one that already exists.
+    const dependentModelCount = models.filter((m) => m.connectionId === connection.id).length;
+    const dependentProfileIds = new Set(profiles.filter((p) => p.connectionId === connection.id).map((p) => p.id));
+    const dependentChatCount = chats.filter((c) => dependentProfileIds.has(c.profileId)).length;
+    const parts = [
+      `${dependentModelCount} model${dependentModelCount === 1 ? '' : 's'}`,
+      `${dependentProfileIds.size} profile${dependentProfileIds.size === 1 ? '' : 's'}`,
+    ];
+    if (dependentChatCount > 0) {
+      parts.push(
+        `${dependentChatCount} chat${dependentChatCount === 1 ? '' : 's'} (including ${dependentChatCount === 1 ? 'its' : 'their'} message history)`
+      );
+    }
+    const ok = window.confirm(`Delete connection "${connection.name}"? This also deletes ${parts.join(', ')}. This cannot be undone.`);
     if (!ok) return;
     setDeleting(true);
     setError(null);

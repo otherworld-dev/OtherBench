@@ -1,7 +1,8 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Connection } from '@grunt/core/types/config.js';
+import type { Chat } from '@grunt/core/ports/store.js';
+import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import { useGruntStore } from '../../state/store.js';
 import { ConnectionsPanel } from './ConnectionsPanel.js';
 
@@ -42,6 +43,58 @@ function makeConnection(overrides: Partial<Connection> = {}): Connection {
     status: 'unknown',
     statusMessage: null,
     checkedAt: null,
+    ...overrides,
+  };
+}
+
+function makeModel(overrides: Partial<ModelInfo> = {}): ModelInfo {
+  return {
+    id: 'model-1',
+    connectionId: 'conn-1',
+    modelId: 'llama3.2',
+    displayName: 'llama3.2',
+    source: 'discovered',
+    supportsVision: false,
+    supportsTools: false,
+    supportsReasoning: false,
+    contextWindow: null,
+    maxOutput: null,
+    priceInPer1m: null,
+    priceOutPer1m: null,
+    priceCachedPer1m: null,
+    currency: 'USD',
+    ...overrides,
+  };
+}
+
+function makeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    id: 'profile-1',
+    name: 'Everyday',
+    description: null,
+    colour: null,
+    connectionId: 'conn-1',
+    modelId: 'llama3.2',
+    systemPrompt: null,
+    params: {},
+    toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+    isDefault: false,
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function makeChat(overrides: Partial<Chat> = {}): Chat {
+  return {
+    id: 'chat-1',
+    title: 'Hello',
+    profileId: 'profile-1',
+    headMessageId: null,
+    workspaceRoot: null,
+    pinned: false,
+    archivedAt: null,
+    createdAt: 1,
+    updatedAt: 1,
     ...overrides,
   };
 }
@@ -218,8 +271,62 @@ describe('ConnectionsPanel', () => {
 
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('conn-1'));
     expect(confirmSpy).toHaveBeenCalled();
-    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/cascades|deletes every model and profile/i);
+    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/this cannot be undone/i);
     expect(screen.queryByTestId('connections-list')).not.toBeInTheDocument();
+
+    confirmSpy.mockRestore();
+  });
+
+  // Finding 9 regression: the confirmation used to say "every model and
+  // profile that uses it, and any chat built on one of those profiles" --
+  // vague enough that the user has to reconstruct the actual blast radius in
+  // their head. The store already has the exact counts (removeConnection,
+  // state/store.ts); this asserts they actually appear.
+  it('the delete confirmation states the REAL dependent model/profile/chat counts, not a vague blanket warning', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Doomed' })]);
+    useGruntStore.getState().setModels([
+      makeModel({ id: 'm1', connectionId: 'conn-1' }),
+      makeModel({ id: 'm2', connectionId: 'conn-1' }),
+    ]);
+    useGruntStore.getState().setProfiles([
+      makeProfile({ id: 'p1', connectionId: 'conn-1' }),
+      makeProfile({ id: 'p2', connectionId: 'conn-1' }),
+    ]);
+    useGruntStore.getState().setChats([makeChat({ id: 'chat-1', profileId: 'p1' })]);
+    mockedDelete.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByTestId('connection-row-conn-1'));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
+    const message = confirmSpy.mock.calls[0]?.[0] ?? '';
+    expect(message).toMatch(/2 models/i);
+    expect(message).toMatch(/2 profiles/i);
+    expect(message).toMatch(/1 chat/i);
+
+    confirmSpy.mockRestore();
+  });
+
+  it('the delete confirmation omits the chat clause entirely when no chat depends on it', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1', name: 'Lonely' })]);
+    useGruntStore.getState().setModels([makeModel({ id: 'm1', connectionId: 'conn-1' })]);
+    useGruntStore.getState().setProfiles([]);
+    mockedDelete.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<ConnectionsPanel />);
+    await user.click(screen.getByTestId('connection-row-conn-1'));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
+    const message = confirmSpy.mock.calls[0]?.[0] ?? '';
+    expect(message).toMatch(/1 model/i);
+    expect(message).toMatch(/0 profiles/i);
+    expect(message).not.toMatch(/chat/i);
 
     confirmSpy.mockRestore();
   });
