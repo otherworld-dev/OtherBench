@@ -4,6 +4,7 @@
     { "path": "packages/core" },
     { "path": "packages/store-sqlite" },
     { "path": "packages/engine-aisdk" },
+    { "path": "packages/tools" },
     { "path": "packages/server" },
     { "path": "packages/web" }
   ]
