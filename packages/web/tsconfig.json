@@ -11,5 +11,5 @@
   },
   "include": ["src"],
   "exclude": ["test", "e2e"],
-  "references": [{ "path": "../core" }]
+  "references": [{ "path": "../core" }, { "path": "../tools" }]
 }

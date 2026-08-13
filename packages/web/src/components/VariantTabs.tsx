@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useState, type JSX } from 'react';
+import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { ModelInfo } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PricingSnapshot, Usage } from '@grunt/core/types/usage.js';
@@ -89,6 +90,9 @@ export interface VariantCardProps {
   onKeep: () => void;
   onRetry: () => void;
   retrying: boolean;
+  /** This variant's own still-pending tool-call approvals (task 26) -- distinct per variant/messageId, which is exactly what keeps one variant's approval prompt from ever affecting a sibling's. */
+  pendingApprovals?: ApprovalRequest[];
+  onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
 }
 
 /**
@@ -99,7 +103,17 @@ export interface VariantCardProps {
  * the single active tab's content (`VariantTabs`) and as one column of the
  * split view (`CompareSplit`) -- identical either way.
  */
-export function VariantCard({ variant, usage, models, isKept, onKeep, onRetry, retrying }: VariantCardProps): JSX.Element {
+export function VariantCard({
+  variant,
+  usage,
+  models,
+  isKept,
+  onKeep,
+  onRetry,
+  retrying,
+  pendingApprovals = [],
+  onResolveApproval,
+}: VariantCardProps): JSX.Element {
   const latencyMs = useLatencyMs(variant);
   const cost = usage ? estimateCost(usage, findPricing(models, variant)) : null;
 
@@ -118,7 +132,7 @@ export function VariantCard({ variant, usage, models, isKept, onKeep, onRetry, r
         </span>
       </div>
 
-      <Message message={variant} />
+      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} />
 
       <div className="flex items-center justify-between gap-2">
         {variant.status === 'error' ? (
@@ -206,6 +220,7 @@ export interface VariantTabsProps {
   retryingIds: Set<string>;
   /** Present only when this strip was reopened from a "⤺ N other variants" chip -- lets the user collapse back without picking a different variant. Omitted for a fresh, unresolved compare turn (nothing to collapse back to). */
   onClose?: () => void;
+  onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
 }
 
 /**
@@ -217,7 +232,17 @@ export interface VariantTabsProps {
  * renderer. Failures are per-tab: one variant erroring never touches its
  * siblings' own tabs, cards, or Retry state.
  */
-export function VariantTabs({ variants, extras, models, keptId, onKeep, onRetry, retryingIds, onClose }: VariantTabsProps): JSX.Element {
+export function VariantTabs({
+  variants,
+  extras,
+  models,
+  keptId,
+  onKeep,
+  onRetry,
+  retryingIds,
+  onClose,
+  onResolveApproval,
+}: VariantTabsProps): JSX.Element {
   const [activeId, setActiveId] = useState<string>(() => keptId ?? variants[0]?.id ?? '');
   const [split, setSplit] = useState(false);
   const active = variants.find((v) => v.id === activeId) ?? variants[0];
@@ -256,7 +281,16 @@ export function VariantTabs({ variants, extras, models, keptId, onKeep, onRetry,
       </div>
 
       {split ? (
-        <VariantGrid variants={variants} extras={extras} models={models} keptId={keptId} onKeep={onKeep} onRetry={onRetry} retryingIds={retryingIds} />
+        <VariantGrid
+          variants={variants}
+          extras={extras}
+          models={models}
+          keptId={keptId}
+          onKeep={onKeep}
+          onRetry={onRetry}
+          retryingIds={retryingIds}
+          onResolveApproval={onResolveApproval}
+        />
       ) : (
         active && (
           <div className="p-3">
@@ -268,6 +302,8 @@ export function VariantTabs({ variants, extras, models, keptId, onKeep, onRetry,
               onKeep={() => onKeep(active.id)}
               onRetry={() => onRetry(active)}
               retrying={retryingIds.has(active.id)}
+              pendingApprovals={extras[active.id]?.pendingApprovals ?? []}
+              onResolveApproval={onResolveApproval}
             />
           </div>
         )
@@ -285,6 +321,7 @@ export function VariantGrid({
   onKeep,
   onRetry,
   retryingIds,
+  onResolveApproval,
 }: Omit<VariantTabsProps, 'onClose'>): JSX.Element {
   return (
     <div data-testid="compare-split" className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2">
@@ -298,6 +335,8 @@ export function VariantGrid({
           onKeep={() => onKeep(v.id)}
           onRetry={() => onRetry(v)}
           retrying={retryingIds.has(v.id)}
+          pendingApprovals={extras[v.id]?.pendingApprovals ?? []}
+          onResolveApproval={onResolveApproval}
         />
       ))}
     </div>

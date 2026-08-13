@@ -18,6 +18,16 @@ export interface EngineRequest {
    * Tool executions need this for `ToolContext.messageId` correlation.
    */
   messageId: string;
+  /**
+   * The chat's configured workspace root (`Chat.workspaceRoot`), or `null`
+   * if none is set. Threaded through so the engine can populate
+   * `ToolContext.workspaceRoot` for every tool execution -- fs/shell tools
+   * (and `PermissionBroker.decide()`) require this to be non-null to operate
+   * at all (see `containPath`/`PermissionBroker`). Added alongside
+   * `chatId`/`messageId` for the same reason: tool execution needs it and it
+   * cannot be derived from `messages`.
+   */
+  workspaceRoot: string | null;
 }
 
 export type EngineEvent =

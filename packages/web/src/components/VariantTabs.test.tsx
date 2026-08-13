@@ -145,7 +145,7 @@ describe('VariantTabs', () => {
 
   it('shows cost and token counts on the tab label from the usage extras', () => {
     const variants = [variant('a')];
-    const extras = extrasFor({ a: { usage: { tokensIn: 1_000_000, tokensOut: 500_000, tokensCached: 0, tokensReasoning: 0 } } });
+    const extras = extrasFor({ a: { usage: { tokensIn: 1_000_000, tokensOut: 500_000, tokensCached: 0, tokensReasoning: 0 }, pendingApprovals: [] } });
     render(
       <VariantTabs variants={variants} extras={extras} models={[model]} keptId={null} onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} />
     );
@@ -157,7 +157,7 @@ describe('VariantTabs', () => {
 
   it('shows an unknown-pricing dash rather than a misleading $0.00 when there is no matching model', () => {
     const variants = [variant('a')];
-    const extras = extrasFor({ a: { usage: { tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0 } } });
+    const extras = extrasFor({ a: { usage: { tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0 }, pendingApprovals: [] } });
     render(
       <VariantTabs variants={variants} extras={extras} models={[]} keptId={null} onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} />
     );
@@ -195,6 +195,31 @@ describe('VariantTabs', () => {
       <VariantTabs variants={[variant('a')]} extras={{}} models={[]} keptId="a" onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} onClose={onClose} />
     );
     expect(screen.getByRole('button', { name: /collapse variants/i })).toBeInTheDocument();
+  });
+
+  it('a pending approval on ONE variant renders only on that variant\'s own card, and resolving it never touches a sibling (task 26 decision #2)', async () => {
+    const variants = [variant('a'), variant('b')];
+    const requestA = { id: 'req-a', chatId: 'chat-1', messageId: 'a', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
+    const extras = extrasFor({
+      a: { usage: null, pendingApprovals: [requestA] },
+      b: { usage: null, pendingApprovals: [] },
+    });
+    const onResolveApproval = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <VariantTabs variants={variants} extras={extras} models={[]} keptId={null} onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} onResolveApproval={onResolveApproval} />
+    );
+    await user.click(screen.getByRole('button', { name: /split view/i }));
+
+    // Only variant a's card shows a prompt; b's shows none.
+    expect(within(screen.getByTestId('variant-card-a')).getByTestId('approval-prompt-req-a')).toBeInTheDocument();
+    expect(within(screen.getByTestId('variant-card-b')).queryByRole('alert')).not.toBeInTheDocument();
+
+    await user.click(within(screen.getByTestId('variant-card-a')).getByTestId('approval-deny'));
+    expect(onResolveApproval).toHaveBeenCalledWith('req-a', { choice: 'deny' });
+    // b never had a prompt to begin with, and is untouched by a's resolution.
+    expect(within(screen.getByTestId('variant-card-b')).queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('defaults the active tab to the kept variant when reopened', () => {

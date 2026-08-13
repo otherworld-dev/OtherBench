@@ -1,4 +1,5 @@
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
+import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part } from '@grunt/core/types/messages.js';
 import type { Usage } from '@grunt/core/types/usage.js';
 
@@ -22,9 +23,20 @@ function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): P
 /** Everything a single message accrues from its `TurnEvent`s that isn't part of `CanonMessage` itself. */
 export interface MessageExtras {
   usage: Usage | null;
+  /**
+   * Approval requests raised by this message's OWN tool calls that have not
+   * yet been answered. An array, not a single nullable slot -- a model can
+   * request more than one tool call in a single step, and each gets its own
+   * independent request; this is also what a compare-turn's per-variant
+   * isolation actually looks like client-side, since `ApprovalRequest`s for
+   * a DIFFERENT variant live in a different message's own `extras` entry
+   * entirely (see `applyTurnEvent` in store.ts, which is already keyed by
+   * `event.messageId`).
+   */
+  pendingApprovals: ApprovalRequest[];
 }
 
-export const emptyExtras: MessageExtras = { usage: null };
+export const emptyExtras: MessageExtras = { usage: null, pendingApprovals: [] };
 
 /**
  * Folds one `TurnEvent` onto a message, mirroring exactly what
@@ -66,6 +78,13 @@ export function applyEventToMessage(
     }
     case 'status':
       return { message: { ...message, status: event.status }, extras };
+    case 'approval-request':
+      return { message, extras: { ...extras, pendingApprovals: [...extras.pendingApprovals, event.request] } };
+    case 'approval-resolved':
+      return {
+        message,
+        extras: { ...extras, pendingApprovals: extras.pendingApprovals.filter((r) => r.id !== event.requestId) },
+      };
     default:
       return { message, extras };
   }

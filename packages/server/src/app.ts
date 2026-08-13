@@ -6,6 +6,7 @@ import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
+import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
 import { mountStatic } from './static.js';
@@ -60,6 +61,13 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', turnsRoutes(container));
   authed.route('/', searchRoutes(container));
   authed.route('/usage', usageRoutes(container));
+  // toolsRoutes, like turnsRoutes, defines full paths under several
+  // different prefixes (/mcp-servers, /chats/:id/grants, /grants/:id,
+  // /chats/:id/audit, /approvals/:id/resolve) rather than one fixed one, so
+  // it also mounts at the authed app's own root. No path collisions with
+  // chatsRoutes/turnsRoutes: those own /chats, /chats/:id, /chats/:id/messages,
+  // /chats/:id/turns, /chats/:id/stream, /chats/:id/head, /messages/:id/cancel.
+  authed.route('/', toolsRoutes(container));
   app.route('/api', authed);
 
   if (options.webDistDir) {

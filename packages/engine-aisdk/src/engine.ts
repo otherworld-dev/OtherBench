@@ -111,7 +111,7 @@ export class AiSdkChatEngine implements ChatEngine {
         tools: req.profile.model?.supportsTools ?? true,
       };
       const messages = await toModelMessages(req.messages, caps, loadAttachmentUnavailable);
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId);
+      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.workspaceRoot);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -309,7 +309,13 @@ function resolveLanguageModel(handle: Extract<ProviderHandle, { kind: 'aisdk' }>
   return (handle.provider as unknown as (id: string) => LanguageModel)(modelId);
 }
 
-function buildToolSet(specs: ToolSpec[], signal: AbortSignal, chatId: string, messageId: string): ToolSet {
+function buildToolSet(
+  specs: ToolSpec[],
+  signal: AbortSignal,
+  chatId: string,
+  messageId: string,
+  workspaceRoot: string | null
+): ToolSet {
   const toolSet: ToolSet = {};
   for (const spec of specs) {
     toolSet[spec.name] = tool({
@@ -319,7 +325,7 @@ function buildToolSet(specs: ToolSpec[], signal: AbortSignal, chatId: string, me
         const ctx: ToolContext = {
           chatId,
           messageId,
-          workspaceRoot: null,
+          workspaceRoot,
           signal: opts.abortSignal ?? signal,
         };
         return spec.execute(input, ctx);

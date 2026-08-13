@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
+import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import { MockChatEngine } from '../src/mock-provider.js';
@@ -57,6 +58,7 @@ function makeRequest(prompt: string, over: Partial<EngineRequest> = {}): EngineR
     signal: new AbortController().signal,
     chatId: 'chat-1',
     messageId: 'msg-req-1',
+    workspaceRoot: null,
     ...over,
   };
 }
@@ -151,6 +153,66 @@ describe('MockChatEngine', () => {
 
       const toolCall = events.find((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>;
       expect(toolCall.args).toMatchObject({ path: expect.any(String) });
+    });
+
+    it('routes through a REAL read_file ToolSpec when one is supplied via req.tools, instead of fabricating a result', async () => {
+      const engine = new MockChatEngine({ sleep: fakeSleep() });
+      const capturedCtx: ToolContext[] = [];
+      const realReadFile: ToolSpec = {
+        name: 'read_file',
+        description: 'real',
+        parameters: {},
+        risk: 'read',
+        source: 'fs',
+        execute: async (args, ctx) => {
+          capturedCtx.push(ctx);
+          return `REAL content of ${(args as { path: string }).path}`;
+        },
+      };
+
+      const events = await drain(
+        engine.stream(makeRequest('please #tool secrets.txt', { tools: [realReadFile], workspaceRoot: '/ws', messageId: 'variant-42' }))
+      );
+
+      const toolResult = events.find((e) => e.type === 'tool-result') as Extract<EngineEvent, { type: 'tool-result' }>;
+      expect(toolResult.result).toBe('REAL content of secrets.txt');
+      expect(toolResult.isError).toBe(false);
+
+      // The ToolContext handed to the real tool is exactly what
+      // engine-aisdk's own buildToolSet would construct for a genuine
+      // model-triggered call -- same chatId/messageId/workspaceRoot the
+      // request itself carries.
+      expect(capturedCtx[0]).toMatchObject({ chatId: 'chat-1', messageId: 'variant-42', workspaceRoot: '/ws' });
+
+      const answerText = events
+        .filter((e): e is Extract<EngineEvent, { type: 'text-delta' }> => e.type === 'text-delta')
+        .map((e) => e.text)
+        .join('');
+      expect(answerText).toContain('REAL content of secrets.txt');
+    });
+
+    it('surfaces a real tool error (e.g. an approval denial) as an error answer rather than pretending it succeeded', async () => {
+      const engine = new MockChatEngine({ sleep: fakeSleep() });
+      const deniedTool: ToolSpec = {
+        name: 'read_file',
+        description: 'real',
+        parameters: {},
+        risk: 'read',
+        source: 'fs',
+        execute: async () => ({ error: true, code: 'approval_denied', message: 'The user denied this tool call.' }),
+      };
+
+      const events = await drain(engine.stream(makeRequest('#tool secret.txt', { tools: [deniedTool] })));
+
+      const toolResult = events.find((e) => e.type === 'tool-result') as Extract<EngineEvent, { type: 'tool-result' }>;
+      expect(toolResult.isError).toBe(true);
+
+      const answerText = events
+        .filter((e): e is Extract<EngineEvent, { type: 'text-delta' }> => e.type === 'text-delta')
+        .map((e) => e.text)
+        .join('');
+      expect(answerText).toContain('did not go through');
+      expect(answerText).toContain('approval_denied');
     });
   });
 

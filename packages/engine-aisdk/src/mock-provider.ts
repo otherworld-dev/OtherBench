@@ -6,6 +6,7 @@ import type {
   EngineEvent,
   EngineRequest,
 } from '@grunt/core/ports/chat-engine.js';
+import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { Usage } from '@grunt/core/types/usage.js';
@@ -117,6 +118,11 @@ function extractToolArgPath(prompt: string): string {
   return match?.[1] ?? 'example.txt';
 }
 
+/** Recognises the `{error: true, code, message}` shape every real `ToolSpec.execute()` in this codebase resolves with on failure (fs-tools.ts, shell-tool.ts, provider.ts) -- never a thrown exception, see those modules' own docs for why. */
+function isToolErrorResult(result: unknown): boolean {
+  return typeof result === 'object' && result !== null && (result as { error?: unknown }).error === true;
+}
+
 /**
  * A keyless `ChatEngine` whose behaviour is driven entirely by markers in
  * the latest user message's text, so it can be steered by hand to exercise
@@ -195,23 +201,60 @@ export class MockChatEngine implements ChatEngine {
     yield finishEvent(tokensIn, estimateTokens(text));
   }
 
+  /**
+   * Routes `#tool` through a REAL `read_file` `ToolSpec` when the caller
+   * supplied one via `req.tools` (task 26: `GruntToolProvider`'s gated
+   * output, threaded here exactly as `engine-aisdk`'s `buildToolSet` would
+   * for a real model's tool call), rather than fabricating a result --
+   * this is what lets the mock provider exercise the genuine approval flow
+   * end to end in a real browser with no API key: `PermissionBroker.decide()`,
+   * an `approval-request` event, a suspended wait (this generator simply
+   * `await`s it, exactly mirroring how a real `streamText` step pauses on a
+   * tool call), and a real (redacted, audited) result or a real denial --
+   * not a scripted stand-in for any of that.
+   *
+   * Falls back to the original fabricated result when no matching tool was
+   * supplied (`tools: []`, the default in most tests, including this
+   * file's own `#tool` tests below) -- unchanged behaviour from before this
+   * routing existed.
+   */
   private async *streamToolTurn(req: EngineRequest, prompt: string, tokensIn: number): AsyncGenerator<EngineEvent> {
     const path = extractToolArgPath(prompt);
     const callId = `mock-tool-${randomUUID()}`;
+    const args = { path };
 
     if (req.signal.aborted) return;
     await this.sleep(150, req.signal);
     if (req.signal.aborted) return;
-    yield { type: 'tool-call', id: callId, name: 'read_file', args: { path } };
+    yield { type: 'tool-call', id: callId, name: 'read_file', args };
 
-    const fileContents = `This is the mocked content of ${path}.`;
+    const realTool = req.tools.find((t) => t.name === 'read_file');
+    let resultText: string;
+    let isError = false;
+
+    if (realTool) {
+      const ctx: ToolContext = {
+        chatId: req.chatId,
+        messageId: req.messageId,
+        workspaceRoot: req.workspaceRoot,
+        signal: req.signal,
+      };
+      const result = await realTool.execute(args, ctx);
+      if (req.signal.aborted) return;
+      isError = isToolErrorResult(result);
+      resultText = typeof result === 'string' ? result : JSON.stringify(result);
+    } else {
+      resultText = `This is the mocked content of ${path}.`;
+    }
 
     if (req.signal.aborted) return;
     await this.sleep(150, req.signal);
     if (req.signal.aborted) return;
-    yield { type: 'tool-result', id: callId, name: 'read_file', result: fileContents, isError: false };
+    yield { type: 'tool-result', id: callId, name: 'read_file', result: resultText, isError };
 
-    const answer = `I read \`${path}\` and it contains: ${fileContents}`;
+    const answer = isError
+      ? `I tried to read \`${path}\` but the call did not go through: ${resultText}`
+      : `I read \`${path}\` and it contains: ${resultText}`;
     for (const chunk of splitIntoChunks(answer, 6)) {
       if (req.signal.aborted) return;
       await this.sleep(50, req.signal);

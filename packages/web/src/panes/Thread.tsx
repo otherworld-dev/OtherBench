@@ -1,5 +1,6 @@
 import { useMemo, useState, type JSX } from 'react';
 import { activePath, childrenOf, extendForward, siblingsOf } from '@grunt/core/domain/tree.js';
+import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
@@ -89,6 +90,20 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     }
   }
 
+  /**
+   * The other half of the approval round trip whose request arrives over
+   * SSE (state/store.ts's `applyTurnEvent`, folded by reducer.ts into
+   * `extras[messageId].pendingApprovals`): sends the human's choice to the
+   * server, which both records/executes it AND streams back the matching
+   * `approval-resolved` event that removes this prompt from state -- so
+   * there is nothing to do here on success beyond letting that arrive;
+   * `ApprovalPrompt` itself handles a failed request by re-enabling its
+   * buttons (this just needs to let the rejection propagate back to it).
+   */
+  async function resolveApproval(requestId: string, choice: ApprovalChoice): Promise<void> {
+    await api.approvals.resolve(requestId, choice);
+  }
+
   async function retryVariant(variant: CanonMessage): Promise<void> {
     setRetryingIds((s) => new Set(s).add(variant.id));
     // Optimistic, local-only: clears the failed attempt's parts/error so the
@@ -144,6 +159,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     onRetry={(v) => void retryVariant(v)}
                     retryingIds={retryingIds}
                     onClose={() => setReopenedParentId(null)}
+                    onResolveApproval={resolveApproval}
                   />
                 );
               }
@@ -153,6 +169,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                   message={m}
                   otherVariantsCount={siblings.length > 1 ? siblings.length - 1 : 0}
                   onReopenVariants={siblings.length > 1 ? () => setReopenedParentId(m.parentId) : undefined}
+                  pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
+                  onResolveApproval={resolveApproval}
                 />
               );
             })
@@ -168,6 +186,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               onKeep={(id) => void keepVariant(id)}
               onRetry={(v) => void retryVariant(v)}
               retryingIds={retryingIds}
+              onResolveApproval={resolveApproval}
             />
           )}
         </div>

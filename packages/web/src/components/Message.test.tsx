@@ -80,4 +80,22 @@ describe('Message', () => {
     expect(screen.getByText('Hello **world**')).toBeInTheDocument();
     expect(screen.queryByText('world')).not.toBeInTheDocument();
   });
+
+  it('renders a pending approval inline, wired to onResolveApproval, and renders none when the list is empty', () => {
+    const { rerender } = render(<Message message={base()} pendingApprovals={[]} onResolveApproval={async () => {}} />);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    const request = {
+      id: 'req-1',
+      chatId: 'c1',
+      messageId: 'm1',
+      toolName: 'write_file',
+      risk: 'mutate' as const,
+      source: 'fs' as const,
+      args: { path: 'a.txt' },
+      summary: 'write_file(a.txt)',
+    };
+    rerender(<Message message={base()} pendingApprovals={[request]} onResolveApproval={async () => {}} />);
+    expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
+  });
 });

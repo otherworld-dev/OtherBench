@@ -136,6 +136,8 @@ beforeEach(() => {
     secrets: new FakeSecretStore(),
     engine: manual.engine,
     registry: {} as never,
+    toolProvider: {} as never,
+    mcpManager: {} as never,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
     close: () => {},

@@ -1,29 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
-import type { RiskClass, ToolContext, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
 import type { ToolPolicy } from '../types/config.js';
+
+export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
 
 export type Decision =
   | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant'; grantId?: string }
   | { kind: 'deny'; reason: string }
   | { kind: 'ask'; request: ApprovalRequest };
-
-export interface ApprovalRequest {
-  id: string;
-  chatId: string;
-  messageId: string;
-  toolName: string;
-  risk: RiskClass;
-  args: unknown;
-  summary: string;
-}
-
-export type ApprovalChoice =
-  | { choice: 'deny' }
-  | { choice: 'once' }
-  | { choice: 'chat' }
-  | { choice: 'always'; constraint: Grant['constraint'] };
 
 /** What `decide()` remembers about a pending 'ask' so `resolve()` can act on it later. */
 interface PendingRequest {
@@ -101,6 +87,7 @@ export class PermissionBroker {
       messageId: ctx.messageId,
       toolName: tool.name,
       risk: tool.risk,
+      source: tool.source,
       args,
       summary: summarize(tool, args),
     };

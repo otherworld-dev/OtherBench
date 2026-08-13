@@ -1,7 +1,8 @@
 import { useEffect, useState, type JSX, type ReactNode } from 'react';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
+import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 
@@ -27,6 +28,226 @@ function EmptyState({ children }: { children: ReactNode }): JSX.Element {
 
 function formatCost(cost: number): string {
   return cost > 0 && cost < 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(2)}`;
+}
+
+/**
+ * How often the honest-state sections below (MCP health, grants, audit)
+ * re-poll -- there is no push channel for any of the three (unlike the
+ * thread itself, which is SSE-driven): MCP server status changes on its own
+ * timeline (health checks, reconnects) with nothing to notify this pane;
+ * a grant can be created as a side effect of an approval resolved from
+ * Thread.tsx, a sibling component with no direct line to this one; and the
+ * audit trail grows on every gated tool call, same story. Polling is the
+ * simple, honest choice here over wiring a second SSE channel or lifting
+ * shared state up -- "the inspector is the honest-state surface" (task 26
+ * decision #3) is about never rendering an empty state that HIDES real
+ * activity, not about sub-second live-ness.
+ */
+const POLL_INTERVAL_MS = 4000;
+
+/**
+ * Polls `fetcher` every `POLL_INTERVAL_MS`, starting immediately and
+ * restarting whenever `deps` changes (e.g. switching chats). Deliberately
+ * does NOT clear `data` back to `null` between ticks of the SAME poll loop
+ * -- only on a genuine restart -- so a routine re-poll updates numbers in
+ * place instead of flashing back to a loading state every few seconds.
+ */
+function usePolled<T>(fetcher: () => Promise<T>, deps: unknown[]): { data: T | null; failed: boolean } {
+  const [data, setData] = useState<T | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setData(null);
+    setFailed(false);
+
+    async function tick(): Promise<void> {
+      try {
+        const result = await fetcher();
+        if (!cancelled) {
+          setData(result);
+          setFailed(false);
+        }
+      } catch (err) {
+        console.error('[grunt-web] Inspector poll failed:', err);
+        if (!cancelled) setFailed(true);
+      }
+      if (!cancelled) timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+    }
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps is the caller's own explicit restart list, not derivable from `fetcher`'s identity.
+  }, deps);
+
+  return { data, failed };
+}
+
+const MCP_STATUS_COLOR: Record<McpServerHealth['status'], string> = {
+  ok: 'bg-[var(--success,#3fb950)]',
+  connecting: 'bg-[var(--accent)] animate-pulse',
+  error: 'bg-[var(--danger)]',
+  unknown: 'bg-[var(--text-faint)]',
+};
+
+function StatusDot({ status }: { status: McpServerHealth['status'] }): JSX.Element {
+  return <span data-testid="mcp-status-dot" data-status={status} className={`inline-block h-2 w-2 shrink-0 rounded-full ${MCP_STATUS_COLOR[status]}`} aria-hidden="true" />;
+}
+
+/** "MCP server health" -- every configured server (enabled or not), its live connection status, tool count, and a manual refresh action (`POST /api/mcp-servers/:id/refresh`, task 25's reconnect-with-backoff still runs on its own regardless). */
+function McpHealthSection(): JSX.Element {
+  const { data: servers, failed } = usePolled(() => api.mcpServers.list(), []);
+  const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
+
+  async function refresh(id: string): Promise<void> {
+    setRefreshingIds((s) => new Set(s).add(id));
+    try {
+      await api.mcpServers.refresh(id);
+    } catch (err) {
+      console.error(`[grunt-web] failed to refresh MCP server ${id}:`, err);
+    } finally {
+      setRefreshingIds((s) => {
+        const next = new Set(s);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  if (failed) return <EmptyState>Couldn&rsquo;t load MCP server health.</EmptyState>;
+  if (servers === null) return <EmptyState>Loading…</EmptyState>;
+  if (servers.length === 0) return <EmptyState>No MCP servers are configured.</EmptyState>;
+
+  return (
+    <div data-testid="mcp-health" className="space-y-2">
+      {servers.map((s) => (
+        <div key={s.id} data-testid={`mcp-server-${s.id}`} className="flex items-center gap-2 text-sm">
+          <StatusDot status={s.status} />
+          <span className="min-w-0 flex-1 truncate">{s.name}</span>
+          <span className="text-xs text-[var(--text-muted)]">{s.enabled ? `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}` : 'disabled'}</span>
+          <button
+            type="button"
+            aria-label={`Refresh ${s.name}`}
+            disabled={refreshingIds.has(s.id)}
+            onClick={() => void refresh(s.id)}
+            className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+          >
+            ↻
+          </button>
+        </div>
+      ))}
+      {servers.some((s) => s.status === 'error' && s.lastError) && (
+        <div className="space-y-1 pt-1">
+          {servers
+            .filter((s) => s.status === 'error' && s.lastError)
+            .map((s) => (
+              <p key={s.id} className="text-xs text-[var(--danger)]">
+                {s.name}: {s.lastError}
+              </p>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "Tool grants" -- every grant currently in effect for this chat (chat-scoped + global 'always' grants, see routes/tools.ts), each with a Revoke action that takes effect on the VERY NEXT tool call (no restart -- see PermissionBroker.decide, which reads the grant list fresh every time). */
+function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
+  const { data: grants, failed } = usePolled(() => api.grants.list(chatId), [chatId]);
+  const [revoking, setRevoking] = useState<Set<string>>(new Set());
+  const [localGrants, setLocalGrants] = useState<Grant[] | null>(null);
+
+  useEffect(() => setLocalGrants(null), [chatId]);
+  const shown = localGrants ?? grants;
+
+  async function revoke(id: string): Promise<void> {
+    setRevoking((s) => new Set(s).add(id));
+    try {
+      await api.grants.revoke(id);
+      // Optimistic removal -- the next poll would also drop it, but a
+      // Revoke button that visibly does nothing for up to POLL_INTERVAL_MS
+      // reads as broken, and decision #3 requires this to be verifiably
+      // immediate, not eventually-consistent-looking.
+      setLocalGrants((shown ?? []).filter((g) => g.id !== id));
+    } catch (err) {
+      console.error(`[grunt-web] failed to revoke grant ${id}:`, err);
+    } finally {
+      setRevoking((s) => {
+        const next = new Set(s);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  if (failed) return <EmptyState>Couldn&rsquo;t load grants for this chat.</EmptyState>;
+  if (shown === null) return <EmptyState>Loading…</EmptyState>;
+  if (shown.length === 0) return <EmptyState>No grants issued in this chat yet.</EmptyState>;
+
+  return (
+    <div data-testid="grants-list" className="space-y-2">
+      {shown.map((g) => (
+        <div key={g.id} data-testid={`grant-${g.id}`} className="flex items-center gap-2 text-sm">
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-medium">{g.toolName}</span>
+            <span className="ml-1.5 text-xs text-[var(--text-muted)]">
+              {g.scope === 'always' ? 'always' : 'this chat'}
+              {g.constraint?.pathPrefix ? ` · ${g.constraint.pathPrefix}` : ''}
+              {g.constraint?.commandPrefix ? ` · ${g.constraint.commandPrefix}` : ''}
+            </span>
+          </span>
+          <button
+            type="button"
+            aria-label={`Revoke grant for ${g.toolName}`}
+            disabled={revoking.has(g.id)}
+            onClick={() => void revoke(g.id)}
+            className="rounded border border-[var(--danger)] px-1.5 py-0.5 text-xs text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+          >
+            Revoke
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatAuditTime(createdAt: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - createdAt) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return new Date(createdAt).toLocaleTimeString();
+}
+
+/** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see GruntToolProvider), and duration. Newest first. */
+function AuditSection({ chatId }: { chatId: string }): JSX.Element {
+  const { data: entries, failed } = usePolled(() => api.audit.list(chatId), [chatId]);
+
+  if (failed) return <EmptyState>Couldn&rsquo;t load the audit trail for this chat.</EmptyState>;
+  if (entries === null) return <EmptyState>Loading…</EmptyState>;
+  if (entries.length === 0) return <EmptyState>No tool calls recorded in this chat yet.</EmptyState>;
+
+  const sorted: AuditEntry[] = [...entries].sort((a, b) => b.createdAt - a.createdAt);
+
+  return (
+    <ul data-testid="audit-trail" className="space-y-2">
+      {sorted.map((entry) => (
+        <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">{entry.toolName}</span>
+            <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
+          </div>
+          <div className="text-xs text-[var(--text-muted)]">
+            {entry.resultSummary} · {entry.grantedBy} · {entry.durationMs}ms
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /**
@@ -204,11 +425,15 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
       </Section>
 
       <Section title="Tool grants">
-        <EmptyState>No grants issued in this chat yet.</EmptyState>
+        {chat ? <GrantsSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
       <Section title="MCP server health">
-        <EmptyState>No MCP servers are configured.</EmptyState>
+        <McpHealthSection />
+      </Section>
+
+      <Section title="Audit trail">
+        {chat ? <AuditSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
       <Section title="Running session spend">

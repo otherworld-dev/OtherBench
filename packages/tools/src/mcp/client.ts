@@ -12,6 +12,9 @@ export interface McpToolDescriptor {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  /** MCP's own behaviour hints, when the server declares them -- used by `@grunt/tools`'s `provider.ts` to classify risk (e.g. `readOnlyHint` -> our 'read' RiskClass). */
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
 }
 
 export type McpStatus = 'connecting' | 'ok' | 'error';
@@ -41,8 +44,21 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function mapTools(tools: { name: string; description?: string; inputSchema: Record<string, unknown> }[]): McpToolDescriptor[] {
-  return tools.map((t) => ({ name: t.name, description: t.description ?? '', inputSchema: t.inputSchema }));
+interface RawListedTool {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
+}
+
+function mapTools(tools: RawListedTool[]): McpToolDescriptor[] {
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description ?? '',
+    inputSchema: t.inputSchema,
+    readOnlyHint: t.annotations?.readOnlyHint,
+    destructiveHint: t.annotations?.destructiveHint,
+  }));
 }
 
 /**

@@ -72,6 +72,7 @@ function makeRequest(over: Partial<EngineRequest> = {}): EngineRequest {
     signal: new AbortController().signal,
     chatId: 'chat-1',
     messageId: 'msg-req-1',
+    workspaceRoot: null,
     ...over,
   };
 }

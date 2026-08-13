@@ -1,5 +1,7 @@
 import type { JSX } from 'react';
+import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { MarkdownBody } from './MarkdownBody.js';
 
 function ReasoningBlock({ text }: { text: string }): JSX.Element {
@@ -62,6 +64,10 @@ export interface MessageProps {
    */
   otherVariantsCount?: number;
   onReopenVariants?: () => void;
+  /** Tool calls this message has made that are still waiting on a human decision (task 26). Rendered inline, right where the eventual tool-result would appear. */
+  pendingApprovals?: ApprovalRequest[];
+  /** Required whenever `pendingApprovals` is non-empty; omitted (with an empty array) everywhere a message can never have one, e.g. read-only historical views. */
+  onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
 }
 
 /**
@@ -71,7 +77,13 @@ export interface MessageProps {
  * implementation", so this component stays deliberately unaware of whether
  * it's being shown standalone, inside a tab, or inside a split column.
  */
-export function Message({ message, otherVariantsCount = 0, onReopenVariants }: MessageProps): JSX.Element {
+export function Message({
+  message,
+  otherVariantsCount = 0,
+  onReopenVariants,
+  pendingApprovals = [],
+  onResolveApproval,
+}: MessageProps): JSX.Element {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
 
@@ -98,6 +110,14 @@ export function Message({ message, otherVariantsCount = 0, onReopenVariants }: M
         {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : message.parts.map((p, i) => renderPart(p, i))}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
+
+      {pendingApprovals.length > 0 && onResolveApproval && (
+        <div className="space-y-1">
+          {pendingApprovals.map((request) => (
+            <ApprovalPrompt key={request.id} request={request} onResolve={onResolveApproval} />
+          ))}
+        </div>
+      )}
 
       {message.status === 'error' && message.error && (
         <p className="text-xs text-[var(--danger)]">{message.error.message}</p>

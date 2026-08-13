@@ -1,16 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store } from '@grunt/core/ports/store.js';
+import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { McpServerManager } from '@grunt/tools/mcp/manager.js';
+import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { StreamRegistry } from './stream/registry.js';
 
@@ -24,6 +28,10 @@ export interface Container {
   turnRunner: TurnRunner;
   /** Live/recently-completed SSE buffers, fed by `turnRunner`'s events -- see src/stream/registry.ts. */
   streamRegistry: StreamRegistry;
+  /** Assembles fs/shell/MCP tools and gates every call behind `PermissionBroker` (task 26) -- shared by `turnRunner` (via `TurnRunnerOptions.toolProvider`) and routes/tools.ts (approval resolution, MCP refresh). */
+  toolProvider: ToolProvider;
+  /** Owns live MCP server connections; `toolProvider` reads its cached tools, routes/tools.ts calls `sync()` after any write to the `mcp_server` table. */
+  mcpManager: McpServerManager;
   close(): void;
 }
 
@@ -100,7 +108,20 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 
   const registry = new ProviderRegistry();
   const engine = new AiSdkChatEngine(registry);
-  const turnRunner = new TurnRunner(store, engine);
+
+  const broker = new PermissionBroker(store);
+  const mcpManager = new McpServerManager(store, secrets);
+  const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
+  // against whatever `mcp_server` rows already exist as soon as the
+  // container is up, not lazily on the first turn that needs one --
+  // fire-and-forget so a slow/unreachable server doesn't delay server
+  // startup; its status simply stays 'connecting'/'error' until it resolves.
+  void mcpManager.sync().catch((err: unknown) => {
+    console.error('[grunt-server] initial MCP server sync failed:', err);
+  });
+
+  const turnRunner = new TurnRunner(store, engine, { toolProvider });
   const streamRegistry = new StreamRegistry(turnRunner, store);
 
   const container: Container = {
@@ -110,7 +131,18 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     registry,
     turnRunner,
     streamRegistry,
-    close: () => store.close(),
+    toolProvider,
+    mcpManager,
+    close: () => {
+      store.close();
+      // Best-effort, not awaited: `close()` is a synchronous port method
+      // used throughout the test suite without an await, and disconnecting
+      // MCP clients is cleanup, not something anything downstream of
+      // `close()` depends on having finished.
+      void toolProvider.shutdown().catch((err: unknown) => {
+        console.error('[grunt-server] error shutting down tool provider:', err);
+      });
+    },
   };
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).

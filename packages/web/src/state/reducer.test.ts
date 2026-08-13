@@ -74,6 +74,24 @@ describe('applyEventToMessage', () => {
     const { message } = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'status', status: 'complete' });
     expect(message.status).toBe('complete');
   });
+
+  it('an approval-request adds to pendingApprovals without touching parts/status', () => {
+    const request = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: { path: 'a.txt' }, summary: 'write_file(a.txt)' };
+    const { message, extras } = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request });
+    expect(extras.pendingApprovals).toEqual([request]);
+    expect(message).toEqual(baseMessage());
+  });
+
+  it('approval-resolved removes only the matching request, leaving siblings untouched', () => {
+    const reqA = { id: 'req-a', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
+    const reqB = { id: 'req-b', chatId: 'c1', messageId: 'm1', toolName: 'run_command', risk: 'execute' as const, source: 'shell' as const, args: {}, summary: 'b' };
+    let acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request: reqA });
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'approval-request', request: reqB });
+    expect(acc.extras.pendingApprovals).toHaveLength(2);
+
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'approval-resolved', requestId: 'req-a', choice: 'once' });
+    expect(acc.extras.pendingApprovals).toEqual([reqB]);
+  });
 });
 
 describe('applyHelloBuffer', () => {

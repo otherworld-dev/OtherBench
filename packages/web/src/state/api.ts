@@ -1,7 +1,9 @@
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { AuditEntry, Chat, Grant, McpServer } from '@grunt/core/ports/store.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
+import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -88,6 +90,18 @@ export interface SearchResult {
   snippet: string;
 }
 
+export interface CreateMcpServerBody {
+  name: string;
+  transport: 'stdio' | 'http';
+  command?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string | null;
+  /** Plaintext header VALUES -- the server stores each as a SecretStore ref and never echoes the value back (see routes/tools.ts). */
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
 /**
  * Thin typed wrapper over `/api/*`. Every shape here is read off the actual
  * route handlers in packages/server/src/routes/*.ts (task 19/20 brief:
@@ -147,6 +161,28 @@ export const api = {
     cancel: (messageId: string) => post<void>(`/messages/${messageId}/cancel`),
     retry: (messageId: string) => post<{ messageId: string }>(`/messages/${messageId}/retry`),
     setHead: (chatId: string, messageId: string) => post<Chat>(`/chats/${chatId}/head`, { messageId }),
+  },
+
+  mcpServers: {
+    list: () => request<McpServerHealth[]>('/mcp-servers'),
+    create: (body: CreateMcpServerBody) => post<McpServer>('/mcp-servers', body),
+    patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
+    delete: (id: string) => del(`/mcp-servers/${id}`),
+    refresh: (id: string) => post<void>(`/mcp-servers/${id}/refresh`),
+  },
+
+  grants: {
+    /** Chat-scoped grants for `chatId` PLUS every global ('always') grant -- see routes/tools.ts for why both belong in one "active for this chat" view. */
+    list: (chatId: string) => request<Grant[]>(`/chats/${chatId}/grants`),
+    revoke: (id: string) => del(`/grants/${id}`),
+  },
+
+  audit: {
+    list: (chatId: string) => request<AuditEntry[]>(`/chats/${chatId}/audit`),
+  },
+
+  approvals: {
+    resolve: (requestId: string, choice: ApprovalChoice) => post<{ resolved: boolean }>(`/approvals/${requestId}/resolve`, choice),
   },
 
   /** Not fetched via `request` -- consumed directly by `state/sse.ts` as an `EventSource` URL. */

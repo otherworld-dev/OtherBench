@@ -11,6 +11,9 @@ vi.mock('./state/api.js', () => ({
     profiles: { list: vi.fn() },
     chats: { list: vi.fn() },
     usage: { get: vi.fn() },
+    mcpServers: { list: vi.fn(), refresh: vi.fn() },
+    grants: { list: vi.fn(), revoke: vi.fn() },
+    audit: { list: vi.fn() },
   },
 }));
 
@@ -21,6 +24,9 @@ const mockedModels = vi.mocked(api.models.list);
 const mockedProfiles = vi.mocked(api.profiles.list);
 const mockedChats = vi.mocked(api.chats.list);
 const mockedUsage = vi.mocked(api.usage.get);
+const mockedMcpList = vi.mocked(api.mcpServers.list);
+const mockedGrantsList = vi.mocked(api.grants.list);
+const mockedAuditList = vi.mocked(api.audit.list);
 
 function reset(): void {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
@@ -29,6 +35,14 @@ function reset(): void {
   mockedProfiles.mockReset();
   mockedChats.mockReset();
   mockedUsage.mockReset();
+  // The Inspector's honest-state sections (task 26) mount alongside every
+  // other App view regardless of which one the test is exercising -- give
+  // them a benign default so this file's tests, which are about
+  // connections/models/profiles/chats/usage, aren't also asserting on (or
+  // spamming console.error from) MCP/grants/audit polling they don't care about.
+  mockedMcpList.mockReset().mockResolvedValue([]);
+  mockedGrantsList.mockReset().mockResolvedValue([]);
+  mockedAuditList.mockReset().mockResolvedValue([]);
 
   // jsdom doesn't implement matchMedia -- App's narrow-layout breakpoint
   // (useMediaQuery, lib/useMediaQuery.ts) needs it just to mount.

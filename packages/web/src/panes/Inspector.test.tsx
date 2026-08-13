@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
@@ -12,12 +13,28 @@ vi.mock('../state/api.js', () => ({
     usage: {
       get: vi.fn(),
     },
+    mcpServers: {
+      list: vi.fn(),
+      refresh: vi.fn(),
+    },
+    grants: {
+      list: vi.fn(),
+      revoke: vi.fn(),
+    },
+    audit: {
+      list: vi.fn(),
+    },
   },
 }));
 
 import { api } from '../state/api.js';
 
 const mockedUsageGet = vi.mocked(api.usage.get);
+const mockedMcpList = vi.mocked(api.mcpServers.list);
+const mockedMcpRefresh = vi.mocked(api.mcpServers.refresh);
+const mockedGrantsList = vi.mocked(api.grants.list);
+const mockedGrantsRevoke = vi.mocked(api.grants.revoke);
+const mockedAuditList = vi.mocked(api.audit.list);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -77,6 +94,18 @@ function makeMessage(id: string, overrides: Partial<CanonMessage> = {}): CanonMe
     ...overrides,
   };
 }
+
+// Applies to every test in this file: the three new honest-state sections
+// (MCP health, grants, audit) mount unconditionally alongside session spend,
+// so every test needs SOME resolved value for them, not just the ones that
+// specifically exercise those sections below.
+beforeEach(() => {
+  mockedMcpList.mockReset().mockResolvedValue([]);
+  mockedMcpRefresh.mockReset().mockResolvedValue(undefined);
+  mockedGrantsList.mockReset().mockResolvedValue([]);
+  mockedGrantsRevoke.mockReset().mockResolvedValue(undefined);
+  mockedAuditList.mockReset().mockResolvedValue([]);
+});
 
 describe('Inspector session spend', () => {
   beforeEach(() => {
@@ -166,5 +195,103 @@ describe('Inspector session spend', () => {
 
     rerender(<Inspector chat={makeChat({ id: 'chat-2' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     await waitFor(() => expect(mockedUsageGet).toHaveBeenCalledWith('chat-2'));
+  });
+});
+
+function mcpHealthSection(): HTMLElement {
+  return screen.getByRole('heading', { name: 'MCP server health' }).closest('section')!;
+}
+function grantsSection(): HTMLElement {
+  return screen.getByRole('heading', { name: 'Tool grants' }).closest('section')!;
+}
+function auditSection(): HTMLElement {
+  return screen.getByRole('heading', { name: 'Audit trail' }).closest('section')!;
+}
+
+describe('Inspector MCP server health', () => {
+  afterEach(cleanup);
+
+  it('shows an honest empty state when no servers are configured', async () => {
+    mockedMcpList.mockResolvedValue([]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(mcpHealthSection()).findByText('No MCP servers are configured.')).toBeInTheDocument();
+  });
+
+  it('renders each server\'s live status and tool count, and lets a manual refresh be triggered', async () => {
+    mockedMcpList.mockResolvedValue([
+      { id: 'srv-1', name: 'Filesystem MCP', transport: 'stdio', enabled: true, status: 'ok', lastError: null, toolCount: 3 },
+      { id: 'srv-2', name: 'Broken Server', transport: 'http', enabled: true, status: 'error', lastError: 'connection refused', toolCount: 0 },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const section = await within(mcpHealthSection()).findByTestId('mcp-health');
+    expect(within(section).getByText('Filesystem MCP')).toBeInTheDocument();
+    expect(within(section).getByText('3 tools')).toBeInTheDocument();
+    expect(within(section).getByText(/connection refused/)).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(mcpHealthSection()).getByRole('button', { name: 'Refresh Filesystem MCP' }));
+    expect(mockedMcpRefresh).toHaveBeenCalledWith('srv-1');
+  });
+
+  it('shows an error state, not a crash, when the health fetch fails', async () => {
+    mockedMcpList.mockRejectedValue(new Error('down'));
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(mcpHealthSection()).findByText(/couldn.t load mcp server health/i)).toBeInTheDocument();
+  });
+});
+
+describe('Inspector tool grants', () => {
+  afterEach(cleanup);
+
+  it('lists active grants for the chat and revoking one removes it immediately, without waiting for the next poll', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g1', chatId: 'chat-1', profileId: null, toolName: 'write_file', scope: 'chat', constraint: null, expiresAt: null },
+      { id: 'g2', chatId: null, profileId: null, toolName: 'run_command', scope: 'always', constraint: { commandPrefix: 'npm test' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    await within(grantsSection()).findByTestId('grant-g1');
+    expect(within(grantsSection()).getByText('write_file')).toBeInTheDocument();
+    expect(within(grantsSection()).getByText(/npm test/)).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(grantsSection()).getByRole('button', { name: 'Revoke grant for run_command' }));
+    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g2');
+    // Gone from the DOM right away -- optimistic removal, not "eventually, on the next poll".
+    expect(within(grantsSection()).queryByTestId('grant-g2')).not.toBeInTheDocument();
+    expect(within(grantsSection()).getByTestId('grant-g1')).toBeInTheDocument();
+  });
+
+  it('shows an honest empty state with no chat selected, and never calls the API', () => {
+    render(<Inspector chat={null} profile={null} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(within(grantsSection()).getByText('No chat selected.')).toBeInTheDocument();
+    expect(mockedGrantsList).not.toHaveBeenCalled();
+  });
+});
+
+describe('Inspector audit trail', () => {
+  afterEach(cleanup);
+
+  it('lists recorded tool calls, newest first, with a summary that never includes raw content', async () => {
+    mockedAuditList.mockResolvedValue([
+      { id: 'a1', chatId: 'chat-1', messageId: 'm1', toolName: 'write_file', argsRedacted: { path: 'x.txt', content: '[redacted]' }, resultSummary: 'ok (2 fields)', durationMs: 12, grantedBy: 'ask:once', createdAt: 1000 },
+      { id: 'a2', chatId: 'chat-1', messageId: 'm1', toolName: 'run_command', argsRedacted: { command: 'npm test' }, resultSummary: 'ok (5 fields)', durationMs: 4000, grantedBy: 'ask:chat', createdAt: 5000 },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    const items = within(list).getAllByRole('listitem');
+    expect(items).toHaveLength(2);
+    // Newest (createdAt: 5000) first.
+    expect(items[0]).toHaveTextContent('run_command');
+    expect(items[1]).toHaveTextContent('write_file');
+    expect(list).not.toHaveTextContent('[redacted]'); // the redaction happened server-side; this just must not defeat it by rendering raw args
+  });
+
+  it('shows an honest empty state when nothing has been audited yet', async () => {
+    mockedAuditList.mockResolvedValue([]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(auditSection()).findByText('No tool calls recorded in this chat yet.')).toBeInTheDocument();
   });
 });

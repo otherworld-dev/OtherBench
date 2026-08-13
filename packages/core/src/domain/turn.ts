@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Store } from '../ports/store.js';
+import type { ApprovalChoice, ApprovalRequest, ToolProvider } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ResolvedProfile } from '../types/config.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
@@ -12,9 +13,19 @@ import { classifyProviderError } from '../types/errors.js';
  * belongs to. `messageId` is what lets a single subscriber (the SSE
  * transport, task 17) multiplex every variant of a compare turn over one
  * channel: the caller demuxes by `messageId`, not by which `run()` call
- * produced it.
+ * produced it. `approval-request`/`approval-resolved` (task 26) are relayed
+ * here from a `ToolProvider`'s own `onApprovalEvent` -- see the constructor
+ * subscription below -- rather than originating from `ChatEngine.stream()`,
+ * since a gated tool's approval wait happens INSIDE a tool's `execute()`,
+ * underneath the engine, not as a distinct stream event the engine itself
+ * knows how to produce.
  */
-export type TurnEvent = { messageId: string } & (EngineEvent | { type: 'status'; status: MessageStatus });
+export type TurnEvent = { messageId: string } & (
+  | EngineEvent
+  | { type: 'status'; status: MessageStatus }
+  | { type: 'approval-request'; request: ApprovalRequest }
+  | { type: 'approval-resolved'; requestId: string; choice: ApprovalChoice['choice'] }
+);
 
 export interface TurnInput {
   chatId: string;
@@ -35,6 +46,20 @@ export interface TurnRunnerOptions {
   generateId?: () => string;
   /** How often (ms) a streaming variant's partial parts may be re-checkpointed to the store. */
   checkpointIntervalMs?: number;
+  /**
+   * Supplies the tools a variant's `EngineRequest.tools` is populated with
+   * (task 26). Omitted (the default) preserves the pre-task-26 behaviour of
+   * every existing test and caller that constructs a `TurnRunner` without
+   * one: `tools: []`, no approval events ever raised. When supplied,
+   * `listTools(profile.toolPolicy)` is called once per variant (so a
+   * profile's own policy -- not some global default -- governs what that
+   * variant's model may call), and this runner subscribes to its
+   * `onApprovalEvent` for the lifetime of the runner, relaying every event
+   * as a `TurnEvent` tagged with the `messageId` the underlying
+   * `ApprovalRequest` already carries (see the `ToolApprovalEvent` port
+   * type's doc for why per-variant isolation falls out of that for free).
+   */
+  toolProvider?: ToolProvider;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -77,6 +102,7 @@ export class TurnRunner {
   private readonly now: () => number;
   private readonly generateId: () => string;
   private readonly checkpointIntervalMs: number;
+  private readonly toolProvider?: ToolProvider;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
 
@@ -88,6 +114,14 @@ export class TurnRunner {
     this.now = options.now ?? Date.now;
     this.generateId = options.generateId ?? randomUUID;
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
+    this.toolProvider = options.toolProvider;
+    this.toolProvider?.onApprovalEvent((event) => {
+      if (event.type === 'request') {
+        this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
+      } else {
+        this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+      }
+    });
   }
 
   /** Subscribes to every `TurnEvent` this runner emits, across every turn/chat it drives. Returns an unsubscribe function. */
@@ -257,13 +291,23 @@ export class TurnRunner {
 
     try {
       const history = this.buildRequestMessages(userMessageId, profile);
+      const workspaceRoot = this.store.chats.get(chatId)?.workspaceRoot ?? null;
+      // Listed fresh per variant (not cached on the runner) so each variant's
+      // request reflects THIS profile's own toolPolicy, and so a grant
+      // revoked or an MCP server re-enabled between turns is picked up on
+      // the very next call rather than requiring a restart -- ToolProvider
+      // implementations are expected to keep their own MCP-connection state
+      // long-lived internally; this call is just "what does this policy
+      // currently allow", not "go reconnect everything".
+      const tools = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
       const request: EngineRequest = {
         profile,
         messages: history,
-        tools: [], // no ToolProvider wired yet -- tool policy enforcement is task 21.
+        tools,
         signal: controller.signal,
         chatId,
         messageId,
+        workspaceRoot,
       };
 
       for await (const event of this.engine.stream(request)) {
