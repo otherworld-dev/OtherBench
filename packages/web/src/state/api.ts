@@ -137,7 +137,8 @@ export interface CreateMcpServerBody {
  * reconstructed from the briefs.
  */
 export const api = {
-  health: () => request<{ status: string; time: string }>('/health'),
+  /** `platform` is the SERVER's `process.platform` (e.g. "win32"), not the browser's -- see routes/health.ts. Used to validate a chat's workspace root against the OS that will actually resolve it. */
+  health: () => request<{ status: string; time: string; platform: string }>('/health'),
 
   connections: {
     list: () => request<Connection[]>('/connections'),

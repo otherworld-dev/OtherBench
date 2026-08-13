@@ -6,11 +6,19 @@ import { Hono } from 'hono';
  * server up yet" before they necessarily have (or need) a bearer token, so
  * this route is mounted outside the auth gate in app.ts on purpose; it
  * returns nothing sensitive.
+ *
+ * `platform` (`process.platform`, e.g. `"win32"`, `"linux"`, `"darwin"`) is
+ * included so the web client can validate a chat's workspace root against
+ * the SERVER's own path convention, not the browser's -- a workspace root is
+ * a filesystem path the server resolves (`containPath`,
+ * packages/core/src/domain/paths.ts), so "is this a native absolute path"
+ * only has one correct answer, and it depends on what OS the server -- not
+ * necessarily the machine the browser happens to run on -- is running on.
  */
 export function healthRoutes(): Hono {
   const app = new Hono();
 
-  app.get('/health', (c) => c.json({ status: 'ok', time: new Date().toISOString() }));
+  app.get('/health', (c) => c.json({ status: 'ok', time: new Date().toISOString(), platform: process.platform }));
 
   return app;
 }
