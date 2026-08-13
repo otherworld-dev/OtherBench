@@ -233,8 +233,52 @@ describe('ProfilesPanel', () => {
     await user.click(screen.getByRole('button', { name: /^delete$/i }));
 
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('profile-1'));
-    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/chat built on this profile is deleted/i);
+    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/this cannot be undone/i);
     expect(screen.queryByTestId('profile-row-profile-1')).not.toBeInTheDocument();
+
+    confirmSpy.mockRestore();
+  });
+
+  // Finding 9 regression: put the real dependent-chat count in the
+  // confirmation, the same as ConnectionsPanel's delete does.
+  it('the delete confirmation states the REAL dependent chat count', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Doomed' })]);
+    useGruntStore.getState().setChats([
+      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'chat-2', title: 'B', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, createdAt: 1, updatedAt: 1 },
+      { id: 'chat-3', title: 'C', profileId: 'some-other-profile', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ]);
+    mockedDelete.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
+    // Exactly the 2 chats built on THIS profile, not the unrelated 3rd one.
+    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/2 chats/i);
+
+    confirmSpy.mockRestore();
+  });
+
+  it('the delete confirmation omits the chat clause when no chat depends on this profile', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Lonely' })]);
+    mockedDelete.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
+    expect(confirmSpy.mock.calls[0]?.[0]).not.toMatch(/chat/i);
 
     confirmSpy.mockRestore();
   });
@@ -295,6 +339,33 @@ describe('ProfilesPanel', () => {
       await waitFor(() =>
         expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'] } }))
       );
+    });
+
+    // Finding 8 regression: a failed GET /mcp-servers left the local
+    // `mcpServers` array empty forever, and the checklist keyed purely on
+    // `.length === 0` -- so a profile with a real, active allowlist was told
+    // "No MCP servers configured yet", an outright false statement on an
+    // access-control surface. The stored mcpServerIds must stay untouched
+    // either way (nothing here widens or narrows the actual policy).
+    it('shows an error state, not the "no servers configured" empty state, when the MCP server list fails to load', async () => {
+      useGruntStore.getState().setConnections([makeConnection()]);
+      useGruntStore.getState().setModels([makeModel()]);
+      useGruntStore.getState().setProfiles([
+        makeProfile({ id: 'profile-1', toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['mcp-1', 'mcp-2'], approvalMode: 'always_ask' } }),
+      ]);
+      mockedMcpList.mockRejectedValue(new Error('network down'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const user = userEvent.setup();
+
+      render(<ProfilesPanel />);
+      await user.click(screen.getByTestId('profile-row-profile-1'));
+
+      expect(await screen.findByTestId('mcp-allowlist-error')).toHaveTextContent(/couldn.?t load mcp servers/i);
+      // It must NOT claim there are no servers -- that's false; there are two, they just couldn't be fetched to display.
+      expect(screen.queryByText(/no mcp servers configured yet/i)).not.toBeInTheDocument();
+      expect(screen.queryByTestId('mcp-server-allowlist')).not.toBeInTheDocument();
+
+      consoleErrorSpy.mockRestore();
     });
 
     it('pre-checks the servers already in an existing profile\'s allowlist, and unchecking one removes it on save', async () => {

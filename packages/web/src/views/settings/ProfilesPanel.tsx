@@ -33,6 +33,8 @@ interface ProfileFormProps {
   profile: Profile | null;
   /** Every configured MCP server (enabled or not -- see the allowlist checklist below for why disabled ones stay visible), for the `toolPolicy.mcpServerIds` checklist. */
   mcpServers: McpServerHealth[];
+  /** True when `GET /mcp-servers` failed -- distinguishes "genuinely no servers configured" from "couldn't find out" so this access-control checklist never claims the latter is the former. See `ProfilesPanel`'s `mcpServersFailed` doc. */
+  mcpServersFailed: boolean;
   onSaved: (profile: Profile) => void;
   onDeleted: (id: string) => void;
   onCancel: () => void;
@@ -52,9 +54,10 @@ interface ProfileFormProps {
  * (see `resolveProfile`, packages/server/src/profile-resolution.ts), so
  * storing the row id here would silently fail to resolve a model at all.
  */
-function ProfileForm({ profile, mcpServers, onSaved, onDeleted, onCancel }: ProfileFormProps): JSX.Element {
+function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted, onCancel }: ProfileFormProps): JSX.Element {
   const connections = useGruntStore((s) => s.connections);
   const models = useGruntStore((s) => s.models);
+  const chats = useGruntStore((s) => s.chats);
 
   const [name, setName] = useState(profile?.name ?? '');
   const [description, setDescription] = useState(profile?.description ?? '');
@@ -144,7 +147,16 @@ function ProfileForm({ profile, mcpServers, onSaved, onDeleted, onCancel }: Prof
 
   async function handleDelete(): Promise<void> {
     if (!profile) return;
-    const ok = window.confirm(`Delete profile "${profile.name}"? Any chat built on this profile is deleted along with it. This cannot be undone.`);
+    // Same reasoning as ConnectionsPanel's handleDelete: the store already
+    // holds the exact dependent-chat count (removeProfile, state/store.ts),
+    // so put the real number in this one confirmation rather than adding a
+    // second step.
+    const dependentChatCount = chats.filter((c) => c.profileId === profile.id).length;
+    const consequence =
+      dependentChatCount > 0
+        ? ` This deletes ${dependentChatCount} chat${dependentChatCount === 1 ? '' : 's'} built on it (including ${dependentChatCount === 1 ? 'its' : 'their'} message history).`
+        : '';
+    const ok = window.confirm(`Delete profile "${profile.name}"?${consequence} This cannot be undone.`);
     if (!ok) return;
     setDeleting(true);
     setError(null);
@@ -358,7 +370,13 @@ function ProfileForm({ profile, mcpServers, onSaved, onDeleted, onCancel }: Prof
           This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
           having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
         </p>
-        {mcpServers.length === 0 ? (
+        {mcpServersFailed ? (
+          <p role="alert" data-testid="mcp-allowlist-error" className="text-xs text-[var(--danger)]">
+            Couldn&rsquo;t load MCP servers -- this profile&rsquo;s existing allowlist ({mcpServerIds.length} server
+            {mcpServerIds.length === 1 ? '' : 's'}) is preserved, but can&rsquo;t be shown or edited until this loads. Reload the page, or
+            check Settings &gt; MCP Servers.
+          </p>
+        ) : mcpServers.length === 0 ? (
           <p className="text-xs text-[var(--text-faint)]">No MCP servers configured yet -- add one in Settings &gt; MCP Servers.</p>
         ) : (
           <div data-testid="mcp-server-allowlist" className="space-y-1">
@@ -455,15 +473,28 @@ export function ProfilesPanel(): JSX.Element {
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerHealth[]>([]);
+  // INVARIANT: an empty `mcpServers` array must not by itself mean "no
+  // servers configured" -- that's also exactly what a failed fetch leaves
+  // behind, and this list backs an access-control checklist
+  // (toolPolicy.mcpServerIds), not a convenience filter. Tracked separately
+  // so the form can tell "genuinely none" apart from "couldn't find out"
+  // rather than letting the empty local array quietly stand in for both.
+  const [mcpServersFailed, setMcpServersFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     api.mcpServers
       .list()
       .then((servers) => {
-        if (!cancelled) setMcpServers(servers);
+        if (!cancelled) {
+          setMcpServers(servers);
+          setMcpServersFailed(false);
+        }
       })
-      .catch((err: unknown) => console.error('[grunt-web] failed to load MCP servers for the profile allowlist:', err));
+      .catch((err: unknown) => {
+        console.error('[grunt-web] failed to load MCP servers for the profile allowlist:', err);
+        if (!cancelled) setMcpServersFailed(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -512,6 +543,7 @@ export function ProfilesPanel(): JSX.Element {
             key={editingId === 'new' ? 'new' : (selected?.id ?? 'new')}
             profile={editingId === 'new' ? null : selected}
             mcpServers={mcpServers}
+            mcpServersFailed={mcpServersFailed}
             onSaved={handleSaved}
             onDeleted={handleDeleted}
             onCancel={() => setEditingId(null)}
