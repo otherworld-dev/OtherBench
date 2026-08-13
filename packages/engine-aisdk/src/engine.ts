@@ -149,11 +149,20 @@ export class AiSdkChatEngine implements ChatEngine {
   }
 
   async testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult> {
-    const handle = this.resolver.resolve(conn, apiKey);
-    if (handle.kind === 'mock') return this.mock.testConnection(conn, apiKey);
-
     const start = Date.now();
     try {
+      // `resolver.resolve()` used to run before this try block, so a
+      // synchronous throw from it (e.g. ProviderRegistry's buildProvider
+      // rejecting an `openai_compatible` connection with no baseUrl --
+      // registry.ts's ConfigError) escaped as a rejected promise instead of
+      // the `{ok: false, message}` this method exists to report, and from
+      // there surfaced as an opaque 500 at POST /api/connections/:id/test
+      // (no try/catch there either). `stream()` above already wraps its own
+      // `resolver.resolve()` call the same way, for the same reason -- this
+      // brings `testConnection` in line with it.
+      const handle = this.resolver.resolve(conn, apiKey);
+      if (handle.kind === 'mock') return await this.mock.testConnection(conn, apiKey);
+
       const models = await this.listRealModels(conn, apiKey);
       return { ok: true, message: `Connected; ${models.length} model(s) available.`, latencyMs: Date.now() - start };
     } catch (err) {

@@ -32,6 +32,26 @@ function getConnectionOrThrow(container: Container, id: string): Connection {
 }
 
 /**
+ * `openai_compatible` (unlike `ollama`, which falls back to a default local
+ * URL) has no default host to talk to -- `buildProvider`
+ * (packages/engine-aisdk/src/registry.ts) always throws `ConfigError` for
+ * one with no `baseUrl`, which made every `/test`, `/discover-models`, and
+ * real turn against such a connection fail. Rejected at creation so a new
+ * connection can't be saved into a state that can only ever fail; existing
+ * rows saved before this check existed are untouched (validation only ever
+ * runs against a write) and are still handled gracefully -- `testConnection`
+ * now classifies that same `ConfigError` into `{ok: false, message}` instead
+ * of throwing (see `AiSdkChatEngine.testConnection`).
+ */
+function requireBaseUrlIfOpenaiCompatible(kind: ConnectionKind, baseUrl: string | null | undefined): void {
+  if (kind === 'openai_compatible' && !baseUrl) {
+    throw new HTTPException(400, {
+      message: '"baseUrl" is required for an "openai_compatible" connection: it has no default host to talk to.',
+    });
+  }
+}
+
+/**
  * Maps a `classifyProviderError` kind to an HTTP status a client can act on,
  * mirroring `/test` (which already turns the same underlying failure into a
  * helpful `{ok: false, message}` instead of letting it throw). `auth` is a
@@ -115,6 +135,7 @@ export function connectionsRoutes(container: Container): Hono {
     const kind = parseKind(body.kind);
     const baseUrl = optionalNullableString(body.baseUrl, 'baseUrl');
     const extraHeaders = optionalStringHeadersRecord(body.extraHeaders, 'extraHeaders');
+    requireBaseUrlIfOpenaiCompatible(kind, baseUrl);
 
     const id = randomUUID();
     let secretRef: string | null = null;
@@ -151,6 +172,15 @@ export function connectionsRoutes(container: Container): Hono {
     if (body.kind !== undefined) patch.kind = parseKind(body.kind);
     if (body.baseUrl !== undefined) patch.baseUrl = optionalNullableString(body.baseUrl, 'baseUrl') ?? null;
     if (body.extraHeaders !== undefined) patch.extraHeaders = optionalStringHeadersRecord(body.extraHeaders, 'extraHeaders');
+
+    // Only re-validated when the patch actually touches `kind` or `baseUrl`
+    // -- a row already saved with kind: openai_compatible and no baseUrl
+    // (from before this check existed, or restored from an older backup)
+    // must stay editable for its other fields rather than being locked out
+    // until the caller also supplies a baseUrl it didn't ask to change.
+    if (patch.kind !== undefined || patch.baseUrl !== undefined) {
+      requireBaseUrlIfOpenaiCompatible(patch.kind ?? existing.kind, patch.baseUrl !== undefined ? patch.baseUrl : existing.baseUrl);
+    }
 
     if ('apiKey' in body) {
       if (body.apiKey === null) {

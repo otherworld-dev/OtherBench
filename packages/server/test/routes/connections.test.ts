@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { ConnectionTestResult, DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
 import type { Connection } from '@grunt/core/types/config.js';
+import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
+import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -235,6 +238,63 @@ describe('PATCH /api/connections/:id', () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it('rejects clearing baseUrl on an existing openai_compatible connection with 400', async () => {
+    const created = await json(
+      await app().request('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Local LLM', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8080/v1' }),
+      })
+    );
+    const res = await app().request(`/api/connections/${created['id']}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: null }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects switching kind to openai_compatible without also supplying a baseUrl', async () => {
+    const created = await json(
+      await app().request('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Was OpenAI', kind: 'openai', apiKey: 'sk-x' }),
+      })
+    );
+    const res = await app().request(`/api/connections/${created['id']}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'openai_compatible' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('does not force a legacy invalid row (openai_compatible, no baseUrl) to fix baseUrl just to rename it', async () => {
+    // Simulates a row saved before creation-time validation existed --
+    // inserted directly into the store, bypassing POST's check.
+    const id = randomUUID();
+    container.store.connections.create({
+      id,
+      name: 'Legacy Local LLM',
+      kind: 'openai_compatible',
+      baseUrl: null,
+      secretRef: null,
+      extraHeaders: {},
+      status: 'unknown',
+      statusMessage: null,
+      checkedAt: null,
+    });
+
+    const res = await app().request(`/api/connections/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed Legacy LLM' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await json(res))['name']).toBe('Renamed Legacy LLM');
+  });
 });
 
 describe('DELETE /api/connections/:id', () => {
@@ -291,6 +351,78 @@ describe('POST /api/connections/:id/test', () => {
     const res = await app().request(`/api/connections/${created['id']}/test`, { method: 'POST' });
     const raw = JSON.stringify(await res.json());
     expect(raw).not.toContain('sk-should-not-leak');
+  });
+
+  it(
+    'returns a classified, non-500 error (not a stack trace) testing an openai_compatible connection with no baseUrl -- ' +
+      'against the REAL AiSdkChatEngine/ProviderRegistry, reproducing the reported opaque-500 bug end to end',
+    async () => {
+      // FakeChatEngine (used by every other test in this file) never calls a
+      // resolver at all, so it cannot see this bug -- it only exists on the
+      // path through the real ProviderRegistry.resolve() -> buildProvider(),
+      // which throws ConfigError synchronously for an openai_compatible
+      // connection with no baseUrl (registry.ts). A row in exactly this state
+      // is inserted directly into the store rather than via POST, standing in
+      // for a connection created before any creation-time validation existed
+      // -- proving the fix protects existing rows, not just newly rejected
+      // ones.
+      const realContainer: Container = { ...container, engine: new AiSdkChatEngine(new ProviderRegistry()) };
+      const id = randomUUID();
+      container.store.connections.create({
+        id,
+        name: 'Legacy Local LLM',
+        kind: 'openai_compatible',
+        baseUrl: null,
+        secretRef: null,
+        extraHeaders: {},
+        status: 'unknown',
+        statusMessage: null,
+        checkedAt: null,
+      });
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const res = await createApp(realContainer).request(`/api/connections/${id}/test`, { method: 'POST' });
+
+      expect(res.status).not.toBe(500);
+      const body = await json(res);
+      expect(JSON.stringify(body)).not.toBe('{"error":"Internal server error."}');
+      // The generic catch-all in app.ts's onError (console.error + {error:
+      // 'Internal server error.'}) must never fire -- proves the failure was
+      // classified rather than falling through as an unhandled rejection.
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+
+      consoleErrorSpy.mockRestore();
+    }
+  );
+});
+
+describe('POST /api/connections validates openai_compatible requires a baseUrl', () => {
+  it('rejects creating an openai_compatible connection with no baseUrl with 400', async () => {
+    const res = await app().request('/api/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'No Base URL', kind: 'openai_compatible' }),
+    });
+    expect(res.status).toBe(400);
+    expect(container.store.connections.list()).toHaveLength(0);
+  });
+
+  it('still allows an openai_compatible connection when baseUrl is provided', async () => {
+    const res = await app().request('/api/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Local LLM', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:8080/v1' }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it('does not require a baseUrl for other connection kinds', async () => {
+    const res = await app().request('/api/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Local Ollama', kind: 'ollama' }),
+    });
+    expect(res.status).toBe(201);
   });
 });
 

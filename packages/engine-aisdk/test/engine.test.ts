@@ -443,6 +443,31 @@ describe('AiSdkChatEngine.listModels (real providers, injectable fetch)', () => 
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('testConnection reports ok:false instead of rejecting when resolver.resolve() throws synchronously', async () => {
+    // Mirrors what the REAL ProviderRegistry.resolve() does for an
+    // `openai_compatible` connection with no baseUrl (registry.ts's
+    // buildProvider throws ConfigError synchronously, before any network
+    // call). `stream()` already wraps `resolver.resolve()` in a try/catch;
+    // `testConnection()`'s try block used to start one line below the
+    // resolve() call, so this same failure mode escaped as a rejected
+    // promise instead of a reported {ok: false, ...} result -- which is what
+    // let it reach POST /api/connections/:id/test as an opaque 500.
+    const resolver: ProviderResolver = {
+      resolve: () => {
+        throw new Error(
+          'Connection "Local LLM" (conn-1) is kind "openai_compatible" but has no baseUrl configured.'
+        );
+      },
+    };
+    const engine = new AiSdkChatEngine(resolver);
+
+    const result = await engine.testConnection(makeConnection({ kind: 'openai_compatible', baseUrl: null }), null);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('baseUrl');
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
   it('testConnection reports ok:true when models list successfully', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'gpt-4o' }] }), { status: 200 }));
     const engine = engineWithFetch(fetchImpl as unknown as typeof fetch);
