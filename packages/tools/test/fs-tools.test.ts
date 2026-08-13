@@ -1,7 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { constants as fsConstants, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  constants as fsConstants,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
 import {
   readFileTool,
@@ -10,6 +20,7 @@ import {
   writeFileTool,
   editFileTool,
   fsTools,
+  HardLinkError,
   ToctouGuardError,
   __testing,
 } from '../src/fs-tools.js';
@@ -261,6 +272,159 @@ describe('edit_file', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Attack reproductions
+//
+// Every test below performs the real attack -- a real hard link, a real
+// directory-for-junction swap, a real concurrent racer -- rather than
+// asserting on the guard logic in isolation. Where a hook is used it is only
+// to CHOOSE WHICH WINDOW the real swap lands in; the swap itself is a genuine
+// filesystem operation. A hooked approximation is precisely what let the
+// TOCTOU defect through last time: the old test hooked the one sub-window the
+// old guard happened to cover.
+// ---------------------------------------------------------------------------
+
+const ATTACKER_MARKER = 'ATTACKER-CONTROLLED-OUTSIDE-CONTENT';
+const SECRET_MARKER = 'TOP-SECRET-OUTSIDE-DATA';
+
+/**
+ * Creates a directory junction (Windows) / symlink (POSIX) and FAILS LOUDLY
+ * if it cannot, instead of letting the caller quietly turn into a no-op test.
+ * Directory junctions need no elevation on Windows and symlinks need none on
+ * POSIX, so an inability to create one is a broken environment, not an
+ * expected condition -- and a test that silently passes when the attack it
+ * exists to reproduce could not even be set up is worse than no test.
+ */
+function makeJunctionOrThrow(target: string, linkPath: string): void {
+  try {
+    symlinkSync(target, linkPath, 'junction');
+  } catch (err) {
+    throw new Error(
+      `Could not create a directory junction at "${linkPath}" -> "${target}". This test reproduces a real ` +
+        'containment bypass and cannot be allowed to pass vacuously; fix the environment rather than skipping it. ' +
+        `Underlying error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+describe('hard links defeat path containment unless refused outright', () => {
+  // No race, no privilege, 100% reliable. `mklink /H` (Windows) and link(2)
+  // (POSIX) create a second directory entry -- inside the workspace -- for a
+  // file that lives outside it. realpath() on that entry returns the entry's
+  // own in-workspace path, because the entry IS the file, so containPath sees
+  // nothing wrong; an identity check sees a perfectly stable identity for the
+  // same reason. The model creates the link with run_command (one approval)
+  // and can then read or clobber any same-volume file the user can.
+
+  function hardLinkOutsideFileIntoWorkspace(name: string, content: string): string {
+    const target = join(outside, `${name}.txt`);
+    writeFileSync(target, content);
+    const link = join(ws, `${name}-link.txt`);
+    try {
+      linkSync(target, link);
+    } catch (err) {
+      throw new Error(
+        `Could not create a hard link at "${link}" -> "${target}". This test reproduces a real containment ` +
+          `bypass and must not pass vacuously. Underlying error: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    return target;
+  }
+
+  it('read_file refuses a hard link to an outside file instead of leaking its content', async () => {
+    hardLinkOutsideFileIntoWorkspace('secret', SECRET_MARKER);
+    const result = (await readFileTool.execute({ path: 'secret-link.txt' }, ctx())) as Record<string, unknown>;
+
+    expect(result.error).toBe(true);
+    expect(result.code).toBe('hard_link');
+    expect(JSON.stringify(result)).not.toContain(SECRET_MARKER);
+
+    // containPath is happy with it -- that is the whole point. The refusal
+    // has to come from the link count on the opened handle, nothing else.
+    await expect(__testing.openVerified(ws, 'secret-link.txt', fsConstants.O_RDONLY)).rejects.toBeInstanceOf(
+      HardLinkError
+    );
+  });
+
+  it('edit_file refuses a hard link to an outside file, leaving it untouched', async () => {
+    const target = hardLinkOutsideFileIntoWorkspace('editable', SECRET_MARKER);
+    const result = (await editFileTool.execute(
+      { path: 'editable-link.txt', oldString: SECRET_MARKER, newString: 'PWNED' },
+      ctx()
+    )) as Record<string, unknown>;
+
+    expect(result.error).toBe(true);
+    expect(result.code).toBe('hard_link');
+    expect(readFileSync(target, 'utf8')).toBe(SECRET_MARKER);
+  });
+
+  it('search_files does not grep content out of a hard-linked outside file', async () => {
+    hardLinkOutsideFileIntoWorkspace('grepped', SECRET_MARKER);
+    const result = (await searchFilesTool.execute({ query: SECRET_MARKER }, ctx())) as Record<string, unknown>;
+    expect(result.matches).toEqual([]);
+  });
+
+  it('a genuinely in-workspace file with a single link is unaffected', async () => {
+    writeFileSync(join(ws, 'ordinary.txt'), 'ordinary content');
+    const result = (await readFileTool.execute({ path: 'ordinary.txt' }, ctx())) as Record<string, unknown>;
+    expect(result.content).toBe('ordinary content');
+  });
+
+  it('the refusal is symmetric: two links INSIDE the workspace are refused too, and that is accepted', async () => {
+    // Documenting the false-positive cost honestly rather than pretending it
+    // away: the link count cannot distinguish "second name inside" from
+    // "second name outside", so legitimately hard-linked trees are refused.
+    writeFileSync(join(ws, 'orig.txt'), 'inside content');
+    linkSync(join(ws, 'orig.txt'), join(ws, 'alias.txt'));
+    const result = (await readFileTool.execute({ path: 'orig.txt' }, ctx())) as Record<string, unknown>;
+    expect(result.code).toBe('hard_link');
+  });
+});
+
+describe('write_file must not destroy the target before the guard refuses', () => {
+  it('leaves a hard-linked outside file byte-for-byte intact when it refuses', async () => {
+    // O_TRUNC truncates at open() -- before any identity comparison, before
+    // the hard-link check, before the second containment verdict. The file
+    // was therefore already zeroed by the time the guard said no. This is a
+    // deterministic reproduction: no race, the refusal is guaranteed, so the
+    // only question is whether the file survived it.
+    const target = join(outside, 'victim.txt');
+    writeFileSync(target, SECRET_MARKER);
+    linkSync(target, join(ws, 'victim-link.txt'));
+
+    const result = (await writeFileTool.execute({ path: 'victim-link.txt', content: 'PWNED' }, ctx())) as Record<
+      string,
+      unknown
+    >;
+
+    expect(result.error).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe(SECRET_MARKER);
+  });
+
+  it('leaves the target intact when the TOCTOU guard refuses a swapped path', async () => {
+    // The same property on the racy path: the refusal happens after the open
+    // (it has to -- the handle is what tells us which file we got), so the
+    // open must not itself be destructive.
+    const sub = join(ws, 'sub');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'file.txt'), 'original-inside-content');
+    writeFileSync(join(outside, 'file.txt'), ATTACKER_MARKER);
+
+    await expect(
+      __testing.openVerified(ws, 'sub/file.txt', fsConstants.O_WRONLY | fsConstants.O_CREAT, {
+        __raceHooksForTests: {
+          afterContainPath: () => {
+            rmSync(sub, { recursive: true, force: true });
+            makeJunctionOrThrow(outside, sub);
+          },
+        },
+      })
+    ).rejects.toBeInstanceOf(ToctouGuardError);
+
+    expect(readFileSync(join(outside, 'file.txt'), 'utf8')).toBe(ATTACKER_MARKER);
+  });
+});
+
 describe('TOCTOU guard (openVerified)', () => {
   it('does not false-positive on an ordinary, unraced open', async () => {
     writeFileSync(join(ws, 'a.txt'), 'hello');
@@ -268,43 +432,255 @@ describe('TOCTOU guard (openVerified)', () => {
     await handle.close();
   });
 
-  it('detects an ancestor directory swapped for a junction between the containment check and the open, and refuses', async () => {
-    // Reproduces the exact scenario the TOCTOU ruling described: a checked
-    // directory replaced by a junction between check and use, redirecting a
-    // literal in-workspace path string to a target outside the workspace.
+  /**
+   * Runs `openVerified` with a real directory-for-junction swap landing in
+   * the named window, and asserts the guard refuses. Returns nothing: any
+   * failure to actually perform the swap throws.
+   */
+  async function expectRefusalWithSwapIn(window: 'afterContainPath' | 'afterSnapshot'): Promise<void> {
     const sub = join(ws, 'sub');
     mkdirSync(sub);
     writeFileSync(join(sub, 'file.txt'), 'original-inside-content');
-    const resolvedPath = join(sub, 'file.txt');
+    writeFileSync(join(outside, 'file.txt'), ATTACKER_MARKER);
 
     let swapped = false;
-    const raceHook = () => {
+    const swap = (): void => {
       rmSync(sub, { recursive: true, force: true });
-      try {
-        symlinkSync(outside, sub, 'junction');
-      } catch {
-        return; // needs privilege on some platforms/configs -- test below no-ops if so
-      }
-      writeFileSync(join(outside, 'file.txt'), 'ATTACKER-CONTROLLED-OUTSIDE-CONTENT');
+      makeJunctionOrThrow(outside, sub);
       swapped = true;
     };
 
     const promise = __testing.openVerified(ws, 'sub/file.txt', fsConstants.O_RDONLY, {
-      __raceHookForTests: raceHook,
+      __raceHooksForTests: { [window]: swap },
     });
 
-    if (!swapped) {
-      // Could not create the junction unprivileged in this environment; the
-      // swap never happened, so the open must succeed normally instead.
-      const { handle } = await promise;
-      await handle.close();
-      return;
-    }
-
     await expect(promise).rejects.toBeInstanceOf(ToctouGuardError);
-    // The attacker's content must never have been readable through the
-    // resolved path: openVerified must have refused before returning a
-    // usable handle, not merely logged a warning.
-    void resolvedPath;
+    // Non-vacuity: the attack must actually have been carried out.
+    expect(swapped).toBe(true);
+    // And nothing must have come back that could carry the attacker's bytes.
+    await expect(promise).rejects.not.toHaveProperty('handle');
+  }
+
+  it('refuses when the swap lands AFTER containPath -- the window the previous guard silently missed', async () => {
+    // The old guard took its "before" snapshot after containPath had already
+    // finished, so a swap landing here was recorded as the "before" state and
+    // the post-open comparison compared the attacker's file to itself.
+    await expectRefusalWithSwapIn('afterContainPath');
   });
+
+  it('refuses when the swap lands between the snapshot and the open', async () => {
+    await expectRefusalWithSwapIn('afterSnapshot');
+  });
+
+  it('refuses a directory listing whose directory is swapped after containPath', async () => {
+    const sub = join(ws, 'sub');
+    mkdirSync(sub);
+    writeFileSync(join(sub, 'inside.txt'), 'inside');
+    writeFileSync(join(outside, 'attacker-only.txt'), ATTACKER_MARKER);
+
+    await expect(
+      __testing.readdirVerified(ws, 'sub', {
+        __raceHooksForTests: {
+          afterContainPath: () => {
+            rmSync(sub, { recursive: true, force: true });
+            makeJunctionOrThrow(outside, sub);
+          },
+        },
+      })
+    ).rejects.toBeInstanceOf(ToctouGuardError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unhooked reproduction: a real concurrent racer
+//
+// No hooks, no injected seams, no cooperation from the code under test. A
+// worker thread toggles `ws/sub` between a real directory and a junction
+// pointing outside the workspace as fast as it can, while the main thread
+// calls the shipped tools in a loop -- exactly the shape of attack a model
+// with `run_command` can mount from a background process during its own turn.
+//
+// Against the previous implementation this leaked: read_file returned
+// attacker-controlled content, write_file landed writes on a file outside the
+// workspace, and list_dir enumerated an outside directory on roughly 2.4% of
+// attempts. The assertions below are about OUTCOMES (did attacker bytes reach
+// the caller / did our bytes reach the attacker's file), not about which
+// internal check happened to fire.
+// ---------------------------------------------------------------------------
+
+interface RaceSetup {
+  sub: string;
+  stash: string;
+  outsideDir: string;
+}
+
+/**
+ * Writes the racer worker once per temp base and returns its path.
+ *
+ * The racer toggles `ws/sub` between a real directory and a junction that
+ * points outside the workspace, as fast as the OS will let it. It has to be
+ * resilient: the tools under test hold handles inside `sub`, and write_file
+ * recreates `sub` (mkdir -p) whenever it finds it missing, so every step can
+ * and does fail transiently. It reports what it managed to do so the test can
+ * refuse to draw conclusions from a race that never actually happened.
+ */
+function racerScript(): string {
+  const scriptPath = join(base, 'racer.cjs');
+  writeFileSync(
+    scriptPath,
+    `const { parentPort, workerData } = require('node:worker_threads');
+const { renameSync, symlinkSync, rmdirSync, rmSync, lstatSync, existsSync } = require('node:fs');
+const { sub, stash, outsideDir, until } = workerData;
+let swaps = 0;
+const errors = Object.create(null);
+function note(step, err) { const k = step + ':' + (err && err.code ? err.code : 'ERR'); errors[k] = (errors[k] || 0) + 1; }
+function lstatOrNull(p) { try { return lstatSync(p); } catch { return null; } }
+
+// Put ws/sub back to being the real directory, whatever state it is in --
+// a junction we created, or an empty directory write_file's mkdir -p made
+// while the real one was stashed.
+function normalise() {
+  // Nothing stashed => ws/sub is already the authoritative real directory.
+  if (!existsSync(stash)) return;
+  const st = lstatOrNull(sub);
+  if (st !== null && st.isSymbolicLink()) {
+    // Our own junction: rmdir removes the reparse point, never the target.
+    try { rmdirSync(sub); } catch (e) { note('unlink-junction', e); return; }
+  } else if (st !== null) {
+    // A real directory write_file recreated (mkdir -p) while the real one
+    // was stashed. Safe to delete: we just proved it is not a link.
+    try { rmSync(sub, { recursive: true, force: true }); } catch (e) { note('rm-interloper', e); return; }
+  }
+  try { renameSync(stash, sub); } catch (e) { note('restore', e); }
+}
+
+while (Date.now() < until) {
+  normalise();
+  try { renameSync(sub, stash); } catch (e) { note('stash', e); continue; }
+  try { symlinkSync(outsideDir, sub, 'junction'); } catch (e) { note('junction', e); continue; }
+  swaps++;
+  try { rmdirSync(sub); } catch (e) { note('unlink-junction', e); continue; }
+  try { renameSync(stash, sub); } catch (e) { note('restore', e); }
+}
+normalise();
+parentPort.postMessage({ swaps, errors });
+`,
+    'utf8'
+  );
+  return scriptPath;
+}
+
+interface RaceReport {
+  swaps: number;
+  errors: Record<string, number>;
+}
+
+/** Runs `attempt` in a loop while a racer toggles the tree; resolves with what the racer achieved. */
+async function underRacer(setup: RaceSetup, durationMs: number, attempt: () => Promise<void>): Promise<RaceReport> {
+  const until = Date.now() + durationMs;
+  const worker = new Worker(racerScript(), {
+    workerData: { sub: setup.sub, stash: setup.stash, outsideDir: setup.outsideDir, until },
+  });
+  const report = new Promise<RaceReport>((resolvePromise, rejectPromise) => {
+    worker.once('message', (m: RaceReport) => resolvePromise(m));
+    worker.once('error', rejectPromise);
+  });
+
+  while (Date.now() < until) {
+    await attempt();
+  }
+
+  const result = await report;
+  await worker.terminate();
+  return result;
+}
+
+const RACE_MS = 3000;
+
+describe('under a real, unhooked concurrent racer', () => {
+  let setup: RaceSetup;
+
+  beforeEach(() => {
+    setup = { sub: join(ws, 'sub'), stash: join(base, 'stash'), outsideDir: outside };
+    mkdirSync(setup.sub);
+    writeFileSync(join(setup.sub, 'inside.txt'), 'INSIDE-CONTENT');
+    writeFileSync(join(outside, 'inside.txt'), ATTACKER_MARKER);
+    writeFileSync(join(outside, 'attacker-only.txt'), ATTACKER_MARKER);
+  });
+
+  it(
+    'read_file never returns content from outside the workspace',
+    async () => {
+      let attempts = 0;
+      let leaks = 0;
+      const race = await underRacer(setup, RACE_MS, async () => {
+        attempts++;
+        const result = (await readFileTool.execute({ path: 'sub/inside.txt' }, ctx())) as Record<string, unknown>;
+        if (typeof result.content === 'string' && result.content.includes(ATTACKER_MARKER)) leaks++;
+      });
+
+      // Non-vacuity first: if the racer never landed a swap, or the loop
+      // barely ran, a zero leak count proves nothing at all.
+      expect({ ...race, attempts, leaks }).toMatchObject({ leaks: 0 });
+      expect(race.swaps).toBeGreaterThan(0);
+      expect(attempts).toBeGreaterThan(100);
+    },
+    RACE_MS + 20_000
+  );
+
+  it(
+    'write_file never lands a write on a file outside the workspace',
+    async () => {
+      let attempts = 0;
+      const payload = 'WRITTEN-BY-A-CONTAINED-TOOL';
+      const race = await underRacer(setup, RACE_MS, async () => {
+        attempts++;
+        // A millisecond of breathing room per attempt: write_file holds a
+        // handle inside `sub` and recreates it via mkdir -p, and a
+        // back-to-back loop keeps the directory busy enough that the racer
+        // cannot land a single swap (measured: 2 swaps in 1405 attempts
+        // without this, 205 in 211 with it). A model retrying in a loop is
+        // not back-to-back either.
+        await new Promise((r) => setTimeout(r, 1));
+        await writeFileTool.execute({ path: 'sub/inside.txt', content: payload }, ctx());
+      });
+
+      // The outside file must still hold the attacker's own bytes: neither
+      // overwritten with our payload, nor truncated on the way to a refusal.
+      expect({ ...race, attempts, outside: readFileSync(join(outside, 'inside.txt'), 'utf8') }).toMatchObject({
+        outside: ATTACKER_MARKER,
+      });
+      expect(race.swaps).toBeGreaterThan(0);
+      expect(attempts).toBeGreaterThan(100);
+    },
+    RACE_MS + 20_000
+  );
+
+  it(
+    'list_dir enumerates outside the workspace far less often, but this is a NARROWING and not a fix',
+    async () => {
+      // Honest assertion. list_dir holds no handle -- Node exposes no
+      // fd-based readdir -- so a swap that lands and is reverted entirely
+      // within the readdir call is undetectable, and a model that retries in
+      // a loop will eventually hit it. The previous implementation leaked on
+      // ~2.4% of attempts (977 of 39,993 in the reviewer's run). The bound
+      // below is deliberately far above zero and far below that: it is a
+      // regression fence, not a claim of safety.
+      let attempts = 0;
+      let leaks = 0;
+      const race = await underRacer(setup, RACE_MS, async () => {
+        attempts++;
+        const result = (await listDirTool.execute({ path: 'sub' }, ctx())) as Record<string, unknown>;
+        const entries = (result.entries as { name: string }[] | undefined) ?? [];
+        if (entries.some((e) => e.name === 'attacker-only.txt')) leaks++;
+      });
+
+      const rate = leaks / attempts;
+      expect({ ...race, attempts, leaks, rate }).toMatchObject({});
+      expect(race.swaps).toBeGreaterThan(0);
+      expect(attempts).toBeGreaterThan(100);
+      expect(rate).toBeLessThan(0.005);
+    },
+    RACE_MS + 20_000
+  );
 });
