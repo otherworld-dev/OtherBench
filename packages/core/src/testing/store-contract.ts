@@ -144,7 +144,7 @@ function makeMcpServer(over: Partial<McpServer> & { id: string }): McpServer {
     transport: 'stdio',
     command: 'node',
     args: [],
-    env: {},
+    envRefs: {},
     url: null,
     headerRefs: {},
     enabled: true,

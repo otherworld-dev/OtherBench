@@ -15,7 +15,7 @@ function makeRow(overrides: Partial<McpServer> = {}): McpServer {
     transport: 'stdio',
     command: process.execPath,
     args: [FIXTURE_PATH],
-    env: {},
+    envRefs: {},
     url: null,
     headerRefs: {},
     enabled: true,
@@ -109,5 +109,22 @@ describe('McpServerManager', () => {
     await expect(manager.sync()).resolves.not.toThrow();
     expect(store.mcpServers.get('srv-1')!.status).toBe('error');
     expect(manager.listFor(['srv-1'])).toHaveLength(0);
+  });
+
+  it('resolves stdio envRefs via SecretStore before spawning, and an unresolvable ref is dropped rather than failing the connection', async () => {
+    const store = new InMemoryStore();
+    const secrets = new FakeSecretStore();
+    await secrets.set('env-ref-good', 'some-value');
+    store.mcpServers.create(makeRow({ envRefs: { GOOD_VAR: 'env-ref-good', BAD_VAR: 'no-such-ref' } }));
+    const manager = new McpServerManager(store, secrets, { initialBackoffMs: 50, maxBackoffMs: 100 });
+    managers.push(manager);
+
+    await manager.sync();
+    await waitFor(() => manager.health()[0]?.status === 'ok');
+
+    // Never failed to connect even though one of the two envRefs can't
+    // resolve -- mirrors the http branch's "drop, don't fail" handling of
+    // an unresolvable headerRef.
+    expect(manager.health()[0]!.status).toBe('ok');
   });
 });

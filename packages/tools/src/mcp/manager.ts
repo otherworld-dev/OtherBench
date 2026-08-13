@@ -130,7 +130,14 @@ export class McpServerManager {
       if (!row.command) {
         throw new Error(`MCP server "${row.name}" (${row.id}) has transport "stdio" but no command configured.`);
       }
-      return { transport: 'stdio', command: row.command, args: row.args, env: row.env };
+      // `envRefs` stores SecretStore references, never the env values
+      // themselves -- same discipline as `headerRefs` below. A ref that
+      // fails to resolve is dropped from the outgoing environment rather
+      // than failing the whole connection, for the same reason the http
+      // branch drops an unresolvable header: the child process will surface
+      // its own error if that variable was actually required.
+      const env = await this.resolveSecretRefs(row.envRefs);
+      return { transport: 'stdio', command: row.command, args: row.args, env };
     }
 
     if (!row.url) {
@@ -138,16 +145,18 @@ export class McpServerManager {
     }
     // `headerRefs` stores SecretStore references, never header values
     // themselves -- the same "never plaintext in SQLite" discipline
-    // Connection.secretRef already follows (see profile-resolution.ts). A
-    // ref that fails to resolve is dropped from the outgoing headers rather
-    // than failing the whole connection; the server will surface its own
-    // auth error if that header was actually required, which is more
-    // honest than this manager guessing.
-    const headers: Record<string, string> = {};
-    for (const [headerName, ref] of Object.entries(row.headerRefs)) {
-      const value = await this.secrets.get(ref);
-      if (value !== null) headers[headerName] = value;
-    }
+    // Connection.secretRef already follows (see profile-resolution.ts).
+    const headers = await this.resolveSecretRefs(row.headerRefs);
     return { transport: 'http', url: row.url, headers };
+  }
+
+  /** Resolves a `{name: secretRef}` map (`envRefs` or `headerRefs`) to `{name: value}`, silently dropping any ref that fails to resolve (see the two call sites above for why that's the right failure mode here). */
+  private async resolveSecretRefs(refs: Record<string, string>): Promise<Record<string, string>> {
+    const resolved: Record<string, string> = {};
+    for (const [name, ref] of Object.entries(refs)) {
+      const value = await this.secrets.get(ref);
+      if (value !== null) resolved[name] = value;
+    }
+    return resolved;
   }
 }

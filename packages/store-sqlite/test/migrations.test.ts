@@ -48,6 +48,24 @@ describe('runMigrations', () => {
     }
   });
 
+  it('003 renames mcp_server.env to env_refs and resets pre-existing plaintext values to the empty default', () => {
+    // env used to hold plaintext env var values; there is no SecretStore
+    // entry for a pre-existing row's old plaintext to become a ref to, so
+    // (same precedent as 002) it is reset to the safe empty default rather
+    // than "migrated forward" as a fake ref.
+    const db = freshDb();
+    try {
+      runMigrations(db, [MIGRATIONS[0]!]);
+      db.exec(`INSERT INTO mcp_server (id, name, transport, env, header_refs)
+               VALUES ('legacy', 'Legacy Srv', 'stdio', '{"API_KEY":"plaintext-value"}', '{}')`);
+      runMigrations(db);
+      const row = db.prepare(`SELECT env_refs FROM mcp_server WHERE id = 'legacy'`).get() as { env_refs: string };
+      expect(row.env_refs).toBe('{}');
+    } finally {
+      db.close();
+    }
+  });
+
   it('creates every table the data model specifies', () => {
     const db = freshDb();
     try {

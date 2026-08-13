@@ -22,6 +22,13 @@ interface McpServerBody {
   transport?: unknown;
   command?: unknown;
   args?: unknown;
+  /**
+   * Plaintext env VAR VALUES on the wire (e.g. `{"API_KEY": "sk-..."}`).
+   * Never stored as-is: each is written to `SecretStore` and only the
+   * resulting reference is persisted in `McpServer.envRefs`, the identical
+   * treatment `headers` (below) gets -- a stdio server's environment is
+   * exactly as likely to carry a credential as an HTTP server's headers.
+   */
   env?: unknown;
   url?: unknown;
   /**
@@ -50,29 +57,46 @@ function parseStringArray(value: unknown, field: string): string[] {
   return value;
 }
 
-function parseEnv(value: unknown): Record<string, string> {
-  return optionalStringHeadersRecord(value, 'env');
-}
-
 function getMcpServerOrThrow(container: Container, id: string): McpServer {
   const row = container.store.mcpServers.get(id);
   if (!row) throw new HTTPException(404, { message: `MCP server "${id}" not found.` });
   return row;
 }
 
-/** Writes each header value to SecretStore under a fresh per-header ref and returns the resulting `headerRefs` map. Existing refs for headers no longer present are left orphaned (harmless: SecretStore has no listing/GC surface here, same accepted tradeoff Connection.secretRef already has on delete of individual headers, as opposed to the whole connection). */
-async function storeHeaderSecrets(container: Container, serverId: string, headers: Record<string, string>): Promise<Record<string, string>> {
-  const headerRefs: Record<string, string> = {};
-  for (const [headerName, value] of Object.entries(headers)) {
-    const ref = `mcp:${serverId}:${headerName}`;
+/**
+ * Writes each value in `values` to `SecretStore` under a fresh per-entry ref
+ * and returns the resulting `{name: ref}` map -- shared by `env`->`envRefs`
+ * and `headers`->`headerRefs`, distinguished only by `kind` in the ref's own
+ * name (so an env var and a header happening to share a name on the SAME
+ * server never collide on the same secret). Existing refs for entries no
+ * longer present are left orphaned (harmless: SecretStore has no
+ * listing/GC surface here, same accepted tradeoff `Connection.secretRef`
+ * already has on delete of individual headers, as opposed to the whole
+ * connection).
+ */
+async function storeMcpSecrets(
+  container: Container,
+  serverId: string,
+  kind: 'env' | 'header',
+  values: Record<string, string>
+): Promise<Record<string, string>> {
+  const refs: Record<string, string> = {};
+  for (const [name, value] of Object.entries(values)) {
+    const ref = `mcp:${serverId}:${kind}:${name}`;
     await container.secrets.set(ref, value);
-    headerRefs[headerName] = ref;
+    refs[name] = ref;
   }
-  return headerRefs;
+  return refs;
 }
 
-async function deleteHeaderSecrets(container: Container, row: McpServer): Promise<void> {
-  await Promise.all(Object.values(row.headerRefs).map((ref) => container.secrets.delete(ref)));
+/** Deletes every secret a `{name: ref}` map points at -- used per-field on PATCH (only the field actually being replaced), and via `deleteAllMcpSecrets` (both fields) on DELETE. */
+async function deleteSecretRefs(container: Container, refs: Record<string, string>): Promise<void> {
+  await Promise.all(Object.values(refs).map((ref) => container.secrets.delete(ref)));
+}
+
+async function deleteAllMcpSecrets(container: Container, row: McpServer): Promise<void> {
+  await deleteSecretRefs(container, row.envRefs);
+  await deleteSecretRefs(container, row.headerRefs);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,13 +155,23 @@ export function toolsRoutes(container: Container): Hono {
 
   app.get('/mcp-servers', (c) => c.json(container.mcpManager.health()));
 
+  // Full config for ONE server (command/args/url/enabled/transport --
+  // everything `health()` above omits because it's shaped for runtime
+  // status, not editing). Mirrors `GET /connections/:id`: returns the
+  // stored row including `envRefs`/`headerRefs` (reference ids, safe to
+  // show), never the plaintext values those refs point at -- there is no
+  // route anywhere that returns those, matching `Connection.secretRef`.
+  app.get('/mcp-servers/:id', (c) => c.json(getMcpServerOrThrow(container, c.req.param('id'))));
+
   app.post('/mcp-servers', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as McpServerBody;
     const name = requireNonEmptyString(body.name, 'name');
     const transport = parseTransport(body.transport);
+    const env = optionalStringHeadersRecord(body.env, 'env');
     const headers = optionalStringHeadersRecord(body.headers, 'headers');
     const id = randomUUID();
-    const headerRefs = await storeHeaderSecrets(container, id, headers);
+    const envRefs = transport === 'stdio' ? await storeMcpSecrets(container, id, 'env', env) : {};
+    const headerRefs = await storeMcpSecrets(container, id, 'header', headers);
 
     const created = container.store.mcpServers.create({
       id,
@@ -145,7 +179,7 @@ export function toolsRoutes(container: Container): Hono {
       transport,
       command: transport === 'stdio' ? (optionalNullableString(body.command, 'command') ?? null) : null,
       args: transport === 'stdio' ? parseStringArray(body.args, 'args') : [],
-      env: transport === 'stdio' ? parseEnv(body.env) : {},
+      envRefs,
       url: transport === 'http' ? (optionalNullableString(body.url, 'url') ?? null) : null,
       headerRefs,
       enabled: optionalBoolean(body.enabled, 'enabled', true),
@@ -166,12 +200,15 @@ export function toolsRoutes(container: Container): Hono {
     if (body.transport !== undefined) patch.transport = parseTransport(body.transport);
     if (body.command !== undefined) patch.command = optionalNullableString(body.command, 'command') ?? null;
     if (body.args !== undefined) patch.args = parseStringArray(body.args, 'args');
-    if (body.env !== undefined) patch.env = parseEnv(body.env);
     if (body.url !== undefined) patch.url = optionalNullableString(body.url, 'url') ?? null;
     if (body.enabled !== undefined) patch.enabled = optionalBoolean(body.enabled, 'enabled', existing.enabled);
+    if (body.env !== undefined) {
+      await deleteSecretRefs(container, existing.envRefs);
+      patch.envRefs = await storeMcpSecrets(container, id, 'env', optionalStringHeadersRecord(body.env, 'env'));
+    }
     if (body.headers !== undefined) {
-      await deleteHeaderSecrets(container, existing);
-      patch.headerRefs = await storeHeaderSecrets(container, id, optionalStringHeadersRecord(body.headers, 'headers'));
+      await deleteSecretRefs(container, existing.headerRefs);
+      patch.headerRefs = await storeMcpSecrets(container, id, 'header', optionalStringHeadersRecord(body.headers, 'headers'));
     }
 
     const updated = container.store.mcpServers.update(id, patch);
@@ -182,7 +219,7 @@ export function toolsRoutes(container: Container): Hono {
   app.delete('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
     const existing = getMcpServerOrThrow(container, id);
-    await deleteHeaderSecrets(container, existing);
+    await deleteAllMcpSecrets(container, existing);
     container.store.mcpServers.delete(id);
     await container.mcpManager.sync();
     return c.body(null, 204);

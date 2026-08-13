@@ -5,14 +5,14 @@ import { fromBool, fromJson, fromJsonNullable, toBool, toJson, toJsonNullable } 
 
 const mapping: CrudMapping<McpServer> = {
   table: 'mcp_server',
-  columns: ['id', 'name', 'transport', 'command', 'args', 'env', 'url', 'header_refs', 'enabled', 'status', 'tools_cache'],
+  columns: ['id', 'name', 'transport', 'command', 'args', 'env_refs', 'url', 'header_refs', 'enabled', 'status', 'tools_cache'],
   toRow: (s) => [
     s.id,
     s.name,
     s.transport,
     s.command,
     toJson(s.args),
-    toJson(s.env),
+    toJson(s.envRefs),
     s.url,
     toJson(s.headerRefs),
     toBool(s.enabled),
@@ -25,7 +25,7 @@ const mapping: CrudMapping<McpServer> = {
     transport: row.transport as McpServer['transport'],
     command: row.command as string | null,
     args: fromJson<string[]>(row.args as string),
-    env: fromJson<Record<string, string>>(row.env as string),
+    envRefs: fromJson<Record<string, string>>(row.env_refs as string),
     url: row.url as string | null,
     headerRefs: fromJson<Record<string, string>>(row.header_refs as string),
     enabled: fromBool(row.enabled as number),

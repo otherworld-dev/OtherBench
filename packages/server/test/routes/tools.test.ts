@@ -60,7 +60,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
 }
 
 describe('MCP server routes', () => {
-  it('creates a server (storing header values as secrets, never plaintext), lists it, and connects it for real', async () => {
+  it('creates a server (storing header AND env values as secrets, never plaintext), lists it, and connects it for real', async () => {
     const res = await app().request('/api/mcp-servers', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -69,14 +69,16 @@ describe('MCP server routes', () => {
         transport: 'stdio',
         command: process.execPath,
         args: [FIXTURE_PATH],
-        headers: { 'X-Test': 'super-secret-value' },
+        env: { API_KEY: 'super-secret-env-value' },
+        headers: { 'X-Test': 'super-secret-header-value' },
       }),
     });
     expect(res.status).toBe(201);
-    const created = (await res.json()) as { id: string; headerRefs: Record<string, string> };
-    // headers is meaningless for a stdio server, so nothing is stored -- and
-    // regardless, the raw value must never appear in the response body.
-    expect(JSON.stringify(created)).not.toContain('super-secret-value');
+    const created = (await res.json()) as { id: string; envRefs: Record<string, string>; headerRefs: Record<string, string> };
+    // Neither raw value may ever appear in the response body -- only refs.
+    expect(JSON.stringify(created)).not.toContain('super-secret-env-value');
+    expect(JSON.stringify(created)).not.toContain('super-secret-header-value');
+    expect(await secrets.get(created.envRefs['API_KEY']!)).toBe('super-secret-env-value');
 
     const listRes = await app().request('/api/mcp-servers');
     const health = (await listRes.json()) as { id: string; status: string }[];
@@ -99,6 +101,59 @@ describe('MCP server routes', () => {
     expect(Object.keys(created.headerRefs)).toEqual(['Authorization']);
     expect(created.headerRefs['Authorization']).not.toBe('Bearer sekret'); // it's a REF, not the value
     expect(await secrets.get(created.headerRefs['Authorization']!)).toBe('Bearer sekret');
+  });
+
+  it('stores stdio ENV VALUES as SecretStore refs, not plaintext, and a PATCH replacing env updates the value and drops refs for removed keys', async () => {
+    const res = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Env Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { TOKEN: 'first-secret' } }),
+    });
+    const created = (await res.json()) as { id: string; envRefs: Record<string, string> };
+    expect(Object.keys(created.envRefs)).toEqual(['TOKEN']);
+    expect(created.envRefs['TOKEN']).not.toBe('first-secret');
+    const tokenRef = created.envRefs['TOKEN']!;
+    expect(await secrets.get(tokenRef)).toBe('first-secret');
+
+    // Replace TOKEN's value -- the ref is deterministic (same server + same
+    // var name), so it's reused, but the secret it points at is updated.
+    const patchRes = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ env: { TOKEN: 'second-secret' } }),
+    });
+    const updated = (await patchRes.json()) as { envRefs: Record<string, string> };
+    expect(await secrets.get(updated.envRefs['TOKEN']!)).toBe('second-secret');
+
+    // Now drop TOKEN entirely (a different var name) -- its old ref must no
+    // longer resolve, not be left dangling.
+    const secondPatchRes = await app().request(`/api/mcp-servers/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ env: { OTHER_VAR: 'third-secret' } }),
+    });
+    const secondUpdate = (await secondPatchRes.json()) as { envRefs: Record<string, string> };
+    expect(Object.keys(secondUpdate.envRefs)).toEqual(['OTHER_VAR']);
+    expect(await secrets.get(tokenRef)).toBeNull();
+  });
+
+  it('GET /mcp-servers/:id returns the full stored config (refs, not plaintext), 404s for an unknown id', async () => {
+    const createRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Srv', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { A: 'secretval' } }),
+    });
+    const created = (await createRes.json()) as { id: string };
+
+    const getRes = await app().request(`/api/mcp-servers/${created.id}`);
+    expect(getRes.status).toBe(200);
+    const fetched = (await getRes.json()) as { id: string; command: string; envRefs: Record<string, string> };
+    expect(fetched.id).toBe(created.id);
+    expect(fetched.command).toBe(process.execPath);
+    expect(JSON.stringify(fetched)).not.toContain('secretval');
+
+    const missing = await app().request('/api/mcp-servers/does-not-exist');
+    expect(missing.status).toBe(404);
   });
 
   it('updates and deletes a server, re-syncing after each write', async () => {
@@ -131,7 +186,7 @@ describe('MCP server routes', () => {
       transport: 'stdio',
       command: process.execPath,
       args: [FIXTURE_PATH],
-      env: {},
+      envRefs: {},
       url: null,
       headerRefs: {},
       enabled: true,
