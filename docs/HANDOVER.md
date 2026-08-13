@@ -2,10 +2,11 @@
 
 This replaces an earlier handover written when the project was two
 milestones in ("there is no runnable app yet"). That is no longer true. This
-version reflects the state at the end of Task 31, branch `feat/grunt-v1`,
-HEAD around commit `eba8f61` plus this doc's own commit.
+version reflects the state at the end of Task 31 plus two post-31 security
+fixes (commits `6839cb1`, `020051e` — see Security posture below), branch
+`feat/grunt-v1`.
 
-**Status:** 721 unit/integration tests pass, 9/9 Playwright e2e specs pass,
+**Status:** 730 unit/integration tests pass, 9/9 Playwright e2e specs pass,
 `npm run typecheck` and `npm run build` are clean. `README.md` has a
 verified install → build → run → mock-provider walkthrough — follow that
 first if you just want to see it work.
@@ -22,7 +23,7 @@ across 8 milestones. Honest status of each:
 | M2 | T11–15 | Provider registry, message conversion, mock provider, AI-SDK `ChatEngine`, connections/models/profiles REST API | Done |
 | M3 | T16–18 | `TurnRunner`, SSE stream registry, chats API + FTS5 search | Done — this is the milestone the earlier handover called "the first genuinely usable point," and it now is one |
 | M4 | T19–20 | App shell/state/SSE client, `Thread`/`Message`/`Composer` | Done |
-| M5 | T21 | Attachment storage + capability fallback (a vision-less model gets a degradation notice, not a silent drop) | Done, with known gaps below |
+| M5 | T21 | Attachment storage + capability fallback (a vision-less model gets a degradation notice, not a silent drop) | Done, with known gaps below. A stored-XSS hole in the content-serving route (found post-31) is fixed — see Security posture |
 | M6 | T22–26 | Permission broker, filesystem tools, shell tool, MCP client, `ToolProvider` assembly + approval UI + Inspector | Done. This milestone got a dedicated adversarial security re-review that found real, working exploits (see Security posture below) — all closed or explicitly narrowed, not swept under a "TODO" |
 | M7 | T27–28 | Compare fan-out + variant UI (tabs, Split view, Keep), usage/cost reporting | Done |
 | M8 | T29–31 | Tauri desktop shell, packaging, e2e smoke + this handover | **T29 and T30 are not built at all.** T31 (this task) is done: one consolidated Playwright smoke test plus README/HANDOVER |
@@ -121,26 +122,68 @@ reach both:
   both are documented in-module rather than only here, and the in-module
   version is the one that will stay in sync with the code.
 
-**Shell grant defaults — a controller ruling that the shipped UI does not
-follow.** During the T22–24 security re-review, an `always`-scope shell
-grant using `commandPrefix` (matching a command *and any arguments after
-it*) was flagged as, for most real programs, equivalent to an arbitrary-code-
-execution grant: `npm test --node-options=--require=/tmp/evil.js`, `git -c
+**Shell grant defaults — the shipped UI now follows the controller ruling.**
+During the T22–24 security re-review, an `always`-scope shell grant using
+`commandPrefix` (matching a command *and any arguments after it*) was
+flagged as, for most real programs, equivalent to an arbitrary-code-execution
+grant: `npm test --node-options=--require=/tmp/evil.js`, `git -c
 core.pager=/tmp/evil.sh log`, `docker run -v /:/host alpine cat
 /host/etc/shadow`. The ruling (`.superpowers/sdd/2026-08-12-grunt-v1/progress.md`):
 *"shell grants DEFAULT TO EXACT COMMAND. `commandPrefix` remains available
 but must be an explicit opt-in with a visible warning, never the default
-offered by the UI."* The broker-level half of this is solid — a `chat`-scope
-grant is hardcoded to `commandExact` server-side, no UI path can make it a
-prefix grant. **The UI's "Always allow" button does not follow the ruling
-for `always`-scope grants**: `ApprovalPrompt.tsx`'s `deriveAlwaysConstraint`
-unconditionally builds `{ commandPrefix: request.args.command }` for a shell
-request, with no separate exact-command option and no warning shown. This
-reads like the ruling wasn't carried into the later UI task rather than a
-knowing reversal of it — either way, it's a real, live gap. **Top follow-up
-if you pick this back up:** make "Always allow" default to `commandExact`
-for shell, and offer `commandPrefix` only as an explicit, visibly-labelled
-second choice.
+offered by the UI."* The broker-level half of this was always solid — a
+`chat`-scope grant is hardcoded to `commandExact` server-side, no UI path can
+make it a prefix grant. The UI's "Always allow" button initially did not
+follow the ruling for `always`-scope grants: `ApprovalPrompt.tsx`'s
+`deriveAlwaysConstraint` unconditionally built `{ commandPrefix:
+request.args.command }` for a shell request, with no separate exact-command
+option and no warning shown. **Fixed**: `deriveAlwaysConstraint` now takes an
+explicit `allowAnyArgs` flag and defaults `false`, so a plain click on
+"Always allow" for a shell request produces `commandExact`. `commandPrefix`
+is still reachable, but only via a secondary, unchecked-by-default checkbox
+("Let 'Always allow' permit this program with any arguments, instead of only
+this exact command") that, once checked, surfaces a plain-language warning
+with concrete arg-injection examples before the click is made. Covered by a
+test asserting the default grant shape is `commandExact`, not
+`commandPrefix`. `Inspector.tsx`'s grant list was also fixed to display a
+`commandExact` grant's pinned command — it previously only rendered
+`constraint.commandPrefix`, so the grants this default now produces would
+have shown no command at all.
+
+**Attachment serving — hardened against a stored-XSS-to-RCE path.**
+`GET /api/attachments/:id/content` (`packages/server/src/routes/
+attachments.ts`) used to serve the STORED (attacker-uploaded) MIME type
+verbatim as `Content-Type`, with an unconditional `Content-Disposition:
+inline`. Uploading an `.html` or `.svg` file and fetching it back executed
+attacker script in this app's own origin — and that origin also hosts the
+API that runs shell commands and holds the bearer token, so this was not "an
+alert box in a sandboxed viewer" but a real path from "uploaded a file" to
+"ran a command on the machine". **Fixed**: `Content-Type` is now only ever a
+literal from a strict allowlist of inert raster image types
+(`INLINE_SAFE_MIME_TYPES` — png/jpeg/gif/webp/bmp/ico/avif), or
+`application/octet-stream`, never the stored value; `image/svg+xml` is
+deliberately excluded from that allowlist (SVG is XML and can carry
+`<script>`, unlike a raster image); `Content-Disposition` defaults to
+`attachment` and is `inline` only for that same allowlist;
+`X-Content-Type-Options: nosniff` and a restrictive
+`Content-Security-Policy: default-src 'none'; sandbox` were added as
+defence in depth. The filename (also attacker-controlled) now goes through
+a `contentDisposition()` helper that strips control characters, neutralises
+`"`/`\` in the legacy quoted `filename="..."` fallback, and carries the
+exact original name via RFC 5987 `filename*=UTF-8''...` — closing a gap the
+old filename sanitiser left open (it stripped CR/LF/`"` but not backslash,
+so a trailing `\` could escape the closing quote). On the client,
+`packages/web`'s image-preview gate (`Composer.tsx`/`Message.tsx` via
+`AttachmentChip`) moved from a bare `mime.startsWith('image/')` check to
+`api.attachments.previewable(mime)`, a matching raster-only allowlist — an
+SVG attachment now shows its generic file icon instead of a broken `<img>`
+pointed at what is now a forced download. PNG/JPEG/GIF/WEBP/BMP/ICO/AVIF
+keep rendering inline exactly as before (verified via the attachments
+Playwright e2e spec). Covered by tests asserting: an uploaded `.html` never
+comes back inline as `text/html`, an uploaded `.svg` never comes back inline
+as `image/svg+xml`, a PNG still serves inline with its real type, a filename
+containing CR/LF/quotes/a trailing backslash cannot inject or malform the
+response headers, and a non-ASCII filename round-trips via `filename*`.
 
 ## Encryption at rest
 
@@ -224,7 +267,10 @@ All deliberate, all recorded at the time in the plan's Global Constraints:
 ## If you're picking this back up
 
 The natural next steps, roughly in order of value:
-1. Fix the shell "Always allow" default (see Security posture above) — small, well-scoped, and the only place the shipped code visibly disagrees with a recorded security ruling.
-2. Task 29/30 (Tauri shell + packaging) if a desktop app is still wanted, or drop them from the plan and call `grunt serve` + browser the intended shape.
-3. A Settings UI for connections/profiles/MCP servers — everything currently requires hand-written `curl`, which is fine for evaluation and bad for real use.
-4. Attachment deletion / blob GC, before blob storage in any long-running instance grows unboundedly.
+1. Task 29/30 (Tauri shell + packaging) if a desktop app is still wanted, or drop them from the plan and call `grunt serve` + browser the intended shape.
+2. A Settings UI for connections/profiles/MCP servers — everything currently requires hand-written `curl`, which is fine for evaluation and bad for real use.
+3. Attachment deletion / blob GC, before blob storage in any long-running instance grows unboundedly.
+
+(The shell "Always allow" default and the attachment-serving stored-XSS hole
+that were previously the top two follow-ups here are both fixed — see
+Security posture above.)
