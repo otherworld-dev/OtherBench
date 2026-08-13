@@ -1,32 +1,45 @@
 import { useMemo, useState, type JSX } from 'react';
-import { activePath, siblingsOf } from '@grunt/core/domain/tree.js';
+import { activePath, childrenOf, extendForward, siblingsOf } from '@grunt/core/domain/tree.js';
 import type { Chat } from '@grunt/core/ports/store.js';
+import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
 import { Message } from '../components/Message.js';
+import { VariantTabs } from '../components/VariantTabs.js';
 import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 
 /**
- * Centre pane: the active branch (head -> root) plus the composer.
- * `siblingsOf` runs for every message on the path, so a compare turn
- * anywhere in history renders its variant count without throwing --
- * switching which variant is active is only wired for the tail message
- * (the current leaf), where "move `head` to this sibling" is unambiguous;
- * an interior sibling's own subtree is a task 27 concern (see Message.tsx's
- * doc comment on the seam this leaves).
+ * Centre pane: the active branch (head -> root), extended forward through
+ * any run of single-child replies, plus the composer. An unresolved compare
+ * turn (more than one child at the effective tail, none kept yet) renders as
+ * an open `VariantTabs` strip right where the reply would otherwise go; a
+ * RESOLVED compare turn (one sibling already kept, task 27's "Keep this
+ * one") renders as an ordinary message with a "⤺ N other variants" chip that
+ * reopens the same tab strip in place, letting the user pick a different
+ * variant without losing the others -- they're never deleted, only unselected.
  *
  * `messages` in the store is a flat, cross-chat pool (every message loaded
  * or streamed into this session, never scoped or evicted per chat -- see
- * store.ts). `siblingsOf` groups purely by `parentId`, and every chat's
- * first message has `parentId: null` -- so feeding it the WHOLE pool would
- * treat unrelated chats' root messages as compare variants of each other.
- * Scoping to this chat's own messages before any tree computation is what
- * keeps `activePath`/`siblingsOf` chat-local (task 19/20 CRITICAL fix).
+ * store.ts). `siblingsOf`/`childrenOf`/`extendForward` all group purely by
+ * `parentId`, and every chat's first message has `parentId: null` -- so
+ * feeding any of them the WHOLE pool would treat unrelated chats' root
+ * messages as compare variants of each other. Scoping to this chat's own
+ * messages before any tree computation is what keeps them chat-local (task
+ * 19/20 CRITICAL fix) -- every tree call below runs against `chatMessages`,
+ * never the raw `messages` map.
  */
 export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const messages = useGruntStore((s) => s.messages);
+  const extras = useGruntStore((s) => s.extras);
+  const models = useGruntStore((s) => s.models);
   const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
+  const resetMessageForRetry = useGruntStore((s) => s.resetMessageForRetry);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  // Which turn's tab strip has been manually reopened from its "⤺ N other
+  // variants" chip, identified by the shared `parentId` of its sibling set
+  // (there is at most one shared parent per turn, so this alone disambiguates).
+  const [reopenedParentId, setReopenedParentId] = useState<string | null>(null);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
 
   const chatId = chat?.id ?? null;
   const chatMessages = useMemo(
@@ -42,6 +55,15 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     }
   }, [chat?.headMessageId, chatMessages]);
 
+  const displayPath = useMemo(() => {
+    if (path.length === 0) return [];
+    const tail = path[path.length - 1]!;
+    return [...path, ...extendForward(chatMessages, tail.id)];
+  }, [path, chatMessages]);
+
+  const tailId = displayPath.at(-1)?.id ?? null;
+  const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
+
   if (!chat) {
     return (
       <main className="flex h-full w-full flex-1 items-center justify-center text-sm text-[var(--text-faint)]">
@@ -50,19 +72,40 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     );
   }
 
-  async function switchSibling(siblingId: string): Promise<void> {
+  async function keepVariant(messageId: string): Promise<void> {
     const previousHeadId = chat!.headMessageId;
     setSwitchError(null);
-    setHeadMessageId(chat!.id, siblingId);
+    setHeadMessageId(chat!.id, messageId);
+    setReopenedParentId(null); // collapses the tab strip back automatically
     try {
-      await api.turns.setHead(chat!.id, siblingId);
+      await api.turns.setHead(chat!.id, messageId);
     } catch (err) {
-      console.error('[grunt-web] failed to persist head after switching variant:', err);
+      console.error('[grunt-web] failed to keep variant:', err);
       // The server refused the switch (e.g. a stale/cross-chat id) -- don't
       // leave the client rendering a state the server never accepted. Roll
       // the optimistic update back and say so, rather than only logging it.
       if (previousHeadId) setHeadMessageId(chat!.id, previousHeadId);
-      setSwitchError("Couldn't switch to that variant -- the server rejected the change, so it was reverted. Please try again.");
+      setSwitchError("Couldn't keep that variant -- the server rejected the change, so it was reverted. Please try again.");
+    }
+  }
+
+  async function retryVariant(variant: CanonMessage): Promise<void> {
+    setRetryingIds((s) => new Set(s).add(variant.id));
+    // Optimistic, local-only: clears the failed attempt's parts/error so the
+    // retried stream's deltas build on a clean slate rather than appending
+    // onto stale content -- mirrors what the server does to the same row
+    // (TurnRunner.retry).
+    resetMessageForRetry(variant.id);
+    try {
+      await api.turns.retry(variant.id);
+    } catch (err) {
+      console.error(`[grunt-web] failed to retry ${variant.id}:`, err);
+    } finally {
+      setRetryingIds((s) => {
+        const next = new Set(s);
+        next.delete(variant.id);
+        return next;
+      });
     }
   }
 
@@ -78,29 +121,54 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       )}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
-          {path.length === 0 ? (
+          {displayPath.length === 0 ? (
             <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
           ) : (
-            path.map((m, i) => {
+            displayPath.map((m) => {
               let siblings = [m];
               try {
                 siblings = siblingsOf(chatMessages, m.id);
               } catch {
-                // m not found in chatMessages (shouldn't happen -- it came from activePath over the same set) -- fall back to "no siblings".
+                // m not found in chatMessages (shouldn't happen -- it came from the same set) -- fall back to "no siblings".
               }
-              const siblingIndex = Math.max(0, siblings.findIndex((s) => s.id === m.id));
-              const isTail = i === path.length - 1;
+              const isReopened = siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
+              if (isReopened) {
+                return (
+                  <VariantTabs
+                    key={`turn-${m.parentId}`}
+                    variants={siblings}
+                    extras={extras}
+                    models={models}
+                    keptId={m.id}
+                    onKeep={(id) => void keepVariant(id)}
+                    onRetry={(v) => void retryVariant(v)}
+                    retryingIds={retryingIds}
+                    onClose={() => setReopenedParentId(null)}
+                  />
+                );
+              }
               return (
                 <Message
                   key={m.id}
                   message={m}
-                  siblingCount={siblings.length}
-                  siblingIndex={siblingIndex}
-                  onPrevSibling={isTail && siblingIndex > 0 ? () => void switchSibling(siblings[siblingIndex - 1]!.id) : undefined}
-                  onNextSibling={isTail && siblingIndex < siblings.length - 1 ? () => void switchSibling(siblings[siblingIndex + 1]!.id) : undefined}
+                  otherVariantsCount={siblings.length > 1 ? siblings.length - 1 : 0}
+                  onReopenVariants={siblings.length > 1 ? () => setReopenedParentId(m.parentId) : undefined}
                 />
               );
             })
+          )}
+
+          {openVariants.length > 1 && (
+            <VariantTabs
+              key={`turn-open-${tailId}`}
+              variants={openVariants}
+              extras={extras}
+              models={models}
+              keptId={null}
+              onKeep={(id) => void keepVariant(id)}
+              onRetry={(v) => void retryVariant(v)}
+              retryingIds={retryingIds}
+            />
           )}
         </div>
       </div>

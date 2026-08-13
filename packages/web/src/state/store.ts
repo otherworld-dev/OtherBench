@@ -83,6 +83,19 @@ export interface GruntState {
    */
   applyHello(buffers: HelloBuffer[]): void;
 
+  /**
+   * Optimistically resets a message right before a retry request goes out
+   * (task 27: per-tab Retry on a failed compare variant) -- clears its
+   * parts/error, sets status back to 'streaming', and drops any accrued
+   * usage extras. Mirrors what `TurnRunner.retry` does server-side to the
+   * same message id: without this, deltas from the retried attempt would
+   * append onto the failed attempt's stale parts (and its error would keep
+   * showing) instead of starting clean, since `applyEventToMessage`'s
+   * text-delta case always appends onto whatever is already there. A no-op
+   * if the message isn't known locally.
+   */
+  resetMessageForRetry(messageId: string): void;
+
   // --- UI ---------------------------------------------------------------------
   inspectorCollapsed: boolean;
   setInspectorCollapsed(collapsed: boolean): void;
@@ -185,6 +198,16 @@ export const useGruntStore = create<GruntState>()((set) => ({
       }
 
       return { messages, extras, pendingEvents };
+    }),
+
+  resetMessageForRetry: (messageId) =>
+    set((state) => {
+      const existing = state.messages[messageId];
+      if (!existing) return state;
+      return {
+        messages: { ...state.messages, [messageId]: { ...existing, parts: [], status: 'streaming', error: null } },
+        extras: { ...state.extras, [messageId]: emptyExtras },
+      };
     }),
 
   inspectorCollapsed: false,

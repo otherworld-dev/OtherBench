@@ -75,6 +75,34 @@ export function turnsRoutes(container: Container): Hono {
     return c.body(null, 204);
   });
 
+  // Task 27: per-tab "Retry" on a failed compare variant. Re-runs the SAME
+  // message row in place (TurnRunner.retry) rather than posting a new turn,
+  // so the retried reply stays the same tab/sibling instead of spawning a
+  // duplicate user message. Fire-and-forget, same shape as POST .../turns:
+  // the 202 response confirms the retry was accepted, not that it finished.
+  app.post('/messages/:id/retry', async (c) => {
+    const messageId = c.req.param('id');
+    const message = container.store.messages.get(messageId);
+    if (!message) throw new HTTPException(404, { message: `Message "${messageId}" not found.` });
+    if (message.role !== 'assistant' || !message.producedBy) {
+      throw new HTTPException(400, { message: `Message "${messageId}" is not a retryable assistant variant.` });
+    }
+    if (message.status === 'streaming') {
+      throw new HTTPException(409, { message: `Message "${messageId}" is already streaming.` });
+    }
+
+    const profile = await resolveProfile(container, message.producedBy.profileId);
+    // Reset the SSE buffer *before* kicking off the retry -- same
+    // before-any-event-can-arrive ordering `registerTurn` relies on for a
+    // fresh turn (see StreamRegistry.resetBuffer's doc).
+    container.streamRegistry.resetBuffer(message.chatId, messageId);
+    void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
+      console.error(`[grunt-server] retry ${messageId} failed outside its own error handling:`, err);
+    });
+
+    return c.json({ messageId }, 202);
+  });
+
   app.post('/chats/:id/head', async (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);

@@ -135,6 +135,7 @@ export const api = {
   turns: {
     create: (chatId: string, body: CreateTurnBody) => post<TurnResult>(`/chats/${chatId}/turns`, body),
     cancel: (messageId: string) => post<void>(`/messages/${messageId}/cancel`),
+    retry: (messageId: string) => post<{ messageId: string }>(`/messages/${messageId}/retry`),
     setHead: (chatId: string, messageId: string) => post<Chat>(`/chats/${chatId}/head`, { messageId }),
   },
 

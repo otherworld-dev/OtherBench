@@ -53,22 +53,25 @@ function renderPart(part: Part, key: number): JSX.Element | null {
 
 export interface MessageProps {
   message: CanonMessage;
-  /** > 1 when this message belongs to a compare turn's sibling set. */
-  siblingCount: number;
-  siblingIndex: number;
-  onPrevSibling?: () => void;
-  onNextSibling?: () => void;
+  /**
+   * > 0 when this message is the KEPT variant of a resolved compare turn
+   * that still has other, non-selected siblings sitting around (never
+   * deleted -- they cost money and represent work, task 27 design). Renders
+   * a "⤺ N other variants" chip that reopens the tab strip in place of this
+   * message; omit (or 0) for an ordinary message with no siblings.
+   */
+  otherVariantsCount?: number;
+  onReopenVariants?: () => void;
 }
 
 /**
- * Renders one message. Siblings (a compare turn's variants) don't break
- * this renderer -- a plain "i / N" switcher (data-testid="compare-seam")
- * stands in for task 27's full tab strip (profile/model/cost/latency/token
- * count per tab, live status dots): out of scope here, but the seam is
- * exercised end-to-end so that task can slot in without restructuring how
- * Thread walks the tree.
+ * Renders one message. This is also the renderer VariantCard (VariantTabs.tsx)
+ * wraps for a single tab/split-column's body -- task 27's design calls for
+ * the tab strip and the split view to be "a container swap, not a second
+ * implementation", so this component stays deliberately unaware of whether
+ * it's being shown standalone, inside a tab, or inside a split column.
  */
-export function Message({ message, siblingCount, siblingIndex, onPrevSibling, onNextSibling }: MessageProps): JSX.Element {
+export function Message({ message, otherVariantsCount = 0, onReopenVariants }: MessageProps): JSX.Element {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
 
@@ -79,18 +82,15 @@ export function Message({ message, siblingCount, siblingIndex, onPrevSibling, on
         {!isUser && message.producedBy && <span>{message.producedBy.modelId}</span>}
         {message.status === 'error' && <span className="text-[var(--danger)]">error</span>}
         {message.status === 'cancelled' && <span>stopped</span>}
-        {siblingCount > 1 && (
-          <span data-testid="compare-seam" className="ml-auto flex items-center gap-1 rounded border border-[var(--border)] px-1">
-            <button type="button" onClick={onPrevSibling} aria-label="Previous variant" disabled={!onPrevSibling} className="disabled:opacity-30">
-              ‹
-            </button>
-            <span>
-              {siblingIndex + 1} / {siblingCount}
-            </span>
-            <button type="button" onClick={onNextSibling} aria-label="Next variant" disabled={!onNextSibling} className="disabled:opacity-30">
-              ›
-            </button>
-          </span>
+        {otherVariantsCount > 0 && (
+          <button
+            type="button"
+            data-testid="reopen-variants-chip"
+            onClick={onReopenVariants}
+            className="ml-auto rounded-full border border-[var(--border)] px-2 py-0.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+          >
+            ⤺ {otherVariantsCount} other variant{otherVariantsCount === 1 ? '' : 's'}
+          </button>
         )}
       </div>
 

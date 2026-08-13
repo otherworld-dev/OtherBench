@@ -476,3 +476,120 @@ describe('TurnRunner.run', () => {
     expect(store.chats.get(chat.id)?.headMessageId).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// TurnRunner.retry -- task 27: per-tab "Retry" on a failed compare variant.
+// Re-runs the SAME assistant message row in place (same id, same parentId),
+// rather than creating a new turn -- so a retried tab stays the same sibling
+// in the compare set instead of spawning a duplicate user message.
+// ---------------------------------------------------------------------------
+
+describe('TurnRunner.retry', () => {
+  it('resets an errored message and re-streams it to completion in place (same id, rebuilt history)', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    expect(store.messages.get(messageId)?.status).toBe('error');
+
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+
+    const retryPromise = runner.retry('chat-1', messageId, makeResolvedProfile());
+    // The reset (parts/status/error cleared, 'streaming' status emitted) is
+    // synchronous -- it happens before the first `await` inside retry(),
+    // so it's already visible without a flush.
+    expect(store.messages.get(messageId)).toMatchObject({ status: 'streaming', error: null, parts: [] });
+    expect(events).toContainEqual({ messageId, type: 'status', status: 'streaming' });
+
+    push(messageId, { type: 'text-delta', text: 'Second try' });
+    await flush();
+    push(messageId, { type: 'finish', usage: { tokensIn: 2, tokensOut: 2, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' });
+    await flush();
+    await retryPromise;
+
+    const finalMessage = store.messages.get(messageId);
+    expect(finalMessage?.status).toBe('complete');
+    expect(finalMessage?.error).toBeNull();
+    expect(textParts(finalMessage!.parts)).toBe('Second try');
+    expect(finalMessage?.id).toBe(messageId); // same row -- not a new sibling.
+
+    // A fresh usage row is written for the successful retry (the original
+    // failed attempt never wrote one -- no `finish` event, see turn.ts).
+    const usageRows = store.usage.list('chat-1').filter((u) => u.messageId === messageId);
+    expect(usageRows).toHaveLength(1);
+    expect(usageRows[0]).toMatchObject({ tokensIn: 2, tokensOut: 2 });
+  });
+
+  it('rejects retrying an unknown message id', async () => {
+    const store = new InMemoryStore();
+    const { engine } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+
+    await expect(runner.retry('chat-1', 'no-such-message', makeResolvedProfile())).rejects.toThrow(/unknown message/i);
+  });
+
+  it('rejects retrying a message that is currently streaming', async () => {
+    const store = new InMemoryStore();
+    const { engine } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+
+    await expect(runner.retry('chat-1', messageId, makeResolvedProfile())).rejects.toThrow(/already streaming/i);
+  });
+
+  it('a compare sibling is unaffected by retrying its neighbour (per-variant isolation still holds)', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Compare' }],
+      profiles: [makeResolvedProfile({ id: 'profile-a' }), makeResolvedProfile({ id: 'profile-b' })],
+    });
+    await flush();
+    const [failingId, survivorId] = result.assistantMessageIds as [string, string];
+
+    push(failingId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+
+    void runner.retry('chat-1', failingId, makeResolvedProfile({ id: 'profile-a' }));
+    await flush();
+
+    // The sibling is completely untouched by the retry -- still streaming,
+    // never reset, never notified.
+    expect(store.messages.get(survivorId)?.status).toBe('streaming');
+    push(survivorId, { type: 'text-delta', text: 'Going fine' });
+    await flush();
+    expect(events).toContainEqual({ messageId: survivorId, type: 'text-delta', text: 'Going fine' });
+
+    push(failingId, { type: 'text-delta', text: 'Fixed' });
+    await flush();
+    push(failingId, { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' });
+    await flush();
+    expect(textParts(store.messages.get(failingId)!.parts)).toBe('Fixed');
+  });
+});

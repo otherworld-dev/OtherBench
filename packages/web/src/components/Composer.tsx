@@ -76,11 +76,16 @@ export function Composer({ chat }: { chat: Chat }): JSX.Element {
         registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
       });
 
-      const newHead = result.assistantMessageIds[0];
-      if (newHead) {
-        setHeadMessageId(chat.id, newHead);
-        void api.turns.setHead(chat.id, newHead).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
-      }
+      // Head always advances to the new USER message, never straight to one
+      // of its assistant replies -- picking a reply is an explicit choice
+      // (task 27: `POST .../head`), never automatic, even for a single
+      // profile. `Thread` walks forward through any run of single-child
+      // messages on its own (`extendForward`, packages/core/src/domain/tree.ts),
+      // so a single-profile reply still renders immediately; a multi-profile
+      // (compare) turn instead surfaces as an open tab strip right after
+      // this message, since its several replies are NOT a single-child run.
+      setHeadMessageId(chat.id, result.userMessageId);
+      void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
 
       setText('');
       textareaRef.current?.focus();

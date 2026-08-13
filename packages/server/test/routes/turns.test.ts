@@ -263,6 +263,102 @@ describe('POST /api/messages/:id/cancel', () => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/messages/:id/retry
+// ---------------------------------------------------------------------------
+
+describe('POST /api/messages/:id/retry', () => {
+  it('re-streams a failed variant in place: same message id, reset parts/status/error, fresh events', async () => {
+    const { chatId, profileIds } = seedChat(2);
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const [failingId, otherId] = assistantMessageIds as [string, string];
+
+    push(failingId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    expect(container.store.messages.get(failingId)?.status).toBe('error');
+
+    const streamRes = await app().request(`/api/chats/${chatId}/stream`);
+    const reader = sseReader(streamRes);
+    await reader.next(); // hello
+
+    const retryRes = await app().request(`/api/messages/${failingId}/retry`, { method: 'POST' });
+    expect(retryRes.status).toBe(202);
+    expect((await retryRes.json()) as { messageId: string }).toEqual({ messageId: failingId });
+
+    // The reset is visible immediately (synchronous, before the retry's own await).
+    expect(container.store.messages.get(failingId)).toMatchObject({ status: 'streaming', error: null, parts: [] });
+
+    const resetEvent = await reader.next();
+    expect(resetEvent?.data).toEqual({ messageId: failingId, type: 'status', status: 'streaming' });
+
+    push(failingId, { type: 'text-delta', text: 'Second attempt' });
+    const deltaEvent = await reader.next();
+    expect(deltaEvent?.data).toEqual({ messageId: failingId, type: 'text-delta', text: 'Second attempt' });
+
+    push(failingId, FINISH);
+    await reader.next(); // finish
+    const statusEvent = await reader.next();
+    expect(statusEvent?.data).toEqual({ messageId: failingId, type: 'status', status: 'complete' });
+
+    expect(container.store.messages.get(failingId)).toMatchObject({ status: 'complete', error: null });
+    // The sibling was never touched by the retry.
+    expect(container.store.messages.get(otherId)?.status).toBe('streaming');
+
+    await reader.cancel();
+  });
+
+  it('a client reconnecting after a retry sees only the retried attempt in the hello replay, not the failed one', async () => {
+    const { chatId, profileIds } = seedChat();
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const messageId = assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Before the failure' });
+    push(messageId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+
+    await app().request(`/api/messages/${messageId}/retry`, { method: 'POST' });
+    push(messageId, { type: 'text-delta', text: 'After the retry' });
+    await flush();
+
+    const streamRes = await app().request(`/api/chats/${chatId}/stream`);
+    const reader = sseReader(streamRes);
+    const hello = await reader.next();
+    const events = (hello?.data as { inFlight: { messageId: string; events: { type: string; text?: string }[] }[] }).inFlight.find(
+      (b) => b.messageId === messageId
+    )?.events;
+
+    expect(events?.map((e) => e.type)).toEqual(['status', 'text-delta']);
+    expect(events?.find((e) => e.type === 'text-delta')?.text).toBe('After the retry');
+    await reader.cancel();
+  });
+
+  it('404s for an unknown message', async () => {
+    const res = await app().request('/api/messages/no-such-message/retry', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('409s when the message is currently streaming', async () => {
+    const { chatId, profileIds } = seedChat();
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const messageId = assistantMessageIds[0] as string;
+
+    const retryRes = await app().request(`/api/messages/${messageId}/retry`, { method: 'POST' });
+    expect(retryRes.status).toBe(409);
+  });
+
+  it('400s for a user message', async () => {
+    const { chatId, profileIds } = seedChat();
+    const res = await postTurn(chatId, profileIds);
+    const { userMessageId } = (await res.json()) as { userMessageId: string };
+
+    const retryRes = await app().request(`/api/messages/${userMessageId}/retry`, { method: 'POST' });
+    expect(retryRes.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/chats/:id/head
 // ---------------------------------------------------------------------------
 

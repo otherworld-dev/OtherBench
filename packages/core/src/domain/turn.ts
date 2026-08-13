@@ -174,6 +174,39 @@ export class TurnRunner {
     this.controllers.get(messageId)?.abort();
   }
 
+  /**
+   * Re-runs one existing assistant message IN PLACE (same id, same
+   * `parentId`) -- task 27's per-tab Retry on a failed compare variant.
+   * Unlike `run()`, this never creates a new user message: the whole point
+   * is that a retried variant stays the same sibling in its compare set,
+   * not a duplicate turn hanging off a fresh (identical-text) user message.
+   *
+   * Resets the row's `parts`/`status`/`error` and emits a `status:
+   * 'streaming'` event *synchronously*, before this function's first
+   * `await` -- a caller (the turns route) that needs to reset a
+   * `StreamRegistry` buffer for this message id can do so and then call
+   * this, confident the reset lands before any new event does (same
+   * ordering guarantee `registerTurn` relies on in `run()`, see
+   * routes/turns.ts).
+   *
+   * Rejects if `messageId` is unknown, has no `parentId` to rebuild history
+   * from (a retried message is always a reply, never a root), or is
+   * currently `'streaming'` (retrying an in-flight variant makes no sense --
+   * cancel it first).
+   */
+  async retry(chatId: string, messageId: string, profile: ResolvedProfile): Promise<void> {
+    const message = this.store.messages.get(messageId);
+    if (!message) throw new Error(`retry: unknown message "${messageId}"`);
+    if (!message.parentId) throw new Error(`retry: message "${messageId}" has no parent to rebuild history from`);
+    if (message.status === 'streaming') throw new Error(`retry: message "${messageId}" is already streaming`);
+
+    this.store.messages.updateParts(messageId, []);
+    this.store.messages.updateStatus(messageId, 'streaming'); // omitting `error` clears it -- see MessageRepo.updateStatus's doc.
+    this.emit({ messageId, type: 'status', status: 'streaming' });
+
+    await this.runVariant(chatId, message.parentId, messageId, profile);
+  }
+
   private async runVariant(
     chatId: string,
     userMessageId: string,

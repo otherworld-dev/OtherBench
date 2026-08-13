@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CanonMessage } from '../src/types/messages.js';
-import { activePath, siblingsOf, descendantIds } from '../src/domain/tree.js';
+import { activePath, siblingsOf, descendantIds, childrenOf, extendForward } from '../src/domain/tree.js';
 
 function msg(over: Partial<CanonMessage> & { id: string; createdAt: number }): CanonMessage {
   return {
@@ -97,5 +97,61 @@ describe('descendantIds', () => {
     const root = msg({ id: 'root', createdAt: 1 });
     const leaf = msg({ id: 'leaf', parentId: 'root', createdAt: 2 });
     expect(descendantIds([root, leaf], 'leaf')).toEqual(new Set());
+  });
+});
+
+describe('childrenOf', () => {
+  it('returns direct children only, creation-ordered', () => {
+    const root = msg({ id: 'root', createdAt: 1 });
+    const gc = msg({ id: 'gc', parentId: 'child', createdAt: 4 });
+    const childB = msg({ id: 'child-b', parentId: 'root', createdAt: 3 });
+    const childA = msg({ id: 'child-a', parentId: 'root', createdAt: 2 });
+    const messages = [root, gc, childB, childA];
+
+    expect(childrenOf(messages, 'root').map((m) => m.id)).toEqual(['child-a', 'child-b']);
+  });
+
+  it('returns an empty array for a leaf or an unknown parent id, never throws', () => {
+    const root = msg({ id: 'root', createdAt: 1 });
+    expect(childrenOf([root], 'root')).toEqual([]);
+    expect(childrenOf([root], 'no-such-id')).toEqual([]);
+  });
+});
+
+describe('extendForward', () => {
+  it('walks forward through a run of single-child messages to the true leaf', () => {
+    const root = msg({ id: 'root', createdAt: 1 });
+    const userMsg = msg({ id: 'user', parentId: 'root', createdAt: 2 });
+    const reply = msg({ id: 'reply', parentId: 'user', createdAt: 3, role: 'assistant' });
+    const messages = [root, userMsg, reply];
+
+    expect(extendForward(messages, 'root').map((m) => m.id)).toEqual(['user', 'reply']);
+  });
+
+  it('stops right before an unresolved compare turn (more than one child)', () => {
+    const userMsg = msg({ id: 'user', createdAt: 1 });
+    const variantA = msg({ id: 'variant-a', parentId: 'user', createdAt: 2, role: 'assistant' });
+    const variantB = msg({ id: 'variant-b', parentId: 'user', createdAt: 3, role: 'assistant' });
+    const messages = [userMsg, variantA, variantB];
+
+    expect(extendForward(messages, 'user')).toEqual([]);
+    // The unresolved set is exactly what `childrenOf` returns at that tail --
+    // this is the contract the UI relies on to render the open tab strip.
+    expect(childrenOf(messages, 'user').map((m) => m.id)).toEqual(['variant-a', 'variant-b']);
+  });
+
+  it('returns an empty array when the tail is already a true leaf', () => {
+    const root = msg({ id: 'root', createdAt: 1 });
+    expect(extendForward([root], 'root')).toEqual([]);
+  });
+
+  it('extends through a chain, then stops at a compare turn partway along it', () => {
+    const root = msg({ id: 'root', createdAt: 1 });
+    const mid = msg({ id: 'mid', parentId: 'root', createdAt: 2 });
+    const variantA = msg({ id: 'variant-a', parentId: 'mid', createdAt: 3, role: 'assistant' });
+    const variantB = msg({ id: 'variant-b', parentId: 'mid', createdAt: 4, role: 'assistant' });
+    const messages = [root, mid, variantA, variantB];
+
+    expect(extendForward(messages, 'root').map((m) => m.id)).toEqual(['mid']);
   });
 });

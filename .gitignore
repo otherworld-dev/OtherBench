@@ -14,6 +14,7 @@ coverage/
 .vitest/
 playwright-report/
 test-results/
+.playwright-mcp/
 
 # Local runtime data
 *.db

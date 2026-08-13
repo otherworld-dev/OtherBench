@@ -141,6 +141,37 @@ describe('useGruntStore', () => {
     expect(useGruntStore.getState().messages['m1']?.parts).toEqual([{ type: 'text', text: 'live text' }]);
   });
 
+  it('resetMessageForRetry clears parts/error and re-arms status so a retried stream starts clean', () => {
+    useGruntStore.getState().registerMessage(
+      stubAssistant('m1', {
+        status: 'error',
+        parts: [{ type: 'text', text: 'partial before failing' }],
+        error: { kind: 'rate_limit', message: 'boom', retryable: true },
+      })
+    );
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'm1',
+      type: 'finish',
+      usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 },
+      finishReason: 'stop',
+    });
+    expect(useGruntStore.getState().extras['m1']?.usage).not.toBeNull();
+
+    useGruntStore.getState().resetMessageForRetry('m1');
+
+    expect(useGruntStore.getState().messages['m1']).toMatchObject({ status: 'streaming', error: null, parts: [] });
+    expect(useGruntStore.getState().extras['m1']?.usage).toBeNull();
+
+    // A delta after the reset builds on the clean slate, not the old failed text.
+    useGruntStore.getState().applyTurnEvent({ messageId: 'm1', type: 'text-delta', text: 'Second attempt' });
+    expect(useGruntStore.getState().messages['m1']?.parts).toEqual([{ type: 'text', text: 'Second attempt' }]);
+  });
+
+  it('resetMessageForRetry is a no-op for a message the store does not know', () => {
+    useGruntStore.getState().resetMessageForRetry('unknown');
+    expect(useGruntStore.getState().messages['unknown']).toBeUndefined();
+  });
+
   it('setHeadMessageId updates the chat entry in place', () => {
     const chat: Chat = {
       id: 'chat-1',

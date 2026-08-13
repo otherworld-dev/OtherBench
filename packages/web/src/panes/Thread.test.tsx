@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -10,6 +10,7 @@ vi.mock('../state/api.js', () => ({
   api: {
     turns: {
       setHead: vi.fn(),
+      retry: vi.fn(),
     },
   },
 }));
@@ -17,6 +18,7 @@ vi.mock('../state/api.js', () => ({
 import { api } from '../state/api.js';
 
 const mockedSetHead = vi.mocked(api.turns.setHead);
+const mockedRetry = vi.mocked(api.turns.retry);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -48,9 +50,19 @@ function makeMessage(id: string, chatId: string, overrides: Partial<CanonMessage
   };
 }
 
+function variantMessage(id: string, parentId: string, overrides: Partial<CanonMessage> = {}): CanonMessage {
+  return makeMessage(id, 'chat-1', {
+    parentId,
+    role: 'assistant',
+    producedBy: { profileId: id, profileName: `Profile ${id}`, connectionId: 'c1', modelId: 'model-x' },
+    ...overrides,
+  });
+}
+
 function reset(): void {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   mockedSetHead.mockReset();
+  mockedRetry.mockReset();
 }
 
 /**
@@ -76,7 +88,7 @@ describe('Thread', () => {
   // session, their unrelated root messages (all `parentId: null`) were
   // grouped as compare-turn siblings of one another. This test must FAIL
   // against the unfixed code.
-  it('does not show a compare badge on a chat whose root message merely shares parentId:null with other chats loaded in the same session', () => {
+  it('does not show a compare chip or tab strip on a chat whose root message merely shares parentId:null with other chats loaded in the same session', () => {
     const rootA = makeMessage('root-a', 'chat-a');
     const rootB = makeMessage('root-b', 'chat-b');
     const rootC = makeMessage('root-c', 'chat-c');
@@ -90,45 +102,90 @@ describe('Thread', () => {
     render(<Thread chat={chatA} />);
 
     expect(screen.getByText('text of root-a')).toBeInTheDocument();
-    expect(screen.queryByTestId('compare-seam')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reopen-variants-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
   });
 
-  it('still shows a compare switcher for a real compare turn within the SAME chat', () => {
+  it('renders an open tab strip for an unresolved compare turn (head still on the parent user message)', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
-    const variantA = makeMessage('variant-a', 'chat-1', {
-      parentId: 'root',
-      role: 'assistant',
-      createdAt: 1,
-      parts: [{ type: 'text', text: 'reply A' }],
-    });
-    const variantB = makeMessage('variant-b', 'chat-1', {
-      parentId: 'root',
-      role: 'assistant',
-      createdAt: 2,
-      parts: [{ type: 'text', text: 'reply B' }],
-    });
+    const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
+    const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
     useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
-    const chat = makeChat({ headMessageId: 'variant-b' });
+    // Head is on the USER message -- nothing has been kept yet.
+    const chat = makeChat({ headMessageId: 'root' });
 
     render(<Thread chat={chat} />);
 
-    expect(screen.getByTestId('compare-seam')).toHaveTextContent('2 / 2');
+    expect(screen.getByTestId('variant-tabs')).toBeInTheDocument();
+    expect(screen.getByTestId('variant-tab-variant-a')).toBeInTheDocument();
+    expect(screen.getByTestId('variant-tab-variant-b')).toBeInTheDocument();
+    // Unresolved -- no chip anywhere, and no Collapse button (nothing to collapse back to).
+    expect(screen.queryByTestId('reopen-variants-chip')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /collapse variants/i })).not.toBeInTheDocument();
   });
 
-  it('reverts the optimistic head switch and surfaces an error when the server rejects setHead', async () => {
+  it('a single-profile reply renders automatically even though head only advances to the user message', () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
-    const variantA = makeMessage('variant-a', 'chat-1', {
-      parentId: 'root',
-      role: 'assistant',
-      createdAt: 1,
-      parts: [{ type: 'text', text: 'reply A' }],
-    });
-    const variantB = makeMessage('variant-b', 'chat-1', {
-      parentId: 'root',
-      role: 'assistant',
-      createdAt: 2,
-      parts: [{ type: 'text', text: 'reply B' }],
-    });
+    const reply = variantMessage('reply', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'the only reply' }] });
+    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    const chat = makeChat({ headMessageId: 'root' });
+
+    render(<Thread chat={chat} />);
+
+    expect(screen.getByText('the only reply')).toBeInTheDocument();
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
+  });
+
+  it('a resolved compare turn (head already on one variant) renders as an ordinary message with a chip, which reopens the tab strip', async () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
+    const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
+    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
+    const chat = makeChat({ headMessageId: 'variant-b' });
+
+    const user = userEvent.setup();
+    render(<Thread chat={chat} />);
+
+    expect(screen.getByText('reply B')).toBeInTheDocument();
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
+    const chip = screen.getByTestId('reopen-variants-chip');
+    expect(chip).toHaveTextContent('⤺ 1 other variant');
+
+    await user.click(chip);
+
+    const tabs = screen.getByTestId('variant-tabs');
+    expect(within(tabs).getByTestId('variant-tab-variant-a')).toBeInTheDocument();
+    expect(within(tabs).getByTestId('variant-tab-variant-b')).toBeInTheDocument();
+    // Reopened (not fresh/unresolved) -- a Collapse button is offered.
+    expect(screen.getByRole('button', { name: /collapse variants/i })).toBeInTheDocument();
+  });
+
+  it('Keep issues the head call and collapses the open tab strip back into an ordinary message', async () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
+    const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
+    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
+    useGruntStore.getState().setChats([makeChat({ headMessageId: 'root' })]);
+    mockedSetHead.mockResolvedValue(makeChat({ headMessageId: 'variant-b' }));
+
+    const user = userEvent.setup();
+    render(<ThreadForChat chatId="chat-1" />);
+
+    expect(screen.getByTestId('variant-tabs')).toBeInTheDocument();
+    await user.click(screen.getByTestId('variant-tab-variant-b'));
+    await user.click(screen.getByRole('button', { name: /keep this one/i }));
+
+    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'variant-b'));
+    // Collapsed: the tab strip is gone, replaced by the kept message + chip for the other variant.
+    await waitFor(() => expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument());
+    expect(screen.getByText('reply B')).toBeInTheDocument();
+    expect(screen.getByTestId('reopen-variants-chip')).toHaveTextContent('⤺ 1 other variant');
+  });
+
+  it('reverts the optimistic Keep and surfaces an error when the server rejects setHead', async () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const variantA = variantMessage('variant-a', 'root', { createdAt: 1, parts: [{ type: 'text', text: 'reply A' }] });
+    const variantB = variantMessage('variant-b', 'root', { createdAt: 2, parts: [{ type: 'text', text: 'reply B' }] });
     useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
     useGruntStore.getState().setChats([makeChat({ headMessageId: 'variant-b' })]);
     mockedSetHead.mockRejectedValue(new Error('Bad Request'));
@@ -136,44 +193,40 @@ describe('Thread', () => {
     const user = userEvent.setup();
     render(<ThreadForChat chatId="chat-1" />);
 
-    expect(screen.getByTestId('compare-seam')).toHaveTextContent('2 / 2');
-    await user.click(screen.getByLabelText('Previous variant'));
+    await user.click(screen.getByTestId('reopen-variants-chip'));
+    await user.click(screen.getByTestId('variant-tab-variant-a'));
+    await user.click(screen.getByRole('button', { name: /keep this one/i }));
 
     await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'variant-a'));
-
     // Reverted back to variant-b once the server rejected the switch.
     await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('variant-b'));
-    await waitFor(() => expect(screen.getByTestId('compare-seam')).toHaveTextContent('2 / 2'));
-
-    // And the failure is surfaced to the user, not just logged.
-    expect(screen.getByRole('alert')).toHaveTextContent(/couldn't switch|failed to switch/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/couldn't keep|failed to keep/i);
   });
 
-  it('keeps the optimistic head switch when the server confirms it', async () => {
+  it('Retry calls the retry endpoint for that variant only and resets it locally, leaving its sibling untouched', async () => {
     const root = makeMessage('root', 'chat-1', { role: 'user' });
-    const variantA = makeMessage('variant-a', 'chat-1', {
-      parentId: 'root',
-      role: 'assistant',
+    const failing = variantMessage('failing', 'root', {
       createdAt: 1,
-      parts: [{ type: 'text', text: 'reply A' }],
+      status: 'error',
+      error: { kind: 'rate_limit', message: 'boom', retryable: true },
+      parts: [{ type: 'text', text: 'partial before failing' }],
     });
-    const variantB = makeMessage('variant-b', 'chat-1', {
-      parentId: 'root',
-      role: 'assistant',
-      createdAt: 2,
-      parts: [{ type: 'text', text: 'reply B' }],
-    });
-    useGruntStore.getState().loadMessages('chat-1', [root, variantA, variantB], null);
-    useGruntStore.getState().setChats([makeChat({ headMessageId: 'variant-b' })]);
-    mockedSetHead.mockResolvedValue(makeChat({ headMessageId: 'variant-a' }));
+    const healthy = variantMessage('healthy', 'root', { createdAt: 2, status: 'streaming', parts: [{ type: 'text', text: 'still going' }] });
+    useGruntStore.getState().loadMessages('chat-1', [root, failing, healthy], null);
+    mockedRetry.mockResolvedValue({ messageId: 'failing' });
+    const chat = makeChat({ headMessageId: 'root' });
 
     const user = userEvent.setup();
-    render(<ThreadForChat chatId="chat-1" />);
+    render(<Thread chat={chat} />);
 
-    await user.click(screen.getByLabelText('Previous variant'));
+    await user.click(screen.getByTestId('variant-tab-failing'));
+    await user.click(screen.getByRole('button', { name: /retry profile failing/i }));
 
-    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'variant-a'));
-    expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('variant-a');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(mockedRetry).toHaveBeenCalledWith('failing');
+    // Reset locally: the failed attempt's stale content/error is cleared and status re-armed to streaming.
+    await waitFor(() => expect(useGruntStore.getState().messages['failing']?.status).toBe('streaming'));
+    expect(useGruntStore.getState().messages['failing']?.parts).toEqual([]);
+    // The sibling is completely unaffected.
+    expect(useGruntStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
   });
 });

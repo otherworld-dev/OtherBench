@@ -106,6 +106,23 @@ describe('Composer', () => {
     });
   });
 
+  // Task 27: head always advances to the new USER message, never straight to
+  // an assistant reply -- picking a reply is always an explicit "Keep"
+  // action, even when there's only one profile (Thread's `extendForward`
+  // renders a lone reply automatically, without needing head to point past
+  // it -- see Composer's comment at this call site).
+  it('advances head to the new user message, not an assistant reply, even for a single-profile turn', async () => {
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    const chat = makeChat();
+    const user = userEvent.setup();
+
+    render(<Composer chat={chat} />);
+    await user.type(screen.getByRole('textbox', { name: /message/i }), 'Hi{Enter}');
+
+    expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'u1');
+  });
+
   it('Shift+Enter inserts a newline instead of sending', async () => {
     const chat = makeChat();
     const user = userEvent.setup();

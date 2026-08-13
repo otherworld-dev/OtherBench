@@ -116,6 +116,34 @@ export class StreamRegistry {
     }
   }
 
+  /**
+   * Replaces `messageId`'s buffer with a fresh, empty 'streaming' one --
+   * unlike `registerTurn`, unconditionally, even if a (stale) buffer already
+   * exists. This is `retry`'s (task 27) counterpart to `registerTurn`: a
+   * retried message is the SAME id re-streamed in place (TurnRunner.retry),
+   * so without this its old buffer would still hold the failed attempt's
+   * events (partial text, the terminal `error`), and a client replaying
+   * "everything since the turn started" would concatenate the old failed
+   * content with the new retry's -- see `applyHelloBuffer`'s doc in
+   * packages/web/src/state/reducer.ts for why a buffer must be everything
+   * *since this attempt* started, not since the message id was first seen.
+   *
+   * Must be called (by the retry route) before `TurnRunner.retry()` -- same
+   * ordering requirement as `registerTurn` before `run()`, since an event
+   * for a message with no buffer at all is silently dropped by
+   * `handleEvent`. Cancels any pending eviction timer, since a buffer that
+   * was about to be evicted for aging out of retention is no longer stale
+   * once it's freshly reset.
+   */
+  resetBuffer(chatId: string, messageId: string): void {
+    const timer = this.evictionTimers.get(messageId);
+    if (timer) {
+      clearTimeout(timer);
+      this.evictionTimers.delete(messageId);
+    }
+    this.buffers.set(messageId, { chatId, messageId, events: [], status: 'streaming' });
+  }
+
   private handleEvent(event: TurnEvent): void {
     const buffer = this.buffers.get(event.messageId);
     if (!buffer) return; // Unknown to us -- registerTurn() was never called for it; nothing to attach this to.

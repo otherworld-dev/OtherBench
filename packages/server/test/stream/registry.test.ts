@@ -385,4 +385,74 @@ describe('StreamRegistry', () => {
       vi.useRealTimers();
     }
   });
+
+  it('resetBuffer replaces a message buffer wholesale, so a retry never replays the failed attempt it followed', async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const registry = new StreamRegistry(runner, store);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    registry.registerTurn('chat-1', result.assistantMessageIds);
+    const messageId = result.assistantMessageIds[0] as string;
+
+    push(messageId, { type: 'text-delta', text: 'Partial before failing' });
+    push(messageId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    expect(registry.snapshot('chat-1')[0]?.events.map((e) => e.type)).toEqual(['text-delta', 'error', 'status']);
+
+    registry.resetBuffer('chat-1', messageId);
+    const afterReset = registry.snapshot('chat-1');
+    expect(afterReset).toHaveLength(1);
+    expect(afterReset[0]).toMatchObject({ messageId, status: 'streaming', events: [] });
+
+    // Live events after the reset (from a retry) land on the fresh buffer,
+    // with none of the failed attempt's history mixed in.
+    const received: TurnEvent[] = [];
+    registry.subscribe('chat-1', (e) => received.push(e));
+    void runner.retry('chat-1', messageId, makeResolvedProfile());
+    push(messageId, { type: 'text-delta', text: 'Retried text' });
+    await flush();
+    expect(received.filter((e) => e.type === 'text-delta')).toEqual([{ messageId, type: 'text-delta', text: 'Retried text' }]);
+    expect(registry.snapshot('chat-1')[0]?.events.filter((e) => e.type === 'text-delta')).toEqual([
+      { messageId, type: 'text-delta', text: 'Retried text' },
+    ]);
+  });
+
+  it('resetBuffer cancels a pending eviction timer, so a since-reset buffer is never wiped out by the old attempt\'s eviction', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryStore();
+      const { engine, push } = manualEngine();
+      const runner = new TurnRunner(store, engine);
+      const registry = new StreamRegistry(runner, store, { retentionMs: 60_000 });
+
+      const result = await runner.run({
+        chatId: 'chat-1',
+        parentId: null,
+        userParts: [{ type: 'text', text: 'Hi' }],
+        profiles: [makeResolvedProfile()],
+      });
+      registry.registerTurn('chat-1', result.assistantMessageIds);
+      const messageId = result.assistantMessageIds[0] as string;
+
+      push(messageId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+      await vi.advanceTimersByTimeAsync(0); // schedules eviction in 60s
+
+      registry.resetBuffer('chat-1', messageId);
+      await vi.advanceTimersByTimeAsync(61_000); // past the original eviction deadline
+
+      // Still present and streaming -- the reset buffer was never evicted by the timer scheduled for the pre-reset attempt.
+      const snapshot = registry.snapshot('chat-1');
+      expect(snapshot).toHaveLength(1);
+      expect(snapshot[0]).toMatchObject({ messageId, status: 'streaming', events: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

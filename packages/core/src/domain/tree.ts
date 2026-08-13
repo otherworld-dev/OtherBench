@@ -58,6 +58,47 @@ export function siblingsOf(messages: CanonMessage[], messageId: string): CanonMe
 }
 
 /**
+ * Direct children of `parentId`, creation-ordered. Empty if there are none
+ * -- including an unknown `parentId` -- unlike `siblingsOf`/`activePath`,
+ * this never throws: "no children yet" is the ordinary case for whatever is
+ * currently the last message in a branch, not a data-consistency problem.
+ */
+export function childrenOf(messages: CanonMessage[], parentId: string): CanonMessage[] {
+  return messages.filter((m) => m.parentId === parentId).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
+ * Extends a rendered path forward, past `tailId`, through any run of
+ * single-child messages -- e.g. `chat.headMessageId` lands on the new user
+ * message right after it's sent (Composer never auto-advances past it), so
+ * a single-profile reply's lone assistant child needs to be walked into the
+ * displayed thread automatically, the same way `activePath` walks everything
+ * *up to* the head.
+ *
+ * Stops the moment a message has zero children (nothing more exists yet) or
+ * more than one (an unresolved compare turn belongs there instead --
+ * `childrenOf` at that point is the sibling set the UI renders as an open
+ * tab strip; which one to keep is always an explicit choice, task 27, never
+ * something this function decides for the caller by picking one to continue
+ * through).
+ */
+export function extendForward(messages: CanonMessage[], tailId: string): CanonMessage[] {
+  const extension: CanonMessage[] = [];
+  let currentId = tailId;
+  const seen = new Set<string>([tailId]); // guards against a malformed cycle looping forever
+  for (;;) {
+    const children = childrenOf(messages, currentId);
+    if (children.length !== 1) break;
+    const only = children[0]!;
+    if (seen.has(only.id)) break; // defensive -- should be unreachable given create()'s own cycle guards
+    extension.push(only);
+    seen.add(only.id);
+    currentId = only.id;
+  }
+  return extension;
+}
+
+/**
  * All descendant ids of `messageId` (children, grandchildren, ...),
  * excluding `messageId` itself. Used e.g. to cascade a delete or to grey
  * out an abandoned branch. Returns an empty set for a leaf, or for an id
