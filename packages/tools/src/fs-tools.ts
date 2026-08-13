@@ -287,8 +287,10 @@ async function openVerified(
   } else {
     // A file that does not exist yet has no identity to compare, so the
     // anchor is its parent directory -- which is what an ancestor swap
-    // redirects. `preParent` is null only when we just created the parents
-    // ourselves via mkdir, in which case there is nothing older to compare.
+    // redirects. `preParent` is null when the parent did not exist at (A)
+    // either, i.e. we created it ourselves via mkdir a moment ago: there is
+    // no older state to compare against, and nothing an attacker could have
+    // redirected, because the directory did not exist to be redirected.
     if (preParent !== null && !sameIdentity(preParent, midParent)) throw new ToctouGuardError(candidate);
   }
 

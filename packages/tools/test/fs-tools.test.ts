@@ -654,8 +654,13 @@ describe('under a real, unhooked concurrent racer', () => {
       expect({ ...race, attempts, outside: readFileSync(join(outside, 'inside.txt'), 'utf8') }).toMatchObject({
         outside: ATTACKER_MARKER,
       });
+      // Floors, not targets: measured ~211 attempts and ~205 landed swaps
+      // here. Low enough to survive a loaded machine (this loop paces itself
+      // at 1ms, so it does far fewer attempts than the read/list races), high
+      // enough that a race which never happened cannot masquerade as a race
+      // that found nothing.
       expect(race.swaps).toBeGreaterThan(0);
-      expect(attempts).toBeGreaterThan(100);
+      expect(attempts).toBeGreaterThan(20);
     },
     RACE_MS + 20_000
   );

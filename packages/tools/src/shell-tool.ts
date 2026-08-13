@@ -119,7 +119,8 @@ function buildSpawnInvocation(command: string): { file: string; args: string[]; 
 // still relates it to our child. A process that deliberately detaches --
 // `start /b` or DETACHED_PROCESS on Windows, setsid()/its own process group
 // on POSIX -- is no longer in that tree and SURVIVES both branches above
-// (verified). run_command's description says so rather than promising the
+// (demonstrated during review with a detached grandchild that outlived the
+// timeout kill). run_command's description says so rather than promising the
 // model something this function cannot deliver.
 async function terminate(child: ChildProcess, graceMs: number): Promise<void> {
   if (!child.pid) return;
