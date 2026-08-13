@@ -1,0 +1,761 @@
+import { useEffect, useRef, useState, type JSX } from 'react';
+import type { McpServer } from '@grunt/core/ports/store.js';
+import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { usePolled } from '../../lib/usePolled.js';
+import { ApiError, api, type CreateMcpServerBody } from '../../state/api.js';
+
+const STATUS_COLOR: Record<McpServerHealth['status'], string> = {
+  ok: 'bg-[var(--success,#3fb950)]',
+  connecting: 'bg-[var(--accent)] animate-pulse',
+  error: 'bg-[var(--danger)]',
+  unknown: 'bg-[var(--text-faint)]',
+};
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
+/** One draft row for a key/value secret map (env vars or HTTP headers) while editing. */
+interface KvRow {
+  key: string;
+  value: string;
+}
+
+function keysToRows(keys: string[]): KvRow[] {
+  return keys.map((key) => ({ key, value: '' }));
+}
+
+/**
+ * Collapses draft rows into a `Record<string,string>` for submission.
+ * Drops a row with a blank key (same as `ConnectionsPanel.rowsToHeaders`)
+ * AND, unlike that one, a row with a blank VALUE too: `extraHeaders` (that
+ * panel's equivalent) is plain non-secret metadata where an empty string is
+ * a legitimate value, but env vars and auth headers stand in for
+ * credentials -- a row a user added but never actually filled in is far
+ * more likely to be an unfinished edit than an intentional empty secret, and
+ * silently sending `""` would overwrite (or newly set) that entry with a
+ * blank value the user never typed.
+ */
+function rowsToSecretMap(rows: KvRow[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (key.length === 0 || row.value.length === 0) continue;
+    result[key] = row.value;
+  }
+  return result;
+}
+
+function argsToRows(args: string[]): string[] {
+  return [...args];
+}
+
+function rowsToArgs(rows: string[]): string[] {
+  return rows.map((r) => r.trim()).filter((r) => r.length > 0);
+}
+
+interface ParsedTool {
+  name: string;
+  description: string;
+}
+
+/**
+ * `McpServer.toolsCache` is `unknown` on the wire (a JSON blob mirroring
+ * `McpToolDescriptor[]`, packages/tools/src/mcp/client.ts, written by
+ * `McpServerManager` only once a connection reaches `'ok'`) -- parsed
+ * defensively here rather than cast, since it may be `null` (never
+ * connected yet) or, in principle, a shape from a future/older server
+ * version this client doesn't recognise.
+ */
+function parseToolsCache(toolsCache: unknown): ParsedTool[] {
+  if (!Array.isArray(toolsCache)) return [];
+  const result: ParsedTool[] = [];
+  for (const entry of toolsCache) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const name = (entry as Record<string, unknown>)['name'];
+    if (typeof name !== 'string') continue;
+    const description = (entry as Record<string, unknown>)['description'];
+    result.push({ name, description: typeof description === 'string' ? description : '' });
+  }
+  return result;
+}
+
+/** A key/value row editor shared by the env-vars and headers sections -- add/edit/remove rows, styled identically to `ConnectionsPanel`'s header-row editor. */
+function KvRowsEditor({
+  rows,
+  onChange,
+  keyPlaceholder,
+  valuePlaceholder,
+  keyLabel,
+  valueLabel,
+}: {
+  rows: KvRow[];
+  onChange: (rows: KvRow[]) => void;
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  keyLabel: string;
+  valueLabel: string;
+}): JSX.Element {
+  return (
+    <div className="space-y-1.5">
+      {rows.map((row, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          <input
+            aria-label={keyLabel}
+            value={row.key}
+            onChange={(e) => onChange(rows.map((r, idx) => (idx === i ? { ...r, key: e.target.value } : r)))}
+            placeholder={keyPlaceholder}
+            className="w-1/2 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm"
+          />
+          <input
+            type="password"
+            aria-label={valueLabel}
+            value={row.value}
+            onChange={(e) => onChange(rows.map((r, idx) => (idx === i ? { ...r, value: e.target.value } : r)))}
+            placeholder={valuePlaceholder}
+            autoComplete="new-password"
+            className="w-1/2 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm"
+          />
+          <button
+            type="button"
+            aria-label={`Remove ${keyLabel.toLowerCase()}`}
+            onClick={() => onChange(rows.filter((_, idx) => idx !== i))}
+            className="shrink-0 rounded border border-[var(--border)] px-1.5 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => onChange([...rows, { key: '', value: '' }])}
+        className="rounded border border-dashed border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+      >
+        + Add {keyLabel.toLowerCase()}
+      </button>
+    </div>
+  );
+}
+
+interface McpServerFormProps {
+  /** `null` means "creating a new server". */
+  server: McpServer | null;
+  onSaved: (server: McpServer) => void;
+  onDeleted: (id: string) => void;
+  onCancel: () => void;
+}
+
+/**
+ * Add/edit form for one MCP server. Keyed by `server?.id` from the parent
+ * (see `McpServersPanel`) so switching servers remounts with fresh state,
+ * matching `ConnectionForm`/`ProfileForm`.
+ *
+ * `env` (stdio) and `headers` (http) are BOTH stored server-side as
+ * `SecretStore` references (`McpServer.envRefs`/`headerRefs`) and never
+ * echoed back as plaintext (see routes/tools.ts) -- exactly the write-only
+ * discipline `ConnectionForm` already applies to a connection's API key,
+ * generalised here from a single value to a named set: the form shows WHICH
+ * NAMES are currently set (safe metadata, not a secret) but never their
+ * values, and a name typed into "current names" pre-seeds an empty row
+ * purely as a convenience so re-adding a variable doesn't require retyping
+ * its name too. Leaving the whole section untouched omits it from the
+ * PATCH body entirely (existing secrets stay exactly as they are); touching
+ * it at all REPLACES the complete set, because that is genuinely what a
+ * PATCH carrying `env`/`headers` does server-side -- there is no partial-
+ * merge endpoint to build a nicer illusion on top of.
+ */
+function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormProps): JSX.Element {
+  const [name, setName] = useState(server?.name ?? '');
+  const [transport, setTransport] = useState<McpServer['transport']>(server?.transport ?? 'stdio');
+  const [command, setCommand] = useState(server?.command ?? '');
+  const [argRows, setArgRows] = useState<string[]>(() => argsToRows(server?.args ?? []));
+  const [url, setUrl] = useState(server?.url ?? '');
+  const [enabled, setEnabled] = useState(server?.enabled ?? true);
+
+  const [envRows, setEnvRows] = useState<KvRow[]>([]);
+  const [envTouched, setEnvTouched] = useState(false);
+  const [envClear, setEnvClear] = useState(false);
+  const [headerRows, setHeaderRows] = useState<KvRow[]>([]);
+  const [headerTouched, setHeaderTouched] = useState(false);
+  const [headerClear, setHeaderClear] = useState(false);
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+
+  const tools = parseToolsCache(server?.toolsCache ?? null);
+
+  function startEnvEdit(): void {
+    setEnvRows((rows) => (rows.length > 0 ? rows : keysToRows(Object.keys(server?.envRefs ?? {}))));
+    setEnvTouched(true);
+    setEnvClear(false);
+  }
+  function startHeaderEdit(): void {
+    setHeaderRows((rows) => (rows.length > 0 ? rows : keysToRows(Object.keys(server?.headerRefs ?? {}))));
+    setHeaderTouched(true);
+    setHeaderClear(false);
+  }
+
+  function validate(): string | null {
+    if (name.trim().length === 0) return '"Name" is required.';
+    if (transport === 'stdio' && command.trim().length === 0) return 'A command is required for a stdio server.';
+    if (transport === 'http' && url.trim().length === 0) return 'A URL is required for an http (Streamable HTTP) server.';
+    return null;
+  }
+
+  async function handleSave(): Promise<void> {
+    const validationError = validate();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const body: CreateMcpServerBody = {
+        name: name.trim(),
+        transport,
+        command: transport === 'stdio' ? command.trim() : null,
+        args: transport === 'stdio' ? rowsToArgs(argRows) : [],
+        url: transport === 'http' ? url.trim() : null,
+        enabled,
+      };
+      if (transport === 'stdio') {
+        if (envClear) body.env = {};
+        else if (envTouched) body.env = rowsToSecretMap(envRows);
+        // else: omit -- existing env vars (if any) are left untouched.
+      }
+      if (transport === 'http') {
+        if (headerClear) body.headers = {};
+        else if (headerTouched) body.headers = rowsToSecretMap(headerRows);
+        // else: omit -- existing headers (if any) are left untouched.
+      }
+
+      const saved = server ? await api.mcpServers.patch(server.id, body) : await api.mcpServers.create(body);
+      onSaved(saved);
+    } catch (err) {
+      console.error('[grunt-web] failed to save MCP server:', err);
+      setError(errorMessage(err, 'Save failed -- please try again.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(): Promise<void> {
+    if (!server) return;
+    const ok = window.confirm(`Delete MCP server "${server.name}"? Any profile that enables it loses access to its tools. This cannot be undone.`);
+    if (!ok) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api.mcpServers.delete(server.id);
+      onDeleted(server.id);
+    } catch (err) {
+      console.error(`[grunt-web] failed to delete MCP server ${server.id}:`, err);
+      setError(errorMessage(err, 'Delete failed -- please try again.'));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function handleRefresh(): Promise<void> {
+    if (!server) return;
+    setRefreshing(true);
+    setRefreshMessage(null);
+    try {
+      await api.mcpServers.refresh(server.id);
+      setRefreshMessage('Refresh requested -- see status in the list on the left.');
+    } catch (err) {
+      console.error(`[grunt-web] failed to refresh MCP server ${server.id}:`, err);
+      setRefreshMessage(errorMessage(err, 'Refresh failed -- please try again.'));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  return (
+    <div data-testid="mcp-server-form" className="max-w-xl space-y-4">
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]" htmlFor="mcp-name">
+          Name
+        </label>
+        <input
+          id="mcp-name"
+          aria-label="MCP server name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
+        />
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]" htmlFor="mcp-transport">
+          Transport
+        </label>
+        <select
+          id="mcp-transport"
+          aria-label="Transport"
+          value={transport}
+          onChange={(e) => setTransport(e.target.value as McpServer['transport'])}
+          className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
+        >
+          <option value="stdio">stdio -- launches a local process</option>
+          <option value="http">http -- Streamable HTTP</option>
+        </select>
+      </div>
+
+      {transport === 'stdio' ? (
+        <>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]" htmlFor="mcp-command">
+              Command
+            </label>
+            <input
+              id="mcp-command"
+              aria-label="Command"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="npx"
+              className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
+            />
+          </div>
+
+          <div>
+            <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Arguments</span>
+            <div className="space-y-1.5">
+              {argRows.map((arg, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <input
+                    aria-label="Argument"
+                    value={arg}
+                    onChange={(e) => setArgRows((rows) => rows.map((r, idx) => (idx === i ? e.target.value : r)))}
+                    placeholder="-y @some/mcp-server"
+                    className="flex-1 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Remove argument"
+                    onClick={() => setArgRows((rows) => rows.filter((_, idx) => idx !== i))}
+                    className="shrink-0 rounded border border-[var(--border)] px-1.5 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setArgRows((rows) => [...rows, ''])}
+                className="rounded border border-dashed border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+              >
+                + Add argument
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Environment variables</span>
+            {server && !envTouched && !envClear && (
+              <p data-testid="mcp-env-status" className="mb-1.5 text-xs text-[var(--text-muted)]">
+                {Object.keys(server.envRefs).length > 0
+                  ? `Currently set: ${Object.keys(server.envRefs).join(', ')}. Values are never shown -- edit to replace the whole set.`
+                  : 'None set.'}
+              </p>
+            )}
+            {envTouched ? (
+              <>
+                <p className="mb-1.5 text-xs text-[var(--text-muted)]">
+                  Editing replaces the ENTIRE set of environment variables -- re-enter every one you want to keep.
+                </p>
+                <KvRowsEditor rows={envRows} onChange={setEnvRows} keyPlaceholder="API_KEY" valuePlaceholder="value" keyLabel="Env var name" valueLabel="Env var value" />
+              </>
+            ) : (
+              <button type="button" onClick={startEnvEdit} disabled={envClear} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50">
+                Edit environment variables…
+              </button>
+            )}
+            {server && Object.keys(server.envRefs).length > 0 && (
+              <label className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+                <input
+                  type="checkbox"
+                  checked={envClear}
+                  onChange={(e) => {
+                    setEnvClear(e.target.checked);
+                    if (e.target.checked) {
+                      setEnvTouched(false);
+                      setEnvRows([]);
+                    }
+                  }}
+                />
+                Clear all environment variables
+              </label>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]" htmlFor="mcp-url">
+              URL
+            </label>
+            <input
+              id="mcp-url"
+              aria-label="URL"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://example.com/mcp"
+              className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
+            />
+          </div>
+
+          <div>
+            <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Headers</span>
+            {server && !headerTouched && !headerClear && (
+              <p data-testid="mcp-headers-status" className="mb-1.5 text-xs text-[var(--text-muted)]">
+                {Object.keys(server.headerRefs).length > 0
+                  ? `Currently set: ${Object.keys(server.headerRefs).join(', ')}. Values are never shown -- edit to replace the whole set.`
+                  : 'None set.'}
+              </p>
+            )}
+            {headerTouched ? (
+              <>
+                <p className="mb-1.5 text-xs text-[var(--text-muted)]">Editing replaces the ENTIRE set of headers -- re-enter every one you want to keep.</p>
+                <KvRowsEditor
+                  rows={headerRows}
+                  onChange={setHeaderRows}
+                  keyPlaceholder="Authorization"
+                  valuePlaceholder="Bearer …"
+                  keyLabel="Header name"
+                  valueLabel="Header value"
+                />
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={startHeaderEdit}
+                disabled={headerClear}
+                className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+              >
+                Edit headers…
+              </button>
+            )}
+            {server && Object.keys(server.headerRefs).length > 0 && (
+              <label className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+                <input
+                  type="checkbox"
+                  checked={headerClear}
+                  onChange={(e) => {
+                    setHeaderClear(e.target.checked);
+                    if (e.target.checked) {
+                      setHeaderTouched(false);
+                      setHeaderRows([]);
+                    }
+                  }}
+                />
+                Clear all headers
+              </label>
+            )}
+          </div>
+        </>
+      )}
+
+      <label className="flex items-center gap-1.5 text-sm">
+        <input type="checkbox" aria-label="Enabled" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+        Enabled
+      </label>
+
+      {server && (
+        <div>
+          <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Tools this server exposes</span>
+          {tools.length === 0 ? (
+            <p className="text-xs text-[var(--text-faint)]">No tools listed yet -- connect the server (enable it, or click Refresh) to discover them.</p>
+          ) : (
+            <ul data-testid="mcp-tools-list" className="space-y-1">
+              {tools.map((t) => (
+                <li key={t.name} className="text-xs">
+                  <span className="font-mono font-medium">{t.name}</span>
+                  {t.description && <span className="text-[var(--text-muted)]"> -- {t.description}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-3">
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" onClick={onCancel} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">
+          Cancel
+        </button>
+        {server && (
+          <>
+            <button
+              type="button"
+              onClick={() => void handleRefresh()}
+              disabled={refreshing}
+              className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
+            >
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+              className="ml-auto rounded border border-[var(--danger)] px-3 py-1.5 text-sm text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+            >
+              {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+          </>
+        )}
+      </div>
+
+      {refreshMessage && (
+        <p data-testid="mcp-refresh-result" className="text-sm text-[var(--text-muted)]">
+          {refreshMessage}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function McpServerRow({
+  health,
+  active,
+  busy,
+  onSelect,
+  onToggleEnabled,
+  onRefresh,
+}: {
+  health: McpServerHealth;
+  active: boolean;
+  busy: boolean;
+  onSelect: () => void;
+  onToggleEnabled: () => void;
+  onRefresh: () => void;
+}): JSX.Element {
+  return (
+    <li>
+      <div className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'}`}>
+        <button
+          type="button"
+          data-testid={`mcp-row-${health.id}`}
+          onClick={onSelect}
+          aria-current={active ? 'true' : undefined}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${STATUS_COLOR[health.status]}`} aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate">{health.name}</span>
+          <span className={`shrink-0 text-xs ${active ? '' : 'text-[var(--text-muted)]'}`}>
+            {health.transport} · {health.enabled ? `${health.toolCount} tool${health.toolCount === 1 ? '' : 's'}` : 'disabled'}
+          </span>
+        </button>
+        <button
+          type="button"
+          aria-label={health.enabled ? `Disable ${health.name}` : `Enable ${health.name}`}
+          disabled={busy}
+          onClick={onToggleEnabled}
+          className={`shrink-0 rounded border px-1.5 py-0.5 text-xs disabled:opacity-50 ${
+            active ? 'border-[var(--accent-text)]' : 'border-[var(--border)] hover:bg-[var(--bg-sunken)]'
+          }`}
+        >
+          {health.enabled ? 'On' : 'Off'}
+        </button>
+        <button
+          type="button"
+          aria-label={`Refresh ${health.name}`}
+          disabled={busy}
+          onClick={onRefresh}
+          className={`shrink-0 rounded border px-1.5 py-0.5 text-xs disabled:opacity-50 ${
+            active ? 'border-[var(--accent-text)]' : 'border-[var(--border)] hover:bg-[var(--bg-sunken)]'
+          }`}
+        >
+          ↻
+        </button>
+      </div>
+      {health.status === 'error' && health.lastError && (
+        <p className={`px-2 pb-1 truncate text-xs ${active ? 'text-[var(--accent-text)]' : 'text-[var(--danger)]'}`} title={health.lastError}>
+          {health.lastError}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/**
+ * MCP servers panel (settings UI, remaining piece 1). Add/edit/delete,
+ * enable/disable, and a manual refresh -- the previous agent's Connections/
+ * Models/Profiles panels were built before there was any way to manage MCP
+ * servers, so `Profile.toolPolicy.mcpServerIds` (this panel's sibling in
+ * ProfilesPanel) had nothing to select from.
+ *
+ * `list()` (`GET /mcp-servers`, polled here every few seconds like
+ * Inspector's own health section) returns live health only -- status, tool
+ * COUNT, enabled -- so the row list is built from that directly. The edit
+ * form needs the full stored config (command/args/url/env/headers), which
+ * has no place in the health shape, so selecting a row fetches it separately
+ * via `GET /mcp-servers/:id`. `pollNonce` forces `usePolled` to restart (and
+ * therefore re-fetch immediately, not waiting out the rest of the interval)
+ * right after any action this panel itself performs -- create, delete,
+ * enable/disable, refresh -- so those actions are reflected in the list
+ * without a several-second-long "did that work?" gap.
+ */
+export function McpServersPanel(): JSX.Element {
+  const [pollNonce, setPollNonce] = useState(0);
+  const { data: servers, failed: healthFailed } = usePolled(() => api.mcpServers.list(), [pollNonce]);
+  const bumpPoll = (): void => setPollNonce((n) => n + 1);
+
+  const [editingId, setEditingId] = useState<string | 'new' | null>(null);
+  const [selectedConfig, setSelectedConfig] = useState<McpServer | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // Set right before `handleSaved` switches `editingId` to a just-created/
+  // -saved server's own id -- that id's full config is already in hand (the
+  // create/patch response IS the full McpServer), so the effect below must
+  // skip its own fetch for that one transition rather than immediately
+  // re-requesting via GET the exact object it was just handed, which would
+  // also flash the form to "Loading…" right after a successful save.
+  const skipNextFetch = useRef(false);
+
+  useEffect(() => {
+    if (!editingId || editingId === 'new') {
+      setSelectedConfig(null);
+      setLoadError(null);
+      return;
+    }
+    if (skipNextFetch.current) {
+      skipNextFetch.current = false;
+      return;
+    }
+    let cancelled = false;
+    setLoadingConfig(true);
+    setLoadError(null);
+    api.mcpServers
+      .get(editingId)
+      .then((cfg) => {
+        if (!cancelled) setSelectedConfig(cfg);
+      })
+      .catch((err: unknown) => {
+        console.error(`[grunt-web] failed to load MCP server ${editingId}:`, err);
+        if (!cancelled) setLoadError(errorMessage(err, 'Failed to load this server -- please try again.'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingConfig(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [editingId]);
+
+  function handleSaved(server: McpServer): void {
+    // Only meaningful (and only consumed) when `editingId` is genuinely
+    // about to change, e.g. 'new' -> the freshly created id -- that's the
+    // one case the effect below will actually re-run for. Patching an
+    // ALREADY-selected server leaves `editingId` unchanged, so the effect
+    // never re-runs and never gets a chance to consume the flag; setting it
+    // in that case would wrongly skip the fetch for whatever the user
+    // selects next.
+    if (editingId !== server.id) skipNextFetch.current = true;
+    setSelectedConfig(server);
+    setEditingId(server.id);
+    bumpPoll();
+  }
+
+  function handleDeleted(): void {
+    setEditingId(null);
+    setSelectedConfig(null);
+    bumpPoll();
+  }
+
+  async function toggleEnabled(health: McpServerHealth): Promise<void> {
+    setBusyIds((s) => new Set(s).add(health.id));
+    try {
+      await api.mcpServers.patch(health.id, { enabled: !health.enabled });
+      bumpPoll();
+    } catch (err) {
+      console.error(`[grunt-web] failed to toggle MCP server ${health.id}:`, err);
+    } finally {
+      setBusyIds((s) => {
+        const next = new Set(s);
+        next.delete(health.id);
+        return next;
+      });
+    }
+  }
+
+  async function refreshOne(health: McpServerHealth): Promise<void> {
+    setBusyIds((s) => new Set(s).add(health.id));
+    try {
+      await api.mcpServers.refresh(health.id);
+      bumpPoll();
+    } catch (err) {
+      console.error(`[grunt-web] failed to refresh MCP server ${health.id}:`, err);
+    } finally {
+      setBusyIds((s) => {
+        const next = new Set(s);
+        next.delete(health.id);
+        return next;
+      });
+    }
+  }
+
+  const showForm = editingId === 'new' || selectedConfig !== null;
+
+  return (
+    <div className="mx-auto flex max-w-5xl gap-6">
+      <div className="w-80 shrink-0">
+        <button
+          type="button"
+          onClick={() => setEditingId('new')}
+          className="mb-3 w-full rounded bg-[var(--accent)] px-2 py-1.5 text-sm font-medium text-[var(--accent-text)]"
+        >
+          + New MCP server
+        </button>
+        {healthFailed && <p className="mb-2 text-xs text-[var(--danger)]">Couldn&rsquo;t load MCP server health.</p>}
+        {servers === null ? (
+          <p className="text-sm text-[var(--text-faint)]">Loading…</p>
+        ) : servers.length === 0 ? (
+          <p className="text-sm text-[var(--text-faint)]">No MCP servers yet.</p>
+        ) : (
+          <ul data-testid="mcp-servers-list" className="space-y-0.5">
+            {servers.map((h) => (
+              <McpServerRow
+                key={h.id}
+                health={h}
+                active={h.id === editingId}
+                busy={busyIds.has(h.id)}
+                onSelect={() => setEditingId(h.id)}
+                onToggleEnabled={() => void toggleEnabled(h)}
+                onRefresh={() => void refreshOne(h)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="flex-1">
+        {editingId === 'new' ? (
+          <McpServerForm key="new" server={null} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
+        ) : editingId && loadingConfig ? (
+          <p className="text-sm text-[var(--text-faint)]">Loading…</p>
+        ) : editingId && loadError ? (
+          <p className="text-sm text-[var(--danger)]">{loadError}</p>
+        ) : showForm && selectedConfig ? (
+          <McpServerForm key={selectedConfig.id} server={selectedConfig} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
+        ) : (
+          <p className="text-sm text-[var(--text-faint)]">Select a server to edit, or create a new one.</p>
+        )}
+      </div>
+    </div>
+  );
+}

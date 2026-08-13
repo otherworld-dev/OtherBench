@@ -123,6 +123,7 @@ export interface CreateMcpServerBody {
   transport: 'stdio' | 'http';
   command?: string | null;
   args?: string[];
+  /** Plaintext env VAR VALUES -- the server stores each as a SecretStore ref (`McpServer.envRefs`) and never echoes the value back, identically to `headers` below (see routes/tools.ts). */
   env?: Record<string, string>;
   url?: string | null;
   /** Plaintext header VALUES -- the server stores each as a SecretStore ref and never echoes the value back (see routes/tools.ts). */
@@ -193,7 +194,10 @@ export const api = {
   },
 
   mcpServers: {
+    /** Live health only (status/toolCount/lastError) -- NOT full config (no command/args/url/env/headers). See `get` below for that. */
     list: () => request<McpServerHealth[]>('/mcp-servers'),
+    /** Full stored config for one server, for the edit form -- `envRefs`/`headerRefs` are reference ids, never the plaintext values they point at. */
+    get: (id: string) => request<McpServer>(`/mcp-servers/${id}`),
     create: (body: CreateMcpServerBody) => post<McpServer>('/mcp-servers', body),
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),

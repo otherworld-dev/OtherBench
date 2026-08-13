@@ -3,6 +3,7 @@ import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { usePolled } from '../lib/usePolled.js';
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 
@@ -43,49 +44,9 @@ function formatCost(cost: number): string {
  * decision #3) is about never rendering an empty state that HIDES real
  * activity, not about sub-second live-ness.
  */
-const POLL_INTERVAL_MS = 4000;
-
-/**
- * Polls `fetcher` every `POLL_INTERVAL_MS`, starting immediately and
- * restarting whenever `deps` changes (e.g. switching chats). Deliberately
- * does NOT clear `data` back to `null` between ticks of the SAME poll loop
- * -- only on a genuine restart -- so a routine re-poll updates numbers in
- * place instead of flashing back to a loading state every few seconds.
- */
-function usePolled<T>(fetcher: () => Promise<T>, deps: unknown[]): { data: T | null; failed: boolean } {
-  const [data, setData] = useState<T | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setData(null);
-    setFailed(false);
-
-    async function tick(): Promise<void> {
-      try {
-        const result = await fetcher();
-        if (!cancelled) {
-          setData(result);
-          setFailed(false);
-        }
-      } catch (err) {
-        console.error('[grunt-web] Inspector poll failed:', err);
-        if (!cancelled) setFailed(true);
-      }
-      if (!cancelled) timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
-    }
-
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps is the caller's own explicit restart list, not derivable from `fetcher`'s identity.
-  }, deps);
-
-  return { data, failed };
-}
+// `usePolled` moved to ../lib/usePolled.js so the Settings > MCP servers
+// panel can reuse the exact same "no push channel, poll and don't flash to
+// loading on a routine re-fetch" behaviour for its own health list.
 
 // ---------------------------------------------------------------------------
 // Workspace root -- the single setting that unblocks the whole tool runtime.

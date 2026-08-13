@@ -1,14 +1,16 @@
 import { useState, type JSX } from 'react';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
+import { McpServersPanel } from './settings/McpServersPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles';
+type Tab = 'connections' | 'models' | 'profiles' | 'mcpServers';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
   models: 'Models',
   profiles: 'Profiles',
+  mcpServers: 'MCP Servers',
 };
 
 export interface SettingsViewProps {
@@ -16,14 +18,14 @@ export interface SettingsViewProps {
 }
 
 /**
- * Full-screen overlay housing the three settings panels (Connections,
- * Models, Profiles) -- before this, every connection/model/profile had to
- * be created with `curl` against the REST API, the single biggest
- * usability gap in the product. Deliberately a sibling of `UsageView`:
- * same full-screen overlay shell, same tab-strip-in-header pattern, same
- * "click a header button in App.tsx" entry point -- so switching between
- * the two while working feels like the same surface, not two different
- * apps bolted together.
+ * Full-screen overlay housing the settings panels (Connections, Models,
+ * Profiles, MCP Servers) -- before this, every connection/model/profile/MCP
+ * server had to be created with `curl` against the REST API, the single
+ * biggest usability gap in the product. Deliberately a sibling of
+ * `UsageView`: same full-screen overlay shell, same tab-strip-in-header
+ * pattern, same "click a header button in App.tsx" entry point -- so
+ * switching between the two while working feels like the same surface, not
+ * two different apps bolted together.
  */
 export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('connections');
@@ -57,6 +59,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'connections' && <ConnectionsPanel />}
         {tab === 'models' && <ModelsPanel />}
         {tab === 'profiles' && <ProfilesPanel />}
+        {tab === 'mcpServers' && <McpServersPanel />}
       </div>
     </div>
   );
