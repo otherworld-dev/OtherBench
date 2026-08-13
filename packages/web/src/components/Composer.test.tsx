@@ -18,6 +18,7 @@ vi.mock('../state/api.js', () => ({
       upload: vi.fn(),
       list: vi.fn(),
       contentUrl: (id: string) => `/api/attachments/${id}/content`,
+      previewable: (mime: string) => ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/avif'].includes(mime),
     },
   },
 }));

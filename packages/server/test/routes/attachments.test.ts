@@ -175,14 +175,103 @@ describe('GET /api/attachments/:id', () => {
 });
 
 describe('GET /api/attachments/:id/content', () => {
-  it('streams back the exact original bytes with the right Content-Type', async () => {
+  it('streams back the exact original bytes, forced to a download for a non-image type -- stored MIME is never trusted for inline rendering (security fix: was `text/plain` inline, is now `application/octet-stream` + attachment; nothing in the UI relied on inline text)', async () => {
     const created = await (
       await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'original bytes', 'text/plain') })
     ).json();
 
     const res = await app().request(`/api/attachments/${created.id}/content`);
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('text/plain');
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment/);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(await res.text()).toBe('original bytes');
+  });
+});
+
+/**
+ * Regression coverage for the stored-XSS-via-attachment-serve hole: this
+ * origin also hosts an API that can run shell commands (see this route's
+ * module doc), so a script that executes here can call `/api/...` as the
+ * user -- "uploaded a file" must never become "ran a command on the
+ * machine". Every test in this block failed against the pre-fix route,
+ * which served attachments with the STORED (attacker-controlled) MIME type
+ * and an unconditional `Content-Disposition: inline`.
+ */
+describe('GET /api/attachments/:id/content -- inline-render hardening', () => {
+  it('never serves an uploaded .html file as inline text/html (the actual stored-XSS vector: fetching it would have executed script in this origin)', async () => {
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        body: uploadForm('evil.html', '<script>fetch("/api/chats").then(r=>r.json()).then(console.log)</script>', 'text/html'),
+      })
+    ).json();
+
+    const res = await app().request(`/api/attachments/${created.id}/content`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).not.toBe('text/html');
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment/);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('never serves an uploaded .svg file as inline image/svg+xml -- SVG can carry <script> and is not inert like a raster image', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(document.cookie)</script></svg>';
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        body: uploadForm('evil.svg', svg, 'image/svg+xml'),
+      })
+    ).json();
+
+    const res = await app().request(`/api/attachments/${created.id}/content`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).not.toBe('image/svg+xml');
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment/);
+  });
+
+  it('still serves a PNG inline with its real Content-Type, so the thread/composer thumbnail preview keeps working', async () => {
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        body: uploadForm('photo.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), 'image/png'),
+      })
+    ).json();
+
+    const res = await app().request(`/api/attachments/${created.id}/content`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('content-disposition')).toMatch(/^inline/);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it('a filename engineered to break out of the quoted Content-Disposition value (CR/LF, quotes, a trailing backslash) cannot inject a header or malform the value', async () => {
+    const nasty = 'evil".txt\r\nX-Injected: yes\r\nbackslash\\';
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm(nasty, 'hi', 'text/plain') })
+    ).json();
+
+    const res = await app().request(`/api/attachments/${created.id}/content`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-injected')).toBeNull();
+    const disposition = res.headers.get('content-disposition')!;
+    expect(disposition).not.toMatch(/[\r\n]/);
+    // No raw backslash anywhere: one right before the closing quote of the
+    // ASCII `filename="..."` fallback would escape it under the HTTP
+    // quoted-string grammar and leave the value unterminated for a strict
+    // parser -- the pre-fix code only stripped CR/LF/", not backslash.
+    expect(disposition).not.toContain('\\');
+    expect(disposition.startsWith('attachment')).toBe(true);
+  });
+
+  it('a non-ASCII filename round-trips via the RFC 5987 filename* parameter rather than being mangled', async () => {
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('café ☕.txt', 'hi', 'text/plain') })
+    ).json();
+
+    const res = await app().request(`/api/attachments/${created.id}/content`);
+    const disposition = res.headers.get('content-disposition')!;
+    expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent('café ☕.txt')}`);
   });
 });

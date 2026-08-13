@@ -38,7 +38,7 @@ function imageDisplayName(attachmentId: string, mime: string): string {
 
 function AttachmentPartChip({ part }: { part: Extract<Part, { type: 'image' | 'file' }> }): JSX.Element {
   const filename = part.type === 'file' ? part.filename : imageDisplayName(part.attachmentId, part.mime);
-  const previewUrl = part.mime.startsWith('image/') ? api.attachments.contentUrl(part.attachmentId) : undefined;
+  const previewUrl = api.attachments.previewable(part.mime) ? api.attachments.contentUrl(part.attachmentId) : undefined;
   return <AttachmentChip filename={filename} mime={part.mime} previewUrl={previewUrl} />;
 }
 

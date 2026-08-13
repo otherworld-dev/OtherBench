@@ -292,7 +292,7 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
               filename={a.filename}
               mime={a.mime}
               size={a.size}
-              previewUrl={a.mime.startsWith('image/') ? api.attachments.contentUrl(a.id) : undefined}
+              previewUrl={api.attachments.previewable(a.mime) ? api.attachments.contentUrl(a.id) : undefined}
               onRemove={() => removeAttachment(a.id)}
             />
           ))}

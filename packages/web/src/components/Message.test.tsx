@@ -110,6 +110,17 @@ describe('Message', () => {
     expect(screen.getByTestId('attachment-chip')).toHaveTextContent('report.pdf');
   });
 
+  it('never points an <img> at an SVG attachment -- the content route now forces SVG to a download (it can carry script), so an inline preview would only ever be a broken image', () => {
+    const message = base({ parts: [{ type: 'file', attachmentId: 'att-1', mime: 'image/svg+xml', filename: 'evil.svg' }] });
+    const { container } = render(<Message message={message} />);
+
+    expect(screen.getByTestId('attachment-chip')).toBeInTheDocument();
+    // AttachmentChip's thumbnail <img> has alt="" (decorative, so it's
+    // absent from the accessibility tree by design) -- querying the DOM
+    // directly here, not by role, is deliberate.
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+  });
+
   it('renders an attachment chip for a user message that included an image, alongside its plain text', () => {
     const message = base({
       role: 'user',

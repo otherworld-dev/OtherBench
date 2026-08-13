@@ -33,14 +33,69 @@ function tooLarge(name: string, size: number): HTTPException {
 }
 
 /**
- * Strips characters that would make an invalid or ambiguous HTTP header
- * value out of a filename that is otherwise pure display metadata -- see
- * this route's module doc (and blob-store.ts) for the broader
- * path-containment rule this filename is never used for: the STORAGE path
- * is always derived from the content hash, never from this string.
+ * MIME types that are safe to serve with `Content-Disposition: inline` --
+ * i.e. rendering them directly, in this origin, cannot execute script.
+ * Everything else is served as `application/octet-stream` with `attachment`
+ * disposition (a forced download) regardless of what the caller uploaded it
+ * as. This is a strict ALLOWLIST, not a denylist, and it is checked against
+ * a normalised copy of the stored MIME, never trusted verbatim -- see this
+ * route's module doc for why the stored value can't be trusted at all.
+ *
+ * `image/svg+xml` is deliberately NOT here even though it superficially
+ * looks like "just another image type": SVG is an XML document format that
+ * can carry `<script>`, `onload=`, and other script-executing content, and
+ * a script that runs in this origin can call this server's own `/api/...`
+ * as the user -- including the shell tool. Every type below is a raster
+ * format with no comparable script surface, so an attacker who mislabels
+ * arbitrary bytes with one of these MIME types gets, at worst, a broken
+ * image (the browser tries to decode it as that raster format and fails),
+ * never script execution -- and `X-Content-Type-Options: nosniff` below
+ * closes off the one remaining route to that (the browser sniffing the
+ * bytes and rendering them as something other than what Content-Type says).
  */
-function safeHeaderFilename(filename: string): string {
-  return filename.replace(/[\r\n"]/g, '');
+const INLINE_SAFE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+  'image/avif',
+]);
+
+/** Strips any `;charset=...`-style parameter and normalises case/whitespace, so a stored MIME value like `"Image/PNG ; foo=bar"` still matches the allowlist by its base type. */
+function baseMimeType(mime: string): string {
+  return (mime.split(';')[0] ?? '').trim().toLowerCase();
+}
+
+/**
+ * Builds a `Content-Disposition` header value that cannot be used to inject
+ * a second header or break out of the quoted filename, from a filename that
+ * is attacker-controlled upload metadata (see this route's module doc) --
+ * see blob-store.ts for the broader path-containment rule this filename is
+ * never used for: the STORAGE path is always derived from the content hash,
+ * never from this string.
+ *
+ * Two defences, both required:
+ *   - Control characters (CR, LF, and friends) are stripped outright -- a
+ *     filename containing a raw CRLF pair could otherwise split the
+ *     response into two headers (response splitting / header injection).
+ *   - The legacy, quoted `filename="..."` fallback has its `"` and `\`
+ *     characters removed so it can never terminate the quoted string early
+ *     (a lone trailing backslash would otherwise escape the closing quote
+ *     under the HTTP quoted-string grammar, leaving the value ambiguous to
+ *     a strict parser). The real, EXACT filename -- including any
+ *     originally-quote-or-backslash-bearing or non-ASCII content -- travels
+ *     in the RFC 5987 `filename*=UTF-8''...` extended parameter instead,
+ *     which is percent-encoded and therefore cannot contain a literal
+ *     quote, backslash, CR, LF, or any other header-breaking byte.
+ */
+function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
+  const stripped = filename.replace(/[\x00-\x1f\x7f]/g, '');
+  const asciiFallback = stripped.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'download';
+  const encoded = encodeURIComponent(stripped) || 'download';
+  return `${kind}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
 /**
@@ -54,6 +109,24 @@ function safeHeaderFilename(filename: string): string {
  * The uploaded file's ORIGINAL filename is stored as metadata only
  * (`Attachment.filename`) and is never joined into any filesystem path --
  * `BlobStore.put()` doesn't even accept one, by construction.
+ *
+ * **`GET /attachments/:id/content` serves attacker-controlled bytes from
+ * this app's OWN origin, which also hosts an API that can run shell
+ * commands (the `run_command` tool) and, when configured, holds the bearer
+ * token.** A response that renders as HTML or SVG in the browser is
+ * therefore not "an alert box in a sandboxed viewer" -- script executing in
+ * this origin can call `/api/...` as the user, including the shell tool.
+ * Both the attachment's stored MIME type (`file.type` off the multipart
+ * upload -- fully attacker-controlled) and its original filename are
+ * treated as such throughout this route: the response `Content-Type` is
+ * NEVER the stored value verbatim, only ever a literal from
+ * `INLINE_SAFE_MIME_TYPES` or the fixed fallback `application/octet-stream`
+ * (see that constant's doc for why SVG is deliberately excluded even though
+ * it looks like "just another image type"), `Content-Disposition` defaults
+ * to `attachment` (forces a download) and is only ever `inline` for that
+ * same narrow allowlist, and the filename is run through
+ * `contentDisposition()` rather than interpolated directly, so it can
+ * neither inject a header nor break out of the quoted value.
  */
 export function attachmentsRoutes(container: Container): Hono {
   const app = new Hono();
@@ -117,12 +190,33 @@ export function attachmentsRoutes(container: Container): Hono {
       throw new HTTPException(404, { message: `Attachment "${attachment.id}"'s blob is missing on disk.` });
     }
 
+    // Never trust the stored MIME for the response Content-Type -- it's
+    // attacker-controlled upload metadata (see the module doc above). Only
+    // a strict allowlist of inert raster image types is served with its
+    // real type and `inline` disposition; everything else -- including
+    // SVG, which CAN carry script -- is served as an opaque, forced
+    // download. `servedType` is always a literal from the allowlist itself
+    // (never the raw stored string), so even a byte-for-byte match can't
+    // smuggle anything extra through.
+    const inlineSafe = INLINE_SAFE_MIME_TYPES.has(baseMimeType(attachment.mime));
+    const servedType = inlineSafe ? baseMimeType(attachment.mime) : 'application/octet-stream';
+    const disposition = inlineSafe ? 'inline' : 'attachment';
+
     return new Response(new Uint8Array(data), {
       status: 200,
       headers: {
-        'Content-Type': attachment.mime,
-        'Content-Disposition': `inline; filename="${safeHeaderFilename(attachment.filename)}"`,
+        'Content-Type': servedType,
+        'Content-Disposition': contentDisposition(disposition, attachment.filename),
         'Content-Length': String(data.length),
+        // Belt-and-braces alongside the allowlist above: even if a browser
+        // would otherwise sniff these bytes as something more dangerous
+        // than `servedType` claims, this forbids that outright.
+        'X-Content-Type-Options': 'nosniff',
+        // Defence in depth: even for an `inline` (raster-image) response,
+        // this forbids the response from loading anything else or being
+        // treated as an active document, in browsers that honour CSP on a
+        // directly-navigated resource.
+        'Content-Security-Policy': "default-src 'none'; sandbox",
       },
     });
   });

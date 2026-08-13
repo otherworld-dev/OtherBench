@@ -106,6 +106,18 @@ export interface SearchResult {
   snippet: string;
 }
 
+/** See `api.attachments.previewable`'s doc -- must stay identical to the server's `INLINE_SAFE_MIME_TYPES`. */
+const INLINE_PREVIEWABLE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+  'image/avif',
+]);
+
 export interface CreateMcpServerBody {
   name: string;
   transport: 'stdio' | 'http';
@@ -206,6 +218,19 @@ export const api = {
     list: (chatId: string) => request<Attachment[]>(`/chats/${chatId}/attachments`),
     /** Not fetched via `request` -- consumed directly as an `<img src>`/download URL. */
     contentUrl: (id: string) => `/api/attachments/${id}/content`,
+    /**
+     * True only for the narrow raster-image allowlist that
+     * `GET /attachments/:id/content` (packages/server/src/routes/
+     * attachments.ts's `INLINE_SAFE_MIME_TYPES`) will actually serve
+     * `inline` with its real Content-Type -- kept in sync with that
+     * allowlist deliberately. Everything else, including `image/svg+xml`
+     * (SVG can carry script, so it's excluded there on purpose), now comes
+     * back as an opaque `application/octet-stream` download regardless of
+     * the mime string, so pointing an `<img src>` at it would only ever
+     * show a broken-image icon -- callers should gate any inline preview
+     * on this instead of a bare `mime.startsWith('image/')` check.
+     */
+    previewable: (mime: string): boolean => INLINE_PREVIEWABLE_MIME_TYPES.has((mime.split(';')[0] ?? '').trim().toLowerCase()),
   },
 
   /** Not fetched via `request` -- consumed directly by `state/sse.ts` as an `EventSource` URL. */
