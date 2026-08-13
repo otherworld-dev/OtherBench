@@ -121,4 +121,21 @@ describe('App bootstrap', () => {
     await user.click(screen.getByRole('button', { name: /close usage view/i }));
     expect(screen.queryByTestId('usage-view')).not.toBeInTheDocument();
   });
+
+  it('opens the settings overlay from the header button, and closes it again', async () => {
+    mockedConnections.mockResolvedValue([]);
+    mockedModels.mockResolvedValue([]);
+    mockedProfiles.mockResolvedValue([]);
+    mockedChats.mockResolvedValue([]);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await screen.findByText(/no chats yet/i);
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(await screen.findByTestId('settings-view')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /close settings/i }));
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument();
+  });
 });
