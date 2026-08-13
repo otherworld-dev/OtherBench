@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
@@ -116,6 +117,22 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   const db = openDatabase(options.dbPath);
   runMigrations(db);
   const store = new SqliteStore(db);
+
+  // A message row left `status: 'streaming'` can only mean the process that
+  // was writing it is gone -- this process's own `TurnRunner.controllers`
+  // (the only thing that could still be driving one) is empty on every
+  // fresh start, so any such row found here is orphaned, not a live stream.
+  // Reconciled synchronously, before anything else can reach the store, so
+  // no route or SSE client ever observes a `streaming` row this process
+  // did not itself just start. See reconcile.ts for why the dead end this
+  // closes has no in-app escape otherwise.
+  const reconciled = reconcileInterruptedTurns(store);
+  if (reconciled.length > 0) {
+    console.warn(
+      `[grunt-server] reconciled ${reconciled.length} message(s) left "streaming" by a previous process: ` +
+        reconciled.map((m) => m.id).join(', ')
+    );
+  }
 
   const passphrase = await resolveSecretsPassphrase(options.secretsPath);
   const secrets = createSecretStore(options.secretsPath, passphrase);

@@ -108,4 +108,61 @@ describe('createContainer', () => {
     expect(container.store.connections.list()).toEqual([]);
     container.close();
   });
+
+  it(
+    'reconciles a message left "streaming" by a previous process on startup, over a real reopened database -- ' +
+      'simulates the process dying mid-turn (kill -9 / power loss / crash): the row is never cleanly closed, so ' +
+      'nothing but the next process opening this same file can ever move it out of "streaming"',
+    async () => {
+      const dbPath = join(dir, 'grunt.db');
+      const secretsPath = join(dir, 'secrets.json');
+
+      // First "process": creates the referential chain a message needs, and
+      // a row left mid-stream -- as if TurnRunner.runVariant was still
+      // writing to it when this process died, with SOME partial content
+      // already checkpointed.
+      const first = await createContainer({ dbPath, secretsPath });
+      first.store.connections.create({
+        id: 'conn-1', name: 'Test', kind: 'mock', baseUrl: null, secretRef: null,
+        extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null,
+      });
+      first.store.models.create({
+        id: 'model-1', connectionId: 'conn-1', modelId: 'm', displayName: 'M', source: 'manual',
+        supportsVision: false, supportsTools: false, supportsReasoning: false, contextWindow: null,
+        maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
+      });
+      first.store.profiles.create({
+        id: 'profile-1', name: 'P', description: null, colour: null, connectionId: 'conn-1', modelId: 'model-1',
+        systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+        isDefault: false, archivedAt: null,
+      });
+      first.store.chats.create({ id: 'chat-1', profileId: 'profile-1', title: 'Chat', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+      first.store.messages.create({
+        id: 'user-1', chatId: 'chat-1', parentId: null, role: 'user',
+        parts: [{ type: 'text', text: 'hello' }], status: 'complete', error: null, producedBy: null,
+      });
+      first.store.messages.create({
+        id: 'msg-orphaned', chatId: 'chat-1', parentId: 'user-1', role: 'assistant',
+        parts: [{ type: 'text', text: 'partial answer before the crash' }],
+        status: 'streaming', error: null, producedBy: null,
+      });
+      // No graceful shutdown call exists that would flush a terminal status
+      // -- `close()` here only releases the file handle, exactly like a
+      // crash would (kill -9 doesn't run any of this process's JS either).
+      first.close();
+
+      // Second "process": reopens the SAME database file.
+      const second = await createContainer({ dbPath, secretsPath });
+      try {
+        const reconciled = second.store.messages.get('msg-orphaned');
+        expect(reconciled?.status).toBe('error');
+        expect(reconciled?.status).not.toBe('streaming');
+        expect(reconciled?.error?.message.toLowerCase()).toContain('restart');
+        // Partial content survives -- reconciliation never touches parts.
+        expect(reconciled?.parts).toEqual([{ type: 'text', text: 'partial answer before the crash' }]);
+      } finally {
+        second.close();
+      }
+    }
+  );
 });

@@ -521,6 +521,21 @@ export function runStoreContract(
       it('updateStatus throws when the id does not exist', () => {
         expect(() => store.messages.updateStatus('does-not-exist', 'complete')).toThrow(Error);
       });
+
+      it('listByStatus returns every message at that status across every chat, and none at another status', () => {
+        const { chat: chatA } = seedChat(store, 'chat-a');
+        const { chat: chatB } = seedChat(store, 'chat-b');
+        store.messages.create(makeMessageInput({ id: 'streaming-a', chatId: chatA.id, status: 'streaming' }));
+        store.messages.create(makeMessageInput({ id: 'streaming-b', chatId: chatB.id, status: 'streaming' }));
+        store.messages.create(makeMessageInput({ id: 'complete-a', chatId: chatA.id, status: 'complete' }));
+
+        expect(store.messages.listByStatus('streaming').map((m) => m.id).sort()).toEqual(['streaming-a', 'streaming-b']);
+        expect(store.messages.listByStatus('complete').map((m) => m.id)).toEqual(['complete-a']);
+      });
+
+      it('listByStatus returns [] when nothing is at that status', () => {
+        expect(store.messages.listByStatus('streaming')).toEqual([]);
+      });
     });
 
     describe('grants', () => {

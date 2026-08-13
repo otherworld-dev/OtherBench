@@ -214,6 +214,13 @@ export class SqliteMessageRepo implements MessageRepo {
     }
   }
 
+  listByStatus(status: MessageStatus): CanonMessage[] {
+    const rows = this.db
+      .prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`)
+      .all(status) as Record<string, unknown>[];
+    return rows.map(fromRow);
+  }
+
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
     const match = toFtsMatchExpression(query);
     if (match === null) return [];

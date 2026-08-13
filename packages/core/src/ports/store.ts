@@ -65,6 +65,14 @@ export interface MessageRepo {
   updateParts(id: string, parts: Part[]): void;
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void;
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[];
+  /**
+   * Every message across every chat currently at `status`, in no particular
+   * order. Exists for startup reconciliation (see
+   * `domain/reconcile.ts`'s `reconcileInterruptedTurns`), which needs to
+   * find every orphaned `streaming` row without walking each chat's message
+   * tree one at a time via `roots`/`children`.
+   */
+  listByStatus(status: MessageStatus): CanonMessage[];
 }
 
 // --- attachments ----------------------------------------------------------------

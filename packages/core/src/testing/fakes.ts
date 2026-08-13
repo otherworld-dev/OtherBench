@@ -425,6 +425,10 @@ class InMemoryMessageRepo implements MessageRepo {
     m.error = error ? structuredClone(error) : null;
   }
 
+  listByStatus(status: MessageStatus): CanonMessage[] {
+    return [...this.byId.values()].filter((m) => m.status === status).map((m) => structuredClone(m));
+  }
+
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
