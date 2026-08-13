@@ -97,14 +97,22 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   const v = value as Record<string, unknown>;
   const pathPrefix = v['pathPrefix'];
   const commandPrefix = v['commandPrefix'];
+  const commandExact = v['commandExact'];
   if (pathPrefix !== undefined && typeof pathPrefix !== 'string') {
     throw new HTTPException(400, { message: '"constraint.pathPrefix" must be a string.' });
   }
   if (commandPrefix !== undefined && typeof commandPrefix !== 'string') {
     throw new HTTPException(400, { message: '"constraint.commandPrefix" must be a string.' });
   }
-  if (pathPrefix === undefined && commandPrefix === undefined) return null;
-  return { pathPrefix: pathPrefix as string | undefined, commandPrefix: commandPrefix as string | undefined };
+  if (commandExact !== undefined && typeof commandExact !== 'string') {
+    throw new HTTPException(400, { message: '"constraint.commandExact" must be a string.' });
+  }
+  if (pathPrefix === undefined && commandPrefix === undefined && commandExact === undefined) return null;
+  return {
+    pathPrefix: pathPrefix as string | undefined,
+    commandPrefix: commandPrefix as string | undefined,
+    commandExact: commandExact as string | undefined,
+  };
 }
 
 function parseApprovalChoice(body: ApprovalBody): ApprovalChoice {

@@ -147,7 +147,24 @@ export interface Grant {
   profileId: string | null;
   toolName: string;
   scope: 'once' | 'chat' | 'always';
-  constraint: { pathPrefix?: string; commandPrefix?: string } | null;
+  /**
+   * Narrows what the grant authorises. `null` means "no narrowing" -- only
+   * ever valid for non-shell tools; `PermissionBroker` refuses to create an
+   * unconstrained grant of any scope for the shell.
+   *
+   * - `pathPrefix`: matched against the RESOLVED path (`containPath`), not
+   *   the raw argument, so `..` cannot walk out of the granted subtree.
+   * - `commandPrefix`: argv-prefix match, no shell metacharacters. Broad --
+   *   see `commandPrefixMatches` in domain/permissions.ts for exactly how
+   *   broad, and why.
+   * - `commandExact`: the command must equal this string exactly (modulo
+   *   surrounding whitespace). What a `'chat'`-scope shell approval is
+   *   stored as.
+   *
+   * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
+   * needs no migration.
+   */
+  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string } | null;
   expiresAt: number | null;
 }
 
