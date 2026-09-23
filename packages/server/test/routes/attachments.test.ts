@@ -26,7 +26,7 @@ beforeEach(async () => {
     mcpManager: {} as never,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
-    blobStore: createBlobStore(dataDir),
+    blobStore: createBlobStore(join(dataDir, 'attachments')),
     close: () => {},
   };
   container.store.chats.create({
@@ -384,5 +384,80 @@ describe('DELETE /api/attachments/:id', () => {
   it('404s for an unknown attachment id', async () => {
     const res = await app().request('/api/attachments/does-not-exist', { method: 'DELETE' });
     expect(res.status).toBe(404);
+  });
+
+  /**
+   * Task 32 fix round 1, Critical 1: before this, NOTHING ever set
+   * `attachment.messageId` in production -- the only place that did was
+   * this very test file, setting it BY HAND. This test sends a real turn
+   * through the real route (`POST /chats/:id/turns`, which drives the real
+   * `TurnRunner.run`) instead, so it fails against the pre-fix code (the
+   * attachment stays `messageId: null` and DELETE wrongly succeeds).
+   */
+  it('409s for an attachment actually sent via POST /chats/:id/turns -- no hand-set messageId', async () => {
+    container.store.connections.create({
+      id: 'conn-1', name: 'Conn', kind: 'mock', baseUrl: null, secretRef: null,
+      extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null,
+    });
+    container.store.profiles.create({
+      id: 'profile-1', name: 'Profile', description: null, colour: null, connectionId: 'conn-1', modelId: 'mock-standard',
+      systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+      isDefault: false, archivedAt: null,
+    });
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'sent for real', 'text/plain') })
+    ).json();
+    const blobPath = join(dataDir, 'attachments', created.sha256.slice(0, 2), created.sha256);
+
+    const turnRes = await app().request('/api/chats/chat-1/turns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parentId: null,
+        parts: [{ type: 'file', attachmentId: created.id, mime: 'text/plain', filename: 'a.txt' }],
+        profileIds: ['profile-1'],
+      }),
+    });
+    expect(turnRes.status).toBe(202);
+    // The real turn actually bound it -- not a hand-set messageId.
+    expect(container.store.attachments.get(created.id)?.messageId).not.toBeNull();
+
+    const res = await app().request(`/api/attachments/${created.id}`, { method: 'DELETE' });
+
+    expect(res.status).toBe(409);
+    expect(container.store.attachments.get(created.id)).not.toBeNull();
+    await expect(stat(blobPath)).resolves.toBeTruthy();
+  });
+
+  it('400s when a turn\'s part references an attachment belonging to a DIFFERENT chat', async () => {
+    container.store.connections.create({
+      id: 'conn-1', name: 'Conn', kind: 'mock', baseUrl: null, secretRef: null,
+      extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null,
+    });
+    container.store.profiles.create({
+      id: 'profile-1', name: 'Profile', description: null, colour: null, connectionId: 'conn-1', modelId: 'mock-standard',
+      systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+      isDefault: false, archivedAt: null,
+    });
+    container.store.chats.create({
+      id: 'chat-2', title: 'Other chat', profileId: 'profile-1', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    const created = await (
+      await app().request('/api/chats/chat-2/attachments', { method: 'POST', body: uploadForm('a.txt', 'wrong chat', 'text/plain') })
+    ).json();
+
+    const turnRes = await app().request('/api/chats/chat-1/turns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parentId: null,
+        parts: [{ type: 'file', attachmentId: created.id, mime: 'text/plain', filename: 'a.txt' }],
+        profileIds: ['profile-1'],
+      }),
+    });
+
+    expect(turnRes.status).toBe(400);
+    expect(container.store.attachments.get(created.id)?.messageId).toBeNull();
   });
 });

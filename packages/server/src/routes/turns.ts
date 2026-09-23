@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { InvalidAttachmentReferenceError } from '@grunt/core/domain/turn.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
@@ -57,7 +58,19 @@ export function turnsRoutes(container: Container): Hono {
 
     const profiles = await Promise.all(profileIds.map((id) => resolveProfile(container, id)));
 
-    const result = await container.turnRunner.run({ chatId, parentId, userParts: parts, profiles });
+    let result;
+    try {
+      result = await container.turnRunner.run({ chatId, parentId, userParts: parts, profiles });
+    } catch (err) {
+      // A part naming an attachment that doesn't exist, or belongs to a
+      // DIFFERENT chat, is a client-supplied bad reference -- 400, not the
+      // 500 an uncaught throw here would otherwise become. See
+      // InvalidAttachmentReferenceError's doc (domain/turn.ts).
+      if (err instanceof InvalidAttachmentReferenceError) {
+        throw new HTTPException(400, { message: err.message });
+      }
+      throw err;
+    }
     // Seeds the registry's buffers *before* any client can subscribe, so a
     // `GET /stream` racing this response never sees "unknown message" --
     // see the StreamRegistry class doc for why this ordering matters.

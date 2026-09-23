@@ -4,7 +4,7 @@ import type { ChatEngine, EngineEvent, EngineRequest } from '../src/ports/chat-e
 import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config.js';
 import type { Part } from '../src/types/messages.js';
 import { FakeChatEngine, InMemoryStore } from '../src/testing/fakes.js';
-import { TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { InvalidAttachmentReferenceError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -690,6 +690,178 @@ describe('TurnRunner capability fallback for image attachments', () => {
     await flush();
 
     expect(engine.requests[0]?.loadAttachment).toBe(loadAttachment);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TurnRunner.run -- attachment binding + reference validation (task 32 fix
+// round 1, Critical 1). Before this, NOTHING in production ever set
+// `attachment.messageId`, so `DELETE /api/attachments/:id`'s "already sent"
+// 409 guard could never fire on a real turn: a sent attachment stayed
+// `messageId: null` forever, so a client could delete an attachment a real
+// message still referenced, permanently breaking that chat (the part 404s,
+// and every later turn's history re-conversion fails with "unknown
+// attachment").
+// ---------------------------------------------------------------------------
+
+describe('TurnRunner.run binds attachments to the user message that sends them', () => {
+  it('sets messageId on an image/file part\'s attachment to the new user message id', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1' }));
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+
+    expect(store.attachments.get('att-1')?.messageId).toBe(result.userMessageId);
+  });
+
+  it('binds every distinct attachment referenced across several image/file parts in the same turn', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1' }));
+    store.attachments.create(makeAttachment({ id: 'att-2', chatId: 'chat-1', filename: 'doc.pdf', mime: 'application/pdf' }));
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [
+        { type: 'image', attachmentId: 'att-1', mime: 'image/png' },
+        { type: 'file', attachmentId: 'att-2', mime: 'application/pdf', filename: 'doc.pdf' },
+      ],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+
+    expect(store.attachments.get('att-1')?.messageId).toBe(result.userMessageId);
+    expect(store.attachments.get('att-2')?.messageId).toBe(result.userMessageId);
+  });
+
+  it('does not touch attachment.messageId at all for a turn with no image/file parts', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'no attachments here' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+
+    // Nothing to assert on directly (no attachment exists), but this must
+    // not throw -- attachmentIdsIn() over a text-only part list is [].
+  });
+
+  // Decision: "an attachment already bound to an earlier message may be
+  // referenced again (e.g. editing an earlier user message creates a
+  // sibling that reuses it) -- keep the FIRST binding; it only needs to be
+  // non-null." Simulated here by running two separate turns that both
+  // reference the same attachment id.
+  it('keeps the FIRST binding when the same attachment is referenced again by a later turn', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-1' }));
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+
+    const first = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+    const firstBinding = store.attachments.get('att-1')?.messageId;
+    expect(firstBinding).toBe(first.userMessageId);
+
+    // A second turn (e.g. a sibling created by "editing" the first user
+    // message) reuses the SAME attachment id.
+    const second = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+
+    expect(second.userMessageId).not.toBe(first.userMessageId);
+    // Still bound to the FIRST message, not rebound to the second.
+    expect(store.attachments.get('att-1')?.messageId).toBe(firstBinding);
+  });
+
+  it('rejects with InvalidAttachmentReferenceError, and creates NO user message, when a part names an unknown attachment id', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+
+    await expect(
+      runner.run({
+        chatId: 'chat-1',
+        parentId: null,
+        userParts: [{ type: 'image', attachmentId: 'does-not-exist', mime: 'image/png' }],
+        profiles: [makeResolvedProfile()],
+      })
+    ).rejects.toBeInstanceOf(InvalidAttachmentReferenceError);
+
+    expect(store.messages.roots('chat-1')).toEqual([]);
+  });
+
+  it('rejects with InvalidAttachmentReferenceError when a part names an attachment that belongs to a DIFFERENT chat', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Chat One', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.chats.create({
+      id: 'chat-2', title: 'Chat Two', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    store.attachments.create(makeAttachment({ id: 'att-1', chatId: 'chat-2' }));
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+
+    await expect(
+      runner.run({
+        chatId: 'chat-1', // deliberately NOT chat-2, the attachment's real chat
+        parentId: null,
+        userParts: [{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }],
+        profiles: [makeResolvedProfile()],
+      })
+    ).rejects.toBeInstanceOf(InvalidAttachmentReferenceError);
+
+    // Neither chat gained a user message, and the attachment stayed
+    // unbound and still in its own chat.
+    expect(store.messages.roots('chat-1')).toEqual([]);
+    expect(store.messages.roots('chat-2')).toEqual([]);
+    expect(store.attachments.get('att-1')).toMatchObject({ chatId: 'chat-2', messageId: null });
   });
 });
 

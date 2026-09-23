@@ -47,6 +47,42 @@ export interface TurnInput {
   profiles: ResolvedProfile[];
 }
 
+/**
+ * Thrown by `TurnRunner.run()` when a user part's `attachmentId` (an
+ * `image`/`file` `Part`) doesn't resolve to an attachment row that belongs
+ * to THIS chat -- either the id is unknown, or it names a real attachment
+ * that lives in a DIFFERENT chat. Without this check, a turn could bind
+ * (see `run()`'s attachment-binding step below) a message to another
+ * chat's attachment; that attachment would then dangle the moment the
+ * OTHER chat is deleted (its row cascades away there, but this chat's
+ * message would still reference it, and `loadAttachment` would fail on
+ * every later turn). Thrown BEFORE the user message is created, so a
+ * rejected turn never leaves a half-created row behind.
+ *
+ * Core has no notion of an HTTP status, so this is a plain typed `Error` --
+ * the caller (`routes/turns.ts`) catches it by `instanceof` and maps it to
+ * a 400, the same pattern `PathEscapeError` (domain/paths.ts) uses for
+ * `fs-tools.ts`.
+ */
+export class InvalidAttachmentReferenceError extends Error {
+  constructor(
+    readonly attachmentId: string,
+    readonly chatId: string
+  ) {
+    super(`Attachment "${attachmentId}" does not exist or does not belong to chat "${chatId}".`);
+    this.name = 'InvalidAttachmentReferenceError';
+  }
+}
+
+/** Every `attachmentId` an `image`/`file` part in `parts` names, deduplicated. */
+function attachmentIdsIn(parts: Part[]): string[] {
+  const ids = new Set<string>();
+  for (const part of parts) {
+    if (part.type === 'image' || part.type === 'file') ids.add(part.attachmentId);
+  }
+  return [...ids];
+}
+
 export interface TurnResult {
   userMessageId: string;
   assistantMessageIds: string[];
@@ -192,6 +228,17 @@ export class TurnRunner {
   }
 
   async run(input: TurnInput): Promise<TurnResult> {
+    // Validated BEFORE the user message is created, so a bad reference
+    // rejects the whole turn rather than leaving a half-created row behind
+    // -- see InvalidAttachmentReferenceError's doc.
+    const referencedAttachments = attachmentIdsIn(input.userParts).map((id) => {
+      const attachment = this.store.attachments.get(id);
+      if (!attachment || attachment.chatId !== input.chatId) {
+        throw new InvalidAttachmentReferenceError(id, input.chatId);
+      }
+      return attachment;
+    });
+
     const userMessage = this.store.messages.create({
       id: this.generateId(),
       chatId: input.chatId,
@@ -202,6 +249,19 @@ export class TurnRunner {
       error: null,
       producedBy: null,
     });
+
+    // Binds each referenced attachment to the message that just carried it
+    // -- the "sent" mark DELETE /api/attachments/:id checks (routes/
+    // attachments.ts decision #1). An attachment already bound to an
+    // EARLIER message (e.g. editing an earlier user message creates a
+    // sibling that reuses the same upload) keeps that first binding rather
+    // than being rebound here -- it only needs to stay non-null, not point
+    // at the most recent message.
+    for (const attachment of referencedAttachments) {
+      if (attachment.messageId === null) {
+        this.store.attachments.update(attachment.id, { messageId: userMessage.id });
+      }
+    }
 
     const variants: { message: CanonMessage; profile: ResolvedProfile }[] = [];
     for (const profile of input.profiles) {
