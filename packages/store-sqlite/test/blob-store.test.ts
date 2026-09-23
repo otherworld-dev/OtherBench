@@ -230,13 +230,28 @@ describe('BlobStore legacy-root fallback', () => {
 // ---------------------------------------------------------------------------
 
 describe('resolveAttachmentsRoots', () => {
-  it('derives <dir>/<name>.attachments/ for a file database, from the database\'s own basename', () => {
+  // `:memory:` calls create a REAL temp directory on disk (mkdtempSync) --
+  // tracked and removed here so this suite doesn't itself leave orphans
+  // under %TEMP%/$TMPDIR (task 32 fix round 2, Minor #2: this is exactly
+  // how the reported 28 stray `grunt-attachments-*` directories accumulated
+  // in the first place).
+  const createdTempRoots: string[] = [];
+  function trackMemoryRoots(roots: { writeRoot: string; isTemporary: boolean }): typeof roots {
+    if (roots.isTemporary) createdTempRoots.push(roots.writeRoot);
+    return roots;
+  }
+
+  afterEach(async () => {
+    await Promise.all(createdTempRoots.splice(0).map((p) => rm(p, { recursive: true, force: true })));
+  });
+
+  it('derives <dir>/<full-basename>.attachments/ for a file database, from the database\'s ENTIRE basename (extension included)', () => {
     const dbPath = join(dir, 'grunt.db');
     const secretsPath = join(dir, 'secrets.json');
 
     const roots = resolveAttachmentsRoots(dbPath, secretsPath);
 
-    expect(roots.writeRoot).toBe(join(dir, 'grunt.attachments'));
+    expect(roots.writeRoot).toBe(join(dir, 'grunt.db.attachments'));
     expect(roots.isTemporary).toBe(false);
   });
 
@@ -247,8 +262,59 @@ describe('resolveAttachmentsRoots', () => {
     const scratch = resolveAttachmentsRoots(join(dir, 'scratch.db'), secretsPath);
 
     expect(main.writeRoot).not.toBe(scratch.writeRoot);
-    expect(main.writeRoot).toBe(join(dir, 'main.attachments'));
-    expect(scratch.writeRoot).toBe(join(dir, 'scratch.attachments'));
+    expect(main.writeRoot).toBe(join(dir, 'main.db.attachments'));
+    expect(scratch.writeRoot).toBe(join(dir, 'scratch.db.attachments'));
+  });
+
+  // Task 32 fix round 2, Critical #1: an earlier version stripped the
+  // extension before appending ".attachments", so `main.db` and
+  // `main.bak` (or `grunt` and `grunt.db`) collided on the exact same
+  // `<stem>.attachments/` -- reproduced live: two such databases opened
+  // side by side, each one's sweep deleted the other's blobs. The full
+  // basename never collides between two distinct filenames, because the
+  // filenames themselves don't.
+  it('gives two databases with the SAME STEM but different extensions (or no extension at all) two DIFFERENT write roots', () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const withBak = resolveAttachmentsRoots(join(dir, 'main.bak'), secretsPath);
+    const withDb = resolveAttachmentsRoots(join(dir, 'main.db'), secretsPath);
+    const noExt = resolveAttachmentsRoots(join(dir, 'grunt'), secretsPath);
+    const withExt = resolveAttachmentsRoots(join(dir, 'grunt.db'), secretsPath);
+
+    expect(withBak.writeRoot).not.toBe(withDb.writeRoot);
+    expect(noExt.writeRoot).not.toBe(withExt.writeRoot);
+    expect(withBak.writeRoot).toBe(join(dir, 'main.bak.attachments'));
+    expect(withDb.writeRoot).toBe(join(dir, 'main.db.attachments'));
+    expect(noExt.writeRoot).toBe(join(dir, 'grunt.attachments'));
+    expect(withExt.writeRoot).toBe(join(dir, 'grunt.db.attachments'));
+  });
+
+  // Minor #5: a database literally named `foo.attachments` used to get a
+  // write root equal to its own path (`<stem>.attachments` where stem is
+  // `foo` -- i.e. `foo.attachments`, colliding with the database file
+  // itself) and 500 every upload. The full-basename fix makes this
+  // `foo.attachments.attachments` instead -- still distinct.
+  it('a database literally named "foo.attachments" gets a write root distinct from its own path', () => {
+    const secretsPath = join(dir, 'secrets.json');
+    const dbPath = join(dir, 'foo.attachments');
+
+    const roots = resolveAttachmentsRoots(dbPath, secretsPath);
+
+    expect(roots.writeRoot).not.toBe(dbPath);
+    expect(roots.writeRoot).toBe(join(dir, 'foo.attachments.attachments'));
+  });
+
+  it('a database literally named "foo.attachments" can actually put()/get() a blob through its derived BlobStore', async () => {
+    const secretsPath = join(dir, 'secrets.json');
+    const dbPath = join(dir, 'foo.attachments');
+    const roots = resolveAttachmentsRoots(dbPath, secretsPath);
+    const storeForFoo = createBlobStore(roots.writeRoot, roots.legacyRoot);
+
+    const data = Buffer.from('upload into a db literally named foo.attachments');
+    const { sha256 } = await storeForFoo.put(data);
+    const readBack = await storeForFoo.get(sha256);
+
+    expect(readBack.equals(data)).toBe(true);
   });
 
   it('legacyRoot is always <dirname(secretsPath)>/attachments -- the old shared location -- regardless of the database path', () => {
@@ -262,8 +328,8 @@ describe('resolveAttachmentsRoots', () => {
   it(':memory: gets a fresh, unique temp directory every call, and is marked temporary', () => {
     const secretsPath = join(dir, 'secrets.json');
 
-    const a = resolveAttachmentsRoots(':memory:', secretsPath);
-    const b = resolveAttachmentsRoots(':memory:', secretsPath);
+    const a = trackMemoryRoots(resolveAttachmentsRoots(':memory:', secretsPath));
+    const b = trackMemoryRoots(resolveAttachmentsRoots(':memory:', secretsPath));
 
     expect(a.isTemporary).toBe(true);
     expect(b.isTemporary).toBe(true);
@@ -273,7 +339,7 @@ describe('resolveAttachmentsRoots', () => {
   it(':memory: still resolves legacyRoot from secretsPath, so pre-fix blobs stay readable', () => {
     const secretsPath = join(dir, 'secrets.json');
 
-    const roots = resolveAttachmentsRoots(':memory:', secretsPath);
+    const roots = trackMemoryRoots(resolveAttachmentsRoots(':memory:', secretsPath));
 
     expect(roots.legacyRoot).toBe(join(dir, 'attachments'));
   });

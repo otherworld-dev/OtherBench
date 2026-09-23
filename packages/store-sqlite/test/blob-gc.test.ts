@@ -1,10 +1,12 @@
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Store } from '@grunt/core/ports/store.js';
+import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { gcBlobIfOrphaned, isPinned, sweepOrphanedBlobs, withPinnedSha } from '../src/blob-gc.js';
-import { createBlobStore, type BlobStore } from '../src/blob-store.js';
+import { createBlobStore, sha256Of, type BlobStore } from '../src/blob-store.js';
 
 /**
  * A minimal `Store` stand-in exposing only what blob-gc.ts actually calls
@@ -130,20 +132,35 @@ describe('sweepOrphanedBlobs', () => {
     await expect(stat(referenced.path)).resolves.toBeTruthy();
   });
 
-  // Minor #5: one `referencedShas()` call for the whole sweep, never
-  // `isReferenced` per file -- the old per-file query was a full table scan
-  // (no index existed on `attachment.sha256`) run once per blob on disk, on
-  // every chat/profile/connection delete.
-  it('calls referencedShas() exactly once per sweep, and never calls isReferenced at all', async () => {
-    await blobStore.put(Buffer.from('one'));
-    await blobStore.put(Buffer.from('two'));
-    await blobStore.put(Buffer.from('three'));
-    const store = fakeStore([]);
+  // Minor #5: one `referencedShas()` call for the whole sweep as a fast
+  // pre-filter, rather than one `isReferenced` query per file on disk (a
+  // full table scan with no index, run once per blob, on every chat/
+  // profile/connection delete before the migration in this same round).
+  //
+  // `isReferenced` is NOT gone, though (Important #1, fix round 2): it's
+  // now also called once per ORPHAN CANDIDATE, as a synchronous re-check
+  // immediately before that blob's own unlink -- see sweepOrphanedBlobs's
+  // doc for why the snapshot alone isn't enough. It is never called for a
+  // blob the snapshot already says IS referenced (that's the whole point
+  // of keeping the snapshot as a pre-filter: most blobs on a real sweep
+  // are still in use, and skip the per-file query entirely).
+  it('calls referencedShas() once per sweep, and re-checks isReferenced only for orphan candidates right before their unlink', async () => {
+    const referencedBlob = await blobStore.put(Buffer.from('referenced'));
+    const orphanA = await blobStore.put(Buffer.from('orphan-a'));
+    const orphanB = await blobStore.put(Buffer.from('orphan-b'));
+    const store = fakeStore([referencedBlob.sha256]);
 
-    await sweepOrphanedBlobs(store, blobStore);
+    const result = await sweepOrphanedBlobs(store, blobStore);
 
+    expect(result).toEqual({ scanned: 3, removed: 2 }); // scanned counts every well-formed blob file, referenced included
+    await expect(stat(orphanA.path)).rejects.toThrow();
+    await expect(stat(orphanB.path)).rejects.toThrow();
+    await expect(stat(referencedBlob.path)).resolves.toBeTruthy();
     expect(store.calls.referencedShas).toBe(1);
-    expect(store.calls.isReferenced).toBe(0);
+    // Exactly one re-check per orphan candidate (orphanA, orphanB) -- NOT
+    // called for referencedBlob, which the snapshot pre-filter already
+    // skipped before ever reaching the re-check line.
+    expect(store.calls.isReferenced).toBe(2);
   });
 
   it('propagates (does NOT swallow) a non-filesystem error, e.g. from a mis-wired blobStore.root getter', async () => {
@@ -327,6 +344,123 @@ describe('sweepOrphanedBlobs', () => {
       await sweepOrphanedBlobs(fakeStore([]), blobStore);
 
       await expect(stat(freshTmp)).resolves.toBeTruthy();
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Important #1 (task 32 fix round 2): the one-shot referencedShas()
+  // snapshot is only a fast pre-filter now -- adapted from the reviewer's
+  // rr/i3.mjs reproduction (3,000 filler blobs, a sweep of ~150-200ms, an
+  // upload landing entirely inside that window). Against 22cee46 (fix
+  // round 1's code), the deterministic test below fails every run: the
+  // stale snapshot said unreferenced, nothing re-checked it, and the blob
+  // was unlinked with its row still present.
+  // ---------------------------------------------------------------------
+  describe('Important #1: a row created after the sweep-start snapshot must still survive', () => {
+    it('deterministic: isReferenced disagreeing with the stale referencedShas() snapshot wins -- the blob survives', async () => {
+      const target = await blobStore.put(Buffer.from('created after the snapshot was taken'));
+      // Simulates the row having been created in the gap between the
+      // sweep's ONE referencedShas() snapshot (taken at the very start,
+      // here returning an EMPTY set -- "stale", as if this blob's row
+      // didn't exist yet) and the synchronous re-check immediately before
+      // this blob's own unlink (here answering `true` for the same sha,
+      // as if the row now exists) -- exactly the window Important #1
+      // closes. A real timing-based version of this same race follows
+      // below, adapted directly from the reviewer's rr/i3.mjs.
+      const store: Store = {
+        attachments: {
+          isReferenced: (sha256: string) => sha256 === target.sha256,
+          referencedShas: () => new Set<string>(),
+        },
+      } as unknown as Store;
+
+      const result = await sweepOrphanedBlobs(store, blobStore);
+
+      expect(result.removed).toBe(0);
+      await expect(stat(target.path)).resolves.toBeTruthy();
+    });
+
+    it(
+      'real timing (adapted from rr/i3.mjs): 3,000 filler blobs make the sweep take long enough for an upload ' +
+        'landing shortly after it starts to still be mid-flight when the sweep reaches that shard',
+      async () => {
+        const fillerCount = 3000;
+        for (let i = 0; i < fillerCount; i++) {
+          const sha = createHash('sha256').update(`filler${i}`).digest('hex');
+          const shardDir = join(root, sha.slice(0, 2));
+          await mkdir(shardDir, { recursive: true });
+          await writeFile(join(shardDir, sha), 'x');
+        }
+        // A target hash landing in a LATE shard ('ff') so the sweep reaches
+        // it only after working through the other (up to) 255 shards first.
+        let n = 0;
+        let data: Buffer;
+        let sha: string;
+        do {
+          data = Buffer.from(`target${n++}`);
+          sha = createHash('sha256').update(data).digest('hex');
+        } while (!sha.startsWith('ff'));
+
+        const referencedFillerShas = new Set<string>();
+        for (let i = 0; i < fillerCount; i++) {
+          referencedFillerShas.add(createHash('sha256').update(`filler${i}`).digest('hex'));
+        }
+        const store: Store = {
+          attachments: {
+            isReferenced: (s: string) => s === sha,
+            referencedShas: () => referencedFillerShas, // stale: target is NOT in it, same as the real fresh-upload case
+          },
+        } as unknown as Store;
+
+        const sweepPromise = sweepOrphanedBlobs(store, blobStore);
+        await new Promise((r) => setTimeout(r, 20)); // the upload starts well inside the sweep's runtime
+        await withPinnedSha(sha, async () => {
+          await blobStore.put(data);
+        });
+        const result = await sweepPromise;
+
+        expect(result.removed).toBe(0);
+        await expect(stat(blobStore.pathFor(sha))).resolves.toBeTruthy();
+      },
+      10_000
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // Important #2 (task 32 fix round 2): gcBlobIfOrphaned decides an
+  // attachment is orphaned, then BlobStore.remove's own `await lstat(...)`
+  // gives a same-content upload a window to pin, write (or find it
+  // already written), and create its row -- all before the original
+  // decision ever reaches an actual unlink. Adapted directly from the
+  // reviewer's rr/i3.mjs "gc-window" scenario.
+  // ---------------------------------------------------------------------
+  describe('Important #2: a row created while gcBlobIfOrphaned awaits BlobStore.remove\'s lstat must still survive', () => {
+    it('unit: BlobStore.remove aborts when shouldStillRemove returns false, checked right before the unlink', async () => {
+      const { sha256, path } = await blobStore.put(Buffer.from('must survive'));
+
+      await blobStore.remove(sha256, () => false);
+
+      await expect(stat(path)).resolves.toBeTruthy();
+    });
+
+    it('end-to-end (rr/i3.mjs\'s exact "gc-window" sequence, real InMemoryStore): a same-content upload landing while gc awaits lstat keeps both the row and the blob', async () => {
+      const data = Buffer.from('gc-window');
+      await blobStore.put(data); // orphan blob already on disk, unreferenced
+      const sha = sha256Of(data);
+      const store = new InMemoryStore();
+
+      const gc = gcBlobIfOrphaned(store, blobStore, sha); // decides orphaned, then awaits BlobStore.remove's lstat
+      await withPinnedSha(sha, async () => {
+        const b = await blobStore.put(data); // sees the file already exists; still always writes+renames now (Important #2's put() fix)
+        store.attachments.create({
+          id: 'target2', chatId: 'c', messageId: null, filename: 't', mime: 't',
+          size: b.size, sha256: sha, storagePath: b.path, extractedText: null,
+        });
+      });
+      await gc;
+
+      expect(store.attachments.get('target2')).not.toBeNull();
+      await expect(stat(blobStore.pathFor(sha))).resolves.toBeTruthy();
     });
   });
 });

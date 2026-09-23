@@ -112,7 +112,12 @@ export async function gcBlobIfOrphaned(store: Store, blobStore: BlobStore, sha25
   if (isPinned(sha256)) return;
   if (store.attachments.isReferenced(sha256)) return;
   try {
-    await blobStore.remove(sha256);
+    // The initial checks above happened before `BlobStore.remove` even
+    // started its own `await lstat(...)` -- a same-content upload can pin,
+    // write, and create its row entirely inside that window (Important #2,
+    // task 32 fix round 2; reproduced deterministically). `shouldStillRemove`
+    // re-checks both, synchronously, right before the actual unlink.
+    await blobStore.remove(sha256, () => !isPinned(sha256) && !store.attachments.isReferenced(sha256));
   } catch (err) {
     if (!isFilesystemError(err)) throw err;
     console.error(`[grunt] failed to garbage-collect attachment blob "${sha256}":`, err);
@@ -147,7 +152,17 @@ export interface BlobSweepResult {
  *     referenced set, fetched ONCE per sweep -- see that method's doc; this
  *     used to call `isReferenced` per file, one synchronous SQLite query
  *     per blob on disk, on every chat/profile/connection delete) and not
- *     currently pinned (`isPinned` -- an upload still in flight).
+ *     currently pinned (`isPinned` -- an upload still in flight). That
+ *     snapshot is only a fast PRE-filter, though: immediately before each
+ *     `unlink`, both `isPinned` and the now-indexed `isReferenced` are
+ *     re-checked synchronously, with no `await` in between (Important #1,
+ *     task 32 fix round 2). A sweep over thousands of blobs runs for as
+ *     long as it takes to `readdir`/`lstat` every one of them -- reproduced
+ *     deterministically with a ~180ms sweep and an upload landing 5-60ms
+ *     in: the snapshot taken at the START of the sweep is stale by the time
+ *     the loop reaches that blob's shard, so a pin-put-create-unpin cycle
+ *     that completes entirely inside the sweep's own runtime is invisible
+ *     to the snapshot but must still block the unlink.
  *
  * Enumerates disk and diffs it against the table (never the other way
  * round), so it also reclaims blobs orphaned before this GC existed, or left
@@ -206,7 +221,13 @@ export async function sweepOrphanedBlobs(store: Store, blobStore: BlobStore): Pr
         if (isPinned(name)) continue; // an upload of this exact content is still in flight
 
         result.scanned++;
-        if (referenced.has(name)) continue;
+        if (referenced.has(name)) continue; // fast pre-filter from the sweep-start snapshot -- see this function's own doc for why that alone isn't enough
+        // Re-checked synchronously, right here, with no `await` before the
+        // unlink call below: the snapshot above (and the isPinned check a
+        // few lines up) can both be stale by now -- this loop may have
+        // spent an unbounded amount of real time on readdir/lstat calls for
+        // every blob before this one.
+        if (isPinned(name) || store.attachments.isReferenced(name)) continue;
         try {
           await unlink(full);
           result.removed++;

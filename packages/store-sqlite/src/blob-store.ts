@@ -1,8 +1,8 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
-import { lstat, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 export interface StoredBlob {
   sha256: string;
@@ -13,17 +13,6 @@ export interface StoredBlob {
 
 function isEnoentError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
-}
-
-/** True if node:fs/promises `stat` succeeded (the path exists), false for ENOENT specifically. Anything else (a permissions error, say) is a real failure and propagates. */
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch (err) {
-    if (isEnoentError(err)) return false;
-    throw err;
-  }
 }
 
 /** The sha256 hex digest of `data`. Exposed so a caller can pin a sha256 against GC (`blob-gc.ts`'s `withPinnedSha`) BEFORE calling `put()`, closing the window between "bytes exist on disk" and "a row references them" that `put()` alone can't close. */
@@ -61,8 +50,18 @@ export interface AttachmentsRoots {
  * startup/cascade-delete sweep see the FIRST database's still-in-use blobs
  * as "nothing in MY table references this" and delete them.
  *
- * - A file database at `<dir>/<name><ext>` gets `<dir>/<name>.attachments/`
- *   -- unique to that one file, derived from its own basename.
+ * - A file database at `<dir>/<full-basename>` gets
+ *   `<dir>/<full-basename>.attachments/` -- unique to that one file,
+ *   derived from its ENTIRE basename, extension included. (Fix round 2,
+ *   Critical 1: an earlier version stripped the extension first, so
+ *   `main.db` and `main.bak`, or `grunt` and `grunt.db`, collided on the
+ *   exact same `<stem>.attachments/` -- reproduced live: two such
+ *   databases opened side by side, each one's sweep deleted the other's
+ *   blobs. The full basename can never collide between two distinct
+ *   filenames in the same directory, because the filenames themselves
+ *   don't. This also fixes fix round 2's Minor #5: a database literally
+ *   named `foo.attachments` now gets `foo.attachments.attachments` --
+ *   still distinct from its own path -- instead of colliding with itself.)
  * - `:memory:` has no stable on-disk path to derive anything from, so it
  *   gets a fresh, unique temp directory every time (`isTemporary: true`);
  *   nothing else can ever collide with it, and there's nothing to preserve
@@ -83,10 +82,8 @@ export function resolveAttachmentsRoots(dbPath: string, secretsPath: string): At
   }
 
   const dir = dirname(dbPath);
-  const base = basename(dbPath);
-  const ext = extname(base);
-  const stem = ext ? base.slice(0, -ext.length) : base;
-  const writeRoot = join(dir, `${stem}.attachments`);
+  const fullBasename = basename(dbPath);
+  const writeRoot = join(dir, `${fullBasename}.attachments`);
   return { writeRoot, legacyRoot, isTemporary: false };
 }
 
@@ -149,33 +146,44 @@ export class BlobStore {
   /**
    * Writes `data`, addressed by its own sha256 hash, into the WRITE root
    * (never the legacy one). Returns the hash, the absolute path it was
-   * written to (or already existed at), and the byte length.
+   * written to, and the byte length.
    *
-   * Written atomically: `data` is first written to a sibling temp file
-   * (unique per call, via a random suffix) and then renamed over the final
-   * path, so a crash mid-write can never leave a truncated/partial blob at
+   * Written atomically, and UNCONDITIONALLY: `data` is always written to a
+   * sibling temp file (unique per call, via a random suffix) and then
+   * renamed over the final path, regardless of whether a file already sits
+   * there. A crash mid-write can never leave a truncated/partial blob at
    * `pathFor(sha256)` -- any reader either sees the complete file or none at
    * all. This also makes two concurrent `put()`s of the SAME bytes safe: both
    * compute the same hash, both write to their own distinct temp file, and
    * whichever rename lands second simply replaces the first with byte-
    * identical content -- neither observes a torn write.
    *
-   * This alone does NOT close the gap between "bytes exist on disk" and "an
-   * attachment row references them" -- a caller uploading new content
-   * should pin the hash (`blob-gc.ts`'s `withPinnedSha`, using `sha256Of`)
-   * before calling this, so a concurrent GC pass can't collect it in that
-   * window. See Important #3 in the task 32 fix-round-1 notes.
+   * An earlier version checked "does this path already exist?" first and
+   * skipped the write entirely when it did, as a re-upload-of-identical-
+   * content optimisation. Removed in task 32 fix round 2 (Important #2):
+   * that check-then-trust was itself a race -- a concurrent GC pass could
+   * unlink the file in the gap between the existence check reporting
+   * "yes" and this function returning having done nothing, leaving a
+   * brand-new attachment row pointing at nothing. Always renaming into
+   * place removes the assumption entirely: even if a concurrent delete
+   * removes the file a moment before this call's own `rename()`, that
+   * `rename()` simply (re)creates the destination, so the blob exists once
+   * `put()` returns no matter what any concurrent GC pass did. The cost is
+   * a redundant write+rename on the (comparatively rare) exact-content-
+   * reupload path; correctness under concurrent GC was judged worth it.
+   * `withPinnedSha` (`blob-gc.ts`) still matters and is still required --
+   * this only protects the WRITE from a concurrent unlink, not the
+   * still-unpinned window before an attachment row exists at all, which is
+   * what pinning closes.
    */
   async put(data: Buffer): Promise<StoredBlob> {
     const sha256 = sha256Of(data);
     const path = this.pathFor(sha256);
 
-    if (!(await pathExists(path))) {
-      await mkdir(dirname(path), { recursive: true });
-      const tmpPath = `${path}.tmp-${randomBytes(6).toString('hex')}`;
-      await writeFile(tmpPath, data);
-      await rename(tmpPath, path);
-    }
+    await mkdir(dirname(path), { recursive: true });
+    const tmpPath = `${path}.tmp-${randomBytes(6).toString('hex')}`;
+    await writeFile(tmpPath, data);
+    await rename(tmpPath, path);
 
     return { sha256, path, size: data.length };
   }
@@ -221,12 +229,27 @@ export class BlobStore {
    * directory: `lstat`s the shard dir first (reports the link itself,
    * never follows it) and does nothing if it isn't a real directory --
    * same rule `sweepOrphanedBlobs` walks the whole tree by (Minor #6).
+   *
+   * `shouldStillRemove`, if given, is called synchronously immediately
+   * after that `lstat` resolves and immediately BEFORE the actual
+   * `unlink()` call -- no `await` in between -- and aborts (no unlink,
+   * resolves normally) if it returns false. Closes Important #2 (task 32
+   * fix round 2): `gcBlobIfOrphaned` decides a blob is orphaned, then this
+   * method's own `lstat` await gives a same-content upload a window to pin
+   * the hash, write it (or find it already written), and create its
+   * attachment row -- all before the decision above ever reaches an actual
+   * `unlink`. `gcBlobIfOrphaned` passes a callback that re-checks
+   * `isPinned`/`isReferenced` right at that point, catching exactly that
+   * window. `BlobStore` itself has no notion of "referenced" or "pinned"
+   * (that's `blob-gc.ts`'s domain over `@grunt/core`'s `Store`), so this
+   * takes the check as an opaque predicate instead of depending on either.
    */
-  async remove(sha256: string): Promise<void> {
+  async remove(sha256: string, shouldStillRemove?: () => boolean): Promise<void> {
     const path = this.pathFor(sha256);
     try {
       const shardStat = await lstat(dirname(path)).catch(() => null);
       if (!shardStat || !shardStat.isDirectory()) return;
+      if (shouldStillRemove && !shouldStillRemove()) return;
       await unlink(path);
     } catch (err) {
       if (!isEnoentError(err)) throw err;
