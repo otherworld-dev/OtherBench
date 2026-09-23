@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNullableString, optionalStringArray, requireNonEmptyString } from '../validation.js';
 
@@ -111,10 +112,15 @@ export function profilesRoutes(container: Container): Hono {
     return c.json(container.store.profiles.update(id, patch));
   });
 
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getProfileOrThrow(container, id);
     container.store.profiles.delete(id);
+    // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
+    // in turn cascades THEIR attachment rows away -- sweep for any blob
+    // orphaned as a result. Never throws; can't turn this delete into a
+    // failed request.
+    await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
   });
 

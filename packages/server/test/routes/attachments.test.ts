@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -273,5 +273,116 @@ describe('GET /api/attachments/:id/content -- inline-render hardening', () => {
     const res = await app().request(`/api/attachments/${created.id}/content`);
     const disposition = res.headers.get('content-disposition')!;
     expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent('café ☕.txt')}`);
+  });
+});
+
+/**
+ * `storagePath` is a raw SERVER filesystem path (task 32 decision #3) -- the
+ * client only ever fetches attachment bytes via `GET .../content`, never a
+ * filesystem path, so it should never appear in a response body. Checked at
+ * every response site that returns an `Attachment` shape: upload, list, and
+ * single-get.
+ */
+describe('storagePath is never serialised to a client', () => {
+  it('is absent from the upload (POST) response', async () => {
+    const res = await app().request('/api/chats/chat-1/attachments', {
+      method: 'POST',
+      body: uploadForm('a.txt', 'hello', 'text/plain'),
+    });
+    const body = await res.json();
+
+    expect(body).not.toHaveProperty('storagePath');
+    expect(JSON.stringify(body)).not.toContain('storagePath');
+  });
+
+  it('is absent from the list (GET /chats/:id/attachments) response', async () => {
+    await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'hello', 'text/plain') });
+
+    const res = await app().request('/api/chats/chat-1/attachments');
+    const body = await res.json();
+
+    expect(JSON.stringify(body)).not.toContain('storagePath');
+    expect(body).toHaveLength(1);
+    expect(body[0]).not.toHaveProperty('storagePath');
+  });
+
+  it('is absent from the single-get (GET /attachments/:id) response', async () => {
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'hello', 'text/plain') })
+    ).json();
+
+    const res = await app().request(`/api/attachments/${created.id}`);
+    const body = await res.json();
+
+    expect(body).not.toHaveProperty('storagePath');
+    expect(JSON.stringify(body)).not.toContain('storagePath');
+  });
+});
+
+/**
+ * Task 32 decision #1: `DELETE /api/attachments/:id` only ever deletes an
+ * UNSENT attachment (`messageId === null`). Deleting one that's already
+ * part of a sent message would make the transcript misrepresent what was
+ * actually sent -- refused with 409 instead. Deleting an unsent one removes
+ * the row and then GCs its blob, unless some OTHER row (dedupe: even across
+ * chats) still shares the same sha256 -- decision #1's whole point.
+ */
+describe('DELETE /api/attachments/:id', () => {
+  it('removes an unsent attachment\'s row AND its blob file on disk', async () => {
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'delete me', 'text/plain') })
+    ).json();
+    const blobPath = join(dataDir, 'attachments', created.sha256.slice(0, 2), created.sha256);
+    await expect(stat(blobPath)).resolves.toBeTruthy();
+
+    const res = await app().request(`/api/attachments/${created.id}`, { method: 'DELETE' });
+
+    expect(res.status).toBe(204);
+    expect(container.store.attachments.get(created.id)).toBeNull();
+    await expect(stat(blobPath)).rejects.toThrow();
+  });
+
+  it('keeps the blob alive while a SECOND attachment row (in a different chat) still shares its sha256; removing that one too finally removes the blob', async () => {
+    container.store.chats.create({
+      id: 'chat-2', title: 'Second chat', profileId: 'profile-1', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    const content = 'shared content across two chats';
+    const first = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', content, 'text/plain') })
+    ).json();
+    const second = await (
+      await app().request('/api/chats/chat-2/attachments', { method: 'POST', body: uploadForm('a-copy.txt', content, 'text/plain') })
+    ).json();
+    expect(first.sha256).toBe(second.sha256);
+    const blobPath = join(dataDir, 'attachments', first.sha256.slice(0, 2), first.sha256);
+
+    const firstDelete = await app().request(`/api/attachments/${first.id}`, { method: 'DELETE' });
+    expect(firstDelete.status).toBe(204);
+    // Still referenced by `second` -- the blob must survive.
+    await expect(stat(blobPath)).resolves.toBeTruthy();
+
+    const secondDelete = await app().request(`/api/attachments/${second.id}`, { method: 'DELETE' });
+    expect(secondDelete.status).toBe(204);
+    await expect(stat(blobPath)).rejects.toThrow();
+  });
+
+  it('409s for an attachment already sent as part of a message, leaving its row and blob untouched', async () => {
+    const created = await (
+      await app().request('/api/chats/chat-1/attachments', { method: 'POST', body: uploadForm('a.txt', 'already sent', 'text/plain') })
+    ).json();
+    container.store.attachments.update(created.id, { messageId: 'msg-1' });
+    const blobPath = join(dataDir, 'attachments', created.sha256.slice(0, 2), created.sha256);
+
+    const res = await app().request(`/api/attachments/${created.id}`, { method: 'DELETE' });
+
+    expect(res.status).toBe(409);
+    expect(container.store.attachments.get(created.id)).not.toBeNull();
+    await expect(stat(blobPath)).resolves.toBeTruthy();
+  });
+
+  it('404s for an unknown attachment id', async () => {
+    const res = await app().request('/api/attachments/does-not-exist', { method: 'DELETE' });
+    expect(res.status).toBe(404);
   });
 });

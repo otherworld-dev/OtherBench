@@ -10,6 +10,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
+import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import { createBlobStore, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
@@ -150,6 +151,18 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 
   const dataDir = options.dataDir ?? dirname(options.secretsPath);
   const blobStore = createBlobStore(dataDir);
+
+  // Startup blob sweep (task 32 decision #2c): reclaims anything orphaned
+  // before this GC existed, or left behind by a crash between a row delete
+  // and its blob cleanup. Enumerates disk and diffs it against the
+  // `attachment` table, never the other way round -- see
+  // `sweepOrphanedBlobs`'s own doc. Awaited (not fire-and-forget) so the
+  // server never briefly serves with stale garbage still on disk, but it
+  // never throws either way, so a sweep failure can never block startup.
+  const swept = await sweepOrphanedBlobs(store, blobStore);
+  if (swept.removed > 0) {
+    console.warn(`[grunt-server] startup blob sweep removed ${swept.removed} orphaned attachment blob(s) (of ${swept.scanned} scanned).`);
+  }
 
   const registry = new ProviderRegistry();
   const engine = new AiSdkChatEngine(registry);

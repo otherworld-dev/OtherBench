@@ -5,6 +5,7 @@ import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
@@ -109,10 +110,15 @@ export function chatsRoutes(container: Container): Hono {
     return c.json(container.store.chats.update(id, patch));
   });
 
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getChatOrThrow(container, id);
     container.store.chats.delete(id);
+    // Deleting a chat cascades its attachment rows away in SQLite (ON
+    // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
+    // `sweepOrphanedBlobs` never throws (see its own doc), so this can never
+    // turn a successful delete into a failed request.
+    await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
   });
 
