@@ -121,6 +121,10 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
 
   /** Uploads each file in turn, appending it to `attachments` as soon as its own upload resolves -- so a chip for a fast file appears immediately rather than waiting on a slower sibling in the same drop/paste. A file that fails to upload is dropped silently from the composer (logged, not surfaced as a blocking error) rather than left in limbo with no attachment id to send. */
   async function uploadFiles(files: File[]): Promise<void> {
+    // A new upload starts a clean slate for any earlier remove-failure
+    // message -- it describes an attachment that may not even be in this
+    // batch, and leaving it up reads as if the NEW upload just failed.
+    setRemoveError(null);
     for (const file of files) {
       try {
         const created = await api.attachments.upload(chat.id, file);
@@ -161,6 +165,14 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
    * from the server (the row -- and the part it would become on send --
    * would still exist, with no chip showing it), which is a more confusing
    * failure than just leaving the chip there with an error message.
+   *
+   * A 404 is treated as success, not a failure to surface (task 32 fix
+   * round 1, Minor #9): it means the row is ALREADY gone -- e.g. this same
+   * remove already went through and only the local state update raced a
+   * second click, or another tab/request deleted it first -- and the
+   * chip's only job left is to disappear, not to report an "error" for a
+   * row that is, from the user's point of view, already exactly as removed
+   * as they wanted.
    */
   async function removeAttachment(id: string): Promise<void> {
     setRemoveError(null);
@@ -168,6 +180,10 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
       await api.attachments.delete(id);
       setAttachments((prev) => prev.filter((a) => a.id !== id));
     } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setAttachments((prev) => prev.filter((a) => a.id !== id));
+        return;
+      }
       console.error(`[grunt-web] failed to delete attachment ${id}:`, err);
       setRemoveError(err instanceof ApiError ? err.message : 'Failed to remove the attachment. Please try again.');
     }
@@ -178,6 +194,9 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
     if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
 
     setSending(true);
+    // A stale remove-failure message from before this send must not linger
+    // over the (possibly different) attachments actually being sent now.
+    setRemoveError(null);
     const parts: Part[] = [
       ...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []),
       ...attachments.map(attachmentToPart),
@@ -312,6 +331,7 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
               size={a.size}
               previewUrl={api.attachments.previewable(a.mime) ? api.attachments.contentUrl(a.id) : undefined}
               onRemove={() => void removeAttachment(a.id)}
+              removeDisabled={sending}
             />
           ))}
         </div>

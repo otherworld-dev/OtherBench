@@ -9,6 +9,8 @@ export interface AttachmentChipProps {
   previewUrl?: string;
   /** Renders a remove ("×") button that calls this -- composer-only; omit for a read-only chip inside a rendered message. */
   onRemove?: () => void;
+  /** Disables the remove button (still rendered, visibly inert) without hiding it -- e.g. while a send is in flight, so a click can't race the attachment being sent. Ignored when `onRemove` is omitted. */
+  removeDisabled?: boolean;
 }
 
 function formatBytes(bytes: number): string {
@@ -23,7 +25,7 @@ function formatBytes(bytes: number): string {
  * sending) and inside a rendered `Message` (read-only, `onRemove` omitted)
  * -- see Composer.tsx and Message.tsx.
  */
-export function AttachmentChip({ filename, mime, size, previewUrl, onRemove }: AttachmentChipProps): JSX.Element {
+export function AttachmentChip({ filename, mime, size, previewUrl, onRemove, removeDisabled }: AttachmentChipProps): JSX.Element {
   const isImage = mime.startsWith('image/');
 
   return (
@@ -44,8 +46,9 @@ export function AttachmentChip({ filename, mime, size, previewUrl, onRemove }: A
         <button
           type="button"
           onClick={onRemove}
+          disabled={removeDisabled}
           aria-label={`Remove ${filename}`}
-          className="ml-0.5 rounded-full px-1 text-[var(--text-muted)] hover:bg-[var(--bg-raised)] hover:text-[var(--danger)]"
+          className="ml-0.5 rounded-full px-1 text-[var(--text-muted)] hover:bg-[var(--bg-raised)] hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--text-muted)]"
         >
           ×
         </button>
