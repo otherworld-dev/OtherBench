@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BlobStore, createBlobStore } from '../src/blob-store.js';
+import { BlobStore, createBlobStore, resolveAttachmentsRoots, sha256Of } from '../src/blob-store.js';
 
 let dir: string;
+let root: string;
 let store: BlobStore;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'grunt-blob-store-test-'));
-  store = createBlobStore(dir);
+  root = join(dir, 'attachments');
+  store = createBlobStore(root);
 });
 
 afterEach(async () => {
@@ -21,16 +23,23 @@ function sha256Hex(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
+describe('sha256Of', () => {
+  it('matches node:crypto\'s own sha256 hex digest', () => {
+    const data = Buffer.from('pin me before put()');
+    expect(sha256Of(data)).toBe(sha256Hex(data));
+  });
+});
+
 describe('BlobStore.pathFor', () => {
-  it('is content-addressed at <dataDir>/attachments/<first-two-hex>/<sha256>, derived purely from the hash', () => {
+  it('is content-addressed at <root>/<first-two-hex>/<sha256>, derived purely from the hash', () => {
     const hash = 'ab'.padEnd(64, '0');
-    expect(store.pathFor(hash)).toBe(join(dir, 'attachments', 'ab', hash));
+    expect(store.pathFor(hash)).toBe(join(root, 'ab', hash));
   });
 });
 
 describe('BlobStore.root', () => {
-  it('is <dataDir>/attachments', () => {
-    expect(store.root).toBe(join(dir, 'attachments'));
+  it('is exactly the root it was constructed with -- no implicit "attachments" subfolder appended', () => {
+    expect(store.root).toBe(root);
   });
 });
 
@@ -58,6 +67,30 @@ describe('BlobStore.remove', () => {
     await expect(stat(a.path)).resolves.toBeTruthy();
     await expect(stat(b.path)).rejects.toThrow();
   });
+
+  // Minor #6 (task 32 fix round 1): the sweep already refused to follow a
+  // symlink/junction standing in for a shard directory; remove() (the
+  // single-attachment GC path, `gcBlobIfOrphaned`) did not apply the same
+  // check and would happily unlink() straight through one. Reproduced here
+  // with a real Windows junction (no admin rights needed for a directory
+  // junction), entirely inside this test's own temp dir -- never touching
+  // the repo.
+  it('never deletes through a junctioned shard directory -- refuses rather than following it', async () => {
+    const decoyDir = join(dir, 'decoy-target');
+    await mkdir(decoyDir, { recursive: true });
+    const sha256 = '11'.padEnd(64, '2');
+    const shard = sha256.slice(0, 2); // '11'
+    const decoyFile = join(decoyDir, sha256);
+    await writeFile(decoyFile, 'do not delete me');
+
+    // root/<shard> is a JUNCTION pointing at decoyDir, not a real directory.
+    await mkdir(root, { recursive: true });
+    await symlink(decoyDir, join(root, shard), 'junction');
+
+    await store.remove(sha256);
+
+    await expect(stat(decoyFile)).resolves.toBeTruthy();
+  });
 });
 
 describe('BlobStore.put / get', () => {
@@ -69,7 +102,7 @@ describe('BlobStore.put / get', () => {
 
     expect(result.sha256).toBe(expectedHash);
     expect(result.size).toBe(data.length);
-    expect(result.path).toBe(join(dir, 'attachments', expectedHash.slice(0, 2), expectedHash));
+    expect(result.path).toBe(join(root, expectedHash.slice(0, 2), expectedHash));
     await expect(stat(result.path)).resolves.toBeTruthy();
 
     const readBack = await store.get(expectedHash);
@@ -87,7 +120,7 @@ describe('BlobStore.put / get', () => {
 
     // Only one file exists under this hash's shard directory -- the second
     // put() did not create a sibling or overwrite-with-a-new-name.
-    const shardDir = join(dir, 'attachments', first.sha256.slice(0, 2));
+    const shardDir = join(root, first.sha256.slice(0, 2));
     const entries = await readdir(shardDir);
     expect(entries).toEqual([first.sha256]);
   });
@@ -111,12 +144,145 @@ describe('BlobStore.put / get', () => {
 
   it('never leaves a stray .tmp- file behind after a successful put()', async () => {
     const result = await store.put(Buffer.from('no leftovers'));
-    const shardDir = join(dir, 'attachments', result.sha256.slice(0, 2));
+    const shardDir = join(root, result.sha256.slice(0, 2));
     const entries = await readdir(shardDir);
     expect(entries.every((e) => !e.includes('.tmp-'))).toBe(true);
   });
 
   it('get() rejects for a hash that was never put()', async () => {
     await expect(store.get('0'.repeat(64))).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy-root read fallback (task 32 fix round 1, Critical #2): a blob
+// uploaded before per-database roots existed lives in the OLD shared
+// directory. get() must still be able to serve it -- but put()/remove()
+// must NEVER touch that directory.
+// ---------------------------------------------------------------------------
+
+describe('BlobStore legacy-root fallback', () => {
+  it('get() falls back to the legacy root when the blob is missing from the primary root', async () => {
+    const legacyRoot = join(dir, 'legacy-attachments');
+    const data = Buffer.from('uploaded before per-database roots existed');
+    const sha256 = sha256Hex(data);
+    await mkdir(join(legacyRoot, sha256.slice(0, 2)), { recursive: true });
+    await writeFile(join(legacyRoot, sha256.slice(0, 2), sha256), data);
+
+    const storeWithLegacy = createBlobStore(root, legacyRoot);
+
+    const readBack = await storeWithLegacy.get(sha256);
+    expect(readBack.equals(data)).toBe(true);
+  });
+
+  it('prefers the primary root over the legacy one when both have the same sha256', async () => {
+    const legacyRoot = join(dir, 'legacy-attachments');
+    const primaryData = Buffer.from('the real, current copy');
+    const sha256 = sha256Hex(primaryData);
+    await mkdir(join(legacyRoot, sha256.slice(0, 2)), { recursive: true });
+    await writeFile(join(legacyRoot, sha256.slice(0, 2), sha256), 'a stale legacy copy, must be ignored');
+
+    const storeWithLegacy = createBlobStore(root, legacyRoot);
+    await storeWithLegacy.put(primaryData);
+
+    const readBack = await storeWithLegacy.get(sha256);
+    expect(readBack.equals(primaryData)).toBe(true);
+  });
+
+  it('still 404s (rejects) when neither root has the blob', async () => {
+    const legacyRoot = join(dir, 'legacy-attachments');
+    const storeWithLegacy = createBlobStore(root, legacyRoot);
+
+    await expect(storeWithLegacy.get('0'.repeat(64))).rejects.toThrow();
+  });
+
+  it('put() never writes into the legacy root', async () => {
+    const legacyRoot = join(dir, 'legacy-attachments');
+    const storeWithLegacy = createBlobStore(root, legacyRoot);
+
+    const { sha256 } = await storeWithLegacy.put(Buffer.from('new upload'));
+
+    await expect(stat(join(legacyRoot, sha256.slice(0, 2), sha256))).rejects.toThrow();
+    await expect(stat(join(root, sha256.slice(0, 2), sha256))).resolves.toBeTruthy();
+  });
+
+  it('remove() never touches the legacy root, even when the same sha256 lives there too', async () => {
+    const legacyRoot = join(dir, 'legacy-attachments');
+    const data = Buffer.from('shared sha in both roots');
+    const sha256 = sha256Hex(data);
+    await mkdir(join(legacyRoot, sha256.slice(0, 2)), { recursive: true });
+    const legacyPath = join(legacyRoot, sha256.slice(0, 2), sha256);
+    await writeFile(legacyPath, data);
+
+    const storeWithLegacy = createBlobStore(root, legacyRoot);
+    await storeWithLegacy.put(data);
+
+    await storeWithLegacy.remove(sha256);
+
+    await expect(stat(legacyPath)).resolves.toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveAttachmentsRoots (task 32 fix round 1, Critical #2): derives a
+// database's blob root from the DATABASE PATH itself, never from
+// secretsPath, and never shared with another database.
+// ---------------------------------------------------------------------------
+
+describe('resolveAttachmentsRoots', () => {
+  it('derives <dir>/<name>.attachments/ for a file database, from the database\'s own basename', () => {
+    const dbPath = join(dir, 'grunt.db');
+    const secretsPath = join(dir, 'secrets.json');
+
+    const roots = resolveAttachmentsRoots(dbPath, secretsPath);
+
+    expect(roots.writeRoot).toBe(join(dir, 'grunt.attachments'));
+    expect(roots.isTemporary).toBe(false);
+  });
+
+  it('gives two different database files in the SAME directory two DIFFERENT write roots', () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const main = resolveAttachmentsRoots(join(dir, 'main.db'), secretsPath);
+    const scratch = resolveAttachmentsRoots(join(dir, 'scratch.db'), secretsPath);
+
+    expect(main.writeRoot).not.toBe(scratch.writeRoot);
+    expect(main.writeRoot).toBe(join(dir, 'main.attachments'));
+    expect(scratch.writeRoot).toBe(join(dir, 'scratch.attachments'));
+  });
+
+  it('legacyRoot is always <dirname(secretsPath)>/attachments -- the old shared location -- regardless of the database path', () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const roots = resolveAttachmentsRoots(join(dir, 'anything.db'), secretsPath);
+
+    expect(roots.legacyRoot).toBe(join(dir, 'attachments'));
+  });
+
+  it(':memory: gets a fresh, unique temp directory every call, and is marked temporary', () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const a = resolveAttachmentsRoots(':memory:', secretsPath);
+    const b = resolveAttachmentsRoots(':memory:', secretsPath);
+
+    expect(a.isTemporary).toBe(true);
+    expect(b.isTemporary).toBe(true);
+    expect(a.writeRoot).not.toBe(b.writeRoot);
+  });
+
+  it(':memory: still resolves legacyRoot from secretsPath, so pre-fix blobs stay readable', () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const roots = resolveAttachmentsRoots(':memory:', secretsPath);
+
+    expect(roots.legacyRoot).toBe(join(dir, 'attachments'));
+  });
+
+  it('handles a database file with no extension', () => {
+    const secretsPath = join(dir, 'secrets.json');
+
+    const roots = resolveAttachmentsRoots(join(dir, 'grunt'), secretsPath);
+
+    expect(roots.writeRoot).toBe(join(dir, 'grunt.attachments'));
   });
 });
