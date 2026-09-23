@@ -17,18 +17,28 @@ vi.mock('../state/api.js', () => ({
     attachments: {
       upload: vi.fn(),
       list: vi.fn(),
+      delete: vi.fn(),
       contentUrl: (id: string) => `/api/attachments/${id}/content`,
       previewable: (mime: string) => ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/avif'].includes(mime),
     },
   },
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+    }
+  },
 }));
 
-import { api } from '../state/api.js';
+import { api, ApiError } from '../state/api.js';
 
 const mockedCreate = vi.mocked(api.turns.create);
 const mockedCancel = vi.mocked(api.turns.cancel);
 const mockedSetHead = vi.mocked(api.turns.setHead);
 const mockedUpload = vi.mocked(api.attachments.upload);
+const mockedDelete = vi.mocked(api.attachments.delete);
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -86,7 +96,6 @@ function makeAttachment(overrides: Partial<Awaited<ReturnType<typeof api.attachm
     mime: 'image/png',
     size: 1234,
     sha256: 'deadbeef',
-    storagePath: '/data/attachments/de/deadbeef',
     extractedText: null,
     ...overrides,
   };
@@ -98,6 +107,7 @@ function reset(): void {
   mockedCancel.mockReset();
   mockedSetHead.mockReset();
   mockedUpload.mockReset();
+  mockedDelete.mockReset();
 }
 
 describe('Composer', () => {
@@ -276,8 +286,9 @@ describe('Composer', () => {
       expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('clip.png');
     });
 
-    it('removes an attachment chip before sending when its remove button is clicked', async () => {
+    it('removes an attachment chip before sending when its remove button is clicked, by calling DELETE on the server', async () => {
       mockedUpload.mockResolvedValue(makeAttachment());
+      mockedDelete.mockResolvedValue(undefined);
       const chat = makeChat();
       const user = userEvent.setup();
       render(<Composer chat={chat} />);
@@ -287,7 +298,29 @@ describe('Composer', () => {
 
       await user.click(screen.getByRole('button', { name: /remove photo.png/i }));
 
+      await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('att-1'));
       expect(screen.queryByTestId('attachment-chip')).not.toBeInTheDocument();
+    });
+
+    // Task 32 decision #4: a DELETE failure must not silently drop the chip
+    // -- the server-side row (and the part it would become on send) would
+    // still exist with nothing in the composer showing it. The chip stays,
+    // and the failure surfaces as a visible error instead.
+    it('keeps the chip and shows an error when removing an attachment fails', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment());
+      mockedDelete.mockRejectedValue(new ApiError(409, 'Attachment "att-1" has already been sent as part of a message and cannot be deleted.'));
+      const chat = makeChat();
+      const user = userEvent.setup();
+      render(<Composer chat={chat} />);
+      const file = new File(['x'], 'photo.png', { type: 'image/png' });
+      fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [file] } });
+      await screen.findByTestId('attachment-chip');
+
+      await user.click(screen.getByRole('button', { name: /remove photo.png/i }));
+
+      await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('att-1'));
+      expect(screen.getByTestId('attachment-chip')).toBeInTheDocument();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/already been sent/i);
     });
 
     it('sending includes an uploaded image as an image part alongside the text part', async () => {

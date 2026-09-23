@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
-import type { Attachment, Chat } from '@grunt/core/ports/store.js';
+import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { api } from '../state/api.js';
+import { api, ApiError } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { AttachmentChip } from './AttachmentChip.js';
 
@@ -39,7 +39,7 @@ function buildAssistantStub(chat: Chat, id: string, parentId: string, profile: {
  * real visual content or degrade -- `file` for everything else (PDFs, text,
  * CSVs, ...), which `toModelMessages` sends as file content unconditionally.
  */
-function attachmentToPart(attachment: Attachment): Part {
+function attachmentToPart(attachment: PublicAttachment): Part {
   return attachment.mime.startsWith('image/')
     ? { type: 'image', attachmentId: attachment.id, mime: attachment.mime }
     : { type: 'file', attachmentId: attachment.id, mime: attachment.mime, filename: attachment.filename };
@@ -98,8 +98,9 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [comparePickerOpen, setComparePickerOpen] = useState(false);
   const [selectedProfileIds, setSelectedProfileIds] = useState<string[]>(() => (chat.profileId ? [chat.profileId] : []));
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] = useState<PublicAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
@@ -151,8 +152,25 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
     if (files.length > 0) void uploadFiles(files);
   }
 
-  function removeAttachment(id: string): void {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  /**
+   * Removing a chip before sending must actually delete the server-side
+   * attachment row (and, if orphaned, its blob) -- not just drop it from
+   * local state, which would leave the upload behind forever (task 32
+   * decision #4). The chip stays put until the DELETE actually succeeds:
+   * dropping it optimistically and then failing would desync the composer
+   * from the server (the row -- and the part it would become on send --
+   * would still exist, with no chip showing it), which is a more confusing
+   * failure than just leaving the chip there with an error message.
+   */
+  async function removeAttachment(id: string): Promise<void> {
+    setRemoveError(null);
+    try {
+      await api.attachments.delete(id);
+      setAttachments((prev) => prev.filter((a) => a.id !== id));
+    } catch (err) {
+      console.error(`[grunt-web] failed to delete attachment ${id}:`, err);
+      setRemoveError(err instanceof ApiError ? err.message : 'Failed to remove the attachment. Please try again.');
+    }
   }
 
   async function handleSend(): Promise<void> {
@@ -293,9 +311,15 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
               mime={a.mime}
               size={a.size}
               previewUrl={api.attachments.previewable(a.mime) ? api.attachments.contentUrl(a.id) : undefined}
-              onRemove={() => removeAttachment(a.id)}
+              onRemove={() => void removeAttachment(a.id)}
             />
           ))}
+        </div>
+      )}
+
+      {removeError && (
+        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+          {removeError}
         </div>
       )}
 
