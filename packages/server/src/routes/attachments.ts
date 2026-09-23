@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { Attachment } from '@grunt/core/ports/store.js';
+import type { Attachment, PublicAttachment } from '@grunt/core/ports/store.js';
+import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
+import { sha256Of } from '@grunt/store-sqlite/blob-store.js';
 import type { Container } from '../container.js';
 import { extractAttachmentText } from '../attachment-text.js';
 
@@ -24,6 +26,18 @@ function getAttachmentOrThrow(container: Container, id: string): Attachment {
   const attachment = container.store.attachments.get(id);
   if (!attachment) throw new HTTPException(404, { message: `Attachment "${id}" not found.` });
   return attachment;
+}
+
+/**
+ * Strips `storagePath` -- a raw SERVER filesystem path -- before an
+ * `Attachment` row ever reaches `c.json()` (task 32 decision #3). Applied at
+ * every response site in this file; the full row (with `storagePath`) is
+ * still what every INTERNAL call in this route uses (e.g. `GET .../content`
+ * reads `attachment.sha256` off it to load the blob).
+ */
+function toPublicAttachment(a: Attachment): PublicAttachment {
+  const { storagePath, ...rest } = a;
+  return rest;
 }
 
 function tooLarge(name: string, size: number): HTTPException {
@@ -154,31 +168,75 @@ export function attachmentsRoutes(container: Container): Hono {
     if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, data.length);
 
     const mime = file.type || 'application/octet-stream';
-    const blob = await container.blobStore.put(data);
-    const extractedText = await extractAttachmentText(data, mime, file.name);
 
-    const created = container.store.attachments.create({
-      id: randomUUID(),
-      chatId,
-      messageId: null,
-      filename: file.name,
-      mime,
-      size: blob.size,
-      sha256: blob.sha256,
-      storagePath: blob.path,
-      extractedText,
+    // Pinned from BEFORE the blob is written until AFTER the attachment row
+    // exists (Important #3, task 32 fix round 1): closes the window where
+    // the blob is on disk but nothing references it yet, which a concurrent
+    // GC pass (`gcBlobIfOrphaned`/`sweepOrphanedBlobs`, both consult
+    // `isPinned`) would otherwise -- correctly, by its own point-in-time
+    // view -- see as garbage and remove out from under this upload. Hashed
+    // here (not read off `blob.sha256`) because pinning has to start BEFORE
+    // `blobStore.put()` is even called.
+    const sha256 = sha256Of(data);
+    const created = await withPinnedSha(sha256, async () => {
+      const blob = await container.blobStore.put(data);
+      const extractedText = await extractAttachmentText(data, mime, file.name);
+
+      return container.store.attachments.create({
+        id: randomUUID(),
+        chatId,
+        messageId: null,
+        filename: file.name,
+        mime,
+        size: blob.size,
+        sha256: blob.sha256,
+        storagePath: blob.path,
+        extractedText,
+      });
     });
 
-    return c.json(created, 201);
+    return c.json(toPublicAttachment(created), 201);
   });
 
   app.get('/chats/:id/attachments', (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
-    return c.json(container.store.attachments.list(chatId));
+    return c.json(container.store.attachments.list(chatId).map(toPublicAttachment));
   });
 
-  app.get('/attachments/:id', (c) => c.json(getAttachmentOrThrow(container, c.req.param('id'))));
+  app.get('/attachments/:id', (c) => c.json(toPublicAttachment(getAttachmentOrThrow(container, c.req.param('id')))));
+
+  /**
+   * Deletes an UNSENT attachment (task 32 decision #1): `messageId === null`
+   * means it was uploaded but never sent as part of a message. An
+   * already-sent attachment is part of that message's history -- deleting
+   * it would make the transcript misrepresent what was actually sent to the
+   * model, and its image/file part would 404 on next render -- so that case
+   * is refused with 409 rather than allowed. Unknown id is a 404, same as
+   * every other attachment route.
+   *
+   * Removes the row first, then GCs its blob (a no-op if some OTHER
+   * attachment row -- upload dedupes by content hash, possibly in a
+   * different chat entirely -- still references the same sha256): see
+   * `gcBlobIfOrphaned` (@grunt/store-sqlite/blob-gc.js). A filesystem-level
+   * GC failure (a locked file, a permissions error, ...) is logged and
+   * swallowed by that function itself, never surfaced as a failure of this
+   * DELETE -- but a programming/wiring error is NOT swallowed (see that
+   * function's own doc) and propagates as a 500 on purpose.
+   */
+  app.delete('/attachments/:id', async (c) => {
+    const attachment = getAttachmentOrThrow(container, c.req.param('id'));
+    if (attachment.messageId !== null) {
+      throw new HTTPException(409, {
+        message: `Attachment "${attachment.id}" has already been sent as part of a message and cannot be deleted.`,
+      });
+    }
+
+    container.store.attachments.delete(attachment.id);
+    await gcBlobIfOrphaned(container.store, container.blobStore, attachment.sha256);
+
+    return c.body(null, 204);
+  });
 
   app.get('/attachments/:id/content', async (c) => {
     const attachment = getAttachmentOrThrow(container, c.req.param('id'));

@@ -5,6 +5,7 @@ import type { DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
 import type { Connection, ConnectionKind, ModelInfo } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { ErrorKind } from '@grunt/core/types/messages.js';
+import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
@@ -210,6 +211,13 @@ export function connectionsRoutes(container: Container): Hono {
     const existing = getConnectionOrThrow(container, id);
     if (existing.secretRef) await container.secrets.delete(existing.secretRef);
     container.store.connections.delete(id);
+    // Deleting a connection cascades away its models/profiles/chats and, in
+    // turn, THEIR attachment rows (ON DELETE CASCADE) -- sweep for any blob
+    // orphaned as a result. Filesystem-level failures are swallowed (see
+    // sweepOrphanedBlobs's own doc) and can't turn this into a failed
+    // request; a programming/wiring error is NOT swallowed and surfaces as
+    // a 500 on purpose.
+    await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
   });
 

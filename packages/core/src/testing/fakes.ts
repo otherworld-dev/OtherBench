@@ -259,6 +259,12 @@ class InMemoryAttachmentRepo implements AttachmentRepo {
   delete(id: string): void {
     this.repo.delete(id);
   }
+  isReferenced(sha256: string): boolean {
+    return this.repo.list().some((a) => a.sha256 === sha256);
+  }
+  referencedShas(): Set<string> {
+    return new Set(this.repo.list().map((a) => a.sha256));
+  }
 }
 
 class InMemoryUsageRepo implements UsageRepo {

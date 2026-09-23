@@ -8,6 +8,7 @@
     "./store.js": { "types": "./dist/store.d.ts", "default": "./dist/store.js" },
     "./secret-store.js": { "types": "./dist/secret-store.d.ts", "default": "./dist/secret-store.js" },
     "./blob-store.js": { "types": "./dist/blob-store.d.ts", "default": "./dist/blob-store.js" },
+    "./blob-gc.js": { "types": "./dist/blob-gc.d.ts", "default": "./dist/blob-gc.js" },
     "./migrations/*.js": { "types": "./dist/migrations/*.d.ts", "default": "./dist/migrations/*.js" }
   },
   "scripts": {

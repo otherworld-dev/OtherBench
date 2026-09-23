@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -109,6 +109,39 @@ describe('createContainer', () => {
     container.close();
   });
 
+  // Task 32 fix round 2, Minor #2: a `:memory:` database's blob write root
+  // is a fresh per-process temp directory (resolveAttachmentsRoots) that
+  // nothing else will ever reuse -- without cleaning it up, it accumulates
+  // forever under %TEMP%/$TMPDIR across every restart and every test run
+  // (confirmed: 28 stray `grunt-attachments-*` directories already there
+  // from exactly this, before this fix). Fails against 22cee46: the
+  // directory survives `close()` there.
+  it(':memory:\'s temp attachments directory is removed once the container is closed', async () => {
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    const tempRoot = container.blobStore.root;
+    expect(tempRoot).toContain('grunt-attachments-');
+    await expect(stat(tempRoot)).resolves.toBeTruthy();
+
+    container.close();
+    // close() removes it best-effort and unawaited (same fire-and-forget
+    // pattern as toolProvider.shutdown()) -- give it a tick to actually run.
+    await new Promise((r) => setTimeout(r, 50));
+
+    await expect(stat(tempRoot)).rejects.toThrow();
+  });
+
+  it('a real FILE database\'s attachments directory is NEVER removed on close -- it is the user\'s own attachment storage, not scratch', async () => {
+    const dbPath = join(dir, 'grunt.db');
+    const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
+    const writeRoot = container.blobStore.root;
+    await container.blobStore.put(Buffer.from('a real user attachment'));
+
+    container.close();
+    await new Promise((r) => setTimeout(r, 50));
+
+    await expect(stat(writeRoot)).resolves.toBeTruthy();
+  });
+
   it(
     'reconciles a message left "streaming" by a previous process on startup, over a real reopened database -- ' +
       'simulates the process dying mid-turn (kill -9 / power loss / crash): the row is never cleanly closed, so ' +
@@ -165,4 +198,73 @@ describe('createContainer', () => {
       }
     }
   );
+
+  it(
+    'startup blob sweep (task 32 decision #2c): removes a pre-existing orphan blob, and leaves a still-referenced ' +
+      'blob and a stray non-blob file completely alone -- over a real reopened database and a real on-disk BlobStore',
+    async () => {
+      const dbPath = join(dir, 'grunt.db');
+      const secretsPath = join(dir, 'secrets.json');
+
+      // First "process": seeds a referential chain, an attachment row that
+      // legitimately references one blob, and writes a SECOND blob directly
+      // via BlobStore with no attachment row at all -- simulating a blob
+      // orphaned before this GC existed, or left behind by a crash between
+      // a row delete and its (not-yet-existing) blob cleanup.
+      const first = await createContainer({ dbPath, secretsPath });
+      first.store.connections.create({
+        id: 'conn-1', name: 'Test', kind: 'mock', baseUrl: null, secretRef: null,
+        extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null,
+      });
+      first.store.models.create({
+        id: 'model-1', connectionId: 'conn-1', modelId: 'm', displayName: 'M', source: 'manual',
+        supportsVision: false, supportsTools: false, supportsReasoning: false, contextWindow: null,
+        maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
+      });
+      first.store.profiles.create({
+        id: 'profile-1', name: 'P', description: null, colour: null, connectionId: 'conn-1', modelId: 'model-1',
+        systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+        isDefault: false, archivedAt: null,
+      });
+      first.store.chats.create({ id: 'chat-1', profileId: 'profile-1', title: 'Chat', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+      const referencedBlob = await first.blobStore.put(Buffer.from('still referenced -- must survive'));
+      first.store.attachments.create({
+        id: 'att-referenced', chatId: 'chat-1', messageId: null, filename: 'keep.txt', mime: 'text/plain',
+        size: referencedBlob.size, sha256: referencedBlob.sha256, storagePath: referencedBlob.path, extractedText: null,
+      });
+
+      const orphanBlob = await first.blobStore.put(Buffer.from('nobody references me any more'));
+      // No attachment row for orphanBlob at all -- that's the orphan.
+
+      // A stray, non-blob file sitting inside a real shard directory --
+      // must never be treated as a delete candidate, no matter what.
+      const strayShardDir = join(first.blobStore.root, referencedBlob.sha256.slice(0, 2));
+      const strayPath = join(strayShardDir, 'not-a-blob.txt');
+      await writeFile(strayPath, 'definitely not a content-addressed blob');
+
+      first.close();
+
+      // Second "process": reopens the SAME database (and therefore derives
+      // the exact same per-database attachments root). Its startup sweep
+      // runs before createContainer even returns.
+      const second = await createContainer({ dbPath, secretsPath });
+      try {
+        await expect(stat(orphanBlob.path)).rejects.toThrow(); // swept away
+        await expect(stat(referencedBlob.path)).resolves.toBeTruthy(); // untouched
+        await expect(stat(strayPath)).resolves.toBeTruthy(); // untouched
+      } finally {
+        second.close();
+      }
+    }
+  );
+
+  it('startup blob sweep tolerates an attachments directory that does not exist yet (nothing has ever been uploaded)', async () => {
+    const dbPath = join(dir, 'grunt.db');
+    const secretsPath = join(dir, 'secrets.json');
+
+    // A fresh database's derived write root never exists on disk yet.
+    const container = await createContainer({ dbPath, secretsPath });
+    container.close();
+  });
 });

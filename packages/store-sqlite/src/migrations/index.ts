@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { MIGRATION_001_INITIAL } from './001-initial.js';
 import { MIGRATION_002_GRANT_SOURCE } from './002-grant-source.js';
 import { MIGRATION_003_MCP_ENV_REFS } from './003-mcp-env-refs.js';
+import { MIGRATION_004_ATTACHMENT_SHA256_INDEX } from './004-attachment-sha256-index.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -10,6 +11,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 1, name: '001-initial', sql: MIGRATION_001_INITIAL },
   { version: 2, name: '002-grant-source', sql: MIGRATION_002_GRANT_SOURCE },
   MIGRATION_003_MCP_ENV_REFS,
+  { version: 4, name: '004-attachment-sha256-index', sql: MIGRATION_004_ATTACHMENT_SHA256_INDEX },
 ];
 
 /**

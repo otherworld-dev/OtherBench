@@ -284,6 +284,54 @@ export function runStoreContract(
       expect(store.attachments.get('att-a')).toMatchObject({ id: 'att-a', chatId: chat.id, filename: 'photo.png' });
     });
 
+    describe('attachments: isReferenced / referencedShas', () => {
+      it('isReferenced is false for a sha256 no row has', () => {
+        expect(store.attachments.isReferenced('no-such-sha')).toBe(false);
+      });
+
+      it('isReferenced is true once a row has that sha256, and false again once it is deleted', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.attachments.create(makeAttachment({ id: 'att-a', chatId: chat.id, sha256: 'sha-x' }));
+
+        expect(store.attachments.isReferenced('sha-x')).toBe(true);
+
+        store.attachments.delete('att-a');
+
+        expect(store.attachments.isReferenced('sha-x')).toBe(false);
+      });
+
+      it('isReferenced stays true while a SECOND row (in a different chat) still shares the sha256, even after the first row is deleted', () => {
+        const { chat: chatA } = seedChat(store, 'chat-a');
+        const { chat: chatB } = seedChat(store, 'chat-b');
+        store.attachments.create(makeAttachment({ id: 'att-a', chatId: chatA.id, sha256: 'shared-sha' }));
+        store.attachments.create(makeAttachment({ id: 'att-b', chatId: chatB.id, sha256: 'shared-sha' }));
+
+        store.attachments.delete('att-a');
+        expect(store.attachments.isReferenced('shared-sha')).toBe(true);
+
+        store.attachments.delete('att-b');
+        expect(store.attachments.isReferenced('shared-sha')).toBe(false);
+      });
+
+      it('referencedShas returns every distinct sha256 across every chat, and updates as rows are deleted', () => {
+        const { chat: chatA } = seedChat(store, 'chat-a');
+        const { chat: chatB } = seedChat(store, 'chat-b');
+        store.attachments.create(makeAttachment({ id: 'att-a', chatId: chatA.id, sha256: 'sha-1' }));
+        store.attachments.create(makeAttachment({ id: 'att-b', chatId: chatB.id, sha256: 'sha-2' }));
+        // Same sha256 as att-a, in a different chat -- must not duplicate in the set.
+        store.attachments.create(makeAttachment({ id: 'att-c', chatId: chatB.id, sha256: 'sha-1' }));
+
+        expect(store.attachments.referencedShas()).toEqual(new Set(['sha-1', 'sha-2']));
+
+        store.attachments.delete('att-b');
+        expect(store.attachments.referencedShas()).toEqual(new Set(['sha-1']));
+      });
+
+      it('referencedShas is empty when there are no attachment rows at all', () => {
+        expect(store.attachments.referencedShas()).toEqual(new Set());
+      });
+    });
+
     it('usage: create/get round-trip', () => {
       const { chat, profileId, connectionId, modelId } = seedChat(store, 'chat-a');
       const message = store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));

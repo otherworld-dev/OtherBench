@@ -1,13 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
+import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 let container: Container;
+let dataDir: string;
 
-beforeEach(() => {
+// A REAL, temp-dir-backed BlobStore -- see chats.test.ts's identical
+// comment for why a `{} as never` placeholder is no longer safe to use
+// here: DELETE /api/profiles/:id now runs the real blob-GC sweep, and a
+// mis-wired blobStore would 500 every DELETE test instead of exercising
+// anything real (task 32 fix round 1, Minor #8).
+beforeEach(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), 'grunt-profiles-route-test-'));
   const store = new InMemoryStore();
   const engine = new FakeChatEngine([]);
   const turnRunner = new TurnRunner(store, engine);
@@ -20,7 +31,7 @@ beforeEach(() => {
     mcpManager: {} as never,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
-    blobStore: {} as never,
+    blobStore: createBlobStore(join(dataDir, 'attachments')),
     close: () => {},
   };
   container.store.connections.create({
@@ -34,6 +45,10 @@ beforeEach(() => {
     statusMessage: null,
     checkedAt: null,
   });
+});
+
+afterEach(async () => {
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 function app() {

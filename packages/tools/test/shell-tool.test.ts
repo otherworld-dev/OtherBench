@@ -51,6 +51,13 @@ afterEach(() => {
  * dependent on the deprecated wmic.exe binary) and letting a genuine
  * failure THROW keeps this check honest.
  */
+// Each commandLineStillRunning() call cold-starts PowerShell and runs a CIM
+// process query, which routinely takes several seconds on Windows while the
+// full suite is running in parallel. The tests that use it get this explicit
+// budget instead of vitest's 5s default, which the positive control (two
+// queries plus a taskkill) overran on an ordinary full run.
+const PROCESS_QUERY_TIMEOUT_MS = 30_000;
+
 async function commandLineStillRunning(marker: string): Promise<boolean> {
   if (process.platform === 'win32') {
     const { stdout } = await execFileAsync('powershell', [
@@ -85,7 +92,7 @@ describe('commandLineStillRunning (positive control)', () => {
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(await commandLineStillRunning(marker)).toBe(false);
-  });
+  }, PROCESS_QUERY_TIMEOUT_MS);
 });
 
 describe('run_command', () => {
@@ -144,7 +151,7 @@ describe('run_command', () => {
       // that).
       expect(await commandLineStillRunning(marker)).toBe(false);
     },
-    10_000
+    PROCESS_QUERY_TIMEOUT_MS
   );
 
   it(
@@ -162,7 +169,7 @@ describe('run_command', () => {
       expect(result.error).toBeUndefined();
       expect(await commandLineStillRunning(marker)).toBe(false);
     },
-    10_000
+    PROCESS_QUERY_TIMEOUT_MS
   );
 
   it('caps combined output at 100KB and appends a truncation notice', async () => {

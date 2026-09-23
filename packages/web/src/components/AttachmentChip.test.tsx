@@ -26,6 +26,17 @@ describe('AttachmentChip', () => {
     expect(removed).toBe(true);
   });
 
+  it('disables (but still renders) the remove button when removeDisabled is true, and a click does not call onRemove', async () => {
+    let removed = false;
+    const user = userEvent.setup();
+    render(<AttachmentChip filename="notes.txt" mime="text/plain" onRemove={() => (removed = true)} removeDisabled />);
+
+    const button = screen.getByRole('button', { name: /remove notes.txt/i });
+    expect(button).toBeDisabled();
+    await user.click(button);
+    expect(removed).toBe(false);
+  });
+
   it('renders a thumbnail for an image with a previewUrl, and a generic icon otherwise', () => {
     // The thumbnail is decorative (the filename text already conveys what
     // it is), so it's `alt=""` -- which the accessibility tree reports as

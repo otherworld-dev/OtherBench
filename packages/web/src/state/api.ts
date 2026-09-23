@@ -1,4 +1,4 @@
-import type { Attachment, AuditEntry, Chat, Grant, McpServer } from '@grunt/core/ports/store.js';
+import type { AuditEntry, Chat, Grant, McpServer, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
@@ -227,8 +227,15 @@ export const api = {
   },
 
   attachments: {
-    upload: (chatId: string, file: File) => uploadFile<Attachment>(`/chats/${chatId}/attachments`, file),
-    list: (chatId: string) => request<Attachment[]>(`/chats/${chatId}/attachments`),
+    upload: (chatId: string, file: File) => uploadFile<PublicAttachment>(`/chats/${chatId}/attachments`, file),
+    list: (chatId: string) => request<PublicAttachment[]>(`/chats/${chatId}/attachments`),
+    /**
+     * Deletes an UNSENT attachment (server-enforced: 409 if it's already
+     * part of a sent message -- see routes/attachments.ts decision #1).
+     * Removes the row and, unless another attachment row still shares its
+     * content hash, its on-disk blob too.
+     */
+    delete: (id: string) => del(`/attachments/${id}`),
     /** Not fetched via `request` -- consumed directly as an `<img src>`/download URL. */
     contentUrl: (id: string) => `/api/attachments/${id}/content`,
     /**
