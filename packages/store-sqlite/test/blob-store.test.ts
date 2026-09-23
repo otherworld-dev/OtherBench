@@ -28,6 +28,38 @@ describe('BlobStore.pathFor', () => {
   });
 });
 
+describe('BlobStore.root', () => {
+  it('is <dataDir>/attachments', () => {
+    expect(store.root).toBe(join(dir, 'attachments'));
+  });
+});
+
+describe('BlobStore.remove', () => {
+  it('unlinks a previously-put() blob so a subsequent get() rejects', async () => {
+    const data = Buffer.from('to be removed');
+    const { sha256, path } = await store.put(data);
+
+    await store.remove(sha256);
+
+    await expect(stat(path)).rejects.toThrow();
+    await expect(store.get(sha256)).rejects.toThrow();
+  });
+
+  it('removing a blob that was never put() (missing file) resolves without throwing', async () => {
+    await expect(store.remove('0'.repeat(64))).resolves.toBeUndefined();
+  });
+
+  it('removing one of two distinct blobs leaves the other intact', async () => {
+    const a = await store.put(Buffer.from('keep me'));
+    const b = await store.put(Buffer.from('remove me'));
+
+    await store.remove(b.sha256);
+
+    await expect(stat(a.path)).resolves.toBeTruthy();
+    await expect(stat(b.path)).rejects.toThrow();
+  });
+});
+
 describe('BlobStore.put / get', () => {
   it('writes bytes content-addressed by their own sha256, and get() reads the same bytes back', async () => {
     const data = Buffer.from('hello world');

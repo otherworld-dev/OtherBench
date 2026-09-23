@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export interface StoredBlob {
@@ -9,13 +9,17 @@ export interface StoredBlob {
   size: number;
 }
 
+function isEnoentError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
 /** True if node:fs/promises `stat` succeeded (the path exists), false for ENOENT specifically. Anything else (a permissions error, say) is a real failure and propagates. */
 async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
   } catch (err) {
-    if (typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if (isEnoentError(err)) return false;
     throw err;
   }
 }
@@ -40,13 +44,25 @@ export class BlobStore {
   constructor(private readonly dataDir: string) {}
 
   /**
+   * The directory every blob lives somewhere under: `<dataDir>/attachments`.
+   * The blob GC sweep (`blob-gc.ts`'s `sweepOrphanedBlobs`) walks this
+   * directory directly to diff what's physically on disk against what the
+   * `AttachmentRepo` table still references -- exposed as a getter (rather
+   * than making the sweep reach into `dataDir` itself) so this class stays
+   * the one place that knows the on-disk layout.
+   */
+  get root(): string {
+    return join(this.dataDir, 'attachments');
+  }
+
+  /**
    * Where a blob with this sha256 hex digest would live, or does live.
    * Pure path arithmetic -- no I/O, so it's safe to call before `put()` (to
    * check `AttachmentRepo` for an existing row with the same hash and skip
    * re-uploading entirely) as well as after.
    */
   pathFor(sha256: string): string {
-    return join(this.dataDir, 'attachments', sha256.slice(0, 2), sha256);
+    return join(this.root, sha256.slice(0, 2), sha256);
   }
 
   /**
@@ -80,6 +96,23 @@ export class BlobStore {
   /** Reads back the bytes for a previously-`put()` sha256 hash. Rejects (ENOENT) if nothing was ever stored under it. */
   async get(sha256: string): Promise<Buffer> {
     return readFile(this.pathFor(sha256));
+  }
+
+  /**
+   * Unlinks the blob for `sha256`, if any. A missing file is treated as
+   * already-clean (resolves normally, no error) -- the caller (attachment
+   * GC, `blob-gc.ts`) only ever calls this once it has already decided the
+   * blob is garbage, and "it's already gone" is success, not a failure.
+   * Any other error (permissions, a locked file, ...) propagates so the
+   * caller can log it -- this method itself makes no decision about whether
+   * such a failure should be swallowed.
+   */
+  async remove(sha256: string): Promise<void> {
+    try {
+      await unlink(this.pathFor(sha256));
+    } catch (err) {
+      if (!isEnoentError(err)) throw err;
+    }
   }
 }
 

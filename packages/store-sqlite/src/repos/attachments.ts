@@ -22,7 +22,7 @@ const mapping: CrudMapping<Attachment> = {
 export class SqliteAttachmentRepo implements AttachmentRepo {
   private readonly crud: SqliteCrudRepo<Attachment>;
 
-  constructor(db: DatabaseSync) {
+  constructor(private readonly db: DatabaseSync) {
     this.crud = new SqliteCrudRepo(db, mapping);
   }
 
@@ -44,5 +44,15 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
 
   delete(id: string): void {
     this.crud.delete(id);
+  }
+
+  isReferenced(sha256: string): boolean {
+    const row = this.db.prepare('SELECT 1 FROM attachment WHERE sha256 = ? LIMIT 1').get(sha256);
+    return row !== undefined;
+  }
+
+  referencedShas(): Set<string> {
+    const rows = this.db.prepare('SELECT DISTINCT sha256 FROM attachment').all() as { sha256: string }[];
+    return new Set(rows.map((r) => r.sha256));
   }
 }
