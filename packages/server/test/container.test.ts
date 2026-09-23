@@ -172,14 +172,13 @@ describe('createContainer', () => {
     async () => {
       const dbPath = join(dir, 'grunt.db');
       const secretsPath = join(dir, 'secrets.json');
-      const dataDir = dir;
 
       // First "process": seeds a referential chain, an attachment row that
       // legitimately references one blob, and writes a SECOND blob directly
       // via BlobStore with no attachment row at all -- simulating a blob
       // orphaned before this GC existed, or left behind by a crash between
       // a row delete and its (not-yet-existing) blob cleanup.
-      const first = await createContainer({ dbPath, secretsPath, dataDir });
+      const first = await createContainer({ dbPath, secretsPath });
       first.store.connections.create({
         id: 'conn-1', name: 'Test', kind: 'mock', baseUrl: null, secretRef: null,
         extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null,
@@ -207,15 +206,16 @@ describe('createContainer', () => {
 
       // A stray, non-blob file sitting inside a real shard directory --
       // must never be treated as a delete candidate, no matter what.
-      const strayShardDir = join(dataDir, 'attachments', referencedBlob.sha256.slice(0, 2));
+      const strayShardDir = join(first.blobStore.root, referencedBlob.sha256.slice(0, 2));
       const strayPath = join(strayShardDir, 'not-a-blob.txt');
       await writeFile(strayPath, 'definitely not a content-addressed blob');
 
       first.close();
 
-      // Second "process": reopens the SAME database + data dir. Its startup
-      // sweep runs before createContainer even returns.
-      const second = await createContainer({ dbPath, secretsPath, dataDir });
+      // Second "process": reopens the SAME database (and therefore derives
+      // the exact same per-database attachments root). Its startup sweep
+      // runs before createContainer even returns.
+      const second = await createContainer({ dbPath, secretsPath });
       try {
         await expect(stat(orphanBlob.path)).rejects.toThrow(); // swept away
         await expect(stat(referencedBlob.path)).resolves.toBeTruthy(); // untouched
@@ -230,8 +230,8 @@ describe('createContainer', () => {
     const dbPath = join(dir, 'grunt.db');
     const secretsPath = join(dir, 'secrets.json');
 
-    // Never creates a dataDir/attachments directory at all before startup.
-    const container = await createContainer({ dbPath, secretsPath, dataDir: join(dir, 'fresh-data-dir') });
+    // A fresh database's derived write root never exists on disk yet.
+    const container = await createContainer({ dbPath, secretsPath });
     container.close();
   });
 });

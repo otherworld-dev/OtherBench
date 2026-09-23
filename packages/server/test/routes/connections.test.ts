@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
@@ -6,6 +9,7 @@ import type { ConnectionTestResult, DiscoveredModel } from '@grunt/core/ports/ch
 import type { Connection } from '@grunt/core/types/config.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
+import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -50,8 +54,15 @@ function fakeNetworkError(): TypeError {
 let container: Container;
 let secrets: FakeSecretStore;
 let engine: ThrowingModelsEngine;
+let dataDir: string;
 
-beforeEach(() => {
+// A REAL, temp-dir-backed BlobStore -- see chats.test.ts's identical
+// comment for why a `{} as never` placeholder is no longer safe to use
+// here: DELETE /api/connections/:id now runs the real blob-GC sweep, and a
+// mis-wired blobStore would 500 every DELETE test instead of exercising
+// anything real (task 32 fix round 1, Minor #8).
+beforeEach(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), 'grunt-connections-route-test-'));
   secrets = new FakeSecretStore();
   engine = new ThrowingModelsEngine([]);
   const store = new InMemoryStore();
@@ -65,9 +76,13 @@ beforeEach(() => {
     mcpManager: {} as never,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
-    blobStore: {} as never,
+    blobStore: createBlobStore(join(dataDir, 'attachments')),
     close: () => {},
   };
+});
+
+afterEach(async () => {
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 function app() {

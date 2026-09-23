@@ -23,7 +23,6 @@ beforeEach(async () => {
   container = await createContainer({
     dbPath: join(dir, 'grunt.db'),
     secretsPath: join(dir, 'secrets.json'),
-    dataDir: dir,
   });
 });
 
@@ -69,8 +68,10 @@ async function createChat(profileId: string, id: string): Promise<void> {
   });
 }
 
+// dbPath is join(dir, 'grunt.db'), so its derived per-database write root
+// (resolveAttachmentsRoots, blob-store.ts) is join(dir, 'grunt.attachments').
 function blobPathFor(sha256: string): string {
-  return join(dir, 'attachments', sha256.slice(0, 2), sha256);
+  return join(dir, 'grunt.attachments', sha256.slice(0, 2), sha256);
 }
 
 describe('deleting a chat with attachments leaves no orphan blobs afterwards', () => {

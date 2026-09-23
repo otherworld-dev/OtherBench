@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
+import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { subscribeAutoTitle } from '../../src/routes/chats.js';
@@ -94,8 +98,19 @@ const FINISH: EngineEvent = {
 let container: Container;
 let push: (messageId: string, event: EngineEvent | null) => void;
 let requests: EngineRequest[];
+let dataDir: string;
 
-beforeEach(() => {
+// A REAL, temp-dir-backed BlobStore -- not a `{} as never` placeholder.
+// DELETE /api/chats/:id now runs the real blob-GC sweep after every delete
+// (task 32), which used to be swallowed into a silent no-op by ANY thrown
+// error, including a TypeError from a mis-wired blobStore like a bare `{}`.
+// That's fixed now (blob-gc.ts's `isFilesystemError` only swallows real
+// filesystem errors), which means a `{}` stub would make every DELETE test
+// below 500 instead of exercising anything real -- a real BlobStore is what
+// makes this suite actually catch a wiring regression instead of quietly
+// tolerating one (task 32 fix round 1, Minor #8).
+beforeEach(async () => {
+  dataDir = await mkdtemp(join(tmpdir(), 'grunt-chats-route-test-'));
   const store = new InMemoryStore();
   const manual = manualEngine();
   push = manual.push;
@@ -110,7 +125,7 @@ beforeEach(() => {
     mcpManager: {} as never,
     turnRunner,
     streamRegistry: new StreamRegistry(turnRunner, store),
-    blobStore: {} as never,
+    blobStore: createBlobStore(join(dataDir, 'attachments')),
     close: () => {},
   };
   subscribeAutoTitle(container);
@@ -139,6 +154,10 @@ beforeEach(() => {
     isDefault: false,
     archivedAt: null,
   });
+});
+
+afterEach(async () => {
+  await rm(dataDir, { recursive: true, force: true });
 });
 
 function app() {

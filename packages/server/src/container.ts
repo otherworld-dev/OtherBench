@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
@@ -11,7 +11,7 @@ import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
-import { createBlobStore, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
@@ -43,21 +43,21 @@ export interface Container {
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
-  /**
-   * Root directory attachment blobs are stored under, as
-   * `<dataDir>/attachments/<sha256[0:2]>/<sha256>`. Defaults to
-   * `dirname(secretsPath)` -- unlike `dbPath`, `secretsPath` is never
-   * `:memory:`, so it always names a real directory on disk to anchor
-   * attachment storage next to (alongside `grunt.db` and `secrets.json` in
-   * the ordinary case). Override when a caller wants attachments kept
-   * somewhere else, e.g. a test using a real blob store against an
-   * in-memory database.
-   */
-  dataDir?: string;
 }
 
 function isEnoent(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+/** True if `path` exists (any type), false for ENOENT specifically. Used only for the one-time "does the legacy attachments directory still exist" startup check below. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (err) {
+    if (isEnoent(err)) return false;
+    throw err;
+  }
 }
 
 /**
@@ -149,16 +149,33 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   const passphrase = await resolveSecretsPassphrase(options.secretsPath);
   const secrets = createSecretStore(options.secretsPath, passphrase);
 
-  const dataDir = options.dataDir ?? dirname(options.secretsPath);
-  const blobStore = createBlobStore(dataDir);
+  // Per-database attachment roots (task 32 fix round 1, Critical #2):
+  // derived from THIS database's own path, never shared with any other
+  // database that happens to sit next to the same secrets.json (or, for
+  // `:memory:`, the same default ~/.grunt directory) -- see
+  // resolveAttachmentsRoots's doc for the incident this fixes. The legacy
+  // shared root is read-only from here on: `blobStore.get()` falls back to
+  // it, but nothing ever writes to or sweeps it again.
+  const roots = resolveAttachmentsRoots(options.dbPath, options.secretsPath);
+  const blobStore = createBlobStore(roots.writeRoot, roots.legacyRoot);
+
+  if (await pathExists(roots.legacyRoot)) {
+    console.warn(
+      `[grunt-server] legacy shared attachments directory "${roots.legacyRoot}" still exists -- it is no longer ` +
+        `written to or swept. Blobs already there stay readable; new uploads for this database go to ` +
+        `"${roots.writeRoot}" instead.`
+    );
+  }
 
   // Startup blob sweep (task 32 decision #2c): reclaims anything orphaned
   // before this GC existed, or left behind by a crash between a row delete
   // and its blob cleanup. Enumerates disk and diffs it against the
   // `attachment` table, never the other way round -- see
   // `sweepOrphanedBlobs`'s own doc. Awaited (not fire-and-forget) so the
-  // server never briefly serves with stale garbage still on disk, but it
-  // never throws either way, so a sweep failure can never block startup.
+  // server never briefly serves with stale garbage still on disk. Only ever
+  // touches `roots.writeRoot` -- see resolveAttachmentsRoots's doc for why
+  // that's now safe to run unconditionally, even with another database's
+  // own file sitting in the same parent directory.
   const swept = await sweepOrphanedBlobs(store, blobStore);
   if (swept.removed > 0) {
     console.warn(`[grunt-server] startup blob sweep removed ${swept.removed} orphaned attachment blob(s) (of ${swept.scanned} scanned).`);
@@ -191,7 +208,22 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
     loadAttachment: async (id: string): Promise<Buffer> => {
       const attachment = store.attachments.get(id);
       if (!attachment) throw new Error(`loadAttachment: unknown attachment "${id}".`);
-      return blobStore.get(attachment.sha256);
+      try {
+        return await blobStore.get(attachment.sha256);
+      } catch (err) {
+        // NEVER let the raw fs error through: `BlobStore.get`'s rejection
+        // (a real Node `Error`, e.g. "ENOENT: no such file or directory,
+        // open 'C:\...\attachments\92\922a...'") names an absolute SERVER
+        // filesystem path. TurnRunner persists whatever this throws as
+        // `message.error.message` (classifyProviderError copies it
+        // verbatim), which `GET /chats/:id/messages` then returns straight
+        // to the client -- exactly the leak `storagePath` was stripped from
+        // API responses to prevent in the first place (task 32 decision
+        // #3), reopened through a different door. This names the
+        // attachment by id/filename instead -- never a path.
+        console.error(`[grunt-server] failed to load attachment "${id}"'s blob:`, err);
+        throw new Error(`Attachment "${attachment.filename}" (${id}) is missing or unreadable.`);
+      }
     },
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);

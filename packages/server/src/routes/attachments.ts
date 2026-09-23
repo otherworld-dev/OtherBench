@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Attachment, PublicAttachment } from '@grunt/core/ports/store.js';
-import { gcBlobIfOrphaned } from '@grunt/store-sqlite/blob-gc.js';
+import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
+import { sha256Of } from '@grunt/store-sqlite/blob-store.js';
 import type { Container } from '../container.js';
 import { extractAttachmentText } from '../attachment-text.js';
 
@@ -167,19 +168,31 @@ export function attachmentsRoutes(container: Container): Hono {
     if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, data.length);
 
     const mime = file.type || 'application/octet-stream';
-    const blob = await container.blobStore.put(data);
-    const extractedText = await extractAttachmentText(data, mime, file.name);
 
-    const created = container.store.attachments.create({
-      id: randomUUID(),
-      chatId,
-      messageId: null,
-      filename: file.name,
-      mime,
-      size: blob.size,
-      sha256: blob.sha256,
-      storagePath: blob.path,
-      extractedText,
+    // Pinned from BEFORE the blob is written until AFTER the attachment row
+    // exists (Important #3, task 32 fix round 1): closes the window where
+    // the blob is on disk but nothing references it yet, which a concurrent
+    // GC pass (`gcBlobIfOrphaned`/`sweepOrphanedBlobs`, both consult
+    // `isPinned`) would otherwise -- correctly, by its own point-in-time
+    // view -- see as garbage and remove out from under this upload. Hashed
+    // here (not read off `blob.sha256`) because pinning has to start BEFORE
+    // `blobStore.put()` is even called.
+    const sha256 = sha256Of(data);
+    const created = await withPinnedSha(sha256, async () => {
+      const blob = await container.blobStore.put(data);
+      const extractedText = await extractAttachmentText(data, mime, file.name);
+
+      return container.store.attachments.create({
+        id: randomUUID(),
+        chatId,
+        messageId: null,
+        filename: file.name,
+        mime,
+        size: blob.size,
+        sha256: blob.sha256,
+        storagePath: blob.path,
+        extractedText,
+      });
     });
 
     return c.json(toPublicAttachment(created), 201);
