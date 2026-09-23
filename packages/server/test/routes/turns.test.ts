@@ -239,6 +239,41 @@ describe('POST /api/chats/:id/turns', () => {
     const res = await postTurn(chatId, []);
     expect(res.status).toBe(400);
   });
+
+  // Task 32 fix round 2, Minor #1: a malformed part used to sail through
+  // `parseParts` untouched ("trust the element shape") and only fail once
+  // `TurnRunner.run` handed it to `store.attachments.get(id)`, where
+  // SQLite's own parameter binding rejects a non-string/number/null value
+  // with an opaque driver error -- a generic 500, not a 400 naming what
+  // was actually wrong with the request. Fails against 22cee46: both
+  // cases below 500 there instead of 400.
+  describe('malformed parts are rejected with 400, not a generic 500', () => {
+    it('an image part with attachmentId missing entirely', async () => {
+      const { chatId, profileIds } = seedChat();
+      const res = await postTurn(chatId, profileIds, [{ type: 'image', mime: 'image/png' }]);
+      expect(res.status).toBe(400);
+    });
+
+    it('a file part whose attachmentId is an object, not a string', async () => {
+      const { chatId, profileIds } = seedChat();
+      const res = await postTurn(chatId, profileIds, [
+        { type: 'file', attachmentId: { nested: 'object' }, mime: 'text/plain', filename: 'a.txt' },
+      ]);
+      expect(res.status).toBe(400);
+    });
+
+    it('a part with an unrecognised "type"', async () => {
+      const { chatId, profileIds } = seedChat();
+      const res = await postTurn(chatId, profileIds, [{ type: 'bogus' }]);
+      expect(res.status).toBe(400);
+    });
+
+    it('a part that is not even an object (a bare string)', async () => {
+      const { chatId, profileIds } = seedChat();
+      const res = await postTurn(chatId, profileIds, ['just a string']);
+      expect(res.status).toBe(400);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

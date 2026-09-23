@@ -17,12 +17,73 @@ interface HeadBody {
   messageId?: unknown;
 }
 
+const KNOWN_PART_TYPES = new Set(['text', 'reasoning', 'image', 'file', 'tool-call', 'tool-result', 'notice']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/**
+ * Validates one element of `parts` against `Part`'s actual shape (task 32
+ * fix round 2, Minor #1): before this, a malformed part -- most
+ * concretely, an `image`/`file` part with `attachmentId` missing entirely
+ * or given as an object -- sailed straight through `parseParts` untouched
+ * ("trust the element shape") and only failed once `TurnRunner.run` handed
+ * it to `store.attachments.get(id)`, where SQLite's own parameter binding
+ * rejects a non-string/number/null value with a generic driver error --
+ * an opaque 500, not a 400 naming what was actually wrong with the request.
+ */
+function assertValidPart(part: unknown, index: number): void {
+  const where = `"parts[${index}]"`;
+  if (!isPlainObject(part) || typeof part['type'] !== 'string' || !KNOWN_PART_TYPES.has(part['type'])) {
+    throw new HTTPException(400, { message: `${where} must be an object with a recognised "type".` });
+  }
+  switch (part['type']) {
+    case 'text':
+    case 'reasoning':
+    case 'notice':
+      if (typeof part['text'] !== 'string') {
+        throw new HTTPException(400, { message: `${where}.text must be a string.` });
+      }
+      break;
+    case 'image':
+      if (!isNonEmptyString(part['attachmentId'])) {
+        throw new HTTPException(400, { message: `${where}.attachmentId must be a non-empty string.` });
+      }
+      if (typeof part['mime'] !== 'string') {
+        throw new HTTPException(400, { message: `${where}.mime must be a string.` });
+      }
+      break;
+    case 'file':
+      if (!isNonEmptyString(part['attachmentId'])) {
+        throw new HTTPException(400, { message: `${where}.attachmentId must be a non-empty string.` });
+      }
+      if (typeof part['mime'] !== 'string' || typeof part['filename'] !== 'string') {
+        throw new HTTPException(400, { message: `${where}.mime and .filename must be strings.` });
+      }
+      break;
+    case 'tool-call':
+      if (typeof part['id'] !== 'string' || typeof part['name'] !== 'string') {
+        throw new HTTPException(400, { message: `${where}.id and .name must be strings.` });
+      }
+      break;
+    case 'tool-result':
+      if (typeof part['id'] !== 'string' || typeof part['name'] !== 'string' || typeof part['isError'] !== 'boolean') {
+        throw new HTTPException(400, { message: `${where}.id, .name must be strings and .isError a boolean.` });
+      }
+      break;
+  }
+}
+
 function parseParts(value: unknown): Part[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new HTTPException(400, { message: '"parts" must be a non-empty array.' });
   }
-  // Trusting the element shape rather than re-deriving a bespoke Part schema
-  // here, consistent with parseParams()/parseToolPolicy() in routes/profiles.ts.
+  value.forEach((part, index) => assertValidPart(part, index));
   return value as Part[];
 }
 

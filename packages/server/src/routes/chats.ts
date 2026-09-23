@@ -116,8 +116,11 @@ export function chatsRoutes(container: Container): Hono {
     container.store.chats.delete(id);
     // Deleting a chat cascades its attachment rows away in SQLite (ON
     // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
-    // `sweepOrphanedBlobs` never throws (see its own doc), so this can never
-    // turn a successful delete into a failed request.
+    // `sweepOrphanedBlobs` swallows filesystem-level failures (a locked
+    // file, a permissions error, ...) so those can never turn a successful
+    // delete into a failed request; it does NOT swallow a programming/
+    // wiring error (see its own doc), which surfaces as a 500 here on
+    // purpose rather than silently no-op-ing.
     await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
   });

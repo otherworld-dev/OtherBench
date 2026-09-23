@@ -218,9 +218,11 @@ export function attachmentsRoutes(container: Container): Hono {
    * Removes the row first, then GCs its blob (a no-op if some OTHER
    * attachment row -- upload dedupes by content hash, possibly in a
    * different chat entirely -- still references the same sha256): see
-   * `gcBlobIfOrphaned` (@grunt/store-sqlite/blob-gc.js). GC failures are
-   * logged and swallowed by that function itself, never surfaced as a
-   * failure of this DELETE.
+   * `gcBlobIfOrphaned` (@grunt/store-sqlite/blob-gc.js). A filesystem-level
+   * GC failure (a locked file, a permissions error, ...) is logged and
+   * swallowed by that function itself, never surfaced as a failure of this
+   * DELETE -- but a programming/wiring error is NOT swallowed (see that
+   * function's own doc) and propagates as a 500 on purpose.
    */
   app.delete('/attachments/:id', async (c) => {
     const attachment = getAttachmentOrThrow(container, c.req.param('id'));

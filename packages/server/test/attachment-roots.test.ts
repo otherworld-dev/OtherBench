@@ -86,8 +86,8 @@ describe('two databases in the same directory never share or clobber each other\
 
       // Different per-database write roots entirely.
       expect(containerA.blobStore.root).not.toBe(containerB.blobStore.root);
-      expect(containerA.blobStore.root).toBe(join(dir, 'main.attachments'));
-      expect(containerB.blobStore.root).toBe(join(dir, 'scratch.attachments'));
+      expect(containerA.blobStore.root).toBe(join(dir, 'main.db.attachments'));
+      expect(containerB.blobStore.root).toBe(join(dir, 'scratch.db.attachments'));
 
       // Deleting chat-a (cascades A's attachment row, sweeps A's root) must
       // not touch B's blob at all.
@@ -135,6 +135,66 @@ describe('two databases in the same directory never share or clobber each other\
     } finally {
       containerA.close();
     }
+  });
+
+  /**
+   * Task 32 fix round 2, Critical #1: an earlier version of
+   * `resolveAttachmentsRoots` stripped the extension before appending
+   * ".attachments", so two databases sharing a STEM -- `main.db`/
+   * `main.bak`, or `grunt`/`grunt.db` -- collided on the exact same
+   * `<stem>.attachments/` root. Reproduced live (the reviewer's rr/c2.mjs,
+   * adapted here): two such servers side by side, a chat delete (and a
+   * restart) in one made the other's attachment 404. Fails against
+   * 22cee46 for BOTH pairs below; the "distinct-stem" test above alone
+   * would never have caught this, since `main.db`/`scratch.db` never
+   * shared a stem in the first place.
+   */
+  describe.each([
+    ['main.db', 'main.bak', 'same stem, different extension'],
+    ['grunt', 'grunt.db', 'same stem, one with no extension at all'],
+  ])('same-stem collision: %s vs %s (%s)', (nameA, nameB) => {
+    it('a chat delete (sweep) and a restart in one database never 404s the other\'s attachment', async () => {
+      const secretsPath = join(dir, 'secrets.json');
+      let A = await createContainer({ dbPath: join(dir, nameA), secretsPath });
+      let B = await createContainer({ dbPath: join(dir, nameB), secretsPath });
+      try {
+        const { profileId: profileA } = await seedProfile(A, 'a');
+        const { profileId: profileB } = await seedProfile(B, 'b');
+        A.store.chats.create({ id: 'chat-a', title: 'A', profileId: profileA, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+        B.store.chats.create({ id: 'chat-b', title: 'B', profileId: profileB, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+        const uploadA = await (
+          await createApp(A).request('/api/chats/chat-a/attachments', { method: 'POST', body: uploadForm('a.txt', `A-content-${nameA}`, 'text/plain') })
+        ).json();
+        const uploadB = await (
+          await createApp(B).request('/api/chats/chat-b/attachments', { method: 'POST', body: uploadForm('b.txt', `B-content-${nameB}`, 'text/plain') })
+        ).json();
+
+        expect(A.blobStore.root).not.toBe(B.blobStore.root);
+
+        // An extra chat in A, deleted -- triggers A's own cascade sweep.
+        A.store.chats.create({ id: 'chat-a2', title: 'A2', profileId: profileA, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+        await createApp(A).request('/api/chats/chat-a2/attachments', { method: 'POST', body: uploadForm('x.txt', `A-throwaway-${nameA}`, 'text/plain') });
+        const del = await createApp(A).request('/api/chats/chat-a2', { method: 'DELETE' });
+        expect(del.status).toBe(204);
+
+        A.close();
+        A = await createContainer({ dbPath: join(dir, nameA), secretsPath }); // A's own startup sweep
+
+        const bAfterASweep = await createApp(B).request(`/api/attachments/${uploadB.id}/content`);
+        const aOwn = await createApp(A).request(`/api/attachments/${uploadA.id}/content`);
+        expect(bAfterASweep.status).toBe(200);
+        expect(aOwn.status).toBe(200);
+
+        B.close();
+        B = await createContainer({ dbPath: join(dir, nameB), secretsPath });
+        const aAfterBRestart = await createApp(A).request(`/api/attachments/${uploadA.id}/content`);
+        expect(aAfterBRestart.status).toBe(200);
+      } finally {
+        A.close();
+        B.close();
+      }
+    });
   });
 });
 

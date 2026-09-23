@@ -118,8 +118,10 @@ export function profilesRoutes(container: Container): Hono {
     container.store.profiles.delete(id);
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
     // in turn cascades THEIR attachment rows away -- sweep for any blob
-    // orphaned as a result. Never throws; can't turn this delete into a
-    // failed request.
+    // orphaned as a result. Filesystem-level failures are swallowed (see
+    // sweepOrphanedBlobs's own doc) and can't turn this into a failed
+    // request; a programming/wiring error is NOT swallowed and surfaces as
+    // a 500 on purpose.
     await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
   });

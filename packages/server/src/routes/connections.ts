@@ -213,8 +213,10 @@ export function connectionsRoutes(container: Container): Hono {
     container.store.connections.delete(id);
     // Deleting a connection cascades away its models/profiles/chats and, in
     // turn, THEIR attachment rows (ON DELETE CASCADE) -- sweep for any blob
-    // orphaned as a result. Never throws; can't turn this delete into a
-    // failed request.
+    // orphaned as a result. Filesystem-level failures are swallowed (see
+    // sweepOrphanedBlobs's own doc) and can't turn this into a failed
+    // request; a programming/wiring error is NOT swallowed and surfaces as
+    // a 500 on purpose.
     await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
   });

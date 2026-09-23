@@ -69,9 +69,10 @@ async function createChat(profileId: string, id: string): Promise<void> {
 }
 
 // dbPath is join(dir, 'grunt.db'), so its derived per-database write root
-// (resolveAttachmentsRoots, blob-store.ts) is join(dir, 'grunt.attachments').
+// (resolveAttachmentsRoots, blob-store.ts) is join(dir, 'grunt.db.attachments')
+// -- the full basename, extension included (task 32 fix round 2, Critical #1).
 function blobPathFor(sha256: string): string {
-  return join(dir, 'grunt.attachments', sha256.slice(0, 2), sha256);
+  return join(dir, 'grunt.db.attachments', sha256.slice(0, 2), sha256);
 }
 
 describe('deleting a chat with attachments leaves no orphan blobs afterwards', () => {
@@ -152,5 +153,52 @@ describe('deleting a connection cascades its profiles/chats\' attachments and GC
     expect(container.store.chats.get('chat-1')).toBeNull();
     expect(container.store.attachments.get(created.id)).toBeNull();
     await expect(stat(blobPath)).rejects.toThrow();
+  });
+});
+
+/**
+ * Task 32 fix round 2, Minor #1: before `parseParts` validated part shape,
+ * a malformed `image`/`file` part's `attachmentId` sailed through
+ * untouched into `TurnRunner.run`, which hands it to
+ * `store.attachments.get(id)`. Against `InMemoryStore` that's harmless
+ * (a `Map` lookup with a weird key just misses), but against the REAL
+ * SqliteStore -- what every actual `grunt serve` process uses -- SQLite's
+ * own parameter binding rejects a non-string/number/null value outright:
+ * confirmed empirically, `db.prepare(...).get(undefined)` throws
+ * `TypeError: Provided value cannot be bound to SQLite parameter 1.` and
+ * `db.prepare(...).get({...})` throws `Error: Unknown named parameter`.
+ * That's why this specific case needs a real SQLite-backed container to
+ * reproduce at all -- most route tests use `InMemoryStore`, which would
+ * never hit it.
+ */
+describe('POST /chats/:id/turns rejects a malformed attachmentId with 400, not the SQLite-binding 500 (needs a real SqliteStore)', () => {
+  it('an image part whose attachmentId is missing entirely', async () => {
+    const { profileId } = await createConnectionModelProfile('p1');
+    await createChat(profileId, 'chat-1');
+
+    const res = await app().request('/api/chats/chat-1/turns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parentId: null, parts: [{ type: 'image', mime: 'image/png' }], profileIds: [profileId] }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('a file part whose attachmentId is an object, not a string', async () => {
+    const { profileId } = await createConnectionModelProfile('p1');
+    await createChat(profileId, 'chat-1');
+
+    const res = await app().request('/api/chats/chat-1/turns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        parentId: null,
+        parts: [{ type: 'file', attachmentId: { nested: 'object' }, mime: 'text/plain', filename: 'a.txt' }],
+        profileIds: [profileId],
+      }),
+    });
+
+    expect(res.status).toBe(400);
   });
 });

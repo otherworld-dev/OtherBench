@@ -109,6 +109,39 @@ describe('createContainer', () => {
     container.close();
   });
 
+  // Task 32 fix round 2, Minor #2: a `:memory:` database's blob write root
+  // is a fresh per-process temp directory (resolveAttachmentsRoots) that
+  // nothing else will ever reuse -- without cleaning it up, it accumulates
+  // forever under %TEMP%/$TMPDIR across every restart and every test run
+  // (confirmed: 28 stray `grunt-attachments-*` directories already there
+  // from exactly this, before this fix). Fails against 22cee46: the
+  // directory survives `close()` there.
+  it(':memory:\'s temp attachments directory is removed once the container is closed', async () => {
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    const tempRoot = container.blobStore.root;
+    expect(tempRoot).toContain('grunt-attachments-');
+    await expect(stat(tempRoot)).resolves.toBeTruthy();
+
+    container.close();
+    // close() removes it best-effort and unawaited (same fire-and-forget
+    // pattern as toolProvider.shutdown()) -- give it a tick to actually run.
+    await new Promise((r) => setTimeout(r, 50));
+
+    await expect(stat(tempRoot)).rejects.toThrow();
+  });
+
+  it('a real FILE database\'s attachments directory is NEVER removed on close -- it is the user\'s own attachment storage, not scratch', async () => {
+    const dbPath = join(dir, 'grunt.db');
+    const container = await createContainer({ dbPath, secretsPath: join(dir, 'secrets.json') });
+    const writeRoot = container.blobStore.root;
+    await container.blobStore.put(Buffer.from('a real user attachment'));
+
+    container.close();
+    await new Promise((r) => setTimeout(r, 50));
+
+    await expect(stat(writeRoot)).resolves.toBeTruthy();
+  });
+
   it(
     'reconciles a message left "streaming" by a previous process on startup, over a real reopened database -- ' +
       'simulates the process dying mid-turn (kill -9 / power loss / crash): the row is never cleanly closed, so ' +

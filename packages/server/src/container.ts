@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
@@ -161,9 +161,10 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 
   if (await pathExists(roots.legacyRoot)) {
     console.warn(
-      `[grunt-server] legacy shared attachments directory "${roots.legacyRoot}" still exists -- it is no longer ` +
-        `written to or swept. Blobs already there stay readable; new uploads for this database go to ` +
-        `"${roots.writeRoot}" instead.`
+      `[grunt-server] legacy shared attachments directory "${roots.legacyRoot}" still exists. New uploads for ` +
+        `this database go to "${roots.writeRoot}" instead, and it is never written to or swept -- but it is ` +
+        `STILL READ: any attachment uploaded before this change is served from there. Do NOT delete it -- doing ` +
+        `so will make those older attachments 404.`
     );
   }
 
@@ -247,6 +248,20 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
       void toolProvider.shutdown().catch((err: unknown) => {
         console.error('[grunt-server] error shutting down tool provider:', err);
       });
+      // A `:memory:` database's write root is an ephemeral per-process temp
+      // directory (resolveAttachmentsRoots) that nothing else will ever
+      // reuse or clean up -- without this it accumulates forever under
+      // %TEMP%/$TMPDIR across restarts and test runs (task 32 fix round 2,
+      // Minor #2: confirmed 28 stray `grunt-attachments-*` directories
+      // already sitting there from exactly this). Removed here, best-effort
+      // and not awaited, same reasoning as `toolProvider.shutdown()` above.
+      // A real file database's write root is never touched -- it's the
+      // user's own attachment storage, not this process's temp scratch.
+      if (roots.isTemporary) {
+        void rm(roots.writeRoot, { recursive: true, force: true }).catch((err: unknown) => {
+          console.error(`[grunt-server] failed to remove temporary attachments directory "${roots.writeRoot}":`, err);
+        });
+      }
     },
   };
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
