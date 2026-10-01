@@ -30,8 +30,13 @@ attachments/
 .DS_Store
 Thumbs.db
 
-# Claude Code files (snapshotted separately, never in public history)
+# Claude
 .claude/
+CLAUDE.md
+.mcp.json
 
 # Superpowers brainstorming session artifacts
 .superpowers/
+
+# Private docs (moved to Collectives Products/Grunt/Design)
+docs/superpowers/
