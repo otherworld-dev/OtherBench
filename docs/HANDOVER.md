@@ -15,7 +15,7 @@ that first if you just want to see it work.
 
 ## What works today, milestone by milestone
 
-The plan (`docs/superpowers/plans/2026-08-12-grunt-v1.md`) is 31 tasks
+The plan (Collectives `Products/Grunt/Design/Plans/2026-08-12-grunt-v1`) is 31 tasks
 across 8 milestones. Honest status of each:
 
 | Milestone | Tasks | Covers | Status |
@@ -327,8 +327,8 @@ All deliberate, all recorded at the time in the plan's Global Constraints:
 | Document | What it is |
 | --- | --- |
 | `README.md` | Install, run, add a connection/profile, the mock-provider walkthrough |
-| `docs/superpowers/specs/2026-08-12-grunt-multi-model-chat-workbench-design.md` | The original design spec — architecture, data model, permission model, error taxonomy |
-| `docs/superpowers/plans/2026-08-12-grunt-v1.md` | The 31-task implementation plan this was built from, with the full milestone breakdown and code-level detail for M0–M3 |
+| Collectives `Products/Grunt/Design/Specs/2026-08-12-grunt-multi-model-chat-workbench-design` | The original design spec — architecture, data model, permission model, error taxonomy |
+| Collectives `Products/Grunt/Design/Plans/2026-08-12-grunt-v1` | The 31-task implementation plan this was built from, with the full milestone breakdown and code-level detail for M0–M3 |
 | `.superpowers/sdd/2026-08-12-grunt-v1/progress.md` | The execution ledger — every review finding, ruling, and parked risk, including the exact racer numbers behind the TOCTOU claims above and the full shell-grant controller ruling. Git-ignored, so it only exists on a machine that built this |
 | `packages/core/src/domain/paths.ts`, `packages/tools/src/fs-tools.ts` | The containment/TOCTOU/hard-link mechanics and their residuals, documented in-module — read these directly rather than trusting a paraphrase, this one included |
 
