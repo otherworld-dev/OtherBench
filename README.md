@@ -85,12 +85,36 @@ always works and needs neither.
 
 Grunt ships a keyless **mock provider** (`kind: "mock"`) specifically so you
 can evaluate the whole app — streaming, tool calls, approvals, compare —
-without any real credentials. There's no Settings UI yet (see
-`docs/HANDOVER.md`), so connections, profiles, and chats are created
-directly against the REST API for now; everything after that is normal
-browser use.
+without any real credentials.
 
-With the server running (`npm run serve`, default port 4747):
+With the server running (`npm run serve`, default port 4747), open
+`http://127.0.0.1:4747` and use the **Settings** button in the header:
+
+**1. Settings → Connections → New connection.** Pick kind `mock`, give it a
+name, save. No API key needed for this kind.
+
+**2. Settings → Profiles → New profile.** Point it at the connection you just
+made and model `mock-standard` (the mock provider's only model — it always
+exists, no discovery step needed). Turn tool access on — `fs: readwrite`,
+approval mode `always_ask` — so the `#tool` trigger below shows the real
+approval flow, not just a placeholder. Tick "Default" so new chats use it
+automatically.
+
+**3. Back in the chat list, create a new chat, then open the Inspector pane
+and set a Workspace path.** This is the one field that turns on filesystem
+and shell tools for that chat — without it, `#tool` below will fail with a
+permission error. It has to be a proper **native, absolute** path.
+
+**4. Type `#tool notes.txt` as a message** (create a real `notes.txt` in that
+workspace directory first) and see the walkthrough table below.
+
+That's the whole flow through the UI — no `curl`, no REST calls by hand.
+
+### The same thing via curl
+
+Everything above is equally reachable directly against the REST API, which
+is what the Settings UI itself calls — useful for scripting or if you'd
+rather not open a browser yet. Same server, default port 4747:
 
 **1. Create a mock connection:**
 
@@ -151,8 +175,10 @@ curl -X POST http://127.0.0.1:4747/api/chats \
   -d "{\"title\":\"Mock demo\",\"profileId\":\"PROFILE_ID\",\"workspaceRoot\":\"$WORKSPACE\"}"
 ```
 
-**4. Open `http://127.0.0.1:4747`**, click **"Mock demo"** in the chat list,
-and try each of these as separate messages:
+**4. Open `http://127.0.0.1:4747`**, click **"Mock demo"** in the chat list
+(this is the step where the two paths above converge — the UI part starts
+here regardless of how the connection/profile/chat were created), and try
+each of these as separate messages:
 
 | Type this | You'll see |
 | --- | --- |
@@ -167,7 +193,8 @@ streaming, a real (if trivial) tool execution behind a real approval gate.
 
 ## Using a real provider
 
-Same shape, different `kind` and an API key:
+Same shape, different `kind` and an API key — through Settings → Connections
+in the UI, or the same curl call with a real key:
 
 ```sh
 curl -X POST http://127.0.0.1:4747/api/connections \
@@ -178,14 +205,15 @@ curl -X POST http://127.0.0.1:4747/api/connections \
 `kind` is one of `anthropic`, `openai`, `openai_compatible`, `google`,
 `ollama`, or `mock`. For `openai_compatible`, also pass `baseUrl`. The key is
 stored via `SecretStore` (encrypted at rest, see `docs/HANDOVER.md`), never
-in the SQLite database itself. Then `POST /api/connections/:id/discover-models`
-(or add one by hand via `POST /api/models`) and create a profile against a
-real `modelId`, same as above.
+in the SQLite database itself. Then click **Discover models** on that
+connection in Settings (or `POST /api/connections/:id/discover-models`, or
+add one by hand via `POST /api/models`) and create a profile against a real
+`modelId`, same as above.
 
 ## Tests
 
 ```sh
-npx vitest run              # unit + integration, ~750 tests (751 pass, 2 skipped as of this writing)
+npx vitest run              # unit + integration, 953 pass, 3 skipped as of this writing
 npm run typecheck
 cd packages/web && npx playwright test   # e2e, requires npm run build first
 ```
