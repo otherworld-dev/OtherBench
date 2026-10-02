@@ -256,17 +256,41 @@ API that runs shell commands and holds the bearer token.
   user's Claude settings. `canUseTool` uses the same gate as a fallback;
   `permissionMode` is always `'default'`.
 - File-tool paths are checked with `containPath`; outside the workspace is
-  denied without a card. Bash is not path-contained; its grants are pinned to
-  the exact command like `run_command`.
-- Agent file paths are trimmed, `~` paths are refused, and Glob/Grep patterns
-  with absolute, `~` or `..` prefixes are contained.
+  denied without a card. The agent shell tools (Bash, BashOutput, KillShell,
+  PowerShell, Monitor) are not path-contained; their grants are pinned to the
+  exact command like `run_command`.
+- Agent file paths are trimmed, `~` paths are refused, on Windows `/c/...`
+  paths are refused (Claude Code reads them as `C:\...`, `containPath` would
+  not), and Glob/Grep patterns with absolute, `~` or `..` prefixes are
+  contained.
+- Writes to Claude Code's own config always get a card (R13): anything under a
+  `.claude` directory, `.mcp.json`, and `CLAUDE.md`/`CLAUDE.local.md` in any
+  directory (`isProtectedAgentPath`). No grant covers them and a chat/always
+  answer stores none, because a hook, skill or MCP command written there would
+  run on a later turn with no Bash card.
+- Skill and slash-command inline shell (`` !`cmd` ``) is disabled for Grunt
+  turns (R14, `disableSkillShellExecution` in the SDK's flag settings), since
+  the Skill tool itself gets no card.
+- With `agentMcp: false` the turn loads no MCP servers (`strictMcpConfig`);
+  the gate also denies MCP calls.
 - Unknown Claude Code tools can only be approved once (no chat/always grants).
-- The Claude backend's child env has `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
-  removed (any case).
-- Session ids live in `message.engine_meta`; see
-  `packages/engine-claude-code/src/session.ts` for resume/fork/fresh rules.
+- The child env has `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` removed for the
+  Claude backend, and `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`/
+  `CLAUDE_CODE_SSE_PORT` removed for every backend (any case).
+- Session ids live in `message.engine_meta`. A turn continues the session in
+  place only when the message above it is still that session's tip; anything
+  else (retry, edit, compare siblings, another model's turn) starts a fresh
+  session seeded with the branch's own history. There is no fork: a fork
+  copies the whole session, including other branches' turns (R12). See
+  `packages/engine-claude-code/src/session.ts`.
 
 Known gaps:
+
+- The workspace's own Claude Code project config -- `.claude/settings.json`
+  and `settings.local.json` (hooks, permissions), `.claude/skills`, commands
+  and agents, `.mcp.json`, CLAUDE.md -- applies with no trust prompt, as
+  `settingSources` includes `project` and `local`. Hooks run commands without
+  a Grunt card. Only open folders you trust as workspaces.
 
 - Relative paths are resolved against the workspace root for grants and card
   summaries, but Claude Code resolves them against its own current directory,

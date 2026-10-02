@@ -117,10 +117,14 @@ A **Claude Code** connection runs turns through your local Claude Code install
 
 Claude Code profiles need a workspace folder on the chat. Claude Code's own
 tools (Read, Edit, Bash, ...) replace Grunt's fs/shell/MCP tools for those
-turns, and every call goes through Grunt's approval cards. Your `~/.claude`
-settings, CLAUDE.md files and MCP servers apply. Chats are real Claude Code
-sessions: the Inspector shows a `claude --resume` command to continue one in a
-terminal (changes made there don't come back into Grunt).
+turns, and Grunt's profile policy decides every call: under "ask on mutate",
+reads inside the workspace are allowed automatically and edits, shell commands,
+web and MCP calls get an approval card. Your `~/.claude` settings, CLAUDE.md
+files and MCP servers apply, and so do the workspace's own `.claude` settings,
+hooks and skills, `.mcp.json` and CLAUDE.md, with no trust prompt -- only use
+folders you trust as workspaces. Chats are real Claude Code sessions: the
+Inspector shows a `claude --resume` command to continue one in a terminal
+(changes made there don't come back into Grunt).
 
 ## Try it with no API key — the mock provider
 
