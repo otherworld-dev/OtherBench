@@ -248,6 +248,36 @@ This was a real path from "uploaded a file" to "ran a command on the
 machine," not an alert box in a sandboxed viewer: this origin also hosts the
 API that runs shell commands and holds the bearer token.
 
+### Claude Code engine
+
+- Claude Code executes its own tools; Grunt gates them. A PreToolUse hook
+  (matcher `*`) sends every call through `GruntToolProvider.requestApproval`
+  -> `PermissionBroker` (`source: 'agent'`), ahead of any allow-rules in the
+  user's Claude settings. `canUseTool` uses the same gate as a fallback;
+  `permissionMode` is always `'default'`.
+- File-tool paths are checked with `containPath`; outside the workspace is
+  denied without a card. Bash is not path-contained; its grants are pinned to
+  the exact command like `run_command`.
+- Agent file paths are trimmed, `~` paths are refused, and Glob/Grep patterns
+  with absolute, `~` or `..` prefixes are contained.
+- Unknown Claude Code tools can only be approved once (no chat/always grants).
+- The Claude backend's child env has `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
+  removed (any case).
+- Session ids live in `message.engine_meta`; see
+  `packages/engine-claude-code/src/session.ts` for resume/fork/fresh rules.
+
+Known gaps:
+
+- Relative paths are resolved against the workspace root for grants and card
+  summaries, but Claude Code resolves them against its own current directory,
+  which a Bash `cd` can move inside the workspace. A card or a path grant can
+  therefore name a different file than the one touched (containment still
+  holds).
+- Claude Code does its own file I/O, so fs-tools' hard-link and swap
+  protections don't apply to agent tools. A model allowed to run shell
+  commands could hard-link an outside file into the workspace and then read it
+  (auto-allowed under `ask_on_mutate`). Shell approval is the control.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
