@@ -1,4 +1,4 @@
-import { relative, sep } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { containPath } from '@grunt/core/domain/paths.js';
@@ -8,56 +8,114 @@ import type { ToolPolicy } from '@grunt/core/types/config.js';
 export type GateDecision = { allow: true } | { allow: false; reason: string };
 type Gate = (toolName: string, input: Record<string, unknown>) => Promise<GateDecision>;
 
+const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
+
+function isAbsoluteLike(v: string): boolean {
+  return isAbsolute(v) || /^[a-zA-Z]:/.test(v) || v.startsWith('/') || v.startsWith('\\');
+}
+
+/** Everything before the first glob metachar, cut back to the last separator. */
+function staticPrefix(pattern: string): string {
+  const m = /[*?[{]/.exec(pattern);
+  const head = m ? pattern.slice(0, m.index) : pattern;
+  const cut = Math.max(head.lastIndexOf('/'), head.lastIndexOf('\\'));
+  return cut < 0 ? '' : head.slice(0, cut + 1);
+}
+
 /**
- * Adds a workspace-relative `path` (forward slashes) for the first path-like
- * argument, resolved through `containPath` -- the same gate Grunt's fs tools
- * use -- so `pathPrefix` grants and card summaries work for Claude Code's
- * `file_path`/`notebook_path`. A path that won't resolve inside the workspace
- * is reported as `outside` and is never sent to the broker.
+ * For Claude Code's file tools only (classifyAgentTool category file-read /
+ * file-write; every other tool's args pass through untouched), every present
+ * path key is trimmed (as Claude Code does) and resolved through
+ * `containPath` -- the same gate Grunt's fs tools use. `~` paths are refused
+ * (Claude Code expands them to the home dir). The first path key also becomes
+ * a workspace-relative forward-slash `path`, so `pathPrefix` grants and card
+ * summaries work. Glob `pattern` / Grep `glob` values that are absolute, `~`,
+ * or contain `..` must have a contained static prefix. A path outside the
+ * workspace is reported as `outside`; a non-string/empty one as `unusable`.
+ * Neither is ever sent to the broker.
  */
-export function normaliseAgentArgs(input: Record<string, unknown>, workspaceRoot: string): { args: Record<string, unknown> } | { outside: string } {
-  const key = AGENT_PATH_ARG_KEYS.find((k) => typeof input[k] === 'string' && (input[k] as string).length > 0);
-  if (!key) return { args: { ...input } };
-  const raw = input[key] as string;
-  let contained: string;
-  try {
-    contained = containPath(workspaceRoot, raw);
-  } catch {
-    return { outside: raw };
+export function normaliseAgentArgs(
+  toolName: string,
+  input: Record<string, unknown>,
+  workspaceRoot: string,
+): { args: Record<string, unknown> } | { outside: string } | { unusable: string } {
+  const { category } = classifyAgentTool(toolName);
+  if (category !== 'file-read' && category !== 'file-write') return { args: { ...input } };
+  const contain = (raw: string): string | null => {
+    if (raw.startsWith('~')) return null;
+    try {
+      return containPath(workspaceRoot, raw);
+    } catch {
+      return null;
+    }
+  };
+  let rel: string | undefined;
+  for (const key of AGENT_PATH_ARG_KEYS) {
+    if (!(key in input)) continue;
+    const v = input[key];
+    if (typeof v !== 'string' || v.trim().length === 0) return { unusable: key };
+    const contained = contain(v.trim());
+    if (contained === null) return { outside: v };
+    if (rel === undefined) {
+      const r = relative(containPath(workspaceRoot, '.'), contained).split(sep).join('/');
+      rel = r === '' ? '.' : r;
+    }
   }
-  const rootResolved = containPath(workspaceRoot, '.');
-  const rel = relative(rootResolved, contained).split(sep).join('/');
-  return { args: { ...input, path: rel === '' ? '.' : rel } };
+  const patKey = PATTERN_KEYS[toolName];
+  const pat = patKey ? input[patKey] : undefined;
+  if (typeof pat === 'string') {
+    const t = pat.trim();
+    if (isAbsoluteLike(t) || t.startsWith('~') || t.split(/[\\/]/).includes('..')) {
+      const prefix = staticPrefix(t);
+      if (t.startsWith('~') || contain(prefix === '' ? '.' : prefix) === null) return { outside: pat };
+    }
+  }
+  return { args: rel === undefined ? { ...input } : { ...input, path: rel } };
 }
 
 export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApproval'>; policy: ToolPolicy; ctx: ToolContext }): Gate {
   return async (toolName, input) => {
     // No approval card for a turn that is already dead.
     if (deps.ctx.signal.aborted) return { allow: false, reason: 'The turn was stopped.' };
-    const workspaceRoot = deps.ctx.workspaceRoot;
-    if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
-    const normalised = normaliseAgentArgs(input, workspaceRoot);
-    if ('outside' in normalised) {
-      return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
+    try {
+      const workspaceRoot = deps.ctx.workspaceRoot;
+      if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
+      const normalised = normaliseAgentArgs(toolName, input, workspaceRoot);
+      if ('outside' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
+      }
+      if ('unusable' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: it has an unusable path argument (${normalised.unusable}).` };
+      }
+      const spec: ToolSpec = {
+        name: toolName,
+        description: 'Claude Code tool',
+        parameters: {},
+        risk: classifyAgentTool(toolName).risk,
+        source: 'agent',
+        execute: async () => undefined, // never called: Claude Code executes its own tools
+      };
+      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, deps.ctx);
+      return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
+    } catch (err) {
+      return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
     }
-    const spec: ToolSpec = {
-      name: toolName,
-      description: 'Claude Code tool',
-      parameters: {},
-      risk: classifyAgentTool(toolName).risk,
-      source: 'agent',
-      execute: async () => undefined, // never called: Claude Code executes its own tools
-    };
-    const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, deps.ctx);
-    return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
   };
+}
+
+async function safely(gate: Gate, toolName: string, input: Record<string, unknown>): Promise<GateDecision> {
+  try {
+    return await gate(toolName, input);
+  } catch (err) {
+    return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
+  }
 }
 
 /** The primary gate: runs for every tool call before Claude Code applies settings rules or prompts. */
 export function preToolUseHook(gate: Gate): HookCallback {
   return async (input) => {
     if (input.hook_event_name !== 'PreToolUse') return {};
-    const decision = await gate(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
+    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -71,7 +129,7 @@ export function preToolUseHook(gate: Gate): HookCallback {
 /** Fallback for any permission prompt Claude Code still raises after the hook. */
 export function canUseToolFor(gate: Gate): CanUseTool {
   return async (toolName, input) => {
-    const decision = await gate(toolName, input);
+    const decision = await safely(gate, toolName, input);
     return decision.allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
   };
 }

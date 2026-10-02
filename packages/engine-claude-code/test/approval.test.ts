@@ -15,23 +15,23 @@ const ctx = (signal: AbortSignal = new AbortController().signal): ToolContext =>
 
 describe('normaliseAgentArgs', () => {
   it('turns absolute paths into workspace-relative forward-slash paths', () => {
-    expect(normaliseAgentArgs({ file_path: join(ws, 'src', 'a.ts'), old_string: 'x' }, ws)).toEqual({ args: { file_path: join(ws, 'src', 'a.ts'), old_string: 'x', path: 'src/a.ts' } });
+    expect(normaliseAgentArgs('Read', { file_path: join(ws, 'src', 'a.ts'), old_string: 'x' }, ws)).toEqual({ args: { file_path: join(ws, 'src', 'a.ts'), old_string: 'x', path: 'src/a.ts' } });
   });
   it('accepts mixed separators and, on Windows, drive-letter case', () => {
     const mixed = `${ws.replace(/\\/g, '/')}/src/a.ts`;
-    expect(normaliseAgentArgs({ file_path: mixed }, ws)).toMatchObject({ args: { path: 'src/a.ts' } });
+    expect(normaliseAgentArgs('Read', { file_path: mixed }, ws)).toMatchObject({ args: { path: 'src/a.ts' } });
     if (process.platform === 'win32') {
       const lower = ws[0]!.toLowerCase() + ws.slice(1) + '\\src\\a.ts';
-      expect(normaliseAgentArgs({ file_path: lower }, ws)).toMatchObject({ args: { path: 'src/a.ts' } });
+      expect(normaliseAgentArgs('Read', { file_path: lower }, ws)).toMatchObject({ args: { path: 'src/a.ts' } });
     }
   });
   it('reports a path outside the workspace', () => {
     const outside = process.platform === 'win32' ? 'Z:\\elsewhere\\x.txt' : '/elsewhere/x.txt';
-    expect(normaliseAgentArgs({ file_path: outside }, ws)).toEqual({ outside });
-    expect(normaliseAgentArgs({ file_path: join(ws, '..', 'escape.txt') }, ws)).toHaveProperty('outside');
+    expect(normaliseAgentArgs('Read', { file_path: outside }, ws)).toEqual({ outside });
+    expect(normaliseAgentArgs('Read', { file_path: join(ws, '..', 'escape.txt') }, ws)).toHaveProperty('outside');
   });
   it('leaves tools without a path alone', () => {
-    expect(normaliseAgentArgs({ command: 'npm test' }, ws)).toEqual({ args: { command: 'npm test' } });
+    expect(normaliseAgentArgs('Bash', { command: 'npm test' }, ws)).toEqual({ args: { command: 'npm test' } });
   });
 });
 
@@ -65,7 +65,75 @@ describe('createGate', () => {
   });
 });
 
+describe('containment hardening', () => {
+  const outsideAbs = process.platform === 'win32' ? 'Z:\\elsewhere\\x.txt' : '/elsewhere/x.txt';
+  const run = async (tool: string, input: Record<string, unknown>) => {
+    const requestApproval = vi.fn(async (_t: ToolSpec, _a: Record<string, unknown>) => ({ allowed: true as const, grantedBy: 'ask:once' }));
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx() });
+    return { decision: await gate(tool, input), requestApproval };
+  };
+  const denied = async (tool: string, input: Record<string, unknown>) => {
+    const { decision, requestApproval } = await run(tool, input);
+    expect(decision.allow).toBe(false);
+    expect(requestApproval).not.toHaveBeenCalled();
+  };
+
+  it.each(['~/x', '~\\x', '~'])('denies Read of %s', async (p) => { await denied('Read', { file_path: p }); });
+  it('denies leading whitespace before an outside path', async () => {
+    await denied('Read', { file_path: '  ' + outsideAbs });
+    await denied('Read', { file_path: '\t/etc/passwd' });
+  });
+  it('trims whitespace around an inside path', async () => {
+    const { decision, requestApproval } = await run('Read', { file_path: `  ${join(ws, 'src', 'a.ts')} \n` });
+    expect(decision).toEqual({ allow: true });
+    expect(requestApproval.mock.calls[0]![1]).toMatchObject({ path: 'src/a.ts' });
+  });
+  it('denies non-string or empty path values', async () => {
+    await denied('Read', { file_path: 42 });
+    await denied('Read', { file_path: '   ' });
+  });
+  it('contains every present path key, not just the first', async () => {
+    await denied('Grep', { file_path: join(ws, 'src'), path: outsideAbs });
+  });
+  it('handles relative input, the root itself and notebook_path', async () => {
+    expect(normaliseAgentArgs('Read', { file_path: 'src/a.ts' }, ws)).toMatchObject({ args: { path: 'src/a.ts' } });
+    expect(normaliseAgentArgs('Read', { file_path: ws }, ws)).toMatchObject({ args: { path: '.' } });
+    expect(normaliseAgentArgs('NotebookEdit', { notebook_path: join(ws, 'n.ipynb') }, ws)).toMatchObject({ args: { path: 'n.ipynb' } });
+  });
+  it('contains Glob patterns and Grep globs', async () => {
+    await denied('Glob', { pattern: outsideAbs.replace(/[^\\/]+$/, '**/*.pem') });
+    await denied('Glob', { pattern: '../**' });
+    await denied('Glob', { pattern: '~/**/*.pem' });
+    await denied('Grep', { pattern: 'x', glob: outsideAbs.replace(/[^\\/]+$/, '*.txt') });
+    expect((await run('Glob', { pattern: `${ws.replace(/\\/g, '/')}/src/**/*.ts` })).decision).toEqual({ allow: true });
+    expect((await run('Glob', { pattern: 'src/**/*.ts' })).decision).toEqual({ allow: true });
+  });
+  it('leaves MCP tool args alone', async () => {
+    const { decision, requestApproval } = await run('mcp__gh__get_file', { path: '/README.md' });
+    expect(decision).toEqual({ allow: true });
+    expect(requestApproval.mock.calls[0]![1]).toEqual({ path: '/README.md' });
+  });
+  it('fails closed when requestApproval throws', async () => {
+    const gate = createGate({ approvals: { requestApproval: async () => { throw new Error('db down'); } }, policy, ctx: ctx() });
+    expect(await gate('Bash', { command: 'ls' })).toEqual({ allow: false, reason: expect.stringContaining('could not check') });
+  });
+});
+
 describe('SDK adapters', () => {
+  it('hook ignores non-PreToolUse events', async () => {
+    const hook = preToolUseHook(async () => ({ allow: true }));
+    expect(await hook({ hook_event_name: 'PostToolUse', tool_name: 'Read' } as never, 'id', { signal: new AbortController().signal })).toEqual({});
+  });
+  it('hook and canUseTool fail closed if the gate throws', async () => {
+    const boom = async (): Promise<never> => { throw new Error('boom'); };
+    const out = await preToolUseHook(boom)({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: {} } as never, 'id', { signal: new AbortController().signal });
+    expect(out).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+    expect(await canUseToolFor(boom)('Read', {}, { signal: new AbortController().signal } as never)).toMatchObject({ behavior: 'deny' });
+  });
+  it('canUseTool allow returns the original input', async () => {
+    const input = { command: 'x' };
+    expect(await canUseToolFor(async () => ({ allow: true }))('Bash', input, { signal: new AbortController().signal } as never)).toEqual({ behavior: 'allow', updatedInput: input });
+  });
   it('hook returns allow/deny permission decisions', async () => {
     const hook = preToolUseHook(async (name) => (name === 'Bash' ? { allow: false, reason: 'no' } : { allow: true }));
     const signal = new AbortController().signal;
