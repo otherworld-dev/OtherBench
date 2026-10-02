@@ -49,10 +49,21 @@ function deriveAlwaysConstraint(
   if ((request.source === 'shell' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
     return allowAnyArgs ? { commandPrefix: args['command'] } : { commandExact: args['command'] };
   }
-  if ((request.source === 'fs' || request.source === 'agent') && args && typeof args['path'] === 'string') {
+  if ((request.source === 'fs' || isAgentFileTool(request)) && args && typeof args['path'] === 'string') {
     return { pathPrefix: args['path'] };
   }
   return null;
+}
+
+/**
+ * A Claude Code file tool, whose `path` the engine set to the workspace-relative
+ * path it checked. Any other agent tool's `path` is just the tool's own
+ * argument (an MCP tool's, say), not something a path grant should key on.
+ */
+function isAgentFileTool(request: ApprovalRequest): boolean {
+  if (request.source !== 'agent') return false;
+  const { category } = classifyAgentTool(request.toolName);
+  return category === 'file-read' || category === 'file-write';
 }
 
 /** True when this request's args carry a shell `command` string -- the only case `deriveAlwaysConstraint` has a prefix/exact choice to make at all. */
