@@ -26,7 +26,11 @@ export interface ClaudeCodeEngineDeps {
   listEndpointModels: (conn: Connection, token: string | null) => Promise<DiscoveredModel[]>;
   /** Defaults to `process.env`. */
   baseEnv?: NodeJS.ProcessEnv;
+  /** How long a model-list / connection-test probe may take. Defaults to 20 s. */
+  probeTimeoutMs?: number;
 }
+
+const PROBE_TIMEOUT_MS = 20_000;
 
 type ContentBlock = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
@@ -93,7 +97,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const plan = pickSession({ history: req.messages, backend, cwd: req.workspaceRoot, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
     try {
       const first = yield* this.runTurn(req, plan, backend);
-      if (first === 'missing-session') {
+      // A stopped turn never starts a second Claude Code process.
+      if (first === 'missing-session' && !req.signal.aborted) {
         yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history." };
         yield* this.runTurn(req, { mode: 'fresh' }, backend);
       }
@@ -111,6 +116,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const abortController = new AbortController();
     const onAbort = (): void => abortController.abort();
     req.signal.addEventListener('abort', onAbort, { once: true });
+    // An 'abort' that fired before the listener existed never reaches it.
+    if (req.signal.aborted) abortController.abort();
 
     const gate = createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, workspaceRoot: cwd, signal: req.signal } });
     const stderr: string[] = [];
@@ -194,6 +201,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const abortController = new AbortController();
     const onAbort = (): void => abortController.abort();
     req.signal.addEventListener('abort', onAbort, { once: true });
+    if (req.signal.aborted) abortController.abort();
     const model = backend === CLAUDE_BACKEND ? 'haiku' : req.profile.modelId;
     const mapper = new SdkEventMapper();
     try {
@@ -248,14 +256,27 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     }
   }
 
-  /** Starts Claude Code without sending a prompt, asks it something, then shuts it down. */
+  /**
+   * Starts Claude Code without sending a prompt, asks it something, then shuts
+   * it down. Bounded by a timeout so a wedged process can't hang a model list
+   * or connection test forever.
+   */
   private async probe<T>(conn: Connection, ask: (q: ReturnType<QueryFn>) => Promise<T>): Promise<T> {
     const abortController = new AbortController();
     const idle: AsyncIterable<SDKUserMessage> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) };
-    const q = this.deps.query({ prompt: idle, options: { ...lightweightOptions(), env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, null, 'haiku'), abortController } });
+    const timeoutMs = this.deps.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(`Claude Code didn't respond within ${Math.round(timeoutMs / 1000)} s.`));
+      }, timeoutMs);
+    });
     try {
-      return await ask(q);
+      const q = this.deps.query({ prompt: idle, options: { ...lightweightOptions(), env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, null, 'haiku'), abortController } });
+      return await Promise.race([ask(q), timedOut]);
     } finally {
+      clearTimeout(timer);
       abortController.abort();
     }
   }

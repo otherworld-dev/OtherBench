@@ -169,6 +169,84 @@ describe('ClaudeCodeChatEngine.stream', () => {
   });
 });
 
+describe('ClaudeCodeChatEngine abort handling', () => {
+  const aborted = (): AbortSignal => { const ac = new AbortController(); ac.abort(); return ac.signal; };
+
+  it('hands the SDK an already-aborted controller when the turn signal aborted before the listener was wired', async () => {
+    const seen: boolean[] = [];
+    const { query } = fakeQuery(async function* ({ options }) { seen.push(options.abortController!.signal.aborted); yield init(); yield success(); });
+    await collect(engine(query).stream(req({ signal: aborted() })));
+    expect(seen).toEqual([true]);
+  });
+
+  it('does the same for a utility call', async () => {
+    const seen: boolean[] = [];
+    const { query } = fakeQuery(async function* ({ options }) { seen.push(options.abortController!.signal.aborted); yield success(); });
+    await collect(engine(query).stream(req({ purpose: 'utility', workspaceRoot: null, signal: aborted() })));
+    expect(seen).toEqual([true]);
+  });
+
+  it('does not start the missing-session fresh retry once the turn is stopped', async () => {
+    const ac = new AbortController();
+    const { query, calls } = fakeQuery(async function* () {
+      ac.abort();
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['No conversation found with session ID: sess-0'], usage: {} } as unknown as SDKMessage;
+    });
+    const prev: CanonMessage = { ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };
+    const events = await collect(engine(query).stream(req({ signal: ac.signal, messages: [user('q1'), prev, { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1' })));
+    expect(calls).toHaveLength(1);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: 'notice' }));
+  });
+});
+
+describe('ClaudeCodeChatEngine probe', () => {
+  /** A query whose control requests never answer, recording the options and abort state. */
+  function wedgedQuery() {
+    const seen: { options: Options }[] = [];
+    const query: QueryFn = ({ options }) => {
+      seen.push({ options });
+      const gen = (async function* (): AsyncGenerator<SDKMessage> {})();
+      return Object.assign(gen, { interrupt: async () => undefined, supportedModels: () => new Promise<never>(() => {}), accountInfo: () => new Promise<never>(() => {}) });
+    };
+    return { query, seen };
+  }
+
+  it('gives up on a probe that never answers, aborts it, and reports the connection as failed', async () => {
+    const { query, seen } = wedgedQuery();
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: {}, probeTimeoutMs: 20 });
+    await expect(e.listModels(conn(), null)).rejects.toThrow(/didn't respond within/);
+    const result = await e.testConnection(conn(), null);
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining("didn't respond within") });
+    for (const s of seen) expect(s.options.abortController!.signal.aborted).toBe(true);
+  });
+
+  it('defaults the probe timeout to 20 s', async () => {
+    vi.useFakeTimers();
+    try {
+      const { query } = wedgedQuery();
+      const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: {} });
+      const result = e.testConnection(conn(), null);
+      await vi.advanceTimersByTimeAsync(19_999);
+      let settled = false;
+      void result.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await result).toMatchObject({ ok: false, message: "Claude Code didn't respond within 20 s." });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('runs the probe with no settings, MCP servers, thinking or persisted session', async () => {
+    const seen: Options[] = [];
+    const base = fakeQuery(async function* () {}).query;
+    const query: QueryFn = (p) => { seen.push(p.options); return base(p); };
+    await engine(query).listModels(conn(), null);
+    expect(seen[0]).toMatchObject({ settingSources: [], strictMcpConfig: true, thinking: { type: 'disabled' }, persistSession: false });
+  });
+});
+
 describe('ClaudeCodeChatEngine models and test', () => {
   it('lists Claude models from supportedModels and reports the account', async () => {
     const { query } = fakeQuery(async function* () {});
