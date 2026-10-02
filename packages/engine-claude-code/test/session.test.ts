@@ -15,16 +15,24 @@ describe('pickSession', () => {
     const history = [msg('u1', 'user'), msg('a1', 'assistant', meta()), msg('u2', 'user')];
     expect(pickSession({ ...base, history, claims: new SessionClaims(), latestMessageForSession: () => 'a1' })).toEqual({ mode: 'continue', sessionId: 's1' });
   });
-  it('forks when the previous assistant is no longer the tip', () => {
+  it('starts fresh when the previous assistant is no longer the tip (edit, retry, other branch)', () => {
     const history = [msg('u1', 'user'), msg('a1', 'assistant', meta()), msg('u2', 'user')];
-    expect(pickSession({ ...base, history, claims: new SessionClaims(), latestMessageForSession: () => 'a9' })).toEqual({ mode: 'fork', sessionId: 's1' });
+    expect(pickSession({ ...base, history, claims: new SessionClaims(), latestMessageForSession: () => 'a9' })).toEqual({ mode: 'fresh' });
   });
-  it('forks for the second of two simultaneous continuations', () => {
+  it('starts fresh on retry after an errored continuation', () => {
+    // P continued session s1; the next turn on s1 errored (that errored reply
+    // is now the session's latest message) and the user retries it. P is no
+    // longer the tip and s1 holds the errored turn, so s1 must not be resumed:
+    // a fresh session seeded from this branch is the only correct history.
+    const history = [msg('u1', 'user'), msg('p', 'assistant', meta()), msg('u2', 'user')];
+    expect(pickSession({ ...base, history, claims: new SessionClaims(), latestMessageForSession: () => 'errored-reply' })).toEqual({ mode: 'fresh' });
+  });
+  it('starts fresh for the second of two simultaneous continuations', () => {
     const history = [msg('u1', 'user'), msg('a1', 'assistant', meta()), msg('u2', 'user')];
     const claims = new SessionClaims();
     const input = { ...base, history, claims, latestMessageForSession: () => 'a1' };
     expect(pickSession(input).mode).toBe('continue');
-    expect(pickSession(input).mode).toBe('fork');
+    expect(pickSession(input).mode).toBe('fresh');
     claims.release('s1');
     expect(pickSession(input).mode).toBe('continue');
   });

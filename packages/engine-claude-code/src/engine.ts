@@ -115,7 +115,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
       abortController,
       stderr: (data: string) => { stderr.push(data); if (stderr.length > 50) stderr.shift(); },
-      ...(plan.mode !== 'fresh' ? { resume: plan.sessionId, forkSession: plan.mode === 'fork' } : {}),
+      ...(plan.mode === 'continue' ? { resume: plan.sessionId } : {}),
       ...(profile.params.thinkingBudgetTokens ? { maxThinkingTokens: profile.params.thinkingBudgetTokens } : {}),
     };
 

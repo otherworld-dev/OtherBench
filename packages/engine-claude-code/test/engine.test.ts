@@ -66,6 +66,17 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(calls[0]!.options.forkSession).toBeFalsy();
   });
 
+  it('starts a fresh, history-seeded session (no resume, no fork) when the previous message is not the session tip', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-new'); yield success(); });
+    const prev: CanonMessage = { ...user('branch answer'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };
+    await collect(engine(query).stream(req({ messages: [user('q1'), prev, { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a-other-branch' })));
+    expect(calls[0]!.options.resume).toBeUndefined();
+    expect(calls[0]!.options).not.toHaveProperty('forkSession');
+    const content = (calls[0]!.prompt.message as { content: { type: string; text?: string }[] }).content;
+    expect(content[0]!.text).toContain('<grunt-history>');
+    expect(content[0]!.text).toContain('branch answer');
+  });
+
   it('seeds history into a fresh session when the previous turn came from another model', async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
     const prev: CanonMessage = { ...user('earlier answer'), id: 'a1', role: 'assistant' };

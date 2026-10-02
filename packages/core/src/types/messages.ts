@@ -30,7 +30,7 @@ export interface ProducedBy {
 
 /**
  * Engine-owned state stored on an assistant message. Only Claude Code uses it:
- * the session id lets the next turn resume (or fork) the Claude Code session
+ * the session id lets the next turn continue the Claude Code session
  * this message was produced in. See engine-claude-code/src/session.ts.
  */
 export interface EngineMeta {

@@ -1,11 +1,11 @@
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 
-export type SessionPlan = { mode: 'continue'; sessionId: string } | { mode: 'fork'; sessionId: string } | { mode: 'fresh' };
+export type SessionPlan = { mode: 'continue'; sessionId: string } | { mode: 'fresh' };
 
 /**
  * In-process claims on "continue session X in place". Compare siblings or a
  * fast double-send can both see the same message as the session tip; the
- * first claim continues it, the rest fork. Released when the turn ends.
+ * first claim continues it, the rest start fresh. Released when the turn ends.
  */
 export class SessionClaims {
   private readonly held = new Set<string>();
@@ -29,11 +29,17 @@ export function samePath(a: string, b: string): boolean {
 
 /**
  * Chooses how this turn's Claude Code session starts, from the assistant
- * message directly above the new user message (spec §2):
+ * message directly above the new user message (spec §2, as amended by R12):
  *  - same backend + workspace, and that message is the session's tip and not
  *    claimed by an in-flight turn -> continue in place;
- *  - same backend + workspace otherwise -> resume with fork;
  *  - anything else -> a fresh session seeded with Grunt's history.
+ *
+ * There is deliberately no "resume with fork" mode. Sessions are continued in
+ * place, so once a message stops being its session's tip the session also
+ * holds turns from other branches (a retried errored reply, the reply an edit
+ * replaced, a compare sibling's turn). `forkSession` copies the WHOLE session,
+ * so a fork would hand the model that other branch's history. A fresh session
+ * seeded from Grunt's own branch history is always correct.
  */
 export function pickSession(input: {
   history: CanonMessage[];
@@ -49,5 +55,5 @@ export function pickSession(input: {
   if (meta.backend !== input.backend || !samePath(meta.cwd, input.cwd)) return { mode: 'fresh' };
   const isTip = input.latestMessageForSession(meta.sessionId) === previous.id;
   if (isTip && input.claims.tryClaim(meta.sessionId)) return { mode: 'continue', sessionId: meta.sessionId };
-  return { mode: 'fork', sessionId: meta.sessionId };
+  return { mode: 'fresh' };
 }
