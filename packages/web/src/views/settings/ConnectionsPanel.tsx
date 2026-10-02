@@ -3,7 +3,7 @@ import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
 import { ApiError, api, type CreateConnectionBody } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
 
-const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'mock'];
+const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock'];
 
 const STATUS_COLOR: Record<Connection['status'], string> = {
   ok: 'bg-[var(--success,#3fb950)]',

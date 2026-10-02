@@ -283,6 +283,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       }
       return null;
     }
+    case 'agent':
+      return 'Agent tools are not supported yet.';
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

@@ -1,4 +1,4 @@
-import type { CanonMessage, SerializedError } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
 import type { Connection, ResolvedProfile } from '../types/config.js';
 import type { Usage } from '../types/usage.js';
 import type { ToolSpec } from './tool-provider.js';
@@ -40,6 +40,17 @@ export interface EngineRequest {
    * `routes/attachments.ts` writes to on upload.
    */
   loadAttachment?: (id: string) => Promise<Buffer>;
+  /**
+   * `'utility'` marks a tool-less side call (auto-title, summaries) that must
+   * not create a resumable session or load user settings. Default `'turn'`.
+   */
+  purpose?: 'turn' | 'utility';
+  /**
+   * The id of the newest message in this chat whose `engineMeta.sessionId`
+   * equals `sessionId`, or null. Lets a session-keeping engine tell whether
+   * the message it continues from is still that session's tip.
+   */
+  latestMessageForSession?: (sessionId: string) => string | null;
 }
 
 export type EngineEvent =
@@ -48,7 +59,9 @@ export type EngineEvent =
   | { type: 'tool-call'; id: string; name: string; args: unknown }
   | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean }
   | { type: 'finish'; usage: Usage; finishReason: string }
-  | { type: 'error'; error: SerializedError };
+  | { type: 'error'; error: SerializedError }
+  | { type: 'engine-meta'; meta: EngineMeta }
+  | { type: 'notice'; text: string };
 
 export interface DiscoveredModel {
   modelId: string;

@@ -153,6 +153,11 @@ function buildProvider(connection: Connection, apiKey: string | null): ProviderH
         }),
       };
 
+    case 'claude_code':
+      throw new ConfigError(
+        `Connection "${connection.name}" is a Claude Code connection; it is served by ClaudeCodeChatEngine, not the AI SDK registry.`
+      );
+
     case 'mock':
       return { kind: 'mock' };
 

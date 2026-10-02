@@ -269,6 +269,9 @@ export class AiSdkChatEngine implements ChatEngine {
         return conn.kind === 'ollama' ? this.seedOllamaCapabilities(base, headers, models) : models;
       }
 
+      case 'claude_code':
+        throw new Error('listRealModels() was called for a claude_code connection; RoutingChatEngine should have routed it elsewhere.');
+
       case 'mock':
         // Unreachable in practice: callers (listModels/testConnection above)
         // already branch on `handle.kind === 'mock'` before calling this.

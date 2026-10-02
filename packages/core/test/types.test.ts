@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { estimateCost } from '../src/types/usage.js';
+import type { EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
+import type { ConnectionKind, ToolPolicy, ToolSource } from '../src/types/config.js';
+import type { CanonMessage, EngineMeta } from '../src/types/messages.js';
 
 describe('estimateCost', () => {
   it('returns null when no pricing is known', () => {
@@ -31,5 +34,18 @@ describe('estimateCost', () => {
       { tokensIn: 5000, tokensOut: 5000, tokensCached: 0, tokensReasoning: 0 },
       { priceInPer1m: 0, priceOutPer1m: 0, priceCachedPer1m: 0, currency: 'USD' }
     )).toBe(0);
+  });
+});
+
+describe('claude code engine types', () => {
+  it('accepts the new kinds, sources, policy flags, meta and events', () => {
+    const kind: ConnectionKind = 'claude_code';
+    const source: ToolSource = 'agent';
+    const policy: ToolPolicy = { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', agentWeb: false, agentMcp: true };
+    const meta: EngineMeta = { engine: 'claude_code', sessionId: 's1', backend: 'claude', cwd: '/ws', tools: ['Read'], mcpServers: [{ name: 'x', status: 'connected' }] };
+    const msg: Pick<CanonMessage, 'engineMeta'> = { engineMeta: meta };
+    const events: EngineEvent[] = [{ type: 'engine-meta', meta }, { type: 'notice', text: 'hi' }];
+    const req: Pick<EngineRequest, 'purpose' | 'latestMessageForSession'> = { purpose: 'utility', latestMessageForSession: () => null };
+    expect([kind, source, policy.agentWeb, msg.engineMeta?.sessionId, events.length, req.purpose]).toEqual(['claude_code', 'agent', false, 's1', 2, 'utility']);
   });
 });
