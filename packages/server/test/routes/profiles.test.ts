@@ -176,6 +176,30 @@ describe('PATCH /api/profiles/:id', () => {
   });
 });
 
+describe('toolPolicy agent fields', () => {
+  it('accepts and round-trips agentWeb/agentMcp, and rejects non-booleans', async () => {
+    const created = await app().request('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...basicProfileBody,
+        toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', agentWeb: false, agentMcp: true },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const body = (await created.json()) as { id: string; toolPolicy: unknown };
+    expect(body.toolPolicy).toMatchObject({ agentWeb: false, agentMcp: true });
+
+    const bad = await app().request(`/api/profiles/${body.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolPolicy: { agentWeb: 'no' } }),
+    });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: '"toolPolicy.agentWeb" must be a boolean.' });
+  });
+});
+
 describe('DELETE /api/profiles/:id', () => {
   it('deletes the profile', async () => {
     const created = await (

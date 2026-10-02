@@ -249,6 +249,7 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
         chatId,
         messageId: `title-gen:${randomUUID()}`,
         workspaceRoot: null,
+        purpose: 'utility',
       })) {
         if (event.type === 'text-delta') generated += event.text;
         else if (event.type === 'error') throw new Error(event.error.message);
