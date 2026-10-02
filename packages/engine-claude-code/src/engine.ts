@@ -133,7 +133,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // inside the 'internal' Skill tool, which gets no card (R14).
       settings: { disableSkillShellExecution: true },
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
-      hooks: { PreToolUse: [{ hooks: [preToolUseHook(gate)] }] },
+      // The hook waits on a human; Claude Code's default hook timeout (60 s)
+      // would cancel the call under an open card. 86400 s = one day.
+      hooks: { PreToolUse: [{ hooks: [preToolUseHook(gate)], timeout: 86_400 }] },
       canUseTool: canUseToolFor(gate),
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
       abortController,

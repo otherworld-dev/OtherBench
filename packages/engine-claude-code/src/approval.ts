@@ -6,7 +6,8 @@ import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 
 export type GateDecision = { allow: true } | { allow: false; reason: string };
-type Gate = (toolName: string, input: Record<string, unknown>) => Promise<GateDecision>;
+/** `signal` is the SDK's own signal for this hook/permission call; the wait for an answer ends when it or the turn's signal aborts. */
+type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal) => Promise<GateDecision>;
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
 
@@ -87,9 +88,14 @@ export function normaliseAgentArgs(
 }
 
 export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApproval'>; policy: ToolPolicy; ctx: ToolContext }): Gate {
-  return async (toolName, input) => {
+  return async (toolName, input, callSignal) => {
     // No approval card for a turn that is already dead.
     if (deps.ctx.signal.aborted) return { allow: false, reason: 'The turn was stopped.' };
+    if (callSignal?.aborted) return { allow: false, reason: 'Claude Code stopped waiting for this tool call.' };
+    // A pending card is settled as a denial when either the turn stops or
+    // Claude Code gives up on the call (e.g. the hook timed out), so no
+    // card is left waiting for a call that no longer exists.
+    const signal = callSignal ? AbortSignal.any([deps.ctx.signal, callSignal]) : deps.ctx.signal;
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
       if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
@@ -108,7 +114,7 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         source: 'agent',
         execute: async () => undefined, // never called: Claude Code executes its own tools
       };
-      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, deps.ctx);
+      const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal });
       return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
     } catch (err) {
       return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
@@ -116,9 +122,9 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
   };
 }
 
-async function safely(gate: Gate, toolName: string, input: Record<string, unknown>): Promise<GateDecision> {
+async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined): Promise<GateDecision> {
   try {
-    return await gate(toolName, input);
+    return await gate(toolName, input, signal);
   } catch (err) {
     return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -126,9 +132,9 @@ async function safely(gate: Gate, toolName: string, input: Record<string, unknow
 
 /** The primary gate: runs for every tool call before Claude Code applies settings rules or prompts. */
 export function preToolUseHook(gate: Gate): HookCallback {
-  return async (input) => {
+  return async (input, _toolUseId, options) => {
     if (input.hook_event_name !== 'PreToolUse') return {};
-    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
+    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options?.signal);
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
@@ -141,8 +147,8 @@ export function preToolUseHook(gate: Gate): HookCallback {
 
 /** Fallback for any permission prompt Claude Code still raises after the hook. */
 export function canUseToolFor(gate: Gate): CanUseTool {
-  return async (toolName, input) => {
-    const decision = await safely(gate, toolName, input);
+  return async (toolName, input, options) => {
+    const decision = await safely(gate, toolName, input, options?.signal);
     return decision.allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
   };
 }

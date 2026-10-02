@@ -159,6 +159,53 @@ describe('SDK adapters', () => {
     expect(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: {} } as never, 'id', { signal })).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved in Grunt' } });
     expect(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} } as never, 'id', { signal })).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'no' } });
   });
+  describe('when Claude Code gives up on a pending call (hook signal aborts)', () => {
+    /** Like GruntToolProvider.awaitApproval: a pending card settles as a denial when ctx.signal aborts. */
+    const pendingCard = () => {
+      const seen: AbortSignal[] = [];
+      const requestApproval = vi.fn((_t: ToolSpec, _a: unknown, _p: ToolPolicy, c: ToolContext) => {
+        seen.push(c.signal);
+        return new Promise<{ allowed: false; reason: string }>((resolve) => {
+          c.signal.addEventListener('abort', () => resolve({ allowed: false, reason: 'The user denied this tool call.' }), { once: true });
+        });
+      });
+      return { requestApproval, seen };
+    };
+
+    it('settles the pending approval as a denial without stopping the turn', async () => {
+      const { requestApproval, seen } = pendingCard();
+      const turn = new AbortController();
+      const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(turn.signal) });
+      const hookCall = new AbortController();
+      const out = preToolUseHook(gate)({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } } as never, 'id', { signal: hookCall.signal });
+      await vi.waitFor(() => expect(requestApproval).toHaveBeenCalled());
+      expect(seen[0]!.aborted).toBe(false);
+      hookCall.abort();
+      expect(await out).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+      expect(seen[0]!.aborted).toBe(true);
+      expect(turn.signal.aborted).toBe(false);
+    });
+
+    it('still settles on the turn signal', async () => {
+      const { requestApproval } = pendingCard();
+      const turn = new AbortController();
+      const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(turn.signal) });
+      const out = canUseToolFor(gate)('Bash', { command: 'ls' }, { signal: new AbortController().signal } as never);
+      await vi.waitFor(() => expect(requestApproval).toHaveBeenCalled());
+      turn.abort();
+      expect(await out).toMatchObject({ behavior: 'deny' });
+    });
+
+    it('does not raise a card for a call Claude Code already gave up on', async () => {
+      const { requestApproval } = pendingCard();
+      const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx() });
+      const hookCall = new AbortController();
+      hookCall.abort();
+      expect(await gate('Bash', { command: 'ls' }, hookCall.signal)).toMatchObject({ allow: false });
+      expect(requestApproval).not.toHaveBeenCalled();
+    });
+  });
+
   it('canUseTool maps to behavior allow/deny', async () => {
     const can = canUseToolFor(async () => ({ allow: false, reason: 'no' }));
     expect(await can('Bash', { command: 'x' }, { signal: new AbortController().signal } as never)).toEqual({ behavior: 'deny', message: 'no' });

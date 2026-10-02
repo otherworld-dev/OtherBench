@@ -56,6 +56,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(o.resume).toBeUndefined();
     expect(o.env).toEqual({ PATH: '/bin' });
     expect(o.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
+    expect(o.hooks?.PreToolUse?.[0]?.timeout).toBe(86_400);
     expect(calls[0]!.prompt).toMatchObject({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } });
   });
 
