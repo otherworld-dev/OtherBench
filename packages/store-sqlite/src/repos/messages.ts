@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { MessageRepo } from '@grunt/core/ports/store.js';
 import type {
   CanonMessage,
+  EngineMeta,
   MessageStatus,
   Part,
   ProducedBy,
@@ -23,7 +24,7 @@ import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 //   - pathToRoot(): returns [] for an unknown id, it does NOT throw
 
 /** The columns of `message` that map onto CanonMessage, in a fixed order. */
-const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at';
+const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta';
 
 /**
  * Hard cap on how many ancestor hops `pathToRoot`'s recursive CTE will
@@ -101,7 +102,7 @@ function isSqliteError(err: unknown): boolean {
 }
 
 function fromRow(row: Record<string, unknown>): CanonMessage {
-  return {
+  const message: CanonMessage = {
     id: row.id as string,
     chatId: row.chat_id as string,
     parentId: row.parent_id as string | null,
@@ -112,6 +113,11 @@ function fromRow(row: Record<string, unknown>): CanonMessage {
     producedBy: fromJsonNullable<ProducedBy>(row.produced_by as string | null),
     createdAt: row.created_at as number,
   };
+  // Omitted (not null) when unset, so rows without engine state keep their
+  // existing shape -- see CanonMessage.engineMeta.
+  const engineMeta = fromJsonNullable<EngineMeta>((row.engine_meta as string | null) ?? null);
+  if (engineMeta) message.engineMeta = engineMeta;
+  return message;
 }
 
 export class SqliteMessageRepo implements MessageRepo {
@@ -131,7 +137,7 @@ export class SqliteMessageRepo implements MessageRepo {
     this.db
       .prepare(
         `INSERT INTO message (${COLUMNS}, search_text)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         full.id,
@@ -143,6 +149,7 @@ export class SqliteMessageRepo implements MessageRepo {
         toJsonNullable(full.error),
         toJsonNullable(full.producedBy),
         full.createdAt,
+        toJsonNullable(full.engineMeta ?? null),
         deriveSearchText(full.parts)
       );
     return full;
@@ -180,11 +187,11 @@ export class SqliteMessageRepo implements MessageRepo {
   pathToRoot(messageId: string): CanonMessage[] {
     const rows = this.db
       .prepare(
-        `WITH RECURSIVE ancestry(id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, depth) AS (
-           SELECT id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, 0
+        `WITH RECURSIVE ancestry(id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, depth) AS (
+           SELECT id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, 0
              FROM message WHERE id = ?
            UNION ALL
-           SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, a.depth + 1
+           SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, m.engine_meta, a.depth + 1
              FROM message m JOIN ancestry a ON m.id = a.parent_id
             WHERE a.depth < ${MAX_PATH_DEPTH}
          )
@@ -219,6 +226,25 @@ export class SqliteMessageRepo implements MessageRepo {
       .prepare(`SELECT ${COLUMNS} FROM message WHERE status = ? ORDER BY created_at ASC, id ASC`)
       .all(status) as Record<string, unknown>[];
     return rows.map(fromRow);
+  }
+
+  updateEngineMeta(id: string, meta: EngineMeta): void {
+    const result = this.db.prepare(`UPDATE message SET engine_meta = ? WHERE id = ?`).run(toJson(meta), id);
+    if (Number(result.changes) === 0) {
+      throw new Error(`message: not found: ${id}`);
+    }
+  }
+
+  latestBySession(chatId: string, sessionId: string): CanonMessage | null {
+    const row = this.db
+      .prepare(
+        `SELECT ${COLUMNS} FROM message
+          WHERE chat_id = ? AND engine_meta IS NOT NULL AND json_extract(engine_meta, '$.sessionId') = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`
+      )
+      .get(chatId, sessionId) as Record<string, unknown> | undefined;
+    return row ? fromRow(row) : null;
   }
 
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {

@@ -1,4 +1,4 @@
-import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 
@@ -73,6 +73,10 @@ export interface MessageRepo {
    * tree one at a time via `roots`/`children`.
    */
   listByStatus(status: MessageStatus): CanonMessage[];
+  /** Stores engine-owned state on a message. Throws when the id does not exist. */
+  updateEngineMeta(id: string, meta: EngineMeta): void;
+  /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */
+  latestBySession(chatId: string, sessionId: string): CanonMessage | null;
 }
 
 // --- attachments ----------------------------------------------------------------
