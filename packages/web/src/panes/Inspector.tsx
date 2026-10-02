@@ -6,6 +6,7 @@ import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { usePolled } from '../lib/usePolled.js';
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
+import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 
 export interface InspectorProps {
   chat: Chat | null;
@@ -552,6 +553,16 @@ function fmtParam(label: string, value: number | undefined): JSX.Element | null 
   );
 }
 
+function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element | null {
+  const hasSession = useGruntStore((s) => Object.values(s.messages).some((m) => m.chatId === chatId && !!m.engineMeta));
+  if (!hasSession) return null;
+  return (
+    <Section title="Claude Code session">
+      <ClaudeCodeSection chatId={chatId} />
+    </Section>
+  );
+}
+
 /**
  * The right pane. Exists specifically to surface the facts that cause harm
  * when hidden -- "this MCP server is down", "this chat can write to disk" --
@@ -624,6 +635,8 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
           </div>
         )}
       </Section>
+
+      {chat && <ClaudeCodeInspectorSection chatId={chat.id} />}
 
       <Section title="Tool grants">
         {chat ? <GrantsSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
