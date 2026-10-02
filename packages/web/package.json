@@ -12,6 +12,7 @@
   "dependencies": {
     "@grunt/core": "*",
     "@grunt/tools": "*",
+    "@tauri-apps/api": "2.12.1",
     "highlight.js": "11.12.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { AuthedImage } from './AuthedImage.js';
 
 export interface AttachmentChipProps {
   filename: string;
@@ -34,7 +35,7 @@ export function AttachmentChip({ filename, mime, size, previewUrl, onRemove, rem
       className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--bg-sunken)] py-1 pr-1 pl-2 text-xs"
     >
       {isImage && previewUrl ? (
-        <img src={previewUrl} alt="" className="h-4 w-4 rounded-sm object-cover" />
+        <AuthedImage src={previewUrl} alt="" className="h-4 w-4 rounded-sm object-cover" />
       ) : (
         <span aria-hidden="true">{isImage ? '🖼️' : '📎'}</span>
       )}
