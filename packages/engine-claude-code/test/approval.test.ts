@@ -1,10 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
-import { canUseToolFor, createGate, normaliseAgentArgs, preToolUseHook } from '../src/approval.js';
+import { canUseToolFor, createGate, isDriveLetterPosixPath, normaliseAgentArgs, preToolUseHook } from '../src/approval.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-cc-')); mkdirSync(join(ws, 'src')); });
@@ -107,6 +107,25 @@ describe('containment hardening', () => {
     await denied('Grep', { pattern: 'x', glob: outsideAbs.replace(/[^\\/]+$/, '*.txt') });
     expect((await run('Glob', { pattern: `${ws.replace(/\\/g, '/')}/src/**/*.ts` })).decision).toEqual({ allow: true });
     expect((await run('Glob', { pattern: 'src/**/*.ts' })).decision).toEqual({ allow: true });
+  });
+  it('recognises MSYS-style drive paths only on Windows', () => {
+    for (const v of ['/c/Windows/win.ini', '\\c\\x', '/D', '/d/', '/c']) expect(isDriveLetterPosixPath(v, 'win32')).toBe(true);
+    for (const v of ['/cc/x', 'c/x', '/1/x', 'C:\\x', '/', 'src/a.ts', '/c-x']) expect(isDriveLetterPosixPath(v, 'win32')).toBe(false);
+    expect(isDriveLetterPosixPath('/c/Windows/win.ini', 'linux')).toBe(false);
+    expect(isDriveLetterPosixPath('/c/Windows/win.ini', 'darwin')).toBe(false);
+  });
+  it.runIf(process.platform === 'win32')('treats /c/... paths and patterns as outside on Windows, even with a drive-root workspace', async () => {
+    // Claude Code reads /c/Windows/win.ini as C:\Windows\win.ini, but containPath
+    // resolves it on the server's current drive (<drive>:\c\Windows\win.ini),
+    // which a workspace at that drive's root would contain.
+    const driveRoot = parse(process.cwd()).root;
+    expect(normaliseAgentArgs('Read', { file_path: '/c/Windows/win.ini' }, driveRoot)).toEqual({ outside: '/c/Windows/win.ini' });
+    expect(normaliseAgentArgs('Read', { file_path: ' /c/Windows/win.ini' }, driveRoot)).toEqual({ outside: ' /c/Windows/win.ini' });
+    expect(normaliseAgentArgs('Grep', { pattern: 'x', path: '/c/Windows' }, driveRoot)).toEqual({ outside: '/c/Windows' });
+    expect(normaliseAgentArgs('Glob', { pattern: '/c/Windows/*.ini' }, driveRoot)).toEqual({ outside: '/c/Windows/*.ini' });
+    expect(normaliseAgentArgs('Grep', { pattern: 'x', glob: '/c/**/*.ini' }, driveRoot)).toEqual({ outside: '/c/**/*.ini' });
+    await denied('Read', { file_path: '/c/Windows/win.ini' });
+    await denied('Glob', { pattern: '/c/Users/**' });
   });
   it('leaves MCP tool args alone', async () => {
     const { decision, requestApproval } = await run('mcp__gh__get_file', { path: '/README.md' });

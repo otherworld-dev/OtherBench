@@ -14,6 +14,17 @@ function isAbsoluteLike(v: string): boolean {
   return isAbsolute(v) || /^[a-zA-Z]:/.test(v) || v.startsWith('/') || v.startsWith('\\');
 }
 
+/**
+ * True on Windows for an MSYS-style drive path (`/c/...`, `\c`, `/d`). Claude
+ * Code rewrites `/c/...` to `C:\...` before touching the file, but
+ * `containPath` would resolve it on the server's current drive (`E:\c\...`),
+ * so with a drive-root workspace it would be judged contained. Such values are
+ * treated as outside the workspace.
+ */
+export function isDriveLetterPosixPath(value: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' && /^[\\/][a-zA-Z]([\\/]|$)/.test(value);
+}
+
 /** Everything before the first glob metachar, cut back to the last separator. */
 function staticPrefix(pattern: string): string {
   const m = /[*?[{]/.exec(pattern);
@@ -27,7 +38,8 @@ function staticPrefix(pattern: string): string {
  * file-write; every other tool's args pass through untouched), every present
  * path key is trimmed (as Claude Code does) and resolved through
  * `containPath` -- the same gate Grunt's fs tools use. `~` paths are refused
- * (Claude Code expands them to the home dir). The first path key also becomes
+ * (Claude Code expands them to the home dir), and so are `/c/...` paths on
+ * Windows (see isDriveLetterPosixPath). The first path key also becomes
  * a workspace-relative forward-slash `path`, so `pathPrefix` grants and card
  * summaries work. Glob `pattern` / Grep `glob` values that are absolute, `~`,
  * or contain `..` must have a contained static prefix. A path outside the
@@ -42,7 +54,7 @@ export function normaliseAgentArgs(
   const { category } = classifyAgentTool(toolName);
   if (category !== 'file-read' && category !== 'file-write') return { args: { ...input } };
   const contain = (raw: string): string | null => {
-    if (raw.startsWith('~')) return null;
+    if (raw.startsWith('~') || isDriveLetterPosixPath(raw)) return null;
     try {
       return containPath(workspaceRoot, raw);
     } catch {
@@ -65,6 +77,7 @@ export function normaliseAgentArgs(
   const pat = patKey ? input[patKey] : undefined;
   if (typeof pat === 'string') {
     const t = pat.trim();
+    if (isDriveLetterPosixPath(t)) return { outside: pat };
     if (isAbsoluteLike(t) || t.startsWith('~') || t.split(/[\\/]/).includes('..')) {
       const prefix = staticPrefix(t);
       if (t.startsWith('~') || contain(prefix === '' ? '.' : prefix) === null) return { outside: pat };
