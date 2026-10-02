@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
-import { agentPolicyDenial, classifyAgentTool } from './agent-tools.js';
+import { agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { containPath } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -138,7 +138,9 @@ export class PermissionBroker {
       if (tool.source === 'mcp') return { kind: 'allow', grantedBy: 'policy' };
     }
 
-    const grant = this.findMatchingGrant(tool, args, ctx);
+    // A Claude Code write to its own config (see isProtectedAgentPath) always
+    // gets a card: no stored grant, however scoped, may cover it.
+    const grant = isProtectedAgentWrite(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
     if (grant) {
       // A 'once' grant authorises exactly one call; consume it immediately
       // so a second identical call is asked about again rather than reusing
@@ -186,6 +188,15 @@ export class PermissionBroker {
     // Fail closed: Grunt cannot know what an unrecognised Claude Code tool does,
     // so it never pre-authorises future calls. 'chat'/'always' act like 'once'.
     if (pending.tool.source === 'agent' && classifyAgentTool(pending.tool.name).category === 'other') return;
+
+    // Likewise for a Claude Code write to its own config files. A grant on
+    // `.claude/settings.local.json` (or a `pathPrefix` covering `.claude/`,
+    // `.mcp.json` or a CLAUDE.md) would let the model write a hook, a skill's
+    // inline shell or an MCP server command that Claude Code then runs on a
+    // later turn with no Bash card -- a file grant turned into a shell grant.
+    // 'chat'/'always' act like 'once', and decide() never matches a grant for
+    // such a write either.
+    if (isProtectedAgentWrite(pending.tool, pending.args)) return;
 
     if (choice.choice === 'chat') {
       // A 'chat' answer for the shell is NOT a blanket grant for the rest of
@@ -270,6 +281,18 @@ export class PermissionBroker {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * A Claude Code file-write call whose workspace-relative `path` (set by the
+ * engine's gate, engine-claude-code/src/approval.ts) is Claude Code config.
+ * A file-write call with no usable `path` cannot be checked, so it counts as
+ * protected too (fail closed: ask, store nothing).
+ */
+function isProtectedAgentWrite(tool: ToolSpec, args: unknown): boolean {
+  if (tool.source !== 'agent' || classifyAgentTool(tool.name).category !== 'file-write') return false;
+  const path = stringField(args, 'path');
+  return path === null || isProtectedAgentPath(path);
+}
 
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
   switch (tool.source) {

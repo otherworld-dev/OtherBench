@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentDisallowedTools, agentPolicyDenial, classifyAgentTool } from '../src/domain/agent-tools.js';
+import { agentDisallowedTools, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from '../src/domain/agent-tools.js';
 import type { ToolPolicy } from '../src/types/config.js';
 
 const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
@@ -43,6 +43,21 @@ describe('agentDisallowedTools', () => {
     for (const t of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'Bash', 'BashOutput', 'KillShell', 'WebFetch', 'WebSearch']) {
       expect(list).toContain(t);
     }
+  });
+});
+
+describe('isProtectedAgentPath', () => {
+  it.each([
+    '.claude/settings.local.json', '.claude/settings.json', '.claude', '.claude/skills/x/SKILL.md', '.claude/commands/go.md',
+    '.claude/agents/a.md', '.claude/hooks/h.sh', 'sub/.claude/settings.json', 'sub\\.Claude\\settings.json', '.CLAUDE/x',
+    '.mcp.json', 'pkg/.MCP.json', 'CLAUDE.md', 'docs/claude.md', 'CLAUDE.local.md', 'a/b/Claude.Local.MD',
+    // Windows opens these as the same files.
+    '.claude./settings.json', '.claude /settings.json', 'CLAUDE.md.', 'CLAUDE.md::$DATA', '.mcp.json ',
+  ])('protects %s', (p) => {
+    expect(isProtectedAgentPath(p)).toBe(true);
+  });
+  it.each(['src/a.ts', '.', 'README.md', 'claude.mdx', 'my.claude/x', '.claudex/settings.json', 'mcp.json', '.mcp.json.bak', 'CLAUDE.md/inner.txt', 'docs/CLAUDE-notes.md'])('does not protect %s', (p) => {
+    expect(isProtectedAgentPath(p)).toBe(false);
   });
 });
 

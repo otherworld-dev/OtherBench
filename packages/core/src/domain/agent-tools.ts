@@ -22,6 +22,30 @@ const ALWAYS_DISALLOWED = ['AskUserQuestion'];
 /** Argument keys Claude Code tools use for a filesystem path. */
 export const AGENT_PATH_ARG_KEYS: readonly string[] = ['file_path', 'notebook_path', 'path'];
 
+/**
+ * True for a workspace-relative path that Claude Code itself reads as
+ * configuration: anything under a `.claude` directory (settings and
+ * settings.local.json with their hooks, skills, commands, agents), a
+ * `.mcp.json` file, or a `CLAUDE.md` / `CLAUDE.local.md` file in any
+ * directory. Writing one of these can make Claude Code run commands on a later
+ * turn with no Bash card (a hook, a skill's inline shell, an MCP server
+ * command), so the broker never lets a stored grant cover a write to one.
+ *
+ * Case-insensitive, and each segment is compared the way Windows opens it:
+ * trailing dots and spaces dropped, and an NTFS stream suffix (`:$DATA`) cut,
+ * so `.claude./settings.json` or `CLAUDE.md::$DATA` still count. Pass the
+ * path relative to the workspace root -- an absolute path would match a
+ * `.claude` directory the workspace itself happens to sit under.
+ */
+export function isProtectedAgentPath(relPath: string): boolean {
+  const segments = relPath
+    .split(/[\\/]+/)
+    .map((s) => s.replace(/:.*$/, '').replace(/[. ]+$/, '').toLowerCase())
+    .filter((s) => s.length > 0);
+  const last = segments[segments.length - 1];
+  return segments.includes('.claude') || last === '.mcp.json' || last === 'claude.md' || last === 'claude.local.md';
+}
+
 export function classifyAgentTool(name: string): { category: AgentToolCategory; risk: RiskClass } {
   if (FILE_READ.includes(name)) return { category: 'file-read', risk: 'read' };
   if (FILE_WRITE.includes(name)) return { category: 'file-write', risk: 'mutate' };

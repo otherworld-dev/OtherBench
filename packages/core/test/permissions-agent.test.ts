@@ -103,6 +103,53 @@ describe('PermissionBroker with source "agent"', () => {
     const b = new PermissionBroker(new InMemoryStore());
     for (const n of ['Edit', 'Bash']) expect(b.decide(spec(n), {}, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
   });
+  describe('writes to Claude Code config (R13)', () => {
+    const protectedPaths = ['.claude/settings.local.json', '.claude/skills/x/SKILL.md', '.mcp.json', 'CLAUDE.md', 'docs/CLAUDE.local.md'];
+
+    it.each(protectedPaths)('a chat or always answer for %s stores no grant, and the next write asks again', (path) => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      for (const choice of ['chat', 'always'] as const) {
+        const d = b.decide(spec('Write'), { path }, policy(), ctx());
+        if (d.kind !== 'ask') throw new Error('expected ask');
+        b.resolve(d.request.id, choice === 'chat' ? { choice } : { choice, constraint: { pathPrefix: path } });
+      }
+      expect(store.grants.list()).toHaveLength(0);
+      expect(b.decide(spec('Write'), { path }, policy(), ctx()).kind).toBe('ask');
+    });
+
+    it('existing grants never cover a protected write, even unconstrained or with a covering pathPrefix', () => {
+      const store = new InMemoryStore();
+      store.grants.create({ id: 'g-chat', chatId: 'c1', profileId: 'p1', toolName: 'Edit', source: 'agent', scope: 'chat', constraint: null, expiresAt: null });
+      store.grants.create({ id: 'g-always', chatId: null, profileId: 'p1', toolName: 'Edit', source: 'agent', scope: 'always', constraint: { pathPrefix: '.' }, expiresAt: null });
+      const b = new PermissionBroker(store);
+      expect(b.decide(spec('Edit'), { path: 'src/a.ts' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+      for (const path of protectedPaths) expect(b.decide(spec('Edit'), { path }, policy(), ctx()).kind).toBe('ask');
+      expect(b.decide(spec('Edit'), { path: '.claude/settings.local.json' }, policy({ approvalMode: 'always_ask' }), ctx()).kind).toBe('ask');
+    });
+
+    it('an agent file write with no path cannot be checked, so no grant covers it', () => {
+      const store = new InMemoryStore();
+      store.grants.create({ id: 'g', chatId: 'c1', profileId: 'p1', toolName: 'Write', source: 'agent', scope: 'chat', constraint: null, expiresAt: null });
+      const b = new PermissionBroker(store);
+      expect(b.decide(spec('Write'), { content: 'x' }, policy(), ctx()).kind).toBe('ask');
+    });
+
+    it('still allows reading Claude Code config without a card under ask_on_mutate', () => {
+      const b = new PermissionBroker(new InMemoryStore());
+      expect(b.decide(spec('Read'), { path: '.claude/settings.json' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'auto_read' });
+    });
+
+    it('still stores chat grants for ordinary paths', () => {
+      const store = new InMemoryStore();
+      const b = new PermissionBroker(store);
+      const d = b.decide(spec('Write'), { path: 'src/a.ts' }, policy(), ctx());
+      if (d.kind !== 'ask') throw new Error('expected ask');
+      b.resolve(d.request.id, { choice: 'chat' });
+      expect(store.grants.list()).toHaveLength(1);
+    });
+  });
+
   it('an fs-source grant does not satisfy an agent call of the same name', () => {
     const store = new InMemoryStore();
     store.grants.create({ id: 'g2', chatId: 'c1', profileId: 'p1', toolName: 'Edit', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
