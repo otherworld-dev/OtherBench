@@ -20,3 +20,26 @@ export async function desktopBootstrap(): Promise<TransportConfig | null> {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<TransportConfig>('bootstrap');
 }
+
+/**
+ * Subscribes to an event the shell emits (e.g. `tray-new-chat` from the
+ * tray menu). Resolves to the unsubscribe function; in a browser that is a
+ * no-op and nothing is ever delivered.
+ */
+export async function onDesktopEvent(name: string, cb: () => void): Promise<() => void> {
+  if (!isDesktop()) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen(name, () => cb());
+}
+
+/** Start-at-login, via the shell's autostart plugin. Only meaningful when `isDesktop()`. */
+export const autostart = {
+  async isEnabled(): Promise<boolean> {
+    const plugin = await import('@tauri-apps/plugin-autostart');
+    return plugin.isEnabled();
+  },
+  async set(enabled: boolean): Promise<void> {
+    const plugin = await import('@tauri-apps/plugin-autostart');
+    await (enabled ? plugin.enable() : plugin.disable());
+  },
+};

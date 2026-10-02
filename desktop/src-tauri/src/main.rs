@@ -2,12 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod sidecar;
+mod tray;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 
 use serde::Serialize;
-use tauri::{Manager, RunEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+
+/// Passed by the autostart entry so a sign-in launch goes straight to the tray.
+const MINIMIZED_FLAG: &str = "--minimized";
 
 /// What the web app needs to reach its server (web/src/desktop/bridge.ts).
 #[derive(Clone, Serialize)]
@@ -92,9 +96,37 @@ fn main() {
     let server: Arc<Mutex<Option<sidecar::Server>>> = Arc::new(Mutex::new(None));
 
     let app = tauri::Builder::default()
+        // Must be the first plugin. A second launch exits immediately and
+        // its arguments arrive here, in the running instance -- which also
+        // means a second instance never tries to open the locked database.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            tray::show_main(app);
+            let _ = app.emit_to("main", "open-args", argv);
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![MINIMIZED_FLAG]),
+        ))
         .manage(AppState { launch: launch.clone(), server: server.clone() })
         .invoke_handler(tauri::generate_handler![bootstrap])
+        // Closing the main window hides it; the app keeps running in the
+        // tray until Quit, so in-flight replies aren't cut off.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(move |app| {
+            tray::build(app.handle())?;
+            // The window is created hidden (tauri.conf.json) so a sign-in
+            // launch never flashes it on screen.
+            if !std::env::args().any(|a| a == MINIMIZED_FLAG) {
+                tray::show_main(app.handle());
+            }
+
             let spec = sidecar::LaunchSpec {
                 node: node_binary(),
                 script: server_script(app.handle()),
