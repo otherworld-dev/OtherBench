@@ -8,14 +8,29 @@ import './index.css';
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root element missing from index.html');
 
+const root = createRoot(rootEl);
+
 // In the desktop app the API lives on the sidecar's port, not this page's
 // origin, so the transport must be configured before the first request.
 // In a browser this resolves to null straight away.
-const desktop = await desktopBootstrap();
-if (desktop) configureTransport(desktop);
+try {
+  const desktop = await desktopBootstrap();
+  if (desktop) configureTransport(desktop);
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>
+  );
+} catch (err) {
+  // The shell couldn't start its server: show why instead of a blank window.
+  root.render(<StartupError message={String(err)} />);
+}
 
-createRoot(rootEl).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
+function StartupError({ message }: { message: string }) {
+  return (
+    <div className="p-6 font-sans text-sm">
+      <h1 className="mb-2 text-base font-semibold">Grunt couldn't start its server</h1>
+      <pre className="whitespace-pre-wrap rounded border border-[var(--border)] bg-[var(--bg-sunken)] p-3">{message}</pre>
+    </div>
+  );
+}

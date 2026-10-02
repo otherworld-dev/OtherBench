@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the main window. App commands (bootstrap) need no entry here.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
