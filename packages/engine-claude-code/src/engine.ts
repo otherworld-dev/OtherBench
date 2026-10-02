@@ -41,6 +41,18 @@ function promptStream(content: ContentBlock[]): { stream: AsyncIterable<SDKUserM
   return { stream: gen(), close };
 }
 
+/**
+ * Shared by utility calls and connection probes: no settings files, no MCP
+ * servers (none passed, and strict so none are loaded from config), no
+ * extended thinking, and no session written to disk.
+ */
+const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig' | 'thinking' | 'persistSession'> => ({
+  settingSources: [],
+  strictMcpConfig: true,
+  thinking: { type: 'disabled' },
+  persistSession: false,
+});
+
 const textOf = (m: CanonMessage | undefined): string => (m?.parts ?? []).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 
 /** Filenames of the new message's non-image attachments, which Claude Code turns do not receive. */
@@ -170,19 +182,35 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return [{ type: 'text', text }, ...blocks];
   }
 
-  /** Tool-less side calls (auto-title): one turn, no settings, nothing persisted (spec §4). */
+  /**
+   * Tool-less side calls (auto-title): one turn, no settings, no MCP servers,
+   * no thinking, nothing persisted (spec §4). Kept as light as possible so a
+   * title comes back quickly.
+   */
   private async *utility(req: EngineRequest): AsyncGenerator<EngineEvent> {
     const conn = req.profile.connection;
     const backend = backendOf(conn);
     const prompt = promptStream([{ type: 'text', text: textOf(req.messages[req.messages.length - 1]) }]);
     const abortController = new AbortController();
-    req.signal.addEventListener('abort', () => abortController.abort(), { once: true });
+    const onAbort = (): void => abortController.abort();
+    req.signal.addEventListener('abort', onAbort, { once: true });
     const model = backend === CLAUDE_BACKEND ? 'haiku' : req.profile.modelId;
     const mapper = new SdkEventMapper();
     try {
       for await (const msg of this.deps.query({
         prompt: prompt.stream,
-        options: { cwd: tmpdir(), model, env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, req.profile.apiKey, model), maxTurns: 1, settingSources: [], persistSession: false, tools: [], permissionMode: 'default', includePartialMessages: true, abortController },
+        options: {
+          ...lightweightOptions(),
+          cwd: tmpdir(),
+          model,
+          env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, req.profile.apiKey, model),
+          maxTurns: 1,
+          tools: [],
+          systemPrompt: 'Reply with only the requested text.',
+          permissionMode: 'default',
+          includePartialMessages: true,
+          abortController,
+        },
       })) {
         for (const event of mapper.map(msg)) {
           if (event.type === 'text-delta' || event.type === 'finish') yield event;
@@ -194,6 +222,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       if (!req.signal.aborted) yield { type: 'error', error: classifyClaudeCodeFailure(err instanceof Error ? err.message : String(err), { backend, modelId: model }) };
     } finally {
       prompt.close();
+      req.signal.removeEventListener('abort', onAbort);
     }
   }
 
@@ -223,7 +252,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   private async probe<T>(conn: Connection, ask: (q: ReturnType<QueryFn>) => Promise<T>): Promise<T> {
     const abortController = new AbortController();
     const idle: AsyncIterable<SDKUserMessage> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }) };
-    const q = this.deps.query({ prompt: idle, options: { env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, null, 'haiku'), settingSources: [], persistSession: false, abortController } });
+    const q = this.deps.query({ prompt: idle, options: { ...lightweightOptions(), env: buildChildEnv(this.deps.baseEnv ?? process.env, conn, null, 'haiku'), abortController } });
     try {
       return await ask(q);
     } finally {

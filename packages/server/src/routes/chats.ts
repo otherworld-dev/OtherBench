@@ -164,6 +164,8 @@ export function searchRoutes(container: Container): Hono {
 
 const TITLE_MAX_LENGTH = 48;
 const TITLE_GENERATION_TIMEOUT_MS = 10_000;
+/** Claude Code starts a whole CLI process for a utility call, so it gets longer. */
+const CLAUDE_CODE_TITLE_GENERATION_TIMEOUT_MS = 30_000;
 
 function textOf(parts: Part[]): string {
   return parts
@@ -231,15 +233,20 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     const controller = new AbortController();
     // This controller is only ever aborted by the timer below, so this flag
     // is currently equivalent to `controller.signal.aborted` -- but naming
-    // it explicitly "the 10s watchdog fired" (rather than "aborted", a
-    // broader concept) keeps the fallback decision below correct by
-    // construction even if this function ever grows another abort source.
+    // it explicitly "the watchdog fired" (rather than "aborted", a broader
+    // concept) keeps the fallback decision below correct by construction
+    // even if this function ever grows another abort source.
     let timedOut = false;
+    const budgetMs = profile.connection.kind === 'claude_code' ? CLAUDE_CODE_TITLE_GENERATION_TIMEOUT_MS : TITLE_GENERATION_TIMEOUT_MS;
     const timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, TITLE_GENERATION_TIMEOUT_MS);
+    }, budgetMs);
     let generated = '';
+    // The title is complete at `finish`. Stop reading there: an engine's
+    // stream can stay open after it (Claude Code's ends only when its process
+    // exits), and that tail must not let the watchdog throw a finished title away.
+    let finished = false;
     try {
       for await (const event of container.engine.stream({
         profile,
@@ -253,6 +260,10 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
       })) {
         if (event.type === 'text-delta') generated += event.text;
         else if (event.type === 'error') throw new Error(event.error.message);
+        else if (event.type === 'finish') {
+          finished = true;
+          break;
+        }
       }
     } finally {
       clearTimeout(timer);
@@ -261,20 +272,22 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     // The engine can end a stream cleanly with no `error` event when the
     // signal it was given aborts (mirrors TurnRunner.runVariant's own
     // handling of the same behaviour, turn.ts) -- so a timeout leaves
-    // `generated` holding whatever partial text streamed before the 10s
+    // `generated` holding whatever partial text streamed before the
     // watchdog fired, not an empty string. Per this function's documented
     // contract (ANY failure -- engine error, empty result, OR timeout --
-    // uses the fallback), a timeout must win over partial text
-    // unconditionally, rather than falling through to `truncateTitle`
+    // uses the fallback), a timeout before `finish` must win over partial
+    // text unconditionally, rather than falling through to `truncateTitle`
     // whenever `generated` happens to be non-empty.
-    if (timedOut) {
+    if (timedOut && !finished) {
+      console.warn(`[grunt] auto-title for chat ${chatId} timed out after ${budgetMs / 1000}s; using the first message as the title.`);
       container.store.chats.update(chatId, { title: fallback });
       return;
     }
 
     const title = truncateTitle(generated);
     container.store.chats.update(chatId, { title: title.length > 0 ? title : fallback });
-  } catch {
+  } catch (err) {
+    console.warn(`[grunt] auto-title for chat ${chatId} failed (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); using the first message as the title.`);
     container.store.chats.update(chatId, { title: fallback });
   }
 }

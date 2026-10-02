@@ -153,7 +153,19 @@ describe('ClaudeCodeChatEngine.stream', () => {
     const { query, calls } = fakeQuery(async function* () { yield delta('A title'); yield success(); });
     const events = await collect(engine(query).stream(req({ purpose: 'utility', workspaceRoot: null })));
     expect(events[0]).toEqual({ type: 'text-delta', text: 'A title' });
-    expect(calls[0]!.options).toMatchObject({ model: 'haiku', maxTurns: 1, settingSources: [], persistSession: false, tools: [] });
+    const o = calls[0]!.options;
+    expect(o).toMatchObject({ model: 'haiku', maxTurns: 1, settingSources: [], persistSession: false, tools: [], strictMcpConfig: true, thinking: { type: 'disabled' }, systemPrompt: 'Reply with only the requested text.' });
+    expect(o.mcpServers).toBeUndefined();
+  });
+
+  it('does not leave an abort listener on the request signal after a utility call', async () => {
+    const { query } = fakeQuery(async function* () { yield delta('t'); yield success(); });
+    const signal = new AbortController().signal;
+    const add = vi.spyOn(signal, 'addEventListener');
+    const remove = vi.spyOn(signal, 'removeEventListener');
+    await collect(engine(query).stream(req({ purpose: 'utility', workspaceRoot: null, signal })));
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0]![1]);
   });
 });
 
