@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { serve as nodeServe } from '@hono/node-server';
 import { createApp } from './app.js';
 import { createContainer, type Container } from './container.js';
+import { DatabaseLockedError } from './db-lock.js';
+import { announceLine, exitOnStdinClose } from './desktop.js';
 
 /** Arbitrary default port for `grunt serve`; overridable with `--port`. */
 const DEFAULT_PORT = 4747;
@@ -34,13 +36,22 @@ function defaultWebDistDir(): string {
 }
 
 export interface ServeOptions {
+  /** 0 asks the OS for a free port; the bound port is what `ServerHandle.port` reports. */
   port: number;
   host: string;
   dbPath: string;
   token: string | null;
+  /** Desktop handshake: print `{"port":N}` as the only stdout line, exit when stdin closes. */
+  announce: boolean;
+  corsOrigins: string[];
 }
 
-export function parseServeArgs(argv: string[]): ServeOptions {
+/**
+ * `--token` wins; otherwise `GRUNT_TOKEN`. The desktop shell always uses
+ * the environment variable, because a command line is readable by every
+ * other process on the machine and an environment block is not.
+ */
+export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): ServeOptions {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -48,19 +59,25 @@ export function parseServeArgs(argv: string[]): ServeOptions {
       host: { type: 'string' },
       db: { type: 'string' },
       token: { type: 'string' },
+      announce: { type: 'boolean' },
+      'cors-origin': { type: 'string', multiple: true },
     },
     strict: false,
   });
-  const port = values['port'] ? Number(values['port']) : DEFAULT_PORT;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`Invalid --port "${String(values['port'])}": must be an integer between 1 and 65535.`);
+  const port = values['port'] !== undefined ? Number(values['port']) : DEFAULT_PORT;
+  if (typeof values['port'] === 'boolean' || !Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid --port "${String(values['port'])}": must be an integer between 0 and 65535 (0 = any free port).`);
   }
   const dbPath = typeof values['db'] === 'string' ? values['db'] : defaultDbPath();
+  const envToken = env['GRUNT_TOKEN'];
+  const corsOrigins = values['cors-origin'];
   return {
     port,
     host: typeof values['host'] === 'string' ? values['host'] : DEFAULT_HOST,
     dbPath,
-    token: typeof values['token'] === 'string' ? values['token'] : null,
+    token: typeof values['token'] === 'string' ? values['token'] : envToken ? envToken : null,
+    announce: values['announce'] === true,
+    corsOrigins: Array.isArray(corsOrigins) ? corsOrigins.filter((o): o is string => typeof o === 'string') : [],
   };
 }
 
@@ -91,9 +108,26 @@ export class NonLoopbackWithoutTokenError extends Error {
  * Kept as a small, pure, synchronous function (no I/O, no process.exit) so
  * it can be asserted on directly without spinning up a real server.
  */
-export function assertServeSecurity(options: Pick<ServeOptions, 'host' | 'token'>): void {
+export function assertServeSecurity(options: Pick<ServeOptions, 'host' | 'token'> & { announce?: boolean }): void {
   if (!isLoopbackHost(options.host) && !options.token) {
     throw new NonLoopbackWithoutTokenError(options.host);
+  }
+  if (options.announce && !options.token) {
+    throw new AnnounceWithoutTokenError();
+  }
+}
+
+/**
+ * `--announce` is the desktop shell's mode, where the UI is served from the
+ * webview's own origin and reaches this server cross-origin. Without a token
+ * any other local process -- or any web page the CORS allowlist doesn't
+ * cover but a simple request gets through -- could drive the API, so the
+ * shell must always supply one.
+ */
+export class AnnounceWithoutTokenError extends Error {
+  constructor() {
+    super('Refusing to start: --announce requires a token. Set GRUNT_TOKEN in the environment (preferred) or pass --token.');
+    this.name = 'AnnounceWithoutTokenError';
   }
 }
 
@@ -101,17 +135,28 @@ export interface ServeDeps {
   createContainer: (opts: { dbPath: string; secretsPath: string }) => Promise<Container>;
   createApp: typeof createApp;
   serve: typeof nodeServe;
+  /** Where the announce line goes. Defaults to `process.stdout`. */
+  stdout: { write(chunk: string): unknown };
+  /** Watched for close in announce mode. Defaults to `process.stdin`. */
+  stdin: NodeJS.ReadableStream;
+  /** Called with 0 after an announce-mode shutdown. Defaults to `process.exit`. */
+  exit: (code: number) => void;
 }
 
 const defaultDeps: ServeDeps = {
   createContainer,
   createApp,
   serve: nodeServe,
+  stdout: process.stdout,
+  stdin: process.stdin,
+  exit: (code) => process.exit(code),
 };
 
 export interface ServerHandle {
+  /** The port actually bound -- differs from the requested one for `--port 0`. */
   port: number;
   host: string;
+  announce: boolean;
   close: () => void;
 }
 
@@ -122,28 +167,72 @@ export interface ServerHandle {
  * verify the security gate and the "what gets called when" wiring without
  * touching a real filesystem, database, or network port.
  */
-export async function runServe(argv: string[], deps: Partial<ServeDeps> = {}): Promise<ServerHandle> {
-  const { createContainer: buildContainer, createApp: buildApp, serve: startServer } = { ...defaultDeps, ...deps };
+export async function runServe(
+  argv: string[],
+  deps: Partial<ServeDeps> = {},
+  env: NodeJS.ProcessEnv = process.env
+): Promise<ServerHandle> {
+  const {
+    createContainer: buildContainer,
+    createApp: buildApp,
+    serve: startServer,
+    stdout,
+    stdin,
+    exit,
+  } = { ...defaultDeps, ...deps };
 
-  const options = parseServeArgs(argv);
+  const options = parseServeArgs(argv, env);
   assertServeSecurity(options);
 
   const container = await buildContainer({ dbPath: options.dbPath, secretsPath: defaultSecretsPath(options.dbPath) });
-  const app = buildApp(container, { token: options.token, webDistDir: defaultWebDistDir() });
-  const server = startServer({ fetch: app.fetch, port: options.port, hostname: options.host });
 
-  return {
-    port: options.port,
-    host: options.host,
-    close: () => {
-      server.close();
-      container.close();
-    },
+  // Filled in by the listening callback; the Host check reads it per request,
+  // and no request can arrive before the port is bound.
+  let boundPort = options.port;
+  const app = buildApp(container, {
+    token: options.token,
+    webDistDir: defaultWebDistDir(),
+    corsOrigins: options.corsOrigins,
+    hostCheckPort: isLoopbackHost(options.host) ? () => boundPort : undefined,
+  });
+
+  let server: ReturnType<typeof nodeServe>;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server = startServer({ fetch: app.fetch, port: options.port, hostname: options.host }, (info) => {
+        boundPort = info.port;
+        resolve();
+      });
+      // A real server reports a failed bind (EADDRINUSE) as an 'error' event
+      // rather than throwing; test doubles have no `once`.
+      (server as { once?: (event: string, fn: (err: Error) => void) => void }).once?.('error', reject);
+    });
+  } catch (err) {
+    container.close();
+    throw err;
+  }
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    server.close();
+    container.close();
   };
+
+  if (options.announce) {
+    stdout.write(announceLine(boundPort));
+    exitOnStdinClose(stdin, () => {
+      close();
+      exit(0);
+    });
+  }
+
+  return { port: boundPort, host: options.host, announce: options.announce, close };
 }
 
 export interface MainDeps extends Partial<ServeDeps> {
-  exit?: (code: number) => void;
+  env?: NodeJS.ProcessEnv;
 }
 
 /** The CLI entry point: `grunt <command> [options]`. Currently only `serve` exists. */
@@ -152,16 +241,24 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
   const [command, ...rest] = argv;
 
   if (command !== 'serve') {
-    console.error('Usage: grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>]');
+    console.error(
+      'Usage: grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce] [--cors-origin <origin>]...'
+    );
     exit(1);
     return;
   }
 
   try {
-    const handle = await runServe(rest, deps);
-    console.log(`Grunt server listening on http://${handle.host}:${handle.port}`);
+    const handle = await runServe(rest, deps, deps.env ?? process.env);
+    // In announce mode stdout belongs to the handshake alone.
+    const log = handle.announce ? console.error : console.log;
+    log(`Grunt server listening on http://${handle.host}:${handle.port}`);
   } catch (err) {
-    if (err instanceof NonLoopbackWithoutTokenError) {
+    if (
+      err instanceof NonLoopbackWithoutTokenError ||
+      err instanceof AnnounceWithoutTokenError ||
+      err instanceof DatabaseLockedError
+    ) {
       console.error(`Error: ${err.message}`);
       exit(1);
       return;

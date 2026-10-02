@@ -18,6 +18,7 @@ import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { acquireDbLock } from './db-lock.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { StreamRegistry } from './stream/registry.js';
 
@@ -110,11 +111,34 @@ export async function resolveSecretsPassphrase(secretsPath: string): Promise<str
   return generated;
 }
 
-/** Opens (migrating if needed) the real SQLite-backed `Container` the CLI serves from. */
+/**
+ * Opens (migrating if needed) the real SQLite-backed `Container` the CLI
+ * serves from, holding the database lock (db-lock.ts) for its whole life:
+ * taken before anything reads the store -- in particular before
+ * `reconcileInterruptedTurns` -- and released by `close()`, or straight
+ * away if startup fails part-way.
+ */
 export async function createContainer(options: ContainerOptions): Promise<Container> {
   if (options.dbPath !== ':memory:') {
     await mkdir(dirname(options.dbPath), { recursive: true });
   }
+  const lock = acquireDbLock(options.dbPath);
+  let container: Container;
+  try {
+    container = await openContainer(options);
+  } catch (err) {
+    lock?.release();
+    throw err;
+  }
+  const closeContainer = container.close;
+  container.close = () => {
+    closeContainer();
+    lock?.release();
+  };
+  return container;
+}
+
+async function openContainer(options: ContainerOptions): Promise<Container> {
   const db = openDatabase(options.dbPath);
   runMigrations(db);
   const store = new SqliteStore(db);
@@ -123,17 +147,14 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
   // writing it is gone -- ASSUMING a single Grunt server process per
   // database: this process's own `TurnRunner.controllers` (the only thing
   // that could still be driving one) is empty on every fresh start, so any
-  // such row found here looks orphaned to it. That assumption isn't
-  // enforced anywhere -- `openDatabase`'s WAL mode and `busy_timeout`
-  // actively allow a second process to open the same database, and this
-  // runs before the port bind, so a second launch (even one about to fail
-  // with `EADDRINUSE`) can reconcile out from under a still-live first
-  // process's stream, flipping its row to `error` while it's genuinely
-  // streaming. The first process's own terminal `updateStatus` call
-  // overwrites that with the real outcome once its stream finishes, but in
-  // the window before then a client can see a false error, and a
-  // same-window Retry can start a second concurrent run on the same row.
-  // Reconciled synchronously, before anything else can reach the store, so
+  // such row found here looks orphaned to it. `openDatabase`'s WAL mode
+  // and `busy_timeout` would happily let a second process open the same
+  // database, and this runs before the port bind, so without a guard a
+  // second launch (even one about to fail with `EADDRINUSE`) could
+  // reconcile out from under a still-live first process's stream,
+  // flipping its row to `error` while it's genuinely streaming. The
+  // database lock taken in `createContainer` is that guard: a second
+  // process never gets this far. Reconciled synchronously, before anything else can reach the store, so
   // within a single well-behaved process no route or SSE client ever
   // observes a `streaming` row that process did not itself just start. See
   // reconcile.ts for the full reasoning and for why the dead end this closes

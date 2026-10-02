@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
+import { corsAllowlist, hostCheck } from './desktop.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { connectionsRoutes } from './routes/connections.js';
@@ -29,10 +30,29 @@ export interface AppOptions {
    * exercise `/api/*` are unaffected either way.
    */
   webDistDir?: string;
+  /**
+   * Exact origins allowed to call `/api/*` cross-origin -- the desktop
+   * shell's webview, which loads the bundled UI from its own origin rather
+   * than from this server. Empty or unset mounts no CORS handling at all.
+   */
+  corsOrigins?: string[];
+  /**
+   * When set, every request must carry a loopback `Host` for this port (see
+   * desktop.ts's `hostCheck`). `cli.ts` sets it whenever the bind host is
+   * loopback; unset (tests, non-loopback binds) checks nothing.
+   */
+  hostCheckPort?: () => number;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
   const app = new Hono();
+
+  if (options.hostCheckPort) {
+    app.use('*', hostCheck(options.hostCheckPort));
+  }
+  if (options.corsOrigins && options.corsOrigins.length > 0) {
+    app.use('/api/*', corsAllowlist(options.corsOrigins));
+  }
 
   app.route('/api', healthRoutes());
 

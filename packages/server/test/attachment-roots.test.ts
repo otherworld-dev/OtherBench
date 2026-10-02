@@ -289,7 +289,11 @@ describe(':memory: never touches the real default ~/.grunt directory', () => {
     // implementations, so the real default-path derivation actually runs.
     const fakeServerHandle = { close: vi.fn() };
     const handle = await runServe(['--db', ':memory:', '--port', '45699'], {
-      serve: vi.fn(() => fakeServerHandle as never),
+      // Like the real @hono/node-server, report the bound port once listening.
+      serve: vi.fn((opts: { port: number }, onListening?: (info: { port: number }) => void) => {
+        onListening?.({ port: opts.port });
+        return fakeServerHandle as never;
+      }),
     });
     handle.close();
 
