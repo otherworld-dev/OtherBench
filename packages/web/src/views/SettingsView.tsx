@@ -1,16 +1,19 @@
 import { useState, type JSX } from 'react';
+import { isDesktop } from '../desktop/bridge.js';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
+import { DesktopPanel } from './settings/DesktopPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'mcpServers';
+type Tab = 'connections' | 'models' | 'profiles' | 'mcpServers' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
   models: 'Models',
   profiles: 'Profiles',
   mcpServers: 'MCP Servers',
+  desktop: 'Desktop',
 };
 
 export interface SettingsViewProps {
@@ -29,6 +32,8 @@ export interface SettingsViewProps {
  */
 export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('connections');
+  // The Desktop tab only exists inside the desktop app.
+  const tabs = (Object.keys(TAB_LABEL) as Tab[]).filter((t) => t !== 'desktop' || isDesktop());
 
   return (
     <div data-testid="settings-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
@@ -36,7 +41,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         <div className="flex items-center gap-4">
           <h2 className="text-sm font-semibold">Settings</h2>
           <div role="tablist" className="flex gap-1">
-            {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
+            {tabs.map((t) => (
               <button
                 key={t}
                 type="button"
@@ -60,6 +65,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'models' && <ModelsPanel />}
         {tab === 'profiles' && <ProfilesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
+        {tab === 'desktop' && <DesktopPanel />}
       </div>
     </div>
   );

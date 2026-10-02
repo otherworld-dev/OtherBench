@@ -15,8 +15,9 @@ Grunt is a local, multi-model chat workbench. It runs as one Node server
   yes, at whatever scope they choose (once, this chat, or always for a
   specific command/path).
 
-There is no desktop app (yet — see `docs/HANDOVER.md`). Grunt today is
-`grunt serve` plus a browser.
+Grunt runs either as `grunt serve` plus a browser, or as a desktop app (a
+Tauri shell around the same UI and server — early days, see
+[Desktop app](#desktop-app) below).
 
 ## Prerequisites
 
@@ -80,6 +81,29 @@ exists, so on a first install (before the first build) it won't be there
 yet; run `npm install` a second time after `npm run build` if you want it on
 your `PATH`, or `npm link` from `packages/server`. `npm run serve` above
 always works and needs neither.
+
+## Desktop app
+
+`desktop/` is a Tauri v2 shell. The web UI is bundled into the app (not
+loaded from a URL), and the Grunt server runs as a hidden child process on a
+random loopback port with a per-launch token. Closing the app stops the
+server; so does the app crashing, since the server exits when its stdin
+closes. It uses the same `~/.grunt/grunt.db` as `npm run serve`, and only one
+of the two can have it open at a time (`<db>.lock`).
+
+Extra prerequisites: Rust (stable, via `rustup`) and, on Windows, the MSVC
+Build Tools (C++ workload) plus WebView2 (preinstalled on Windows 11).
+
+```sh
+npm install
+npm run app:dev -w @grunt/desktop        # dev: Vite dev server + hot reload
+cd desktop && npx tauri build --debug --no-bundle   # a runnable build with the UI embedded
+```
+
+For now the app finds `node` on `PATH` and the server in this checkout's
+`packages/server/dist` (`GRUNT_NODE` / `GRUNT_SERVER_SCRIPT` override both).
+Installers, a bundled Node runtime, tray, hotkey, notifications and native
+file pickers are the next tasks in the v2 plan.
 
 ## Try it with no API key — the mock provider
 

@@ -1,34 +1,137 @@
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { HelloBuffer, StreamConnectionStatus } from './store.js';
+import { authHeaders } from './transport.js';
 
 /** Backoff schedule (ms) between reconnect attempts; the last value repeats once exhausted. */
 const DEFAULT_BACKOFF_MS = [500, 1000, 2000, 5000, 10000, 15000];
+
+/** What a stream connection reports: each complete SSE event, and its own end or failure. */
+export interface SseHandlers {
+  onEvent: (type: string, data: string) => void;
+  /** Called at most once per connection: failed to open, non-2xx, network error, or the server ended the stream. */
+  onError: () => void;
+}
+
+export interface SseConnection {
+  close(): void;
+}
+
+export type SseConnect = (url: string, handlers: SseHandlers) => SseConnection;
+
+/**
+ * Incremental parser for the subset of `text/event-stream` this server
+ * emits (`event:`, `data:`, `:` comments), per the WHATWG dispatch rules:
+ * fields accumulate until a blank line, `data` lines join with `\n`, one
+ * leading space after the colon is dropped, and an event with no data is
+ * not dispatched. `id:` and `retry:` are accepted and ignored -- reconnect
+ * timing is `SseClient`'s own backoff, not the server's.
+ */
+export class SseParser {
+  private buffer = '';
+  private eventType = '';
+  private dataLines: string[] = [];
+
+  push(chunk: string): Array<{ event: string; data: string }> {
+    this.buffer += chunk;
+    const out: Array<{ event: string; data: string }> = [];
+    let nl: number;
+    while ((nl = this.buffer.search(/\r\n|\r|\n/)) >= 0) {
+      const line = this.buffer.slice(0, nl);
+      const sepLen = this.buffer.startsWith('\r\n', nl) ? 2 : 1;
+      this.buffer = this.buffer.slice(nl + sepLen);
+      if (line === '') {
+        if (this.dataLines.length > 0) out.push({ event: this.eventType || 'message', data: this.dataLines.join('\n') });
+        this.eventType = '';
+        this.dataLines = [];
+        continue;
+      }
+      if (line.startsWith(':')) continue;
+      const colon = line.indexOf(':');
+      const field = colon === -1 ? line : line.slice(0, colon);
+      let value = colon === -1 ? '' : line.slice(colon + 1);
+      if (value.startsWith(' ')) value = value.slice(1);
+      if (field === 'event') this.eventType = value;
+      else if (field === 'data') this.dataLines.push(value);
+    }
+    return out;
+  }
+}
+
+/**
+ * Opens an SSE stream with `fetch` rather than `EventSource`, because
+ * `EventSource` can't send an `Authorization` header and the desktop
+ * shell's server requires one. Reconnection is deliberately not handled
+ * here -- `SseClient` owns that.
+ */
+export function createFetchSseConnect(fetchImpl: typeof fetch = (...args) => fetch(...args)): SseConnect {
+  return (url, handlers) => {
+    const controller = new AbortController();
+    let done = false;
+    const fail = () => {
+      if (done || controller.signal.aborted) return;
+      done = true;
+      handlers.onError();
+    };
+
+    void (async () => {
+      try {
+        const res = await fetchImpl(url, {
+          headers: { Accept: 'text/event-stream', ...authHeaders() },
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) {
+          fail();
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        const parser = new SseParser();
+        for (;;) {
+          const { value, done: ended } = await reader.read();
+          if (ended) break;
+          for (const ev of parser.push(decoder.decode(value, { stream: true }))) {
+            if (controller.signal.aborted) return;
+            handlers.onEvent(ev.event, ev.data);
+          }
+        }
+        fail(); // the server closed the stream
+      } catch {
+        fail();
+      }
+    })();
+
+    return {
+      close() {
+        done = true;
+        controller.abort();
+      },
+    };
+  };
+}
 
 export interface SseClientOptions {
   url: string;
   onHello: (buffers: HelloBuffer[]) => void;
   onEvent: (event: TurnEvent) => void;
   onStatusChange?: (status: StreamConnectionStatus) => void;
-  /** Injectable for tests; defaults to the global `EventSource`. */
-  EventSourceImpl?: new (url: string) => EventSource;
+  /** Injectable for tests; defaults to a `fetch`-based stream carrying the transport's auth header. */
+  connect?: SseConnect;
   /** Injectable for tests; defaults to `[500, 1000, 2000, 5000, 10000, 15000]`. */
   backoffScheduleMs?: number[];
 }
 
 /**
- * Owns one chat's `GET /api/chats/:id/stream` connection. The browser's
- * native `EventSource` already auto-reconnects, but on its own fixed
- * ~3s cadence with no cap growth and no way to observe attempts -- this
- * wrapper takes manual control instead: on any error it closes the socket
- * itself and schedules a fresh `EventSource` after an exponentially growing
- * delay, so a server restart or a flaky network doesn't hammer the
+ * Owns one chat's `GET /api/chats/:id/stream` connection. On any error it
+ * drops the connection and schedules a fresh one after an exponentially
+ * growing delay, so a server restart or a flaky network doesn't hammer the
  * endpoint. Every reconnect's `hello` event carries a fresh replay
  * snapshot, which `onHello` (wired to `useGruntStore.applyHello`) reconciles
  * without duplicating anything already applied live -- see reducer.ts.
  */
 export class SseClient {
   private readonly opts: SseClientOptions;
-  private es: EventSource | null = null;
+  private conn: SseConnection | null = null;
   private attempt = 0;
   private closed = true;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -49,43 +152,41 @@ export class SseClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    this.es?.close();
-    this.es = null;
+    this.conn?.close();
+    this.conn = null;
   }
 
   private open(): void {
-    const Impl = this.opts.EventSourceImpl ?? EventSource;
+    const connect = this.opts.connect ?? createFetchSseConnect();
     // Always 'connecting' here, whether this is the first attempt or a
     // retry -- 'reconnecting' (below, in scheduleReconnect) means "waiting
     // out the backoff delay", a distinct state a UI indicator cares about.
     this.opts.onStatusChange?.('connecting');
 
-    const es = new Impl(this.opts.url);
-    this.es = es;
-
-    es.addEventListener('hello', (ev: Event) => {
-      this.attempt = 0; // a successful connect resets the backoff schedule
-      this.opts.onStatusChange?.('open');
-      const data = this.parse<{ inFlight: HelloBuffer[] }>(ev);
-      if (data) this.opts.onHello(data.inFlight);
+    const conn = connect(this.opts.url, {
+      onEvent: (type, data) => {
+        if (type === 'hello') {
+          this.attempt = 0; // a successful connect resets the backoff schedule
+          this.opts.onStatusChange?.('open');
+          const parsed = this.parse<{ inFlight: HelloBuffer[] }>(data);
+          if (parsed) this.opts.onHello(parsed.inFlight);
+        } else if (type === 'message') {
+          // The registry's per-event sends (routes/turns.ts: `sink.send(null, event)`)
+          // omit `event:`, which SSE treats as the default `message` type.
+          const event = this.parse<TurnEvent>(data);
+          if (event) this.opts.onEvent(event);
+        }
+      },
+      onError: () => {
+        if (this.closed) return;
+        conn.close();
+        this.scheduleReconnect();
+      },
     });
-
-    // The registry's per-event sends (routes/turns.ts: `sink.send(null, event)`)
-    // omit `event:`, which SSE treats as the default `message` type.
-    es.onmessage = (ev: MessageEvent<string>) => {
-      const event = this.parse<TurnEvent>(ev);
-      if (event) this.opts.onEvent(event);
-    };
-
-    es.onerror = () => {
-      if (this.closed) return;
-      es.close();
-      this.scheduleReconnect();
-    };
+    this.conn = conn;
   }
 
-  private parse<T>(ev: Event): T | null {
-    const data = (ev as MessageEvent<string>).data;
+  private parse<T>(data: string): T | null {
     try {
       return JSON.parse(data) as T;
     } catch (err) {

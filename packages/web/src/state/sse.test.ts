@@ -1,26 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SseClient } from './sse.js';
+import { configureTransport } from './transport.js';
+import { createFetchSseConnect, SseClient, SseParser, type SseConnect, type SseHandlers } from './sse.js';
 
-type Listener = (ev: Event) => void;
-
-/** A minimal, fully hand-controlled EventSource double: no real network, no jsdom EventSource dependency. */
+/** A minimal, fully hand-controlled stream double: no real network. */
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
+  static connect: SseConnect = (url, handlers) => new FakeEventSource(url, handlers);
   readonly url: string;
-  onmessage: ((ev: MessageEvent<string>) => void) | null = null;
-  onerror: (() => void) | null = null;
-  private readonly listeners = new Map<string, Listener[]>();
+  private readonly handlers: SseHandlers;
   closed = false;
 
-  constructor(url: string) {
+  constructor(url: string, handlers: SseHandlers) {
     this.url = url;
+    this.handlers = handlers;
     FakeEventSource.instances.push(this);
-  }
-
-  addEventListener(type: string, cb: Listener): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(cb);
-    this.listeners.set(type, list);
   }
 
   close(): void {
@@ -28,18 +21,135 @@ class FakeEventSource {
   }
 
   emitHello(payload: unknown): void {
-    const event = { data: JSON.stringify(payload) } as MessageEvent<string>;
-    for (const cb of this.listeners.get('hello') ?? []) cb(event);
+    this.handlers.onEvent('hello', JSON.stringify(payload));
   }
 
   emitMessage(payload: unknown): void {
-    this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>);
+    this.handlers.onEvent('message', JSON.stringify(payload));
   }
 
   emitError(): void {
-    this.onerror?.();
+    this.handlers.onError();
   }
 }
+
+describe('SseParser', () => {
+  it('dispatches a default-type event on the blank line that ends it', () => {
+    const p = new SseParser();
+    expect(p.push('data: {"a":1}\n')).toEqual([]);
+    expect(p.push('\n')).toEqual([{ event: 'message', data: '{"a":1}' }]);
+  });
+
+  it('honours event:, joins multi-line data with newlines, and handles CRLF', () => {
+    const p = new SseParser();
+    expect(p.push('event: hello\r\ndata: line1\r\ndata: line2\r\n\r\n')).toEqual([{ event: 'hello', data: 'line1\nline2' }]);
+  });
+
+  it('copes with a chunk boundary in the middle of a line', () => {
+    const p = new SseParser();
+    expect(p.push('data: {"te')).toEqual([]);
+    expect(p.push('xt":"hi"}\n\n')).toEqual([{ event: 'message', data: '{"text":"hi"}' }]);
+  });
+
+  it('ignores comments (keepalives), id and retry fields, and empty events', () => {
+    const p = new SseParser();
+    expect(p.push(': keepalive\n\nid: 7\nretry: 100\n\ndata: x\n\n')).toEqual([{ event: 'message', data: 'x' }]);
+  });
+
+  it('strips exactly one space after the colon', () => {
+    const p = new SseParser();
+    expect(p.push('data:  two\ndata:none\n\n')).toEqual([{ event: 'message', data: ' two\nnone' }]);
+  });
+
+  it('resets the event type after each dispatch', () => {
+    const p = new SseParser();
+    expect(p.push('event: hello\ndata: a\n\ndata: b\n\n')).toEqual([
+      { event: 'hello', data: 'a' },
+      { event: 'message', data: 'b' },
+    ]);
+  });
+});
+
+describe('createFetchSseConnect', () => {
+  afterEach(() => configureTransport({ baseUrl: '', token: null }));
+
+  function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+    const enc = new TextEncoder();
+    return new ReadableStream({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(enc.encode(c));
+        controller.close();
+      },
+    });
+  }
+
+  async function flush() {
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('sends the bearer token, parses events across chunks, then reports the end of the stream as an error', async () => {
+    configureTransport({ baseUrl: 'http://127.0.0.1:5000', token: 'tok' });
+    const fetchImpl = vi.fn(async () => new Response(streamOf(['event: hello\ndata: {"inFlight":[]}\n', '\ndata: {"x":1}\n\n'])));
+    const events: Array<[string, string]> = [];
+    const onError = vi.fn();
+
+    createFetchSseConnect(fetchImpl)('http://127.0.0.1:5000/api/chats/c1/stream', {
+      onEvent: (type, data) => events.push([type, data]),
+      onError,
+    });
+    await flush();
+
+    const init = (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1];
+    expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer tok');
+    expect(events).toEqual([
+      ['hello', '{"inFlight":[]}'],
+      ['message', '{"x":1}'],
+    ]);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a non-2xx response as an error without dispatching anything', async () => {
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 401 }));
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+
+    createFetchSseConnect(fetchImpl)('/api/chats/c1/stream', { onEvent, onError });
+    await flush();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a network failure as an error', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('network down');
+    });
+    const onError = vi.fn();
+
+    createFetchSseConnect(fetchImpl)('/api/chats/c1/stream', { onEvent: vi.fn(), onError });
+    await flush();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('close() aborts the request and never reports an error afterwards', async () => {
+    let signal: AbortSignal | undefined;
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      });
+    });
+    const onError = vi.fn();
+
+    const conn = createFetchSseConnect(fetchImpl as never)('/api/chats/c1/stream', { onEvent: vi.fn(), onError });
+    conn.close();
+    await flush();
+
+    expect(signal?.aborted).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+  });
+});
 
 describe('SseClient', () => {
   beforeEach(() => {
@@ -58,7 +168,7 @@ describe('SseClient', () => {
       onHello,
       onEvent: vi.fn(),
       onStatusChange: (s) => statuses.push(s),
-      EventSourceImpl: FakeEventSource as unknown as new (url: string) => EventSource,
+      connect: FakeEventSource.connect,
     });
 
     client.connect();
@@ -77,7 +187,7 @@ describe('SseClient', () => {
       url: '/api/chats/c1/stream',
       onHello: vi.fn(),
       onEvent,
-      EventSourceImpl: FakeEventSource as unknown as new (url: string) => EventSource,
+      connect: FakeEventSource.connect,
     });
     client.connect();
 
@@ -94,7 +204,7 @@ describe('SseClient', () => {
       onHello: vi.fn(),
       onEvent: vi.fn(),
       onStatusChange: (s) => statuses.push(s),
-      EventSourceImpl: FakeEventSource as unknown as new (url: string) => EventSource,
+      connect: FakeEventSource.connect,
       backoffScheduleMs: [100, 300],
     });
     client.connect();
@@ -124,7 +234,7 @@ describe('SseClient', () => {
       url: '/api/chats/c1/stream',
       onHello: vi.fn(),
       onEvent: vi.fn(),
-      EventSourceImpl: FakeEventSource as unknown as new (url: string) => EventSource,
+      connect: FakeEventSource.connect,
       backoffScheduleMs: [100, 9999],
     });
     client.connect();
@@ -145,7 +255,7 @@ describe('SseClient', () => {
       url: '/api/chats/c1/stream',
       onHello: vi.fn(),
       onEvent: vi.fn(),
-      EventSourceImpl: FakeEventSource as unknown as new (url: string) => EventSource,
+      connect: FakeEventSource.connect,
       backoffScheduleMs: [100],
     });
     client.connect();

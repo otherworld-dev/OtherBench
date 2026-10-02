@@ -1,0 +1,16 @@
+{
+  "name": "@grunt/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "app:dev": "tauri dev",
+    "app:bundle": "tauri build",
+    "web:dev": "npm --prefix .. run build && npm --prefix ../packages/web run dev",
+    "web:build": "npm --prefix .. run build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1"
+  }
+}

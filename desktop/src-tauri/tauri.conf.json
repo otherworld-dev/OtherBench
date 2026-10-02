@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Grunt",
+  "version": "0.1.0",
+  "identifier": "dev.otherworld.grunt",
+  "build": {
+    "frontendDist": "../../packages/web/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run web:dev",
+    "beforeBuildCommand": "npm run web:build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Grunt",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 800,
+        "minHeight": 500,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.png"]
+  }
+}

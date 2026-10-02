@@ -4,6 +4,7 @@ import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { apiFetch, apiUrl } from './transport.js';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -23,7 +24,7 @@ async function extractErrorMessage(res: Response): Promise<string> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await apiFetch(path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
@@ -53,7 +54,7 @@ function del(path: string): Promise<void> {
 async function uploadFile<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`/api${path}`, { method: 'POST', body: form });
+  const res = await apiFetch(path, { method: 'POST', body: form });
   if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
   return (await res.json()) as T;
 }
@@ -236,8 +237,8 @@ export const api = {
      * content hash, its on-disk blob too.
      */
     delete: (id: string) => del(`/attachments/${id}`),
-    /** Not fetched via `request` -- consumed directly as an `<img src>`/download URL. */
-    contentUrl: (id: string) => `/api/attachments/${id}/content`,
+    /** Not fetched via `request` -- rendered through `AuthedImage`, which adds the token when there is one. */
+    contentUrl: (id: string) => apiUrl(`/attachments/${id}/content`),
     /**
      * True only for the narrow raster-image allowlist that
      * `GET /attachments/:id/content` (packages/server/src/routes/
@@ -253,6 +254,6 @@ export const api = {
     previewable: (mime: string): boolean => INLINE_PREVIEWABLE_MIME_TYPES.has((mime.split(';')[0] ?? '').trim().toLowerCase()),
   },
 
-  /** Not fetched via `request` -- consumed directly by `state/sse.ts` as an `EventSource` URL. */
-  streamUrl: (chatId: string) => `/api/chats/${chatId}/stream`,
+  /** Not fetched via `request` -- opened by `state/sse.ts`'s streaming reader. */
+  streamUrl: (chatId: string) => apiUrl(`/chats/${chatId}/stream`),
 };
