@@ -104,7 +104,11 @@ describe('PermissionBroker with source "agent"', () => {
     for (const n of ['Edit', 'Bash']) expect(b.decide(spec(n), {}, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
   });
   describe('writes to Claude Code config (R13)', () => {
-    const protectedPaths = ['.claude/settings.local.json', '.claude/skills/x/SKILL.md', '.mcp.json', 'CLAUDE.md', 'docs/CLAUDE.local.md'];
+    const protectedPaths = [
+      '.claude/settings.local.json', '.claude/skills/x/SKILL.md', '.mcp.json', 'CLAUDE.md', 'docs/CLAUDE.local.md',
+      // Windows 8.3 short names for the same files.
+      'CLAUDE~1/settings.local.json', 'CLAUDE~1.MD', 'MCP~1.JSO',
+    ];
 
     it.each(protectedPaths)('a chat or always answer for %s stores no grant, and the next write asks again', (path) => {
       const store = new InMemoryStore();

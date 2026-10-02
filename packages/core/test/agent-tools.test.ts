@@ -53,6 +53,9 @@ describe('isProtectedAgentPath', () => {
     '.mcp.json', 'pkg/.MCP.json', 'CLAUDE.md', 'docs/claude.md', 'CLAUDE.local.md', 'a/b/Claude.Local.MD',
     // Windows opens these as the same files.
     '.claude./settings.json', '.claude /settings.json', 'CLAUDE.md.', 'CLAUDE.md::$DATA', '.mcp.json ',
+    // 8.3 short names: containPath's realpathSync does not expand them, and
+    // Windows opens CLAUDE~1 as .claude (or CLAUDE.local.md), MCP~1.JSO as .mcp.json.
+    'CLAUDE~1/settings.local.json', 'claude~2\\settings.json', 'CLAUDE~1.MD', 'docs/CLAUDE~1.MD', 'MCP~1.JSO', 'sub/CLAUDE~12/x',
   ])('protects %s', (p) => {
     expect(isProtectedAgentPath(p)).toBe(true);
   });

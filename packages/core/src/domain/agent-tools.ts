@@ -36,6 +36,14 @@ export const AGENT_PATH_ARG_KEYS: readonly string[] = ['file_path', 'notebook_pa
  * so `.claude./settings.json` or `CLAUDE.md::$DATA` still count. Pass the
  * path relative to the workspace root -- an absolute path would match a
  * `.claude` directory the workspace itself happens to sit under.
+ *
+ * Any segment that looks like a Windows 8.3 short name (`CLAUDE~1`,
+ * `MCP~1.JSO`) also counts. `containPath` resolves with `realpathSync`, which
+ * leaves short names unexpanded, so `CLAUDE~1/settings.local.json` would
+ * otherwise reach here looking harmless while Windows opens
+ * `.claude/settings.local.json`. A short name can't be mapped back to its long
+ * name without the filesystem, so this fails closed: a write through any
+ * short-name segment always gets a card.
  */
 export function isProtectedAgentPath(relPath: string): boolean {
   const segments = relPath
@@ -43,7 +51,13 @@ export function isProtectedAgentPath(relPath: string): boolean {
     .map((s) => s.replace(/:.*$/, '').replace(/[. ]+$/, '').toLowerCase())
     .filter((s) => s.length > 0);
   const last = segments[segments.length - 1];
-  return segments.includes('.claude') || last === '.mcp.json' || last === 'claude.md' || last === 'claude.local.md';
+  return (
+    segments.includes('.claude') ||
+    segments.some((s) => /~\d/.test(s)) ||
+    last === '.mcp.json' ||
+    last === 'claude.md' ||
+    last === 'claude.local.md'
+  );
 }
 
 export function classifyAgentTool(name: string): { category: AgentToolCategory; risk: RiskClass } {
