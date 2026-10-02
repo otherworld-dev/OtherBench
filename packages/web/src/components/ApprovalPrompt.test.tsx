@@ -104,4 +104,20 @@ describe('ApprovalPrompt', () => {
     expect(await screen.findByText(/try again/i)).toBeInTheDocument();
     expect(screen.getByTestId('approval-once')).not.toBeDisabled();
   });
+
+  it.each(['Bash', 'PowerShell'])('treats agent %s like shell: always defaults to the exact command', async (toolName) => {
+    const agentRequest = request({ toolName, source: 'agent', risk: 'execute', args: { command: 'npm test' }, summary: `${toolName}: npm test` });
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalPrompt request={agentRequest} onResolve={onResolve} />);
+    await userEvent.setup().click(screen.getByTestId('approval-always'));
+    expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { commandExact: 'npm test' } });
+  });
+
+  it('scopes an agent file tool "always" to its normalised path', async () => {
+    const agentRequest = request({ toolName: 'Edit', source: 'agent', args: { file_path: 'E:/ws/src/a.ts', path: 'src/a.ts' }, summary: 'Edit src/a.ts' });
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalPrompt request={agentRequest} onResolve={onResolve} />);
+    await userEvent.setup().click(screen.getByTestId('approval-always'));
+    expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { pathPrefix: 'src/a.ts' } });
+  });
 });

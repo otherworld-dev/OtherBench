@@ -231,11 +231,17 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
           aria-label="Base URL"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder={kind === 'ollama' ? 'Defaults to http://127.0.0.1:11434' : 'https://api.example.com'}
+          placeholder={kind === 'ollama' ? 'Defaults to http://127.0.0.1:11434' : kind === 'claude_code' ? 'Leave empty to use your Claude login' : 'https://api.example.com'}
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
         />
         {kind === 'openai_compatible' && (
           <p className="mt-1 text-xs text-[var(--text-muted)]">Required -- an OpenAI-compatible connection has no default host to talk to.</p>
+        )}
+        {kind === 'claude_code' && (
+          <p className="mt-1 text-xs text-[var(--text-muted)]">
+            Runs turns through your local Claude Code. Empty uses your Claude login (no API key). An Anthropic-compatible endpoint such as
+            Ollama&rsquo;s (http://localhost:11434) runs local models through Claude Code instead.
+          </p>
         )}
       </div>
 

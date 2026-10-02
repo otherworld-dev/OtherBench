@@ -70,6 +70,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [shell, setShell] = useState(profile?.toolPolicy.shell ?? false);
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
+  const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
+  const [agentMcp, setAgentMcp] = useState(profile?.toolPolicy.agentMcp ?? true);
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
 
   function toggleMcpServer(id: string): void {
@@ -80,6 +82,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const isClaudeCode = connections.find((c) => c.id === connectionId)?.kind === 'claude_code';
   const modelsForConnection = models.filter((m) => m.connectionId === connectionId);
 
   function handleConnectionChange(newConnectionId: string): void {
@@ -128,7 +131,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       modelId,
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
-      toolPolicy: { fs, shell, approvalMode, mcpServerIds },
+      toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp } : { fs, shell, approvalMode, mcpServerIds },
       isDefault,
     };
 
@@ -286,6 +289,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       <div>
         <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Params (blank = provider default)</span>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {!isClaudeCode && (
+            <>
           <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
             Temperature
             <input
@@ -306,6 +311,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
               className="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1 text-sm text-[var(--text)]"
             />
           </label>
+            </>
+          )}
           <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
             Max output tokens
             <input
@@ -330,10 +337,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       </div>
 
       <div>
-        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">Tool policy</span>
+        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">{isClaudeCode ? 'Claude Code tools' : 'Tool policy'}</span>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
-            Filesystem
+            {isClaudeCode ? 'Files' : 'Filesystem'}
             <select
               aria-label="Filesystem access"
               value={fs}
@@ -358,38 +365,52 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             </select>
           </label>
           <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
-            <input type="checkbox" aria-label="Shell access" checked={shell} onChange={(e) => setShell(e.target.checked)} />
-            Shell access
+            <input type="checkbox" aria-label={isClaudeCode ? 'Bash' : 'Shell access'} checked={shell} onChange={(e) => setShell(e.target.checked)} />
+            {isClaudeCode ? 'Bash' : 'Shell access'}
           </label>
+          {isClaudeCode && (
+            <>
+              <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
+                <input type="checkbox" aria-label="Web tools" checked={agentWeb} onChange={(e) => setAgentWeb(e.target.checked)} />
+                Web tools
+              </label>
+              <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
+                <input type="checkbox" aria-label="MCP servers from your Claude config" checked={agentMcp} onChange={(e) => setAgentMcp(e.target.checked)} />
+                MCP servers from your Claude config
+              </label>
+            </>
+          )}
         </div>
       </div>
 
-      <div>
-        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">MCP servers this profile may use</span>
-        <p className="mb-1.5 text-xs text-[var(--text-muted)]">
-          This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
-          having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
-        </p>
-        {mcpServersFailed ? (
-          <p role="alert" data-testid="mcp-allowlist-error" className="text-xs text-[var(--danger)]">
-            Couldn&rsquo;t load MCP servers -- this profile&rsquo;s existing allowlist ({mcpServerIds.length} server
-            {mcpServerIds.length === 1 ? '' : 's'}) is preserved, but can&rsquo;t be shown or edited until this loads. Reload the page, or
-            check Settings &gt; MCP Servers.
+      {!isClaudeCode && (
+        <div>
+          <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">MCP servers this profile may use</span>
+          <p className="mb-1.5 text-xs text-[var(--text-muted)]">
+            This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
+            having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
           </p>
-        ) : mcpServers.length === 0 ? (
-          <p className="text-xs text-[var(--text-faint)]">No MCP servers configured yet -- add one in Settings &gt; MCP Servers.</p>
-        ) : (
-          <div data-testid="mcp-server-allowlist" className="space-y-1">
-            {mcpServers.map((s) => (
-              <label key={s.id} className="flex items-center gap-1.5 text-sm">
-                <input type="checkbox" aria-label={`Allow MCP server ${s.name}`} checked={mcpServerIds.includes(s.id)} onChange={() => toggleMcpServer(s.id)} />
-                {s.name}
-                {!s.enabled && <span className="text-xs text-[var(--text-muted)]">(disabled -- contributes no tools until re-enabled)</span>}
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
+          {mcpServersFailed ? (
+            <p role="alert" data-testid="mcp-allowlist-error" className="text-xs text-[var(--danger)]">
+              Couldn&rsquo;t load MCP servers -- this profile&rsquo;s existing allowlist ({mcpServerIds.length} server
+              {mcpServerIds.length === 1 ? '' : 's'}) is preserved, but can&rsquo;t be shown or edited until this loads. Reload the page, or
+              check Settings &gt; MCP Servers.
+            </p>
+          ) : mcpServers.length === 0 ? (
+            <p className="text-xs text-[var(--text-faint)]">No MCP servers configured yet -- add one in Settings &gt; MCP Servers.</p>
+          ) : (
+            <div data-testid="mcp-server-allowlist" className="space-y-1">
+              {mcpServers.map((s) => (
+                <label key={s.id} className="flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" aria-label={`Allow MCP server ${s.name}`} checked={mcpServerIds.includes(s.id)} onChange={() => toggleMcpServer(s.id)} />
+                  {s.name}
+                  {!s.enabled && <span className="text-xs text-[var(--text-muted)]">(disabled -- contributes no tools until re-enabled)</span>}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <label className="flex items-center gap-1.5 text-sm">
         <input type="checkbox" aria-label="Default profile" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} />

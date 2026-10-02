@@ -394,4 +394,33 @@ describe('ProfilesPanel', () => {
       await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ mcpServerIds: ['mcp-1'] }) })));
     });
   });
+
+  it('shows Claude Code tool controls and hides sampling params for a claude_code connection', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useGruntStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
+    mockedMcpList.mockResolvedValue([makeMcpServerHealth()]);
+    mockedPatch.mockResolvedValue(makeProfile({ connectionId: 'cc', modelId: 'sonnet' }));
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+
+    expect(screen.queryByLabelText('Temperature')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Top P')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Bash')).toBeInTheDocument();
+    expect(screen.getByLabelText('Web tools')).toBeInTheDocument();
+    expect(screen.getByLabelText('MCP servers from your Claude config')).toBeInTheDocument();
+    expect(screen.queryByTestId('mcp-server-allowlist')).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Web tools'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(mockedPatch).toHaveBeenCalledWith(
+        'profile-1',
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ agentWeb: false, agentMcp: true }) })
+      )
+    );
+  });
 });

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { Connection, Profile } from '@grunt/core/types/config.js';
 import { api, ApiError } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { AttachmentChip } from './AttachmentChip.js';
@@ -87,8 +88,14 @@ export interface ComposerProps {
   parentId?: string | null;
 }
 
+/** True when the profile runs through Claude Code (its own tools, needs a workspace) rather than Grunt's tool layer. */
+export function isClaudeCodeProfile(profile: Profile, connections: Connection[]): boolean {
+  return connections.find((c) => c.id === profile.connectionId)?.kind === 'claude_code';
+}
+
 export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
+  const connections = useGruntStore((s) => s.connections);
   const messages = useGruntStore((s) => s.messages);
   const registerMessage = useGruntStore((s) => s.registerMessage);
   const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
@@ -103,6 +110,8 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const [removeError, setRemoveError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const selectedProfiles = selectedProfileIds.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p);
+  const needsWorkspace = !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
 
@@ -280,6 +289,7 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
                     className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
                   >
                     {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
+                    <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'Grunt tools'}</span>
                   </button>
                 </li>
               ))}
@@ -343,6 +353,10 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
         </div>
       )}
 
+      {needsWorkspace && (
+        <p role="status" className="mb-2 text-xs text-[var(--danger)]">Set a workspace folder to use Claude Code.</p>
+      )}
+
       <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}
@@ -367,7 +381,7 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
           <button
             type="button"
             onClick={() => void handleSend()}
-            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0}
+            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace}
             className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
           >
             Send

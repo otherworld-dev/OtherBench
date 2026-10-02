@@ -343,4 +343,15 @@ describe('ConnectionsPanel', () => {
     expect(mockedDelete).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
+
+  it('explains the Claude Code backends when that kind is picked', async () => {
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    await user.selectOptions(screen.getByLabelText('Connection kind'), 'claude_code');
+
+    expect(screen.getByPlaceholderText('Leave empty to use your Claude login')).toBeInTheDocument();
+    expect(screen.getByText(/http:\/\/localhost:11434/)).toBeInTheDocument();
+  });
 });
