@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
+import { agentPolicyDenial, classifyAgentTool } from './agent-tools.js';
 import { containPath } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -39,9 +40,9 @@ interface PendingRequest {
  */
 const SHELL_TOOL_NAMES = new Set(['run_command']);
 
-/** True for the real shell tool, and for anything wearing its name. See `SHELL_TOOL_NAMES`. */
+/** True for the real shell tool, anything wearing its name, and Claude Code's Bash. See `SHELL_TOOL_NAMES`. */
 function isShellTool(tool: ToolSpec): boolean {
-  return tool.source === 'shell' || SHELL_TOOL_NAMES.has(tool.name);
+  return tool.source === 'shell' || SHELL_TOOL_NAMES.has(tool.name) || (tool.source === 'agent' && tool.name === 'Bash');
 }
 
 /**
@@ -107,15 +108,23 @@ export class PermissionBroker {
     // cwd is forced to workspace_root -- task 24 -- and every fs tool call
     // goes through containPath(workspaceRoot, ...), which itself denies a
     // null root). mcp tools carry no such requirement.
-    if ((tool.source === 'fs' || tool.source === 'shell') && !ctx.workspaceRoot) {
+    if ((tool.source === 'fs' || tool.source === 'shell' || tool.source === 'agent') && !ctx.workspaceRoot) {
       return {
         kind: 'deny',
         reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.`,
       };
     }
 
+    // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, ExitPlanMode)
+    // have no side effects of their own; a subagent's real tool calls come
+    // back through here individually.
+    if (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'internal') {
+      return { kind: 'allow', grantedBy: 'policy' };
+    }
+
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
+      if (tool.source === 'agent' && !isShellTool(tool)) return { kind: 'allow', grantedBy: 'auto_read' };
       // An mcp server was already explicitly enabled by the user (a policy
       // action distinct from any single tool call), so a READ-risk call
       // against it is treated as pre-authorised by that policy decision --
@@ -284,7 +293,7 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return null;
     }
     case 'agent':
-      return 'Agent tools are not supported yet.';
+      return agentPolicyDenial(tool.name, policy);
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

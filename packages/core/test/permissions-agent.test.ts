@@ -1,0 +1,63 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PermissionBroker } from '../src/domain/permissions.js';
+import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
+import { InMemoryStore } from '../src/testing/fakes.js';
+import type { ToolPolicy } from '../src/types/config.js';
+import { classifyAgentTool } from '../src/domain/agent-tools.js';
+
+let ws: string;
+beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-agent-')); });
+afterEach(() => rmSync(ws, { recursive: true, force: true }));
+
+const spec = (name: string): ToolSpec => ({ name, description: '', parameters: {}, risk: classifyAgentTool(name).risk, source: 'agent', execute: async () => undefined });
+const ctx = (o: Partial<ToolContext> = {}): ToolContext => ({ chatId: 'c1', messageId: 'm1', profileId: 'p1', workspaceRoot: ws, signal: new AbortController().signal, ...o });
+const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
+
+describe('PermissionBroker with source "agent"', () => {
+  it('denies every agent tool without a workspace', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(b.decide(spec('Read'), { path: 'a' }, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
+  });
+  it('auto-allows read tools under ask_on_mutate, asks under always_ask', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(b.decide(spec('Read'), { path: 'a' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'auto_read' });
+    expect(b.decide(spec('Read'), { path: 'a' }, policy({ approvalMode: 'always_ask' }), ctx()).kind).toBe('ask');
+  });
+  it('allows internal tools without asking, in either mode', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(b.decide(spec('TodoWrite'), {}, policy({ approvalMode: 'always_ask' }), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'policy' });
+  });
+  it('asks for Edit and Bash, and applies the policy ceiling', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(b.decide(spec('Edit'), { path: 'a.ts' }, policy(), ctx()).kind).toBe('ask');
+    expect(b.decide(spec('Bash'), { command: 'ls' }, policy(), ctx()).kind).toBe('ask');
+    expect(b.decide(spec('Bash'), { command: 'ls' }, policy({ shell: false }), ctx()).kind).toBe('deny');
+    expect(b.decide(spec('Edit'), { path: 'a.ts' }, policy({ fs: 'read' }), ctx()).kind).toBe('deny');
+  });
+  it('pins a chat grant for agent Bash to the exact command', () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    const d = b.decide(spec('Bash'), { command: 'npm test' }, policy(), ctx());
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    b.resolve(d.request.id, { choice: 'chat' });
+    expect(store.grants.list()[0]).toMatchObject({ source: 'agent', toolName: 'Bash', constraint: { commandExact: 'npm test' } });
+    expect(b.decide(spec('Bash'), { command: 'npm test' }, policy(), ctx()).kind).toBe('allow');
+    expect(b.decide(spec('Bash'), { command: 'npm test && rm -rf /' }, policy(), ctx()).kind).toBe('ask');
+  });
+  it('refuses an unconstrained always grant for agent Bash', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    const d = b.decide(spec('Bash'), { command: 'ls' }, policy(), ctx());
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    expect(() => b.resolve(d.request.id, { choice: 'always', constraint: null })).toThrow(/unconstrained/);
+  });
+  it('never lets an agent grant satisfy a Grunt fs tool of the same name, or vice versa', () => {
+    const store = new InMemoryStore();
+    store.grants.create({ id: 'g1', chatId: 'c1', profileId: 'p1', toolName: 'Edit', source: 'agent', scope: 'chat', constraint: null, expiresAt: null });
+    const b = new PermissionBroker(store);
+    const fsSpec: ToolSpec = { ...spec('Edit'), source: 'fs' };
+    expect(b.decide(fsSpec, { path: 'a.ts' }, policy(), ctx()).kind).toBe('ask');
+  });
+});
