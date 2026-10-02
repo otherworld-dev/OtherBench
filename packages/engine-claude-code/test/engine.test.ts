@@ -52,6 +52,7 @@ describe('ClaudeCodeChatEngine.stream', () => {
     const o = calls[0]!.options;
     expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });
     expect(o.disallowedTools).toContain('AskUserQuestion');
+    expect(o.settings).toEqual({ disableSkillShellExecution: true });
     expect(o.resume).toBeUndefined();
     expect(o.env).toEqual({ PATH: '/bin' });
     expect(o.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);

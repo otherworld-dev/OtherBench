@@ -128,6 +128,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       permissionMode: 'default',
       includePartialMessages: true,
       settingSources: ['user', 'project', 'local'],
+      // Flag-settings layer (above user/project/local): skills and slash
+      // commands may not run their inline !`cmd` shell. That shell would run
+      // inside the 'internal' Skill tool, which gets no card (R14).
+      settings: { disableSkillShellExecution: true },
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
       hooks: { PreToolUse: [{ hooks: [preToolUseHook(gate)] }] },
       canUseTool: canUseToolFor(gate),
