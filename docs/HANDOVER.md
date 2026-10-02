@@ -248,6 +248,60 @@ This was a real path from "uploaded a file" to "ran a command on the
 machine," not an alert box in a sandboxed viewer: this origin also hosts the
 API that runs shell commands and holds the bearer token.
 
+### Claude Code engine
+
+- Claude Code executes its own tools; Grunt gates them. A PreToolUse hook
+  (matcher `*`) sends every call through `GruntToolProvider.requestApproval`
+  -> `PermissionBroker` (`source: 'agent'`), ahead of any allow-rules in the
+  user's Claude settings. `canUseTool` uses the same gate as a fallback;
+  `permissionMode` is always `'default'`.
+- File-tool paths are checked with `containPath`; outside the workspace is
+  denied without a card. The agent shell tools (Bash, BashOutput, KillShell,
+  PowerShell, Monitor) are not path-contained; their grants are pinned to the
+  exact command like `run_command`.
+- Agent file paths are trimmed, `~` paths are refused, on Windows `/c/...`
+  paths are refused (Claude Code reads them as `C:\...`, `containPath` would
+  not), and Glob/Grep patterns with absolute, `~` or `..` prefixes are
+  contained.
+- Writes to Claude Code's own config always get a card (R13): anything under a
+  `.claude` directory, `.mcp.json`, and `CLAUDE.md`/`CLAUDE.local.md` in any
+  directory (`isProtectedAgentPath`). No grant covers them and a chat/always
+  answer stores none, because a hook, skill or MCP command written there would
+  run on a later turn with no Bash card.
+- Skill and slash-command inline shell (`` !`cmd` ``) is disabled for Grunt
+  turns (R14, `disableSkillShellExecution` in the SDK's flag settings), since
+  the Skill tool itself gets no card.
+- With `agentMcp: false` the turn loads no MCP servers (`strictMcpConfig`);
+  the gate also denies MCP calls.
+- Unknown Claude Code tools can only be approved once (no chat/always grants).
+- The child env has `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` removed for the
+  Claude backend, and `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`/
+  `CLAUDE_CODE_SSE_PORT` removed for every backend (any case).
+- Session ids live in `message.engine_meta`. A turn continues the session in
+  place only when the message above it is still that session's tip; anything
+  else (retry, edit, compare siblings, another model's turn) starts a fresh
+  session seeded with the branch's own history. There is no fork: a fork
+  copies the whole session, including other branches' turns (R12). See
+  `packages/engine-claude-code/src/session.ts`.
+
+Known gaps:
+
+- The workspace's own Claude Code project config -- `.claude/settings.json`
+  and `settings.local.json` (hooks, permissions), `.claude/skills`, commands
+  and agents, `.mcp.json`, CLAUDE.md -- applies with no trust prompt, as
+  `settingSources` includes `project` and `local`. Hooks run commands without
+  a Grunt card. Only open folders you trust as workspaces.
+
+- Relative paths are resolved against the workspace root for grants and card
+  summaries, but Claude Code resolves them against its own current directory,
+  which a Bash `cd` can move inside the workspace. A card or a path grant can
+  therefore name a different file than the one touched (containment still
+  holds).
+- Claude Code does its own file I/O, so fs-tools' hard-link and swap
+  protections don't apply to agent tools. A model allowed to run shell
+  commands could hard-link an outside file into the workspace and then read it
+  (auto-allowed under `ask_on_mutate`). Shell approval is the control.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the

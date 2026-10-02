@@ -408,6 +408,7 @@ describe('StreamRegistry', () => {
       shutdown: async () => {},
       onApprovalEvent: () => () => {},
       resolveApproval: () => false,
+      requestApproval: async () => ({ allowed: true, grantedBy: 'policy' }),
     };
     const runner = new TurnRunner(store, engine, { toolProvider });
     const registry = new StreamRegistry(runner, store);

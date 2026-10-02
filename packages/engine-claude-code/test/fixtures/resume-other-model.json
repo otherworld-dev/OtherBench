@@ -1,0 +1,1244 @@
+[
+  {
+    "type": "system",
+    "subtype": "hook_started",
+    "hook_id": "24428f6c-c38d-490a-afe5-6887fffaf02c",
+    "hook_name": "SessionStart:resume",
+    "hook_event": "SessionStart",
+    "uuid": "f0cf397f-29ec-4030-b712-4772d610067e",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9"
+  },
+  {
+    "type": "system",
+    "subtype": "hook_progress",
+    "hook_id": "24428f6c-c38d-490a-afe5-6887fffaf02c",
+    "hook_name": "SessionStart:resume",
+    "hook_event": "SessionStart",
+    "stdout": "{\"async\": true, \"asyncTimeout\": 180000}\r\n",
+    "stderr": "",
+    "output": "{\"async\": true, \"asyncTimeout\": 180000}\r\n",
+    "uuid": "bfa7594c-e1d4-455e-8a9f-c8e333f22830",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9"
+  },
+  {
+    "type": "system",
+    "subtype": "init",
+    "cwd": "C:\\Users\\Adam\\AppData\\Local\\Temp\\grunt-probe-ws",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "tools": [
+      "Task",
+      "Artifact",
+      "ArtifactComments",
+      "ArtifactData",
+      "AskUserQuestion",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "DesignSync",
+      "Edit",
+      "EnterPlanMode",
+      "EnterWorktree",
+      "ExitPlanMode",
+      "ExitWorktree",
+      "Glob",
+      "Grep",
+      "ListAgents",
+      "ListMcpResourcesTool",
+      "Monitor",
+      "NotebookEdit",
+      "PowerShell",
+      "PushNotification",
+      "Read",
+      "ReadMcpResourceDirTool",
+      "ReadMcpResourceTool",
+      "RemoteTrigger",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "ToolSearch",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write",
+      "mcp__claude_ai_Claude_Docs__batch",
+      "mcp__claude_ai_Claude_Docs__create",
+      "mcp__claude_ai_Claude_Docs__delete",
+      "mcp__claude_ai_Claude_Docs__export",
+      "mcp__claude_ai_Claude_Docs__guide",
+      "mcp__claude_ai_Claude_Docs__query",
+      "mcp__claude_ai_Claude_Docs__read",
+      "mcp__claude_ai_Claude_Docs__update",
+      "mcp__godot__add_node",
+      "mcp__godot__create_scene",
+      "mcp__godot__export_mesh_library",
+      "mcp__godot__get_debug_output",
+      "mcp__godot__get_godot_version",
+      "mcp__godot__get_project_info",
+      "mcp__godot__get_uid",
+      "mcp__godot__launch_editor",
+      "mcp__godot__list_projects",
+      "mcp__godot__load_sprite",
+      "mcp__godot__run_project",
+      "mcp__godot__save_scene",
+      "mcp__godot__stop_project",
+      "mcp__godot__update_project_uids",
+      "mcp__plugin_playwright_playwright__browser_click",
+      "mcp__plugin_playwright_playwright__browser_close",
+      "mcp__plugin_playwright_playwright__browser_console_messages",
+      "mcp__plugin_playwright_playwright__browser_drag",
+      "mcp__plugin_playwright_playwright__browser_drop",
+      "mcp__plugin_playwright_playwright__browser_emulate_media",
+      "mcp__plugin_playwright_playwright__browser_evaluate",
+      "mcp__plugin_playwright_playwright__browser_file_upload",
+      "mcp__plugin_playwright_playwright__browser_fill_form",
+      "mcp__plugin_playwright_playwright__browser_find",
+      "mcp__plugin_playwright_playwright__browser_handle_dialog",
+      "mcp__plugin_playwright_playwright__browser_hover",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_navigate_back",
+      "mcp__plugin_playwright_playwright__browser_network_request",
+      "mcp__plugin_playwright_playwright__browser_network_requests",
+      "mcp__plugin_playwright_playwright__browser_press_key",
+      "mcp__plugin_playwright_playwright__browser_resize",
+      "mcp__plugin_playwright_playwright__browser_run_code_unsafe",
+      "mcp__plugin_playwright_playwright__browser_select_option",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "mcp__plugin_playwright_playwright__browser_tabs",
+      "mcp__plugin_playwright_playwright__browser_take_screenshot",
+      "mcp__plugin_playwright_playwright__browser_type",
+      "mcp__plugin_playwright_playwright__browser_wait_for",
+      "mcp__plugin_small-business_shopify__add-to-collection",
+      "mcp__plugin_small-business_shopify__bulk-update-product-status",
+      "mcp__plugin_small-business_shopify__create-collection",
+      "mcp__plugin_small-business_shopify__create-digital-product",
+      "mcp__plugin_small-business_shopify__create-digital-product-from-link",
+      "mcp__plugin_small-business_shopify__create-discount",
+      "mcp__plugin_small-business_shopify__create-product",
+      "mcp__plugin_small-business_shopify__find-mock-shop-catalogs",
+      "mcp__plugin_small-business_shopify__find-sample-product",
+      "mcp__plugin_small-business_shopify__generate-business-names",
+      "mcp__plugin_small-business_shopify__generate-domain-names",
+      "mcp__plugin_small-business_shopify__get-collection",
+      "mcp__plugin_small-business_shopify__get-digital-product",
+      "mcp__plugin_small-business_shopify__get-inventory-levels",
+      "mcp__plugin_small-business_shopify__get-new-store-previews",
+      "mcp__plugin_small-business_shopify__get-order",
+      "mcp__plugin_small-business_shopify__get-product",
+      "mcp__plugin_small-business_shopify__get-shop-info",
+      "mcp__plugin_small-business_shopify__graphql_mutation",
+      "mcp__plugin_small-business_shopify__graphql_query",
+      "mcp__plugin_small-business_shopify__graphql_schema",
+      "mcp__plugin_small-business_shopify__import-mock-shop-catalog",
+      "mcp__plugin_small-business_shopify__list-customers",
+      "mcp__plugin_small-business_shopify__list-orders",
+      "mcp__plugin_small-business_shopify__open-digital-products-install",
+      "mcp__plugin_small-business_shopify__publish-digital-product",
+      "mcp__plugin_small-business_shopify__run-analytics-query",
+      "mcp__plugin_small-business_shopify__search_collections",
+      "mcp__plugin_small-business_shopify__search_docs_chunks",
+      "mcp__plugin_small-business_shopify__search_products",
+      "mcp__plugin_small-business_shopify__search-collective-product-candidates",
+      "mcp__plugin_small-business_shopify__set-inventory",
+      "mcp__plugin_small-business_shopify__show-collective-products",
+      "mcp__plugin_small-business_shopify__switch-shop",
+      "mcp__plugin_small-business_shopify__test-digital-products-connection",
+      "mcp__plugin_small-business_shopify__update-collection",
+      "mcp__plugin_small-business_shopify__update-product",
+      "mcp__plugin_small-business_shopify__upload-digital-product-file",
+      "mcp__plugin_small-business_shopify__upload-digital-product-media",
+      "mcp__plugin_small-business_shopify__validate_graphql_codeblocks"
+    ],
+    "mcp_servers": [
+      {
+        "name": "plugin:context7:context7",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:playwright:playwright",
+        "status": "connected",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:airwallex-agentos",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:apollo-io",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:atlassian-rovo",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:canva",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:clay",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:docusign",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:emergent",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:expensify",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:gusto",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:intuit-mailchimp",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:intuit-quickbooks",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:monday-com",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:myob",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:notion",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:paypal",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:ramp",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:ringex-chat",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:shopify",
+        "status": "connected",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:slack",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:square",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:tiktok",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:trello",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:wix",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:zapier",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:zoho-books",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:zoho-crm",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:zoho-desk",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "plugin:small-business:zoho-projects",
+        "status": "needs-auth",
+        "source": "plugin"
+      },
+      {
+        "name": "claudio",
+        "status": "pending",
+        "source": "user"
+      },
+      {
+        "name": "godot",
+        "status": "connected",
+        "source": "user"
+      },
+      {
+        "name": "blender",
+        "status": "pending",
+        "source": "user"
+      },
+      {
+        "name": "nextcloud",
+        "status": "pending",
+        "source": "user"
+      },
+      {
+        "name": "image-review",
+        "status": "pending",
+        "source": "user"
+      },
+      {
+        "name": "claude.ai Claude Docs",
+        "status": "connected",
+        "source": "claudeai"
+      },
+      {
+        "name": "claude.ai Stripe",
+        "status": "needs-auth",
+        "source": "claudeai"
+      },
+      {
+        "name": "claude.ai Google Drive",
+        "status": "needs-auth",
+        "source": "claudeai"
+      },
+      {
+        "name": "claude.ai Gmail",
+        "status": "needs-auth",
+        "source": "claudeai"
+      },
+      {
+        "name": "claude.ai Google Calendar",
+        "status": "needs-auth",
+        "source": "claudeai"
+      }
+    ],
+    "model": "claude-sonnet-5-5",
+    "permissionMode": "default",
+    "slash_commands": [
+      "adam-writing-style",
+      "claude-setup",
+      "commit",
+      "convert",
+      "finish",
+      "git-migrate",
+      "git-setup",
+      "nextcloud-app-build",
+      "pull",
+      "release",
+      "review-visual",
+      "start",
+      "status",
+      "sync-upstream",
+      "deep-research",
+      "feature-dev:feature-dev",
+      "superpowers:brainstorming",
+      "superpowers:diagnosing-superpowers",
+      "superpowers:dispatching-parallel-agents",
+      "superpowers:executing-plans",
+      "superpowers:finishing-a-development-branch",
+      "superpowers:receiving-code-review",
+      "superpowers:requesting-code-review",
+      "superpowers:subagent-driven-development",
+      "superpowers:systematic-debugging",
+      "superpowers:test-driven-development",
+      "superpowers:using-git-worktrees",
+      "superpowers:using-superpowers",
+      "superpowers:verification-before-completion",
+      "superpowers:writing-plans",
+      "superpowers:writing-skills",
+      "frontend-design:frontend-design",
+      "cowork-plugin-management:cowork-plugin-customizer",
+      "cowork-plugin-management:create-cowork-plugin",
+      "small-business:ad-manager",
+      "small-business:ap-processor",
+      "small-business:brand-style",
+      "small-business:build-agent",
+      "small-business:build-connector",
+      "small-business:business-pulse",
+      "small-business:call-list",
+      "small-business:canva-creator",
+      "small-business:cash-flow-snapshot",
+      "small-business:close-month",
+      "small-business:content-strategy",
+      "small-business:contract-review",
+      "small-business:crm-autopilot",
+      "small-business:grant-rfp-writer",
+      "small-business:grow-pipeline",
+      "small-business:growth-pulse",
+      "small-business:hiring-screener",
+      "small-business:inbox-manager",
+      "small-business:inventory-planner",
+      "small-business:invoice-chase",
+      "small-business:job-post-builder",
+      "small-business:lead-finder",
+      "small-business:lead-triage",
+      "small-business:marketing-monday",
+      "small-business:monday-brief",
+      "small-business:month-end-prep",
+      "small-business:outreach-composer",
+      "small-business:pay-the-bills",
+      "small-business:payroll-prep",
+      "small-business:plan-payroll",
+      "small-business:proposal-builder",
+      "small-business:reactivate",
+      "small-business:report-builder",
+      "small-business:report-pack",
+      "small-business:restock",
+      "small-business:review-reputation",
+      "small-business:seo-ai-visibility",
+      "small-business:smb-onboard",
+      "small-business:smb-router",
+      "small-business:social-content-engine",
+      "small-business:speed-to-lead",
+      "small-business:tax-prep",
+      "small-business:tax-season-organizer",
+      "small-business:ticket-deflector",
+      "design",
+      "slides",
+      "design-sync",
+      "dataviz",
+      "artifact-diagramming",
+      "artifact-capabilities",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring",
+      "advisor",
+      "agents",
+      "auto-mode-setup",
+      "autocompact",
+      "clear",
+      "color",
+      "compact",
+      "config",
+      "output-style",
+      "context",
+      "effort",
+      "fast",
+      "focus",
+      "heapdump",
+      "init",
+      "mcp",
+      "import",
+      "model",
+      "__remote-workflow",
+      "workflow-launch-exec",
+      "reload-plugins",
+      "reload-skills",
+      "rename",
+      "ultrareview",
+      "security-review",
+      "usage-credits",
+      "extra-usage",
+      "usage",
+      "insights",
+      "recap",
+      "skill-doctor",
+      "goal",
+      "design-consent",
+      "design-revoke",
+      "list-agents",
+      "team-onboarding",
+      "anthropic-skills:adam-writing-style",
+      "anthropic-skills:built-in-browser",
+      "anthropic-skills:canvas-design",
+      "anthropic-skills:chrome-browser",
+      "anthropic-skills:computer-use",
+      "anthropic-skills:deep-research",
+      "anthropic-skills:docs",
+      "anthropic-skills:docx",
+      "anthropic-skills:google-workspace",
+      "anthropic-skills:import-memory",
+      "anthropic-skills:kuka-rsi",
+      "anthropic-skills:morning",
+      "anthropic-skills:pdf",
+      "anthropic-skills:pptx",
+      "anthropic-skills:skill-creator",
+      "anthropic-skills:xlsx"
+    ],
+    "terminal_slash_commands": [
+      "doctor",
+      "color",
+      "focus",
+      "reload-plugins"
+    ],
+    "apiKeySource": "none",
+    "claude_code_version": "2.1.287",
+    "output_style": "default",
+    "agents": [
+      "academic-researcher",
+      "accessibility-specialist",
+      "claude",
+      "claude-code-guide",
+      "code-reviewer",
+      "code-simplifier:code-simplifier",
+      "cpp-engineer",
+      "debugger",
+      "Explore",
+      "feature-dev:code-architect",
+      "feature-dev:code-explorer",
+      "feature-dev:code-reviewer",
+      "general-purpose",
+      "mcp-server-architect",
+      "php-developer",
+      "Plan",
+      "python-expert",
+      "security-auditor",
+      "statusline-setup",
+      "technical-researcher",
+      "test-automator",
+      "typescript-expert",
+      "ui-ux-designer"
+    ],
+    "skills": [
+      "adam-writing-style",
+      "claude-setup",
+      "commit",
+      "convert",
+      "finish",
+      "git-migrate",
+      "git-setup",
+      "nextcloud-app-build",
+      "pull",
+      "release",
+      "review-visual",
+      "start",
+      "status",
+      "sync-upstream",
+      "deep-research",
+      "superpowers:brainstorming",
+      "superpowers:diagnosing-superpowers",
+      "superpowers:dispatching-parallel-agents",
+      "superpowers:executing-plans",
+      "superpowers:finishing-a-development-branch",
+      "superpowers:receiving-code-review",
+      "superpowers:requesting-code-review",
+      "superpowers:subagent-driven-development",
+      "superpowers:systematic-debugging",
+      "superpowers:test-driven-development",
+      "superpowers:using-git-worktrees",
+      "superpowers:using-superpowers",
+      "superpowers:verification-before-completion",
+      "superpowers:writing-plans",
+      "superpowers:writing-skills",
+      "frontend-design:frontend-design",
+      "cowork-plugin-management:cowork-plugin-customizer",
+      "cowork-plugin-management:create-cowork-plugin",
+      "small-business:ad-manager",
+      "small-business:ap-processor",
+      "small-business:brand-style",
+      "small-business:build-agent",
+      "small-business:build-connector",
+      "small-business:business-pulse",
+      "small-business:call-list",
+      "small-business:canva-creator",
+      "small-business:cash-flow-snapshot",
+      "small-business:close-month",
+      "small-business:content-strategy",
+      "small-business:contract-review",
+      "small-business:crm-autopilot",
+      "small-business:grant-rfp-writer",
+      "small-business:grow-pipeline",
+      "small-business:growth-pulse",
+      "small-business:hiring-screener",
+      "small-business:inbox-manager",
+      "small-business:inventory-planner",
+      "small-business:invoice-chase",
+      "small-business:job-post-builder",
+      "small-business:lead-finder",
+      "small-business:lead-triage",
+      "small-business:marketing-monday",
+      "small-business:monday-brief",
+      "small-business:month-end-prep",
+      "small-business:outreach-composer",
+      "small-business:pay-the-bills",
+      "small-business:payroll-prep",
+      "small-business:plan-payroll",
+      "small-business:proposal-builder",
+      "small-business:reactivate",
+      "small-business:report-builder",
+      "small-business:report-pack",
+      "small-business:restock",
+      "small-business:review-reputation",
+      "small-business:seo-ai-visibility",
+      "small-business:smb-onboard",
+      "small-business:smb-router",
+      "small-business:social-content-engine",
+      "small-business:speed-to-lead",
+      "small-business:tax-prep",
+      "small-business:tax-season-organizer",
+      "small-business:ticket-deflector",
+      "design",
+      "slides",
+      "design-sync",
+      "dataviz",
+      "artifact-diagramming",
+      "artifact-capabilities",
+      "update-config",
+      "verify",
+      "debug",
+      "code-review",
+      "simplify",
+      "batch",
+      "fewer-permission-prompts",
+      "doctor",
+      "loop",
+      "schedule",
+      "claude-api",
+      "workflow-authoring",
+      "run",
+      "run-skill-generator",
+      "plugin-authoring",
+      "anthropic-skills:adam-writing-style",
+      "anthropic-skills:built-in-browser",
+      "anthropic-skills:canvas-design",
+      "anthropic-skills:chrome-browser",
+      "anthropic-skills:computer-use",
+      "anthropic-skills:deep-research",
+      "anthropic-skills:docs",
+      "anthropic-skills:docx",
+      "anthropic-skills:google-workspace",
+      "anthropic-skills:import-memory",
+      "anthropic-skills:kuka-rsi",
+      "anthropic-skills:morning",
+      "anthropic-skills:pdf",
+      "anthropic-skills:pptx",
+      "anthropic-skills:skill-creator",
+      "anthropic-skills:xlsx"
+    ],
+    "plugins": [
+      {
+        "name": "code-simplifier",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\code-simplifier\\1.0.0",
+        "source": "code-simplifier@claude-plugins-official",
+        "version": "1.0.0"
+      },
+      {
+        "name": "context7",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\context7\\ab024cdcfa7c",
+        "source": "context7@claude-plugins-official"
+      },
+      {
+        "name": "superpowers",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\superpowers\\6.4.1",
+        "source": "superpowers@claude-plugins-official",
+        "version": "6.4.1"
+      },
+      {
+        "name": "feature-dev",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\feature-dev\\ab024cdcfa7c",
+        "source": "feature-dev@claude-plugins-official"
+      },
+      {
+        "name": "frontend-design",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\frontend-design\\ab024cdcfa7c",
+        "source": "frontend-design@claude-plugins-official"
+      },
+      {
+        "name": "playwright",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\playwright\\ab024cdcfa7c",
+        "source": "playwright@claude-plugins-official"
+      },
+      {
+        "name": "security-guidance",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\cache\\claude-plugins-official\\security-guidance\\2.0.8",
+        "source": "security-guidance@claude-plugins-official",
+        "version": "2.0.8"
+      },
+      {
+        "name": "cowork-plugin-management",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\synced\\cb5dc9c1-cce3-443e-992e-7663a0cd0690_5bc51d94-ddfd-4e87-921a-4f741e2baced\\cowork-plugin-management~g5",
+        "source": "cowork-plugin-management@synced",
+        "version": "0.2.2"
+      },
+      {
+        "name": "small-business",
+        "path": "C:\\Users\\Adam\\.claude\\plugins\\synced\\cb5dc9c1-cce3-443e-992e-7663a0cd0690_5bc51d94-ddfd-4e87-921a-4f741e2baced\\small-business~g4",
+        "source": "small-business@synced",
+        "version": "1.35.1"
+      },
+      {
+        "name": "cc-plugin-agents-md",
+        "path": "builtin",
+        "source": "cc-plugin-agents-md@builtin"
+      },
+      {
+        "name": "cc-plugin-telemetry",
+        "path": "builtin",
+        "source": "cc-plugin-telemetry@builtin"
+      },
+      {
+        "name": "cc-plugin-plugin-authoring",
+        "path": "builtin",
+        "source": "cc-plugin-plugin-authoring@builtin"
+      }
+    ],
+    "capabilities": [
+      "interrupt_receipt_v1",
+      "interrupt_cancel_queued_v1",
+      "interrupt_send_now_v1",
+      "msg_lifecycle_v1",
+      "sdk_mcp_tools_list_changed",
+      "sdk_mcp_manifests",
+      "mcp_read_resource_v1",
+      "mcp_tool_ui_meta_v1",
+      "ui_surface_v1"
+    ],
+    "analytics_disabled": false,
+    "product_feedback_disabled": false,
+    "uuid": "b3e980fd-4489-4a9f-8cbf-544382ceb96a",
+    "memory_paths": {
+      "auto": "C:\\Users\\Adam\\.claude\\projects\\C--Users-Adam-AppData-Local-Temp-grunt-probe-ws\\memory\\"
+    },
+    "scratchpad_path": "C:\\Users\\Adam\\AppData\\Local\\Temp\\claude\\C--Users-Adam-AppData-Local-Temp-grunt-probe-ws\\63d2e580-b7ca-4b7b-98a9-ee544e4534e9\\scratchpad",
+    "messaging_socket_path": "\\\\.\\pipe\\LOCAL\\cc-msg-9fe99a13381692f0a92a574a8c890c9f",
+    "fast_mode_state": "off",
+    "per_turn_effort_active": true,
+    "view_mode": "default",
+    "powershell_path": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "startup_timing": {
+      "entrypoint": "claude-vscode",
+      "warm_spare_claimed": false,
+      "plugin_full_loads": 0,
+      "user_context_builds": 3,
+      "sdk_mcp_dial_runs": 0,
+      "sdk_mcp_servers_dialed": 0,
+      "phases": {
+        "node_boot_ms": 109,
+        "settings_load_ms": 0,
+        "pre_action_mdm_keychain_ms": 2,
+        "pre_action_init_ms": 35,
+        "pre_action_migrations_ms": 0,
+        "pre_action_managed_settings_ms": 2,
+        "pre_action_ms": 46,
+        "permission_context_ms": 114,
+        "setup_import_ms": 7,
+        "setup_uds_messaging_ms": 99,
+        "setup_hooks_snapshot_ms": 0,
+        "setup_file_watcher_ms": 0,
+        "setup_release_notes_ms": 13,
+        "setup_ms": 110,
+        "skills_load_ms": 211,
+        "tools_commands_load_ms": 108,
+        "model_catalog_decision_ms": 12,
+        "mcp_connect_ms": 39,
+        "print_import_ms": 6,
+        "mcp_client_module_load_ms": 0,
+        "headless_prologue_ms": 363,
+        "resume_live_check_ms": 2,
+        "resume_deserialize_ms": 9,
+        "hooks_init_ms": 648,
+        "initial_messages_load_ms": 663,
+        "headless_post_load_ms": 4,
+        "input_ready_ms": 1655,
+        "first_message_read_ms": 1691,
+        "sdk_mcp_update_ms": 1,
+        "first_message_handle_ms": 1,
+        "first_message_handle_cpu_ms": 15,
+        "first_message_handle_loop_lag_ms": 0,
+        "mcp_prewait_ms": 1,
+        "qe_system_prompt_ms": 0,
+        "prompt_submit_hooks_ms": 949,
+        "qe_plugin_skills_load_ms": 2,
+        "init_emit_ms": 2
+      },
+      "time_origin_ms": 1790968915328.4397,
+      "phase_start_ms": {
+        "node_boot_ms": 0,
+        "settings_load_ms": 109,
+        "pre_action_mdm_keychain_ms": 116,
+        "pre_action_init_ms": 118,
+        "pre_action_migrations_ms": 153,
+        "pre_action_managed_settings_ms": 154,
+        "pre_action_ms": 116,
+        "permission_context_ms": 164,
+        "setup_import_ms": 280,
+        "setup_uds_messaging_ms": 291,
+        "setup_hooks_snapshot_ms": 390,
+        "setup_file_watcher_ms": 390,
+        "setup_release_notes_ms": 391,
+        "setup_ms": 294,
+        "skills_load_ms": 293,
+        "tools_commands_load_ms": 411,
+        "model_catalog_decision_ms": 520,
+        "mcp_connect_ms": 567,
+        "print_import_ms": 608,
+        "mcp_client_module_load_ms": 661,
+        "headless_prologue_ms": 615,
+        "resume_live_check_ms": 980,
+        "resume_deserialize_ms": 982,
+        "hooks_init_ms": 989,
+        "initial_messages_load_ms": 977,
+        "headless_post_load_ms": 1640,
+        "input_ready_ms": 0,
+        "first_message_read_ms": 0,
+        "sdk_mcp_update_ms": 1691,
+        "first_message_handle_ms": 1691,
+        "mcp_prewait_ms": 1693,
+        "qe_system_prompt_ms": 2778,
+        "prompt_submit_hooks_ms": 1824,
+        "qe_plugin_skills_load_ms": 2778,
+        "init_emit_ms": 2786
+      }
+    }
+  },
+  {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "uuid": "795e7462-e0f4-4df6-b9d1-2f04b6470033"
+  },
+  {
+    "type": "system",
+    "subtype": "hook_progress",
+    "hook_id": "24428f6c-c38d-490a-afe5-6887fffaf02c",
+    "hook_name": "SessionStart:resume",
+    "hook_event": "SessionStart",
+    "stdout": "{\"async\": true, \"asyncTimeout\": 180000}\r\n{\"metrics\": {\"sdk_bootstrap\": 1, \"sdk_bootstrap_ms\": 1332, \"sdk_hook_py\": 311, \"pv\": 20008}}\r\n",
+    "stderr": "",
+    "output": "{\"async\": true, \"asyncTimeout\": 180000}\r\n{\"metrics\": {\"sdk_bootstrap\": 1, \"sdk_bootstrap_ms\": 1332, \"sdk_hook_py\": 311, \"pv\": 20008}}\r\n",
+    "uuid": "f86e6bb8-63fb-473a-b6b6-9381d31c9c55",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "message_start",
+      "message": {
+        "model": "claude-sonnet-5-5",
+        "id": "msg_011CfdxJHcGq5NZoocAR9MV1",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "container": null,
+        "stop_reason": null,
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 19179,
+          "cache_read_input_tokens": 33770,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 19179
+          },
+          "output_tokens": 8,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "input_transformations": [],
+        "diagnostics": {
+          "cache_miss_reason": {
+            "type": "model_changed",
+            "cache_missed_input_tokens": 35954
+          }
+        },
+        "context_management": null
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "bc11c7b4-6cb3-473c-a650-9a30ddfe0214",
+    "ttft_ms": 1934,
+    "thinking_display": "updates"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": {
+        "type": "text",
+        "text": ""
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "c0c2222c-af84-4c11-945a-0184c4aeffba"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": "You asked me to reply with"
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "b7120891-aa31-4e31-a4eb-8f7ae5ae56be"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": " exactly \""
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "57ce2dd3-9cac-467d-8e71-67557d3264a9"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": "pong\", and I did"
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "296fd603-54ca-48b4-8a15-738a35aa40aa"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": "."
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "ad2b6343-16dc-4d77-bfdf-bd8ef0c86df6"
+  },
+  {
+    "type": "assistant",
+    "message": {
+      "model": "claude-sonnet-5-5",
+      "id": "msg_011CfdxJHcGq5NZoocAR9MV1",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "You asked me to reply with exactly \"pong\", and I did."
+        }
+      ],
+      "container": null,
+      "stop_reason": null,
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 19179,
+        "cache_read_input_tokens": 33770,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 19179
+        },
+        "output_tokens": 8,
+        "service_tier": "standard",
+        "inference_geo": "not_available"
+      },
+      "input_transformations": [],
+      "diagnostics": {
+        "cache_miss_reason": {
+          "type": "model_changed",
+          "cache_missed_input_tokens": 35954
+        }
+      },
+      "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "uuid": "e96764ff-fb6a-479b-a3bd-b9879afa4d7f",
+    "timestamp": "2026-10-02T19:22:00.713Z",
+    "request_id": "req_011CfdxJHL9ytSxFQzErQpnD"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "content_block_stop",
+      "index": 0
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "f59f8cf2-1ef2-4018-8e67-1af03595dce5"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "message_delta",
+      "delta": {
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "container": null
+      },
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 19179,
+        "cache_read_input_tokens": 33770,
+        "output_tokens": 21,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 21,
+            "cache_read_input_tokens": 33770,
+            "cache_creation_input_tokens": 19179,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 19179
+            },
+            "type": "message"
+          }
+        ]
+      },
+      "context_management": {
+        "applied_edits": []
+      }
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "37c2acf6-0e84-4664-a91b-611cfbe41e42"
+  },
+  {
+    "type": "stream_event",
+    "event": {
+      "type": "message_stop"
+    },
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "parent_tool_use_id": null,
+    "uuid": "517466f5-5463-45ad-ac37-043e87e22095"
+  },
+  {
+    "type": "rate_limit_event",
+    "rate_limit_info": {
+      "status": "allowed",
+      "resetsAt": 1790975400,
+      "rateLimitType": "five_hour",
+      "overageStatus": "rejected",
+      "overageDisabledReason": "out_of_credits",
+      "isUsingOverage": false,
+      "unifiedWindows": {
+        "five_hour": {
+          "utilization": 0.18,
+          "resetsAt": 1790975400
+        },
+        "seven_day": {
+          "utilization": 0.1,
+          "resetsAt": 1791385200
+        }
+      }
+    },
+    "uuid": "7615e46e-fb28-4610-9440-61c9a5a41437",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9"
+  },
+  {
+    "duration_api_ms": 4734,
+    "stop_reason": "end_turn",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9",
+    "total_cost_usd": 0.11250000000000002,
+    "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 19179,
+      "cache_read_input_tokens": 33770,
+      "output_tokens": 21,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 19179,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 21,
+          "cache_read_input_tokens": 33770,
+          "cache_creation_input_tokens": 19179,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 19179
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard",
+      "fallback_credit": null
+    },
+    "modelUsage": {
+      "claude-haiku-4-5-20251001": {
+        "inputTokens": 908,
+        "outputTokens": 92,
+        "thinkingTokens": 72,
+        "cacheReadInputTokens": 25240,
+        "cacheCreationInputTokens": 12462,
+        "webSearchRequests": 0,
+        "costUSD": 0.028816,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000
+      },
+      "claude-sonnet-5-5": {
+        "inputTokens": 2,
+        "outputTokens": 21,
+        "cacheReadInputTokens": 33770,
+        "cacheCreationInputTokens": 19179,
+        "webSearchRequests": 0,
+        "costUSD": 0.08368400000000001,
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "thinkingTokens": 0,
+        "canonicalModel": "claude-sonnet-5-5",
+        "provider": "firstParty",
+        "costBasis": "list"
+      }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "fast_mode_state": "off",
+    "origin": {
+      "kind": "human"
+    },
+    "subagent_stats": {
+      "spawned": 0,
+      "requested": {
+        "background": 0,
+        "foreground": 0,
+        "unset": 0
+      },
+      "started_in_background": 0,
+      "max_depth": 0,
+      "spawned_by_subagents": 0,
+      "completed": 0,
+      "failed": 0,
+      "killed": {
+        "parent": 0,
+        "user": 0,
+        "system": 0
+      },
+      "refused": {
+        "depth_limit": 0,
+        "concurrency_limit": 0,
+        "budget": 0
+      },
+      "by_type": {}
+    },
+    "is_error": false,
+    "num_turns": 1,
+    "subtype": "success",
+    "api_error_status": null,
+    "result": "You asked me to reply with exactly \"pong\", and I did.",
+    "ttft_ms": 3688,
+    "type": "result",
+    "duration_ms": 3729,
+    "uuid": "8cfc860c-535b-4eb8-88a7-ecaf2f30b64d",
+    "ttft_stream_ms": 3098,
+    "time_to_request_ms": 1164,
+    "time_to_request_phases_ms": {
+      "other": 16,
+      "system_prompt": 36,
+      "resume_other": 0,
+      "process_user_input": 3,
+      "input_attachments": 86,
+      "input_hooks": 949,
+      "transcript_persist": 1,
+      "tool_pool_refresh": 3,
+      "system_prompt_rebuild": 1,
+      "init_message": 10,
+      "engine_pickup": 1,
+      "autocompact": 2,
+      "query_setup": 1,
+      "model_gates": 0,
+      "tool_schema_build": 42,
+      "message_normalization": 3,
+      "client_creation": 3,
+      "request_build": 7
+    },
+    "turn_start_resume_kind": "none",
+    "process_turn_index": 0,
+    "time_to_request_loop_lag_ms": 81,
+    "time_to_request_cpu_ms": 531,
+    "time_to_request_major_faults": 14118,
+    "first_content_frame_ms": 3098,
+    "queued_turn_count": 0,
+    "result_index": 0
+  },
+  {
+    "type": "system",
+    "subtype": "hook_response",
+    "hook_id": "24428f6c-c38d-490a-afe5-6887fffaf02c",
+    "hook_name": "SessionStart:resume",
+    "hook_event": "SessionStart",
+    "output": "{\"async\": true, \"asyncTimeout\": 180000}\r\n{\"metrics\": {\"sdk_bootstrap\": 1, \"sdk_bootstrap_ms\": 1332, \"sdk_hook_py\": 311, \"pv\": 20008}}\r\n",
+    "stdout": "{\"async\": true, \"asyncTimeout\": 180000}\r\n{\"metrics\": {\"sdk_bootstrap\": 1, \"sdk_bootstrap_ms\": 1332, \"sdk_hook_py\": 311, \"pv\": 20008}}\r\n",
+    "stderr": "",
+    "exit_code": 0,
+    "outcome": "success",
+    "uuid": "487c55bc-e752-4f45-91fb-8cfa3710b235",
+    "session_id": "63d2e580-b7ca-4b7b-98a9-ee544e4534e9"
+  }
+]

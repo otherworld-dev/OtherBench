@@ -84,6 +84,9 @@ export type ToolApprovalEvent =
   | { type: 'request'; request: ApprovalRequest }
   | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] };
 
+/** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
+export type ApprovalOutcome = { allowed: true; grantedBy: string } | { allowed: false; reason: string };
+
 export interface ToolProvider {
   listTools(policy: ToolPolicy): Promise<ToolSpec[]>;
   refreshMcp(serverId: string): Promise<void>;
@@ -99,4 +102,11 @@ export interface ToolProvider {
    * its turn being cancelled.
    */
   resolveApproval(requestId: string, choice: ApprovalChoice): boolean;
+  /**
+   * The permission gate for a tool call that something else will execute
+   * (Claude Code's own tools, `source: 'agent'`). Same decide -> approval card
+   * -> resolve -> audit flow as a gated Grunt tool, minus the execution. This
+   * is the only way an external agent's tool call may be authorised.
+   */
+  requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<ApprovalOutcome>;
 }

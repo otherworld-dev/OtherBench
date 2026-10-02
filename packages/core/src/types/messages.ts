@@ -28,6 +28,24 @@ export interface ProducedBy {
   modelId: string;
 }
 
+/**
+ * Engine-owned state stored on an assistant message. Only Claude Code uses it:
+ * the session id lets the next turn continue the Claude Code session
+ * this message was produced in. See engine-claude-code/src/session.ts.
+ */
+export interface EngineMeta {
+  engine: 'claude_code';
+  sessionId: string;
+  /** `'claude'` for the Claude login, or the endpoint base URL. */
+  backend: string;
+  /** The workspace root the session ran in (Claude Code keys sessions by folder). */
+  cwd: string;
+  /** Tools Claude Code reported at session start. */
+  tools?: string[];
+  /** MCP servers Claude Code reported at session start. */
+  mcpServers?: { name: string; status: string }[];
+}
+
 export interface CanonMessage {
   id: string;
   chatId: string;
@@ -37,6 +55,8 @@ export interface CanonMessage {
   status: MessageStatus;
   error: SerializedError | null;
   producedBy: ProducedBy | null;
+  /** Present only on assistant messages produced by an engine that keeps its own state. Absent otherwise (never null). */
+  engineMeta?: EngineMeta;
   createdAt: number;
 }
 

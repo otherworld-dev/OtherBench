@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
+import { agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { containPath } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -39,9 +40,9 @@ interface PendingRequest {
  */
 const SHELL_TOOL_NAMES = new Set(['run_command']);
 
-/** True for the real shell tool, and for anything wearing its name. See `SHELL_TOOL_NAMES`. */
+/** True for the real shell tool, anything wearing its name, and every Claude Code shell-category tool (Bash, PowerShell, ...). See `SHELL_TOOL_NAMES`. */
 function isShellTool(tool: ToolSpec): boolean {
-  return tool.source === 'shell' || SHELL_TOOL_NAMES.has(tool.name);
+  return tool.source === 'shell' || SHELL_TOOL_NAMES.has(tool.name) || (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'shell');
 }
 
 /**
@@ -62,7 +63,9 @@ function isShellTool(tool: ToolSpec): boolean {
  *      rests on is a fact rather than an assumption -- it used to be an
  *      assumption, checked only as "at least one server is enabled
  *      somewhere") skip the prompt when
- *      `approvalMode` is `'ask_on_mutate'`. Shell is carved out of this
+ *      `approvalMode` is `'ask_on_mutate'`. Agent (Claude Code) tools auto-approve only when
+ *      their NAME classifies as file-read (never by declared risk), and agent
+ *      tools need a workspace like fs/shell. Shell is carved out of this
  *      entirely and by name (`tool.source === 'shell'`), not merely by risk
  *      class, precisely so a mis-declared shell `ToolSpec` (risk `'read'`
  *      instead of `'execute'`) still can't slip through auto-approval --
@@ -104,18 +107,27 @@ export class PermissionBroker {
 
     // fs/shell tools act ON a workspace; without one configured for this
     // chat there is nothing for them to legitimately operate on (shell's
-    // cwd is forced to workspace_root -- task 24 -- and every fs tool call
+    // cwd is forced to workspace_root -- task 24 -- agent (Claude Code) tools run in it too, and every fs tool call
     // goes through containPath(workspaceRoot, ...), which itself denies a
     // null root). mcp tools carry no such requirement.
-    if ((tool.source === 'fs' || tool.source === 'shell') && !ctx.workspaceRoot) {
+    if ((tool.source === 'fs' || tool.source === 'shell' || tool.source === 'agent') && !ctx.workspaceRoot) {
       return {
         kind: 'deny',
         reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.`,
       };
     }
 
+    // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, ExitPlanMode)
+    // have no side effects of their own; a subagent's real tool calls come
+    // back through here individually.
+    if (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'internal') {
+      return { kind: 'allow', grantedBy: 'policy' };
+    }
+
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
+      // Name-based, not declared-risk-based: only Claude Code's known file-read tools.
+      if (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'file-read') return { kind: 'allow', grantedBy: 'auto_read' };
       // An mcp server was already explicitly enabled by the user (a policy
       // action distinct from any single tool call), so a READ-risk call
       // against it is treated as pre-authorised by that policy decision --
@@ -126,7 +138,9 @@ export class PermissionBroker {
       if (tool.source === 'mcp') return { kind: 'allow', grantedBy: 'policy' };
     }
 
-    const grant = this.findMatchingGrant(tool, args, ctx);
+    // A Claude Code write to its own config (see isProtectedAgentPath) always
+    // gets a card: no stored grant, however scoped, may cover it.
+    const grant = isProtectedAgentWrite(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
     if (grant) {
       // A 'once' grant authorises exactly one call; consume it immediately
       // so a second identical call is asked about again rather than reusing
@@ -170,6 +184,19 @@ export class PermissionBroker {
     this.pending.delete(requestId);
 
     if (choice.choice === 'deny' || choice.choice === 'once') return;
+
+    // Fail closed: Grunt cannot know what an unrecognised Claude Code tool does,
+    // so it never pre-authorises future calls. 'chat'/'always' act like 'once'.
+    if (pending.tool.source === 'agent' && classifyAgentTool(pending.tool.name).category === 'other') return;
+
+    // Likewise for a Claude Code write to its own config files. A grant on
+    // `.claude/settings.local.json` (or a `pathPrefix` covering `.claude/`,
+    // `.mcp.json` or a CLAUDE.md) would let the model write a hook, a skill's
+    // inline shell or an MCP server command that Claude Code then runs on a
+    // later turn with no Bash card -- a file grant turned into a shell grant.
+    // 'chat'/'always' act like 'once', and decide() never matches a grant for
+    // such a write either.
+    if (isProtectedAgentWrite(pending.tool, pending.args)) return;
 
     if (choice.choice === 'chat') {
       // A 'chat' answer for the shell is NOT a blanket grant for the rest of
@@ -255,6 +282,18 @@ export class PermissionBroker {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A Claude Code file-write call whose workspace-relative `path` (set by the
+ * engine's gate, engine-claude-code/src/approval.ts) is Claude Code config.
+ * A file-write call with no usable `path` cannot be checked, so it counts as
+ * protected too (fail closed: ask, store nothing).
+ */
+function isProtectedAgentWrite(tool: ToolSpec, args: unknown): boolean {
+  if (tool.source !== 'agent' || classifyAgentTool(tool.name).category !== 'file-write') return false;
+  const path = stringField(args, 'path');
+  return path === null || isProtectedAgentPath(path);
+}
+
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
   switch (tool.source) {
     case 'fs':
@@ -283,6 +322,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       }
       return null;
     }
+    case 'agent':
+      return agentPolicyDenial(tool.name, policy);
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

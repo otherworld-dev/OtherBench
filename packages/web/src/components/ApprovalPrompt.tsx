@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -12,6 +13,11 @@ const RISK_LABEL: Record<ApprovalRequest['risk'], string> = {
   mutate: 'modifies something',
   execute: 'executes a command',
 };
+
+/** A Claude Code shell-category tool (Bash, PowerShell, ...) -- grants are scoped like Grunt's own shell tool. */
+function isAgentShell(request: ApprovalRequest): boolean {
+  return request.source === 'agent' && classifyAgentTool(request.toolName).category === 'shell';
+}
 
 /**
  * Derives the constraint an "Always allow" grant is created with, from the
@@ -40,19 +46,30 @@ function deriveAlwaysConstraint(
   allowAnyArgs: boolean
 ): Extract<ApprovalChoice, { choice: 'always' }>['constraint'] {
   const args = request.args as Record<string, unknown> | null;
-  if (request.source === 'shell' && args && typeof args['command'] === 'string') {
+  if ((request.source === 'shell' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
     return allowAnyArgs ? { commandPrefix: args['command'] } : { commandExact: args['command'] };
   }
-  if (request.source === 'fs' && args && typeof args['path'] === 'string') {
+  if ((request.source === 'fs' || isAgentFileTool(request)) && args && typeof args['path'] === 'string') {
     return { pathPrefix: args['path'] };
   }
   return null;
 }
 
+/**
+ * A Claude Code file tool, whose `path` the engine set to the workspace-relative
+ * path it checked. Any other agent tool's `path` is just the tool's own
+ * argument (an MCP tool's, say), not something a path grant should key on.
+ */
+function isAgentFileTool(request: ApprovalRequest): boolean {
+  if (request.source !== 'agent') return false;
+  const { category } = classifyAgentTool(request.toolName);
+  return category === 'file-read' || category === 'file-write';
+}
+
 /** True when this request's args carry a shell `command` string -- the only case `deriveAlwaysConstraint` has a prefix/exact choice to make at all. */
 function isShellCommandRequest(request: ApprovalRequest): boolean {
   const args = request.args as Record<string, unknown> | null;
-  return request.source === 'shell' && !!args && typeof args['command'] === 'string';
+  return (request.source === 'shell' || isAgentShell(request)) && !!args && typeof args['command'] === 'string';
 }
 
 /**

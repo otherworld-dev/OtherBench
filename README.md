@@ -105,6 +105,27 @@ For now the app finds `node` on `PATH` and the server in this checkout's
 Installers, a bundled Node runtime, tray, hotkey, notifications and native
 file pickers are the next tasks in the v2 plan.
 
+## Claude Code
+
+A **Claude Code** connection runs turns through your local Claude Code install
+(via the Claude Agent SDK) instead of calling a model API directly.
+
+- **Base URL empty**: uses your Claude login (run `claude` and `/login` once).
+  No API key; `ANTHROPIC_API_KEY` is never passed through.
+- **Base URL set** (e.g. `http://localhost:11434` for Ollama): runs that
+  endpoint's models through Claude Code. Pick a tool-capable model.
+
+Claude Code profiles need a workspace folder on the chat. Claude Code's own
+tools (Read, Edit, Bash, ...) replace Grunt's fs/shell/MCP tools for those
+turns, and Grunt's profile policy decides every call: under "ask on mutate",
+reads inside the workspace are allowed automatically and edits, shell commands,
+web and MCP calls get an approval card. Your `~/.claude` settings, CLAUDE.md
+files and MCP servers apply, and so do the workspace's own `.claude` settings,
+hooks and skills, `.mcp.json` and CLAUDE.md, with no trust prompt -- only use
+folders you trust as workspaces. Chats are real Claude Code sessions: the
+Inspector shows a `claude --resume` command to continue one in a terminal
+(changes made there don't come back into Grunt).
+
 ## Try it with no API key — the mock provider
 
 Grunt ships a keyless **mock provider** (`kind: "mock"`) specifically so you

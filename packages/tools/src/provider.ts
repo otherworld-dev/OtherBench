@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import type {
   ApprovalChoice,
+  ApprovalOutcome,
   RiskClass,
   ToolApprovalEvent,
   ToolContext,
@@ -30,6 +31,10 @@ interface ToolError {
   code: string;
   message: string;
 }
+
+type Authorization =
+  | { ok: true; grantedBy: string }
+  | { ok: false; code: 'permission_denied' | 'approval_denied'; reason: string; grantedBy: 'deny:policy' | 'deny:user' };
 
 function toolError(code: string, message: string): ToolError {
   return { error: true, code, message };
@@ -240,38 +245,46 @@ export class GruntToolProvider implements ToolProvider {
     });
   }
 
+  async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<ApprovalOutcome> {
+    const startedAt = this.now();
+    const auth = await this.authorize(tool, args, policy, ctx);
+    if (!auth.ok) {
+      this.audit(ctx, tool.name, args, toolError(auth.code, auth.reason), this.now() - startedAt, auth.grantedBy);
+      return { allowed: false, reason: auth.reason };
+    }
+    this.audit(ctx, tool.name, args, null, this.now() - startedAt, auth.grantedBy, 'delegated to Claude Code');
+    return { allowed: true, grantedBy: auth.grantedBy };
+  }
+
+  private async authorize(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<Authorization> {
+    const decision = this.broker.decide(tool, args, policy, ctx);
+    if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
+    if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
+
+    const { request } = decision;
+    // Register the waiter BEFORE notifying so a listener that answers
+    // synchronously from inside the 'request' event still reaches it.
+    const pending = this.awaitApproval(request.id, ctx.signal);
+    this.notify({ type: 'request', request });
+    const choice = await pending;
+    this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
+    if (choice.choice === 'deny') return { ok: false, code: 'approval_denied', reason: 'The user denied this tool call.', grantedBy: 'deny:user' };
+    return { ok: true, grantedBy: `ask:${choice.choice}` };
+  }
+
   private gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec {
     return {
       ...tool,
       execute: async (args: unknown, ctx: ToolContext): Promise<unknown> => {
         const startedAt = this.now();
-        const decision = this.broker.decide(tool, args, policy, ctx);
-
-        if (decision.kind === 'deny') {
-          const result = toolError('permission_denied', decision.reason);
-          this.audit(ctx, tool.name, args, result, this.now() - startedAt, 'deny:policy');
+        const auth = await this.authorize(tool, args, policy, ctx);
+        if (!auth.ok) {
+          const result = toolError(auth.code, auth.reason);
+          this.audit(ctx, tool.name, args, result, this.now() - startedAt, auth.grantedBy);
           return result;
         }
-
-        if (decision.kind === 'allow') {
-          const result = await tool.execute(args, ctx);
-          this.audit(ctx, tool.name, args, result, this.now() - startedAt, describeGrantedBy(decision));
-          return result;
-        }
-
-        const { request } = decision;
-        this.notify({ type: 'request', request });
-        const choice = await this.awaitApproval(request.id, ctx.signal);
-        this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
-
-        if (choice.choice === 'deny') {
-          const result = toolError('approval_denied', 'The user denied this tool call.');
-          this.audit(ctx, tool.name, args, result, this.now() - startedAt, 'deny:user');
-          return result;
-        }
-
         const result = await tool.execute(args, ctx);
-        this.audit(ctx, tool.name, args, result, this.now() - startedAt, `ask:${choice.choice}`);
+        this.audit(ctx, tool.name, args, result, this.now() - startedAt, auth.grantedBy);
         return result;
       },
     };
@@ -318,7 +331,7 @@ export class GruntToolProvider implements ToolProvider {
     });
   }
 
-  private audit(ctx: ToolContext, toolName: string, args: unknown, result: unknown, durationMs: number, grantedBy: string): void {
+  private audit(ctx: ToolContext, toolName: string, args: unknown, result: unknown, durationMs: number, grantedBy: string, summaryOverride?: string): void {
     try {
       this.store.audit.create({
         id: this.generateId(),
@@ -326,7 +339,7 @@ export class GruntToolProvider implements ToolProvider {
         messageId: ctx.messageId,
         toolName,
         argsRedacted: redact(args),
-        resultSummary: summarizeResult(result),
+        resultSummary: summaryOverride ?? summarizeResult(result),
         durationMs,
         grantedBy,
       });

@@ -435,6 +435,8 @@ export class TurnRunner {
         messageId,
         workspaceRoot,
         loadAttachment: this.loadAttachment,
+        purpose: 'turn',
+        latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 
       for await (const event of this.engine.stream(request)) {
@@ -463,9 +465,20 @@ export class TurnRunner {
           this.emit({ messageId, type: 'notice', text: pendingNoticeText });
           pendingNoticeText = null;
         }
+        if (event.type === 'engine-meta') {
+          // Engine-owned state, persisted straight away (a cancelled turn
+          // still records its session) and never broadcast: clients read it
+          // from the message row.
+          this.store.messages.updateEngineMeta(messageId, event.meta);
+          continue;
+        }
         this.emit({ messageId, ...event });
 
         switch (event.type) {
+          case 'notice':
+            parts = [...parts, { type: 'notice', text: event.text }];
+            checkpoint(true);
+            break;
           case 'text-delta':
             parts = appendDelta(parts, 'text', event.text);
             checkpoint(false);

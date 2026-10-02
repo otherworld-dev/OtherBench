@@ -45,6 +45,11 @@ function parseToolPolicy(value: unknown): ToolPolicy {
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
+  for (const key of ['agentWeb', 'agentMcp'] as const) {
+    if (v[key] !== undefined && typeof v[key] !== 'boolean') {
+      throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
+    }
+  }
   return {
     fs: (fs as ToolPolicy['fs']) ?? DEFAULT_TOOL_POLICY.fs,
     shell: typeof v['shell'] === 'boolean' ? v['shell'] : DEFAULT_TOOL_POLICY.shell,
@@ -56,6 +61,8 @@ function parseToolPolicy(value: unknown): ToolPolicy {
     // the harmless empty policy", same as before.
     mcpServerIds: v['mcpServerIds'] === undefined ? DEFAULT_TOOL_POLICY.mcpServerIds : optionalStringArray(v['mcpServerIds'], 'toolPolicy.mcpServerIds'),
     approvalMode: (approvalMode as ToolPolicy['approvalMode']) ?? DEFAULT_TOOL_POLICY.approvalMode,
+    ...(typeof v['agentWeb'] === 'boolean' ? { agentWeb: v['agentWeb'] } : {}),
+    ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : {}),
   };
 }
 

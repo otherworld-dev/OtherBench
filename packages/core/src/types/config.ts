@@ -1,5 +1,5 @@
 export type ConnectionKind =
-  | 'anthropic' | 'openai' | 'openai_compatible' | 'google' | 'ollama' | 'mock';
+  | 'anthropic' | 'openai' | 'openai_compatible' | 'google' | 'ollama' | 'claude_code' | 'mock';
 
 export interface Connection {
   id: string;
@@ -39,14 +39,20 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * declares it and `Grant` (ports/store) records it, and a grant must match on
  * source as well as name -- a tool merely sharing the shell tool's name must
  * not be able to satisfy, or to mint, a grant meant for the real shell.
+ * `'agent'` is a tool run by an external agent (Claude Code) whose execution
+ * Grunt only gates, never performs.
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent';
 
 export interface ToolPolicy {
   fs: FsMode;
   shell: boolean;
   mcpServerIds: string[];
   approvalMode: 'always_ask' | 'ask_on_mutate';
+  /** Claude Code profiles only: WebFetch/WebSearch allowed. Absent = allowed. */
+  agentWeb?: boolean;
+  /** Claude Code profiles only: MCP tools from the user's Claude config allowed. Absent = allowed. */
+  agentMcp?: boolean;
 }
 
 export interface ModelParams {

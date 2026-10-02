@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
@@ -10,6 +11,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
+import { ClaudeCodeChatEngine, type QueryFn } from '@grunt/engine-claude-code/engine.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
@@ -19,6 +21,7 @@ import { SqliteStore } from '@grunt/store-sqlite/store.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
+import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { StreamRegistry } from './stream/registry.js';
 
@@ -204,11 +207,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   }
 
   const registry = new ProviderRegistry();
-  const engine = new AiSdkChatEngine(registry);
+  const aisdkEngine = new AiSdkChatEngine(registry);
 
   const broker = new PermissionBroker(store);
   const mcpManager = new McpServerManager(store, secrets);
   const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  const engine = new RoutingChatEngine(
+    aisdkEngine,
+    new ClaudeCodeChatEngine({ query: query as unknown as QueryFn, approvals: toolProvider, listEndpointModels: endpointModelLister(aisdkEngine) })
+  );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
   // against whatever `mcp_server` rows already exist as soon as the
   // container is up, not lazily on the first turn that needs one --

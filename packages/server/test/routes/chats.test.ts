@@ -59,6 +59,11 @@ function manualEngine(): {
         if (event === null) return;
         if (req.signal.aborted) return;
         yield event;
+        if (event.type === 'finish' && hangAfterFinish && req.purpose === 'utility') {
+          // Like Claude Code: the stream lingers after `finish` until aborted.
+          await new Promise<void>((resolve) => req.signal.addEventListener('abort', () => resolve(), { once: true }));
+          return;
+        }
         if (event.type === 'finish' || event.type === 'error') return;
       }
     },
@@ -99,6 +104,8 @@ let container: Container;
 let push: (messageId: string, event: EngineEvent | null) => void;
 let requests: EngineRequest[];
 let dataDir: string;
+/** When set, the manual engine keeps a utility (title) stream open after yielding `finish` until its signal aborts. */
+let hangAfterFinish = false;
 
 // A REAL, temp-dir-backed BlobStore -- not a `{} as never` placeholder.
 // DELETE /api/chats/:id now runs the real blob-GC sweep after every delete
@@ -110,6 +117,7 @@ let dataDir: string;
 // makes this suite actually catch a wiring regression instead of quietly
 // tolerating one (task 32 fix round 1, Minor #8).
 beforeEach(async () => {
+  hangAfterFinish = false;
   dataDir = await mkdtemp(join(tmpdir(), 'grunt-chats-route-test-'));
   const store = new InMemoryStore();
   const manual = manualEngine();
@@ -571,6 +579,56 @@ describe('auto-title', () => {
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(container.store.chats.get(chatId)?.title).toBe(userText.slice(0, 48));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses a generated title whose finish arrived, even when the engine stream keeps running past the watchdog', async () => {
+    // Claude Code's utility stream only ends when its process exits, which can
+    // be well after `finish`. The title must be taken at `finish`, not lost to
+    // the watchdog that fires while the stream lingers.
+    hangAfterFinish = true;
+    vi.useFakeTimers();
+    try {
+      const created = await createChat();
+      const chatId = created['id'] as string;
+      const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'Please explain quantum entanglement in simple terms suitable for a curious beginner');
+      const mainMessageId = assistantMessageIds[0] as string;
+      push(mainMessageId, FINISH);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const titleReq = requests.find((r) => r.messageId !== mainMessageId);
+      push(titleReq!.messageId, { type: 'text-delta', text: 'Quantum Entanglement Basics' });
+      push(titleReq!.messageId, FINISH);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(container.store.chats.get(chatId)?.title).toBe('Quantum Entanglement Basics');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives a claude_code connection a 30s title budget instead of 10s', async () => {
+    container.store.connections.update('conn-1', { kind: 'claude_code' });
+    vi.useFakeTimers();
+    try {
+      const created = await createChat();
+      const chatId = created['id'] as string;
+      const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'What is the capital of France?');
+      const mainMessageId = assistantMessageIds[0] as string;
+      push(mainMessageId, FINISH);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const titleReq = requests.find((r) => r.messageId !== mainMessageId);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(titleReq!.signal.aborted).toBe(false);
+      push(titleReq!.messageId, { type: 'text-delta', text: 'Capital of France' });
+      push(titleReq!.messageId, FINISH);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(container.store.chats.get(chatId)?.title).toBe('Capital of France');
     } finally {
       vi.useRealTimers();
     }

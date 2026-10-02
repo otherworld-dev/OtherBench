@@ -9,7 +9,7 @@ import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalNullableString, optionalStringHeadersRecord, requireNonEmptyString } from '../validation.js';
 
-const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'mock'];
+const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock'];
 
 interface ConnectionBody {
   name?: unknown;

@@ -1,0 +1,33 @@
+import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
+import type { Connection } from '@grunt/core/types/config.js';
+
+/** Sends `claude_code` connections to the Claude Code engine and everything else to the AI SDK engine. */
+export class RoutingChatEngine implements ChatEngine {
+  constructor(private readonly aisdk: ChatEngine, private readonly claudeCode: ChatEngine) {}
+
+  private pick(kind: Connection['kind']): ChatEngine {
+    return kind === 'claude_code' ? this.claudeCode : this.aisdk;
+  }
+
+  stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+    return this.pick(req.profile.connection.kind).stream(req);
+  }
+
+  listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]> {
+    return this.pick(conn.kind).listModels(conn, apiKey);
+  }
+
+  testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult> {
+    return this.pick(conn.kind).testConnection(conn, apiKey);
+  }
+}
+
+/**
+ * Model listing for a Claude Code endpoint backend. Claude Code wants the bare
+ * Anthropic-compatible base (`http://localhost:11434`); the AI SDK engine's
+ * Ollama path wants the OpenAI-compatible `/v1` base and also seeds
+ * capabilities from Ollama's native API.
+ */
+export function endpointModelLister(aisdk: ChatEngine): (conn: Connection, token: string | null) => Promise<DiscoveredModel[]> {
+  return (conn, token) => aisdk.listModels({ ...conn, kind: 'ollama', baseUrl: `${(conn.baseUrl ?? '').replace(/\/+$/, '')}/v1` }, token);
+}

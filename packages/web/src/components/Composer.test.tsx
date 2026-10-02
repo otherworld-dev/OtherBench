@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { Profile } from '@grunt/core/types/config.js';
+import type { Connection, Profile } from '@grunt/core/types/config.js';
 import { useGruntStore } from '../state/store.js';
 import { Composer } from './Composer.js';
 
@@ -467,5 +467,34 @@ describe('Composer', () => {
       await waitFor(() => expect(mockedCreate).toHaveBeenCalled());
       expect(mockedCreate.mock.calls[0]?.[1]?.parts).toEqual([{ type: 'image', attachmentId: 'att-1', mime: 'image/png' }]);
     });
+  });
+
+  it('tags each profile with its toolset and blocks sending a Claude Code turn without a workspace', async () => {
+    const conn = (id: string, kind: Connection['kind']): Connection => ({
+      id,
+      name: id,
+      kind,
+      baseUrl: null,
+      secretRef: null,
+      extraHeaders: {},
+      status: 'ok',
+      statusMessage: null,
+      checkedAt: null,
+    });
+    useGruntStore.getState().setConnections([conn('cc', 'claude_code'), conn('oll', 'ollama')]);
+    useGruntStore.getState().setProfiles([
+      makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet' }),
+      makeProfile({ id: 'qwen', name: 'Qwen', connectionId: 'oll', modelId: 'qwen3', isDefault: false }),
+    ]);
+    const user = userEvent.setup();
+
+    render(<Composer chat={makeChat({ profileId: 'sonnet', workspaceRoot: null })} />);
+    await user.click(screen.getByRole('button', { name: /Sonnet/ }));
+    expect(screen.getByRole('option', { name: /Sonnet.*CC tools/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Qwen.*Grunt tools/ })).toBeInTheDocument();
+
+    await user.type(screen.getByRole('textbox', { name: /message/i }), 'hello');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.getByText('Set a workspace folder to use Claude Code.')).toBeInTheDocument();
   });
 });

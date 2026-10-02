@@ -373,6 +373,34 @@ export function runStoreContract(
         expect(store.messages.get('does-not-exist')).toBeNull();
       });
 
+      it('engineMeta: absent by default, set by updateEngineMeta, carried by get and pathToRoot', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: chat.id }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: chat.id, parentId: 'u1', role: 'assistant' }));
+        expect('engineMeta' in store.messages.get('a1')!).toBe(false);
+        const meta = { engine: 'claude_code' as const, sessionId: 's1', backend: 'claude', cwd: '/ws' };
+        store.messages.updateEngineMeta('a1', meta);
+        expect(store.messages.get('a1')!.engineMeta).toEqual(meta);
+        expect(store.messages.pathToRoot('a1')[1]!.engineMeta).toEqual(meta);
+        expect('engineMeta' in store.messages.pathToRoot('a1')[0]!).toBe(false);
+        expect(store.messages.children('u1')[0]!.engineMeta).toEqual(meta);
+        expect(() => store.messages.updateEngineMeta('nope', meta)).toThrow();
+      });
+
+      it('latestBySession returns the newest message carrying that session id in the chat', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        const meta = (sessionId: string) => ({ engine: 'claude_code' as const, sessionId, backend: 'claude', cwd: '/ws' });
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: chat.id, createdAt: 1 }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: chat.id, parentId: 'u1', role: 'assistant', createdAt: 2 }));
+        store.messages.create(makeMessageInput({ id: 'u2', chatId: chat.id, parentId: 'a1', createdAt: 3 }));
+        store.messages.create(makeMessageInput({ id: 'a2', chatId: chat.id, parentId: 'u2', role: 'assistant', createdAt: 4 }));
+        store.messages.updateEngineMeta('a1', meta('s1'));
+        expect(store.messages.latestBySession(chat.id, 's1')!.id).toBe('a1');
+        store.messages.updateEngineMeta('a2', meta('s1'));
+        expect(store.messages.latestBySession(chat.id, 's1')!.id).toBe('a2');
+        expect(store.messages.latestBySession(chat.id, 'other')).toBeNull();
+      });
+
       it('children returns child messages ordered by creation time, not insertion order', () => {
         const { chat } = seedChat(store, 'chat-a');
         store.messages.create(makeMessageInput({ id: 'parent', chatId: chat.id, createdAt: 1 }));

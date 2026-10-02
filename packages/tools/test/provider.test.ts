@@ -364,3 +364,43 @@ describe('GruntToolProvider gating', () => {
     expect(result.code).toBe('approval_denied');
   });
 });
+
+describe('requestApproval (external agent tools)', () => {
+  const agentSpec = (name: string, risk: 'read' | 'mutate' | 'execute') => ({ name, description: '', parameters: {}, risk, source: 'agent' as const, execute: async () => { throw new Error('must not execute'); } });
+
+  it('auto-allows a read tool and audits it as delegated', async () => {
+    const store = new InMemoryStore();
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const out = await provider.requestApproval(agentSpec('Read', 'read'), { path: 'a.txt' }, policy(), ctx());
+    expect(out).toEqual({ allowed: true, grantedBy: 'auto_read' });
+    expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'Read', resultSummary: 'delegated to Claude Code', grantedBy: 'auto_read' });
+  });
+
+  it('raises an approval card and returns the human decision', async () => {
+    const store = new InMemoryStore();
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const seen: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => { seen.push(e); if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'once' }); });
+    const out = await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'npm test' }, policy(), ctx());
+    expect(out).toEqual({ allowed: true, grantedBy: 'ask:once' });
+    expect(seen.map((e) => e.type)).toEqual(['request', 'resolved']);
+    expect((seen[0] as Extract<ToolApprovalEvent, { type: 'request' }>).request).toMatchObject({ source: 'agent', toolName: 'Bash', summary: 'Bash: npm test' });
+  });
+
+  it('returns a denial with a reason for policy and user denials', async () => {
+    const store = new InMemoryStore();
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'ls' }, policy({ shell: false }), ctx())).toMatchObject({ allowed: false, reason: expect.stringMatching(/disabled/) });
+    provider.onApprovalEvent((e) => { if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'deny' }); });
+    expect(await provider.requestApproval(agentSpec('Edit', 'mutate'), { path: 'a.txt' }, policy(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+  });
+
+  it('treats an abort while waiting as a denial', async () => {
+    const store = new InMemoryStore();
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+    const ac = new AbortController();
+    const pending = provider.requestApproval(agentSpec('Edit', 'mutate'), { path: 'a.txt' }, policy(), ctx({ signal: ac.signal }));
+    ac.abort();
+    expect(await pending).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+  });
+});

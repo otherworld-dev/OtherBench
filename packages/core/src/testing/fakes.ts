@@ -27,7 +27,7 @@ import type {
   AuditEntry,
 } from '../ports/store.js';
 import type { ModelInfo, Profile } from '../types/config.js';
-import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
+import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 
 // ---------------------------------------------------------------------------
 // FakeChatEngine
@@ -433,6 +433,21 @@ class InMemoryMessageRepo implements MessageRepo {
 
   listByStatus(status: MessageStatus): CanonMessage[] {
     return [...this.byId.values()].filter((m) => m.status === status).map((m) => structuredClone(m));
+  }
+
+  updateEngineMeta(id: string, meta: EngineMeta): void {
+    const m = this.byId.get(id);
+    if (!m) {
+      throw new Error(`Not found: ${id}`);
+    }
+    m.engineMeta = structuredClone(meta);
+  }
+
+  latestBySession(chatId: string, sessionId: string): CanonMessage | null {
+    const matches = [...this.byId.values()]
+      .filter((m) => m.chatId === chatId && m.engineMeta?.sessionId === sessionId)
+      .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    return matches[0] ? structuredClone(matches[0]) : null;
   }
 
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
