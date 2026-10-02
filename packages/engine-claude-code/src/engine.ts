@@ -32,7 +32,10 @@ export interface ClaudeCodeEngineDeps {
 
 const PROBE_TIMEOUT_MS = 20_000;
 
-type ContentBlock = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+/** A notice waiting for a safe moment to be yielded (see ClaudeCodeChatEngine.stream). */
+type PendingNotice = { text: string | null };
+
+type ContentBlock ={ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
 /** A one-message prompt stream that stays open until `close()` -- hooks and canUseTool travel over the same channel, so input must not end before the result. */
 function promptStream(content: ContentBlock[]): { stream: AsyncIterable<SDKUserMessage>; close: () => void } {
@@ -87,28 +90,40 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       return;
     }
 
+    // Not yielded yet: an event yielded before the engine has done any real
+    // work reaches TurnRunner before the turn's live stream is registered and
+    // is dropped from SSE. runTurn yields it right after the init message
+    // (or before an error if Claude Code fails before init).
     const skipped = skippedFiles(req.messages[req.messages.length - 1]);
-    if (skipped.length > 0) {
-      yield { type: 'notice', text: `Not sent to Claude Code (only images are): ${skipped.join(', ')}.` };
-    }
+    const notice: PendingNotice = { text: skipped.length > 0 ? `Not sent to Claude Code (only images are): ${skipped.join(', ')}.` : null };
 
     const conn = req.profile.connection;
     const backend = backendOf(conn);
     const plan = pickSession({ history: req.messages, backend, cwd: req.workspaceRoot, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
     try {
-      const first = yield* this.runTurn(req, plan, backend);
+      const first = yield* this.runTurn(req, plan, backend, notice);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
         yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history." };
-        yield* this.runTurn(req, { mode: 'fresh' }, backend);
+        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice);
       }
     } finally {
       if (plan.mode === 'continue') this.claims.release(plan.sessionId);
     }
   }
 
-  /** One SDK query. Returns 'missing-session' (having yielded nothing) when a resume target is gone. */
-  private async *runTurn(req: EngineRequest, plan: SessionPlan, backend: string): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
+  /**
+   * One SDK query. Returns 'missing-session' (having yielded nothing) when a
+   * resume target is gone. Yields `notice.text` once, after the init message
+   * or before an error, and clears it.
+   */
+  private async *runTurn(req: EngineRequest, plan: SessionPlan, backend: string, notice: PendingNotice): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
+    const flushNotice = function* (): Generator<EngineEvent> {
+      const text = notice.text;
+      if (text === null) return;
+      notice.text = null;
+      yield { type: 'notice', text };
+    };
     const profile = req.profile;
     const cwd = req.workspaceRoot!;
     const content = await this.userContent(req, plan.mode === 'fresh');
@@ -144,7 +159,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // offered MCP tools and no server starts. The gate still denies MCP calls.
       ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
       ...(plan.mode === 'continue' ? { resume: plan.sessionId } : {}),
-      ...(profile.params.thinkingBudgetTokens ? { maxThinkingTokens: profile.params.thinkingBudgetTokens } : {}),
+      ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
     };
 
     const mapper = new SdkEventMapper();
@@ -156,11 +171,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           if (event.type === 'init') {
             sawInit = true;
             yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: event.sessionId, backend, cwd, tools: event.tools, mcpServers: event.mcpServers } };
+            yield* flushNotice();
           } else if (event.type === 'rate-limited') {
             rateLimitResetsAt = event.resetsAt;
           } else if (event.type === 'result-error') {
             prompt.close();
             if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
+            yield* flushNotice();
             yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt }) };
             return 'done';
           } else {
@@ -169,10 +186,12 @@ export class ClaudeCodeChatEngine implements ChatEngine {
           }
         }
       }
+      yield* flushNotice(); // a stream that ended without init
     } catch (err) {
       if (req.signal.aborted) return 'done'; // TurnRunner marks the message cancelled
       const text = [err instanceof Error ? err.message : String(err), ...stderr].join('\n');
       if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
+      yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt }) };
     } finally {
       prompt.close();

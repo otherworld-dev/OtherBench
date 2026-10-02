@@ -22,6 +22,10 @@ describe('classifyClaudeCodeFailure', () => {
   it('gives the login hint for auth failures', () => {
     expect(classifyClaudeCodeFailure('not logged in', c).message).toBe("Claude Code isn't logged in. Run `claude` and `/login`.");
   });
+  it('blames the endpoint, not the Claude login, for an endpoint backend auth failure', () => {
+    expect(classifyClaudeCodeFailure('API Error: 401 Unauthorized', { backend: 'http://localhost:11434', modelId: 'q' })).toEqual({ kind: 'auth', retryable: false, message: 'http://localhost:11434 rejected the token.' });
+    expect(classifyClaudeCodeFailure('Invalid API key · Please run /login', { backend: 'http://gw.example', modelId: 'q' }).message).not.toMatch(/login/);
+  });
   it('detects a missing session on resume', () => {
     expect(isMissingSessionError('No conversation found with session ID: abc')).toBe(true);
     expect(isMissingSessionError('other')).toBe(false);

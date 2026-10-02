@@ -50,6 +50,11 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(m.map(ev({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'b' } }))).toEqual([{ type: 'reasoning-delta', text: 'b' }]);
     expect(m.map(ev({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'sub' } }, 'toolu_1'))).toEqual([]);
   });
+  it('ignores a stream_event with no event payload instead of throwing', () => {
+    const m = new SdkEventMapper();
+    expect(m.map({ type: 'stream_event', parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
+    expect(m.map({ type: 'stream_event', event: null, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
+  });
   it('falls back to assistant text blocks when no deltas streamed', () => {
     const m = new SdkEventMapper();
     const assistant = { type: 'assistant', message: { content: [{ type: 'text', text: 'whole' }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;

@@ -44,8 +44,8 @@ export class SdkEventMapper {
       }
       case 'stream_event': {
         if (m['parent_tool_use_id'] !== null) return [];
-        const event = m['event'] as { type?: string; delta?: { type?: string; text?: string; thinking?: string } };
-        if (event.type !== 'content_block_delta' || !event.delta) return [];
+        const event = m['event'] as { type?: string; delta?: { type?: string; text?: string; thinking?: string } } | null | undefined;
+        if (event?.type !== 'content_block_delta' || !event.delta) return [];
         if (event.delta.type === 'text_delta' && event.delta.text) { this.sawDelta = true; return [{ type: 'text-delta', text: event.delta.text }]; }
         if (event.delta.type === 'thinking_delta' && event.delta.thinking) { this.sawDelta = true; return [{ type: 'reasoning-delta', text: event.delta.thinking }]; }
         return [];

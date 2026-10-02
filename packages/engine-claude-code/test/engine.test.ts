@@ -54,11 +54,20 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(o.disallowedTools).toContain('AskUserQuestion');
     expect(o.settings).toEqual({ disableSkillShellExecution: true });
     expect(o.strictMcpConfig).toBeUndefined();
+    expect(o.thinking).toBeUndefined();
+    expect(o.maxThinkingTokens).toBeUndefined();
     expect(o.resume).toBeUndefined();
     expect(o.env).toEqual({ PATH: '/bin' });
     expect(o.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
     expect(o.hooks?.PreToolUse?.[0]?.timeout).toBe(86_400);
     expect(calls[0]!.prompt).toMatchObject({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } });
+  });
+
+  it('maps a thinking budget to the thinking option, not the deprecated maxThinkingTokens', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(engine(query).stream(req({ profile: profile({ params: { thinkingBudgetTokens: 4096 } }) })));
+    expect(calls[0]!.options.thinking).toEqual({ type: 'enabled', budgetTokens: 4096 });
+    expect(calls[0]!.options.maxThinkingTokens).toBeUndefined();
   });
 
   it('loads no MCP servers at all when the profile turns agent MCP off', async () => {
@@ -159,9 +168,34 @@ describe('ClaudeCodeChatEngine.stream', () => {
     const events = await collect(engine(query).stream(req({ messages: [withFiles] })));
     const notices = events.filter((e) => e.type === 'notice');
     expect(notices).toEqual([{ type: 'notice', text: 'Not sent to Claude Code (only images are): a.pdf, b.csv.' }]);
-    expect(events[0]).toEqual(notices[0]);
+    // Right after the init's engine-meta, not before the query started (an
+    // event that early is dropped from the live stream).
+    expect(events.map((e) => e.type)).toEqual(['engine-meta', 'notice', 'finish']);
     const content = (calls[0]!.prompt.message as { content: { type: string; text?: string }[] }).content;
     expect(content[0]!.text).toContain('a.pdf, b.csv');
+  });
+
+  it('yields the attachment notice before the error when Claude Code fails before init', async () => {
+    const withFile = user('look', { parts: [{ type: 'text', text: 'look' }, { type: 'file', attachmentId: 'f1', filename: 'a.pdf', mime: 'application/pdf', size: 1 }] as CanonMessage['parts'] });
+    const failing = fakeQuery(async function* () { throw new Error('spawn claude ENOENT'); });
+    const events = await collect(engine(failing.query).stream(req({ messages: [withFile] })));
+    expect(events.map((e) => e.type)).toEqual(['notice', 'error']);
+    const errResult = fakeQuery(async function* () { yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], usage: {} } as unknown as SDKMessage; });
+    expect((await collect(engine(errResult.query).stream(req({ messages: [withFile] })))).map((e) => e.type)).toEqual(['notice', 'error']);
+  });
+
+  it('carries the attachment notice across the missing-session retry, yielding it once', async () => {
+    let n = 0;
+    const { query } = fakeQuery(async function* () {
+      n++;
+      if (n === 1) { yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['No conversation found with session ID: sess-0'], usage: {} } as unknown as SDKMessage; return; }
+      yield init('sess-2'); yield success();
+    });
+    const prev: CanonMessage = { ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };
+    const withFile = user('q2', { id: 'u2', parts: [{ type: 'text', text: 'q2' }, { type: 'file', attachmentId: 'f1', filename: 'a.pdf', mime: 'application/pdf', size: 1 }] as CanonMessage['parts'] });
+    const events = await collect(engine(query).stream(req({ messages: [user('q1'), prev, withFile], latestMessageForSession: () => 'a1' })));
+    expect(events.map((e) => e.type)).toEqual(['notice', 'engine-meta', 'notice', 'finish']);
+    expect(events[2]).toEqual({ type: 'notice', text: 'Not sent to Claude Code (only images are): a.pdf.' });
   });
 
   it('uses a lightweight, non-persisted query for utility calls', async () => {
