@@ -40,9 +40,9 @@ interface PendingRequest {
  */
 const SHELL_TOOL_NAMES = new Set(['run_command']);
 
-/** True for the real shell tool, anything wearing its name, and Claude Code's Bash. See `SHELL_TOOL_NAMES`. */
+/** True for the real shell tool, anything wearing its name, and every Claude Code shell-category tool (Bash, PowerShell, ...). See `SHELL_TOOL_NAMES`. */
 function isShellTool(tool: ToolSpec): boolean {
-  return tool.source === 'shell' || SHELL_TOOL_NAMES.has(tool.name) || (tool.source === 'agent' && tool.name === 'Bash');
+  return tool.source === 'shell' || SHELL_TOOL_NAMES.has(tool.name) || (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'shell');
 }
 
 /**
@@ -63,7 +63,9 @@ function isShellTool(tool: ToolSpec): boolean {
  *      rests on is a fact rather than an assumption -- it used to be an
  *      assumption, checked only as "at least one server is enabled
  *      somewhere") skip the prompt when
- *      `approvalMode` is `'ask_on_mutate'`. Shell is carved out of this
+ *      `approvalMode` is `'ask_on_mutate'`. Agent (Claude Code) tools auto-approve only when
+ *      their NAME classifies as file-read (never by declared risk), and agent
+ *      tools need a workspace like fs/shell. Shell is carved out of this
  *      entirely and by name (`tool.source === 'shell'`), not merely by risk
  *      class, precisely so a mis-declared shell `ToolSpec` (risk `'read'`
  *      instead of `'execute'`) still can't slip through auto-approval --
@@ -105,7 +107,7 @@ export class PermissionBroker {
 
     // fs/shell tools act ON a workspace; without one configured for this
     // chat there is nothing for them to legitimately operate on (shell's
-    // cwd is forced to workspace_root -- task 24 -- and every fs tool call
+    // cwd is forced to workspace_root -- task 24 -- agent (Claude Code) tools run in it too, and every fs tool call
     // goes through containPath(workspaceRoot, ...), which itself denies a
     // null root). mcp tools carry no such requirement.
     if ((tool.source === 'fs' || tool.source === 'shell' || tool.source === 'agent') && !ctx.workspaceRoot) {
@@ -124,7 +126,8 @@ export class PermissionBroker {
 
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
-      if (tool.source === 'agent' && !isShellTool(tool)) return { kind: 'allow', grantedBy: 'auto_read' };
+      // Name-based, not declared-risk-based: only Claude Code's known file-read tools.
+      if (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'file-read') return { kind: 'allow', grantedBy: 'auto_read' };
       // An mcp server was already explicitly enabled by the user (a policy
       // action distinct from any single tool call), so a READ-risk call
       // against it is treated as pre-authorised by that policy decision --
@@ -179,6 +182,10 @@ export class PermissionBroker {
     this.pending.delete(requestId);
 
     if (choice.choice === 'deny' || choice.choice === 'once') return;
+
+    // Fail closed: Grunt cannot know what an unrecognised Claude Code tool does,
+    // so it never pre-authorises future calls. 'chat'/'always' act like 'once'.
+    if (pending.tool.source === 'agent' && classifyAgentTool(pending.tool.name).category === 'other') return;
 
     if (choice.choice === 'chat') {
       // A 'chat' answer for the shell is NOT a blanket grant for the rest of

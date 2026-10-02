@@ -11,10 +11,11 @@ export type AgentToolCategory = 'file-read' | 'file-write' | 'shell' | 'web' | '
 
 const FILE_READ = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'];
 const FILE_WRITE = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
-const SHELL = ['Bash', 'BashOutput', 'KillShell'];
+const SHELL = ['Bash', 'BashOutput', 'KillShell', 'PowerShell', 'Monitor'];
+const MCP_RESOURCE = ['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool'];
 const WEB = ['WebFetch', 'WebSearch'];
 // No side effects of their own; a Task/Agent subagent's own tool calls are gated individually.
-const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ExitPlanMode'];
+const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ExitPlanMode', 'EnterPlanMode', 'ToolSearch', 'Skill'];
 // Grunt has no UI to answer it; Claude asks in plain text instead.
 const ALWAYS_DISALLOWED = ['AskUserQuestion'];
 
@@ -26,7 +27,7 @@ export function classifyAgentTool(name: string): { category: AgentToolCategory; 
   if (FILE_WRITE.includes(name)) return { category: 'file-write', risk: 'mutate' };
   if (SHELL.includes(name)) return { category: 'shell', risk: 'execute' };
   if (WEB.includes(name)) return { category: 'web', risk: 'mutate' };
-  if (name.startsWith('mcp__')) return { category: 'mcp', risk: 'mutate' };
+  if (name.startsWith('mcp__') || MCP_RESOURCE.includes(name)) return { category: 'mcp', risk: 'mutate' };
   if (INTERNAL.includes(name)) return { category: 'internal', risk: 'read' };
   return { category: 'other', risk: 'mutate' };
 }

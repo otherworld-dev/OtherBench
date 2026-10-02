@@ -45,3 +45,18 @@ describe('agentDisallowedTools', () => {
     }
   });
 });
+
+describe('R7 additions', () => {
+  it.each([
+    ['PowerShell', 'shell', 'execute'], ['Monitor', 'shell', 'execute'],
+    ['EnterPlanMode', 'internal', 'read'], ['ToolSearch', 'internal', 'read'], ['Skill', 'internal', 'read'],
+    ['ListMcpResourcesTool', 'mcp', 'mutate'], ['ReadMcpResourceTool', 'mcp', 'mutate'], ['ReadMcpResourceDirTool', 'mcp', 'mutate'],
+  ])('%s -> %s/%s', (name, category, risk) => {
+    expect(classifyAgentTool(name)).toEqual({ category, risk });
+  });
+  it('shell:false denies and hides PowerShell and Monitor', () => {
+    expect(agentPolicyDenial('PowerShell', policy({ shell: false }))).not.toBeNull();
+    expect(agentDisallowedTools(policy({ shell: false }))).toEqual(expect.arrayContaining(['PowerShell', 'Monitor']));
+    expect(agentPolicyDenial('ListMcpResourcesTool', policy({ agentMcp: false }))).toMatch(/MCP/);
+  });
+});

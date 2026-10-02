@@ -60,4 +60,53 @@ describe('PermissionBroker with source "agent"', () => {
     const fsSpec: ToolSpec = { ...spec('Edit'), source: 'fs' };
     expect(b.decide(fsSpec, { path: 'a.ts' }, policy(), ctx()).kind).toBe('ask');
   });
+
+  it('treats PowerShell as shell: pinned chat grant, no unconstrained always, ceiling', () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    expect(b.decide(spec('PowerShell'), { command: 'dir' }, policy({ shell: false }), ctx()).kind).toBe('deny');
+    const d = b.decide(spec('PowerShell'), { command: 'dir' }, policy(), ctx());
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    expect(() => b.resolve(d.request.id, { choice: 'always', constraint: null })).toThrow(/unconstrained/);
+    const d2 = b.decide(spec('PowerShell'), { command: 'dir' }, policy(), ctx());
+    if (d2.kind !== 'ask') throw new Error('expected ask');
+    b.resolve(d2.request.id, { choice: 'chat' });
+    expect(store.grants.list()[0]).toMatchObject({ toolName: 'PowerShell', constraint: { commandExact: 'dir' } });
+  });
+  it('auto_read is name-based: mis-declared risk still asks', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(b.decide({ ...spec('Bash'), risk: 'read' }, { command: 'ls' }, policy(), ctx()).kind).toBe('ask');
+    expect(b.decide({ ...spec('Edit'), risk: 'read' }, { path: 'a' }, policy(), ctx()).kind).toBe('ask');
+  });
+  it('allows EnterPlanMode/ToolSearch/Skill as internal', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    for (const n of ['EnterPlanMode', 'ToolSearch', 'Skill']) {
+      expect(b.decide(spec(n), {}, policy({ approvalMode: 'always_ask' }), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'policy' });
+    }
+  });
+  it('denies MCP resource tools under agentMcp:false', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(b.decide(spec('ListMcpResourcesTool'), {}, policy({ agentMcp: false }), ctx()).kind).toBe('deny');
+  });
+  it('unknown agent tools can only be approved once', () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    for (const choice of ['chat', 'always'] as const) {
+      const d = b.decide(spec('CronCreate'), { a: 1 }, policy(), ctx());
+      if (d.kind !== 'ask') throw new Error('expected ask');
+      b.resolve(d.request.id, choice === 'chat' ? { choice } : { choice, constraint: null });
+      expect(store.grants.list()).toHaveLength(0);
+    }
+    expect(b.decide(spec('CronCreate'), { a: 1 }, policy(), ctx()).kind).toBe('ask');
+  });
+  it('denies Edit and Bash without a workspace', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    for (const n of ['Edit', 'Bash']) expect(b.decide(spec(n), {}, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
+  });
+  it('an fs-source grant does not satisfy an agent call of the same name', () => {
+    const store = new InMemoryStore();
+    store.grants.create({ id: 'g2', chatId: 'c1', profileId: 'p1', toolName: 'Edit', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
+    const b = new PermissionBroker(store);
+    expect(b.decide(spec('Edit'), { path: 'a.ts' }, policy(), ctx()).kind).toBe('ask');
+  });
 });
