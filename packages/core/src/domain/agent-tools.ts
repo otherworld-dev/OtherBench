@@ -77,8 +77,10 @@ export function agentPolicyDenial(name: string, policy: ToolPolicy): string | nu
 
 /**
  * Tools to hide from Claude Code entirely (SDK `disallowedTools`), so the
- * model isn't offered tools every call to which would be denied. MCP tools are
- * not listed here: `agentMcp: false` is enforced by the gate (agentPolicyDenial).
+ * model isn't offered tools every call to which would be denied. Individual
+ * `mcp__*` tools are not listed here: under `agentMcp: false` the engine loads
+ * no MCP servers at all (`strictMcpConfig`), and the gate still denies any
+ * MCP call (agentPolicyDenial).
  */
 export function agentDisallowedTools(policy: ToolPolicy): string[] {
   const out = [...ALWAYS_DISALLOWED];
@@ -86,5 +88,6 @@ export function agentDisallowedTools(policy: ToolPolicy): string[] {
   if (policy.fs === 'off') out.push(...FILE_READ);
   if (!policy.shell) out.push(...SHELL);
   if (policy.agentWeb === false) out.push(...WEB);
+  if (policy.agentMcp === false) out.push(...MCP_RESOURCE);
   return out;
 }

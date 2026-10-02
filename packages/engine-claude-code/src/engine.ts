@@ -140,6 +140,9 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
       abortController,
       stderr: (data: string) => { stderr.push(data); if (stderr.length > 50) stderr.shift(); },
+      // MCP off: load no MCP config at all (none is passed), so the model isn't
+      // offered MCP tools and no server starts. The gate still denies MCP calls.
+      ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
       ...(plan.mode === 'continue' ? { resume: plan.sessionId } : {}),
       ...(profile.params.thinkingBudgetTokens ? { maxThinkingTokens: profile.params.thinkingBudgetTokens } : {}),
     };

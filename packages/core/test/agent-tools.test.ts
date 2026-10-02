@@ -74,4 +74,8 @@ describe('R7 additions', () => {
     expect(agentDisallowedTools(policy({ shell: false }))).toEqual(expect.arrayContaining(['PowerShell', 'Monitor']));
     expect(agentPolicyDenial('ListMcpResourcesTool', policy({ agentMcp: false }))).toMatch(/MCP/);
   });
+  it('agentMcp:false hides the MCP resource tools', () => {
+    expect(agentDisallowedTools(policy({ agentMcp: false }))).toEqual(expect.arrayContaining(['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool']));
+    expect(agentDisallowedTools(policy())).not.toContain('ListMcpResourcesTool');
+  });
 });

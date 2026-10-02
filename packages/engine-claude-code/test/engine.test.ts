@@ -53,11 +53,24 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(o).toMatchObject({ cwd: ws, model: 'sonnet', permissionMode: 'default', includePartialMessages: true, settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Be brief.' } });
     expect(o.disallowedTools).toContain('AskUserQuestion');
     expect(o.settings).toEqual({ disableSkillShellExecution: true });
+    expect(o.strictMcpConfig).toBeUndefined();
     expect(o.resume).toBeUndefined();
     expect(o.env).toEqual({ PATH: '/bin' });
     expect(o.hooks?.PreToolUse?.[0]?.hooks).toHaveLength(1);
     expect(o.hooks?.PreToolUse?.[0]?.timeout).toBe(86_400);
     expect(calls[0]!.prompt).toMatchObject({ type: 'user', origin: { kind: 'human' }, message: { role: 'user', content: [{ type: 'text', text: 'hi' }] } });
+  });
+
+  it('loads no MCP servers at all when the profile turns agent MCP off', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const toolPolicy = { fs: 'readwrite' as const, shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const, agentMcp: false };
+    await collect(engine(query).stream(req({ profile: profile({ toolPolicy }) })));
+    expect(calls[0]!.options.strictMcpConfig).toBe(true);
+    expect(calls[0]!.options.mcpServers).toBeUndefined();
+    // Explicitly on behaves like the default: the user's MCP config applies.
+    const on = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(engine(on.query).stream(req({ profile: profile({ toolPolicy: { ...toolPolicy, agentMcp: true } }) })));
+    expect(on.calls[0]!.options.strictMcpConfig).toBeUndefined();
   });
 
   it('resumes in place from the previous Claude Code message', async () => {
