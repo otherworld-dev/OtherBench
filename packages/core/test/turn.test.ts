@@ -1080,3 +1080,54 @@ describe('TurnRunner.retry', () => {
     expect(textParts(store.messages.get(failingId)!.parts)).toBe('Fixed');
   });
 });
+
+describe('engine meta and notices', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+  const newChat = (store: InMemoryStore) =>
+    store.chats.create({ id: 'chat-1', title: 't', profileId: null, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+  it('persists engine-meta on the assistant message without emitting it', async () => {
+    const store = new InMemoryStore();
+    const meta = { engine: 'claude_code' as const, sessionId: 's1', backend: 'claude', cwd: '/ws' };
+    const engine = new FakeChatEngine([
+      { type: 'engine-meta', meta },
+      { type: 'text-delta', text: 'hi' },
+      { type: 'finish', usage, finishReason: 'stop' },
+    ]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const chat = newChat(store);
+    const result = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'hello' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    expect(store.messages.get(id)!.engineMeta).toEqual(meta);
+    expect(events.some((e) => (e.type as string) === 'engine-meta')).toBe(false);
+  });
+
+  it('appends an engine notice as a notice part and emits it', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'notice', text: 'started fresh' }, { type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const chat = newChat(store);
+    const result = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'hello' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    expect(store.messages.get(id)!.parts).toEqual([{ type: 'notice', text: 'started fresh' }]);
+    expect(events.some((e) => e.type === 'notice' && e.text === 'started fresh')).toBe(true);
+  });
+
+  it('passes purpose "turn" and a chat-scoped latestMessageForSession', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([]);
+    const runner = new TurnRunner(store, engine);
+    const chat = newChat(store);
+    await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'hello' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    const req = engine.requests[0]!;
+    expect(req.purpose).toBe('turn');
+    expect(req.latestMessageForSession!('nope')).toBeNull();
+  });
+});
