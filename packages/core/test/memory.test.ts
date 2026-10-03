@@ -123,6 +123,13 @@ describe('finaliseSummary', () => {
     expect(finaliseSummary(emptyMemoryBody(), two)).toEqual({ ok: true, body });
   });
 
+  it('keeps a code block inside a section, wrapped or not', () => {
+    const body = note({ goals: '- Ship' }).replace('## Decisions', '## Decisions\n```ts\nconst a = 1;\n```\nAfter the code.');
+    expect(finaliseSummary(emptyMemoryBody(), body)).toEqual({ ok: true, body });
+    expect(finaliseSummary(emptyMemoryBody(), `\`\`\`markdown\n${body}\n\`\`\`\n\nLet me know.`)).toEqual({ ok: true, body });
+    expect(finaliseSummary(emptyMemoryBody(), `Here:\n\`\`\`\n${body}\n\`\`\``)).toEqual({ ok: true, body });
+  });
+
   it('names the stray heading when one is the problem', () => {
     const result = finaliseSummary(emptyMemoryBody(), `${note()}\n\n## Appendix\n- x`);
     expect(result).toEqual({ ok: false, reason: `${MEMORY_FORMAT_ERROR} Unexpected heading: "## Appendix".` });

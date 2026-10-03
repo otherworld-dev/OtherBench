@@ -157,6 +157,24 @@ export function hasMemoryContent(body: string): boolean {
 }
 
 /**
+ * Cuts `text` (which starts at `## Pinned`) at the wrapper's closing fence:
+ * the first bare ``` line seen while no inner code block is open. Fence lines
+ * inside the note pair up (open, close), so an even count means the next bare
+ * fence belongs to the wrapper.
+ */
+function stripClosingFence(text: string): string {
+  const lines = text.split('\n');
+  let seen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (!line.startsWith('```')) continue;
+    if (seen % 2 === 0 && line.trim() === '```') return lines.slice(0, i).join('\n');
+    seen++;
+  }
+  return text;
+}
+
+/**
  * Turns the summariser's raw answer into the note to save (spec §2
  * "Validate"). Drops a preamble and a code fence (models add them despite
  * the instruction), requires the five headings, puts `currentBody`'s Pinned
@@ -165,9 +183,11 @@ export function hasMemoryContent(body: string): boolean {
 export function finaliseSummary(currentBody: string, output: string): SummaryCheck {
   let text = output.replace(/\r\n?/g, '\n').trim();
   const start = text.search(/^##[ \t]+pinned[ \t]*$/im);
-  if (start > 0) text = text.slice(start);
-  const fence = /\n```[ \t]*(\n|$)/.exec(text); // the closing fence: drop it and any commentary after it
-  if (fence) text = text.slice(0, fence.index);
+  if (start > 0) {
+    const wrapped = /^```/m.test(text.slice(0, start));
+    text = text.slice(start);
+    if (wrapped) text = stripClosingFence(text);
+  }
   text = normaliseMemoryBody(text);
   if (text.length === 0) return { ok: false, reason: 'The model returned an empty note.' };
   const sections = parseSections(text);
