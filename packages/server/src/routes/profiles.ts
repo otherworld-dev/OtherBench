@@ -6,6 +6,7 @@ import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNullableString, optionalStringArray, requireNonEmptyString } from '../validation.js';
 import { clearProjectDefaultProfile } from './projects.js';
+import { clearMemoryProfile } from './settings.js';
 
 const DEFAULT_TOOL_POLICY: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' };
 
@@ -119,7 +120,10 @@ export function profilesRoutes(container: Container): Hono {
 
     const updated = container.store.profiles.update(id, patch);
     // Spec section 5: an archived profile stops being any project's default.
-    if (updated.archivedAt !== null) clearProjectDefaultProfile(container.store, id);
+    if (updated.archivedAt !== null) {
+      clearProjectDefaultProfile(container.store, id);
+      clearMemoryProfile(container.store, id);
+    }
     return c.json(updated);
   });
 
@@ -127,6 +131,7 @@ export function profilesRoutes(container: Container): Hono {
     const id = c.req.param('id');
     getProfileOrThrow(container, id);
     container.store.profiles.delete(id);
+    clearMemoryProfile(container.store, id);
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
     // in turn cascades THEIR attachment rows away -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see
