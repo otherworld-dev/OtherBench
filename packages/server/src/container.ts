@@ -310,7 +310,12 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // why calling it more than once would be a bug (duplicate title-gen races).
   subscribeAutoTitle(container);
   // Re-queue project chats that went quiet while the server was down (spec §2, §6).
-  memory.sweep();
+  try {
+    memory.sweep();
+  } catch (err) {
+    // Never let the memory sweep stop the server starting.
+    console.warn('[grunt-server] project memory startup sweep failed:', err);
+  }
 
   return container;
 }

@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MEMORY_FORMAT_ERROR, MEMORY_QUIET_MS, NO_MEMORY_MODEL_MESSAGE, emptyMemoryBody } from '@grunt/core/domain/memory.js';
-import { TurnRunner } from '@grunt/core/domain/turn.js';
+import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import { FakeChatEngine, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
@@ -602,5 +602,95 @@ describe('timeouts and shutdown (fix round 1)', () => {
     };
     await service.updateNow('chat');
     expect(signal!.aborted).toBe(true);
+  });
+});
+
+describe('final-review fixes', () => {
+  /** A stand-in for TurnRunner.on that lets a test emit events. */
+  function fakeRunner(): { on(cb: (e: TurnEvent) => void): () => void; emit(e: TurnEvent): void } {
+    const listeners = new Set<(e: TurnEvent) => void>();
+    return {
+      on(cb) {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      },
+      emit(e) {
+        for (const cb of listeners) cb(e);
+      },
+    };
+  }
+
+  it('sweep() survives a chat whose message tree cannot be read: it warns and still queues the others', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    addChat('bad');
+    addChat('good');
+    exchange('bad', 'Broken', 'ok', { at: clock.time - 10 * 60_000 });
+    exchange('good', 'Fine', 'ok', { at: clock.time - 10 * 60_000 });
+    const roots = store.messages.roots.bind(store.messages);
+    vi.spyOn(store.messages, 'roots').mockImplementation((chatId: string) => {
+      if (chatId === 'bad') throw new Error('disk gone');
+      return roots(chatId);
+    });
+
+    expect(() => service.sweep()).not.toThrow();
+    await service.idle();
+    expect(requests).toHaveLength(1);
+    expect(promptOf(requests[0])).toContain('Fine');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('bad'), expect.anything());
+    warn.mockRestore();
+  });
+
+  it.each<MessageStatus>(['error', 'cancelled'])('attach() re-arms the quiet timer when a reply ends %s', (status) => {
+    const runner = fakeRunner();
+    service.attach(runner);
+    exchange('chat', 'Plan', 'partial', { status });
+    runner.emit({ messageId: `chat-a${seq}`, type: 'status', status });
+    expect(clock.pending()).toEqual([MEMORY_QUIET_MS]);
+  });
+
+  it('attach() ignores a streaming status', () => {
+    const runner = fakeRunner();
+    service.attach(runner);
+    exchange('chat', 'Plan', 'partial', { status: 'streaming' });
+    runner.emit({ messageId: `chat-a${seq}`, type: 'status', status: 'streaming' });
+    expect(clock.pending()).toEqual([]);
+  });
+
+  it('an update after an errored-only turn makes no model call', async () => {
+    exchange('chat', 'Plan', 'partial', { status: 'error' });
+    expect(await service.updateNow('chat')).toEqual({ status: 'nothing-new' });
+    expect(requests).toHaveLength(0);
+  });
+
+  it.each(['length', 'max_tokens', 'content-filter'])('treats finishReason "%s" as a failure and saves nothing', async (finishReason) => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => [{ type: 'text-delta', text: note({ goals: '- cut off' }) }, { type: 'finish', usage: ZERO, finishReason }];
+    const outcome = await service.updateNow('chat');
+    expect(outcome.status).toBe('failed');
+    expect(store.projectMemory.get('proj')).toBeNull();
+    expect(store.chats.get('chat')!.memoryCursor).toBeNull();
+    expect(service.lastError('proj')?.message).toContain(finishReason);
+  });
+
+  it('runs only one update at a time across projects, each project still in order', async () => {
+    store.projects.create({ id: 'proj2', name: 'Beta', workspaceRoot: null, defaultProfileId: null });
+    addChat('other', { projectId: 'proj2' });
+    exchange('chat', 'Alpha work', 'ok');
+    exchange('other', 'Beta work', 'ok');
+    const gates = gatedModel();
+
+    const first = service.updateNow('chat');
+    const second = service.updateNow('other');
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(requests).toHaveLength(1);
+
+    gates[0]!.resolve(reply(note()));
+    expect((await first).status).toBe('updated');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(promptOf(requests[1])).toContain('Beta work');
+    gates[1]!.resolve(reply(note({ goals: '- Beta goal' })));
+    expect((await second).status).toBe('updated');
+    await service.idle();
   });
 });

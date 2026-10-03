@@ -34,6 +34,9 @@ export interface ProjectMemoryServiceDeps {
   timeoutMs?: number;
 }
 
+/** Finish reasons (AI SDK and Anthropic spellings) that mean the answer is incomplete or withheld. */
+const TRUNCATING_FINISH_REASONS: ReadonlySet<string> = new Set(['length', 'max_tokens', 'model_context_window_exceeded', 'content-filter', 'refusal', 'error']);
+
 const discarded = (reason: string): MemoryUpdateOutcome => ({ status: 'discarded', reason });
 
 function errorMessage(err: unknown): string {
@@ -53,7 +56,8 @@ function sameNote(before: ProjectMemory | null, after: ProjectMemory | null): bo
  * A completed reply in a project chat (re)starts that chat's quiet timer; a
  * new turn cancels it. When it fires, the chat's completed active-path
  * messages after its cursor are folded into the note by one `purpose:
- * 'utility'` call. Updates run one at a time per project, each reading the
+ * 'utility'` call. Updates run one at a time across all projects (so a
+ * slow or metered memory model is never hit in parallel), each reading the
  * note fresh, so a queued update sees the previous one's result. A failure
  * changes nothing and is kept as the project's `lastError` until the next
  * success. Timers, failures and queues live in this process only; `sweep()`
@@ -69,8 +73,10 @@ export class ProjectMemoryService {
   private readonly timeoutMs: number;
   /** chatId -> pending quiet timer. */
   private readonly timers = new Map<string, unknown>();
-  /** projectId -> the tail of that project's update queue. */
-  private readonly queues = new Map<string, Promise<void>>();
+  /** The tail of the one update queue: at most one summariser call runs at a time across all projects, so a project's updates stay in order. */
+  private tail: Promise<void> = Promise.resolve();
+  /** Updates queued or running. */
+  private outstanding = 0;
   /** projectId -> its last failed update, until the next success. */
   private readonly failures = new Map<string, MemoryFailure>();
   /** projectId + chatId -> an update that is queued but hasn't started; a repeat request joins it. */
@@ -92,7 +98,8 @@ export class ProjectMemoryService {
   /** Starts the quiet timer whenever an assistant reply completes. Call once per runner. */
   attach(turnRunner: { on(cb: (e: TurnEvent) => void): () => void }): () => void {
     return turnRunner.on((event) => {
-      if (event.type !== 'status' || event.status !== 'complete') return;
+      // An errored or cancelled reply re-arms the timer too: its chat has gone quiet, and an update with no new completed reply returns before any model call.
+      if (event.type !== 'status' || !(event.status === 'complete' || event.status === 'error' || event.status === 'cancelled')) return;
       const message = this.store.messages.get(event.messageId);
       if (message?.role === 'assistant') this.noteTurnCompleted(message.chatId);
     });
@@ -135,13 +142,17 @@ export class ProjectMemoryService {
     if (this.disposed) return;
     const now = this.now();
     for (const chat of this.store.chats.list()) {
-      if (!this.contributes(chat) || chat.projectId === null) continue;
-      const replies = this.pending(chat).filter((m) => m.role === 'assistant');
-      if (replies.length === 0) continue;
-      const newest = Math.max(...replies.map((m) => m.createdAt));
-      const wait = this.quietMs - (now - newest);
-      if (wait <= 0) void this.enqueue(chat.projectId, chat.id);
-      else this.schedule(chat.id, wait);
+      try {
+        if (!this.contributes(chat) || chat.projectId === null) continue;
+        const replies = this.pending(chat).filter((m) => m.role === 'assistant');
+        if (replies.length === 0) continue;
+        const newest = Math.max(...replies.map((m) => m.createdAt));
+        const wait = this.quietMs - (now - newest);
+        if (wait <= 0) void this.enqueue(chat.projectId, chat.id);
+        else this.schedule(chat.id, wait);
+      } catch (err) {
+        console.warn(`[grunt-server] project memory sweep skipped chat ${chat.id}:`, err);
+      }
     }
   }
 
@@ -152,8 +163,8 @@ export class ProjectMemoryService {
 
   /** Resolves once every queued update has finished. */
   async idle(): Promise<void> {
-    while (this.queues.size > 0) {
-      await Promise.all([...this.queues.values()]);
+    while (this.outstanding > 0) {
+      await this.tail;
       await Promise.resolve();
     }
   }
@@ -190,16 +201,14 @@ export class ProjectMemoryService {
     const key = `${projectId}\u0000${chatId}`;
     const waiting = this.waiting.get(key);
     if (waiting) return waiting;
-    const previous = this.queues.get(projectId) ?? Promise.resolve();
-    const run = previous.then(() => {
+    this.outstanding += 1;
+    const run = this.tail.then(() => {
       this.waiting.delete(key);
       return this.runUpdate(projectId, chatId);
     });
     this.waiting.set(key, run);
-    const tail = run.then(() => undefined);
-    this.queues.set(projectId, tail);
-    void tail.then(() => {
-      if (this.queues.get(projectId) === tail) this.queues.delete(projectId);
+    this.tail = run.then(() => {
+      this.outstanding -= 1;
     });
     return run;
   }
@@ -331,6 +340,10 @@ export class ProjectMemoryService {
         if (event.type === 'text-delta') text += event.text;
         else if (event.type === 'error') return timedOut ? timeoutFailure : { ok: false, error: event.error.message };
         else if (event.type === 'finish') {
+          // A cut-off note must never be saved: it can parse as a valid, shorter note.
+          if (TRUNCATING_FINISH_REASONS.has(event.finishReason)) {
+            return { ok: false, error: `The model's answer was cut off (finish reason "${event.finishReason}").` };
+          }
           // The note is complete; a Claude Code stream can stay open after this.
           finished = true;
           break;

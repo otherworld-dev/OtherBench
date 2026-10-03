@@ -125,6 +125,8 @@ export function turnsRoutes(container: Container): Hono {
     try {
       result = await container.turnRunner.run({ chatId, parentId, userParts: parts, profiles });
     } catch (err) {
+      // Nothing started, so the chat is quiet again: re-arm its memory timer.
+      container.memory?.noteTurnCompleted(chatId);
       // A part naming an attachment that doesn't exist, or belongs to a
       // DIFFERENT chat, is a client-supplied bad reference -- 400, not the
       // 500 an uncaught throw here would otherwise become. See
@@ -184,6 +186,7 @@ export function turnsRoutes(container: Container): Hono {
     container.memory?.noteTurnStarted(message.chatId);
     container.streamRegistry.resetBuffer(message.chatId, messageId);
     void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
+      container.memory?.noteTurnCompleted(message.chatId);
       console.error(`[grunt-server] retry ${messageId} failed outside its own error handling:`, err);
     });
 
