@@ -107,9 +107,10 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
             type="button"
             aria-label={`New chat in ${name}`}
             title={`New chat in ${name}`}
-            disabled={newChatDisabled}
-            onClick={onNewChat}
-            className="shrink-0 rounded px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] disabled:opacity-40"
+            // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
+            aria-disabled={newChatDisabled || undefined}
+            onClick={newChatDisabled ? undefined : onNewChat}
+            className="shrink-0 rounded px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] aria-disabled:opacity-40"
           >
             +
           </button>

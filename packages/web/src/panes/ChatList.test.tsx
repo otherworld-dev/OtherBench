@@ -28,7 +28,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { ApiError, api, type SearchResult } from '../state/api.js';
-import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests } from '../state/sidebarGroups.js';
+import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 import { ChatList } from './ChatList.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
@@ -260,7 +260,7 @@ describe('ChatList groups', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(mockedProjectCreate).not.toHaveBeenCalled();
 
-    await user.type(input, '  Gamma  {Enter}{Enter}');
+    await user.type(input, '  Gamma  {Enter}');
     await waitFor(() => expect(screen.getByTestId('group-p-new')).toBeInTheDocument());
     expect(mockedProjectCreate).toHaveBeenCalledTimes(1);
     expect(mockedProjectCreate).toHaveBeenCalledWith({ name: 'Gamma' });
@@ -336,5 +336,273 @@ describe('ChatList drag and drop', () => {
     await waitFor(() => expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('1'));
     expect(rowIds('group-pinned')).toEqual(['c1']);
     expect(rowIds('group-p-a')).toEqual([]);
+  });
+});
+
+describe('ChatList chat menu', () => {
+  function setup() {
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha', sortOrder: 0 }), makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 })],
+      chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' }), makeChat({ id: 'c2', title: 'Second' })],
+      activeChatId: 'c1',
+    });
+    render(<ChatList />);
+    return userEvent.setup();
+  }
+  const row = (title: string) => screen.getByRole('button', { name: title });
+
+  it('right-click opens the menu on Rename; Escape closes it and returns focus to the row', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'), { clientX: 40, clientY: 50 });
+
+    expect(screen.getByRole('menu', { name: 'Chat actions' })).toBeInTheDocument();
+    for (const name of ['Rename', 'Pin', 'Move to project…', 'Archive', 'Delete…']) {
+      expect(screen.getByRole('menuitem', { name })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    await waitFor(() => expect(row('First')).toHaveFocus());
+  });
+
+  it('Shift+F10 and the context-menu key on a focused row open the same menu', async () => {
+    const user = setup();
+    row('Second').focus();
+    await user.keyboard('{Shift>}{F10}{/Shift}');
+    expect(screen.getByRole('menu', { name: 'Chat actions' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(row('Second')).toHaveFocus());
+
+    fireEvent.keyDown(row('Second'), { key: 'ContextMenu' });
+    expect(screen.getByRole('menu', { name: 'Chat actions' })).toBeInTheDocument();
+  });
+
+  it('the ⋯ button toggles the menu, and a click outside or a scroll closes it', async () => {
+    const user = setup();
+    const more = within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat actions' });
+
+    await user.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    await user.click(more);
+    expect(screen.queryByRole('menu')).toBeNull();
+
+    await user.click(more);
+    const search = screen.getByRole('searchbox', { name: 'Search chats' });
+    await user.click(search);
+    expect(screen.queryByRole('menu')).toBeNull();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(search).toHaveFocus(); // a pointerdown-outside dismiss does not steal focus (R4)
+
+    await user.click(more);
+    fireEvent.scroll(screen.getByTestId('chat-list-scroll'));
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('Rename edits the title in place: Enter saves the trimmed title, Esc cancels, empty is refused', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const input = screen.getByRole('textbox', { name: 'Chat title' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('First');
+
+    await user.clear(input);
+    await user.keyboard('{Enter}');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(mockedPatch).not.toHaveBeenCalled();
+
+    await user.type(input, '  Renamed  {Enter}');
+    await waitFor(() => expect(row('Renamed')).toBeInTheDocument());
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { title: 'Renamed' });
+    await waitFor(() => expect(row('Renamed')).toHaveFocus());
+
+    fireEvent.contextMenu(row('Renamed'));
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    await user.type(screen.getByRole('textbox', { name: 'Chat title' }), 'xyz{Escape}');
+    expect(row('Renamed')).toBeInTheDocument();
+    expect(mockedPatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a title change from elsewhere while renaming does not overwrite what the user typed (review focus 4)', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const input = screen.getByRole('textbox', { name: 'Chat title' });
+    await user.clear(input);
+    await user.type(input, 'Mine');
+
+    act(() => useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats.find((c) => c.id === 'c1')!, title: 'Auto title' }));
+
+    expect(input).toHaveValue('Mine');
+    await user.keyboard('{Enter}');
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { title: 'Mine' });
+  });
+
+  it('the menu reflects the chat as it is now, not as it was when opened (review focus 4)', () => {
+    setup();
+    fireEvent.contextMenu(row('First'));
+
+    act(() => useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats.find((c) => c.id === 'c1')!, pinned: true }));
+
+    expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
+  });
+
+  it('Pin moves the chat under Pinned and puts focus back on its row; the menu then offers Unpin', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('Second'));
+    await user.click(screen.getByRole('menuitem', { name: 'Pin' }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('c2', { pinned: true });
+    await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c2']));
+    await waitFor(() => expect(row('Second')).toHaveFocus());
+    fireEvent.contextMenu(row('Second'));
+    expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
+  });
+
+  it('Move to project… lists every project plus No project, marks and focuses the current one, and moves the chat', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Move to project…' }));
+
+    const sub = screen.getByRole('menu', { name: 'Move to project…' });
+    expect(within(sub).getAllByRole('menuitemradio').map((el) => el.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false']);
+    expect(within(sub).getByRole('menuitemradio', { name: 'Alpha' })).toHaveFocus();
+    await user.click(within(sub).getByRole('menuitemradio', { name: 'Beta' }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { projectId: 'p-b' });
+    await waitFor(() => expect(rowIds('group-p-b')).toEqual(['c1']));
+    expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull();
+  });
+
+  it('a chat whose project no longer exists shows under No project; its menu marks No project, and choosing it cleans up (review focus 5)', async () => {
+    useGruntStore.setState({ projects: [], chats: [makeChat({ id: 'c9', title: 'Orphan', projectId: 'gone' })] });
+    render(<ChatList />);
+    const user = userEvent.setup();
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c9']);
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Orphan' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move to project…' }));
+    const noProject = screen.getByRole('menuitemradio', { name: 'No project' });
+    expect(noProject).toHaveAttribute('aria-checked', 'true');
+    await user.click(noProject);
+
+    expect(mockedPatch).toHaveBeenCalledWith('c9', { projectId: null });
+  });
+
+  it('Archive hides the chat and clears the selection when it was open', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Archive' }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { archivedAt: expect.any(Number) });
+    await waitFor(() => expect(screen.queryByTestId('chat-row-c1')).toBeNull());
+    expect(useGruntStore.getState().activeChatId).toBeNull();
+  });
+
+  it('Delete… asks first: Cancel keeps the chat and refocuses its row, Delete removes it', async () => {
+    const user = setup();
+    mockedDelete.mockResolvedValue(undefined);
+
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    const dialog = screen.getByRole('alertdialog', { name: "Delete 'First'? This can't be undone." });
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(mockedDelete).not.toHaveBeenCalled();
+    await waitFor(() => expect(row('First')).toHaveFocus());
+
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(mockedDelete).toHaveBeenCalledWith('c1');
+    await waitFor(() => expect(screen.queryByTestId('chat-row-c1')).toBeNull());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(useGruntStore.getState().activeChatId).toBeNull();
+  });
+});
+
+describe('ChatList chat menu focus and unarchive (R4)', () => {
+  it('Esc with the opener row hidden (its group collapsed) falls back to the chat list', async () => {
+    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' })] });
+    render(<ChatList />);
+    const user = userEvent.setup();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
+    act(() => setGroupCollapsed('p-a', true));
+    expect(screen.queryByTestId('chat-row-c1')).toBeNull();
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.getByRole('navigation', { name: 'Chats' })).toHaveFocus());
+  });
+
+  it('a chat deleted elsewhere closes its open menu and leaves focus in the list', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    render(<ChatList />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    act(() => useGruntStore.getState().removeChat('c1'));
+
+    expect(screen.queryByRole('menu')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('navigation', { name: 'Chats' })).toHaveFocus());
+  });
+
+  it('after Delete, focus lands on a neighbouring row', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' }), makeChat({ id: 'c2', title: 'Second' })], activeChatId: null });
+    mockedDelete.mockResolvedValue(undefined);
+    render(<ChatList />);
+    const user = userEvent.setup();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByTestId('chat-row-c1')).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Second' })).toHaveFocus());
+  });
+
+  it('Unpin sends pinned: false even if the chat was pinned after the menu opened', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    render(<ChatList />);
+    const user = userEvent.setup();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'First' }));
+    act(() => useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats.find((c) => c.id === 'c1')!, pinned: true }));
+    await user.click(screen.getByRole('menuitem', { name: 'Unpin' }));
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { pinned: false });
+  });
+});
+
+describe('ChatList + New project focus (Task 9 carry-over)', () => {
+  it('returns focus to + New project after a commit and after a cancel', async () => {
+    const user = userEvent.setup();
+    mockedProjectCreate.mockResolvedValue(makeProject({ id: 'p-new', name: 'Gamma' }));
+    render(<ChatList />);
+    const button = () => screen.getByRole('button', { name: '+ New project' });
+
+    await user.click(button());
+    await user.type(screen.getByRole('textbox', { name: 'Project name' }), 'Gamma{Enter}');
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull());
+    await waitFor(() => expect(button()).toHaveFocus());
+
+    await user.click(button());
+    await user.type(screen.getByRole('textbox', { name: 'Project name' }), 'x{Escape}');
+    await waitFor(() => expect(button()).toHaveFocus());
+  });
+
+  it('keeps keyboard focus on a + button while a chat is being created (aria-disabled, not disabled)', async () => {
+    const user = userEvent.setup();
+    let resolveCreate!: (c: Chat) => void;
+    mockedCreate.mockImplementation(() => new Promise((resolve) => (resolveCreate = resolve)));
+    render(<ChatList />);
+    const newChat = screen.getByRole('button', { name: '+ New chat' });
+    newChat.focus();
+    await user.keyboard('{Enter}');
+
+    expect(newChat).toHaveFocus();
+    expect(newChat).toHaveAttribute('aria-disabled', 'true');
+    await user.keyboard('{Enter}');
+    expect(mockedCreate).toHaveBeenCalledTimes(1);
+    await act(async () => resolveCreate(makeChat({ id: 'c-new' })));
+    expect(newChat).toHaveFocus();
   });
 });

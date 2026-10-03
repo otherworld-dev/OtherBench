@@ -87,14 +87,14 @@ describe('Menu', () => {
     expect(onClose).toHaveBeenLastCalledWith('dismiss');
   });
 
-  it('a pointerdown outside or a scroll dismisses; a pointerdown inside does not', () => {
+  it('a pointerdown outside (reason pointer) or a scroll dismisses; a pointerdown inside does not', () => {
     const onClose = vi.fn();
     render(<Menu label="Chat actions" items={items()} position={{ x: 0, y: 0 }} onClose={onClose} />);
 
     fireEvent.pointerDown(screen.getByRole('menuitem', { name: 'Rename' }));
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.pointerDown(document.body);
-    expect(onClose).toHaveBeenCalledWith('dismiss');
+    expect(onClose).toHaveBeenCalledWith('pointer');
 
     onClose.mockClear();
     fireEvent.scroll(window);

@@ -13,11 +13,13 @@ export interface MenuItem {
 }
 
 /**
- * `dismiss`: Esc, Tab, a pointerdown outside, or a scroll -- the caller puts
- * focus back on whatever opened the menu. `select`: an item was chosen -- its
- * action decides where focus goes next (a rename field, a dialog, the row).
+ * `dismiss`: Esc, Tab or a scroll -- the caller puts focus back on whatever
+ * opened the menu. `pointer`: a pointerdown outside -- the user clicked
+ * something else, so the caller must not steal focus from it. `select`: an
+ * item was chosen -- its action decides where focus goes next (a rename
+ * field, a dialog, the row).
  */
-export type MenuCloseReason = 'dismiss' | 'select';
+export type MenuCloseReason = 'dismiss' | 'pointer' | 'select';
 
 export interface MenuProps {
   /** Accessible name of the menu. */
@@ -212,16 +214,18 @@ export function Menu({ label, items, position, onClose }: MenuProps): JSX.Elemen
   }, [position.x, position.y]);
 
   useEffect(() => {
-    const outside = (e: Event): void => {
-      if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) onCloseRef.current('dismiss');
+    const outside = (reason: MenuCloseReason) => (e: Event): void => {
+      if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) onCloseRef.current(reason);
     };
+    const onPointerDown = outside('pointer');
+    const onScroll = outside('dismiss');
     // Scrolling inside the menu (a long submenu, or focus() scrolling an item
     // into view) must not close it; only scrolling something else does.
-    document.addEventListener('pointerdown', outside);
-    window.addEventListener('scroll', outside, true); // capture: catches the sidebar's own scrolling too
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('scroll', onScroll, true); // capture: catches the sidebar's own scrolling too
     return () => {
-      document.removeEventListener('pointerdown', outside);
-      window.removeEventListener('scroll', outside, true);
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('scroll', onScroll, true);
     };
   }, []);
 
