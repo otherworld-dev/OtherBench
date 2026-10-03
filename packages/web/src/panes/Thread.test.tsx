@@ -105,7 +105,7 @@ describe('Thread', () => {
 
     render(<Thread chat={chatA} />);
 
-    expect(screen.getByText('text of root-a')).toBeInTheDocument();
+    expect(within(screen.getByTestId('thread-scroll')).getByText('text of root-a')).toBeInTheDocument();
     expect(screen.queryByTestId('reopen-variants-chip')).not.toBeInTheDocument();
     expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
   });
@@ -363,5 +363,16 @@ describe('Thread composer per chat', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     view.rerender(<Thread chat={c} />);
     expect(screen.queryByRole('button', { name: 'Auto mode' })).not.toBeInTheDocument();
+  });
+
+  it('renders the conversation strip above (outside) the scroller, only once a user message exists', () => {
+    const view = render(<Thread chat={makeChat({ id: 'chat-a', headMessageId: null })} />);
+    expect(screen.queryByRole('region', { name: 'Conversation' })).not.toBeInTheDocument();
+    useGruntStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
+    view.rerender(<Thread chat={makeChat({ id: 'chat-a', headMessageId: 'root-a' })} />);
+    const strip = screen.getByRole('region', { name: 'Conversation' });
+    const scroller = screen.getByTestId('thread-scroll');
+    expect(scroller.contains(strip)).toBe(false);
+    expect(strip.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
