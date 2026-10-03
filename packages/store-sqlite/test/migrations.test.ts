@@ -145,6 +145,33 @@ describe('runMigrations', () => {
     }
   });
 
+  it('project-memory seeds each existing chat cursor to its newest message (no backfill on upgrade)', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-project-memory'));
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO project (id, name, created_at, updated_at) VALUES ('proj', 'Alpha', 1, 1)`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, project_id, created_at, updated_at) VALUES ('busy', 'Busy', 'p1', 'proj', 1, 1)`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, project_id, created_at, updated_at) VALUES ('empty', 'Empty', 'p1', 'proj', 1, 1)`);
+      const insert = (id: string, parent: string | null, role: string, at: number): void =>
+        db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('${id}', 'busy', ${parent ? `'${parent}'` : 'NULL'}, '${role}', '[]', 'complete', ${at})`);
+      insert('m1', null, 'user', 10);
+      insert('m2', 'm1', 'assistant', 11);
+      insert('m3', 'm2', 'user', 20);
+      insert('m4', 'm3', 'assistant', 20); // same timestamp as m3: the later id wins
+
+      runMigrations(db);
+
+      const cursor = (id: string): string | null => (db.prepare(`SELECT memory_cursor FROM chat WHERE id = ?`).get(id) as { memory_cursor: string | null }).memory_cursor;
+      expect(cursor('busy')).toBe('m4');
+      expect(cursor('empty')).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
   it('project-memory adds the note and version tables, the chat memory columns and app settings; notes cascade with their project', () => {
     const migration = MIGRATIONS.find((m) => m.name.endsWith('-project-memory'));
     expect(migration).toBeDefined();

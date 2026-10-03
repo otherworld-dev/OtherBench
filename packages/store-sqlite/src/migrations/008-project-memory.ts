@@ -4,7 +4,10 @@
 // table (JSON values) for app-wide settings. Grunt had no settings storage
 // before this; `memoryProfileId` is its first key. `source_chat_id` has no
 // foreign key on purpose: a note keeps naming the chat it came from after
-// that chat is deleted (the UI shows "a deleted chat").
+// that chat is deleted (the UI shows "a deleted chat"). Existing chats get
+// their cursor seeded to their newest message, so upgrading never queues a
+// backfill of old history through the memory model (cost and privacy): "Update
+// now" in a chat folds its older messages in on request.
 export const MIGRATION_008_PROJECT_MEMORY = `
 CREATE TABLE project_memory (
   project_id TEXT PRIMARY KEY REFERENCES project(id) ON DELETE CASCADE,
@@ -24,6 +27,7 @@ CREATE TABLE project_memory_version (
 CREATE INDEX idx_project_memory_version_project ON project_memory_version(project_id, created_at);
 ALTER TABLE chat ADD COLUMN memory_cursor TEXT NULL;
 ALTER TABLE chat ADD COLUMN memory_excluded INTEGER NOT NULL DEFAULT 0;
+UPDATE chat SET memory_cursor = (SELECT id FROM message WHERE message.chat_id = chat.id ORDER BY created_at DESC, id DESC LIMIT 1);
 CREATE TABLE app_setting (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
