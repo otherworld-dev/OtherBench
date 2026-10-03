@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
@@ -649,5 +649,44 @@ describe('GET /api/chats/:id/stream', () => {
   it('404s for an unknown chat', async () => {
     const res = await app().request('/api/chats/no-such-chat/stream');
     expect(res.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Project memory timer: a turn that never started must not leave the chat unarmed
+// ---------------------------------------------------------------------------
+
+describe('project memory re-arm when a turn fails to start', () => {
+  function stubMemory() {
+    const memory = { noteTurnStarted: vi.fn(), noteTurnCompleted: vi.fn() };
+    container.memory = memory as never;
+    return memory;
+  }
+
+  it('POST /chats/:id/turns re-arms the quiet timer when run() throws', async () => {
+    const { chatId, profileIds } = seedChat();
+    const memory = stubMemory();
+    vi.spyOn(container.turnRunner, 'run').mockRejectedValue(new Error('store exploded'));
+    const res = await postTurn(chatId, profileIds);
+    expect(res.status).toBe(500);
+    expect(memory.noteTurnStarted).toHaveBeenCalledWith(chatId);
+    expect(memory.noteTurnCompleted).toHaveBeenCalledWith(chatId);
+  });
+
+  it('POST /messages/:id/retry re-arms the quiet timer when retry() rejects', async () => {
+    const { chatId, profileIds } = seedChat();
+    const res = await postTurn(chatId, profileIds);
+    const { assistantMessageIds } = (await res.json()) as { assistantMessageIds: string[] };
+    const failingId = assistantMessageIds[0]!;
+    push(failingId, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    const memory = stubMemory();
+    vi.spyOn(container.turnRunner, 'retry').mockRejectedValue(new Error('retry exploded'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const retryRes = await app().request(`/api/messages/${failingId}/retry`, { method: 'POST' });
+    expect(retryRes.status).toBe(202);
+    await flush();
+    expect(memory.noteTurnStarted).toHaveBeenCalledWith(chatId);
+    expect(memory.noteTurnCompleted).toHaveBeenCalledWith(chatId);
   });
 });

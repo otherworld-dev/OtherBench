@@ -844,4 +844,35 @@ describe('chats in projects', () => {
 
     expect(list.map((c) => c['projectId']).sort()).toEqual([null, 'proj-1'].sort());
   });
+
+  it("PATCH memoryExcluded turns the chat's memory contribution off and on without moving it in the list", async () => {
+    const created = await json(await post({ projectId: 'proj-1' }));
+    const id = created['id'] as string;
+    expect(created).toMatchObject({ memoryExcluded: false, memoryCursor: null });
+    const updatedAt = container.store.chats.get(id)!.updatedAt;
+
+    const off = await patchChat(id, { memoryExcluded: true });
+    expect(off.status).toBe(200);
+    expect(await json(off)).toMatchObject({ memoryExcluded: true, updatedAt });
+    expect(await json(await patchChat(id, { memoryExcluded: false }))).toMatchObject({ memoryExcluded: false, updatedAt });
+  });
+
+  it('rejects a non-boolean memoryExcluded with 400 and leaves the chat unchanged', async () => {
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    for (const bad of ['yes', 1, null]) {
+      const res = await patchChat(id, { memoryExcluded: bad });
+      expect(res.status).toBe(400);
+      expect((await json(res))['error']).toBe('"memoryExcluded" must be a boolean.');
+    }
+    expect(container.store.chats.get(id)!.memoryExcluded).toBe(false);
+  });
+
+  it("moving a chat to another project resets its memory cursor, and a client can't set the cursor", async () => {
+    container.store.projects.create({ id: 'proj-2', name: 'Beta', workspaceRoot: null, defaultProfileId: null });
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    container.store.chats.update(id, { memoryCursor: 'msg-1' });
+
+    expect(await json(await patchChat(id, { memoryCursor: 'msg-9' }))).toMatchObject({ memoryCursor: 'msg-1' });
+    expect(await json(await patchChat(id, { projectId: 'proj-2' }))).toMatchObject({ projectId: 'proj-2', memoryCursor: null });
+  });
 });

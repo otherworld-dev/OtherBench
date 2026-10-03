@@ -308,4 +308,25 @@ describe('MockChatEngine', () => {
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
     });
   });
+
+  describe('#echo-system', () => {
+    function systemMessage(text: string): CanonMessage {
+      return { id: 'system:p', chatId: 'chat-1', parentId: null, role: 'system', parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 0 };
+    }
+
+    it('replies with the system prompt it was given, for checking what a turn sent (e2e)', async () => {
+      const engine = new MockChatEngine({ sleep: fakeSleep() });
+      const events = await drain(engine.stream(makeRequest('#echo-system', { messages: [systemMessage('# Project memory: Alpha\n- pinned-fact'), userMessage('#echo-system')] })));
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      expect(text).toBe('# Project memory: Alpha - pinned-fact');
+      expect(events.at(-1)?.type).toBe('finish');
+    });
+
+    it('says so when there is no system prompt', async () => {
+      const engine = new MockChatEngine({ sleep: fakeSleep() });
+      const events = await drain(engine.stream(makeRequest('#echo-system')));
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      expect(text).toBe('No system prompt.');
+    });
+  });
 });

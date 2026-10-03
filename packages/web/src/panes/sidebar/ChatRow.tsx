@@ -80,6 +80,17 @@ export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, r
         )}
         {chat.title}
       </button>
+      {chat.memoryExcluded && chat.projectId !== null && (
+        <span
+          data-testid="memory-excluded-marker"
+          role="img"
+          aria-label="Not added to project memory"
+          title="Not added to project memory"
+          className="shrink-0 px-0.5 text-xs text-[var(--text-faint)]"
+        >
+          ⊘
+        </span>
+      )}
       {onOpenMenu && (
         <button
           type="button"

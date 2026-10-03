@@ -66,6 +66,8 @@ const chat: Chat = {
   pinned: false,
   autoMode: false,
   projectId: null,
+  memoryCursor: null,
+  memoryExcluded: false,
   archivedAt: null,
   createdAt: 1,
   updatedAt: 1,
@@ -472,6 +474,27 @@ describe('ChatList chat menu', () => {
     await waitFor(() => expect(row('Second')).toHaveFocus());
     fireEvent.contextMenu(row('Second'));
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
+  });
+
+  it("Don't add to project memory marks the row, and the menu then offers Add to project memory", async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: "Don't add to project memory" }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { memoryExcluded: true });
+    await waitFor(() => expect(within(screen.getByTestId('chat-row-c1')).getByTestId('memory-excluded-marker')).toBeInTheDocument());
+    await waitFor(() => expect(row('First')).toHaveFocus());
+
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Add to project memory' }));
+    expect(mockedPatch).toHaveBeenLastCalledWith('c1', { memoryExcluded: false });
+    await waitFor(() => expect(screen.queryByTestId('memory-excluded-marker')).toBeNull());
+  });
+
+  it('a chat outside any project has no project memory item', () => {
+    setup();
+    fireEvent.contextMenu(row('Second'));
+    expect(screen.queryByRole('menuitem', { name: "Don't add to project memory" })).toBeNull();
   });
 
   it('Move to project… lists every project plus No project, marks and focuses the current one, and moves the chat', async () => {

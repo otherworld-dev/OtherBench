@@ -90,6 +90,13 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(calls[0]!.options.forkSession).toBeFalsy();
   });
 
+  it('sends the system prompt append on a resumed turn too, so a resumed session sees the current project memory', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-0'); yield success(); });
+    const prev: CanonMessage = { ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };
+    await collect(engine(query).stream(req({ profile: profile({ systemPrompt: 'Memory v2' }), messages: [user('q1'), prev, { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1' })));
+    expect(calls[0]!.options).toMatchObject({ resume: 'sess-0', systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Memory v2' } });
+  });
+
   it('starts a fresh, history-seeded session (no resume, no fork) when the previous message is not the session tip', async () => {
     const { query, calls } = fakeQuery(async function* () { yield init('sess-new'); yield success(); });
     const prev: CanonMessage = { ...user('branch answer'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };

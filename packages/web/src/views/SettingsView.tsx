@@ -6,13 +6,15 @@ import { DesktopPanel } from './settings/DesktopPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
+import { ProjectsPanel } from './settings/ProjectsPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'mcpServers' | 'appearance' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'projects' | 'mcpServers' | 'appearance' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
   models: 'Models',
   profiles: 'Profiles',
+  projects: 'Projects',
   mcpServers: 'MCP Servers',
   appearance: 'Appearance',
   desktop: 'Desktop',
@@ -66,6 +68,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'connections' && <ConnectionsPanel />}
         {tab === 'models' && <ModelsPanel />}
         {tab === 'profiles' && <ProfilesPanel />}
+        {tab === 'projects' && <ProjectsPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
         {tab === 'appearance' && <AppearancePanel />}
         {tab === 'desktop' && <DesktopPanel />}

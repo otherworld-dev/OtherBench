@@ -119,10 +119,14 @@ export function turnsRoutes(container: Container): Hono {
 
     const profiles = await Promise.all(profileIds.map((id) => resolveProfile(container, id)));
 
+    // The chat isn't quiet any more (project memory, spec §2). Before run(), so a fast reply's new timer is never cancelled.
+    container.memory?.noteTurnStarted(chatId);
     let result;
     try {
       result = await container.turnRunner.run({ chatId, parentId, userParts: parts, profiles });
     } catch (err) {
+      // Nothing started, so the chat is quiet again: re-arm its memory timer.
+      container.memory?.noteTurnCompleted(chatId);
       // A part naming an attachment that doesn't exist, or belongs to a
       // DIFFERENT chat, is a client-supplied bad reference -- 400, not the
       // 500 an uncaught throw here would otherwise become. See
@@ -179,8 +183,10 @@ export function turnsRoutes(container: Container): Hono {
     // Reset the SSE buffer *before* kicking off the retry -- same
     // before-any-event-can-arrive ordering `registerTurn` relies on for a
     // fresh turn (see StreamRegistry.resetBuffer's doc).
+    container.memory?.noteTurnStarted(message.chatId);
     container.streamRegistry.resetBuffer(message.chatId, messageId);
     void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
+      container.memory?.noteTurnCompleted(message.chatId);
       console.error(`[grunt-server] retry ${messageId} failed outside its own error handling:`, err);
     });
 

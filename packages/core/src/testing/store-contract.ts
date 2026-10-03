@@ -12,6 +12,7 @@ import type {
 import type { Connection, ModelInfo, Profile, ToolPolicy } from '../types/config.js';
 import type { CanonMessage, Part } from '../types/messages.js';
 import type { PricingSnapshot } from '../types/usage.js';
+import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -368,6 +369,136 @@ export function runStoreContract(
 
         expect(store.projects.get('proj-a')!.defaultProfileId).toBeNull();
         expect(store.projects.get('proj-b')!.defaultProfileId).toBe(otherId);
+      });
+    });
+
+    describe('chats: memory fields', () => {
+      function addProject(id: string): void {
+        store.projects.create({ id, name: id, workspaceRoot: null, defaultProfileId: null });
+      }
+
+      it('memoryCursor defaults to null and memoryExcluded to false; both round-trip through create, update and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        const created = store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        expect(created).toMatchObject({ memoryCursor: null, memoryExcluded: false });
+        expect(store.chats.get('chat-a')).toMatchObject({ memoryCursor: null, memoryExcluded: false });
+
+        store.chats.update('chat-a', { memoryCursor: 'msg-9', memoryExcluded: true });
+        expect(store.chats.get('chat-a')).toMatchObject({ memoryCursor: 'msg-9', memoryExcluded: true });
+        expect(store.chats.list().find((c) => c.id === 'chat-a')).toMatchObject({ memoryCursor: 'msg-9', memoryExcluded: true });
+
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, memoryExcluded: true }));
+        expect(store.chats.get('chat-b')!.memoryExcluded).toBe(true);
+      });
+
+      it('moving a chat to another project, or out of one, resets its memory cursor; other updates keep it', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        addProject('proj-a');
+        addProject('proj-b');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a' }));
+        store.chats.update('chat-a', { memoryCursor: 'msg-1' });
+
+        store.chats.update('chat-a', { title: 'Renamed', projectId: 'proj-a' });
+        expect(store.chats.get('chat-a')!.memoryCursor).toBe('msg-1');
+
+        expect(store.chats.update('chat-a', { projectId: 'proj-b' }).memoryCursor).toBeNull();
+        expect(store.chats.get('chat-a')!.memoryCursor).toBeNull();
+
+        store.chats.update('chat-a', { memoryCursor: 'msg-2' });
+        store.chats.update('chat-a', { projectId: null });
+        expect(store.chats.get('chat-a')!.memoryCursor).toBeNull();
+      });
+
+      it("deleting a project clears its chats' memory cursors and leaves other chats alone", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        addProject('proj-a');
+        addProject('proj-b');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a' }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, projectId: 'proj-b' }));
+        store.chats.update('chat-a', { memoryCursor: 'msg-a' });
+        store.chats.update('chat-b', { memoryCursor: 'msg-b' });
+
+        store.projects.delete('proj-a');
+
+        expect(store.chats.get('chat-a')).toMatchObject({ projectId: null, memoryCursor: null });
+        expect(store.chats.get('chat-b')!.memoryCursor).toBe('msg-b');
+      });
+    });
+
+    describe('projectMemory', () => {
+      beforeEach(() => {
+        store.projects.create({ id: 'proj-a', name: 'A', workspaceRoot: null, defaultProfileId: null });
+        store.projects.create({ id: 'proj-b', name: 'B', workspaceRoot: null, defaultProfileId: null });
+      });
+
+      it('get is null until the first save; save stores the note and returns it', () => {
+        expect(store.projectMemory.get('proj-a')).toBeNull();
+
+        const saved = store.projectMemory.save('proj-a', 'note one', 'user', null, 1000);
+        expect(saved).toEqual({ projectId: 'proj-a', body: 'note one', updatedAt: 1000, updatedBy: 'user', sourceChatId: null });
+        expect(store.projectMemory.get('proj-a')).toEqual(saved);
+
+        store.projectMemory.save('proj-a', 'note two', 'summariser', 'chat-x', 2000);
+        expect(store.projectMemory.get('proj-a')).toEqual({ projectId: 'proj-a', body: 'note two', updatedAt: 2000, updatedBy: 'summariser', sourceChatId: 'chat-x' });
+        expect(store.projectMemory.get('proj-b')).toBeNull();
+      });
+
+      it('defaults the save time to now', () => {
+        expectRecentTimestamp(store.projectMemory.save('proj-a', 'note', 'user', null).updatedAt);
+      });
+
+      it('every save adds a version; versions come newest first, per project, and version(id) returns one', () => {
+        store.projectMemory.save('proj-a', 'first', 'user', null, 1000);
+        store.projectMemory.save('proj-a', 'second', 'summariser', 'chat-x', 2000);
+        store.projectMemory.save('proj-b', 'other', 'user', null, 1500);
+
+        const versions = store.projectMemory.versions('proj-a');
+        expect(versions.map((v) => [v.projectId, v.body, v.createdAt, v.createdBy, v.sourceChatId])).toEqual([
+          ['proj-a', 'second', 2000, 'summariser', 'chat-x'],
+          ['proj-a', 'first', 1000, 'user', null],
+        ]);
+        expect(store.projectMemory.version(versions[1]!.id)).toEqual(versions[1]);
+        expect(store.projectMemory.version('does-not-exist')).toBeNull();
+      });
+
+      it(`keeps only the newest ${MEMORY_VERSIONS_KEPT} versions per project, even when they share a timestamp`, () => {
+        for (let i = 0; i < MEMORY_VERSIONS_KEPT + 5; i++) store.projectMemory.save('proj-a', `body ${i}`, 'user', null, 5000);
+        store.projectMemory.save('proj-b', 'other', 'user', null, 1);
+
+        const versions = store.projectMemory.versions('proj-a');
+        expect(versions).toHaveLength(MEMORY_VERSIONS_KEPT);
+        expect(versions[0]!.body).toBe(`body ${MEMORY_VERSIONS_KEPT + 4}`);
+        expect(versions.at(-1)!.body).toBe('body 5');
+        expect(store.projectMemory.versions('proj-b')).toHaveLength(1);
+      });
+
+      it('deleting a project deletes its note and its versions', () => {
+        store.projectMemory.save('proj-a', 'note', 'user', null, 1000);
+        const versionId = store.projectMemory.versions('proj-a')[0]!.id;
+        store.projectMemory.save('proj-b', 'kept', 'user', null, 1000);
+
+        store.projects.delete('proj-a');
+
+        expect(store.projectMemory.get('proj-a')).toBeNull();
+        expect(store.projectMemory.versions('proj-a')).toEqual([]);
+        expect(store.projectMemory.version(versionId)).toBeNull();
+        expect(store.projectMemory.get('proj-b')!.body).toBe('kept');
+      });
+
+      it('saving for a project that does not exist throws', () => {
+        expect(() => store.projectMemory.save('does-not-exist', 'note', 'user', null)).toThrow(Error);
+        expect(store.projectMemory.get('does-not-exist')).toBeNull();
+      });
+    });
+
+    describe('settings', () => {
+      it('starts with no memory model, stores one, ignores an empty patch, and clears it with null', () => {
+        expect(store.settings.get()).toEqual({ memoryProfileId: null });
+        expect(store.settings.update({ memoryProfileId: 'profile-a' })).toEqual({ memoryProfileId: 'profile-a' });
+        expect(store.settings.get()).toEqual({ memoryProfileId: 'profile-a' });
+        expect(store.settings.update({})).toEqual({ memoryProfileId: 'profile-a' });
+        store.settings.update({ memoryProfileId: null });
+        expect(store.settings.get()).toEqual({ memoryProfileId: null });
       });
     });
 

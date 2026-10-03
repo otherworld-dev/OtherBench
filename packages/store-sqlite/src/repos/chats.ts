@@ -15,6 +15,8 @@ const mapping: CrudMapping<Chat> = {
     'archived_at',
     'auto_mode',
     'project_id',
+    'memory_cursor',
+    'memory_excluded',
     'created_at',
     'updated_at',
   ],
@@ -28,6 +30,8 @@ const mapping: CrudMapping<Chat> = {
     c.archivedAt,
     toBool(c.autoMode),
     c.projectId,
+    c.memoryCursor,
+    toBool(c.memoryExcluded),
     c.createdAt,
     c.updatedAt,
   ],
@@ -41,6 +45,8 @@ const mapping: CrudMapping<Chat> = {
     archivedAt: row.archived_at as number | null,
     autoMode: fromBool(row.auto_mode as number),
     projectId: row.project_id as string | null,
+    memoryCursor: row.memory_cursor as string | null,
+    memoryExcluded: fromBool(row.memory_excluded as number),
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number,
   }),
@@ -59,6 +65,8 @@ export class SqliteChatRepo implements ChatRepo {
       ...c,
       autoMode: c.autoMode ?? false,
       projectId: c.projectId ?? null,
+      memoryCursor: c.memoryCursor ?? null,
+      memoryExcluded: c.memoryExcluded ?? false,
       createdAt: c.createdAt ?? now,
       updatedAt: c.updatedAt ?? now,
     };
@@ -73,8 +81,11 @@ export class SqliteChatRepo implements ChatRepo {
     return this.crud.list();
   }
 
+  /** A chat that changes project starts over in the new project's memory (ChatRepo.update's doc). */
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat {
-    return this.crud.update(id, patch);
+    const current = this.crud.get(id);
+    const moved = current !== null && patch.projectId !== undefined && patch.projectId !== current.projectId;
+    return this.crud.update(id, moved ? { ...patch, memoryCursor: null } : patch);
   }
 
   delete(id: string): void {

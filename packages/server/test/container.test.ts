@@ -1,7 +1,10 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+﻿import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openDatabase } from '@grunt/store-sqlite/db.js';
+import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
+import { ProjectMemoryService } from '../src/memory/service.js';
 import { createContainer, resolveSecretsPassphrase } from '../src/container.js';
 
 let dir: string;
@@ -107,6 +110,58 @@ describe('createContainer', () => {
     const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
     expect(container.store.connections.list()).toEqual([]);
     container.close();
+  });
+
+  it('wires project memory: a restart re-queues a project chat that went quiet while the server was down', async () => {
+    const dbPath = join(dir, 'grunt.db');
+    const secretsPath = join(dir, 'secrets.json');
+    const old = Date.now() - 10 * 60_000;
+
+    const first = await createContainer({ dbPath, secretsPath });
+    try {
+      expect(first.memory).toBeDefined();
+      first.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+      first.store.profiles.create({
+        id: 'prof',
+        name: 'Mock',
+        description: null,
+        colour: null,
+        connectionId: 'conn',
+        modelId: 'mock-standard',
+        systemPrompt: null,
+        params: {},
+        toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+        isDefault: true,
+        archivedAt: null,
+      });
+      first.store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null });
+      first.store.chats.create({ id: 'chat', title: 'Chat', profileId: 'prof', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, projectId: 'proj' });
+      first.store.messages.create({ id: 'u1', chatId: 'chat', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null, createdAt: old });
+      first.store.messages.create({
+        id: 'a1',
+        chatId: 'chat',
+        parentId: 'u1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'hello' }],
+        status: 'complete',
+        error: null,
+        producedBy: { profileId: 'prof', profileName: 'Mock', connectionId: 'conn', modelId: 'mock-standard' },
+        createdAt: old + 1,
+      });
+      first.store.chats.update('chat', { headMessageId: 'u1' });
+    } finally {
+      first.close();
+    }
+
+    const second = await createContainer({ dbPath, secretsPath });
+    try {
+      await second.memory!.idle();
+      // The mock model's canned reply isn't a note, so the update is rejected -- which proves the startup sweep ran it.
+      expect(second.memory!.lastError('proj')).toMatchObject({ chatId: 'chat', message: expect.stringContaining('rejected') });
+      expect(second.store.chats.get('chat')!.memoryCursor).toBeNull();
+    } finally {
+      second.close();
+    }
   });
 
   // Task 32 fix round 2, Minor #2: a `:memory:` database's blob write root
@@ -266,5 +321,49 @@ describe('createContainer', () => {
     // A fresh database's derived write root never exists on disk yet.
     const container = await createContainer({ dbPath, secretsPath });
     container.close();
+  });
+});
+
+describe('project memory on startup (final review)', () => {
+  it('a throwing sweep() never stops the container being created', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sweep = vi.spyOn(ProjectMemoryService.prototype, 'sweep').mockImplementation(() => {
+      throw new Error('sweep exploded');
+    });
+    try {
+      const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+      expect(sweep).toHaveBeenCalled();
+      expect(warn).toHaveBeenCalled();
+      container.close();
+    } finally {
+      sweep.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('upgrading a v7 database queues nothing: old chats are not back-filled through the memory model', async () => {
+    const dbPath = join(dir, 'v7.db');
+    const secretsPath = join(dir, 'secrets.json');
+    const old = Date.now() - 60 * 60_000;
+    const raw = openDatabase(dbPath);
+    runMigrations(raw, MIGRATIONS.filter((m) => m.version < 8));
+    raw.exec(`INSERT INTO connection (id, name, kind) VALUES ('conn', 'Mock', 'mock')`);
+    raw.exec(`INSERT INTO profile (id, name, connection_id, model_id, is_default) VALUES ('prof', 'Mock', 'conn', 'mock-standard', 1)`);
+    raw.exec(`INSERT INTO project (id, name, created_at, updated_at) VALUES ('proj', 'Alpha', 1, 1)`);
+    raw.exec(`INSERT INTO chat (id, title, profile_id, project_id, created_at, updated_at) VALUES ('chat', 'Old chat', 'prof', 'proj', 1, 1)`);
+    raw.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('u1', 'chat', NULL, 'user', '[{"type":"text","text":"hi"}]', 'complete', ${old})`);
+    raw.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('a1', 'chat', 'u1', 'assistant', '[{"type":"text","text":"hello"}]', 'complete', ${old + 1})`);
+    raw.exec(`UPDATE chat SET head_message_id = 'u1' WHERE id = 'chat'`);
+    raw.close();
+
+    const container = await createContainer({ dbPath, secretsPath });
+    try {
+      expect(container.store.chats.get('chat')!.memoryCursor).toBe('a1');
+      await container.memory!.idle();
+      expect(container.memory!.lastError('proj')).toBeNull();
+      expect(container.store.projectMemory.get('proj')).toBeNull();
+    } finally {
+      container.close();
+    }
   });
 });

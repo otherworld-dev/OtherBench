@@ -9,7 +9,9 @@ import type {
   MessageRepo,
   ModelRepo,
   ProfileRepo,
+  ProjectMemoryRepo,
   ProjectRepo,
+  SettingsRepo,
   Store,
   UsageRepo,
 } from '@grunt/core/ports/store.js';
@@ -22,7 +24,9 @@ import { SqliteMcpServerRepo } from './repos/mcp-servers.js';
 import { SqliteMessageRepo } from './repos/messages.js';
 import { SqliteModelRepo } from './repos/models.js';
 import { SqliteProfileRepo } from './repos/profiles.js';
+import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
 import { SqliteProjectRepo } from './repos/projects.js';
+import { SqliteSettingsRepo } from './repos/settings.js';
 import { SqliteUsageRepo } from './repos/usage.js';
 
 /**
@@ -39,6 +43,8 @@ export class SqliteStore implements Store {
   readonly profiles: ProfileRepo;
   readonly chats: ChatRepo;
   readonly projects: ProjectRepo;
+  readonly projectMemory: ProjectMemoryRepo;
+  readonly settings: SettingsRepo;
   readonly messages: MessageRepo;
   readonly attachments: AttachmentRepo;
   readonly usage: UsageRepo;
@@ -52,6 +58,8 @@ export class SqliteStore implements Store {
     this.profiles = new SqliteProfileRepo(db);
     this.chats = new SqliteChatRepo(db);
     this.projects = new SqliteProjectRepo(db);
+    this.projectMemory = new SqliteProjectMemoryRepo(db);
+    this.settings = new SqliteSettingsRepo(db);
     this.messages = new SqliteMessageRepo(db);
     this.attachments = new SqliteAttachmentRepo(db);
     this.usage = new SqliteUsageRepo(db);

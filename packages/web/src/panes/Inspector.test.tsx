@@ -36,6 +36,10 @@ vi.mock('../state/api.js', async (importOriginal) => {
   };
 });
 
+vi.mock('./InspectorMemory.js', () => ({
+  InspectorMemory: ({ project }: { project: { id: string } }) => <div data-testid="inspector-memory">memory for {project.id}</div>,
+}));
+
 import { ApiError, api } from '../state/api.js';
 
 const mockedUsageGet = vi.mocked(api.usage.get);
@@ -57,6 +61,8 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     pinned: false,
     autoMode: false,
     projectId: null,
+    memoryCursor: null,
+    memoryExcluded: false,
     archivedAt: null,
     createdAt: 1,
     updatedAt: 1,
@@ -497,5 +503,20 @@ describe('Inspector project', () => {
 
     expect(headingButton).toHaveFocus();
     target.remove();
+  });
+
+  it('shows a Project memory section only for a chat in a loaded project', () => {
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Project memory' })).toBeInTheDocument();
+    expect(screen.getByTestId('inspector-memory')).toHaveTextContent('memory for p-w');
+    cleanup();
+
+    render(<Inspector chat={makeChat({ projectId: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.queryByRole('heading', { name: 'Project memory' })).toBeNull();
+    cleanup();
+
+    render(<Inspector chat={makeChat({ projectId: 'deleted' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.queryByTestId('inspector-memory')).toBeNull();
   });
 });

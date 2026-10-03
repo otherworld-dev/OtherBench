@@ -6,7 +6,7 @@ import { CHAT_DRAG_MIME, ChatRow, type ChatRowProps } from './ChatRow.js';
 
 afterEach(cleanup);
 
-const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, createdAt: 1, updatedAt: 1 };
+const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, createdAt: 1, updatedAt: 1 };
 
 function renderRow(props: Partial<ChatRowProps> = {}) {
   const handlers = { onSelect: vi.fn(), onDragEnd: vi.fn(), onOpenMenu: vi.fn(), onRename: vi.fn(), onRenameCancel: vi.fn() };
@@ -19,6 +19,20 @@ function renderRow(props: Partial<ChatRowProps> = {}) {
 }
 
 describe('ChatRow', () => {
+  it('marks a project chat that is not added to project memory, without changing the row name', () => {
+    render(
+      <ul>
+        <ChatRow chat={{ ...chat, projectId: 'p-a', memoryExcluded: true }} active={false} onSelect={vi.fn()} onDragEnd={vi.fn()} />
+      </ul>
+    );
+    expect(screen.getByRole('img', { name: 'Not added to project memory' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    cleanup();
+
+    renderRow();
+    expect(screen.queryByTestId('memory-excluded-marker')).toBeNull();
+  });
+
   it('selects on click and marks the active row', async () => {
     const h = renderRow({ active: true });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Notes' }));
