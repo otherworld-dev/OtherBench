@@ -291,6 +291,47 @@ describe('chats CRUD', () => {
     expect((await json(unarchiveRes))['archivedAt']).toBeNull();
   });
 
+  it('turns auto mode on and off via PATCH autoMode, without moving the chat in the list', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    expect(created['autoMode']).toBe(false);
+    const before = container.store.chats.get(id)!.updatedAt;
+
+    const on = await app().request(`/api/chats/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoMode: true }),
+    });
+    expect(on.status).toBe(200);
+    const onBody = await json(on);
+    expect(onBody['autoMode']).toBe(true);
+    // ChatList sorts by updatedAt; flipping a setting is not chat activity.
+    expect(onBody['updatedAt']).toBe(before);
+    expect((await json(await app().request(`/api/chats/${id}`)))['autoMode']).toBe(true);
+
+    const off = await app().request(`/api/chats/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoMode: false }),
+    });
+    expect((await json(off))['autoMode']).toBe(false);
+  });
+
+  it('rejects a non-boolean autoMode with 400 and leaves the chat unchanged', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    for (const bad of ['yes', 1, null]) {
+      const res = await app().request(`/api/chats/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoMode: bad }),
+      });
+      expect(res.status).toBe(400);
+      expect((await json(res))['error']).toBe('"autoMode" must be a boolean.');
+    }
+    expect(container.store.chats.get(id)!.autoMode).toBe(false);
+  });
+
   it('ignores headMessageId in the generic PATCH body (moving it stays POST /:id/head only)', async () => {
     const created = await createChat();
     const res = await app().request(`/api/chats/${created['id'] as string}`, {
