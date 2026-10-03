@@ -1,4 +1,5 @@
-import type { AuditEntry, Chat, Grant, McpServer, Project, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { AppSettings, AuditEntry, Chat, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
@@ -35,6 +36,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 function post<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+}
+function put<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 }
 function patch<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
@@ -97,6 +101,8 @@ export type ChatPatchBody = Partial<{
   autoMode: boolean;
   /** Moves the chat between projects (null = No project); never changes its folder or profile. */
   projectId: string | null;
+  /** "Don't add to project memory": the summariser skips this chat. Never changes its place in the list. */
+  memoryExcluded: boolean;
 }>;
 
 export interface CreateProjectBody {
@@ -220,6 +226,25 @@ export const api = {
     patch: (id: string, body: PatchProjectBody) => patch<Project>(`/projects/${id}`, body),
     /** Its chats move to No project; none are deleted. */
     delete: (id: string) => del(`/projects/${id}`),
+  },
+
+  /** A project's shared memory note (spec 2026-10-03-project-memory-design §4). */
+  memory: {
+    get: (projectId: string) => request<ProjectMemoryView>(`/projects/${projectId}/memory`),
+    /** Saves as the user. The server checks the headings and the 4,000-character cap; Pinned may change. */
+    save: (projectId: string, body: string) => put<ProjectMemoryView>(`/projects/${projectId}/memory`, { body }),
+    /** Newest first. */
+    versions: (projectId: string) => request<MemoryVersionSummary[]>(`/projects/${projectId}/memory/versions`),
+    version: (projectId: string, versionId: string) => request<ProjectMemoryVersion>(`/projects/${projectId}/memory/versions/${versionId}`),
+    /** Saves that version's body as a new user version. */
+    restore: (projectId: string, versionId: string) => post<ProjectMemoryView>(`/projects/${projectId}/memory/versions/${versionId}/restore`),
+    /** Folds this chat's new turns in now. Resolves when the update has finished; 409 when the chat isn't in a project or is excluded. */
+    updateNow: (chatId: string) => post<MemoryUpdateOutcome>(`/chats/${chatId}/memory/update`),
+  },
+
+  settings: {
+    get: () => request<AppSettings>('/settings'),
+    patch: (body: Partial<AppSettings>) => patch<AppSettings>('/settings', body),
   },
 
   search: (q: string, limit?: number) =>

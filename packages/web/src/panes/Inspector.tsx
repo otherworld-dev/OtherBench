@@ -8,6 +8,7 @@ import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '.
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
+import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
 
 export interface InspectorProps {
@@ -542,6 +543,8 @@ function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element
  * collapse behaviour, not those features.
  */
 export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: InspectorProps): JSX.Element {
+  // The chat's project, when it's loaded: the memory section needs both.
+  const memoryProject = useGruntStore((s) => (chat?.projectId ? (s.projects.find((p) => p.id === chat.projectId) ?? null) : null));
   if (collapsed) {
     return (
       <button
@@ -577,6 +580,12 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
       <Section title="Project">
         {chat ? <InspectorProject chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
+
+      {chat && memoryProject && (
+        <Section title="Project memory">
+          <InspectorMemory chat={chat} project={memoryProject} />
+        </Section>
+      )}
 
       <Section title="Workspace">
         {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}
