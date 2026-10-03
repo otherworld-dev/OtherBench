@@ -23,7 +23,7 @@ export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMen
   const archived = chat.archivedAt !== null;
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
-    { id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) },
+    ...(archived ? [] : [{ id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) }]),
     {
       id: 'move',
       label: 'Move to project…',

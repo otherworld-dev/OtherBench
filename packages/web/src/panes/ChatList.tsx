@@ -134,7 +134,7 @@ export function ChatList(): JSX.Element {
       // new chat, falling back to the app default profile (spec §2).
       body = { projectId };
     } else {
-      const defaultProfile = profiles.find((p) => p.isDefault) ?? profiles[0];
+      const defaultProfile = profiles.find((p) => p.isDefault && p.archivedAt === null) ?? profiles.find((p) => p.archivedAt === null);
       if (!defaultProfile) return;
       body = { profileId: defaultProfile.id };
     }
@@ -312,7 +312,12 @@ export function ChatList(): JSX.Element {
   /** Rejects on failure, which keeps the confirmation dialog open with the message. */
   async function deleteProject(projectId: string): Promise<void> {
     const next = neighbourHeadingSelector(projectId);
-    await api.projects.delete(projectId);
+    try {
+      await api.projects.delete(projectId);
+    } catch (err) {
+      // Already gone (deleted in another tab): same end state the user asked for.
+      if (!(err instanceof ApiError && err.status === 404)) throw err;
+    }
     removeProject(projectId); // its chats move to No project here too, as on the server
     setDeletingProjectId(null);
     focusLater(next, LIST_SELECTOR);

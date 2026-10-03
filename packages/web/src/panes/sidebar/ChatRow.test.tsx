@@ -54,6 +54,14 @@ describe('ChatRow', () => {
     expect(fireEvent.contextMenu(screen.getByRole('button', { name: 'Notes' }))).toBe(true); // not prevented: the browser menu shows
   });
 
+  it('is draggable unless muted (archived rows are not)', () => {
+    renderRow();
+    expect(screen.getByRole('button', { name: 'Notes' })).toHaveAttribute('draggable', 'true');
+    cleanup();
+    renderRow({ muted: true });
+    expect(screen.getByRole('button', { name: 'Notes' })).not.toHaveAttribute('draggable', 'true');
+  });
+
   it('starts a chat drag carrying its id', () => {
     renderRow();
     const dataTransfer = { setData: vi.fn(), effectAllowed: 'all' };

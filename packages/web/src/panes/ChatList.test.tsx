@@ -131,6 +131,20 @@ describe('ChatList desktop integration', () => {
     expect(mockedCreate).toHaveBeenCalledWith({ profileId: 'profile-1' });
   });
 
+  it('skips archived profiles when picking the app default profile', async () => {
+    useGruntStore.setState({
+      profiles: [
+        { ...profile, id: 'old-default', isDefault: true, archivedAt: 9 },
+        { ...profile, id: 'live', isDefault: false },
+      ],
+    });
+    mockedCreate.mockResolvedValue(chat);
+    render(<ChatList />);
+    await waitFor(() => expect(desktopListeners.has('tray-new-chat')).toBe(true));
+    desktopListeners.get('tray-new-chat')!();
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith({ profileId: 'live' }));
+  });
+
   it('unsubscribes on unmount', async () => {
     const { unmount } = render(<ChatList />);
     await waitFor(() => expect(desktopListeners.has('tray-new-chat')).toBe(true));
@@ -720,6 +734,24 @@ describe('ChatList project menu', () => {
     expect(mockedProjectDelete).toHaveBeenCalledWith('p-a');
     await waitFor(() => expect(screen.queryByTestId('group-p-a')).toBeNull());
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
+  });
+
+  it('Delete… treats a 404 as already removed: the project goes and the dialog closes', async () => {
+    const user = setup();
+    mockedProjectDelete.mockRejectedValue(new ApiError(404, 'Project "p-a" not found.'));
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.queryByTestId('group-p-a')).toBeNull());
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
+  });
+
+  it('gives each project group heading an h3 around its toggle button', () => {
+    setup();
+    const h3 = within(screen.getByTestId('group-p-a')).getByRole('heading', { level: 3 });
+    expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'true');
   });
 });
 

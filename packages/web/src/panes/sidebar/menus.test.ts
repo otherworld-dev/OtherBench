@@ -23,10 +23,15 @@ describe('chatMenuItems', () => {
   it('offers Unarchive instead of Archive for an archived chat, and it calls unarchive, not archive (controller ruling R2)', () => {
     const h = chatHandlers();
     const items = chatMenuItems(chat({ archivedAt: 5 }), [], h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', 'Unarchive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Move to project…', 'Unarchive', 'Delete…']);
     items.find((i) => i.label === 'Unarchive')!.onSelect!();
     expect(h.unarchive).toHaveBeenCalled();
     expect(h.archive).not.toHaveBeenCalled();
+  });
+
+  it('hides Pin and Unpin for an archived chat', () => {
+    expect(chatMenuItems(chat({ archivedAt: 5 }), [], chatHandlers()).some((i) => i.id === 'pin')).toBe(false);
+    expect(chatMenuItems(chat({ archivedAt: 5, pinned: true }), [], chatHandlers()).some((i) => i.id === 'pin')).toBe(false);
   });
 
   it('Pin and Unpin set the state opposite to the chat the menu was built with', () => {

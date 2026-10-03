@@ -43,7 +43,7 @@ export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, r
       <button
         type="button"
         data-row-main=""
-        draggable
+        draggable={!muted}
         onDragStart={(e) => {
           e.dataTransfer.setData(CHAT_DRAG_MIME, chat.id);
           e.dataTransfer.effectAllowed = 'move';
