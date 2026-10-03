@@ -10,7 +10,13 @@ export class SqliteSettingsRepo implements SettingsRepo {
     const settings: AppSettings = { ...DEFAULT_APP_SETTINGS };
     const rows = this.db.prepare('SELECT key, value FROM app_setting').all() as { key: string; value: string }[];
     for (const row of rows) {
-      if (row.key in DEFAULT_APP_SETTINGS) (settings as unknown as Record<string, unknown>)[row.key] = JSON.parse(row.value);
+      if (!Object.hasOwn(DEFAULT_APP_SETTINGS, row.key)) continue;
+      try {
+        (settings as unknown as Record<string, unknown>)[row.key] = JSON.parse(row.value);
+      } catch (err) {
+        // A damaged row must not take every settings read down; this key keeps its default.
+        console.warn(`[grunt] ignoring unreadable app setting "${row.key}":`, err);
+      }
     }
     return settings;
   }
@@ -18,7 +24,7 @@ export class SqliteSettingsRepo implements SettingsRepo {
   update(patch: Partial<AppSettings>): AppSettings {
     const upsert = this.db.prepare('INSERT INTO app_setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
     for (const [key, value] of Object.entries(patch)) {
-      if (value !== undefined && key in DEFAULT_APP_SETTINGS) upsert.run(key, JSON.stringify(value));
+      if (value !== undefined && Object.hasOwn(DEFAULT_APP_SETTINGS, key)) upsert.run(key, JSON.stringify(value));
     }
     return this.get();
   }
