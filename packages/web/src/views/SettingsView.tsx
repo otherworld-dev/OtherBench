@@ -1,18 +1,20 @@
 import { useState, type JSX } from 'react';
 import { isDesktop } from '../desktop/bridge.js';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
+import { AppearancePanel } from './settings/AppearancePanel.js';
 import { DesktopPanel } from './settings/DesktopPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'mcpServers' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'mcpServers' | 'appearance' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
   models: 'Models',
   profiles: 'Profiles',
   mcpServers: 'MCP Servers',
+  appearance: 'Appearance',
   desktop: 'Desktop',
 };
 
@@ -65,6 +67,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'models' && <ModelsPanel />}
         {tab === 'profiles' && <ProfilesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
+        {tab === 'appearance' && <AppearancePanel />}
         {tab === 'desktop' && <DesktopPanel />}
       </div>
     </div>

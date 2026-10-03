@@ -42,12 +42,12 @@ test('creating a chat, sending a message, and watching it stream in', async ({ p
   await textbox.press('Enter');
 
   // The user's own message renders immediately (optimistic local stub).
-  await expect(page.getByText('Hello from Playwright')).toBeVisible();
+  await expect(page.getByTestId('thread-scroll').getByText('Hello from Playwright')).toBeVisible();
 
   // The mock provider's canned reply streams in over several chunks;
   // asserting on it proves text actually arrived over the live SSE
   // connection, not just that the turn was created.
-  await expect(page.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
+  await expect(page.getByTestId('thread-scroll').getByText(/Here is a mock reply from Grunt/)).toBeVisible();
 
   // And the turn reaches a terminal state -- the streaming caret goes away.
   await expect(page.getByLabel('streaming')).toHaveCount(0);
@@ -188,7 +188,7 @@ test('full product journey: connection + profile, chat, streaming, tool approval
     await expect(approval).toContainText('read_file');
     await approval.getByRole('button', { name: 'Allow once' }).click();
     await expect(approval).toHaveCount(0);
-    await expect(main.getByText(/THE SMOKE TEST FILE CONTENTS/)).toBeVisible();
+    await expect(main.locator('article[data-role="assistant"] .markdown-body').getByText(/THE SMOKE TEST FILE CONTENTS/)).toBeVisible();
     await expect(page.getByLabel('streaming')).toHaveCount(0);
 
     // --- Run a compare turn across all three profiles.

@@ -168,7 +168,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }
 
   return (
-    <main className="flex h-full w-full flex-1 flex-col overflow-hidden">
+    <main className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
       {switchError && (
         <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-4 py-2 text-sm text-[var(--danger)]">
           <span>{switchError}</span>
@@ -178,7 +178,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
         </div>
       )}
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="h-full overflow-y-auto">
+        <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
             {displayPath.length === 0 ? (
               <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>

@@ -103,8 +103,9 @@ test('approving a tool call feeds the real result back into the model, and a rea
   // The prompt disappears once resolved.
   await expect(prompt).toHaveCount(0);
 
-  // And the REAL file content -- not a fabricated string -- appears in the model's answer.
-  await expect(page.getByText(/THE TREASURE IS BURIED UNDER THE OAK TREE/)).toBeVisible();
+  // And the REAL file content -- not a fabricated string -- appears in the model's answer
+  // (scoped to the reply body: the collapsed tool group and the Inspector outline also mention it).
+  await expect(page.locator('article[data-role="assistant"] .markdown-body').getByText(/THE TREASURE IS BURIED UNDER THE OAK TREE/)).toBeVisible();
   await expect(page.getByLabel('streaming')).toHaveCount(0);
 
   // Independently confirm (outside the browser) that the file is untouched --
