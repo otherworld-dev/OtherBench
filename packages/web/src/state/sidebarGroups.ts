@@ -61,6 +61,8 @@ export function useCollapsedGroups(): ReadonlySet<string> {
 export function revealSidebarGroup(key: string): void {
   setGroupCollapsed(key, false);
   document.getElementById(groupDomId(key))?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  // Keyboard users land on the heading they asked for (its button is always rendered, collapsed or not).
+  document.getElementById(groupDomId(key))?.querySelector<HTMLElement>('[data-heading-main]')?.focus();
 }
 
 /** Test hook: forget the cached set so the next read goes back to storage. */

@@ -481,4 +481,21 @@ describe('Inspector project', () => {
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).toEqual([]);
     target.remove();
   });
+
+  it("moves focus to the project's group heading button after revealing it", async () => {
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    const target = document.createElement('div');
+    target.id = groupDomId('p-w');
+    target.scrollIntoView = vi.fn();
+    const headingButton = document.createElement('button');
+    headingButton.setAttribute('data-heading-main', '');
+    target.appendChild(headingButton);
+    document.body.appendChild(target);
+
+    render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Website' }));
+
+    expect(headingButton).toHaveFocus();
+    target.remove();
+  });
 });

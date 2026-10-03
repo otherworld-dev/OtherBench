@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHAT_DRAG_MIME } from './ChatRow.js';
@@ -30,6 +30,12 @@ describe('ProjectGroup', () => {
     expect(screen.getByText('row')).toBeInTheDocument();
     await userEvent.setup().click(heading);
     expect(h.onToggle).toHaveBeenCalled();
+  });
+
+  it('wraps the heading button in an h3 so heading navigation finds the group', () => {
+    renderGroup();
+    const h3 = screen.getByRole('heading', { level: 3 });
+    expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'true');
   });
 
   it('hides its list when collapsed', () => {

@@ -68,6 +68,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         {renaming && onRename && onRenameCancel ? (
           <InlineNameInput initial={name} label="Project name" maxLength={PROJECT_NAME_MAX} onCommit={onRename} onCancel={onRenameCancel} />
         ) : (
+          <h3 className="m-0 flex min-w-0 flex-1 text-xs font-normal">
           <button
             type="button"
             data-heading-main=""
@@ -101,6 +102,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
             </span>
             <span className="sr-only">{count === 1 ? ' chat' : ' chats'}</span>
           </button>
+          </h3>
         )}
         {onNewChat && (
           <button
