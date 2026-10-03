@@ -272,8 +272,10 @@ API that runs shell commands and holds the bearer token.
 - Hand-off mechanics (Task 1 probe): the hook hands a deferred call over by
   returning `{}` (no decision). Returning `permissionDecision: 'defer'` does
   not reach the classifier; it pauses the turn (`terminal_reason:
-  'tool_deferred'`). In auto mode the hook's no-decision result lets the
-  user's Claude settings allow-rules decide before the classifier, so an `auto` audit row means "handed off", not "classifier approved".
+  'tool_deferred'`). In auto mode the hook's no-decision result lets
+  allow-rules from user, project or local Claude settings (including the
+  workspace's own `.claude/settings.json`) decide before the classifier, so
+  an `auto` audit row means "handed off", not "classifier approved".
 - Unavailable auto mode is silent: Claude Code starts with init
   `permissionMode: 'default'` and no error (models that report no auto
   support, e.g. haiku on this account, or `disableAutoMode`). The engine detects it because init reports
@@ -340,9 +342,15 @@ Known gaps:
   against a refused 127.0.0.1 port); it was allowed by the classifier or by the
   user's own settings allow-rules, which can't be told apart. No classifier
   block has been observed in testing (the only block seen, a force-push in
-  Task 1, came from the user's own git-guard hook). Grunt's hard limits still apply in auto mode: tool policy,
-  workspace containment, and the card for writes to Claude Code config (live
-  check: a write to `.claude/settings.local.json` raised a card, denied).
+  Task 1, came from the user's own git-guard hook). Some of Grunt's limits
+  still apply in auto mode: tool policy, workspace containment for file
+  tools, and the card for Edit/Write/MultiEdit/NotebookEdit calls that touch
+  Claude Code config (live check: a write to `.claude/settings.local.json`
+  raised a card, denied). Shell tools are different: in auto mode
+  Bash/PowerShell are not path-contained and are decided by the classifier
+  (or a settings allow-rule) without a Grunt card. That includes commands
+  that could write `.claude/settings.local.json` or touch files outside the
+  workspace. Turn shell off in the profile if that isn't acceptable.
 - Unverified live: the `PermissionDenied` hook and its `deny:auto` audit row
   (no classifier block was ever observed, Task 1 or Task 11), and
   `canUseTool` on an undecided call. Both are covered by unit tests only.
