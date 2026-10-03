@@ -195,7 +195,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             prompt.close();
             if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
             yield* flushNotice();
-            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
             return 'done';
           } else {
             if (event.type === 'finish') prompt.close();
@@ -209,7 +209,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const text = [err instanceof Error ? err.message : String(err), ...stderr].join('\n');
       if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
       yield* flushNotice();
-      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt }) };
+      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
       prompt.close();
       req.signal.removeEventListener('abort', onAbort);

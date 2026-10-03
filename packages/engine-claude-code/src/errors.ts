@@ -14,13 +14,15 @@ export function autoModeUnavailable(): SerializedError {
   return { kind: 'capability', retryable: false, message: AUTO_MODE_UNAVAILABLE_MESSAGE };
 }
 
-export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null }): SerializedError {
+export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null; autoMode?: boolean }): SerializedError {
   if (/not logged in|\/login|invalid api key|authentication|unauthori[sz]ed|\b401\b/i.test(text)) {
     // `/login` only fixes the Claude login; an endpoint backend uses the connection's token.
     const message = ctx.backend === CLAUDE_BACKEND ? "Claude Code isn't logged in. Run `claude` and `/login`." : `${ctx.backend} rejected the token.`;
     return { kind: 'auth', retryable: false, message };
   }
-  if (/auto[ -]?mode/i.test(text) && /unavailable|not available|not supported|not enabled|disabled/i.test(text)) {
+  // Only an auto-mode turn can fail this way (detection is normally via the
+  // init permissionMode); other turns must not be misread.
+  if (ctx.autoMode === true && /auto[ -]?mode/i.test(text) && /unavailable|not available|not supported|not enabled|disabled/i.test(text)) {
     return autoModeUnavailable();
   }
   if (ctx.rateLimitResetsAt != null || /usage limit|rate.?limit|\b429\b|overloaded/i.test(text)) {
