@@ -176,7 +176,7 @@ test('full product journey: connection + profile, chat, streaming, tool approval
     // --- Send a message and see it stream.
     await textbox.fill(`Hello from the smoke journey ${searchToken}`);
     await textbox.press('Enter');
-    await expect(main.getByText(new RegExp(`Hello from the smoke journey ${searchToken}`))).toBeVisible();
+    await expect(main.getByTestId('thread-scroll').getByText(new RegExp(`Hello from the smoke journey ${searchToken}`))).toBeVisible();
     await expect(main.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
     await expect(page.getByLabel('streaming')).toHaveCount(0);
 
@@ -226,7 +226,7 @@ test('full product journey: connection + profile, chat, streaming, tool approval
     const results = page.locator('nav[aria-label="Chats"] [data-testid^="chat-row-"]');
     await expect(results).toHaveCount(1);
     await results.first().locator('[data-row-main]').click();
-    await expect(main.getByText(new RegExp(`Hello from the smoke journey ${searchToken}`))).toBeVisible();
+    await expect(main.getByTestId('thread-scroll').getByText(new RegExp(`Hello from the smoke journey ${searchToken}`))).toBeVisible();
   } finally {
     rmSync(workspaceRoot, { recursive: true, force: true });
   }
