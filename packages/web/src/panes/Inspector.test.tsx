@@ -7,6 +7,7 @@ import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import { Inspector } from './Inspector.js';
 import { useGruntStore } from '../state/store.js';
+import { COLLAPSED_GROUPS_STORAGE_KEY, groupDomId, resetSidebarGroupsForTests } from '../state/sidebarGroups.js';
 
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
@@ -55,6 +56,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     workspaceRoot: null,
     pinned: false,
     autoMode: false,
+    projectId: null,
     archivedAt: null,
     createdAt: 1,
     updatedAt: 1,
@@ -443,5 +445,57 @@ describe('Inspector audit trail', () => {
     mockedAuditList.mockResolvedValue([]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(await within(auditSection()).findByText('No tool calls recorded in this chat yet.')).toBeInTheDocument();
+  });
+});
+
+describe('Inspector project', () => {
+  beforeEach(() => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+    window.localStorage.clear();
+    resetSidebarGroupsForTests();
+  });
+  afterEach(cleanup);
+
+  it('says "No project" for a chat outside any project, or whose project is gone', () => {
+    render(<Inspector chat={makeChat({ projectId: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.getByTestId('inspector-project')).toHaveTextContent('No project');
+    cleanup();
+
+    render(<Inspector chat={makeChat({ projectId: 'deleted' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.getByTestId('inspector-project')).toHaveTextContent('No project');
+  });
+
+  it("links to the chat's project: clicking expands its sidebar group and scrolls to it", async () => {
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(['p-w']));
+    const target = document.createElement('div');
+    target.id = groupDomId('p-w');
+    target.scrollIntoView = vi.fn();
+    document.body.appendChild(target);
+
+    render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Website' }));
+
+    expect(target.scrollIntoView).toHaveBeenCalled();
+    expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).toEqual([]);
+    target.remove();
+  });
+
+  it("moves focus to the project's group heading button after revealing it", async () => {
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    const target = document.createElement('div');
+    target.id = groupDomId('p-w');
+    target.scrollIntoView = vi.fn();
+    const headingButton = document.createElement('button');
+    headingButton.setAttribute('data-heading-main', '');
+    target.appendChild(headingButton);
+    document.body.appendChild(target);
+
+    render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Website' }));
+
+    expect(headingButton).toHaveFocus();
+    target.remove();
   });
 });

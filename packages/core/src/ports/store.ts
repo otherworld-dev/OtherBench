@@ -49,15 +49,22 @@ export interface Chat {
    * TurnRunner on every turn. Other engines ignore it.
    */
   autoMode: boolean;
+  /**
+   * The project this chat is filed under, or null for "No project" (spec
+   * 2026-10-03-projects-design). Purely organisational: moving a chat never
+   * changes its folder or profile. Set to null when the project is deleted.
+   */
+  projectId: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
-/** What `ChatRepo.create` takes: timestamps default to now, `autoMode` to false. */
-export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode'> & {
+/** What `ChatRepo.create` takes: timestamps default to now, `autoMode` to false, `projectId` to null. */
+export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode' | 'projectId'> & {
   createdAt?: number;
   updatedAt?: number;
   autoMode?: boolean;
+  projectId?: string | null;
 };
 
 export interface ChatRepo {
@@ -65,6 +72,43 @@ export interface ChatRepo {
   get(id: string): Chat | null;
   list(): Chat[];
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat;
+  delete(id: string): void;
+}
+
+// --- projects ----------------------------------------------------------------
+
+/**
+ * A sidebar group of chats that can carry a workspace folder and a default
+ * profile (spec 2026-10-03-projects-design). Both are copied onto a chat only
+ * when it is created in the project; changing them later never touches
+ * existing chats.
+ */
+export interface Project {
+  id: string;
+  name: string;
+  workspaceRoot: string | null;
+  /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
+  defaultProfileId: string | null;
+  /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareProjects`. */
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** What `ProjectRepo.create` takes: timestamps default to now, `sortOrder` to 0. */
+export type NewProject = Omit<Project, 'createdAt' | 'updatedAt' | 'sortOrder'> & {
+  sortOrder?: number;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
+export interface ProjectRepo {
+  create(p: NewProject): Project;
+  get(id: string): Project | null;
+  /** Every project, in sidebar order (`compareProjects`). */
+  list(): Project[];
+  update(id: string, patch: Partial<Omit<Project, 'id'>>): Project;
+  /** Deletes the project. Its chats move to no project (`projectId: null`); chats are never deleted. */
   delete(id: string): void;
 }
 
@@ -284,6 +328,7 @@ export interface Store {
   models: ModelRepo;
   profiles: ProfileRepo;
   chats: ChatRepo;
+  projects: ProjectRepo;
   messages: MessageRepo;
   attachments: AttachmentRepo;
   usage: UsageRepo;

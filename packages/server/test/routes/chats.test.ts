@@ -725,3 +725,123 @@ describe('auto-title', () => {
     expect(titleRequests).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Projects (spec 2026-10-03-projects-design §2)
+// ---------------------------------------------------------------------------
+
+describe('chats in projects', () => {
+  const PROJECT_ROOT = process.platform === 'win32' ? 'C:\\Users\\Test\\project' : '/home/test/project';
+  const OTHER_ROOT = process.platform === 'win32' ? 'D:\\elsewhere' : '/srv/elsewhere';
+
+  function addProfile(id: string, over: { isDefault?: boolean; archivedAt?: number | null } = {}): void {
+    container.store.profiles.create({
+      id,
+      name: id,
+      description: null,
+      colour: null,
+      connectionId: 'conn-1',
+      modelId: 'model-1',
+      systemPrompt: null,
+      params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+      isDefault: over.isDefault ?? false,
+      archivedAt: over.archivedAt ?? null,
+    });
+  }
+
+  beforeEach(() => {
+    addProfile('profile-coder');
+    addProfile('profile-app-default', { isDefault: true });
+    container.store.projects.create({ id: 'proj-1', name: 'Alpha', workspaceRoot: PROJECT_ROOT, defaultProfileId: 'profile-coder' });
+  });
+
+  function post(body: Record<string, unknown>): Promise<Response> {
+    return Promise.resolve(
+      app().request('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    );
+  }
+
+  function patchChat(id: string, body: Record<string, unknown>): Promise<Response> {
+    return Promise.resolve(
+      app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    );
+  }
+
+  it("a chat created with only projectId inherits the project's folder and default profile", async () => {
+    const res = await post({ projectId: 'proj-1' });
+    expect(res.status).toBe(201);
+    expect(await json(res)).toMatchObject({ projectId: 'proj-1', workspaceRoot: PROJECT_ROOT, profileId: 'profile-coder' });
+  });
+
+  it("the request's own profileId and workspaceRoot win over the project's", async () => {
+    const res = await post({ projectId: 'proj-1', profileId: 'profile-1', workspaceRoot: OTHER_ROOT });
+    expect(res.status).toBe(201);
+    expect(await json(res)).toMatchObject({ projectId: 'proj-1', profileId: 'profile-1', workspaceRoot: OTHER_ROOT });
+  });
+
+  it("an explicit workspaceRoot: null means no folder, not the project's", async () => {
+    const res = await post({ projectId: 'proj-1', workspaceRoot: null });
+    expect(await json(res)).toMatchObject({ projectId: 'proj-1', workspaceRoot: null });
+  });
+
+  it('falls back to the app default profile when the project has no default, or its default is archived', async () => {
+    container.store.projects.update('proj-1', { defaultProfileId: null });
+    expect(await json(await post({ projectId: 'proj-1' }))).toMatchObject({ profileId: 'profile-app-default' });
+
+    // Archived without the route clearing it (e.g. by hand in the database).
+    container.store.profiles.update('profile-coder', { archivedAt: 5 });
+    container.store.projects.update('proj-1', { defaultProfileId: 'profile-coder' });
+    expect(await json(await post({ projectId: 'proj-1' }))).toMatchObject({ profileId: 'profile-app-default' });
+  });
+
+  it('still creates the chat when the project folder no longer exists on disk', async () => {
+    const missing = join(dataDir, 'deleted-folder');
+    container.store.projects.update('proj-1', { workspaceRoot: missing });
+
+    const res = await post({ projectId: 'proj-1' });
+
+    expect(res.status).toBe(201);
+    expect(await json(res)).toMatchObject({ workspaceRoot: missing });
+  });
+
+  it('400s for an unknown projectId and creates nothing', async () => {
+    const res = await post({ projectId: 'no-such-project', profileId: 'profile-1' });
+    expect(res.status).toBe(400);
+    expect(container.store.chats.list()).toEqual([]);
+  });
+
+  it('without a projectId, profileId is still required', async () => {
+    expect((await post({})).status).toBe(400);
+  });
+
+  it('PATCH projectId moves the chat and null clears it, without changing its folder, profile or list position', async () => {
+    const created = await json(await post({ profileId: 'profile-1', workspaceRoot: OTHER_ROOT }));
+    const id = created['id'] as string;
+    const updatedAt = container.store.chats.get(id)!.updatedAt;
+
+    const moved = await patchChat(id, { projectId: 'proj-1' });
+    expect(moved.status).toBe(200);
+    expect(await json(moved)).toMatchObject({ projectId: 'proj-1', workspaceRoot: OTHER_ROOT, profileId: 'profile-1', updatedAt });
+
+    const cleared = await patchChat(id, { projectId: null });
+    expect(await json(cleared)).toMatchObject({ projectId: null, workspaceRoot: OTHER_ROOT, profileId: 'profile-1', updatedAt });
+  });
+
+  it('PATCH with an unknown projectId 400s and leaves the chat where it was', async () => {
+    const created = await json(await post({ projectId: 'proj-1' }));
+    const id = created['id'] as string;
+
+    expect((await patchChat(id, { projectId: 'no-such-project' })).status).toBe(400);
+    expect(container.store.chats.get(id)!.projectId).toBe('proj-1');
+  });
+
+  it('chat list responses include projectId', async () => {
+    await post({ projectId: 'proj-1' });
+    await post({ profileId: 'profile-1' });
+
+    const list = (await (await app().request('/api/chats')).json()) as Record<string, unknown>[];
+
+    expect(list.map((c) => c['projectId']).sort()).toEqual([null, 'proj-1'].sort());
+  });
+});

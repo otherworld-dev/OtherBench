@@ -46,7 +46,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe('gcBlobIfOrphaned', () => {
@@ -385,12 +385,23 @@ describe('sweepOrphanedBlobs', () => {
         'landing shortly after it starts to still be mid-flight when the sweep reaches that shard',
       async () => {
         const fillerCount = 3000;
+        // Write the fillers in parallel, one task per shard, so setup stays
+        // fast under full-suite load; the sweep's own runtime is unchanged.
+        const byShard = new Map<string, string[]>();
         for (let i = 0; i < fillerCount; i++) {
           const sha = createHash('sha256').update(`filler${i}`).digest('hex');
-          const shardDir = join(root, sha.slice(0, 2));
-          await mkdir(shardDir, { recursive: true });
-          await writeFile(join(shardDir, sha), 'x');
+          const shard = sha.slice(0, 2);
+          const list = byShard.get(shard) ?? [];
+          list.push(sha);
+          byShard.set(shard, list);
         }
+        await Promise.all(
+          [...byShard].map(async ([shard, shas]) => {
+            const shardDir = join(root, shard);
+            await mkdir(shardDir, { recursive: true });
+            await Promise.all(shas.map((sha) => writeFile(join(shardDir, sha), 'x')));
+          })
+        );
         // A target hash landing in a LATE shard ('ff') so the sweep reaches
         // it only after working through the other (up to) 255 shards first.
         let n = 0;
@@ -422,7 +433,7 @@ describe('sweepOrphanedBlobs', () => {
         expect(result.removed).toBe(0);
         await expect(stat(blobStore.pathFor(sha))).resolves.toBeTruthy();
       },
-      10_000
+      30_000
     );
   });
 

@@ -1,4 +1,4 @@
-import type { AuditEntry, Chat, Grant, McpServer, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { AuditEntry, Chat, Grant, McpServer, Project, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
@@ -81,9 +81,36 @@ export interface CreateProfileBody {
 
 export interface CreateChatBody {
   title?: string;
-  profileId: string;
+  /** Required unless `projectId` is given: the server then uses the project's default profile, else the app default. */
+  profileId?: string;
   workspaceRoot?: string | null;
+  /** Files the new chat in this project; it starts with the project's folder unless `workspaceRoot` is given. */
+  projectId?: string;
 }
+
+export type ChatPatchBody = Partial<{
+  title: string;
+  profileId: string;
+  workspaceRoot: string | null;
+  pinned: boolean;
+  archivedAt: number | null;
+  autoMode: boolean;
+  /** Moves the chat between projects (null = No project); never changes its folder or profile. */
+  projectId: string | null;
+}>;
+
+export interface CreateProjectBody {
+  name: string;
+  workspaceRoot?: string | null;
+  defaultProfileId?: string | null;
+}
+
+export type PatchProjectBody = Partial<{
+  name: string;
+  workspaceRoot: string | null;
+  defaultProfileId: string | null;
+  sortOrder: number;
+}>;
 
 export interface CreateTurnBody {
   parentId: string | null;
@@ -181,10 +208,18 @@ export const api = {
     list: () => request<Chat[]>('/chats'),
     create: (body: CreateChatBody) => post<Chat>('/chats', body),
     get: (id: string) => request<Chat>(`/chats/${id}`),
-    patch: (id: string, body: Partial<{ title: string; profileId: string; workspaceRoot: string | null; pinned: boolean; archivedAt: number | null; autoMode: boolean }>) =>
-      patch<Chat>(`/chats/${id}`, body),
+    patch: (id: string, body: ChatPatchBody) => patch<Chat>(`/chats/${id}`, body),
     delete: (id: string) => del(`/chats/${id}`),
     messages: (id: string) => request<ChatMessagesResult>(`/chats/${id}/messages`),
+  },
+
+  projects: {
+    /** In sidebar order (sortOrder, then name). */
+    list: () => request<Project[]>('/projects'),
+    create: (body: CreateProjectBody) => post<Project>('/projects', body),
+    patch: (id: string, body: PatchProjectBody) => patch<Project>(`/projects/${id}`, body),
+    /** Its chats move to No project; none are deleted. */
+    delete: (id: string) => del(`/projects/${id}`),
   },
 
   search: (q: string, limit?: number) =>

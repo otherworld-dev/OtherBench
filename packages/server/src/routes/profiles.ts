@@ -5,6 +5,7 @@ import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { optionalBoolean, optionalNullableString, optionalStringArray, requireNonEmptyString } from '../validation.js';
+import { clearProjectDefaultProfile } from './projects.js';
 
 const DEFAULT_TOOL_POLICY: ToolPolicy = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' };
 
@@ -116,7 +117,10 @@ export function profilesRoutes(container: Container): Hono {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
 
-    return c.json(container.store.profiles.update(id, patch));
+    const updated = container.store.profiles.update(id, patch);
+    // Spec section 5: an archived profile stops being any project's default.
+    if (updated.archivedAt !== null) clearProjectDefaultProfile(container.store, id);
+    return c.json(updated);
   });
 
   app.delete('/:id', async (c) => {

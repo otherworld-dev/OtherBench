@@ -5,6 +5,7 @@ import { MIGRATION_003_MCP_ENV_REFS } from './003-mcp-env-refs.js';
 import { MIGRATION_004_ATTACHMENT_SHA256_INDEX } from './004-attachment-sha256-index.js';
 import { MIGRATION_005_MESSAGE_ENGINE_META } from './005-message-engine-meta.js';
 import { MIGRATION_006_CHAT_AUTO_MODE } from './006-chat-auto-mode.js';
+import { MIGRATION_007_PROJECTS } from './007-projects.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -16,6 +17,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 4, name: '004-attachment-sha256-index', sql: MIGRATION_004_ATTACHMENT_SHA256_INDEX },
   { version: 5, name: '005-message-engine-meta', sql: MIGRATION_005_MESSAGE_ENGINE_META },
   { version: 6, name: '006-chat-auto-mode', sql: MIGRATION_006_CHAT_AUTO_MODE },
+  { version: 7, name: '007-projects', sql: MIGRATION_007_PROJECTS },
 ];
 
 /**

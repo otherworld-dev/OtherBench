@@ -8,6 +8,7 @@ import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
+import { projectsRoutes } from './routes/projects.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
@@ -71,6 +72,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));
   authed.route('/chats', chatsRoutes(container));
+  authed.route('/projects', projectsRoutes(container));
   // turnsRoutes defines full paths under both /chats/... and /messages/...
   // (a turn spans both namespaces: POST .../turns, GET .../stream, POST
   // .../head live under /chats/:id/..., while POST .../cancel lives under

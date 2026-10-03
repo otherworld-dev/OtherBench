@@ -30,6 +30,15 @@ of work landed after that plan closed out:
   deleted, and their blobs are garbage-collected. Blob storage moved from
   one directory shared by every database to one per database. See
   "Attachments" below.
+- **Projects** (spec `docs/superpowers/specs/2026-10-03-projects-design.md`).
+  The sidebar groups chats as Pinned, each project, then No project. A
+  project can carry a workspace folder and a default profile, which a chat
+  started from the project's **+** copies when it is created (never later).
+  Chats move between projects from the row menu (right-click, **⋯**,
+  Shift+F10 or the ContextMenu key) or by dragging onto a group heading.
+  Deleting a project moves its chats to No project. Archive is reversible:
+  archived chats sit in a "Show archived (N)" section at the bottom of the
+  sidebar, where their menu offers Unarchive. See "Projects" below.
 
 ## Settings UI
 
@@ -129,6 +138,37 @@ and verified with the reviewer's own reproduction probes — see
 `packages/store-sqlite/test/blob-gc.test.ts` and
 `packages/server/test/attachment-roots.test.ts`, which encode those probes
 as regression tests.
+
+## Projects
+
+- **Data.** `project` table and `chat.project_id` (migration `007-projects`),
+  both foreign keys `ON DELETE SET NULL`: deleting a project never deletes
+  chats, deleting a profile clears it as a project default. Archiving a
+  profile clears it too (`PATCH /profiles/:id` calls
+  `clearProjectDefaultProfile`). `ProjectRepo.list()` orders by
+  `sort_order`, then name (`NOCASE`), then id; `compareProjects` in
+  `packages/core/src/domain/projects.ts` is the same order in JS.
+- **API.** `GET/POST /api/projects`, `PATCH/DELETE /api/projects/:id` (name
+  trimmed, 1-80 chars; folder validated like a chat's; default profile must
+  exist and not be archived). `POST /api/chats` takes `projectId`: with no
+  `workspaceRoot` key the chat gets the project's folder (an explicit `null`
+  means no folder), with no `profileId` it gets the project's default, else
+  the app default. `PATCH /api/chats/:id { projectId }` moves a chat without
+  touching its folder or profile, and doesn't bump `updatedAt`.
+- **UI.** `panes/ChatList.tsx` wires `panes/sidebar/*` (`buildSidebar`,
+  `ChatRow`, `ProjectGroup`, the project editors). One `components/Menu.tsx`
+  serves both the chat menu and the project menu; it opens from right-click,
+  the **⋯** button, or Shift+F10 / the ContextMenu key on a focused row.
+  Collapse state is per device, in `localStorage` key
+  `grunt.collapsedGroups`; whether the archived section is open is in
+  `grunt.showArchived`. Archive sets `archivedAt` and is reversible from the
+  archived section (Unarchive sends `PATCH /chats/:id { "archivedAt": null }`).
+  The Inspector's "Project" line links to the sidebar group.
+- **Gaps.** Reordering projects sends one PATCH per project that moves, not
+  one atomic call; on a failure the sidebar reloads the server's order.
+  Projects aren't synced between machines (v2). Projects and chats aren't
+  refreshed across tabs or windows either: another tab's changes show up only
+  after a reload.
 
 ## What is NOT built
 

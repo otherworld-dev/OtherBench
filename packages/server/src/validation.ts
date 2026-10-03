@@ -123,12 +123,12 @@ export function optionalStringArray(value: unknown, field: string): string[] {
   return value;
 }
 
-/** Windows treats a single leading slash (`/foo`) as "absolute" (drive-relative) too, which is exactly the shape a Git-Bash-mangled Windows path takes -- so `looksWindowsAbsolute` deliberately requires a drive letter or a UNC prefix, not just a leading separator. Mirrors the client's identically-named helper (packages/web/src/panes/Inspector.tsx), which this is the server-side backstop for. */
+/** Windows treats a single leading slash (`/foo`) as "absolute" (drive-relative) too, which is exactly the shape a Git-Bash-mangled Windows path takes -- so `looksWindowsAbsolute` deliberately requires a drive letter or a UNC prefix, not just a leading separator. Mirrors the client's identically-named helper (packages/web/src/lib/workspaceRoot.ts), which this is the server-side backstop for. */
 function looksWindowsAbsolute(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
 }
 
-/** Matches the shape Git Bash/MSYS mangles a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. Mirrors the client's `gitBashMangledMatch` (Inspector.tsx). */
+/** Matches the shape Git Bash/MSYS mangles a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. Mirrors the client's `gitBashMangledMatch` (lib/workspaceRoot.ts). */
 function gitBashMangledMatch(value: string): RegExpMatchArray | null {
   return value.match(/^\/([a-zA-Z])(\/|$)/);
 }
@@ -143,7 +143,7 @@ function gitBashMangledMatch(value: string): RegExpMatchArray | null {
  * silently becomes "every sibling directory of wherever `grunt serve`
  * happened to be launched from", and "demo-workspace" becomes some
  * arbitrary subdirectory of it. The web client's own validator
- * (`validateWorkspaceRoot`, Inspector.tsx) is thorough, but it is
+ * (`validateWorkspaceRoot`, packages/web/src/lib/workspaceRoot.ts) is thorough, but it is
  * client-side only -- a direct API call (curl, another client) bypasses it
  * entirely -- so this is the hard gate the product's whole filesystem/shell
  * tool boundary actually rests on, not a UX nicety duplicated for its own

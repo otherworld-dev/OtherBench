@@ -4,9 +4,11 @@ import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { usePolled } from '../lib/usePolled.js';
+import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
+import { InspectorProject } from './InspectorProject.js';
 
 export interface InspectorProps {
   chat: Chat | null;
@@ -59,60 +61,6 @@ function formatCost(cost: number): string {
 // that turns them on.
 // ---------------------------------------------------------------------------
 
-const WORKSPACE_ROOT_HELP =
-  'Must be a native absolute path on the SERVER machine -- e.g. "E:\\Git\\Grunt" on Windows, "/home/user/project" ' +
-  'on Linux/macOS. Not a relative path, and not a Git-Bash-style "/e/Git/Grunt": that form resolves to a path ' +
-  'Windows has no notion of, which fails with a confusing ENOENT at tool-call time instead of a clear error here.';
-
-function looksWindowsAbsolute(value: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
-}
-
-/** Matches the shape Git Bash/MSYS translates a Windows drive path into (e.g. `E:\Git\Grunt` -> `/e/Git/Grunt`) -- capture group 1 is the drive letter. */
-function gitBashMangledMatch(value: string): RegExpMatchArray | null {
-  return value.match(/^\/([a-zA-Z])(\/|$)/);
-}
-
-/**
- * Validates a workspace root against the SERVER's OWN OS convention, read
- * from `GET /api/health`'s `platform` field (never the browser's -- a
- * workspace root is resolved server-side by `containPath`, so only the
- * server's platform can say what "native absolute" means here). While the
- * platform hasn't loaded yet (`null`), still catches the one shape that is
- * never valid input regardless of platform -- a Git-Bash-mangled Windows
- * path -- but otherwise accepts either native absolute form so a slow/failed
- * health fetch doesn't block entering a path outright.
- */
-function validateWorkspaceRoot(raw: string, serverPlatform: string | null): string | null {
-  const value = raw.trim();
-  if (value.length === 0) return 'Enter a workspace path.';
-
-  const windowsAbsolute = looksWindowsAbsolute(value);
-  const gitBashMangled = gitBashMangledMatch(value);
-  const posixAbsolute = value.startsWith('/') && !gitBashMangled;
-
-  if (serverPlatform === 'win32') {
-    if (windowsAbsolute) return null;
-    if (gitBashMangled) {
-      const drive = gitBashMangled[1]!.toUpperCase();
-      return `That is a Git-Bash-style path -- the server (running Windows) needs the native form, e.g. "${drive}:\\..." instead of "${value}".`;
-    }
-    return 'Enter a native absolute Windows path, e.g. "E:\\Git\\Grunt".';
-  }
-
-  if (serverPlatform !== null) {
-    if (posixAbsolute) return null;
-    return 'Enter a native absolute path, e.g. "/home/user/project".';
-  }
-
-  if (windowsAbsolute || posixAbsolute) return null;
-  if (gitBashMangled) {
-    const drive = gitBashMangled[1]!.toUpperCase();
-    return `That looks like a Git-Bash-style path. If the server runs on Windows, use "${drive}:\\..." instead of "${value}".`;
-  }
-  return 'Enter a native absolute path (e.g. "E:\\Git\\Grunt" on Windows, "/home/user/project" on Linux/macOS).';
-}
-
 /** Plain-language consequence of the current tool policy against a workspace that IS set -- makes real access legible, not just "a path is configured". */
 function workspaceConsequence(profile: Profile | null): string {
   const fs = profile?.toolPolicy.fs ?? 'off';
@@ -127,7 +75,7 @@ function workspaceConsequence(profile: Profile | null): string {
 
 function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | null }): JSX.Element {
   const upsertChat = useGruntStore((s) => s.upsertChat);
-  const [serverPlatform, setServerPlatform] = useState<string | null>(null);
+  const serverPlatform = useServerPlatform();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(chat.workspaceRoot ?? '');
   const [saving, setSaving] = useState(false);
@@ -139,19 +87,6 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
   // "Save" doing visibly nothing for a moment reads as broken. `undefined` =
   // no override yet, defer to the prop.
   const [localWorkspaceRoot, setLocalWorkspaceRoot] = useState<string | null | undefined>(undefined);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .health()
-      .then((h) => {
-        if (!cancelled) setServerPlatform(h.platform);
-      })
-      .catch((err: unknown) => console.error('[grunt-web] failed to fetch server platform for workspace validation:', err));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // A genuine chat switch resets the form and drops the optimistic override
   // -- but NOT a re-render mid-edit, which would otherwise wipe out whatever
@@ -638,6 +573,10 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
           ✕
         </button>
       </div>
+
+      <Section title="Project">
+        {chat ? <InspectorProject chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
+      </Section>
 
       <Section title="Workspace">
         {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}

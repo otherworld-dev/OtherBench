@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
@@ -17,7 +17,11 @@ interface ChatBody {
   pinned?: unknown;
   archivedAt?: unknown;
   autoMode?: unknown;
+  projectId?: unknown;
 }
+
+/** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'projectId']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -32,6 +36,30 @@ function requireExistingProfile(container: Container, profileId: string): void {
   if (!container.store.profiles.get(profileId)) {
     throw new HTTPException(404, { message: `Profile "${profileId}" not found.` });
   }
+}
+
+/** An unknown project in a chat body is a bad request, not a missing resource (spec §2). */
+function requireExistingProject(container: Container, value: unknown): Project {
+  const projectId = requireNonEmptyString(value, 'projectId');
+  const project = container.store.projects.get(projectId);
+  if (!project) throw new HTTPException(400, { message: `"projectId": project "${projectId}" not found.` });
+  return project;
+}
+
+/** The profile a chat created in `project` starts with when the request names none (spec §2, §5). */
+function inheritedProfileId(container: Container, project: Project): string {
+  const usable = (id: string | null): string | null => {
+    if (id === null) return null;
+    const profile = container.store.profiles.get(id);
+    return profile && profile.archivedAt === null ? profile.id : null;
+  };
+  // The project's default, unless it was archived or deleted; then the app
+  // default the web client also uses (the default profile, else the first).
+  const live = container.store.profiles.list().filter((p) => p.archivedAt === null);
+  const appDefault = (live.find((p) => p.isDefault) ?? live[0])?.id ?? null;
+  const chosen = usable(project.defaultProfileId) ?? appDefault;
+  if (!chosen) throw new HTTPException(400, { message: 'There is no profile to start this chat with -- create one in Settings first.' });
+  return chosen;
 }
 
 /**
@@ -66,11 +94,22 @@ export function chatsRoutes(container: Container): Hono {
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ChatBody;
-    const profileId = requireNonEmptyString(body.profileId, 'profileId');
-    requireExistingProfile(container, profileId);
+    const project = body.projectId === undefined || body.projectId === null ? null : requireExistingProject(container, body.projectId);
+
+    let profileId: string;
+    if (body.profileId === undefined && project) {
+      profileId = inheritedProfileId(container, project);
+    } else {
+      profileId = requireNonEmptyString(body.profileId, 'profileId');
+      requireExistingProfile(container, profileId);
+    }
 
     const title = typeof body.title === 'string' && body.title.length > 0 ? body.title : DEFAULT_TITLE;
-    const workspaceRoot = optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null;
+    // The project's folder only when the request has no workspaceRoot at all:
+    // an explicit null means "no folder". The folder is not checked on disk --
+    // a missing one gives the usual workspace warnings when tools run (spec §5).
+    const workspaceRoot =
+      body.workspaceRoot !== undefined ? (optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null) : (project?.workspaceRoot ?? null);
 
     const created = container.store.chats.create({
       id: randomUUID(),
@@ -80,6 +119,7 @@ export function chatsRoutes(container: Container): Hono {
       workspaceRoot,
       pinned: false,
       archivedAt: null,
+      projectId: project?.id ?? null,
     });
     return c.json(created, 201);
   });
@@ -108,12 +148,17 @@ export function chatsRoutes(container: Container): Hono {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
+    if (body.projectId !== undefined) {
+      // Moving files the chat; its folder and profile stay as they are (spec §2).
+      patch.projectId = body.projectId === null ? null : requireExistingProject(container, body.projectId).id;
+    }
 
-    // The Auto toggle is a setting, not chat activity: an autoMode-only PATCH
-    // must not move the chat to the top of the list (ChatList sorts by
+    // Toggling Auto or moving a chat to another project is not chat activity:
+    // such a PATCH must not move the chat in the list (ChatList sorts by
     // updatedAt). Every other PATCH, including an empty one, still bumps it.
-    const onlyAutoMode = Object.keys(patch).length === 1 && patch.autoMode !== undefined;
-    if (!onlyAutoMode) patch.updatedAt = Date.now();
+    const keys = Object.keys(patch);
+    const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k));
+    if (!nonActivity) patch.updatedAt = Date.now();
 
     return c.json(container.store.chats.update(id, patch));
   });
