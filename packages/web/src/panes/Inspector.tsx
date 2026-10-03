@@ -8,6 +8,7 @@ import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '.
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
+import { InspectorProject } from './InspectorProject.js';
 
 export interface InspectorProps {
   chat: Chat | null;
@@ -572,6 +573,10 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
           ✕
         </button>
       </div>
+
+      <Section title="Project">
+        {chat ? <InspectorProject chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
+      </Section>
 
       <Section title="Workspace">
         {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}
