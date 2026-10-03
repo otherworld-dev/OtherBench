@@ -253,6 +253,16 @@ export class PermissionBroker {
     });
   }
 
+  /**
+   * Drops a pending request created by `decide()` without answering it: no
+   * grant, no event. Used when auto mode hands the call to Claude Code's
+   * classifier instead of a card (GruntToolProvider.requestApproval). An
+   * unknown or already-settled id is a no-op, never an error.
+   */
+  discard(requestId: string): void {
+    this.pending.delete(requestId);
+  }
+
   private findMatchingGrant(tool: ToolSpec, args: unknown, ctx: ToolContext): Grant | null {
     const now = Date.now();
     for (const grant of this.store.grants.list()) {
@@ -281,6 +291,20 @@ export class PermissionBroker {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether, in Claude Code auto mode, a call the broker would ask about may go
+ * to Claude Code's own classifier instead of a Grunt card (spec
+ * 2026-10-03-claude-code-auto-mode-design section 3). Only Claude Code tools
+ * qualify. A write to Claude Code's own config (see isProtectedAgentPath) and
+ * an unrecognised tool (`other`) never do: those are escalation paths and
+ * always keep the card.
+ */
+export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
+  if (tool.source !== 'agent') return false;
+  if (classifyAgentTool(tool.name).category === 'other') return false;
+  return !isProtectedAgentWrite(tool, args);
+}
 
 /**
  * A Claude Code file-write call whose workspace-relative `path` (set by the
