@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGruntStore } from './state/store.js';
@@ -10,6 +10,7 @@ vi.mock('./state/api.js', () => ({
     models: { list: vi.fn() },
     profiles: { list: vi.fn() },
     chats: { list: vi.fn() },
+    projects: { list: vi.fn() },
     usage: { get: vi.fn() },
     mcpServers: { list: vi.fn(), refresh: vi.fn() },
     grants: { list: vi.fn(), revoke: vi.fn() },
@@ -23,6 +24,7 @@ const mockedConnections = vi.mocked(api.connections.list);
 const mockedModels = vi.mocked(api.models.list);
 const mockedProfiles = vi.mocked(api.profiles.list);
 const mockedChats = vi.mocked(api.chats.list);
+const mockedProjects = vi.mocked(api.projects.list);
 const mockedUsage = vi.mocked(api.usage.get);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
 const mockedGrantsList = vi.mocked(api.grants.list);
@@ -34,6 +36,7 @@ function reset(): void {
   mockedModels.mockReset();
   mockedProfiles.mockReset();
   mockedChats.mockReset();
+  mockedProjects.mockReset().mockResolvedValue([]);
   mockedUsage.mockReset();
   // The Inspector's honest-state sections (task 26) mount alongside every
   // other App view regardless of which one the test is exercising -- give
@@ -66,11 +69,26 @@ describe('App bootstrap', () => {
   // render identically to a genuinely fresh install. Before the fix, all
   // four bootstrap fetches failed silently (console.error only), leaving
   // the UI showing "No chats yet..." with no indication anything was wrong.
+  it('loads projects at startup alongside the rest of the reference data', async () => {
+    mockedConnections.mockResolvedValue([]);
+    mockedModels.mockResolvedValue([]);
+    mockedProfiles.mockResolvedValue([]);
+    mockedChats.mockResolvedValue([]);
+    mockedProjects.mockResolvedValue([
+      { id: 'p-a', name: 'Alpha', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
+    ]);
+
+    render(<App />);
+
+    await waitFor(() => expect(useGruntStore.getState().projects.map((p) => p.id)).toEqual(['p-a']));
+  });
+
   it('shows a clear unreachable-server banner when every bootstrap fetch fails', async () => {
     mockedConnections.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedModels.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedProfiles.mockRejectedValue(new TypeError('Failed to fetch'));
     mockedChats.mockRejectedValue(new TypeError('Failed to fetch'));
+    mockedProjects.mockRejectedValue(new TypeError('Failed to fetch'));
 
     render(<App />);
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
@@ -53,6 +53,19 @@ export interface GruntState {
   setActiveChatId(chatId: string | null): void;
   /** Local-only optimistic (or server-confirmed) head move -- see api.turns.setHead. */
   setHeadMessageId(chatId: string, messageId: string): void;
+
+  // --- projects ---------------------------------------------------------------
+  projects: Project[];
+  setProjects(projects: Project[]): void;
+  /** Inserts or replaces one project by id. */
+  upsertProject(project: Project): void;
+  /**
+   * Removes a project and, in the SAME update, moves its chats to no project
+   * (`projectId: null`) -- mirroring chat.project_id's ON DELETE SET NULL, the
+   * same "never show what the server no longer has" invariant as
+   * removeConnection. Chats are never removed.
+   */
+  removeProject(id: string): void;
 
   // --- messages + the SSE reconciliation seam --------------------------------
   /** Every message the client has learned about, across whatever chat(s) have been loaded or streamed into, keyed by id. */
@@ -122,6 +135,17 @@ export interface GruntState {
   setInspectorCollapsed(collapsed: boolean): void;
 }
 
+/**
+ * `projects` with every default profile in `profileIds` cleared, mirroring
+ * the server (project.default_profile_id is ON DELETE SET NULL, and archiving
+ * a profile clears it too). Returns the same array when nothing changes.
+ */
+function clearDefaultProfiles(projects: Project[], profileIds: ReadonlySet<string>): Project[] {
+  const hit = (p: Project): boolean => p.defaultProfileId !== null && profileIds.has(p.defaultProfileId);
+  if (!projects.some(hit)) return projects;
+  return projects.map((p) => (hit(p) ? { ...p, defaultProfileId: null } : p));
+}
+
 export const useGruntStore = create<GruntState>()((set) => ({
   connections: [],
   models: [],
@@ -154,6 +178,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
         models: state.models.filter((m) => m.connectionId !== id),
         profiles: state.profiles.filter((p) => p.connectionId !== id),
         chats,
+        projects: clearDefaultProfiles(state.projects, removedProfileIds),
         activeChatId,
       };
     }),
@@ -178,17 +203,22 @@ export const useGruntStore = create<GruntState>()((set) => ({
   upsertProfile: (profile) =>
     set((state) => {
       const idx = state.profiles.findIndex((p) => p.id === profile.id);
-      if (idx === -1) return { profiles: [...state.profiles, profile] };
-      const next = [...state.profiles];
-      next[idx] = profile;
-      return { profiles: next };
+      const profiles = idx === -1 ? [...state.profiles, profile] : state.profiles.map((p, i) => (i === idx ? profile : p));
+      // An archived profile stops being any project's default (routes/profiles.ts does the same).
+      const projects = profile.archivedAt === null ? state.projects : clearDefaultProfiles(state.projects, new Set([profile.id]));
+      return { profiles, projects };
     }),
   removeProfile: (id) =>
     set((state) => {
       // Same invariant as removeConnection above, one hop shorter.
       const chats = state.chats.filter((c) => c.profileId !== id);
       const activeChatId = chats.some((c) => c.id === state.activeChatId) ? state.activeChatId : null;
-      return { profiles: state.profiles.filter((p) => p.id !== id), chats, activeChatId };
+      return {
+        profiles: state.profiles.filter((p) => p.id !== id),
+        chats,
+        activeChatId,
+        projects: clearDefaultProfiles(state.projects, new Set([id])),
+      };
     }),
 
   chats: [],
@@ -207,6 +237,22 @@ export const useGruntStore = create<GruntState>()((set) => ({
   setHeadMessageId: (chatId, messageId) =>
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
+    })),
+
+  projects: [],
+  setProjects: (projects) => set({ projects }),
+  upsertProject: (project) =>
+    set((state) => {
+      const idx = state.projects.findIndex((p) => p.id === project.id);
+      if (idx === -1) return { projects: [...state.projects, project] };
+      const next = [...state.projects];
+      next[idx] = project;
+      return { projects: next };
+    }),
+  removeProject: (id) =>
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== id),
+      chats: state.chats.map((c) => (c.projectId === id ? { ...c, projectId: null } : c)),
     })),
 
   messages: {},

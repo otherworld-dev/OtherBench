@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import { useGruntStore } from './store.js';
 
@@ -54,6 +54,10 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
     archivedAt: null,
     ...overrides,
   };
+}
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return { id: 'proj-1', name: 'Alpha', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
@@ -376,5 +380,56 @@ describe('useGruntStore', () => {
     useGruntStore.getState().removeProfile('p1');
 
     expect(useGruntStore.getState().activeChatId).toBe('chat-2');
+  });
+
+  it('setProjects/upsertProject populate the project list, replacing by id', () => {
+    useGruntStore.getState().setProjects([makeProject()]);
+    useGruntStore.getState().upsertProject(makeProject({ name: 'Renamed' }));
+    useGruntStore.getState().upsertProject(makeProject({ id: 'proj-2' }));
+
+    expect(useGruntStore.getState().projects.map((p) => [p.id, p.name])).toEqual([
+      ['proj-1', 'Renamed'],
+      ['proj-2', 'Alpha'],
+    ]);
+  });
+
+  it('removeProject drops the project and moves its chats to no project in the same update, keeping them', () => {
+    useGruntStore.getState().setProjects([makeProject(), makeProject({ id: 'proj-2' })]);
+    useGruntStore.getState().setChats([
+      makeChat({ id: 'a', projectId: 'proj-1', workspaceRoot: '/ws' }),
+      makeChat({ id: 'b', projectId: 'proj-2' }),
+    ]);
+
+    useGruntStore.getState().removeProject('proj-1');
+
+    const state = useGruntStore.getState();
+    expect(state.projects.map((p) => p.id)).toEqual(['proj-2']);
+    expect(state.chats.map((c) => [c.id, c.projectId, c.workspaceRoot])).toEqual([
+      ['a', null, '/ws'],
+      ['b', 'proj-2', null],
+    ]);
+  });
+
+  it('a removed or archived profile stops being any project default, mirroring the server', () => {
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p-a' }), makeProfile({ id: 'p-b' })]);
+    useGruntStore.getState().setProjects([
+      makeProject({ id: 'x', defaultProfileId: 'p-a' }),
+      makeProject({ id: 'y', defaultProfileId: 'p-b' }),
+    ]);
+
+    useGruntStore.getState().upsertProfile(makeProfile({ id: 'p-a', archivedAt: 5 }));
+    expect(useGruntStore.getState().projects.map((p) => p.defaultProfileId)).toEqual([null, 'p-b']);
+
+    useGruntStore.getState().removeProfile('p-b');
+    expect(useGruntStore.getState().projects.map((p) => p.defaultProfileId)).toEqual([null, null]);
+  });
+
+  it('removeConnection clears project defaults that pointed at its profiles', () => {
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'p-a', connectionId: 'conn-1' })]);
+    useGruntStore.getState().setProjects([makeProject({ defaultProfileId: 'p-a' })]);
+
+    useGruntStore.getState().removeConnection('conn-1');
+
+    expect(useGruntStore.getState().projects[0]!.defaultProfileId).toBeNull();
   });
 });

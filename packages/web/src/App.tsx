@@ -32,6 +32,7 @@ export function App(): JSX.Element {
   const setModels = useGruntStore((s) => s.setModels);
   const setProfiles = useGruntStore((s) => s.setProfiles);
   const setChats = useGruntStore((s) => s.setChats);
+  const setProjects = useGruntStore((s) => s.setProjects);
 
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   // Separate from `inspectorCollapsed` (the docked-mode show/hide
@@ -61,7 +62,7 @@ export function App(): JSX.Element {
   // Initial reference-data + chat-list load. Individual failures are logged,
   // not thrown -- a transient failure here shouldn't blank the whole shell;
   // panes render their own empty states off whatever did load. But if ALL
-  // FOUR fail, that's not "nothing configured yet", it's "can't reach the
+  // of them fail, that's not "nothing configured yet", it's "can't reach the
   // server at all", and the banner above says so explicitly instead of
   // silently rendering the fresh-install empty state.
   useEffect(() => {
@@ -72,9 +73,10 @@ export function App(): JSX.Element {
       api.models.list().then(setModels),
       api.profiles.list().then(setProfiles),
       api.chats.list().then(setChats),
+      api.projects.list().then(setProjects),
     ]).then((results) => {
       if (cancelled) return;
-      const labels = ['connections', 'models', 'profiles', 'chats'] as const;
+      const labels = ['connections', 'models', 'profiles', 'chats', 'projects'] as const;
       results.forEach((r, i) => {
         if (r.status === 'rejected') console.error(`[grunt-web] failed to load ${labels[i]}:`, r.reason);
       });
@@ -84,7 +86,7 @@ export function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [setConnections, setModels, setProfiles, setChats]);
+  }, [setConnections, setModels, setProfiles, setChats, setProjects]);
 
   useChatSync(activeChatId);
   useTextSizeShortcuts();
