@@ -223,9 +223,9 @@ test('full product journey: connection + profile, chat, streaming, tool approval
     // still there, not by the chat's sidebar title text, which -- per the
     // note above -- will not still read `chatTitle` by this point.
     await page.getByRole('searchbox', { name: 'Search chats' }).fill(searchToken);
-    const results = page.locator('nav[aria-label="Chats"] ul li button');
+    const results = page.locator('nav[aria-label="Chats"] [data-testid^="chat-row-"]');
     await expect(results).toHaveCount(1);
-    await results.first().click();
+    await results.first().locator('[data-row-main]').click();
     await expect(main.getByText(new RegExp(`Hello from the smoke journey ${searchToken}`))).toBeVisible();
   } finally {
     rmSync(workspaceRoot, { recursive: true, force: true });
