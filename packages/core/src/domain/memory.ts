@@ -122,11 +122,23 @@ function renderSections(sections: MemorySection[]): string {
   return sections.map((s) => (s.content ? `## ${s.heading}\n${s.content}` : `## ${s.heading}`)).join('\n\n');
 }
 
+/** MEMORY_FORMAT_ERROR, naming the first level-2 line that isn't one of the fixed headings, if any. */
+function formatError(text: string): string {
+  for (const line of normaliseMemoryBody(text).split('\n')) {
+    const match = LEVEL2.exec(line);
+    if (match && !(MEMORY_HEADINGS as readonly string[]).includes(match[1] ?? '')) {
+      const shown = line.length > 80 ? `${line.slice(0, 77)}...` : line;
+      return `${MEMORY_FORMAT_ERROR} Unexpected heading: "${shown}".`;
+    }
+  }
+  return MEMORY_FORMAT_ERROR;
+}
+
 /** Why `body` can't be saved, or null when it can. Checks the normalised note. */
 export function validateMemoryBody(body: string): string | null {
   const text = normaliseMemoryBody(body);
   if (text.length === 0) return 'The note is empty.';
-  if (!parseSections(text)) return MEMORY_FORMAT_ERROR;
+  if (!parseSections(text)) return formatError(text);
   if (text.length > MEMORY_MAX_CHARS) return `The note is ${text.length.toLocaleString('en-US')} characters; the limit is ${LIMIT_TEXT}.`;
   return null;
 }
@@ -154,10 +166,12 @@ export function finaliseSummary(currentBody: string, output: string): SummaryChe
   let text = output.replace(/\r\n?/g, '\n').trim();
   const start = text.search(/^##[ \t]+pinned[ \t]*$/im);
   if (start > 0) text = text.slice(start);
-  text = normaliseMemoryBody(text.replace(/\n```[ \t]*$/, ''));
+  const fence = /\n```[ \t]*(\n|$)/.exec(text); // the closing fence: drop it and any commentary after it
+  if (fence) text = text.slice(0, fence.index);
+  text = normaliseMemoryBody(text);
   if (text.length === 0) return { ok: false, reason: 'The model returned an empty note.' };
   const sections = parseSections(text);
-  if (!sections) return { ok: false, reason: MEMORY_FORMAT_ERROR };
+  if (!sections) return { ok: false, reason: formatError(text) };
   const pinned = pinnedSection(currentBody) ?? '';
   if (sections[0]?.content !== pinned) {
     sections[0] = { heading: 'Pinned', content: pinned };
@@ -169,11 +183,17 @@ export function finaliseSummary(currentBody: string, output: string): SummaryChe
   return { ok: true, body: text };
 }
 
+/** The first `n` code units of `text`, not ending inside a surrogate pair. */
+function cutEnd(text: string, n: number): string {
+  const code = text.charCodeAt(n - 1);
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? n - 1 : n);
+}
+
 function toolTarget(args: unknown): string {
   if (typeof args !== 'object' || args === null) return '';
   const a = args as Record<string, unknown>;
   const value = a['path'] ?? a['file_path'] ?? a['command'];
-  return typeof value === 'string' ? ` ${value.length > 120 ? `${value.slice(0, 117)}...` : value}` : '';
+  return typeof value === 'string' ? ` ${value.length > 120 ? `${cutEnd(value, 117)}...` : value}` : '';
 }
 
 function messageText(parts: Part[]): string {
@@ -199,7 +219,10 @@ export function renderMemoryTranscript(messages: CanonMessage[]): string {
     .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${messageText(m.parts)}`)
     .join('\n\n');
   if (text.length <= MEMORY_INPUT_MAX_CHARS) return text;
-  return `[earlier messages omitted]\n${text.slice(text.length - MEMORY_INPUT_MAX_CHARS)}`;
+  let kept = text.slice(text.length - MEMORY_INPUT_MAX_CHARS);
+  const first = kept.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) kept = kept.slice(1); // don't start inside a surrogate pair
+  return `[earlier messages omitted]\n${kept}`;
 }
 
 const byCreated = (a: CanonMessage, b: CanonMessage): number => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);

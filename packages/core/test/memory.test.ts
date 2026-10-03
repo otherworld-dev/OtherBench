@@ -61,7 +61,7 @@ describe('the note format', () => {
     expect(validateMemoryBody('   ')).toBe('The note is empty.');
     expect(validateMemoryBody('## Pinned\n\n## Goals')).toBe(MEMORY_FORMAT_ERROR);
     expect(validateMemoryBody('## Goals\n\n## Pinned\n\n## Decisions\n\n## Current focus\n\n## Open questions')).toBe(MEMORY_FORMAT_ERROR);
-    expect(validateMemoryBody(`${note()}\n\n## Notes\n- extra`)).toBe(MEMORY_FORMAT_ERROR);
+    expect(validateMemoryBody(`${note()}\n\n## Notes\n- extra`)).toBe(`${MEMORY_FORMAT_ERROR} Unexpected heading: "## Notes".`);
     expect(validateMemoryBody(`Intro line\n${note()}`)).toBe(MEMORY_FORMAT_ERROR);
     expect(MEMORY_FORMAT_ERROR).toBe(
       'The note must have exactly these headings, in this order: ## Pinned, ## Goals, ## Decisions, ## Current focus, ## Open questions.'
@@ -116,6 +116,18 @@ describe('finaliseSummary', () => {
     expect(finaliseSummary(emptyMemoryBody(), `Sure! Updated note below.\n${body}`)).toEqual({ ok: true, body });
   });
 
+  it('drops commentary after the closing fence, and keeps only the first of two fenced blocks', () => {
+    const body = note({ goals: '- Fenced' });
+    expect(finaliseSummary(emptyMemoryBody(), `\`\`\`\n${body}\n\`\`\`\n\nLet me know if you want changes.`)).toEqual({ ok: true, body });
+    const two = `\`\`\`markdown\n${body}\n\`\`\`\nAlternatively:\n\`\`\`markdown\n${note({ goals: '- Other' })}\n\`\`\``;
+    expect(finaliseSummary(emptyMemoryBody(), two)).toEqual({ ok: true, body });
+  });
+
+  it('names the stray heading when one is the problem', () => {
+    const result = finaliseSummary(emptyMemoryBody(), `${note()}\n\n## Appendix\n- x`);
+    expect(result).toEqual({ ok: false, reason: `${MEMORY_FORMAT_ERROR} Unexpected heading: "## Appendix".` });
+  });
+
   it('rejects an empty answer or one without the fixed headings', () => {
     expect(finaliseSummary(emptyMemoryBody(), '   ')).toEqual({ ok: false, reason: 'The model returned an empty note.' });
     expect(finaliseSummary(emptyMemoryBody(), '## Goals\n- Only goals')).toEqual({ ok: false, reason: MEMORY_FORMAT_ERROR });
@@ -157,6 +169,24 @@ describe('renderMemoryTranscript', () => {
     expect(text).toHaveLength(prefix.length + MEMORY_INPUT_MAX_CHARS);
     expect(text.endsWith('Assistant: NEWEST')).toBe(true);
     expect(text).not.toContain('OLDEST');
+  });
+});
+
+describe('character boundaries', () => {
+  const emoji = '\u{1F600}';
+
+  it('does not start the kept transcript inside a surrogate pair', () => {
+    // "User: " + 5 x + emoji + (MAX - 1) y: the cut lands between the emoji's two code units.
+    const body = `xxxxx${emoji}${'y'.repeat(MEMORY_INPUT_MAX_CHARS - 1)}`;
+    const text = renderMemoryTranscript([msg('u1', null, 'user', 1, { parts: [{ type: 'text', text: body }] })]);
+    const kept = text.slice('[earlier messages omitted]\n'.length);
+    expect(kept).toBe('y'.repeat(MEMORY_INPUT_MAX_CHARS - 1));
+  });
+
+  it('does not end a tool-call target inside a surrogate pair', () => {
+    const path = `${'a'.repeat(116)}${emoji}tail`;
+    const text = renderMemoryTranscript([msg('a1', null, 'assistant', 1, { parts: [{ type: 'tool-call', id: 't', name: 'read_file', args: { path } }] })]);
+    expect(text).toBe(`Assistant: [tool read_file ${'a'.repeat(116)}... -> ok]`);
   });
 });
 
