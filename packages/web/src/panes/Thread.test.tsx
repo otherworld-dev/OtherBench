@@ -279,4 +279,56 @@ describe('Thread auto-scroll', () => {
     addReply('r2', 'again');
     expect(scroller.scrollTop).toBe(1000);
   });
+
+  it('follows a streamed delta appended to an existing message while near the bottom', () => {
+    const scroller = setup();
+    addReply('r1', 'hel');
+    stubScroller(scroller, 600); // at the bottom
+    fireEvent.scroll(scroller);
+    scroller.scrollTop = 600;
+    act(() => {
+      useGruntStore.getState().loadMessages('chat-1', [variantMessage('r1', 'root', { status: 'streaming', parts: [{ type: 'text', text: 'hello world' }] })], null);
+    });
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('follows when only extras change (a pending approval card appears) while near the bottom', () => {
+    const scroller = setup();
+    addReply('r1', 'running');
+    stubScroller(scroller, 590);
+    fireEvent.scroll(scroller);
+    act(() => {
+      useGruntStore.setState((st) => ({
+        extras: {
+          ...st.extras,
+          r1: {
+            usage: null,
+            ...st.extras['r1'],
+            pendingApprovals: [{ id: 'req-1', chatId: 'chat-1', messageId: 'r1', toolName: 'run_command', risk: 'execute', source: 'shell', args: {}, summary: 'npm test' }],
+          },
+        },
+      }));
+    });
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('opens a chat at the bottom', () => {
+    const scrollHeight = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    const tops = new WeakMap<Element, number>();
+    const top = vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
+      return tops.get(this) ?? 0;
+    });
+    const topSet = vi.spyOn(Element.prototype, 'scrollTop', 'set').mockImplementation(function (this: Element, v: number) {
+      tops.set(this, v);
+    });
+    try {
+      useGruntStore.getState().loadMessages('chat-1', [makeMessage('root', 'chat-1')], null);
+      render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+      expect(screen.getByTestId('thread-scroll').scrollTop).toBe(1000);
+    } finally {
+      scrollHeight.mockRestore();
+      top.mockRestore();
+      topSet.mockRestore();
+    }
+  });
 });

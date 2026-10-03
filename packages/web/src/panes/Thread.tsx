@@ -104,7 +104,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       setShowJump(false);
     }
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [chatId, chatMessages, extras]);
+  }, [chatId, chatMessages, extras, displayPath]);
 
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
 
@@ -178,73 +178,72 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
         </div>
       )}
       <div className="relative min-h-0 flex-1">
-      <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="h-full overflow-y-auto">
-        <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
-          {displayPath.length === 0 ? (
-            <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
-          ) : (
-            displayPath.map((m) => {
-              let siblings = [m];
-              try {
-                siblings = siblingsOf(chatMessages, m.id);
-              } catch {
-                // m not found in chatMessages (shouldn't happen -- it came from the same set) -- fall back to "no siblings".
-              }
-              const isReopened = siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
-              if (isReopened) {
+        <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="h-full overflow-y-auto">
+          <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
+            {displayPath.length === 0 ? (
+              <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
+            ) : (
+              displayPath.map((m) => {
+                let siblings = [m];
+                try {
+                  siblings = siblingsOf(chatMessages, m.id);
+                } catch {
+                  // m not found in chatMessages (shouldn't happen -- it came from the same set) -- fall back to "no siblings".
+                }
+                const isReopened = siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
+                if (isReopened) {
+                  return (
+                    <VariantTabs
+                      key={`turn-${m.parentId}`}
+                      variants={siblings}
+                      extras={extras}
+                      models={models}
+                      keptId={m.id}
+                      onKeep={(id) => void keepVariant(id)}
+                      onRetry={(v) => void retryVariant(v)}
+                      retryingIds={retryingIds}
+                      onClose={() => setReopenedParentId(null)}
+                      onResolveApproval={resolveApproval}
+                    />
+                  );
+                }
                 return (
-                  <VariantTabs
-                    key={`turn-${m.parentId}`}
-                    variants={siblings}
-                    extras={extras}
-                    models={models}
-                    keptId={m.id}
-                    onKeep={(id) => void keepVariant(id)}
-                    onRetry={(v) => void retryVariant(v)}
-                    retryingIds={retryingIds}
-                    onClose={() => setReopenedParentId(null)}
+                  <Message
+                    key={m.id}
+                    message={m}
+                    otherVariantsCount={siblings.length > 1 ? siblings.length - 1 : 0}
+                    onReopenVariants={siblings.length > 1 ? () => setReopenedParentId(m.parentId) : undefined}
+                    pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
                     onResolveApproval={resolveApproval}
                   />
                 );
-              }
-              return (
-                <Message
-                  key={m.id}
-                  message={m}
-                  otherVariantsCount={siblings.length > 1 ? siblings.length - 1 : 0}
-                  onReopenVariants={siblings.length > 1 ? () => setReopenedParentId(m.parentId) : undefined}
-                  pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
-                  onResolveApproval={resolveApproval}
-                />
-              );
-            })
-          )}
+              })
+            )}
 
-          {openVariants.length > 1 && (
-            <VariantTabs
-              key={`turn-open-${tailId}`}
-              variants={openVariants}
-              extras={extras}
-              models={models}
-              keptId={null}
-              onKeep={(id) => void keepVariant(id)}
-              onRetry={(v) => void retryVariant(v)}
-              retryingIds={retryingIds}
-              onResolveApproval={resolveApproval}
-            />
-          )}
+            {openVariants.length > 1 && (
+              <VariantTabs
+                key={`turn-open-${tailId}`}
+                variants={openVariants}
+                extras={extras}
+                models={models}
+                keptId={null}
+                onKeep={(id) => void keepVariant(id)}
+                onRetry={(v) => void retryVariant(v)}
+                retryingIds={retryingIds}
+                onResolveApproval={resolveApproval}
+              />
+            )}
+          </div>
         </div>
-      </div>
-      {showJump && (
-        <button
-          type="button"
-          onClick={jumpToLatest}
-          aria-label="Jump to latest"
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
-        >
-          ↓ Jump to latest
-        </button>
-      )}
+        {showJump && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
+          >
+            <span aria-hidden="true">↓</span> Jump to latest
+          </button>
+        )}
       </div>
       <Composer chat={chat} parentId={tailId} />
     </main>

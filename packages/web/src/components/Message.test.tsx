@@ -192,6 +192,15 @@ describe('Message', () => {
       expect(screen.getByText('Used 2 tools: Read ×2')).toBeInTheDocument();
     });
 
+    it('keeps an expanded group open while more tool parts stream into the trailing run', async () => {
+      const { rerender } = render(<Message message={base({ parts: [call('1', 'Glob'), result('1', 'Glob')] })} />);
+      await userEvent.setup().click(screen.getByText('Used 1 tool: Glob'));
+      expect(screen.getByText('Used 1 tool: Glob').closest('details')).toHaveAttribute('open');
+
+      rerender(<Message message={base({ parts: [call('1', 'Glob'), result('1', 'Glob'), call('2', 'Read')] })} />);
+      expect(screen.getByText('Used 2 tools: Glob, Read').closest('details')).toHaveAttribute('open');
+    });
+
     it('other parts break the run into separate groups', () => {
       const parts = [call('1', 'Glob'), result('1', 'Glob'), { type: 'text' as const, text: 'between' }, call('2', 'Grep'), result('2', 'Grep')];
       render(<Message message={base({ parts })} />);

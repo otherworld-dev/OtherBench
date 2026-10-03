@@ -447,7 +447,7 @@ const OUTLINE_REPLY_CHARS = 80;
 function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; limit: number; expanded: boolean; onToggle: () => void }): JSX.Element | null {
   if (total <= limit) return null;
   return (
-    <button type="button" onClick={onToggle} className="mt-2 text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]">
+    <button type="button" onClick={onToggle} aria-expanded={expanded} className="mt-2 text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]">
       {expanded ? 'Show fewer' : `Show all (${total})`}
     </button>
   );
@@ -509,6 +509,7 @@ function ConversationSection({ chat }: { chat: Chat }): JSX.Element | null {
               <button
                 type="button"
                 data-testid={`outline-${user.id}`}
+                aria-label={`Go to: ${oneLine(user, OUTLINE_USER_CHARS) || '(attachment)'}`}
                 onClick={() => document.getElementById(`msg-${user.id}`)?.scrollIntoView({ block: 'start' })}
                 className="block w-full rounded px-1 py-0.5 text-left hover:bg-[var(--bg-sunken)]"
               >
@@ -539,20 +540,20 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
 
   return (
     <>
-    <ul data-testid="audit-trail" className="space-y-2">
-      {shown.map((entry) => (
-        <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">{entry.toolName}</span>
-            <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
-          </div>
-          <div className="text-xs text-[var(--text-muted)]">
-            {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span> · {entry.durationMs}ms
-          </div>
-        </li>
-      ))}
-    </ul>
-    <ShowAllToggle total={sorted.length} limit={AUDIT_COLLAPSED_COUNT} expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
+      <ul data-testid="audit-trail" className="space-y-2">
+        {shown.map((entry) => (
+          <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">{entry.toolName}</span>
+              <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
+            </div>
+            <div className="text-xs text-[var(--text-muted)]">
+              {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span> · {entry.durationMs}ms
+            </div>
+          </li>
+        ))}
+      </ul>
+      <ShowAllToggle total={sorted.length} limit={AUDIT_COLLAPSED_COUNT} expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
     </>
   );
 }

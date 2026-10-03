@@ -120,20 +120,24 @@ function ToolGroup({ run }: { run: ToolPart[] }): JSX.Element {
 function renderParts(parts: Part[]): JSX.Element[] {
   const out: JSX.Element[] = [];
   let run: ToolPart[] = [];
-  const flush = (key: number): void => {
-    if (run.length > 0) out.push(<ToolGroup key={`tools-${key}`} run={run} />);
+  let runStart = 0;
+  // Keyed by the run's FIRST part so the key (and the user's open/closed
+  // state on the <details>) stays stable while more tool parts stream in.
+  const flush = (): void => {
+    if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} />);
     run = [];
   };
   parts.forEach((p, i) => {
     if (p.type === 'tool-call' || p.type === 'tool-result') {
+      if (run.length === 0) runStart = i;
       run.push(p);
       return;
     }
-    flush(i);
+    flush();
     const el = renderPart(p, i);
     if (el) out.push(el);
   });
-  flush(parts.length);
+  flush();
   return out;
 }
 

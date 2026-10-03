@@ -446,6 +446,10 @@ describe('Inspector audit trail', () => {
 });
 
 describe('Inspector conversation outline', () => {
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
   beforeEach(() => {
     useGruntStore.setState(useGruntStore.getInitialState(), true);
     mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
@@ -484,6 +488,7 @@ describe('Inspector conversation outline', () => {
       user('other', 'a1', 'abandoned branch'),
     ], null);
     renderFor('u3');
+    expect(within(outline()).getByRole('button', { name: 'Go to: first question' })).toBeInTheDocument();
     const entries = within(outline()).getAllByTestId(/^outline-/);
     expect(entries.map((e) => e.getAttribute('data-testid'))).toEqual(['outline-u1', 'outline-u2', 'outline-u3']);
     expect(entries[0]).toHaveTextContent('first question');
@@ -504,8 +509,7 @@ second line`)], null);
   });
 
   it('scrolls the thread to the clicked message', async () => {
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn();
     const target = document.createElement('article');
     target.id = 'msg-u2';
     document.body.appendChild(target);
