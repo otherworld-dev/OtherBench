@@ -11,7 +11,7 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { rename: vi.fn(), togglePin: vi.fn(), moveTo: vi.fn(), archive: vi.fn(), requestDelete: vi.fn() };
+  return { rename: vi.fn(), setPinned: vi.fn(), moveTo: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
@@ -20,19 +20,21 @@ describe('chatMenuItems', () => {
     expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers())[1]!.label).toBe('Unpin');
   });
 
-  it('offers Unarchive instead of Archive for an archived chat (controller ruling R2)', () => {
+  it('offers Unarchive instead of Archive for an archived chat, and it calls unarchive, not archive (controller ruling R2)', () => {
     const h = chatHandlers();
     const items = chatMenuItems(chat({ archivedAt: 5 }), [], h);
     expect(items.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', 'Unarchive', 'Delete…']);
     items.find((i) => i.label === 'Unarchive')!.onSelect!();
-    expect(h.archive).toHaveBeenCalled();
-  });
-
-  it('calls the dedicated unarchive handler when one is given', () => {
-    const h = { ...chatHandlers(), unarchive: vi.fn() };
-    chatMenuItems(chat({ archivedAt: 5 }), [], h).find((i) => i.label === 'Unarchive')!.onSelect!();
     expect(h.unarchive).toHaveBeenCalled();
     expect(h.archive).not.toHaveBeenCalled();
+  });
+
+  it('Pin and Unpin set the state opposite to the chat the menu was built with', () => {
+    const h = chatHandlers();
+    chatMenuItems(chat(), [], h).find((i) => i.id === 'pin')!.onSelect!();
+    expect(h.setPinned).toHaveBeenLastCalledWith(true);
+    chatMenuItems(chat({ pinned: true }), [], h).find((i) => i.id === 'pin')!.onSelect!();
+    expect(h.setPinned).toHaveBeenLastCalledWith(false);
   });
 
   it("lists the projects in the given order plus No project, marking the chat's current one", () => {

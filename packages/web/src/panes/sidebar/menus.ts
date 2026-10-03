@@ -4,12 +4,11 @@ import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 
 export interface ChatMenuHandlers {
   rename(): void;
-  togglePin(): void;
+  /** Sets the pin state the menu item asked for (the opposite of the state the menu was built with). */
+  setPinned(pinned: boolean): void;
   moveTo(projectId: string | null): void;
-  /** Archives a live chat; also unarchives an archived one unless `unarchive` is given. */
   archive(): void;
-  /** Optional: a dedicated Unarchive action for archived chats (falls back to `archive`). */
-  unarchive?(): void;
+  unarchive(): void;
   requestDelete(): void;
 }
 
@@ -24,7 +23,7 @@ export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMen
   const archived = chat.archivedAt !== null;
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
-    { id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: h.togglePin },
+    { id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) },
     {
       id: 'move',
       label: 'Move to project…',
@@ -34,7 +33,7 @@ export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMen
       ],
     },
     archived
-      ? { id: 'unarchive', label: 'Unarchive', onSelect: h.unarchive ?? h.archive }
+      ? { id: 'unarchive', label: 'Unarchive', onSelect: h.unarchive }
       : { id: 'archive', label: 'Archive', onSelect: h.archive },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
   ];
