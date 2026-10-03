@@ -1,4 +1,4 @@
-import { useMemo, useState, type JSX } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { activePath, childrenOf, extendForward, siblingsOf } from '@grunt/core/domain/tree.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -8,6 +8,9 @@ import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
 import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
+
+/** How close (px) to the bottom still counts as "following" the thread. */
+const NEAR_BOTTOM_PX = 80;
 
 /**
  * Centre pane: the active branch (head -> root), extended forward through
@@ -63,6 +66,46 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }, [path, chatMessages]);
 
   const tailId = displayPath.at(-1)?.id ?? null;
+
+  // Auto-follow: stay pinned to the bottom while the user is already there,
+  // but never yank the view while they've scrolled up to read. `nearBottom`
+  // is updated ONLY by scroll events, so at content-change time it still
+  // reflects where the user was BEFORE the change.
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const nearBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const lastChatIdRef = useRef<string | null>(null);
+
+  const onScroll = useCallback((): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    nearBottomRef.current = near;
+    setShowJump(!near);
+  }, []);
+
+  const jumpToLatest = useCallback((): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    nearBottomRef.current = true;
+    setShowJump(false);
+  }, []);
+
+  // Runs after every change to this chat's rendered content (messages incl.
+  // streamed deltas and parts, plus extras such as pending approval cards).
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (lastChatIdRef.current !== chatId) {
+      // Opening a chat starts at the bottom.
+      lastChatIdRef.current = chatId;
+      nearBottomRef.current = true;
+      setShowJump(false);
+    }
+    if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [chatId, chatMessages, extras]);
+
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
 
   if (!chat) {
@@ -134,7 +177,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         </div>
       )}
-      <div className="flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1">
+      <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="h-full overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
           {displayPath.length === 0 ? (
             <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
@@ -190,6 +234,17 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
             />
           )}
         </div>
+      </div>
+      {showJump && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          aria-label="Jump to latest"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
+        >
+          ↓ Jump to latest
+        </button>
+      )}
       </div>
       <Composer chat={chat} parentId={tailId} />
     </main>

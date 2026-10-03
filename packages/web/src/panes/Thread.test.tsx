@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -228,5 +228,55 @@ describe('Thread', () => {
     expect(useGruntStore.getState().messages['failing']?.parts).toEqual([]);
     // The sibling is completely unaffected.
     expect(useGruntStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
+  });
+});
+
+describe('Thread auto-scroll', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  /** jsdom has no layout: give the scroll container fixed metrics and a plain writable scrollTop. */
+  function stubScroller(el: HTMLElement, scrollTop: number): void {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(el, 'scrollTop', { configurable: true, writable: true, value: scrollTop });
+  }
+
+  function addReply(id: string, text: string): void {
+    act(() => {
+      useGruntStore.getState().loadMessages('chat-1', [variantMessage(id, 'root', { parts: [{ type: 'text', text }] })], null);
+    });
+  }
+
+  function setup(): HTMLElement {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    useGruntStore.getState().loadMessages('chat-1', [root], null);
+    render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+    return screen.getByTestId('thread-scroll');
+  }
+
+  it('follows new content when the user is near the bottom', () => {
+    const scroller = setup();
+    stubScroller(scroller, 590); // 1000 - 590 - 400 = 10px from the bottom
+    fireEvent.scroll(scroller);
+    addReply('r1', 'hello');
+    expect(scroller.scrollTop).toBe(1000);
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+  });
+
+  it('does not yank the view when the user has scrolled up, and offers a Jump to latest button', async () => {
+    const scroller = setup();
+    stubScroller(scroller, 100);
+    fireEvent.scroll(scroller);
+    addReply('r1', 'hello');
+    expect(scroller.scrollTop).toBe(100);
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Jump to latest' }));
+    expect(scroller.scrollTop).toBe(1000);
+    // Following resumes: the scroll event the jump causes puts us back at the bottom.
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+    addReply('r2', 'again');
+    expect(scroller.scrollTop).toBe(1000);
   });
 });
