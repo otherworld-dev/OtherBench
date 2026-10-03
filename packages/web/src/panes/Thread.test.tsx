@@ -12,7 +12,10 @@ vi.mock('../state/api.js', () => ({
       setHead: vi.fn(),
       retry: vi.fn(),
     },
+    chats: { patch: vi.fn() },
+    attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
   },
+  ApiError: class ApiError extends Error {},
 }));
 
 import { api } from '../state/api.js';
@@ -331,5 +334,34 @@ describe('Thread auto-scroll', () => {
       top.mockRestore();
       topSet.mockRestore();
     }
+  });
+});
+
+describe('Thread composer per chat', () => {
+  afterEach(cleanup);
+
+  it('does not carry the Auto save state or profile selection from one chat to the next', async () => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    const conn = { id: 'cc', name: 'cc', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null } as never;
+    const oll = { id: 'oll', name: 'oll', kind: 'ollama', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null } as never;
+    useGruntStore.getState().setConnections([conn, oll]);
+    const prof = (id: string, connectionId: string) => ({
+      id, name: id, description: null, colour: null, connectionId, modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null,
+    }) as never;
+    useGruntStore.getState().setProfiles([prof('ccp', 'cc'), prof('ollp', 'oll')]);
+    const a = makeChat({ id: 'a', profileId: 'ccp', workspaceRoot: '/ws' });
+    const b = makeChat({ id: 'b', profileId: 'ccp', workspaceRoot: '/ws' });
+    const c = makeChat({ id: 'c', profileId: 'ollp' });
+    useGruntStore.getState().setChats([a, b, c]);
+    vi.mocked(api.chats.patch).mockReturnValue(new Promise<Chat>(() => {}));
+    const view = render(<Thread chat={a} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Auto mode' }));
+    expect(screen.getByRole('button', { name: 'Auto mode' })).toBeDisabled();
+    view.rerender(<Thread chat={b} />);
+    expect(screen.getByRole('button', { name: 'Auto mode' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    view.rerender(<Thread chat={c} />);
+    expect(screen.queryByRole('button', { name: 'Auto mode' })).not.toBeInTheDocument();
   });
 });

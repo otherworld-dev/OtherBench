@@ -596,4 +596,20 @@ describe('Composer auto mode toggle', () => {
     expect(toggle()).toBeDisabled();
     expect(screen.queryByText(HINT)).not.toBeInTheDocument();
   });
+
+  it('does not announce pressed while unavailable, even if the chat has auto mode on', () => {
+    renderWith({ profileId: 'local-cc', autoMode: true });
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('does not re-insert a chat removed from the store during a failed save', async () => {
+    mockedChatsPatch.mockImplementation(async () => {
+      useGruntStore.getState().setChats([]);
+      throw new ApiError(500, 'Gone.');
+    });
+    renderWith({ profileId: 'sonnet' });
+    await userEvent.setup().click(toggle());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Gone.');
+    expect(useGruntStore.getState().chats).toEqual([]);
+  });
 });

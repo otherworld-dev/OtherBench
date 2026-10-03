@@ -154,7 +154,9 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
     try {
       upsertChat(await api.chats.patch(chat.id, { autoMode: next }));
     } catch (err) {
-      upsertChat({ ...latest(), autoMode: previous });
+      const current = useGruntStore.getState().chats.find((c) => c.id === chat.id);
+      // A chat removed mid-save must not be re-inserted by the revert.
+      if (current) upsertChat({ ...current, autoMode: previous });
       setAutoError(err instanceof ApiError ? err.message : "Couldn't change auto mode. Please try again.");
     } finally {
       setAutoSaving(false);
@@ -334,7 +336,7 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
           <button
             type="button"
             aria-label="Auto mode"
-            aria-pressed={autoMode}
+            aria-pressed={autoActive}
             disabled={autoUnavailable || autoSaving}
             title={autoUnavailable ? 'Auto mode needs the Claude login' : 'Let Claude Code decide routine tool calls (from the next turn)'}
             onClick={() => void toggleAutoMode()}
