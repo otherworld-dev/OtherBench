@@ -112,6 +112,36 @@ export interface ProjectRepo {
   delete(id: string): void;
 }
 
+// --- project memory -----------------------------------------------------------
+
+/** Who wrote a version of a project's memory note. */
+export type MemoryAuthor = 'user' | 'summariser';
+
+/**
+ * A project's current memory note (spec 2026-10-03-project-memory-design §1).
+ * `body` is markdown with the five fixed headings (`MEMORY_HEADINGS`).
+ * `sourceChatId` is the chat the summariser folded in last, null for a user
+ * save. A project that was never saved reads as `emptyProjectMemory()`
+ * (`updatedAt: 0`).
+ */
+export interface ProjectMemory {
+  projectId: string;
+  body: string;
+  updatedAt: number;
+  updatedBy: MemoryAuthor;
+  sourceChatId: string | null;
+}
+
+/** One saved version of a project's note; every save adds one. */
+export interface ProjectMemoryVersion {
+  id: string;
+  projectId: string;
+  body: string;
+  createdAt: number;
+  createdBy: MemoryAuthor;
+  sourceChatId: string | null;
+}
+
 // --- messages ----------------------------------------------------------------
 
 export interface MessageRepo {
