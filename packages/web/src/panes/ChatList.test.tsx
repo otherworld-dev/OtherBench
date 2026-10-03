@@ -722,3 +722,90 @@ describe('ChatList project menu', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
   });
 });
+
+describe('ChatList archived section', () => {
+  function setup() {
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [
+        makeChat({ id: 'c1', title: 'Live', projectId: 'p-a', updatedAt: 10 }),
+        makeChat({ id: 'c2', title: 'Old one', projectId: 'p-a', archivedAt: 5, updatedAt: 20 }),
+        makeChat({ id: 'c3', title: 'Old two', archivedAt: 6, updatedAt: 30 }),
+      ],
+    });
+    render(<ChatList />);
+    return userEvent.setup();
+  }
+  const toggle = () => screen.getByRole('button', { name: /archived/ });
+  const archivedIds = () =>
+    within(screen.getByTestId('archived-section'))
+      .queryAllByTestId(/^chat-row-/)
+      .map((el) => el.getAttribute('data-testid')!.slice('chat-row-'.length));
+
+  it('has no toggle when nothing is archived', () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1' })] });
+    render(<ChatList />);
+    expect(screen.queryByRole('button', { name: /archived/ })).toBeNull();
+  });
+
+  it('shows a collapsed "Show archived (N)" toggle that opens and closes the list', async () => {
+    const user = setup();
+    expect(toggle()).toHaveTextContent('Show archived (2)');
+    expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(archivedIds()).toEqual([]);
+
+    await user.click(toggle());
+    expect(toggle()).toHaveTextContent('Hide archived');
+    expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(archivedIds()).toEqual(['c3', 'c2']);
+
+    await user.click(toggle());
+    expect(archivedIds()).toEqual([]);
+  });
+
+  it('remembers the open state per device', async () => {
+    const user = setup();
+    await user.click(toggle());
+    expect(window.localStorage.getItem('grunt.showArchived')).toBe('true');
+
+    cleanup();
+    render(<ChatList />);
+    expect(toggle()).toHaveTextContent('Hide archived');
+    expect(archivedIds()).toEqual(['c3', 'c2']);
+  });
+
+  it('clicking an archived chat opens it; its menu offers Unarchive, not Archive', async () => {
+    const user = setup();
+    await user.click(toggle());
+    await user.click(screen.getByRole('button', { name: 'Old one' }));
+    expect(useGruntStore.getState().activeChatId).toBe('c2');
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Old one' }));
+    expect(screen.getByRole('menuitem', { name: 'Unarchive' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Archive' })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete…' })).toBeInTheDocument();
+  });
+
+  it('Unarchive returns the chat to its group', async () => {
+    const user = setup();
+    await user.click(toggle());
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Old one' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Unarchive' }));
+
+    expect(mockedPatch).toHaveBeenCalledWith('c2', { archivedAt: null });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['c2', 'c1']));
+    expect(archivedIds()).toEqual(['c3']);
+    expect(toggle()).toHaveTextContent('Hide archived');
+  });
+
+  it('a search filters the archived list too', async () => {
+    const user = setup();
+    mockedSearch.mockResolvedValue([{ messageId: 'm1', chatId: 'c3', snippet: 'x' }]);
+    await user.click(toggle());
+    await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'x');
+
+    await waitFor(() => expect(archivedIds()).toEqual(['c3']));
+    expect(toggle()).toHaveTextContent('Hide archived');
+  });
+});

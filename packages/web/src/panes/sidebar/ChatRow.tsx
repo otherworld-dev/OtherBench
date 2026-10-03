@@ -20,6 +20,8 @@ export interface ChatRowProps {
   onDragEnd: () => void;
   menuOpen?: boolean;
   renaming?: boolean;
+  /** Archived chats in the "Show archived" section: dimmed. */
+  muted?: boolean;
   /** Right-click, Shift+F10 / the ContextMenu key, or the ⋯ button. Without it the row has no menu. */
   onOpenMenu?: (position: { x: number; y: number }, source: MenuSource) => void;
   onRename?: (title: string) => void;
@@ -27,7 +29,7 @@ export interface ChatRowProps {
 }
 
 /** One chat in the sidebar: select it, drag it onto a group heading, or open its menu. */
-export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel }: ChatRowProps): JSX.Element {
+export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel }: ChatRowProps): JSX.Element {
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -68,7 +70,7 @@ export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, r
         }
         aria-current={active ? 'true' : undefined}
         className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-left text-sm ${
-          active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'text-[var(--text)] hover:bg-[var(--bg-sunken)]'
+          active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : `${muted ? 'text-[var(--text-muted)]' : 'text-[var(--text)]'} hover:bg-[var(--bg-sunken)]`
         }`}
       >
         {chat.pinned && (

@@ -40,6 +40,17 @@ function chatRowSelector(chatId: string): string {
   return `[data-testid="chat-row-${chatId}"] [data-row-main]`;
 }
 
+/** localStorage key: whether the "Show archived" section is open. Per device. */
+export const SHOW_ARCHIVED_STORAGE_KEY = 'grunt.showArchived';
+
+function loadShowArchived(): boolean {
+  try {
+    return window.localStorage.getItem(SHOW_ARCHIVED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function headingSelector(projectId: string): string {
   return `[data-testid="group-heading-${projectId}"] [data-heading-main]`;
 }
@@ -78,6 +89,7 @@ export function ChatList(): JSX.Element {
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<{ projectId: string; field: 'folder' | 'profile' } | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(loadShowArchived);
   const newProjectButton = useRef<HTMLButtonElement>(null);
 
   const searching = searchChatIds !== null;
@@ -352,7 +364,17 @@ export function ChatList(): JSX.Element {
     };
   }, []);
 
-  function renderRow(chat: Chat): JSX.Element {
+  function toggleArchived(): void {
+    const next = !showArchived;
+    setShowArchived(next);
+    try {
+      window.localStorage.setItem(SHOW_ARCHIVED_STORAGE_KEY, String(next));
+    } catch {
+      // storage blocked or full -- the toggle still applies for this session.
+    }
+  }
+
+  function renderRow(chat: Chat, muted = false): JSX.Element {
     return (
       <ChatRow
         key={chat.id}
@@ -362,6 +384,7 @@ export function ChatList(): JSX.Element {
         onDragEnd={() => setDropTarget(null)}
         menuOpen={chatMenu?.chatId === chat.id}
         renaming={renamingChatId === chat.id}
+        muted={muted}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
@@ -389,11 +412,11 @@ export function ChatList(): JSX.Element {
         {sidebar.pinned.length > 0 && (
           <div className="mb-3" data-testid="group-pinned">
             <h2 className="px-2 pb-1 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">Pinned</h2>
-            <ul className="space-y-0.5">{sidebar.pinned.map(renderRow)}</ul>
+            <ul className="space-y-0.5">{sidebar.pinned.map((c) => renderRow(c))}</ul>
           </div>
         )}
 
-        {searching && sidebar.pinned.length === 0 && sidebar.groups.length === 0 && (
+        {searching && sidebar.pinned.length === 0 && sidebar.groups.length === 0 && sidebar.archived.length === 0 && (
           <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No chats match your search.</p>
         )}
 
@@ -413,10 +436,24 @@ export function ChatList(): JSX.Element {
               onDropChat={(chatId) => void moveChat(chatId, project?.id ?? null)}
               {...(project ? projectGroupProps(project) : {})}
             >
-              {group.chats.map(renderRow)}
+              {group.chats.map((c) => renderRow(c))}
             </ProjectGroup>
           );
         })}
+
+        {sidebar.archived.length > 0 && (
+          <div className="mb-3" data-testid="archived-section">
+            <button
+              type="button"
+              aria-expanded={showArchived}
+              onClick={toggleArchived}
+              className="w-full rounded px-2 py-1 text-left text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase hover:bg-[var(--bg-sunken)]"
+            >
+              {showArchived ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}
+            </button>
+            {showArchived && <ul className="space-y-0.5">{sidebar.archived.map((c) => renderRow(c, true))}</ul>}
+          </div>
+        )}
 
         {error && (
           <p role="alert" className="px-2 py-2 text-xs text-[var(--danger)]">
