@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -228,5 +228,107 @@ describe('Thread', () => {
     expect(useGruntStore.getState().messages['failing']?.parts).toEqual([]);
     // The sibling is completely unaffected.
     expect(useGruntStore.getState().messages['healthy']?.parts).toEqual([{ type: 'text', text: 'still going' }]);
+  });
+});
+
+describe('Thread auto-scroll', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  /** jsdom has no layout: give the scroll container fixed metrics and a plain writable scrollTop. */
+  function stubScroller(el: HTMLElement, scrollTop: number): void {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 1000 });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: 400 });
+    Object.defineProperty(el, 'scrollTop', { configurable: true, writable: true, value: scrollTop });
+  }
+
+  function addReply(id: string, text: string): void {
+    act(() => {
+      useGruntStore.getState().loadMessages('chat-1', [variantMessage(id, 'root', { parts: [{ type: 'text', text }] })], null);
+    });
+  }
+
+  function setup(): HTMLElement {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    useGruntStore.getState().loadMessages('chat-1', [root], null);
+    render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+    return screen.getByTestId('thread-scroll');
+  }
+
+  it('follows new content when the user is near the bottom', () => {
+    const scroller = setup();
+    stubScroller(scroller, 590); // 1000 - 590 - 400 = 10px from the bottom
+    fireEvent.scroll(scroller);
+    addReply('r1', 'hello');
+    expect(scroller.scrollTop).toBe(1000);
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+  });
+
+  it('does not yank the view when the user has scrolled up, and offers a Jump to latest button', async () => {
+    const scroller = setup();
+    stubScroller(scroller, 100);
+    fireEvent.scroll(scroller);
+    addReply('r1', 'hello');
+    expect(scroller.scrollTop).toBe(100);
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Jump to latest' }));
+    expect(scroller.scrollTop).toBe(1000);
+    // Following resumes: the scroll event the jump causes puts us back at the bottom.
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole('button', { name: 'Jump to latest' })).not.toBeInTheDocument();
+    addReply('r2', 'again');
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('follows a streamed delta appended to an existing message while near the bottom', () => {
+    const scroller = setup();
+    addReply('r1', 'hel');
+    stubScroller(scroller, 600); // at the bottom
+    fireEvent.scroll(scroller);
+    scroller.scrollTop = 600;
+    act(() => {
+      useGruntStore.getState().loadMessages('chat-1', [variantMessage('r1', 'root', { status: 'streaming', parts: [{ type: 'text', text: 'hello world' }] })], null);
+    });
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('follows when only extras change (a pending approval card appears) while near the bottom', () => {
+    const scroller = setup();
+    addReply('r1', 'running');
+    stubScroller(scroller, 590);
+    fireEvent.scroll(scroller);
+    act(() => {
+      useGruntStore.setState((st) => ({
+        extras: {
+          ...st.extras,
+          r1: {
+            usage: null,
+            ...st.extras['r1'],
+            pendingApprovals: [{ id: 'req-1', chatId: 'chat-1', messageId: 'r1', toolName: 'run_command', risk: 'execute', source: 'shell', args: {}, summary: 'npm test' }],
+          },
+        },
+      }));
+    });
+    expect(scroller.scrollTop).toBe(1000);
+  });
+
+  it('opens a chat at the bottom', () => {
+    const scrollHeight = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    const tops = new WeakMap<Element, number>();
+    const top = vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
+      return tops.get(this) ?? 0;
+    });
+    const topSet = vi.spyOn(Element.prototype, 'scrollTop', 'set').mockImplementation(function (this: Element, v: number) {
+      tops.set(this, v);
+    });
+    try {
+      useGruntStore.getState().loadMessages('chat-1', [makeMessage('root', 'chat-1')], null);
+      render(<Thread chat={makeChat({ headMessageId: 'root' })} />);
+      expect(screen.getByTestId('thread-scroll').scrollTop).toBe(1000);
+    } finally {
+      scrollHeight.mockRestore();
+      top.mockRestore();
+      topSet.mockRestore();
+    }
   });
 });

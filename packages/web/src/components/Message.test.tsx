@@ -153,4 +153,60 @@ describe('Message', () => {
     rerender(<Message message={base()} pendingApprovals={[request]} onResolveApproval={async () => {}} />);
     expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
   });
+
+  it('gives the article a DOM id so the Inspector outline can scroll to it', () => {
+    const { container } = render(<Message message={base({ id: 'abc' })} />);
+    expect(container.querySelector('article')).toHaveAttribute('id', 'msg-abc');
+  });
+
+  describe('tool activity grouping', () => {
+    const call = (id: string, name: string) => ({ type: 'tool-call' as const, id, name, args: { q: id } });
+    const result = (id: string, name: string, isError = false) => ({ type: 'tool-result' as const, id, name, result: `out-${id}`, isError });
+
+    it('collapses a run of tool calls/results into one summary with a per-tool breakdown in first-seen order', () => {
+      const parts = [
+        call('1', 'Glob'), result('1', 'Glob'), call('2', 'Read'), result('2', 'Read'),
+        call('3', 'Glob'), result('3', 'Glob'), call('4', 'Bash'), result('4', 'Bash'),
+      ];
+      render(<Message message={base({ parts })} />);
+      const summary = screen.getByText('Used 4 tools: Glob ×2, Read, Bash');
+      const details = summary.closest('details');
+      expect(details).not.toBeNull();
+      expect(details).not.toHaveAttribute('open');
+    });
+
+    it('expands to the existing call/result blocks', async () => {
+      render(<Message message={base({ parts: [call('1', 'Glob'), result('1', 'Glob')] })} />);
+      await userEvent.setup().click(screen.getByText('Used 1 tool: Glob'));
+      expect(screen.getByText('🔧 Glob')).toBeVisible();
+      expect(screen.getByText('out-1')).toBeVisible();
+    });
+
+    it('prefixes the summary with a warning when any result is an error', () => {
+      render(<Message message={base({ parts: [call('1', 'Bash'), result('1', 'Bash', true)] })} />);
+      expect(screen.getByText('⚠ Used 1 tool: Bash')).toBeInTheDocument();
+    });
+
+    it('counts results when a run has no calls', () => {
+      render(<Message message={base({ parts: [result('1', 'Read'), result('2', 'Read')] })} />);
+      expect(screen.getByText('Used 2 tools: Read ×2')).toBeInTheDocument();
+    });
+
+    it('keeps an expanded group open while more tool parts stream into the trailing run', async () => {
+      const { rerender } = render(<Message message={base({ parts: [call('1', 'Glob'), result('1', 'Glob')] })} />);
+      await userEvent.setup().click(screen.getByText('Used 1 tool: Glob'));
+      expect(screen.getByText('Used 1 tool: Glob').closest('details')).toHaveAttribute('open');
+
+      rerender(<Message message={base({ parts: [call('1', 'Glob'), result('1', 'Glob'), call('2', 'Read')] })} />);
+      expect(screen.getByText('Used 2 tools: Glob, Read').closest('details')).toHaveAttribute('open');
+    });
+
+    it('other parts break the run into separate groups', () => {
+      const parts = [call('1', 'Glob'), result('1', 'Glob'), { type: 'text' as const, text: 'between' }, call('2', 'Grep'), result('2', 'Grep')];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByText('Used 1 tool: Glob')).toBeInTheDocument();
+      expect(screen.getByText('between')).toBeInTheDocument();
+      expect(screen.getByText('Used 1 tool: Grep')).toBeInTheDocument();
+    });
+  });
 });

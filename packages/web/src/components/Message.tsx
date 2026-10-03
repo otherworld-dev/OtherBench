@@ -93,6 +93,54 @@ function renderPart(part: Part, key: number): JSX.Element | null {
   }
 }
 
+type ToolPart = Extract<Part, { type: 'tool-call' | 'tool-result' }>;
+
+/** "Used 14 tools: Glob ×4, Read ×6, Bash" -- names in first-seen order, ×1 omitted. Counts calls; a (shouldn't-happen) run of results alone counts those instead. */
+function toolGroupSummary(run: ToolPart[]): string {
+  const calls = run.filter((p) => p.type === 'tool-call');
+  const counted = calls.length > 0 ? calls : run;
+  const counts = new Map<string, number>();
+  for (const p of counted) counts.set(p.name, (counts.get(p.name) ?? 0) + 1);
+  const breakdown = [...counts].map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(', ');
+  const failed = run.some((p) => p.type === 'tool-result' && p.isError);
+  return `${failed ? '⚠ ' : ''}Used ${counted.length} ${counted.length === 1 ? 'tool' : 'tools'}: ${breakdown}`;
+}
+
+/** A collapsed-by-default block for one run of consecutive tool calls/results; expanding shows the unchanged per-part blocks. */
+function ToolGroup({ run }: { run: ToolPart[] }): JSX.Element {
+  return (
+    <details className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+      <summary className="cursor-pointer font-medium text-[var(--text-muted)] select-none">{toolGroupSummary(run)}</summary>
+      <div className="mt-1">{run.map((p, i) => renderPart(p, i))}</div>
+    </details>
+  );
+}
+
+/** Renders a message's parts, folding each run of consecutive tool-call/tool-result parts into one `ToolGroup`. */
+function renderParts(parts: Part[]): JSX.Element[] {
+  const out: JSX.Element[] = [];
+  let run: ToolPart[] = [];
+  let runStart = 0;
+  // Keyed by the run's FIRST part so the key (and the user's open/closed
+  // state on the <details>) stays stable while more tool parts stream in.
+  const flush = (): void => {
+    if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} />);
+    run = [];
+  };
+  parts.forEach((p, i) => {
+    if (p.type === 'tool-call' || p.type === 'tool-result') {
+      if (run.length === 0) runStart = i;
+      run.push(p);
+      return;
+    }
+    flush();
+    const el = renderPart(p, i);
+    if (el) out.push(el);
+  });
+  flush();
+  return out;
+}
+
 export interface MessageProps {
   message: CanonMessage;
   /**
@@ -136,7 +184,7 @@ export function Message({
     : [];
 
   return (
-    <article data-role={message.role} data-status={message.status} className="space-y-1">
+    <article id={`msg-${message.id}`} data-role={message.role} data-status={message.status} className="space-y-1">
       <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
         <span className="font-medium text-[var(--text)]">{label}</span>
         {!isUser && message.producedBy && <span>{message.producedBy.modelId}</span>}
@@ -155,7 +203,7 @@ export function Message({
       </div>
 
       <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
-        {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : message.parts.map((p, i) => renderPart(p, i))}
+        {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : renderParts(message.parts)}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
 

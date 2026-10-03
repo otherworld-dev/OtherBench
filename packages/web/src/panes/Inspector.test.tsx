@@ -399,9 +399,139 @@ describe('Inspector audit trail', () => {
     expect(list).not.toHaveTextContent('[redacted]'); // the redaction happened server-side; this just must not defeat it by rendering raw args
   });
 
+  it('shows short labels for how each call was authorised, keeping the raw value in a tooltip', async () => {
+    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'weird:thing'];
+    mockedAuditList.mockResolvedValue(
+      raws.map((grantedBy, i) => ({ id: `g${i}`, chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy, createdAt: 1000 + i })),
+    );
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (9)' }));
+    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'weird:thing'];
+    raws.forEach((raw, i) => {
+      const label = within(within(list).getByTestId(`audit-g${i}`)).getByText(labels[i]!);
+      expect(label).toHaveAttribute('title', raw);
+    });
+    expect(list).not.toHaveTextContent('3aa2d2fd');
+  });
+
+  it('shows the newest 5 entries, with Show all / Show fewer', async () => {
+    mockedAuditList.mockResolvedValue(
+      Array.from({ length: 8 }, (_, i) => ({ id: `e${i}`, chatId: 'chat-1', messageId: 'm1', toolName: `tool${i}`, argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'policy', createdAt: 1000 + i })),
+    );
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('tool7');
+
+    const user = userEvent.setup();
+    await user.click(within(auditSection()).getByRole('button', { name: 'Show all (8)' }));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(8);
+    await user.click(within(auditSection()).getByRole('button', { name: 'Show fewer' }));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+  });
+
+  it('has no Show all button when there are 5 or fewer entries', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'a1', chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'policy', createdAt: 1 }]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await within(auditSection()).findByTestId('audit-trail');
+    expect(within(auditSection()).queryByRole('button', { name: /show all/i })).not.toBeInTheDocument();
+  });
+
   it('shows an honest empty state when nothing has been audited yet', async () => {
     mockedAuditList.mockResolvedValue([]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(await within(auditSection()).findByText('No tool calls recorded in this chat yet.')).toBeInTheDocument();
+  });
+});
+
+describe('Inspector conversation outline', () => {
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
+  beforeEach(() => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+
+  const user = (id: string, parentId: string | null, text: string): CanonMessage =>
+    makeMessage(id, { role: 'user', parentId, status: 'complete', producedBy: null, parts: [{ type: 'text', text }] });
+  const reply = (id: string, parentId: string, text: string, status: CanonMessage['status'] = 'complete'): CanonMessage =>
+    makeMessage(id, { parentId, status, parts: text ? [{ type: 'text', text }] : [] });
+  const outline = (): HTMLElement => screen.getByRole('heading', { name: 'Conversation' }).closest('section')!;
+  const renderFor = (head: string | null): void => {
+    render(<Inspector chat={makeChat({ headMessageId: head })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+  };
+
+  it('is hidden when the chat has no messages', () => {
+    renderFor(null);
+    expect(screen.queryByRole('heading', { name: 'Conversation' })).not.toBeInTheDocument();
+  });
+
+  it('sits above the audit trail', () => {
+    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'hi')], null);
+    renderFor('u1');
+    const headings = screen.getAllByRole('heading').map((h) => h.textContent);
+    expect(headings.indexOf('Conversation')).toBeGreaterThan(-1);
+    expect(headings.indexOf('Conversation')).toBeLessThan(headings.indexOf('Audit trail'));
+  });
+
+  it('lists user messages on the current branch with a truncated reply preview', () => {
+    const long = 'x'.repeat(100);
+    useGruntStore.getState().loadMessages('chat-1', [
+      user('u1', null, 'first question'), reply('a1', 'u1', long),
+      user('u2', 'a1', 'second question'), reply('a2', 'u2', '', 'streaming'),
+      user('u3', 'a2', 'third question'),
+      // a message on another branch must not show up
+      user('other', 'a1', 'abandoned branch'),
+    ], null);
+    renderFor('u3');
+    expect(within(outline()).getByRole('button', { name: 'Go to: first question' })).toBeInTheDocument();
+    const entries = within(outline()).getAllByTestId(/^outline-/);
+    expect(entries.map((e) => e.getAttribute('data-testid'))).toEqual(['outline-u1', 'outline-u2', 'outline-u3']);
+    expect(entries[0]).toHaveTextContent('first question');
+    expect(entries[0]).toHaveTextContent('x'.repeat(80) + '…');
+    expect(entries[0]).not.toHaveTextContent('x'.repeat(81));
+    expect(entries[1]).toHaveTextContent('…'); // streaming
+    expect(entries[2]).toHaveTextContent('(no reply)');
+    expect(outline()).not.toHaveTextContent('abandoned branch');
+  });
+
+  it('truncates long user text to one line of about 60 characters', () => {
+    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, `${'y'.repeat(70)}
+second line`)], null);
+    renderFor('u1');
+    const entry = within(outline()).getByTestId('outline-u1');
+    expect(entry).toHaveTextContent('y'.repeat(60) + '…');
+    expect(entry).not.toHaveTextContent('second line');
+  });
+
+  it('scrolls the thread to the clicked message', async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const target = document.createElement('article');
+    target.id = 'msg-u2';
+    document.body.appendChild(target);
+    const spy = vi.spyOn(target, 'scrollIntoView');
+    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'b')], null);
+    renderFor('u2');
+    await userEvent.setup().click(within(outline()).getByTestId('outline-u2'));
+    expect(spy).toHaveBeenCalledWith({ block: 'start' });
+    target.remove();
+  });
+
+  it('shows the newest 10 with Show all', async () => {
+    const msgs: CanonMessage[] = [];
+    for (let i = 0; i < 12; i++) {
+      msgs.push(user(`u${i}`, i === 0 ? null : `a${i - 1}`, `q${i}`), reply(`a${i}`, `u${i}`, `r${i}`));
+    }
+    useGruntStore.getState().loadMessages('chat-1', msgs, null);
+    renderFor('a11');
+    expect(within(outline()).getAllByTestId(/^outline-/)).toHaveLength(10);
+    expect(within(outline()).queryByTestId('outline-u0')).not.toBeInTheDocument();
+    expect(within(outline()).getByTestId('outline-u11')).toBeInTheDocument();
+    await userEvent.setup().click(within(outline()).getByRole('button', { name: 'Show all (12)' }));
+    expect(within(outline()).getAllByTestId(/^outline-/)).toHaveLength(12);
   });
 });

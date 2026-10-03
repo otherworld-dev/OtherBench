@@ -1,7 +1,9 @@
-import { useEffect, useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
+import { activePath, childrenOf, extendForward } from '@grunt/core/domain/tree.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
+import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { usePolled } from '../lib/usePolled.js';
 import { ApiError, api } from '../state/api.js';
@@ -421,9 +423,112 @@ function formatAuditTime(createdAt: number): string {
   return new Date(createdAt).toLocaleTimeString();
 }
 
+/** Short, human label for how a gated call was authorised; the raw value stays available as a tooltip. Unknown values pass through. */
+function grantedByLabel(grantedBy: string): string {
+  if (grantedBy.startsWith('grant:')) return 'grant';
+  switch (grantedBy) {
+    case 'auto_read': return 'auto-read';
+    case 'policy': return 'policy';
+    case 'ask:once': return 'asked: once';
+    case 'ask:chat': return 'asked: this chat';
+    case 'ask:always': return 'asked: always';
+    case 'deny:policy': return 'denied by policy';
+    case 'deny:user': return 'denied by you';
+    default: return grantedBy;
+  }
+}
+
+const AUDIT_COLLAPSED_COUNT = 5;
+const OUTLINE_COLLAPSED_COUNT = 10;
+const OUTLINE_USER_CHARS = 60;
+const OUTLINE_REPLY_CHARS = 80;
+
+/** "Show all (N)" / "Show fewer" toggle shared by the capped Inspector lists. */
+function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; limit: number; expanded: boolean; onToggle: () => void }): JSX.Element | null {
+  if (total <= limit) return null;
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={expanded} className="mt-2 text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]">
+      {expanded ? 'Show fewer' : `Show all (${total})`}
+    </button>
+  );
+}
+
+/** Text parts only, whitespace collapsed to one line, cut to `max` chars with an ellipsis. */
+function oneLine(message: CanonMessage, max: number): string {
+  const text = message.parts.map((p) => (p.type === 'text' ? p.text : '')).join(' ').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/**
+ * "Conversation" -- an outline of the user turns on the chat's CURRENT
+ * branch (the same display path Thread renders: head -> root, extended
+ * forward through single-child replies), each with a one-line peek at the
+ * reply. Clicking one scrolls the thread to that message (Message gives its
+ * article the DOM id `msg-<id>`). Hidden when the chat has no messages.
+ * Scoped to this chat's messages for the same reason Thread is: the store's
+ * message pool is cross-chat.
+ */
+function ConversationSection({ chat }: { chat: Chat }): JSX.Element | null {
+  const messages = useGruntStore((s) => s.messages);
+  const [expanded, setExpanded] = useState(false);
+
+  const turns = useMemo(() => {
+    const chatMessages = Object.values(messages).filter((m) => m.chatId === chat.id);
+    if (!chat.headMessageId) return [];
+    let path: CanonMessage[];
+    try {
+      path = activePath(chatMessages, chat.headMessageId);
+      const tail = path[path.length - 1];
+      if (tail) path = [...path, ...extendForward(chatMessages, tail.id)];
+    } catch {
+      return []; // inconsistent/partially-loaded slice -- show nothing rather than throw.
+    }
+    const out: { user: CanonMessage; reply: CanonMessage | null }[] = [];
+    path.forEach((m, i) => {
+      if (m.role !== 'user') return;
+      const next = path[i + 1];
+      // On the path the reply is simply the next message; at an unresolved
+      // compare tail there is none yet, so peek at the first assistant child.
+      const reply = next?.role === 'assistant' ? next : (childrenOf(chatMessages, m.id).find((c) => c.role === 'assistant') ?? null);
+      out.push({ user: m, reply });
+    });
+    return out;
+  }, [messages, chat.id, chat.headMessageId]);
+
+  if (turns.length === 0) return null;
+  // Reads top-to-bottom like the thread; collapsed keeps the NEWEST turns.
+  const shown = expanded ? turns : turns.slice(-OUTLINE_COLLAPSED_COUNT);
+
+  return (
+    <Section title="Conversation">
+      <ul className="space-y-1">
+        {shown.map(({ user, reply }) => {
+          const preview = !reply ? '(no reply)' : reply.status === 'streaming' ? `${oneLine(reply, OUTLINE_REPLY_CHARS)}…` : oneLine(reply, OUTLINE_REPLY_CHARS) || '(no reply)';
+          return (
+            <li key={user.id}>
+              <button
+                type="button"
+                data-testid={`outline-${user.id}`}
+                aria-label={`Go to: ${oneLine(user, OUTLINE_USER_CHARS) || '(attachment)'}`}
+                onClick={() => document.getElementById(`msg-${user.id}`)?.scrollIntoView({ block: 'start' })}
+                className="block w-full rounded px-1 py-0.5 text-left hover:bg-[var(--bg-sunken)]"
+              >
+                <span className="block truncate text-sm">{oneLine(user, OUTLINE_USER_CHARS) || '(attachment)'}</span>
+                <span className="block truncate text-xs text-[var(--text-muted)]">{preview}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <ShowAllToggle total={turns.length} limit={OUTLINE_COLLAPSED_COUNT} expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
+    </Section>
+  );
+}
+
 /** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see GruntToolProvider), and duration. Newest first. */
 function AuditSection({ chatId }: { chatId: string }): JSX.Element {
   const { data: entries, failed } = usePolled(() => api.audit.list(chatId), [chatId]);
+  const [expanded, setExpanded] = useState(false);
 
   if (failed) return <EmptyState>Couldn&rsquo;t load the audit trail for this chat.</EmptyState>;
   if (entries === null) return <EmptyState>Loading…</EmptyState>;
@@ -431,20 +536,25 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
 
   const sorted: AuditEntry[] = [...entries].sort((a, b) => b.createdAt - a.createdAt);
 
+  const shown = expanded ? sorted : sorted.slice(0, AUDIT_COLLAPSED_COUNT);
+
   return (
-    <ul data-testid="audit-trail" className="space-y-2">
-      {sorted.map((entry) => (
-        <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">{entry.toolName}</span>
-            <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
-          </div>
-          <div className="text-xs text-[var(--text-muted)]">
-            {entry.resultSummary} · {entry.grantedBy} · {entry.durationMs}ms
-          </div>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul data-testid="audit-trail" className="space-y-2">
+        {shown.map((entry) => (
+          <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">{entry.toolName}</span>
+              <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
+            </div>
+            <div className="text-xs text-[var(--text-muted)]">
+              {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span> · {entry.durationMs}ms
+            </div>
+          </li>
+        ))}
+      </ul>
+      <ShowAllToggle total={sorted.length} limit={AUDIT_COLLAPSED_COUNT} expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
+    </>
   );
 }
 
@@ -645,6 +755,8 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
       <Section title="MCP server health">
         <McpHealthSection />
       </Section>
+
+      {chat && <ConversationSection chat={chat} />}
 
       <Section title="Audit trail">
         {chat ? <AuditSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
