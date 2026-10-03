@@ -7,7 +7,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
-import { resolveProfile } from '../profile-resolution.js';
+import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
 
 interface ChatBody {
@@ -55,8 +55,7 @@ function inheritedProfileId(container: Container, project: Project): string {
   };
   // The project's default, unless it was archived or deleted; then the app
   // default the web client also uses (the default profile, else the first).
-  const live = container.store.profiles.list().filter((p) => p.archivedAt === null);
-  const appDefault = (live.find((p) => p.isDefault) ?? live[0])?.id ?? null;
+  const appDefault = appDefaultProfileId(container.store);
   const chosen = usable(project.defaultProfileId) ?? appDefault;
   if (!chosen) throw new HTTPException(400, { message: 'There is no profile to start this chat with -- create one in Settings first.' });
   return chosen;

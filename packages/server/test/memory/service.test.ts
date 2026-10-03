@@ -1,0 +1,519 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MEMORY_FORMAT_ERROR, MEMORY_QUIET_MS, NO_MEMORY_MODEL_MESSAGE, emptyMemoryBody } from '@grunt/core/domain/memory.js';
+import { TurnRunner } from '@grunt/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
+import { FakeChatEngine, InMemoryStore } from '@grunt/core/testing/fakes.js';
+import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
+import type { MessageStatus } from '@grunt/core/types/messages.js';
+import { MEMORY_UPDATE_TIMEOUT_MS, ProjectMemoryService, type ProjectMemoryServiceDeps } from '../../src/memory/service.js';
+import { ManualClock } from './manual-clock.js';
+
+const ZERO = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
+const reply = (text: string): EngineEvent[] => [{ type: 'text-delta', text }, { type: 'finish', usage: ZERO, finishReason: 'stop' }];
+
+/** A note in the fixed format; empty sections render as a bare heading. */
+function note({ pinned = '', goals = '- Ship project memory' }: { pinned?: string; goals?: string } = {}): string {
+  return [`## Pinned${pinned ? `\n${pinned}` : ''}`, `## Goals${goals ? `\n${goals}` : ''}`, '## Decisions', '## Current focus', '## Open questions'].join('\n\n');
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+function profileRow(id: string, over: Partial<Profile> = {}): Profile {
+  return {
+    id,
+    name: id,
+    description: null,
+    colour: null,
+    connectionId: 'conn',
+    modelId: 'm',
+    systemPrompt: null,
+    params: {},
+    toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+    isDefault: false,
+    archivedAt: null,
+    ...over,
+  };
+}
+
+let store: InMemoryStore;
+let clock: ManualClock;
+/** What the scripted memory model answers; tests swap it. */
+let respond: (req: EngineRequest) => EngineEvent[] | Promise<EngineEvent[]>;
+let requests: EngineRequest[];
+/** Profile ids `resolveProfile` refuses, as if their connection were gone. */
+let unresolvable: Set<string>;
+let service: ProjectMemoryService;
+let tips: Map<string, string>;
+let seq: number;
+
+const engine: ChatEngine = {
+  async *stream(req) {
+    requests.push(req);
+    const events = await respond(req);
+    for (const event of events) {
+      if (req.signal.aborted) return;
+      yield event;
+    }
+  },
+  listModels: async () => [],
+  testConnection: async () => ({ ok: true, message: 'ok', latencyMs: 0 }),
+};
+
+function makeService(over: Partial<ProjectMemoryServiceDeps> = {}): ProjectMemoryService {
+  return new ProjectMemoryService({
+    store,
+    engine,
+    resolveProfile: async (id: string): Promise<ResolvedProfile> => {
+      const profile = store.profiles.get(id);
+      if (!profile || unresolvable.has(id)) throw new Error(`cannot resolve ${id}`);
+      return { ...profile, connection: store.connections.get(profile.connectionId)!, apiKey: null, model: null };
+    },
+    now: clock.now,
+    scheduler: clock,
+    ...over,
+  });
+}
+
+function addChat(id: string, over: { projectId?: string | null; memoryExcluded?: boolean } = {}): void {
+  store.chats.create({
+    id,
+    title: `Chat ${id}`,
+    profileId: 'p-app',
+    headMessageId: null,
+    workspaceRoot: null,
+    pinned: false,
+    archivedAt: null,
+    projectId: over.projectId === undefined ? 'proj' : over.projectId,
+    memoryExcluded: over.memoryExcluded ?? false,
+  });
+}
+
+/** Adds a user message and its reply under the chat's tip, and parks the head on the user message like the web client. */
+function exchange(chatId: string, user: string, assistant: string, opts: { at?: number; status?: MessageStatus } = {}): { userId: string; replyId: string } {
+  const at = opts.at ?? clock.time;
+  seq += 1;
+  const userId = `${chatId}-u${seq}`;
+  const replyId = `${chatId}-a${seq}`;
+  store.messages.create({ id: userId, chatId, parentId: tips.get(chatId) ?? null, role: 'user', parts: [{ type: 'text', text: user }], status: 'complete', error: null, producedBy: null, createdAt: at });
+  store.messages.create({
+    id: replyId,
+    chatId,
+    parentId: userId,
+    role: 'assistant',
+    parts: [{ type: 'text', text: assistant }],
+    status: opts.status ?? 'complete',
+    error: null,
+    producedBy: { profileId: 'p-app', profileName: 'App', connectionId: 'conn', modelId: 'm' },
+    createdAt: at + 1,
+  });
+  store.chats.update(chatId, { headMessageId: userId });
+  tips.set(chatId, replyId);
+  return { userId, replyId };
+}
+
+/** The text of the single user message a memory request carries. */
+function promptOf(req: EngineRequest | undefined): string {
+  const part = req?.messages[0]?.parts[0];
+  return part?.type === 'text' ? part.text : '';
+}
+
+/** A memory model that holds each answer until the test releases it. */
+function gatedModel(): { resolve: (events: EngineEvent[]) => void }[] {
+  const gates: { resolve: (events: EngineEvent[]) => void }[] = [];
+  respond = () => {
+    const gate = deferred<EngineEvent[]>();
+    gates.push(gate);
+    return gate.promise;
+  };
+  return gates;
+}
+
+beforeEach(() => {
+  store = new InMemoryStore();
+  clock = new ManualClock();
+  respond = () => reply(note());
+  requests = [];
+  unresolvable = new Set();
+  tips = new Map();
+  seq = 0;
+  store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+  store.profiles.create(profileRow('p-app', { isDefault: true }));
+  store.profiles.create(profileRow('p-project'));
+  store.profiles.create(profileRow('p-memory'));
+  store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: 'p-project' });
+  addChat('chat');
+  service = makeService();
+});
+
+describe('quiet timer', () => {
+  it('folds a chat\'s new turns in 5 minutes after its last reply, not before', async () => {
+    const { replyId } = exchange('chat', 'We use SQLite', 'Noted');
+    service.noteTurnCompleted('chat');
+    expect(clock.pending()).toEqual([MEMORY_QUIET_MS]);
+
+    clock.advance(MEMORY_QUIET_MS - 1);
+    await service.idle();
+    expect(requests).toHaveLength(0);
+
+    clock.advance(1);
+    await service.idle();
+    expect(requests).toHaveLength(1);
+    expect(store.projectMemory.get('proj')).toMatchObject({ body: note(), updatedBy: 'summariser', sourceChatId: 'chat', updatedAt: clock.time });
+    expect(store.chats.get('chat')!.memoryCursor).toBe(replyId);
+  });
+
+  it('a new turn starting cancels the timer, and the next reply starts it again from zero', async () => {
+    exchange('chat', 'First', 'ok');
+    service.noteTurnCompleted('chat');
+    clock.advance(3 * 60_000);
+    service.noteTurnStarted('chat');
+    expect(clock.pending()).toEqual([]);
+
+    exchange('chat', 'Second', 'ok');
+    service.noteTurnCompleted('chat');
+    clock.advance(3 * 60_000);
+    await service.idle();
+    expect(requests).toHaveLength(0);
+    clock.advance(2 * 60_000);
+    await service.idle();
+    expect(requests).toHaveLength(1);
+  });
+
+  it('starts no timer for a chat outside a project, one excluded from memory, or one whose project is gone', () => {
+    addChat('loose', { projectId: null });
+    addChat('private', { memoryExcluded: true });
+    service.noteTurnCompleted('loose');
+    service.noteTurnCompleted('private');
+    service.noteTurnCompleted('no-such-chat');
+    expect(clock.pending()).toEqual([]);
+
+    store.projects.delete('proj');
+    service.noteTurnCompleted('chat');
+    expect(clock.pending()).toEqual([]);
+  });
+
+  it('a timer whose chat was excluded before it fired does nothing', async () => {
+    exchange('chat', 'Plan', 'ok');
+    service.noteTurnCompleted('chat');
+    store.chats.update('chat', { memoryExcluded: true });
+    clock.advance(MEMORY_QUIET_MS);
+    await service.idle();
+    expect(requests).toHaveLength(0);
+  });
+
+  it('attach() starts the timer when a TurnRunner reply completes', async () => {
+    const runner = new TurnRunner(store, new FakeChatEngine(reply('Sure.')));
+    service.attach(runner);
+    const result = await runner.run({
+      chatId: 'chat',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'hi' }],
+      profiles: [{ ...profileRow('p-app'), connection: store.connections.get('conn')!, apiKey: null, model: null }],
+    });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+    expect(clock.pending()).toEqual([MEMORY_QUIET_MS]);
+  });
+
+  it('dispose() drops pending timers and schedules no more', () => {
+    exchange('chat', 'Plan', 'ok');
+    service.noteTurnCompleted('chat');
+    service.dispose();
+    expect(clock.pending()).toEqual([]);
+    service.noteTurnCompleted('chat');
+    expect(clock.pending()).toEqual([]);
+  });
+});
+
+describe('an update', () => {
+  it('sends the current note and the new turns as one utility request with no tools', async () => {
+    exchange('chat', 'We use SQLite', 'Noted');
+    await service.updateNow('chat');
+    const req = requests[0]!;
+    expect(req).toMatchObject({ purpose: 'utility', tools: [], workspaceRoot: null, chatId: 'chat' });
+    expect(req.messages).toHaveLength(1);
+    expect(req.messages[0]!.role).toBe('user');
+    expect(promptOf(req)).toContain(`<current-note>\n${emptyMemoryBody()}\n</current-note>`);
+    expect(promptOf(req)).toContain('User: We use SQLite\n\nAssistant: Noted');
+  });
+
+  it('keeps ## Pinned exactly as it was, even when the model rewrites it', async () => {
+    store.projectMemory.save('proj', note({ pinned: '- Never break v1 clients' }), 'user', null);
+    exchange('chat', 'Drop v1?', 'No.');
+    respond = () => reply(note({ pinned: '- (rewritten by the model)', goals: '- Keep v1' }));
+
+    expect((await service.updateNow('chat')).status).toBe('updated');
+
+    expect(store.projectMemory.get('proj')).toMatchObject({ body: note({ pinned: '- Never break v1 clients', goals: '- Keep v1' }), updatedBy: 'summariser', sourceChatId: 'chat' });
+    expect(promptOf(requests[0])).toContain('- Never break v1 clients');
+  });
+
+  it('rejects a note with missing or reordered headings: nothing changes and the failure is recorded', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => reply('## Goals\n- Only one heading');
+    const error = `The memory model's note was rejected: ${MEMORY_FORMAT_ERROR}`;
+
+    expect(await service.updateNow('chat')).toEqual({ status: 'failed', error });
+
+    expect(store.projectMemory.get('proj')).toBeNull();
+    expect(store.chats.get('chat')!.memoryCursor).toBeNull();
+    expect(service.lastError('proj')).toEqual({ message: error, at: clock.time, chatId: 'chat' });
+  });
+
+  it('rejects a note over 4,000 characters', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => reply(note({ goals: 'x'.repeat(4_100) }));
+    const outcome = await service.updateNow('chat');
+    expect(outcome.status).toBe('failed');
+    expect(outcome.status === 'failed' ? outcome.error : '').toMatch(/the limit is 4,000\.$/);
+    expect(store.projectMemory.get('proj')).toBeNull();
+  });
+
+  it('accepts a note wrapped in a code fence after a preamble (review focus 1)', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => reply(`Here is the updated note:\n\n\`\`\`markdown\n${note({ goals: '- Fenced' })}\n\`\`\``);
+    expect((await service.updateNow('chat')).status).toBe('updated');
+    expect(store.projectMemory.get('proj')!.body).toBe(note({ goals: '- Fenced' }));
+  });
+
+  it('records an engine error, and the next successful update clears it', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => [{ type: 'error', error: { kind: 'rate_limit', message: 'Slow down', retryable: true } }];
+    expect(await service.updateNow('chat')).toEqual({ status: 'failed', error: 'Memory update failed: Slow down' });
+    expect(service.lastError('proj')!.message).toBe('Memory update failed: Slow down');
+
+    respond = () => reply(note());
+    expect((await service.updateNow('chat')).status).toBe('updated');
+    expect(service.lastError('proj')).toBeNull();
+  });
+
+  it('advances the cursor to the newest message it included; with nothing new it makes no call', async () => {
+    exchange('chat', 'First', 'ok');
+    const { replyId } = exchange('chat', 'Second', 'ok');
+    await service.updateNow('chat');
+    expect(store.chats.get('chat')!.memoryCursor).toBe(replyId);
+    expect(promptOf(requests[0])).toContain('User: First');
+
+    expect(await service.updateNow('chat')).toEqual({ status: 'nothing-new' });
+    expect(requests).toHaveLength(1);
+
+    exchange('chat', 'Third', 'ok');
+    await service.updateNow('chat');
+    expect(promptOf(requests[1])).toContain('User: Third');
+    expect(promptOf(requests[1])).not.toContain('User: Second');
+  });
+
+  it('sends only the most recent 30,000 characters of new conversation', async () => {
+    exchange('chat', `OLDEST ${'x'.repeat(40_000)}`, 'ok');
+    exchange('chat', 'NEWEST', 'ok');
+    await service.updateNow('chat');
+    const prompt = promptOf(requests[0]);
+    expect(prompt).toContain('User: NEWEST');
+    expect(prompt).toContain('[earlier messages omitted]');
+    expect(prompt).not.toContain('OLDEST');
+  });
+
+  it('makes no call when no new reply completed (an errored reply is not folded in)', async () => {
+    exchange('chat', 'Plan', 'boom', { status: 'error' });
+    expect(await service.updateNow('chat')).toEqual({ status: 'nothing-new' });
+    expect(requests).toHaveLength(0);
+  });
+
+  it('saves no version when the model returns the note unchanged, but still advances the cursor', async () => {
+    const { replyId } = exchange('chat', 'Small talk', 'ok');
+    respond = () => reply(emptyMemoryBody());
+    expect(await service.updateNow('chat')).toEqual({ status: 'unchanged' });
+    expect(store.projectMemory.versions('proj')).toEqual([]);
+    expect(store.chats.get('chat')!.memoryCursor).toBe(replyId);
+  });
+});
+
+describe('serialisation', () => {
+  it("runs one update per project at a time, and the second sees the first one's note", async () => {
+    addChat('chat-2');
+    exchange('chat', 'Plan A', 'ok');
+    exchange('chat-2', 'Plan B', 'ok');
+    const gates = gatedModel();
+
+    const first = service.updateNow('chat');
+    const second = service.updateNow('chat-2');
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(requests).toHaveLength(1);
+
+    gates[0]!.resolve(reply(note({ goals: '- From chat one' })));
+    expect((await first).status).toBe('updated');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expect(promptOf(requests[1])).toContain('- From chat one');
+
+    gates[1]!.resolve(reply(note({ goals: '- From chat one\n- From chat two' })));
+    expect((await second).status).toBe('updated');
+    expect(store.projectMemory.versions('proj')).toHaveLength(2);
+  });
+
+  it('Update now pressed twice makes one call and one version; the second run finds nothing new (review focus 3)', async () => {
+    exchange('chat', 'Plan', 'ok');
+    const first = service.updateNow('chat');
+    const second = service.updateNow('chat');
+    expect((await first).status).toBe('updated');
+    expect(await second).toEqual({ status: 'nothing-new' });
+    expect(requests).toHaveLength(1);
+    expect(store.projectMemory.versions('proj')).toHaveLength(1);
+  });
+
+  it('a quiet timer that fires while Update now runs queues behind it and finds nothing new (review focus 3)', async () => {
+    service = makeService({ timeoutMs: 24 * 3_600_000 });
+    exchange('chat', 'Plan', 'ok');
+    const gates = gatedModel();
+    const manual = service.updateNow('chat');
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+
+    service.noteTurnCompleted('chat');
+    clock.advance(MEMORY_QUIET_MS);
+    gates[0]!.resolve(reply(note()));
+
+    expect((await manual).status).toBe('updated');
+    await service.idle();
+    expect(requests).toHaveLength(1);
+    expect(store.projectMemory.versions('proj')).toHaveLength(1);
+  });
+});
+
+describe('startup sweep', () => {
+  it('queues chats whose last reply is over 5 minutes old, times the rest, and skips up-to-date, excluded and loose chats', async () => {
+    addChat('recent');
+    addChat('done');
+    addChat('excluded', { memoryExcluded: true });
+    addChat('loose', { projectId: null });
+    exchange('chat', 'Old work', 'ok', { at: clock.time - 6 * 60_000 });
+    exchange('recent', 'Recent work', 'ok', { at: clock.time - 2 * 60_000 });
+    const { replyId } = exchange('done', 'Done work', 'ok', { at: clock.time - 60 * 60_000 });
+    store.chats.update('done', { memoryCursor: replyId });
+    exchange('excluded', 'Private', 'ok', { at: clock.time - 60 * 60_000 });
+    exchange('loose', 'Loose', 'ok', { at: clock.time - 60 * 60_000 });
+
+    service.sweep();
+    // 'recent' replied 2 min ago (its reply is 1 ms after its question): 3 min + 1 ms to go.
+    expect(clock.pending()).toEqual([3 * 60_000 + 1]);
+    await service.idle();
+    expect(requests).toHaveLength(1);
+    expect(promptOf(requests[0])).toContain('Old work');
+
+    clock.advance(3 * 60_000 + 1);
+    await service.idle();
+    expect(requests).toHaveLength(2);
+    expect(promptOf(requests[1])).toContain('Recent work');
+  });
+});
+
+describe('changes while an update runs', () => {
+  async function startGated(): Promise<{ running: Promise<unknown>; release: () => void }> {
+    exchange('chat', 'Plan', 'ok');
+    const gates = gatedModel();
+    const running = service.updateNow('chat');
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    return { running, release: () => gates[0]!.resolve(reply(note({ goals: '- From the model' }))) };
+  }
+
+  it('discards its result when the user saves the note meanwhile; the user save wins', async () => {
+    const { running, release } = await startGated();
+    const mine = note({ goals: '- Written by hand' });
+    store.projectMemory.save('proj', mine, 'user', null);
+    release();
+
+    expect(await running).toEqual({ status: 'discarded', reason: 'The note was edited while the update ran.' });
+    expect(store.projectMemory.get('proj')!.body).toBe(mine);
+    expect(store.projectMemory.versions('proj')).toHaveLength(1);
+    expect(store.chats.get('chat')!.memoryCursor).toBeNull();
+  });
+
+  it('discards its result when the project is deleted', async () => {
+    const { running, release } = await startGated();
+    store.projects.delete('proj');
+    release();
+    expect(await running).toEqual({ status: 'discarded', reason: 'The project was deleted.' });
+    expect(store.projectMemory.get('proj')).toBeNull();
+  });
+
+  it('discards its result when the chat is deleted', async () => {
+    const { running, release } = await startGated();
+    store.chats.delete('chat');
+    release();
+    expect(await running).toEqual({ status: 'discarded', reason: 'The chat was deleted.' });
+    expect(store.projectMemory.get('proj')).toBeNull();
+  });
+
+  it('discards its result when the chat is excluded or moved to another project', async () => {
+    const excluded = await startGated();
+    store.chats.update('chat', { memoryExcluded: true });
+    excluded.release();
+    expect(await excluded.running).toEqual({ status: 'discarded', reason: 'This chat is set to not add to project memory.' });
+
+    store.chats.update('chat', { memoryExcluded: false });
+    store.projects.create({ id: 'proj-2', name: 'Beta', workspaceRoot: null, defaultProfileId: null });
+    const gates = gatedModel();
+    const moved = service.updateNow('chat');
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    store.chats.update('chat', { projectId: 'proj-2' });
+    gates[0]!.resolve(reply(note()));
+    expect(await moved).toEqual({ status: 'discarded', reason: 'The chat moved to another project.' });
+    expect(store.projectMemory.get('proj')).toBeNull();
+    expect(store.projectMemory.get('proj-2')).toBeNull();
+  });
+});
+
+describe('which model runs it', () => {
+  it('uses the Memory model setting first, then the project default, then the app default', async () => {
+    store.settings.update({ memoryProfileId: 'p-memory' });
+    exchange('chat', 'One', 'ok');
+    await service.updateNow('chat');
+    expect(requests[0]!.profile.id).toBe('p-memory');
+
+    store.profiles.update('p-memory', { archivedAt: 5 });
+    exchange('chat', 'Two', 'ok');
+    await service.updateNow('chat');
+    expect(requests[1]!.profile.id).toBe('p-project');
+
+    store.projects.update('proj', { defaultProfileId: null });
+    exchange('chat', 'Three', 'ok');
+    await service.updateNow('chat');
+    expect(requests[2]!.profile.id).toBe('p-app');
+  });
+
+  it('skips a profile that cannot be resolved', async () => {
+    unresolvable.add('p-project');
+    exchange('chat', 'One', 'ok');
+    await service.updateNow('chat');
+    expect(requests[0]!.profile.id).toBe('p-app');
+  });
+
+  it('records "No model available for project memory" and calls nothing when no profile is usable', async () => {
+    for (const id of ['p-app', 'p-project', 'p-memory']) store.profiles.update(id, { archivedAt: 5 });
+    exchange('chat', 'One', 'ok');
+
+    expect(await service.updateNow('chat')).toEqual({ status: 'failed', error: NO_MEMORY_MODEL_MESSAGE });
+    expect(requests).toHaveLength(0);
+    expect(service.lastError('proj')).toEqual({ message: NO_MEMORY_MODEL_MESSAGE, at: clock.time, chatId: 'chat' });
+  });
+});
+
+describe('a model that never answers', () => {
+  it('gives up after 120 s, records why, and frees the queue (review focus 2)', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = (req) => new Promise((resolve) => req.signal.addEventListener('abort', () => resolve([]), { once: true }));
+    const hung = service.updateNow('chat');
+    await vi.waitFor(() => expect(clock.pending()).toEqual([MEMORY_UPDATE_TIMEOUT_MS]));
+
+    clock.advance(MEMORY_UPDATE_TIMEOUT_MS);
+
+    expect(await hung).toEqual({ status: 'failed', error: "Memory update failed: The model didn't answer within 120 s." });
+    expect(service.lastError('proj')).toMatchObject({ chatId: 'chat', at: clock.time });
+
+    respond = () => reply(note());
+    expect((await service.updateNow('chat')).status).toBe('updated');
+    expect(service.lastError('proj')).toBeNull();
+  });
+});

@@ -1,5 +1,6 @@
 import { HTTPException } from 'hono/http-exception';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
+import type { Store } from '@grunt/core/ports/store.js';
 import type { Container } from './container.js';
 
 /**
@@ -17,7 +18,7 @@ import type { Container } from './container.js';
  * duplicating it would risk the two drifting on how the API key gets
  * decrypted.
  */
-export async function resolveProfile(container: Container, profileId: string): Promise<ResolvedProfile> {
+export async function resolveProfile(container: Pick<Container, 'store' | 'secrets'>, profileId: string): Promise<ResolvedProfile> {
   const profile = container.store.profiles.get(profileId);
   if (!profile) throw new HTTPException(404, { message: `Profile "${profileId}" not found.` });
 
@@ -32,4 +33,14 @@ export async function resolveProfile(container: Container, profileId: string): P
   const model = container.store.models.list(profile.connectionId).find((m) => m.modelId === profile.modelId) ?? null;
 
   return { ...profile, connection, apiKey, model };
+}
+
+/**
+ * The app default profile: the default unarchived profile, else the first
+ * unarchived one, else null. The web client picks a new chat's profile the
+ * same way.
+ */
+export function appDefaultProfileId(store: Store): string | null {
+  const live = store.profiles.list().filter((p) => p.archivedAt === null);
+  return (live.find((p) => p.isDefault) ?? live[0])?.id ?? null;
 }
