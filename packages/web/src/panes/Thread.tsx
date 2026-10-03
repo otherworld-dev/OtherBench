@@ -8,6 +8,7 @@ import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
 import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
+import { ConversationStrip } from './ConversationStrip.js';
 
 /** How close (px) to the bottom still counts as "following" the thread. */
 const NEAR_BOTTOM_PX = 80;
@@ -106,6 +107,19 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [chatId, chatMessages, extras, displayPath]);
 
+  // The scroller changes size without a scroll event (e.g. the conversation
+  // strip opening above it), which would leave a pinned thread's newest
+  // messages below the fold. Re-pin when we were following the bottom.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [chatId]);
+
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
 
   if (!chat) {
@@ -177,6 +191,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         </div>
       )}
+      <ConversationStrip chat={chat} />
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
