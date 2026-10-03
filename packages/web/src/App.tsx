@@ -91,7 +91,7 @@ export function App(): JSX.Element {
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
 
   return (
-    <div className="grid h-screen grid-cols-[260px_1fr] grid-rows-[auto_auto_1fr]" data-narrow={isNarrow || undefined}>
+    <div className="grid h-screen grid-cols-[260px_minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden" data-narrow={isNarrow || undefined}>
       {unreachable && (
         <div
           role="alert"
@@ -137,16 +137,16 @@ export function App(): JSX.Element {
         </div>
       </header>
 
-      <div className="row-start-3 h-full min-h-0">
+      <div className="row-start-3 h-full min-h-0 min-w-0">
         <ChatList />
       </div>
 
-      <div className="relative row-start-3 grid h-full min-h-0 grid-cols-[1fr_auto]">
+      <div className="relative row-start-3 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
         <Thread chat={activeChat} />
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
         {!isNarrow && (
-          <div className="h-full" style={{ width: inspectorCollapsed ? undefined : 320 }}>
+          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : 320 }}>
             <Inspector
               chat={activeChat}
               profile={activeProfile}
