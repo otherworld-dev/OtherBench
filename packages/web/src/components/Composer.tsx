@@ -99,6 +99,10 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const messages = useGruntStore((s) => s.messages);
   const registerMessage = useGruntStore((s) => s.registerMessage);
   const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
+  const upsertChat = useGruntStore((s) => s.upsertChat);
+  // The store's copy, so an optimistic toggle shows at once even if the parent
+  // hasn't re-rendered with the new chat yet.
+  const storedChat = useGruntStore((s) => s.chats.find((c) => c.id === chat.id));
 
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -108,10 +112,20 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const [attachments, setAttachments] = useState<PublicAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [autoError, setAutoError] = useState<string | null>(null);
+  const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const selectedProfiles = selectedProfileIds.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p);
   const needsWorkspace = !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));
+  // Auto mode (spec 2026-10-03-claude-code-auto-mode-design section 2): offered
+  // when any selected profile runs through Claude Code; it needs the Claude
+  // login, so it's unavailable when every such profile uses an endpoint backend.
+  const claudeCodeProfiles = selectedProfiles.filter((p) => isClaudeCodeProfile(p, connections));
+  const showAutoToggle = claudeCodeProfiles.length > 0;
+  const autoUnavailable = showAutoToggle && claudeCodeProfiles.every((p) => !!connections.find((c) => c.id === p.connectionId)?.baseUrl);
+  const autoMode = (storedChat ?? chat).autoMode;
+  const autoActive = autoMode && !autoUnavailable;
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
 
@@ -126,6 +140,25 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
 
   async function handleStop(): Promise<void> {
     await Promise.all(inFlightIds.map((id) => api.turns.cancel(id).catch((err: unknown) => console.error(`[grunt-web] failed to cancel ${id}:`, err))));
+  }
+
+  /** Flips the chat's Auto setting optimistically; a failed save reverts only `autoMode` and shows why. Applies from the next turn. */
+  async function toggleAutoMode(): Promise<void> {
+    if (autoSaving) return;
+    const previous = autoMode;
+    const next = !previous;
+    const latest = (): Chat => useGruntStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    setAutoError(null);
+    setAutoSaving(true);
+    upsertChat({ ...latest(), autoMode: next });
+    try {
+      upsertChat(await api.chats.patch(chat.id, { autoMode: next }));
+    } catch (err) {
+      upsertChat({ ...latest(), autoMode: previous });
+      setAutoError(err instanceof ApiError ? err.message : "Couldn't change auto mode. Please try again.");
+    } finally {
+      setAutoSaving(false);
+    }
   }
 
   /** Uploads each file in turn, appending it to `attachments` as soon as its own upload resolves -- so a chip for a fast file appears immediately rather than waiting on a slower sibling in the same drop/paste. A file that fails to upload is dropped silently from the composer (logged, not surfaced as a blocking error) rather than left in limbo with no attachment id to send. */
@@ -297,6 +330,24 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
           )}
         </div>
 
+        {showAutoToggle && (
+          <button
+            type="button"
+            aria-label="Auto mode"
+            aria-pressed={autoMode}
+            disabled={autoUnavailable || autoSaving}
+            title={autoUnavailable ? 'Auto mode needs the Claude login' : 'Let Claude Code decide routine tool calls (from the next turn)'}
+            onClick={() => void toggleAutoMode()}
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
+              autoActive
+                ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]'
+                : 'border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
+            }`}
+          >
+            Auto
+          </button>
+        )}
+
         {comparedProfiles.map((p) => (
           <span key={p.id} className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)]">
             + {p.name}
@@ -355,6 +406,16 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
 
       {needsWorkspace && (
         <p role="status" className="mb-2 text-xs text-[var(--danger)]">Set a workspace folder to use Claude Code.</p>
+      )}
+
+      {autoError && (
+        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+          {autoError}
+        </div>
+      )}
+
+      {autoActive && (
+        <p className="mb-2 text-xs text-[var(--text-muted)]">Auto mode: Claude Code decides routine tool calls; your profile limits still apply.</p>
       )}
 
       <div className="flex items-end gap-2">

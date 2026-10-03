@@ -14,6 +14,7 @@ vi.mock('../state/api.js', () => ({
       cancel: vi.fn(),
       setHead: vi.fn(),
     },
+    chats: { patch: vi.fn() },
     attachments: {
       upload: vi.fn(),
       list: vi.fn(),
@@ -39,6 +40,7 @@ const mockedCancel = vi.mocked(api.turns.cancel);
 const mockedSetHead = vi.mocked(api.turns.setHead);
 const mockedUpload = vi.mocked(api.attachments.upload);
 const mockedDelete = vi.mocked(api.attachments.delete);
+const mockedChatsPatch = vi.mocked(api.chats.patch);
 
 function makeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
@@ -109,6 +111,7 @@ function reset(): void {
   mockedSetHead.mockReset();
   mockedUpload.mockReset();
   mockedDelete.mockReset();
+  mockedChatsPatch.mockReset();
 }
 
 describe('Composer', () => {
@@ -497,5 +500,100 @@ describe('Composer', () => {
     await user.type(screen.getByRole('textbox', { name: /message/i }), 'hello');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(screen.getByText('Set a workspace folder to use Claude Code.')).toBeInTheDocument();
+  });
+});
+
+describe('Composer auto mode toggle', () => {
+  const HINT = 'Auto mode: Claude Code decides routine tool calls; your profile limits still apply.';
+  const conn = (id: string, kind: Connection['kind'], baseUrl: string | null = null): Connection => ({
+    id, name: id, kind, baseUrl, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null,
+  });
+
+  beforeEach(() => {
+    reset();
+    useGruntStore.getState().setConnections([conn('cc', 'claude_code'), conn('cc-endpoint', 'claude_code', 'http://localhost:11434'), conn('oll', 'ollama')]);
+    useGruntStore.getState().setProfiles([
+      makeProfile({ id: 'sonnet', name: 'Sonnet', connectionId: 'cc', modelId: 'sonnet' }),
+      makeProfile({ id: 'local-cc', name: 'Local CC', connectionId: 'cc-endpoint', modelId: 'qwen3', isDefault: false }),
+      makeProfile({ id: 'qwen', name: 'Qwen', connectionId: 'oll', modelId: 'qwen3', isDefault: false }),
+    ]);
+  });
+  afterEach(cleanup);
+
+  function renderWith(overrides: Partial<Chat>): Chat {
+    const chat = makeChat({ workspaceRoot: '/ws', ...overrides });
+    useGruntStore.getState().setChats([chat]);
+    render(<Composer chat={chat} />);
+    return chat;
+  }
+  const toggle = () => screen.getByRole('button', { name: 'Auto mode' });
+
+  it('is hidden when no selected profile uses Claude Code', () => {
+    renderWith({ profileId: 'qwen' });
+    expect(screen.queryByRole('button', { name: 'Auto mode' })).not.toBeInTheDocument();
+  });
+
+  it('shows for a Claude Code profile, off by default, with no hint', () => {
+    renderWith({ profileId: 'sonnet' });
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle()).toBeEnabled();
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+
+  it('shows in a compare turn when any selected profile uses Claude Code', async () => {
+    const user = userEvent.setup();
+    renderWith({ profileId: 'qwen' });
+    await user.click(screen.getByRole('button', { name: '+ Compare' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Sonnet' }));
+    expect(toggle()).toBeEnabled();
+  });
+
+  it('turns on optimistically, patches the chat, and shows the hint', async () => {
+    let resolvePatch!: (c: Chat) => void;
+    mockedChatsPatch.mockReturnValue(new Promise<Chat>((r) => { resolvePatch = r; }));
+    const chat = renderWith({ profileId: 'sonnet' });
+    await userEvent.setup().click(toggle());
+    expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { autoMode: true });
+    expect(useGruntStore.getState().chats[0]!.autoMode).toBe(true);
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(HINT)).toBeInTheDocument();
+    resolvePatch({ ...chat, autoMode: true });
+    await waitFor(() => expect(toggle()).toBeEnabled());
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('sends one PATCH for a double click while the save is in flight', async () => {
+    mockedChatsPatch.mockReturnValue(new Promise<Chat>(() => {}));
+    renderWith({ profileId: 'sonnet' });
+    const user = userEvent.setup();
+    await user.click(toggle());
+    await user.click(toggle());
+    expect(mockedChatsPatch).toHaveBeenCalledTimes(1);
+    expect(toggle()).toBeDisabled();
+  });
+
+  it('reverts only autoMode and shows the error when saving fails', async () => {
+    mockedChatsPatch.mockImplementation(async () => {
+      // Another change lands while the save is in flight; the revert must keep it.
+      useGruntStore.getState().upsertChat({ ...useGruntStore.getState().chats[0]!, title: 'Renamed meanwhile' });
+      throw new ApiError(500, 'Database is locked.');
+    });
+    renderWith({ profileId: 'sonnet' });
+    await userEvent.setup().click(toggle());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+    expect(useGruntStore.getState().chats[0]).toMatchObject({ autoMode: false, title: 'Renamed meanwhile' });
+  });
+
+  it('is disabled, with the reason, when every selected Claude Code profile uses an endpoint', () => {
+    renderWith({ profileId: 'local-cc' });
+    expect(toggle()).toBeDisabled();
+    expect(toggle()).toHaveAttribute('title', 'Auto mode needs the Claude login');
+  });
+
+  it('shows no hint while unavailable, even if the chat has auto mode on', () => {
+    renderWith({ profileId: 'local-cc', autoMode: true });
+    expect(toggle()).toBeDisabled();
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
   });
 });
