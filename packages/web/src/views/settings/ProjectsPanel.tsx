@@ -4,7 +4,7 @@ import { ApiError, api } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
 
 export const MEMORY_MODEL_HINT =
-  "Keeps each project's memory note up to date a few minutes after a chat goes quiet. A cheap or local model is plenty. Project default uses the project's default profile, then the app default.";
+  "Keeps each project's memory note up to date a few minutes after a chat goes quiet. The memory model reads each project's chats, so choose a model you're happy to send that content to; a local model keeps it on this machine. Unset (Project default) uses the project's default profile, else the app default.";
 
 /** Settings for every project (spec 2026-10-03-project-memory-design §5): the model the memory summariser runs on. */
 export function ProjectsPanel(): JSX.Element {

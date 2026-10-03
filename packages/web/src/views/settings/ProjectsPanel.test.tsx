@@ -45,13 +45,16 @@ function select(): HTMLSelectElement {
 }
 
 describe('ProjectsPanel', () => {
-  it('offers Project default plus every live profile, with a hint to pick a cheap or local model', async () => {
+  it('offers Project default plus every live profile, with a privacy hint about what the model reads', async () => {
     render(<ProjectsPanel />);
     await waitFor(() => expect(select()).toBeEnabled());
     expect(Array.from(select().options).map((o) => o.textContent)).toEqual(['Project default', 'Local Llama', 'Opus']);
     expect(select().value).toBe('');
     expect(screen.getByText(MEMORY_MODEL_HINT)).toBeInTheDocument();
-    expect(MEMORY_MODEL_HINT).toContain('cheap or local model');
+    expect(MEMORY_MODEL_HINT).toContain("reads each project's chats");
+    expect(MEMORY_MODEL_HINT).toContain("a model you're happy to send that content to");
+    expect(MEMORY_MODEL_HINT).toContain('a local model keeps it on this machine');
+    expect(MEMORY_MODEL_HINT).toContain("project's default profile, else the app default");
   });
 
   it('shows the saved choice and saves a new one', async () => {
