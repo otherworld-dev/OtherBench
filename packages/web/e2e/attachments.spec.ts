@@ -143,7 +143,7 @@ test('drag-and-drop attaches a file, shows a removable chip, and the sent messag
   // ...and reappears attached to the user's own message in the thread, next
   // to its text -- decision #5's "visible chip per attachment", surviving
   // the round trip through the server and back.
-  await expect(page.getByText('What do you see?')).toBeVisible();
+  await expect(page.getByTestId('thread-scroll').getByText('What do you see?')).toBeVisible();
   await expect(page.locator('article[data-role="user"]').getByTestId('attachment-chip')).toBeVisible();
 });
 
