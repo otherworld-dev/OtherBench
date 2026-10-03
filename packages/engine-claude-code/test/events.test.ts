@@ -10,6 +10,11 @@ const run = (msgs: SDKMessage[]): MappedEvent[] => { const m = new SdkEventMappe
 const textOf = (events: MappedEvent[]): string => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
 
 describe('SdkEventMapper on recorded turns', () => {
+  it('carries the session permission mode on init', () => {
+    expect(run(fixture('text-turn'))[0]).toMatchObject({ type: 'init', permissionMode: 'default' });
+    const bare = new SdkEventMapper().map({ type: 'system', subtype: 'init', session_id: 's', tools: [], mcp_servers: [] } as unknown as SDKMessage);
+    expect(bare[0]).toMatchObject({ type: 'init', permissionMode: null });
+  });
   it('text turn: init, streamed text, finish', () => {
     const events = run(fixture('text-turn'));
     expect(events[0]).toMatchObject({ type: 'init', sessionId: expect.any(String) });

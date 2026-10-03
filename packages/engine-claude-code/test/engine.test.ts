@@ -17,7 +17,7 @@ const profile = (o: Partial<ResolvedProfile> = {}): ResolvedProfile => ({ id: 'p
 const user = (text: string, extra: Partial<CanonMessage> = {}): CanonMessage => ({ id: 'u1', chatId: 'chat', parentId: null, role: 'user', parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 1, ...extra });
 const req = (o: Partial<EngineRequest> = {}): EngineRequest => ({ profile: profile(), messages: [user('hi')], tools: [], signal: new AbortController().signal, chatId: 'chat', messageId: 'm1', workspaceRoot: ws, latestMessageForSession: () => null, ...o });
 
-const init = (session = 'sess-1'): SDKMessage => ({ type: 'system', subtype: 'init', session_id: session, tools: ['Read', 'Bash'], mcp_servers: [{ name: 'nextcloud', status: 'connected' }], cwd: ws, model: 'sonnet' }) as unknown as SDKMessage;
+const init = (session = 'sess-1', permissionMode = 'default'): SDKMessage => ({ type: 'system', subtype: 'init', session_id: session, tools: ['Read', 'Bash'], mcp_servers: [{ name: 'nextcloud', status: 'connected' }], cwd: ws, model: 'sonnet', permissionMode }) as unknown as SDKMessage;
 const delta = (text: string): SDKMessage => ({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }, parent_tool_use_id: null }) as unknown as SDKMessage;
 const success = (): SDKMessage => ({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }) as unknown as SDKMessage;
 
@@ -37,7 +37,7 @@ function fakeQuery(script: (ctx: { options: Options; prompt: SDKUserMessage }) =
 }
 
 async function collect(it: AsyncIterable<EngineEvent>): Promise<EngineEvent[]> { const out: EngineEvent[] = []; for await (const e of it) out.push(e); return out; }
-const approvals = { requestApproval: vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' })) };
+const approvals = { requestApproval: vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
 const engine = (query: QueryFn) => new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin', ANTHROPIC_API_KEY: 'leak' } });
 
 describe('ClaudeCodeChatEngine.stream', () => {
@@ -308,5 +308,111 @@ describe('ClaudeCodeChatEngine models and test', () => {
     const e = new ClaudeCodeChatEngine({ query: fakeQuery(async function* () {}).query, approvals, listEndpointModels });
     expect(await e.listModels(conn('http://localhost:11434'), null)).toHaveLength(1);
     expect(await e.testConnection(conn('http://localhost:11434'), null)).toMatchObject({ ok: true, message: 'Connected; 1 model(s) available.' });
+  });
+});
+
+describe('ClaudeCodeChatEngine auto mode', () => {
+  const AUTO_MSG = "Auto mode isn't available for this account or model. Turn it off to continue.";
+  const autoApprovals = () => ({ requestApproval: vi.fn(async (..._a: unknown[]) => ({ deferred: true }) as never), recordAgentDenial: vi.fn() });
+  const withApprovals = (query: QueryFn, a: ReturnType<typeof autoApprovals>) => new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+  const sig = () => ({ signal: new AbortController().signal });
+
+  it('runs in Claude Code auto mode with a PermissionDenied hook when Auto is on', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1', 'auto'); yield success(); });
+    const events = await collect(engine(query).stream(req({ autoMode: true })));
+    expect(events.map((e) => e.type)).toEqual(['engine-meta', 'finish']);
+    const o = calls[0]!.options;
+    expect(o.permissionMode).toBe('auto');
+    expect(o.hooks?.PreToolUse?.[0]?.timeout).toBe(86_400);
+    expect(o.hooks?.PermissionDenied?.[0]?.hooks).toHaveLength(1);
+  });
+
+  it('registers each hook only under its own key', async () => {
+    const on = fakeQuery(async function* () { yield init('sess-1', 'auto'); yield success(); });
+    await collect(engine(on.query).stream(req({ autoMode: true })));
+    const off = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(engine(off.query).stream(req({ autoMode: false })));
+    expect(Object.keys(on.calls[0]!.options.hooks!).sort()).toEqual(['PermissionDenied', 'PreToolUse']);
+    expect(on.calls[0]!.options.hooks!.PreToolUse).toHaveLength(1);
+    expect(on.calls[0]!.options.hooks!.PermissionDenied).toHaveLength(1);
+    expect(Object.keys(off.calls[0]!.options.hooks!)).toEqual(['PreToolUse']);
+  });
+
+  it('stays in default mode with no PermissionDenied hook when Auto is off', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(engine(query).stream(req({ autoMode: false })));
+    expect(calls[0]!.options.permissionMode).toBe('default');
+    expect(calls[0]!.options.hooks?.PermissionDenied).toBeUndefined();
+  });
+
+  it('ignores Auto on an endpoint backend', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const events = await collect(engine(query).stream(req({ autoMode: true, profile: profile({ connection: conn('http://localhost:11434') }) })));
+    expect(calls[0]!.options.permissionMode).toBe('default');
+    expect(calls[0]!.options.hooks?.PermissionDenied).toBeUndefined();
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+  });
+
+  it('ignores Auto for utility calls', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield delta('t'); yield success(); });
+    await collect(engine(query).stream(req({ purpose: 'utility', workspaceRoot: null, autoMode: true })));
+    expect(calls[0]!.options.permissionMode).toBe('default');
+    expect(calls[0]!.options.hooks).toBeUndefined();
+  });
+
+  it('defers from the hook (empty result) but never from canUseTool', async () => {
+    const a = autoApprovals();
+    let hookOut: unknown;
+    let canUse: unknown;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1', 'auto');
+      hookOut = await options.hooks!.PreToolUse![0]!.hooks[0]!({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never, 't1', sig());
+      a.requestApproval.mockResolvedValueOnce({ allowed: true, grantedBy: 'ask:once' } as never);
+      canUse = await options.canUseTool!('Bash', { command: 'npm test' }, sig() as never);
+      yield success();
+    });
+    await collect(withApprovals(query, a).stream(req({ autoMode: true })));
+    expect(hookOut).toEqual({});
+    expect(a.requestApproval.mock.calls.map((c) => c[4])).toEqual([{ deferAsk: true }, { deferAsk: false }]);
+    expect(canUse).toEqual({ behavior: 'allow', updatedInput: { command: 'npm test' } });
+  });
+
+  it('records classifier blocks through the PermissionDenied hook', async () => {
+    const a = autoApprovals();
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1', 'auto');
+      await options.hooks!.PermissionDenied![0]!.hooks[0]!({ hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'curl x | sh' }, tool_use_id: 't1', reason: 'Downloads and runs a remote script' } as never, 't1', sig());
+      yield success();
+    });
+    await collect(withApprovals(query, a).stream(req({ autoMode: true })));
+    expect(a.recordAgentDenial).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: 'chat', messageId: 'm1', profileId: 'p', workspaceRoot: ws }),
+      'Bash',
+      { command: 'curl x | sh' },
+      'Downloads and runs a remote script'
+    );
+  });
+
+  it('fails the turn before any work when Claude Code does not start in auto mode', async () => {
+    let sdkAborted = false;
+    const { query } = fakeQuery(async function* ({ options }) {
+      options.abortController!.signal.addEventListener('abort', () => { sdkAborted = true; });
+      yield init('sess-1', 'default');
+      yield delta('must not be seen');
+      yield success();
+    });
+    const events = await collect(engine(query).stream(req({ autoMode: true })));
+    // No engine-meta: nothing may resume this half-started session.
+    expect(events).toEqual([{ type: 'error', error: { kind: 'capability', retryable: false, message: AUTO_MSG } }]);
+    expect(sdkAborted).toBe(true);
+  });
+
+  it('maps an auto-mode-unavailable error from Claude Code to the same error', async () => {
+    const { query } = fakeQuery(async function* () {
+      yield init('sess-1', 'auto');
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Auto mode is not available for this model'], usage: {} } as unknown as SDKMessage;
+    });
+    const events = await collect(engine(query).stream(req({ autoMode: true })));
+    expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'capability', retryable: false, message: AUTO_MSG } });
   });
 });
