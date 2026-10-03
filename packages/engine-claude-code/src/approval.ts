@@ -115,7 +115,10 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         execute: async () => undefined, // never called: Claude Code executes its own tools
       };
       const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal });
-      return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
+      // The gate never asks for a deferral yet (Task 7 wires auto mode in), so
+      // a deferred outcome here is unexpected: fail closed.
+      if ('deferred' in outcome) return { allow: false, reason: 'Grunt could not check this tool call: unexpected deferral.' };
+      return outcome.allowed ?{ allow: true } : { allow: false, reason: outcome.reason };
     } catch (err) {
       return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
     }

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
 import type {
   ApprovalChoice,
+  ApprovalOptions,
   ApprovalOutcome,
   RiskClass,
   ToolApprovalEvent,
@@ -245,9 +246,17 @@ export class GruntToolProvider implements ToolProvider {
     });
   }
 
-  async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<ApprovalOutcome> {
+  async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const startedAt = this.now();
-    const auth = await this.authorize(tool, args, policy, ctx);
+    const decision = this.broker.decide(tool, args, policy, ctx);
+    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+      // Auto mode: Claude Code's classifier decides this call. No card, no
+      // event and nothing stored -- the pending request is dropped unanswered.
+      this.broker.discard(decision.request.id);
+      this.audit(ctx, tool.name, args, null, this.now() - startedAt, 'auto', 'delegated to Claude Code auto mode');
+      return { deferred: true };
+    }
+    const auth = await this.settle(decision, ctx);
     if (!auth.ok) {
       this.audit(ctx, tool.name, args, toolError(auth.code, auth.reason), this.now() - startedAt, auth.grantedBy);
       return { allowed: false, reason: auth.reason };
@@ -256,8 +265,18 @@ export class GruntToolProvider implements ToolProvider {
     return { allowed: true, grantedBy: auth.grantedBy };
   }
 
-  private async authorize(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<Authorization> {
-    const decision = this.broker.decide(tool, args, policy, ctx);
+  recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void {
+    const text = reason.trim().length > 0 ? reason.trim() : 'Blocked by Claude Code auto mode.';
+    // redact() truncates a long string exactly as it does audit args.
+    this.audit(ctx, toolName, args, null, 0, 'deny:auto', redact(text) as string);
+  }
+
+  private authorize(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<Authorization> {
+    return this.settle(this.broker.decide(tool, args, policy, ctx), ctx);
+  }
+
+  /** Turns a broker decision into an authorisation, raising (and waiting on) an approval card for 'ask'. */
+  private async settle(decision: Decision, ctx: ToolContext): Promise<Authorization> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
     if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
 
