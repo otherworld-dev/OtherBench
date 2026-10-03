@@ -87,7 +87,7 @@ export interface Project {
   id: string;
   name: string;
   workspaceRoot: string | null;
-  /** Cleared (null) when that profile is deleted or archived. */
+  /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
   defaultProfileId: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareProjects`. */
   sortOrder: number;

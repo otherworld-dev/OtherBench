@@ -166,7 +166,9 @@ as regression tests.
   The Inspector's "Project" line links to the sidebar group.
 - **Gaps.** Reordering projects sends one PATCH per project that moves, not
   one atomic call; on a failure the sidebar reloads the server's order.
-  Projects aren't synced between machines (v2).
+  Projects aren't synced between machines (v2). Projects and chats aren't
+  refreshed across tabs or windows either: another tab's changes show up only
+  after a reload.
 
 ## What is NOT built
 
