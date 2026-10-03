@@ -254,7 +254,32 @@ API that runs shell commands and holds the bearer token.
   (matcher `*`) sends every call through `GruntToolProvider.requestApproval`
   -> `PermissionBroker` (`source: 'agent'`), ahead of any allow-rules in the
   user's Claude settings. `canUseTool` uses the same gate as a fallback;
-  `permissionMode` is always `'default'`.
+  `permissionMode` is `'default'` unless the chat's Auto toggle is on (next
+  bullet).
+- Auto mode (per chat: Composer **Auto** toggle, `chat.auto_mode`, applies
+  from the next turn). On the Claude login, turns run with
+  `permissionMode: 'auto'`. The hook still sends every call through
+  `requestApproval` -> `PermissionBroker` first, so policy denials,
+  outside-workspace denials, auto-read and grants behave exactly as before.
+  Only a call the broker would *ask* about goes to Claude Code's classifier
+  instead of a card (audited `auto`), and never a write to Claude Code config
+  or an unrecognised tool: those still get a card (`isDeferrableInAutoMode`).
+  `canUseTool` never defers, so a call the classifier can't decide gets a
+  card. Classifier blocks are audited `deny:auto` from a `PermissionDenied`
+  hook. Endpoint backends and utility calls ignore the toggle; if Claude Code
+  doesn't start in auto mode the turn fails with a capability error.
+- Hand-off mechanics (Task 1 probe): the hook hands a deferred call over by
+  returning `{}` (no decision). Returning `permissionDecision: 'defer'` does
+  not reach the classifier; it pauses the turn (`terminal_reason:
+  'tool_deferred'`). Because the hand-off is "no decision", the user's own
+  Claude settings allow-rules can decide before the classifier does (ruling
+  R7), so an `auto` audit row means "handed off", not "classifier approved".
+- Unavailable auto mode is silent: Claude Code starts with init
+  `permissionMode: 'default'` and no error (haiku on this account, or
+  `disableAutoMode`). The engine checks the init message and fails the turn
+  with a capability error ("Auto mode isn't available for this account or
+  model. Turn it off to continue."). Use a model whose `supportsAutoMode` is
+  true (sonnet here).
 - File-tool paths are checked with `containPath`; outside the workspace is
   denied without a card. The agent shell tools (Bash, BashOutput, KillShell,
   PowerShell, Monitor) are not path-contained; their grants are pinned to the
@@ -301,6 +326,23 @@ Known gaps:
   protections don't apply to agent tools. A model allowed to run shell
   commands could hard-link an outside file into the workspace and then read it
   (auto-allowed under `ask_on_mutate`). Shell approval is the control.
+- In auto mode the audit records the hand-off (`auto`), not the classifier's
+  verdict: a call the classifier allowed has no further row, only blocks do
+  (`deny:auto`). A deferred call the classifier couldn't decide gets a second
+  row when its card is answered.
+- Q4 (Task 1): `canUseTool` was never reached when the classifier couldn't
+  decide; in every probe run `canUseToolCalls` was empty and the turn ended
+  `completed` with no classifier blocks observed, so that fallback is
+  unverified live.
+- The classifier is not a security boundary for Grunt. In testing it allowed
+  a `curl ... | sh` (Task 1 probe against a .invalid host; Task 11 against a
+  refused 127.0.0.1 port) and it blocked nothing that Grunt's own gate had not
+  already stopped. Grunt's hard limits still apply in auto mode: tool policy,
+  workspace containment, and the card for writes to Claude Code config (live
+  check: a write to `.claude/settings.local.json` raised a card, denied).
+- Unverified live: the `PermissionDenied` hook and its `deny:auto` audit row
+  (no classifier block was ever observed, Task 1 or Task 11), and
+  `canUseTool` on an undecided call. Both are covered by unit tests only.
 
 ## Encryption at rest
 
