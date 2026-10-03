@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
-import { agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
+import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { containPath } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -307,15 +307,23 @@ export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
 }
 
 /**
- * A Claude Code file-write call whose workspace-relative `path` (set by the
- * engine's gate, engine-claude-code/src/approval.ts) is Claude Code config.
+ * A Claude Code file-write call where the workspace-relative `path` (set by the
+ * engine's gate, engine-claude-code/src/approval.ts), or any other path key,
+ * is Claude Code config.
  * A file-write call with no usable `path` cannot be checked, so it counts as
  * protected too (fail closed: ask, store nothing).
  */
 function isProtectedAgentWrite(tool: ToolSpec, args: unknown): boolean {
   if (tool.source !== 'agent' || classifyAgentTool(tool.name).category !== 'file-write') return false;
   const path = stringField(args, 'path');
-  return path === null || isProtectedAgentPath(path);
+  if (path === null || isProtectedAgentPath(path)) return true;
+  // The normalised `path` is the first path key present; a tool may carry
+  // others (`file_path`, `notebook_path`). Any protected one protects the call.
+  for (const key of AGENT_PATH_ARG_KEYS) {
+    const raw = stringField(args, key);
+    if (raw !== null && isProtectedAgentPath(raw)) return true;
+  }
+  return false;
 }
 
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {

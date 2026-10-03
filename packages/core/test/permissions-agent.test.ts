@@ -139,6 +139,15 @@ describe('PermissionBroker with source "agent"', () => {
       expect(b.decide(spec('Write'), { content: 'x' }, policy(), ctx()).kind).toBe('ask');
     });
 
+    it('NotebookEdit with a harmless file_path but a protected notebook_path is never grant-matched', () => {
+      const store = new InMemoryStore();
+      store.grants.create({ id: 'g', chatId: 'c1', profileId: 'p1', toolName: 'NotebookEdit', source: 'agent', scope: 'chat', constraint: null, expiresAt: null });
+      const b = new PermissionBroker(store);
+      const args = { path: 'a.ipynb', file_path: 'a.ipynb', notebook_path: '.claude/settings.local.json' };
+      expect(b.decide(spec('NotebookEdit'), args, policy(), ctx()).kind).toBe('ask');
+      expect(b.decide(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'b.ipynb' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    });
+
     it('still allows reading Claude Code config without a card under ask_on_mutate', () => {
       const b = new PermissionBroker(new InMemoryStore());
       expect(b.decide(spec('Read'), { path: '.claude/settings.json' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'auto_read' });
@@ -175,6 +184,12 @@ describe('isDeferrableInAutoMode', () => {
       expect(isDeferrableInAutoMode(spec('Write'), { path })).toBe(false);
     }
     expect(isDeferrableInAutoMode(spec('Edit'), {})).toBe(false);
+  });
+  it('never defers a write when any path key is protected', () => {
+    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { file_path: 'a.ipynb', notebook_path: '.claude/settings.local.json' })).toBe(false);
+    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'CLAUDE.md' })).toBe(false);
+    expect(isDeferrableInAutoMode(spec('Write'), { path: 'a.ts', file_path: '.mcp.json' })).toBe(false);
+    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'b.ipynb' })).toBe(true);
   });
   it('never defers an unrecognised Claude Code tool', () => {
     expect(isDeferrableInAutoMode(spec('SomeNewTool'), {})).toBe(false);
