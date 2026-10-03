@@ -421,9 +421,37 @@ function formatAuditTime(createdAt: number): string {
   return new Date(createdAt).toLocaleTimeString();
 }
 
+/** Short, human label for how a gated call was authorised; the raw value stays available as a tooltip. Unknown values pass through. */
+function grantedByLabel(grantedBy: string): string {
+  if (grantedBy.startsWith('grant:')) return 'grant';
+  switch (grantedBy) {
+    case 'auto_read': return 'auto-read';
+    case 'policy': return 'policy';
+    case 'ask:once': return 'asked: once';
+    case 'ask:chat': return 'asked: this chat';
+    case 'ask:always': return 'asked: always';
+    case 'deny:policy': return 'denied by policy';
+    case 'deny:user': return 'denied by you';
+    default: return grantedBy;
+  }
+}
+
+const AUDIT_COLLAPSED_COUNT = 5;
+
+/** "Show all (N)" / "Show fewer" toggle shared by the capped Inspector lists. */
+function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; limit: number; expanded: boolean; onToggle: () => void }): JSX.Element | null {
+  if (total <= limit) return null;
+  return (
+    <button type="button" onClick={onToggle} className="mt-2 text-xs text-[var(--text-muted)] underline hover:text-[var(--text)]">
+      {expanded ? 'Show fewer' : `Show all (${total})`}
+    </button>
+  );
+}
+
 /** "Audit trail" -- every gated tool call in this chat: tool, how it was authorised, a short result summary (never raw output/content -- redaction happens server-side, see GruntToolProvider), and duration. Newest first. */
 function AuditSection({ chatId }: { chatId: string }): JSX.Element {
   const { data: entries, failed } = usePolled(() => api.audit.list(chatId), [chatId]);
+  const [expanded, setExpanded] = useState(false);
 
   if (failed) return <EmptyState>Couldn&rsquo;t load the audit trail for this chat.</EmptyState>;
   if (entries === null) return <EmptyState>Loading…</EmptyState>;
@@ -431,20 +459,25 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
 
   const sorted: AuditEntry[] = [...entries].sort((a, b) => b.createdAt - a.createdAt);
 
+  const shown = expanded ? sorted : sorted.slice(0, AUDIT_COLLAPSED_COUNT);
+
   return (
+    <>
     <ul data-testid="audit-trail" className="space-y-2">
-      {sorted.map((entry) => (
+      {shown.map((entry) => (
         <li key={entry.id} data-testid={`audit-${entry.id}`} className="text-sm">
           <div className="flex items-center justify-between gap-2">
             <span className="font-medium">{entry.toolName}</span>
             <span className="text-xs text-[var(--text-muted)]">{formatAuditTime(entry.createdAt)}</span>
           </div>
           <div className="text-xs text-[var(--text-muted)]">
-            {entry.resultSummary} · {entry.grantedBy} · {entry.durationMs}ms
+            {entry.resultSummary} · <span title={entry.grantedBy}>{grantedByLabel(entry.grantedBy)}</span> · {entry.durationMs}ms
           </div>
         </li>
       ))}
     </ul>
+    <ShowAllToggle total={sorted.length} limit={AUDIT_COLLAPSED_COUNT} expanded={expanded} onToggle={() => setExpanded((e) => !e)} />
+    </>
   );
 }
 

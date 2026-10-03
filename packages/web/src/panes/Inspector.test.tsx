@@ -399,6 +399,45 @@ describe('Inspector audit trail', () => {
     expect(list).not.toHaveTextContent('[redacted]'); // the redaction happened server-side; this just must not defeat it by rendering raw args
   });
 
+  it('shows short labels for how each call was authorised, keeping the raw value in a tooltip', async () => {
+    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'weird:thing'];
+    mockedAuditList.mockResolvedValue(
+      raws.map((grantedBy, i) => ({ id: `g${i}`, chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy, createdAt: 1000 + i })),
+    );
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (9)' }));
+    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'weird:thing'];
+    raws.forEach((raw, i) => {
+      const label = within(within(list).getByTestId(`audit-g${i}`)).getByText(labels[i]!);
+      expect(label).toHaveAttribute('title', raw);
+    });
+    expect(list).not.toHaveTextContent('3aa2d2fd');
+  });
+
+  it('shows the newest 5 entries, with Show all / Show fewer', async () => {
+    mockedAuditList.mockResolvedValue(
+      Array.from({ length: 8 }, (_, i) => ({ id: `e${i}`, chatId: 'chat-1', messageId: 'm1', toolName: `tool${i}`, argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'policy', createdAt: 1000 + i })),
+    );
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('tool7');
+
+    const user = userEvent.setup();
+    await user.click(within(auditSection()).getByRole('button', { name: 'Show all (8)' }));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(8);
+    await user.click(within(auditSection()).getByRole('button', { name: 'Show fewer' }));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+  });
+
+  it('has no Show all button when there are 5 or fewer entries', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'a1', chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'policy', createdAt: 1 }]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await within(auditSection()).findByTestId('audit-trail');
+    expect(within(auditSection()).queryByRole('button', { name: /show all/i })).not.toBeInTheDocument();
+  });
+
   it('shows an honest empty state when nothing has been audited yet', async () => {
     mockedAuditList.mockResolvedValue([]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
