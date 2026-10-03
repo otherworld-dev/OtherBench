@@ -265,18 +265,19 @@ API that runs shell commands and holds the bearer token.
   instead of a card (audited `auto`), and never a write to Claude Code config
   or an unrecognised tool: those still get a card (`isDeferrableInAutoMode`).
   `canUseTool` never defers, so a call the classifier can't decide gets a
-  card. Classifier blocks are audited `deny:auto` from a `PermissionDenied`
-  hook. Endpoint backends and utility calls ignore the toggle; if Claude Code
+  card (unverified live -- see Known gaps). Classifier blocks are audited
+  `deny:auto` from a `PermissionDenied` hook (unverified live -- see Known
+  gaps). Endpoint backends and utility calls ignore the toggle; if Claude Code
   doesn't start in auto mode the turn fails with a capability error.
 - Hand-off mechanics (Task 1 probe): the hook hands a deferred call over by
   returning `{}` (no decision). Returning `permissionDecision: 'defer'` does
   not reach the classifier; it pauses the turn (`terminal_reason:
-  'tool_deferred'`). Because the hand-off is "no decision", the user's own
-  Claude settings allow-rules can decide before the classifier does (ruling
-  R7), so an `auto` audit row means "handed off", not "classifier approved".
+  'tool_deferred'`). In auto mode the hook's no-decision result lets the
+  user's Claude settings allow-rules decide before the classifier, so an `auto` audit row means "handed off", not "classifier approved".
 - Unavailable auto mode is silent: Claude Code starts with init
-  `permissionMode: 'default'` and no error (haiku on this account, or
-  `disableAutoMode`). The engine checks the init message and fails the turn
+  `permissionMode: 'default'` and no error (models that report no auto
+  support, e.g. haiku on this account, or `disableAutoMode`). The engine detects it because init reports
+  `permissionMode: 'default'`, and fails the turn
   with a capability error ("Auto mode isn't available for this account or
   model. Turn it off to continue."). Use a model whose `supportsAutoMode` is
   true (sonnet here).
@@ -334,10 +335,12 @@ Known gaps:
   decide; in every probe run `canUseToolCalls` was empty and the turn ended
   `completed` with no classifier blocks observed, so that fallback is
   unverified live.
-- The classifier is not a security boundary for Grunt. In testing it allowed
-  a `curl ... | sh` (Task 1 probe against a .invalid host; Task 11 against a
-  refused 127.0.0.1 port) and it blocked nothing that Grunt's own gate had not
-  already stopped. Grunt's hard limits still apply in auto mode: tool policy,
+- The classifier is not a security boundary for Grunt. A `curl ... | sh` ran
+  under auto mode in testing (Task 1 probe against a .invalid host; Task 11
+  against a refused 127.0.0.1 port); it was allowed by the classifier or by the
+  user's own settings allow-rules, which can't be told apart. No classifier
+  block has been observed in testing (the only block seen, a force-push in
+  Task 1, came from the user's own git-guard hook). Grunt's hard limits still apply in auto mode: tool policy,
   workspace containment, and the card for writes to Claude Code config (live
   check: a write to `.claude/settings.local.json` raised a card, denied).
 - Unverified live: the `PermissionDenied` hook and its `deny:auto` audit row
