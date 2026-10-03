@@ -8,6 +8,7 @@ import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
+import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
 import { settingsRoutes } from './routes/settings.js';
 import { toolsRoutes } from './routes/tools.js';
@@ -84,6 +85,10 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // /chats/:id/messages; this owns /chats/:id/turns, /chats/:id/stream,
   // /chats/:id/head, /messages/:id/cancel.
   authed.route('/', turnsRoutes(container));
+  // memoryRoutes defines full paths under /projects/:id/memory and
+  // /chats/:id/memory, so it also mounts at the authed root. No collisions:
+  // projectsRoutes owns /projects and /projects/:id only.
+  authed.route('/', memoryRoutes(container));
   authed.route('/', searchRoutes(container));
   authed.route('/usage', usageRoutes(container));
   // toolsRoutes, like turnsRoutes, defines full paths under several

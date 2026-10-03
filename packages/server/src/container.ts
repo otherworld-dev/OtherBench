@@ -22,6 +22,8 @@ import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
+import { ProjectMemoryService } from './memory/service.js';
+import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { StreamRegistry } from './stream/registry.js';
 
@@ -41,6 +43,13 @@ export interface Container {
   mcpManager: McpServerManager;
   /** Content-addressed blob storage for attachments (task 21) -- `routes/attachments.ts` writes to it on upload; `TurnRunner`'s `loadAttachment` (wired below) reads from it to embed real bytes for a vision-capable model. */
   blobStore: BlobStore;
+  /**
+   * Project memory's summariser (spec 2026-10-03-project-memory-design §2):
+   * quiet timers, the per-project update queue and each project's last
+   * failure. Always set by `createContainer`; optional only so route tests
+   * that never touch memory can build a Container without one.
+   */
+  memory?: ProjectMemoryService;
   close(): void;
 }
 
@@ -256,6 +265,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     },
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
+  const memory = new ProjectMemoryService({ store, engine, resolveProfile: (id) => resolveProfile({ store, secrets }, id) });
+  memory.attach(turnRunner);
 
   const container: Container = {
     store,
@@ -267,7 +278,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     toolProvider,
     mcpManager,
     blobStore,
+    memory,
     close: () => {
+      // First: aborts in-flight summariser calls and stops new ones before the store goes away.
+      memory.dispose();
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting
@@ -295,6 +309,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).
   subscribeAutoTitle(container);
+  // Re-queue project chats that went quiet while the server was down (spec §2, §6).
+  memory.sweep();
 
   return container;
 }

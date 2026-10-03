@@ -18,10 +18,11 @@ interface ChatBody {
   archivedAt?: unknown;
   autoMode?: unknown;
   projectId?: unknown;
+  memoryExcluded?: unknown;
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'projectId']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'projectId', 'memoryExcluded']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -147,25 +148,30 @@ export function chatsRoutes(container: Container): Hono {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
+    if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
     if (body.projectId !== undefined) {
       // Moving files the chat; its folder and profile stay as they are (spec §2).
       patch.projectId = body.projectId === null ? null : requireExistingProject(container, body.projectId).id;
     }
 
-    // Toggling Auto or moving a chat to another project is not chat activity:
+    // Toggling Auto, turning project memory off or on, or moving a chat to another project is not chat activity:
     // such a PATCH must not move the chat in the list (ChatList sorts by
     // updatedAt). Every other PATCH, including an empty one, still bumps it.
     const keys = Object.keys(patch);
     const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k));
     if (!nonActivity) patch.updatedAt = Date.now();
 
-    return c.json(container.store.chats.update(id, patch));
+    const updated = container.store.chats.update(id, patch);
+    // A chat that stops contributing, or changes project, drops its pending memory timer.
+    if (patch.memoryExcluded === true || patch.projectId !== undefined) container.memory?.cancel(id);
+    return c.json(updated);
   });
 
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getChatOrThrow(container, id);
     container.store.chats.delete(id);
+    container.memory?.cancel(id);
     // Deleting a chat cascades its attachment rows away in SQLite (ON
     // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
     // `sweepOrphanedBlobs` swallows filesystem-level failures (a locked

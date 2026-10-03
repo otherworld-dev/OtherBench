@@ -109,6 +109,58 @@ describe('createContainer', () => {
     container.close();
   });
 
+  it('wires project memory: a restart re-queues a project chat that went quiet while the server was down', async () => {
+    const dbPath = join(dir, 'grunt.db');
+    const secretsPath = join(dir, 'secrets.json');
+    const old = Date.now() - 10 * 60_000;
+
+    const first = await createContainer({ dbPath, secretsPath });
+    try {
+      expect(first.memory).toBeDefined();
+      first.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+      first.store.profiles.create({
+        id: 'prof',
+        name: 'Mock',
+        description: null,
+        colour: null,
+        connectionId: 'conn',
+        modelId: 'mock-standard',
+        systemPrompt: null,
+        params: {},
+        toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' },
+        isDefault: true,
+        archivedAt: null,
+      });
+      first.store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null });
+      first.store.chats.create({ id: 'chat', title: 'Chat', profileId: 'prof', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, projectId: 'proj' });
+      first.store.messages.create({ id: 'u1', chatId: 'chat', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null, createdAt: old });
+      first.store.messages.create({
+        id: 'a1',
+        chatId: 'chat',
+        parentId: 'u1',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'hello' }],
+        status: 'complete',
+        error: null,
+        producedBy: { profileId: 'prof', profileName: 'Mock', connectionId: 'conn', modelId: 'mock-standard' },
+        createdAt: old + 1,
+      });
+      first.store.chats.update('chat', { headMessageId: 'u1' });
+    } finally {
+      first.close();
+    }
+
+    const second = await createContainer({ dbPath, secretsPath });
+    try {
+      await second.memory!.idle();
+      // The mock model's canned reply isn't a note, so the update is rejected -- which proves the startup sweep ran it.
+      expect(second.memory!.lastError('proj')).toMatchObject({ chatId: 'chat', message: expect.stringContaining('rejected') });
+      expect(second.store.chats.get('chat')!.memoryCursor).toBeNull();
+    } finally {
+      second.close();
+    }
+  });
+
   // Task 32 fix round 2, Minor #2: a `:memory:` database's blob write root
   // is a fresh per-process temp directory (resolveAttachmentsRoots) that
   // nothing else will ever reuse -- without cleaning it up, it accumulates
