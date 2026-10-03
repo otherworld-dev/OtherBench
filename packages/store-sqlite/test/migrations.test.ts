@@ -145,6 +145,39 @@ describe('runMigrations', () => {
     }
   });
 
+  it('project-memory adds the note and version tables, the chat memory columns and app settings; notes cascade with their project', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-project-memory'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO project (id, name, created_at, updated_at) VALUES ('proj', 'Alpha', 1, 1)`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, project_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 'proj', 1, 1)`);
+
+      runMigrations(db);
+
+      expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+      const chat = db.prepare(`SELECT memory_cursor, memory_excluded FROM chat WHERE id = 'legacy'`).get() as { memory_cursor: string | null; memory_excluded: number };
+      expect(chat.memory_cursor).toBeNull();
+      expect(chat.memory_excluded).toBe(0);
+
+      db.exec(`INSERT INTO project_memory (project_id, body, updated_at, updated_by) VALUES ('proj', 'note', 1, 'user')`);
+      db.exec(`INSERT INTO project_memory_version (id, project_id, body, created_at, created_by) VALUES ('v1', 'proj', 'note', 1, 'user')`);
+      expect(() => db.exec(`UPDATE project_memory SET updated_by = 'robot'`)).toThrow();
+      db.exec(`INSERT INTO app_setting (key, value) VALUES ('memoryProfileId', '"p1"')`);
+
+      db.exec(`DELETE FROM project WHERE id = 'proj'`);
+      const count = (table: string): number => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+      expect(count('project_memory')).toBe(0);
+      expect(count('project_memory_version')).toBe(0);
+      expect(count('app_setting')).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   describe('003 plaintext residue', () => {
     let dir: string;
     afterEach(() => {
@@ -210,6 +243,9 @@ describe('runMigrations', () => {
         'grant',
         'audit',
         'project',
+        'project_memory',
+        'project_memory_version',
+        'app_setting',
         'message_fts',
       ]) {
         expect(names).toContain(expected);

@@ -55,22 +55,33 @@ export interface Chat {
    * changes its folder or profile. Set to null when the project is deleted.
    */
   projectId: string | null;
+  /**
+   * Project memory (spec 2026-10-03-project-memory-design §1): the id of the
+   * last message already folded into the project's note, or null when none
+   * has been. `ChatRepo.update` resets it whenever `projectId` changes.
+   */
+  memoryCursor: string | null;
+  /** "Don't add to project memory": the summariser skips this chat. It still receives the note. */
+  memoryExcluded: boolean;
   createdAt: number;
   updatedAt: number;
 }
 
-/** What `ChatRepo.create` takes: timestamps default to now, `autoMode` to false, `projectId` to null. */
-export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode' | 'projectId'> & {
+/** What `ChatRepo.create` takes: timestamps default to now, `autoMode` and `memoryExcluded` to false, `projectId` and `memoryCursor` to null. */
+export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'memoryCursor' | 'memoryExcluded'> & {
   createdAt?: number;
   updatedAt?: number;
   autoMode?: boolean;
   projectId?: string | null;
+  memoryCursor?: string | null;
+  memoryExcluded?: boolean;
 };
 
 export interface ChatRepo {
   create(c: NewChat): Chat;
   get(id: string): Chat | null;
   list(): Chat[];
+  /** A patch that changes `projectId` also sets `memoryCursor: null`: the chat starts over in its new project's memory. */
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat;
   delete(id: string): void;
 }
@@ -108,7 +119,10 @@ export interface ProjectRepo {
   /** Every project, in sidebar order (`compareProjects`). */
   list(): Project[];
   update(id: string, patch: Partial<Omit<Project, 'id'>>): Project;
-  /** Deletes the project. Its chats move to no project (`projectId: null`); chats are never deleted. */
+  /**
+   * Deletes the project and its memory note and versions. Its chats move to
+   * no project (`projectId: null`, `memoryCursor: null`); chats are never deleted.
+   */
   delete(id: string): void;
 }
 
@@ -140,6 +154,35 @@ export interface ProjectMemoryVersion {
   createdAt: number;
   createdBy: MemoryAuthor;
   sourceChatId: string | null;
+}
+
+export interface ProjectMemoryRepo {
+  /** The project's current note, or null if it has never been saved. */
+  get(projectId: string): ProjectMemory | null;
+  /**
+   * Replaces the project's note, records it as a new version, and prunes the
+   * project's versions beyond the newest `MEMORY_VERSIONS_KEPT` (ties on
+   * `createdAt` break by save order). `at` defaults to now. Throws for a
+   * project that doesn't exist.
+   */
+  save(projectId: string, body: string, by: MemoryAuthor, sourceChatId: string | null, at?: number): ProjectMemory;
+  /** The project's versions, newest first. */
+  versions(projectId: string): ProjectMemoryVersion[];
+  version(id: string): ProjectMemoryVersion | null;
+}
+
+// --- app settings ----------------------------------------------------------------
+
+/** App-wide settings (one set per database). Defaults: `DEFAULT_APP_SETTINGS`. */
+export interface AppSettings {
+  /** The profile the project-memory summariser runs on; null = each project's default profile, then the app default. */
+  memoryProfileId: string | null;
+}
+
+export interface SettingsRepo {
+  get(): AppSettings;
+  /** Applies the keys `patch` defines and returns the full settings. */
+  update(patch: Partial<AppSettings>): AppSettings;
 }
 
 // --- messages ----------------------------------------------------------------
@@ -359,6 +402,8 @@ export interface Store {
   profiles: ProfileRepo;
   chats: ChatRepo;
   projects: ProjectRepo;
+  projectMemory: ProjectMemoryRepo;
+  settings: SettingsRepo;
   messages: MessageRepo;
   attachments: AttachmentRepo;
   usage: UsageRepo;

@@ -6,6 +6,7 @@ import { MIGRATION_004_ATTACHMENT_SHA256_INDEX } from './004-attachment-sha256-i
 import { MIGRATION_005_MESSAGE_ENGINE_META } from './005-message-engine-meta.js';
 import { MIGRATION_006_CHAT_AUTO_MODE } from './006-chat-auto-mode.js';
 import { MIGRATION_007_PROJECTS } from './007-projects.js';
+import { MIGRATION_008_PROJECT_MEMORY } from './008-project-memory.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -18,6 +19,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 5, name: '005-message-engine-meta', sql: MIGRATION_005_MESSAGE_ENGINE_META },
   { version: 6, name: '006-chat-auto-mode', sql: MIGRATION_006_CHAT_AUTO_MODE },
   { version: 7, name: '007-projects', sql: MIGRATION_007_PROJECTS },
+  { version: 8, name: '008-project-memory', sql: MIGRATION_008_PROJECT_MEMORY },
 ];
 
 /**

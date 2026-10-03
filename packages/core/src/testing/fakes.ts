@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   ChatEngine,
   ConnectionTestResult,
@@ -29,8 +30,16 @@ import type {
   McpServer,
   Grant,
   AuditEntry,
+  AppSettings,
+  MemoryAuthor,
+  ProjectMemory,
+  ProjectMemoryRepo,
+  ProjectMemoryVersion,
+  SettingsRepo,
 } from '../ports/store.js';
 import { compareProjects } from '../domain/projects.js';
+import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
+import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import type { ModelInfo, Profile } from '../types/config.js';
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 
@@ -239,6 +248,8 @@ class InMemoryChatRepo implements ChatRepo {
       ...c,
       autoMode: c.autoMode ?? false,
       projectId: c.projectId ?? null,
+      memoryCursor: c.memoryCursor ?? null,
+      memoryExcluded: c.memoryExcluded ?? false,
       createdAt: c.createdAt ?? now,
       updatedAt: c.updatedAt ?? now,
     };
@@ -251,7 +262,10 @@ class InMemoryChatRepo implements ChatRepo {
     return this.repo.list();
   }
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat {
-    return this.repo.update(id, patch);
+    // A chat that changes project starts over in the new project's memory (ChatRepo.update's doc).
+    const current = this.repo.get(id);
+    const moved = current !== null && patch.projectId !== undefined && patch.projectId !== current.projectId;
+    return this.repo.update(id, moved ? { ...patch, memoryCursor: null } : patch);
   }
   delete(id: string): void {
     this.repo.delete(id);
@@ -260,7 +274,10 @@ class InMemoryChatRepo implements ChatRepo {
 
 class InMemoryProjectRepo implements ProjectRepo {
   private readonly repo = new InMemoryCrudRepo<Project>();
-  constructor(private readonly chats: ChatRepo) {}
+  constructor(
+    private readonly chats: ChatRepo,
+    private readonly onDelete: (projectId: string) => void
+  ) {}
   create(p: NewProject): Project {
     const now = Date.now();
     return this.repo.create({ ...p, sortOrder: p.sortOrder ?? 0, createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now });
@@ -275,11 +292,74 @@ class InMemoryProjectRepo implements ProjectRepo {
     return this.repo.update(id, patch);
   }
   delete(id: string): void {
-    // Mirrors chat.project_id's ON DELETE SET NULL (migration 007).
+    // Mirrors chat.project_id's ON DELETE SET NULL (migration 007); the chat
+    // repo's update also resets each chat's memory cursor.
     for (const chat of this.chats.list()) {
       if (chat.projectId === id) this.chats.update(chat.id, { projectId: null });
     }
+    // Mirrors project_memory's and project_memory_version's ON DELETE CASCADE (migration 008).
+    this.onDelete(id);
     this.repo.delete(id);
+  }
+}
+
+/** Versions newest first; ties on `createdAt` break by save order (SQLite: rowid). */
+function newestFirst(versions: ProjectMemoryVersion[]): ProjectMemoryVersion[] {
+  return versions
+    .map((v, order) => ({ v, order }))
+    .sort((a, b) => b.v.createdAt - a.v.createdAt || b.order - a.order)
+    .map(({ v }) => v);
+}
+
+class InMemoryProjectMemoryRepo implements ProjectMemoryRepo {
+  private readonly notes = new Map<string, ProjectMemory>();
+  /** Every project's versions, oldest save first. */
+  private all: ProjectMemoryVersion[] = [];
+
+  constructor(private readonly projectExists: (projectId: string) => boolean) {}
+
+  get(projectId: string): ProjectMemory | null {
+    const note = this.notes.get(projectId);
+    return note ? structuredClone(note) : null;
+  }
+
+  save(projectId: string, body: string, by: MemoryAuthor, sourceChatId: string | null, at: number = Date.now()): ProjectMemory {
+    // Mirrors project_memory.project_id's foreign key.
+    if (!this.projectExists(projectId)) throw new Error(`project_memory: no project ${projectId}`);
+    const note: ProjectMemory = { projectId, body, updatedAt: at, updatedBy: by, sourceChatId };
+    this.notes.set(projectId, note);
+    this.all.push({ id: randomUUID(), projectId, body, createdAt: at, createdBy: by, sourceChatId });
+    const keep = new Set(newestFirst(this.all.filter((v) => v.projectId === projectId)).slice(0, MEMORY_VERSIONS_KEPT).map((v) => v.id));
+    this.all = this.all.filter((v) => v.projectId !== projectId || keep.has(v.id));
+    return structuredClone(note);
+  }
+
+  versions(projectId: string): ProjectMemoryVersion[] {
+    return newestFirst(this.all.filter((v) => v.projectId === projectId)).map((v) => structuredClone(v));
+  }
+
+  version(id: string): ProjectMemoryVersion | null {
+    const found = this.all.find((v) => v.id === id);
+    return found ? structuredClone(found) : null;
+  }
+
+  /** Called by `InMemoryProjectRepo.delete`. */
+  removeProject(projectId: string): void {
+    this.notes.delete(projectId);
+    this.all = this.all.filter((v) => v.projectId !== projectId);
+  }
+}
+
+class InMemorySettingsRepo implements SettingsRepo {
+  private value: AppSettings = { ...DEFAULT_APP_SETTINGS };
+  get(): AppSettings {
+    return { ...this.value };
+  }
+  update(patch: Partial<AppSettings>): AppSettings {
+    for (const [key, value] of Object.entries(patch) as [keyof AppSettings, AppSettings[keyof AppSettings] | undefined][]) {
+      if (value !== undefined) this.value = { ...this.value, [key]: value };
+    }
+    return this.get();
   }
 }
 
@@ -518,8 +598,12 @@ export class InMemoryStore implements Store {
   readonly connections: ConnectionRepo = new InMemoryConnectionRepo();
   readonly models: ModelRepo = new InMemoryModelRepo();
   readonly chats: ChatRepo = new InMemoryChatRepo();
-  readonly projects: ProjectRepo = new InMemoryProjectRepo(this.chats);
+  // The project and memory repos refer to each other lazily (existence check, cascade on delete).
+  private readonly memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
+  readonly projectMemory: ProjectMemoryRepo = this.memoryRepo;
+  readonly projects: ProjectRepo = new InMemoryProjectRepo(this.chats, (id) => this.memoryRepo.removeProject(id));
   readonly profiles: ProfileRepo = new InMemoryProfileRepo(this.projects);
+  readonly settings: SettingsRepo = new InMemorySettingsRepo();
   readonly messages: MessageRepo = new InMemoryMessageRepo();
   readonly attachments: AttachmentRepo = new InMemoryAttachmentRepo();
   readonly usage: UsageRepo = new InMemoryUsageRepo();

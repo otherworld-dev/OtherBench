@@ -66,6 +66,8 @@ const chat: Chat = {
   pinned: false,
   autoMode: false,
   projectId: null,
+  memoryCursor: null,
+  memoryExcluded: false,
   archivedAt: null,
   createdAt: 1,
   updatedAt: 1,

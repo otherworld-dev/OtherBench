@@ -4,7 +4,7 @@ import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import { buildSidebar, moveProjectPatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
-  return { id, title: id, profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, createdAt: 1, updatedAt: 1, ...over };
+  return { id, title: id, profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string, sortOrder = 0): Project {

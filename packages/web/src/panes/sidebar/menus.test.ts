@@ -3,7 +3,7 @@ import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { chatMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
-  return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, createdAt: 1, updatedAt: 1, ...over };
+  return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string): Project {

@@ -45,8 +45,13 @@ export class SqliteProjectRepo implements ProjectRepo {
     return this.crud.update(id, patch);
   }
 
-  /** Its chats keep existing: chat.project_id is ON DELETE SET NULL (migration 007). */
+  /**
+   * Its chats keep existing: chat.project_id is ON DELETE SET NULL (migration
+   * 007), and their memory cursors are cleared here to match ChatRepo.update.
+   * Its memory note and versions cascade away (migration 008).
+   */
   delete(id: string): void {
+    this.db.prepare('UPDATE chat SET memory_cursor = NULL WHERE project_id = ?').run(id);
     this.crud.delete(id);
   }
 }
