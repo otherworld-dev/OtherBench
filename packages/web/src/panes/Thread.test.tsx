@@ -28,6 +28,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     headMessageId: null,
     workspaceRoot: null,
     pinned: false,
+    autoMode: false,
     archivedAt: null,
     createdAt: 1,
     updatedAt: 1,

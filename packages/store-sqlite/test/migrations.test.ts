@@ -94,6 +94,24 @@ describe('runMigrations', () => {
     }
   });
 
+  it('chat-auto-mode adds chat.auto_mode, with every existing chat off', () => {
+    const autoMode = MIGRATIONS.find((m) => m.name.endsWith('chat-auto-mode'));
+    expect(autoMode).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < autoMode!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'CC', 'claude_code')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Sonnet', 'c1', 'sonnet')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+      runMigrations(db);
+      const row = db.prepare(`SELECT auto_mode FROM chat WHERE id = 'legacy'`).get() as { auto_mode: number };
+      expect(row.auto_mode).toBe(0);
+      expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+    } finally {
+      db.close();
+    }
+  });
+
   describe('003 plaintext residue', () => {
     let dir: string;
     afterEach(() => {
