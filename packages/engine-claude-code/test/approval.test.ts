@@ -267,6 +267,26 @@ describe('auto mode gate', () => {
     expect(await preToolUseHook(gate)(hookInput('Write', { file_path: outsidePath }), 'id', sig())).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
   });
 
+  it('a requestApproval that throws in auto mode makes the hook DENY, never an empty result', async () => {
+    const requestApproval = vi.fn(async (..._a: unknown[]) => { throw new Error('store down'); });
+    const gate = createGate({ approvals: { requestApproval: requestApproval as never }, policy, ctx: ctx(), autoMode: true });
+    const out = await preToolUseHook(gate)(hookInput('Bash', { command: 'npm test' }), 'id', sig());
+    expect(out).toMatchObject({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } });
+    expect(out).not.toEqual({});
+  });
+
+  it('outside auto mode a deferred outcome makes the hook DENY', async () => {
+    const gate = createGate({ approvals: { requestApproval: deferring() }, policy, ctx: ctx() });
+    const out = await preToolUseHook(gate)(hookInput('Bash', { command: 'npm test' }), 'id', sig());
+    expect(out).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  it('only an outcome with deferred === true defers', async () => {
+    const odd = vi.fn(async (..._a: unknown[]) => ({ allowed: false as const, reason: 'no', deferred: false }));
+    const gate = createGate({ approvals: { requestApproval: odd as never }, policy, ctx: ctx(), autoMode: true });
+    expect(await gate('Bash', { command: 'ls' }, undefined, { mayDefer: true })).toEqual({ allow: false, reason: 'no' });
+  });
+
   it('canUseTool never defers: it gets a card through requestApproval without deferAsk', async () => {
     const requestApproval = allowing();
     const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoMode: true });

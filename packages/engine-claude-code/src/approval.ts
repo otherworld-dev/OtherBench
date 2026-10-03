@@ -124,9 +124,10 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
       // can't decide) always gets a card.
       const deferAsk = deps.autoMode === true && opts?.mayDefer === true;
       const outcome = await deps.approvals.requestApproval(spec, normalised.args, deps.policy, { ...deps.ctx, signal }, { deferAsk });
-      if ('deferred' in outcome) {
+      if ('deferred' in outcome && outcome.deferred === true) {
         return deferAsk ? { defer: true } : { allow: false, reason: 'Grunt could not check this tool call: unexpected deferral.' };
       }
+      if (!('allowed' in outcome)) return { allow: false, reason: 'Grunt could not check this tool call: unrecognised approval outcome.' };
       return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
     } catch (err) {
       return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
