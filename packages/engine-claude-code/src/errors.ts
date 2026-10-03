@@ -7,11 +7,23 @@ export function isMissingSessionError(text: string): boolean {
   return /no conversation found|session .*not found|could not find session/i.test(text);
 }
 
-export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null }): SerializedError {
+export const AUTO_MODE_UNAVAILABLE_MESSAGE = "Auto mode isn't available for this account or model. Turn it off to continue.";
+
+/** The turn error when a chat asks for auto mode and Claude Code can't run in it. */
+export function autoModeUnavailable(): SerializedError {
+  return { kind: 'capability', retryable: false, message: AUTO_MODE_UNAVAILABLE_MESSAGE };
+}
+
+export function classifyClaudeCodeFailure(text: string, ctx: { backend: string; modelId: string; rateLimitResetsAt?: number | null; autoMode?: boolean }): SerializedError {
   if (/not logged in|\/login|invalid api key|authentication|unauthori[sz]ed|\b401\b/i.test(text)) {
     // `/login` only fixes the Claude login; an endpoint backend uses the connection's token.
     const message = ctx.backend === CLAUDE_BACKEND ? "Claude Code isn't logged in. Run `claude` and `/login`." : `${ctx.backend} rejected the token.`;
     return { kind: 'auth', retryable: false, message };
+  }
+  // Only an auto-mode turn can fail this way (detection is normally via the
+  // init permissionMode); other turns must not be misread.
+  if (ctx.autoMode === true && /auto[ -]?mode/i.test(text) && /unavailable|not available|not supported|not enabled|disabled/i.test(text)) {
+    return autoModeUnavailable();
   }
   if (ctx.rateLimitResetsAt != null || /usage limit|rate.?limit|\b429\b|overloaded/i.test(text)) {
     const resets = ctx.rateLimitResetsAt ?? Number(/\|(\d{9,})/.exec(text)?.[1] ?? NaN);

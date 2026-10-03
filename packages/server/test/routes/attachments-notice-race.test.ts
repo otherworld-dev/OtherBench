@@ -159,6 +159,7 @@ describe('capability-fallback notice: real HTTP round trip (regression)', () => 
       onApprovalEvent: () => () => {},
       resolveApproval: () => false,
       requestApproval: async () => ({ allowed: true, grantedBy: 'policy' }),
+      recordAgentDenial: () => {},
     };
     const turnRunner = new TurnRunner(store, engine, { toolProvider });
     const container: Container = {

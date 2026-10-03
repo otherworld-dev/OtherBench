@@ -16,6 +16,7 @@ interface ChatBody {
   workspaceRoot?: unknown;
   pinned?: unknown;
   archivedAt?: unknown;
+  autoMode?: unknown;
 }
 
 const DEFAULT_TITLE = 'New Chat';
@@ -94,7 +95,7 @@ export function chatsRoutes(container: Container): Hono {
     // explicit, separate action (POST /:id/head, routes/turns.ts) so that
     // selecting a compare-turn variant can never happen as a side effect of
     // an unrelated rename/pin/archive PATCH (task 16 decision #2).
-    const patch: Partial<Omit<Chat, 'id'>> = { updatedAt: Date.now() };
+    const patch: Partial<Omit<Chat, 'id'>> = {};
     if (body.title !== undefined) patch.title = requireNonEmptyString(body.title, 'title');
     if (body.profileId !== undefined) {
       const profileId = requireNonEmptyString(body.profileId, 'profileId');
@@ -106,6 +107,13 @@ export function chatsRoutes(container: Container): Hono {
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
+    if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
+
+    // The Auto toggle is a setting, not chat activity: an autoMode-only PATCH
+    // must not move the chat to the top of the list (ChatList sorts by
+    // updatedAt). Every other PATCH, including an empty one, still bumps it.
+    const onlyAutoMode = Object.keys(patch).length === 1 && patch.autoMode !== undefined;
+    if (!onlyAutoMode) patch.updatedAt = Date.now();
 
     return c.json(container.store.chats.update(id, patch));
   });

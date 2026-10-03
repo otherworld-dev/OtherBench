@@ -85,7 +85,20 @@ export type ToolApprovalEvent =
   | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] };
 
 /** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
-export type ApprovalOutcome = { allowed: true; grantedBy: string } | { allowed: false; reason: string };
+export type ApprovalOutcome =
+  | { allowed: true; grantedBy: string }
+  | { allowed: false; reason: string }
+  | { deferred: true };
+
+/** Options for `ToolProvider.requestApproval`. */
+export interface ApprovalOptions {
+  /**
+   * Claude Code auto mode: a call the broker would ask about is handed to
+   * Claude Code's own classifier (`{ deferred: true }`) instead of raising a
+   * card, when `isDeferrableInAutoMode` allows it. Deny/allow are unaffected.
+   */
+  deferAsk?: boolean;
+}
 
 export interface ToolProvider {
   listTools(policy: ToolPolicy): Promise<ToolSpec[]>;
@@ -108,5 +121,11 @@ export interface ToolProvider {
    * -> resolve -> audit flow as a gated Grunt tool, minus the execution. This
    * is the only way an external agent's tool call may be authorised.
    */
-  requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<ApprovalOutcome>;
+  requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts?: ApprovalOptions): Promise<ApprovalOutcome>;
+  /**
+   * Records a tool call Claude Code's auto-mode classifier blocked (its
+   * PermissionDenied hook) as an audit row with grantedBy `deny:auto` and the
+   * classifier's reason as the summary. Changes no decision. Never throws.
+   */
+  recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void;
 }

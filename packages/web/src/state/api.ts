@@ -181,7 +181,7 @@ export const api = {
     list: () => request<Chat[]>('/chats'),
     create: (body: CreateChatBody) => post<Chat>('/chats', body),
     get: (id: string) => request<Chat>(`/chats/${id}`),
-    patch: (id: string, body: Partial<{ title: string; profileId: string; workspaceRoot: string | null; pinned: boolean; archivedAt: number | null }>) =>
+    patch: (id: string, body: Partial<{ title: string; profileId: string; workspaceRoot: string | null; pinned: boolean; archivedAt: number | null; autoMode: boolean }>) =>
       patch<Chat>(`/chats/${id}`, body),
     delete: (id: string) => del(`/chats/${id}`),
     messages: (id: string) => request<ChatMessagesResult>(`/chats/${id}/messages`),

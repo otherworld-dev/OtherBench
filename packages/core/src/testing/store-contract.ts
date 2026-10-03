@@ -278,6 +278,20 @@ export function runStoreContract(
       expect(store.chats.get('chat-a')).toMatchObject({ id: 'chat-a', title: 'My Chat', profileId });
     });
 
+    it('chats: autoMode defaults to false and round-trips through create and update', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      const created = store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+      expect(created.autoMode).toBe(false);
+      expect(store.chats.get('chat-a')!.autoMode).toBe(false);
+
+      store.chats.update('chat-a', { autoMode: true });
+      expect(store.chats.get('chat-a')!.autoMode).toBe(true);
+      expect(store.chats.list().find((c) => c.id === 'chat-a')!.autoMode).toBe(true);
+
+      store.chats.create(makeChatInput({ id: 'chat-b', profileId, autoMode: true }));
+      expect(store.chats.get('chat-b')!.autoMode).toBe(true);
+    });
+
     it('attachments: create/get round-trip', () => {
       const { chat } = seedChat(store, 'chat-a');
       store.attachments.create(makeAttachment({ id: 'att-a', chatId: chat.id, filename: 'photo.png' }));

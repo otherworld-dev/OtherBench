@@ -245,7 +245,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         )}
       </div>
-      <Composer chat={chat} parentId={tailId} />
+      <Composer key={chat.id} chat={chat} parentId={tailId} />
     </main>
   );
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -402,5 +402,73 @@ describe('requestApproval (external agent tools)', () => {
     const pending = provider.requestApproval(agentSpec('Edit', 'mutate'), { path: 'a.txt' }, policy(), ctx({ signal: ac.signal }));
     ac.abort();
     expect(await pending).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+  });
+});
+
+describe('requestApproval in auto mode (deferAsk)', () => {
+  const agentSpec = (name: string, risk: 'read' | 'mutate' | 'execute') => ({ name, description: '', parameters: {}, risk, source: 'agent' as const, execute: async () => { throw new Error('must not execute'); } });
+
+  it('hands an ask to Claude Code: no card, no pending request, one "auto" audit row', async () => {
+    const { provider, store, broker } = makeProvider();
+    const discard = vi.spyOn(broker, 'discard');
+    const seen: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => seen.push(e));
+    const out = await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'npm test' }, policy(), ctx(), { deferAsk: true });
+    expect(out).toEqual({ deferred: true });
+    expect(seen).toEqual([]);
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(() => broker.resolve(discard.mock.calls[0]![0], { choice: 'once' })).toThrow(/unknown or already-resolved/);
+    expect(store.grants.list()).toEqual([]);
+    expect(store.audit.list('chat-1')).toEqual([
+      expect.objectContaining({ toolName: 'Bash', grantedBy: 'auto', resultSummary: 'delegated to Claude Code auto mode', argsRedacted: { command: 'npm test' } }),
+    ]);
+  });
+
+  it('leaves allow and deny decisions unchanged', async () => {
+    const { provider, store } = makeProvider();
+    expect(await provider.requestApproval(agentSpec('Read', 'read'), { path: 'a.txt' }, policy(), ctx(), { deferAsk: true })).toEqual({ allowed: true, grantedBy: 'auto_read' });
+    expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'ls' }, policy({ shell: false }), ctx(), { deferAsk: true })).toMatchObject({ allowed: false, reason: expect.stringMatching(/disabled/) });
+    expect(store.audit.list('chat-1').map((a) => a.grantedBy).sort()).toEqual(['auto_read', 'deny:policy']);
+  });
+
+  it.each([
+    ['a write to Claude Code config', 'Edit', { path: '.claude/settings.local.json' }],
+    ['an unrecognised tool', 'SomeNewTool', { anything: 1 }],
+  ])('still raises a card for %s', async (_label, name, args) => {
+    const { provider } = makeProvider();
+    const seen: string[] = [];
+    provider.onApprovalEvent((e) => {
+      seen.push(e.type);
+      if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'once' });
+    });
+    expect(await provider.requestApproval(agentSpec(name, 'mutate'), args, policy(), ctx(), { deferAsk: true })).toEqual({ allowed: true, grantedBy: 'ask:once' });
+    expect(seen).toEqual(['request', 'resolved']);
+  });
+
+  it('raises a card as before when deferAsk is not set', async () => {
+    const { provider } = makeProvider();
+    provider.onApprovalEvent((e) => { if (e.type === 'request') provider.resolveApproval(e.request.id, { choice: 'deny' }); });
+    expect(await provider.requestApproval(agentSpec('Bash', 'execute'), { command: 'npm test' }, policy(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+  });
+});
+
+describe('recordAgentDenial', () => {
+  it('writes a deny:auto audit row with the reason as its summary and redacted args', () => {
+    const { provider, store } = makeProvider();
+    provider.recordAgentDenial(ctx(), 'Write', { path: 'notes.txt', content: 'secret stuff' }, 'Writes credentials to disk');
+    expect(store.audit.list('chat-1')).toEqual([
+      expect.objectContaining({ toolName: 'Write', grantedBy: 'deny:auto', resultSummary: 'Writes credentials to disk', argsRedacted: { path: 'notes.txt', content: '[redacted]' }, durationMs: 0 }),
+    ]);
+  });
+
+  it('truncates a long reason and fills in a blank one', () => {
+    const { provider, store } = makeProvider();
+    provider.recordAgentDenial(ctx({ messageId: 'msg-long' }), 'Bash', { command: 'x' }, 'r'.repeat(500));
+    provider.recordAgentDenial(ctx({ messageId: 'msg-blank' }), 'Bash', { command: 'y' }, '   ');
+    const rows = store.audit.list('chat-1');
+    const long = rows.find((r) => r.messageId === 'msg-long')!;
+    expect(long.resultSummary.startsWith('r'.repeat(200))).toBe(true);
+    expect(long.resultSummary).toContain('(500 chars)');
+    expect(rows.find((r) => r.messageId === 'msg-blank')!.resultSummary).toBe('Blocked by Claude Code auto mode.');
   });
 });

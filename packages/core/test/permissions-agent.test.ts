@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PermissionBroker } from '../src/domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker } from '../src/domain/permissions.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
 import type { ToolPolicy } from '../src/types/config.js';
@@ -139,6 +139,15 @@ describe('PermissionBroker with source "agent"', () => {
       expect(b.decide(spec('Write'), { content: 'x' }, policy(), ctx()).kind).toBe('ask');
     });
 
+    it('NotebookEdit with a harmless file_path but a protected notebook_path is never grant-matched', () => {
+      const store = new InMemoryStore();
+      store.grants.create({ id: 'g', chatId: 'c1', profileId: 'p1', toolName: 'NotebookEdit', source: 'agent', scope: 'chat', constraint: null, expiresAt: null });
+      const b = new PermissionBroker(store);
+      const args = { path: 'a.ipynb', file_path: 'a.ipynb', notebook_path: '.claude/settings.local.json' };
+      expect(b.decide(spec('NotebookEdit'), args, policy(), ctx()).kind).toBe('ask');
+      expect(b.decide(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'b.ipynb' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    });
+
     it('still allows reading Claude Code config without a card under ask_on_mutate', () => {
       const b = new PermissionBroker(new InMemoryStore());
       expect(b.decide(spec('Read'), { path: '.claude/settings.json' }, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'auto_read' });
@@ -159,5 +168,54 @@ describe('PermissionBroker with source "agent"', () => {
     store.grants.create({ id: 'g2', chatId: 'c1', profileId: 'p1', toolName: 'Edit', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
     const b = new PermissionBroker(store);
     expect(b.decide(spec('Edit'), { path: 'a.ts' }, policy(), ctx()).kind).toBe('ask');
+  });
+});
+
+describe('isDeferrableInAutoMode', () => {
+  it('defers routine Claude Code calls', () => {
+    expect(isDeferrableInAutoMode(spec('Bash'), { command: 'npm test' })).toBe(true);
+    expect(isDeferrableInAutoMode(spec('PowerShell'), { command: 'dir' })).toBe(true);
+    expect(isDeferrableInAutoMode(spec('Edit'), { path: 'src/a.ts' })).toBe(true);
+    expect(isDeferrableInAutoMode(spec('WebFetch'), { url: 'https://example.com' })).toBe(true);
+    expect(isDeferrableInAutoMode(spec('mcp__nextcloud__deck_add_card'), {})).toBe(true);
+  });
+  it('never defers a write to Claude Code config, or a write with no usable path', () => {
+    for (const path of ['.claude/settings.local.json', 'sub/CLAUDE.md', '.mcp.json', 'CLAUDE~1/settings.json']) {
+      expect(isDeferrableInAutoMode(spec('Write'), { path })).toBe(false);
+    }
+    expect(isDeferrableInAutoMode(spec('Edit'), {})).toBe(false);
+  });
+  it('never defers a write when any path key is protected', () => {
+    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { file_path: 'a.ipynb', notebook_path: '.claude/settings.local.json' })).toBe(false);
+    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'CLAUDE.md' })).toBe(false);
+    expect(isDeferrableInAutoMode(spec('Write'), { path: 'a.ts', file_path: '.mcp.json' })).toBe(false);
+    expect(isDeferrableInAutoMode(spec('NotebookEdit'), { path: 'a.ipynb', notebook_path: 'b.ipynb' })).toBe(true);
+  });
+  it('never defers an unrecognised Claude Code tool', () => {
+    expect(isDeferrableInAutoMode(spec('SomeNewTool'), {})).toBe(false);
+  });
+  it("never defers Grunt's own tools", () => {
+    expect(isDeferrableInAutoMode({ ...spec('run_command'), source: 'shell' }, { command: 'ls' })).toBe(false);
+    expect(isDeferrableInAutoMode({ ...spec('write_file'), source: 'fs' }, { path: 'a.txt' })).toBe(false);
+  });
+});
+
+describe('PermissionBroker.discard', () => {
+  it('drops a pending request so it can no longer be resolved, storing nothing', () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    const d = b.decide(spec('Bash'), { command: 'ls' }, policy(), ctx());
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    b.discard(d.request.id);
+    expect(() => b.resolve(d.request.id, { choice: 'chat' })).toThrow(/unknown or already-resolved/);
+    expect(store.grants.list()).toEqual([]);
+  });
+  it('is a no-op for an unknown or already-discarded id', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    expect(() => b.discard('nope')).not.toThrow();
+    const d = b.decide(spec('Bash'), { command: 'ls' }, policy(), ctx());
+    if (d.kind !== 'ask') throw new Error('expected ask');
+    b.discard(d.request.id);
+    expect(() => b.discard(d.request.id)).not.toThrow();
   });
 });

@@ -3,12 +3,12 @@ import { tmpdir } from 'node:os';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext, ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
-import { canUseToolFor, createGate, preToolUseHook } from './approval.js';
+import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook } from './approval.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
-import { classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
+import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
@@ -21,7 +21,7 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
 
 export interface ClaudeCodeEngineDeps {
   query: QueryFn;
-  approvals: Pick<ToolProvider, 'requestApproval'>;
+  approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'>;
   /** Model listing for an endpoint backend (e.g. Ollama), supplied by the server. */
   listEndpointModels: (conn: Connection, token: string | null) => Promise<DiscoveredModel[]>;
   /** Defaults to `process.env`. */
@@ -134,13 +134,17 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // An 'abort' that fired before the listener existed never reaches it.
     if (req.signal.aborted) abortController.abort();
 
-    const gate = createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, workspaceRoot: cwd, signal: req.signal } });
+    // Auto mode needs the Claude login; an endpoint backend always runs in
+    // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
+    const autoMode = req.autoMode === true && backend === CLAUDE_BACKEND;
+    const gateCtx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, workspaceRoot: cwd, signal: req.signal };
+    const gate = createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode });
     const stderr: string[] = [];
     const options: Options = {
       cwd,
       model: profile.modelId,
       env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId),
-      permissionMode: 'default',
+      permissionMode: autoMode ? 'auto' : 'default',
       includePartialMessages: true,
       settingSources: ['user', 'project', 'local'],
       // Flag-settings layer (above user/project/local): skills and slash
@@ -150,7 +154,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
       // The hook waits on a human; Claude Code's default hook timeout (60 s)
       // would cancel the call under an open card. 86400 s = one day.
-      hooks: { PreToolUse: [{ hooks: [preToolUseHook(gate)], timeout: 86_400 }] },
+      hooks: {
+        PreToolUse: [{ hooks: [preToolUseHook(gate)], timeout: 86_400 }],
+        // Classifier blocks are audited as deny:auto (auto mode only).
+        ...(autoMode ? { PermissionDenied: [{ hooks: [permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx })] }] } : {}),
+      },
       canUseTool: canUseToolFor(gate),
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
       abortController,
@@ -170,6 +178,15 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         for (const event of mapper.map(msg)) {
           if (event.type === 'init') {
             sawInit = true;
+            if (autoMode && event.permissionMode !== 'auto') {
+              // Claude Code started in another mode: auto mode isn't available
+              // for this account or model. Stop before the model does any work,
+              // and persist no session meta for this half-started session.
+              abortController.abort();
+              yield* flushNotice();
+              yield { type: 'error', error: autoModeUnavailable() };
+              return 'done';
+            }
             yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: event.sessionId, backend, cwd, tools: event.tools, mcpServers: event.mcpServers } };
             yield* flushNotice();
           } else if (event.type === 'rate-limited') {
@@ -178,7 +195,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
             prompt.close();
             if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
             yield* flushNotice();
-            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt }) };
+            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
             return 'done';
           } else {
             if (event.type === 'finish') prompt.close();
@@ -192,7 +209,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const text = [err instanceof Error ? err.message : String(err), ...stderr].join('\n');
       if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
       yield* flushNotice();
-      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt }) };
+      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
       prompt.close();
       req.signal.removeEventListener('abort', onAbort);

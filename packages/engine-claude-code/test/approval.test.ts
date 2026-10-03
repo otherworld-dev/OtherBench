@@ -4,7 +4,7 @@ import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
-import { canUseToolFor, createGate, isDriveLetterPosixPath, normaliseAgentArgs, preToolUseHook } from '../src/approval.js';
+import { canUseToolFor, createGate, isDriveLetterPosixPath, normaliseAgentArgs, permissionDeniedHook, preToolUseHook } from '../src/approval.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-cc-')); mkdirSync(join(ws, 'src')); });
@@ -209,5 +209,144 @@ describe('SDK adapters', () => {
   it('canUseTool maps to behavior allow/deny', async () => {
     const can = canUseToolFor(async () => ({ allow: false, reason: 'no' }));
     expect(await can('Bash', { command: 'x' }, { signal: new AbortController().signal } as never)).toEqual({ behavior: 'deny', message: 'no' });
+  });
+});
+
+describe('auto mode gate', () => {
+  const deferring = () => vi.fn(async (..._a: unknown[]) => ({ deferred: true as const }));
+  const allowing = () => vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'ask:once' }));
+  const hookInput = (tool_name: string, tool_input: unknown) => ({ hook_event_name: 'PreToolUse', tool_name, tool_input }) as never;
+  const sig = () => ({ signal: new AbortController().signal });
+  const outsidePath = process.platform === 'win32' ? 'Z:\\x.txt' : '/x.txt';
+
+  it('asks requestApproval to defer on the hook path in auto mode, and returns defer', async () => {
+    const requestApproval = deferring();
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoMode: true });
+    expect(await gate('Bash', { command: 'npm test' }, undefined, { mayDefer: true })).toEqual({ defer: true });
+    expect(requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: true });
+  });
+
+  it('never asks to defer outside auto mode, or without mayDefer', async () => {
+    const requestApproval = allowing();
+    await createGate({ approvals: { requestApproval }, policy, ctx: ctx() })('Bash', { command: 'ls' }, undefined, { mayDefer: true });
+    await createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoMode: true })('Bash', { command: 'ls' });
+    expect(requestApproval.mock.calls.map((c) => c[4])).toEqual([{ deferAsk: false }, { deferAsk: false }]);
+  });
+
+  it('still denies an outside-workspace path in auto mode without asking', async () => {
+    const requestApproval = deferring();
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoMode: true });
+    expect(await gate('Write', { file_path: outsidePath }, undefined, { mayDefer: true })).toMatchObject({ allow: false });
+    expect(requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('still short-circuits an aborted turn in auto mode without asking', async () => {
+    const requestApproval = deferring();
+    const ac = new AbortController();
+    ac.abort();
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(ac.signal), autoMode: true });
+    expect(await gate('Bash', { command: 'ls' }, undefined, { mayDefer: true })).toMatchObject({ allow: false });
+    expect(requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('fails closed if requestApproval defers a call it was not asked to defer', async () => {
+    const gate = createGate({ approvals: { requestApproval: deferring() }, policy, ctx: ctx(), autoMode: true });
+    expect(await gate('Bash', { command: 'ls' })).toMatchObject({ allow: false });
+  });
+
+  it('the hook returns an empty result (no decision) for a deferred call, never permissionDecision "defer"', async () => {
+    const gate = createGate({ approvals: { requestApproval: deferring() }, policy, ctx: ctx(), autoMode: true });
+    const out = await preToolUseHook(gate)(hookInput('Bash', { command: 'npm test' }), 'id', sig());
+    expect(out).toEqual({});
+    expect(JSON.stringify(out)).not.toContain('defer');
+  });
+
+  it('the hook still allows and denies explicitly in auto mode', async () => {
+    const gate = createGate({ approvals: { requestApproval: allowing() }, policy, ctx: ctx(), autoMode: true });
+    expect(await preToolUseHook(gate)(hookInput('Bash', { command: 'ls' }), 'id', sig())).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(await preToolUseHook(gate)(hookInput('Write', { file_path: outsidePath }), 'id', sig())).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  it('a requestApproval that throws in auto mode makes the hook DENY, never an empty result', async () => {
+    const requestApproval = vi.fn(async (..._a: unknown[]) => { throw new Error('store down'); });
+    const gate = createGate({ approvals: { requestApproval: requestApproval as never }, policy, ctx: ctx(), autoMode: true });
+    const out = await preToolUseHook(gate)(hookInput('Bash', { command: 'npm test' }), 'id', sig());
+    expect(out).toMatchObject({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' } });
+    expect(out).not.toEqual({});
+  });
+
+  it('outside auto mode a deferred outcome makes the hook DENY', async () => {
+    const gate = createGate({ approvals: { requestApproval: deferring() }, policy, ctx: ctx() });
+    const out = await preToolUseHook(gate)(hookInput('Bash', { command: 'npm test' }), 'id', sig());
+    expect(out).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
+  });
+
+  it('only an outcome with deferred === true defers', async () => {
+    const odd = vi.fn(async (..._a: unknown[]) => ({ allowed: false as const, reason: 'no', deferred: false }));
+    const gate = createGate({ approvals: { requestApproval: odd as never }, policy, ctx: ctx(), autoMode: true });
+    expect(await gate('Bash', { command: 'ls' }, undefined, { mayDefer: true })).toEqual({ allow: false, reason: 'no' });
+  });
+
+  it('canUseTool never defers: it gets a card through requestApproval without deferAsk', async () => {
+    const requestApproval = allowing();
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), autoMode: true });
+    expect(await canUseToolFor(gate)('Bash', { command: 'npm test' }, sig() as never)).toEqual({ behavior: 'allow', updatedInput: { command: 'npm test' } });
+    expect(requestApproval.mock.calls[0]![4]).toEqual({ deferAsk: false });
+  });
+
+  it('canUseTool denies if a gate ever answers defer to it', async () => {
+    expect(await canUseToolFor(async () => ({ defer: true }))('Bash', {}, sig() as never)).toMatchObject({ behavior: 'deny' });
+  });
+});
+
+describe('permissionDeniedHook', () => {
+  const signal = () => ({ signal: new AbortController().signal });
+  const FALLBACK = 'Blocked by Claude Code auto mode.';
+
+  it('records the block with workspace-relative args and the classifier reason', async () => {
+    const recordAgentDenial = vi.fn();
+    const hook = permissionDeniedHook({ approvals: { recordAgentDenial }, ctx: ctx() });
+    const file = join(ws, 'src', 'a.ts');
+    const out = await hook({ hook_event_name: 'PermissionDenied', tool_name: 'Edit', tool_input: { file_path: file }, tool_use_id: 't1', reason: 'Edits outside the task' } as never, 't1', signal());
+    expect(out).toEqual({});
+    expect(recordAgentDenial).toHaveBeenCalledWith(expect.objectContaining({ chatId: 'c', messageId: 'm', profileId: 'p' }), 'Edit', { file_path: file, path: 'src/a.ts' }, 'Edits outside the task');
+  });
+
+  it('records the raw args when they cannot be normalised', async () => {
+    const recordAgentDenial = vi.fn();
+    const outside = process.platform === 'win32' ? 'Z:\\x.txt' : '/x.txt';
+    await permissionDeniedHook({ approvals: { recordAgentDenial }, ctx: ctx() })({ hook_event_name: 'PermissionDenied', tool_name: 'Write', tool_input: { file_path: outside }, tool_use_id: 't1', reason: 'r' } as never, 't1', signal());
+    expect(recordAgentDenial.mock.calls[0]![2]).toEqual({ file_path: outside });
+  });
+
+  it('ignores other hook events', async () => {
+    const recordAgentDenial = vi.fn();
+    expect(await permissionDeniedHook({ approvals: { recordAgentDenial }, ctx: ctx() })({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: {} } as never, 'id', signal())).toEqual({});
+    expect(recordAgentDenial).not.toHaveBeenCalled();
+  });
+
+  it('never throws when recording fails', async () => {
+    const recordAgentDenial = vi.fn(() => { throw new Error('db gone'); });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(permissionDeniedHook({ approvals: { recordAgentDenial }, ctx: ctx() })({ hook_event_name: 'PermissionDenied', tool_name: 'Bash', tool_input: { command: 'x' }, tool_use_id: 't1', reason: 'r' } as never, 't1', signal())).resolves.toEqual({});
+    err.mockRestore();
+  });
+
+  it('coerces a malformed payload at the boundary', async () => {
+    const recordAgentDenial = vi.fn();
+    const hook = permissionDeniedHook({ approvals: { recordAgentDenial }, ctx: ctx() });
+    await hook({ hook_event_name: 'PermissionDenied', tool_name: 42, tool_input: 'nope', reason: { x: 1 } } as never, 'id', signal());
+    await hook({ hook_event_name: 'PermissionDenied', tool_name: 'B'.repeat(500), tool_input: [1, 2], reason: '   ' } as never, 'id', signal());
+    await hook({ hook_event_name: 'PermissionDenied', tool_input: null } as never, 'id', signal());
+    const calls = recordAgentDenial.mock.calls as unknown[][];
+    expect(calls).toHaveLength(3);
+    expect(typeof calls[0]![1]).toBe('string');
+    expect(calls[0]![2]).toEqual({});
+    expect(calls[0]![3]).toBe(FALLBACK);
+    expect(calls[1]![1]).toHaveLength(200);
+    expect(calls[1]![2]).toEqual({});
+    expect(calls[1]![3]).toBe(FALLBACK);
+    expect(typeof calls[2]![1]).toBe('string');
+    expect(calls[2]![2]).toEqual({});
   });
 });

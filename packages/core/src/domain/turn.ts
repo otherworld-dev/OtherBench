@@ -389,7 +389,11 @@ export class TurnRunner {
 
     try {
       const history = this.buildRequestMessages(userMessageId, profile);
-      const workspaceRoot = this.store.chats.get(chatId)?.workspaceRoot ?? null;
+      // Read fresh per variant: a workspace or Auto change made between turns
+      // applies from the very next turn (and to a retry), never mid-turn.
+      const chat = this.store.chats.get(chatId);
+      const workspaceRoot = chat?.workspaceRoot ?? null;
+      const autoMode = chat?.autoMode ?? false;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -436,6 +440,7 @@ export class TurnRunner {
         workspaceRoot,
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
+        autoMode,
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 

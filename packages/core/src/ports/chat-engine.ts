@@ -51,6 +51,13 @@ export interface EngineRequest {
    * the message it continues from is still that session's tip.
    */
   latestMessageForSession?: (sessionId: string) => string | null;
+  /**
+   * The chat's Auto toggle (`Chat.autoMode`), read fresh for every turn, so a
+   * change applies from the next turn and never mid-turn. Only the Claude Code
+   * engine reads it (Claude login only, never for utility calls); every other
+   * engine ignores it.
+   */
+  autoMode?: boolean;
 }
 
 export type EngineEvent =

@@ -3,7 +3,7 @@ import type { EngineEvent } from '@grunt/core/ports/chat-engine.js';
 
 export type MappedEvent =
   | EngineEvent
-  | { type: 'init'; sessionId: string; tools: string[]; mcpServers: { name: string; status: string }[] }
+  | { type: 'init'; sessionId: string; tools: string[]; mcpServers: { name: string; status: string }[]; permissionMode: string | null }
   | { type: 'result-error'; text: string }
   | { type: 'rate-limited'; resetsAt: number | null };
 
@@ -40,7 +40,7 @@ export class SdkEventMapper {
       case 'system': {
         if (m['subtype'] !== 'init') return [];
         const servers = (m['mcp_servers'] as { name: string; status: string }[] | undefined) ?? [];
-        return [{ type: 'init', sessionId: String(m['session_id']), tools: (m['tools'] as string[] | undefined) ?? [], mcpServers: servers.map(({ name, status }) => ({ name, status })) }];
+        return [{ type: 'init', sessionId: String(m['session_id']), tools: (m['tools'] as string[] | undefined) ?? [], mcpServers: servers.map(({ name, status }) => ({ name, status })), permissionMode: typeof m['permissionMode'] === 'string' ? (m['permissionMode'] as string) : null }];
       }
       case 'stream_event': {
         if (m['parent_tool_use_id'] !== null) return [];

@@ -42,12 +42,26 @@ export interface Chat {
   workspaceRoot: string | null;
   pinned: boolean;
   archivedAt: number | null;
+  /**
+   * Claude Code auto mode for this chat's turns (spec
+   * 2026-10-03-claude-code-auto-mode-design): Claude Code's classifier decides
+   * routine tool calls instead of a Grunt card. Off by default; read fresh by
+   * TurnRunner on every turn. Other engines ignore it.
+   */
+  autoMode: boolean;
   createdAt: number;
   updatedAt: number;
 }
 
+/** What `ChatRepo.create` takes: timestamps default to now, `autoMode` to false. */
+export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode'> & {
+  createdAt?: number;
+  updatedAt?: number;
+  autoMode?: boolean;
+};
+
 export interface ChatRepo {
-  create(c: Omit<Chat, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }): Chat;
+  create(c: NewChat): Chat;
   get(id: string): Chat | null;
   list(): Chat[];
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat;

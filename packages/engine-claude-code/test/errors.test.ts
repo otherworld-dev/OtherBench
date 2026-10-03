@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyClaudeCodeFailure, isMissingSessionError } from '../src/errors.js';
+import { AUTO_MODE_UNAVAILABLE_MESSAGE, classifyClaudeCodeFailure, isMissingSessionError } from '../src/errors.js';
 
 const c = { backend: 'claude', modelId: 'sonnet' };
 describe('classifyClaudeCodeFailure', () => {
@@ -29,5 +29,23 @@ describe('classifyClaudeCodeFailure', () => {
   it('detects a missing session on resume', () => {
     expect(isMissingSessionError('No conversation found with session ID: abc')).toBe(true);
     expect(isMissingSessionError('other')).toBe(false);
+  });
+});
+
+describe('auto mode unavailable', () => {
+  it.each([
+    'Auto mode is not available for this model',
+    'auto mode unavailable for this account',
+    'Cannot start in auto-mode: auto mode is disabled by your organization',
+  ])('maps "%s" to the capability error', (text) => {
+    expect(classifyClaudeCodeFailure(text, { backend: 'claude', modelId: 'sonnet', autoMode: true })).toEqual({ kind: 'capability', retryable: false, message: AUTO_MODE_UNAVAILABLE_MESSAGE });
+  });
+  it('does not apply to a turn that is not in auto mode', () => {
+    const text = 'Auto mode is not available for this model';
+    expect(classifyClaudeCodeFailure(text, { backend: 'claude', modelId: 'sonnet' }).kind).toBe('unknown');
+    expect(classifyClaudeCodeFailure(text, { backend: 'claude', modelId: 'sonnet', autoMode: false }).kind).toBe('unknown');
+  });
+  it('does not misread an unrelated failure', () => {
+    expect(classifyClaudeCodeFailure('Tool Bash failed: exit 1', { backend: 'claude', modelId: 'sonnet' }).kind).toBe('unknown');
   });
 });

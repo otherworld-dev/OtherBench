@@ -1130,4 +1130,40 @@ describe('engine meta and notices', () => {
     expect(req.purpose).toBe('turn');
     expect(req.latestMessageForSession!('nope')).toBeNull();
   });
+
+  it('passes the chat\'s autoMode, read fresh for every turn', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const chat = newChat(store);
+    const first = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'one' }], profiles: [makeResolvedProfile()] });
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+    expect(engine.requests[0]!.autoMode).toBe(false);
+
+    store.chats.update(chat.id, { autoMode: true });
+    await runner.run({ chatId: chat.id, parentId: firstId, userParts: [{ type: 'text', text: 'two' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+    expect(engine.requests[1]!.autoMode).toBe(true);
+  });
+
+  it('retries an errored turn with the chat\'s current autoMode, not the one it failed with', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine((req) =>
+      req.autoMode
+        ? [{ type: 'error', error: { kind: 'capability', retryable: false, message: "Auto mode isn't available for this account or model. Turn it off to continue." } }]
+        : [{ type: 'finish', usage, finishReason: 'stop' }]
+    );
+    const runner = new TurnRunner(store, engine);
+    const chat = newChat(store);
+    store.chats.update(chat.id, { autoMode: true });
+    const result = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'hello' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('error'));
+
+    store.chats.update(chat.id, { autoMode: false });
+    await runner.retry(chat.id, id, makeResolvedProfile());
+    expect(engine.requests.map((r) => r.autoMode)).toEqual([true, false]);
+    expect(store.messages.get(id)!.status).toBe('complete');
+  });
 });

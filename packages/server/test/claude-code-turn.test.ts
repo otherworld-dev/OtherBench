@@ -51,4 +51,21 @@ describe('claude_code turns through the routing engine', () => {
     await vi.waitFor(() => expect(cc.requests).toHaveLength(2));
     expect(lookups).toEqual([null, firstId]);
   });
+
+  it('hands the chat\'s auto mode to the Claude Code engine through the router', async () => {
+    const store = new InMemoryStore();
+    const cc = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, new RoutingChatEngine(new FakeChatEngine([]), cc));
+    const chat = store.chats.create({ id: 'chat-1', title: 't', profileId: 'p1', headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null, autoMode: true });
+
+    const first = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'one' }], profiles: [profile] });
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+    expect(cc.requests[0]!.autoMode).toBe(true);
+
+    store.chats.update(chat.id, { autoMode: false });
+    await runner.run({ chatId: chat.id, parentId: firstId, userParts: [{ type: 'text', text: 'two' }], profiles: [profile] });
+    await vi.waitFor(() => expect(cc.requests).toHaveLength(2));
+    expect(cc.requests[1]!.autoMode).toBe(false);
+  });
 });

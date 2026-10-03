@@ -20,6 +20,7 @@ import type {
   Store,
   UsageRepo,
   Chat,
+  NewChat,
   Attachment,
   UsageRecord,
   McpServer,
@@ -223,9 +224,9 @@ class InMemoryProfileRepo implements ProfileRepo {
 
 class InMemoryChatRepo implements ChatRepo {
   private readonly repo = new InMemoryCrudRepo<Chat>();
-  create(c: Omit<Chat, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }): Chat {
+  create(c: NewChat): Chat {
     const now = Date.now();
-    const full: Chat = { ...c, createdAt: c.createdAt ?? now, updatedAt: c.updatedAt ?? now };
+    const full: Chat = { ...c, autoMode: c.autoMode ?? false, createdAt: c.createdAt ?? now, updatedAt: c.updatedAt ?? now };
     return this.repo.create(full);
   }
   get(id: string): Chat | null {

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Chat, ChatRepo } from '@grunt/core/ports/store.js';
+import type { Chat, ChatRepo, NewChat } from '@grunt/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromBool, toBool } from './util.js';
 
@@ -13,6 +13,7 @@ const mapping: CrudMapping<Chat> = {
     'workspace_root',
     'pinned',
     'archived_at',
+    'auto_mode',
     'created_at',
     'updated_at',
   ],
@@ -24,6 +25,7 @@ const mapping: CrudMapping<Chat> = {
     c.workspaceRoot,
     toBool(c.pinned),
     c.archivedAt,
+    toBool(c.autoMode),
     c.createdAt,
     c.updatedAt,
   ],
@@ -35,6 +37,7 @@ const mapping: CrudMapping<Chat> = {
     workspaceRoot: row.workspace_root as string | null,
     pinned: fromBool(row.pinned as number),
     archivedAt: row.archived_at as number | null,
+    autoMode: fromBool(row.auto_mode as number),
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number,
   }),
@@ -47,9 +50,9 @@ export class SqliteChatRepo implements ChatRepo {
     this.crud = new SqliteCrudRepo(db, mapping);
   }
 
-  create(c: Omit<Chat, 'createdAt' | 'updatedAt'> & { createdAt?: number; updatedAt?: number }): Chat {
+  create(c: NewChat): Chat {
     const now = Date.now();
-    const full: Chat = { ...c, createdAt: c.createdAt ?? now, updatedAt: c.updatedAt ?? now };
+    const full: Chat = { ...c, autoMode: c.autoMode ?? false, createdAt: c.createdAt ?? now, updatedAt: c.updatedAt ?? now };
     return this.crud.create(full);
   }
 
