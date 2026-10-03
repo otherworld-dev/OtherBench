@@ -217,9 +217,11 @@ as regression tests.
   restart). On the Claude login, Claude Code's utility path always runs
   `haiku`, whatever model the Memory model setting names. Only the chat's
   active path is summarised; an unresolved compare turn contributes once a
-  variant is picked. The first start after upgrading summarises every
+  variant is picked. The startup sweep runs on every start and folds in any
+  contributing chat's unfolded completed reply (excluded chats and chats with
+  no reply are skipped), so the first start after upgrading summarises every
   existing project chat that has unfolded turns once (cursor null), one call
-  per chat, one project at a time. The Inspector panel polls every 15 s
+  per chat, serialised within each project. The Inspector panel polls every 15 s
   rather than being pushed updates. Un-excluding a chat, or moving it into a
   project, does not re-queue it; it is picked up after its next completed
   reply or the next startup sweep. A `## x` line inside a code block in the
