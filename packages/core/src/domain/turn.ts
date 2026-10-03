@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
-import type { Store } from '../ports/store.js';
+import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ResolvedProfile } from '../types/config.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
+import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -388,12 +389,14 @@ export class TurnRunner {
     };
 
     try {
-      const history = this.buildRequestMessages(userMessageId, profile);
-      // Read fresh per variant: a workspace or Auto change made between turns
-      // applies from the very next turn (and to a retry), never mid-turn.
+      // Read fresh per variant: a workspace, Auto or project-memory change
+      // made between turns applies from the very next turn (and to a retry),
+      // never mid-turn.
       const chat = this.store.chats.get(chatId);
       const workspaceRoot = chat?.workspaceRoot ?? null;
       const autoMode = chat?.autoMode ?? false;
+      const requestProfile = this.withProjectMemory(profile, chat);
+      const history = this.buildRequestMessages(userMessageId, requestProfile);
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -431,7 +434,7 @@ export class TurnRunner {
       }
 
       const request: EngineRequest = {
-        profile,
+        profile: requestProfile,
         messages: requestMessages,
         tools,
         signal: controller.signal,
@@ -581,6 +584,25 @@ export class TurnRunner {
       createdAt: 0,
     };
     return [systemMessage, ...history];
+  }
+
+  /**
+   * The profile this variant's request carries: `profile` itself, or, for a
+   * chat in a project whose memory note has any content, a copy whose system
+   * prompt ends with the note (spec 2026-10-03-project-memory-design §3).
+   * Both engines read it from here: the AI SDK engine through the synthetic
+   * system message `buildRequestMessages` adds, Claude Code as its appended
+   * system prompt (sent with every query, so a resumed session sees the
+   * current note). Excluded chats still get it; exclusion only stops a chat
+   * contributing.
+   */
+  private withProjectMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
+    if (!chat?.projectId) return profile;
+    const project = this.store.projects.get(chat.projectId);
+    const memory = this.store.projectMemory.get(chat.projectId);
+    if (!project || !memory || !hasMemoryContent(memory.body)) return profile;
+    const block = projectMemoryPrompt(project.name, memory.body);
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
   /**
