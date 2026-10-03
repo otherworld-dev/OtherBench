@@ -606,3 +606,119 @@ describe('ChatList + New project focus (Task 9 carry-over)', () => {
     expect(newChat).toHaveFocus();
   });
 });
+
+describe('ChatList project menu', () => {
+  function setup() {
+    useGruntStore.setState({
+      profiles: [profile, { ...profile, id: 'profile-2', name: 'Coder', isDefault: false }, { ...profile, id: 'profile-old', name: 'Old', isDefault: false, archivedAt: 9 }],
+      projects: [makeProject({ id: 'p-a', name: 'Alpha', sortOrder: 0 }), makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 })],
+      chats: [makeChat({ id: 'c1', title: 'First', projectId: 'p-a' })],
+    });
+    render(<ChatList />);
+    return userEvent.setup();
+  }
+  const actions = (key: string) => within(screen.getByTestId(`group-heading-${key}`)).getByRole('button', { name: 'Project actions' });
+  const heading = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
+
+  it('offers the project actions, with Move up disabled on the first project and Move down on the last', async () => {
+    const user = setup();
+    await user.click(actions('p-a'));
+    expect(screen.getByRole('menu', { name: 'Project actions' })).toBeInTheDocument();
+    for (const name of ['Rename', 'Set folder…', 'Default profile…', 'Delete…']) expect(screen.getByRole('menuitem', { name })).toBeEnabled();
+    expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeEnabled();
+
+    await user.keyboard('{Escape}');
+    await user.click(actions('p-b'));
+    expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeDisabled();
+  });
+
+  it('Shift+F10 on a project heading opens its menu; Escape returns focus to the heading', async () => {
+    const user = setup();
+    heading('Alpha').focus();
+    await user.keyboard('{Shift>}{F10}{/Shift}');
+    expect(screen.getByRole('menu', { name: 'Project actions' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(heading('Alpha')).toHaveFocus());
+  });
+
+  it('opening a chat menu closes an open project menu, and the other way round', async () => {
+    const user = setup();
+    await user.click(actions('p-a'));
+    await user.click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat actions' }));
+    expect(screen.getAllByRole('menu').map((m) => m.getAttribute('aria-label'))).toEqual(['Chat actions']);
+
+    await user.click(actions('p-a'));
+    expect(screen.getAllByRole('menu').map((m) => m.getAttribute('aria-label'))).toEqual(['Project actions']);
+  });
+
+  it('Rename edits the name in place and saves it', async () => {
+    const user = setup();
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const input = screen.getByRole('textbox', { name: 'Project name' });
+    await user.clear(input);
+    await user.type(input, 'Renamed{Enter}');
+
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-a', { name: 'Renamed' });
+    await waitFor(() => expect(heading('Renamed')).toBeInTheDocument());
+  });
+
+  it('Set folder… saves a valid folder onto the project', async () => {
+    const user = setup();
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Set folder…' }));
+    const input = within(screen.getByTestId('group-p-a')).getByRole('textbox', { name: 'Project folder' });
+    await user.type(input, 'relative');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getByTestId('project-folder-error')).toBeInTheDocument();
+    expect(mockedProjectPatch).not.toHaveBeenCalled();
+
+    await user.clear(input);
+    await user.type(input, '/home/me/alpha{Enter}');
+
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-a', { workspaceRoot: '/home/me/alpha' });
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Project folder' })).toBeNull());
+    expect(useGruntStore.getState().projects.find((p) => p.id === 'p-a')!.workspaceRoot).toBe('/home/me/alpha');
+    expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull(); // existing chats untouched
+  });
+
+  it('Default profile… saves the chosen profile', async () => {
+    const user = setup();
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Default profile…' }));
+    const select = screen.getByRole('combobox', { name: 'Default profile' });
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['App default', 'Everyday', 'Coder']);
+
+    await user.selectOptions(select, 'profile-2');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-a', { defaultProfileId: 'profile-2' });
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Default profile' })).toBeNull());
+  });
+
+  it('Move down swaps the project with the next one', async () => {
+    const user = setup();
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+
+    await waitFor(() => expect(headingOrder()).toEqual(['p-b', 'p-a', NO_PROJECT_KEY]));
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-b', { sortOrder: 0 });
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-a', { sortOrder: 1 });
+  });
+
+  it('Delete… confirms, then the project goes and its chats show under No project', async () => {
+    const user = setup();
+    mockedProjectDelete.mockResolvedValue(undefined);
+    await user.click(actions('p-a'));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+
+    const dialog = screen.getByRole('alertdialog', { name: "Delete project 'Alpha'?" });
+    expect(dialog).toHaveTextContent('Its chats move to No project.');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    expect(mockedProjectDelete).toHaveBeenCalledWith('p-a');
+    await waitFor(() => expect(screen.queryByTestId('group-p-a')).toBeNull());
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
+  });
+});

@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { InlineNameInput } from '../components/InlineNameInput.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
-import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
+import { ApiError, api, type ChatPatchBody, type CreateChatBody, type PatchProjectBody } from '../state/api.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 import { ChatRow, type MenuSource } from './sidebar/ChatRow.js';
-import { chatMenuItems } from './sidebar/menus.js';
-import { buildSidebar } from './sidebar/model.js';
-import { ProjectGroup } from './sidebar/ProjectGroup.js';
+import { chatMenuItems, projectMenuItems } from './sidebar/menus.js';
+import { buildSidebar, moveProjectPatches } from './sidebar/model.js';
+import { ProjectFolderEditor, ProjectProfileEditor } from './sidebar/ProjectEditors.js';
+import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
 
 /** A sidebar error line: the server's own message when there is one. */
 function errorText(err: unknown, action: string): string {
@@ -39,6 +40,10 @@ function chatRowSelector(chatId: string): string {
   return `[data-testid="chat-row-${chatId}"] [data-row-main]`;
 }
 
+function headingSelector(projectId: string): string {
+  return `[data-testid="group-heading-${projectId}"] [data-heading-main]`;
+}
+
 /**
  * Left pane (spec 2026-10-03-projects-design §3): search, then Pinned, each
  * project, and No project, with "+ New chat" and "+ New project" at the
@@ -55,6 +60,8 @@ export function ChatList(): JSX.Element {
   const upsertChat = useGruntStore((s) => s.upsertChat);
   const upsertProject = useGruntStore((s) => s.upsertProject);
   const removeChat = useGruntStore((s) => s.removeChat);
+  const removeProject = useGruntStore((s) => s.removeProject);
+  const setProjects = useGruntStore((s) => s.setProjects);
   const collapsedGroups = useCollapsedGroups();
 
   const [query, setQuery] = useState('');
@@ -67,6 +74,10 @@ export function ChatList(): JSX.Element {
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
+  const [projectMenu, setProjectMenu] = useState<{ projectId: string; position: { x: number; y: number } } | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [editingProject, setEditingProject] = useState<{ projectId: string; field: 'folder' | 'profile' } | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const newProjectButton = useRef<HTMLButtonElement>(null);
 
   const searching = searchChatIds !== null;
@@ -75,6 +86,8 @@ export function ChatList(): JSX.Element {
   // Looked up on every render, so the menu and dialog act on the chat as it is now.
   const menuChat = chatMenu ? (chats.find((c) => c.id === chatMenu.chatId) ?? null) : null;
   const deletingChat = deletingChatId ? (chats.find((c) => c.id === deletingChatId) ?? null) : null;
+  const menuProject = projectMenu ? (projects.find((p) => p.id === projectMenu.projectId) ?? null) : null;
+  const deletingProject = deletingProjectId ? (projects.find((p) => p.id === deletingProjectId) ?? null) : null;
 
   // The chat under an open menu vanished (deleted or archived from elsewhere): close the menu, keep focus in the list.
   const menuChatGone = chatMenu !== null && menuChat === null;
@@ -180,6 +193,7 @@ export function ChatList(): JSX.Element {
   }
 
   function openChatMenu(chatId: string, position: { x: number; y: number }, source: MenuSource): void {
+    setProjectMenu(null);
     if (source === 'button' && chatMenu?.chatId === chatId) {
       setChatMenu(null);
       focusLater(chatRowSelector(chatId), LIST_SELECTOR);
@@ -219,6 +233,105 @@ export function ChatList(): JSX.Element {
     if (useGruntStore.getState().activeChatId === chatId) setActiveChatId(null);
     setDeletingChatId(null);
     focusLater(next, LIST_SELECTOR);
+  }
+
+  function openProjectMenu(projectId: string, position: { x: number; y: number }, source: MenuSource): void {
+    setChatMenu(null);
+    if (source === 'button' && projectMenu?.projectId === projectId) {
+      setProjectMenu(null);
+      focusLater(headingSelector(projectId), LIST_SELECTOR);
+      return;
+    }
+    setProjectMenu({ projectId, position });
+  }
+
+  async function renameProject(projectId: string, name: string): Promise<void> {
+    setRenamingProjectId(null);
+    setError(null);
+    try {
+      upsertProject(await api.projects.patch(projectId, { name }));
+    } catch (err) {
+      console.error(`[grunt-web] failed to rename project ${projectId}:`, err);
+      setError(errorText(err, "Couldn't rename the project"));
+    }
+    focusLater(headingSelector(projectId), LIST_SELECTOR);
+  }
+
+  /** For the folder / default-profile forms: rejects into the form, which shows the message and stays open. */
+  async function saveProjectEdit(projectId: string, body: PatchProjectBody): Promise<void> {
+    upsertProject(await api.projects.patch(projectId, body));
+    setEditingProject(null);
+    focusLater(headingSelector(projectId), LIST_SELECTOR);
+  }
+
+  function closeProjectEditor(projectId: string): void {
+    setEditingProject(null);
+    focusLater(headingSelector(projectId), LIST_SELECTOR);
+  }
+
+  async function moveProject(projectId: string, dir: -1 | 1): Promise<void> {
+    setError(null);
+    try {
+      for (const { id, sortOrder } of moveProjectPatches(projects, projectId, dir)) {
+        upsertProject(await api.projects.patch(id, { sortOrder }));
+      }
+    } catch (err) {
+      console.error('[grunt-web] failed to reorder projects:', err);
+      setError(errorText(err, "Couldn't reorder the projects"));
+      // Part of the reorder may have landed: show the server's order, not a guess.
+      try {
+        setProjects(await api.projects.list());
+      } catch {
+        // the error line above already says something went wrong.
+      }
+    }
+    focusLater(headingSelector(projectId), LIST_SELECTOR);
+  }
+
+  /** The heading to focus once `projectId`'s is gone: the next one, else the previous one. */
+  function neighbourHeadingSelector(projectId: string): string {
+    const heads = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="group-heading-"]'));
+    const i = heads.findIndex((el) => el.getAttribute('data-testid') === `group-heading-${projectId}`);
+    const neighbour = i === -1 ? undefined : (heads[i + 1] ?? heads[i - 1]);
+    const key = neighbour?.getAttribute('data-testid')?.slice('group-heading-'.length);
+    return key ? headingSelector(key) : LIST_SELECTOR;
+  }
+
+  /** Rejects on failure, which keeps the confirmation dialog open with the message. */
+  async function deleteProject(projectId: string): Promise<void> {
+    const next = neighbourHeadingSelector(projectId);
+    await api.projects.delete(projectId);
+    removeProject(projectId); // its chats move to No project here too, as on the server
+    setDeletingProjectId(null);
+    focusLater(next, LIST_SELECTOR);
+  }
+
+  /** The project-only props of a group heading. */
+  function projectGroupProps(project: Project): Partial<ProjectGroupProps> {
+    const editing = editingProject?.projectId === project.id ? editingProject.field : null;
+    return {
+      onNewChat: () => void createChat(project.id),
+      newChatDisabled: creating || profiles.length === 0,
+      menuOpen: projectMenu?.projectId === project.id,
+      renaming: renamingProjectId === project.id,
+      onOpenMenu: (position, source) => openProjectMenu(project.id, position, source),
+      onRename: (name) => void renameProject(project.id, name),
+      onRenameCancel: () => {
+        setRenamingProjectId(null);
+        focusLater(headingSelector(project.id), LIST_SELECTOR);
+      },
+      editor:
+        editing === 'folder' ? (
+          <ProjectFolderEditor project={project} onSave={(root) => saveProjectEdit(project.id, { workspaceRoot: root })} onCancel={() => closeProjectEditor(project.id)} />
+        ) : editing === 'profile' ? (
+          <ProjectProfileEditor
+            project={project}
+            profiles={profiles}
+            onSave={(defaultProfileId) => saveProjectEdit(project.id, { defaultProfileId })}
+            onCancel={() => closeProjectEditor(project.id)}
+          />
+        ) : undefined,
+    };
   }
 
   // The tray menu's "New chat" does exactly what the button does. The ref
@@ -298,7 +411,7 @@ export function ChatList(): JSX.Element {
               onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
               onDragTarget={(on) => setDropTarget((current) => (on ? group.key : current === group.key ? null : current))}
               onDropChat={(chatId) => void moveChat(chatId, project?.id ?? null)}
-              {...(project ? { onNewChat: () => void createChat(project.id), newChatDisabled: creating || profiles.length === 0 } : {})}
+              {...(project ? projectGroupProps(project) : {})}
             >
               {group.chats.map(renderRow)}
             </ProjectGroup>
@@ -376,6 +489,42 @@ export function ChatList(): JSX.Element {
           onCancel={() => {
             setDeletingChatId(null);
             focusLater(chatRowSelector(deletingChat.id), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {projectMenu && menuProject && (
+        <Menu
+          key={`project:${menuProject.id}`}
+          label="Project actions"
+          position={projectMenu.position}
+          items={projectMenuItems(
+            orderedProjects.findIndex((p) => p.id === menuProject.id),
+            orderedProjects.length,
+            {
+              rename: () => setRenamingProjectId(menuProject.id),
+              setFolder: () => setEditingProject({ projectId: menuProject.id, field: 'folder' }),
+              setDefaultProfile: () => setEditingProject({ projectId: menuProject.id, field: 'profile' }),
+              move: (dir) => void moveProject(menuProject.id, dir),
+              requestDelete: () => setDeletingProjectId(menuProject.id),
+            }
+          )}
+          onClose={(reason) => {
+            setProjectMenu(null);
+            if (reason === 'dismiss') focusLater(headingSelector(menuProject.id), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {deletingProject && (
+        <ConfirmDialog
+          title={`Delete project '${deletingProject.name}'?`}
+          message="Its chats move to No project."
+          confirmLabel="Delete"
+          onConfirm={() => deleteProject(deletingProject.id)}
+          onCancel={() => {
+            setDeletingProjectId(null);
+            focusLater(headingSelector(deletingProject.id), LIST_SELECTOR);
           }}
         />
       )}
