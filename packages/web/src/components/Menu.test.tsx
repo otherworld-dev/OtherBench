@@ -1,9 +1,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Menu, type MenuItem } from './Menu.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function items(calls: string[] = []): MenuItem[] {
   return [
@@ -96,5 +99,83 @@ describe('Menu', () => {
     onClose.mockClear();
     fireEvent.scroll(window);
     expect(onClose).toHaveBeenCalledWith('dismiss');
+  });
+
+  it('Space chooses an item', async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    render(<Menu label="Chat actions" items={items(calls)} position={{ x: 0, y: 0 }} onClose={(r) => calls.push(`close:${r}`)} />);
+
+    await user.keyboard(' ');
+
+    expect(calls).toEqual(['close:select', 'rename']);
+  });
+
+  it('scrolling inside the menu does not dismiss, scrolling the page does', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<Menu label="Chat actions" items={items()} position={{ x: 0, y: 0 }} onClose={onClose} />);
+    screen.getByRole('menuitem', { name: 'Move to project…' }).focus();
+    await user.keyboard('{ArrowRight}');
+
+    fireEvent.scroll(screen.getByRole('menu', { name: 'Move to project…' }));
+    fireEvent.scroll(screen.getByRole('menu', { name: 'Chat actions' }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.scroll(document);
+    expect(onClose).toHaveBeenCalledWith('dismiss');
+  });
+
+  describe('edges', () => {
+    function stubRects(rects: Record<string, Partial<DOMRect>>): void {
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        const r = rects[this.getAttribute('aria-label') ?? this.firstElementChild?.getAttribute('aria-label') ?? ''] ?? {};
+        return { x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, toJSON: () => ({}), ...r } as DOMRect;
+      });
+    }
+
+    beforeEach(() => {
+      vi.stubGlobal('innerWidth', 1000);
+      vi.stubGlobal('innerHeight', 700);
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('clamps the root inside the viewport using its natural size, and again on resize', () => {
+      stubRects({ 'Chat actions': { width: 200, height: 100 } });
+      render(<Menu label="Chat actions" items={items()} position={{ x: 950, y: 690 }} onClose={vi.fn()} />);
+      const root = screen.getByRole('menu', { name: 'Chat actions' }).parentElement as HTMLElement;
+
+      expect(root.className).toContain('w-max');
+      expect(root.style.left).toBe('800px');
+      expect(root.style.top).toBe('600px');
+
+      vi.stubGlobal('innerWidth', 600);
+      fireEvent(window, new Event('resize'));
+      expect(root.style.left).toBe('400px');
+    });
+
+    it('opens a submenu to the left and up when it would overflow the right and bottom edges', async () => {
+      const user = userEvent.setup();
+      stubRects({ 'Move to project…': { left: 900, right: 1100, top: 600, bottom: 800, width: 200, height: 200 } });
+      render(<Menu label="Chat actions" items={items()} position={{ x: 0, y: 0 }} onClose={vi.fn()} />);
+      screen.getByRole('menuitem', { name: 'Move to project…' }).focus();
+      await user.keyboard('{ArrowRight}');
+
+      const sub = screen.getByRole('menu', { name: 'Move to project…' });
+      expect(sub.className).toContain('right-full');
+      expect(sub.className).not.toContain('left-full');
+      expect(sub.style.top).toBe('-100px');
+    });
+
+    it('keeps a submenu on the right when it fits', async () => {
+      const user = userEvent.setup();
+      stubRects({ 'Move to project…': { left: 100, right: 300, top: 10, bottom: 200, width: 200, height: 190 } });
+      render(<Menu label="Chat actions" items={items()} position={{ x: 0, y: 0 }} onClose={vi.fn()} />);
+      screen.getByRole('menuitem', { name: 'Move to project…' }).focus();
+      await user.keyboard('{ArrowRight}');
+
+      const sub = screen.getByRole('menu', { name: 'Move to project…' });
+      expect(sub.className).toContain('left-full');
+    });
   });
 });

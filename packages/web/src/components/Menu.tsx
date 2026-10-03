@@ -50,7 +50,21 @@ interface MenuListProps {
 
 function MenuList({ label, items, isSubmenu, onChoose, onBack, onTab, className, style }: MenuListProps): JSX.Element {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [flipLeft, setFlipLeft] = useState(false);
+  const [shiftY, setShiftY] = useState(0);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  // A submenu measures itself once: flip to the left if it would overflow the
+  // right edge, and shift up if it would overflow the bottom.
+  useLayoutEffect(() => {
+    if (!isSubmenu) return;
+    const rect = listRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    if (rect.right > window.innerWidth) setFlipLeft(true);
+    if (rect.bottom > window.innerHeight) setShiftY(Math.max(-rect.top, window.innerHeight - rect.bottom));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- measure once, when this level opens.
+  }, []);
 
   // On open, focus the current choice of a pick-one list, else the first enabled item.
   useEffect(() => {
@@ -117,7 +131,14 @@ function MenuList({ label, items, isSubmenu, onChoose, onBack, onTab, className,
   }
 
   return (
-    <div role="menu" aria-label={label} aria-orientation="vertical" className={`${LIST_CLASS} ${className ?? ''}`} style={style}>
+    <div
+      ref={listRef}
+      role="menu"
+      aria-label={label}
+      aria-orientation="vertical"
+      className={`${LIST_CLASS} ${className ?? ''} ${isSubmenu ? (flipLeft ? 'right-full mr-1' : 'left-full ml-1') : ''}`}
+      style={isSubmenu ? { ...style, top: shiftY, maxHeight: Math.max(96, window.innerHeight - 8) } : style}
+    >
       {items.map((item, i) => (
         <div key={item.id} role="none" className="relative">
           <button
@@ -153,7 +174,7 @@ function MenuList({ label, items, isSubmenu, onChoose, onBack, onTab, className,
                 focusAt(i);
               }}
               onTab={onTab}
-              className="absolute top-0 left-full ml-1 max-h-72 overflow-y-auto"
+              className="absolute max-h-72 overflow-y-auto"
             />
           )}
         </div>
@@ -175,19 +196,27 @@ export function Menu({ label, items, position, onClose }: MenuProps): JSX.Elemen
   onCloseRef.current = onClose;
   const [placed, setPlaced] = useState(position);
 
-  // Keep the whole menu on screen (a right-click near the bottom-right edge).
+  // Keep the whole menu on screen (a right-click near the bottom-right edge),
+  // now and whenever the window is resized.
   useLayoutEffect(() => {
-    const rect = rootRef.current?.getBoundingClientRect();
-    setPlaced({
-      x: Math.max(0, Math.min(position.x, window.innerWidth - (rect?.width ?? 0))),
-      y: Math.max(0, Math.min(position.y, window.innerHeight - (rect?.height ?? 0))),
-    });
+    const clamp = (): void => {
+      const rect = rootRef.current?.getBoundingClientRect();
+      setPlaced({
+        x: Math.max(0, Math.min(position.x, window.innerWidth - (rect?.width ?? 0))),
+        y: Math.max(0, Math.min(position.y, window.innerHeight - (rect?.height ?? 0))),
+      });
+    };
+    clamp();
+    window.addEventListener('resize', clamp);
+    return () => window.removeEventListener('resize', clamp);
   }, [position.x, position.y]);
 
   useEffect(() => {
     const outside = (e: Event): void => {
       if (!(e.target instanceof Node) || !rootRef.current?.contains(e.target)) onCloseRef.current('dismiss');
     };
+    // Scrolling inside the menu (a long submenu, or focus() scrolling an item
+    // into view) must not close it; only scrolling something else does.
     document.addEventListener('pointerdown', outside);
     window.addEventListener('scroll', outside, true); // capture: catches the sidebar's own scrolling too
     return () => {
@@ -197,7 +226,7 @@ export function Menu({ label, items, position, onClose }: MenuProps): JSX.Elemen
   }, []);
 
   return (
-    <div ref={rootRef} className="fixed z-50" style={{ left: placed.x, top: placed.y }}>
+    <div ref={rootRef} className="fixed z-50 w-max" style={{ left: placed.x, top: placed.y }}>
       <MenuList
         label={label}
         items={items}

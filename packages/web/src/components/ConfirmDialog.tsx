@@ -39,7 +39,7 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      onCancel();
+      if (!busy) onCancel();
     } else if (e.key === 'Tab') {
       // Only two controls: Tab and Shift+Tab swap between them.
       e.preventDefault();
@@ -48,7 +48,13 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onKeyDown={onKeyDown}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      onKeyDown={onKeyDown}
+      onMouseDown={(e) => {
+        // A press on the backdrop or text must not move focus to <body>, or Esc/Tab stop reaching us.
+        if (!(e.target instanceof HTMLButtonElement)) e.preventDefault();
+      }}
+    >
       <div
         role="alertdialog"
         aria-modal="true"
@@ -70,7 +76,7 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
           </p>
         )}
         <div className="mt-4 flex justify-end gap-2">
-          <button ref={cancelRef} type="button" onClick={onCancel} className="rounded border border-[var(--border)] px-2.5 py-1 text-xs">
+          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy} className="rounded border border-[var(--border)] px-2.5 py-1 text-xs">
             Cancel
           </button>
           <button

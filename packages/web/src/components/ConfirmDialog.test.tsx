@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../state/api.js';
@@ -44,5 +44,20 @@ describe('ConfirmDialog', () => {
     await act(async () => reject(new ApiError(500, 'Server said no')));
     expect(await screen.findByRole('alert')).toHaveTextContent('Server said no');
     expect(button).toBeEnabled();
+  });
+
+  it('a press on the backdrop does not steal focus, and Esc and Cancel are inert while confirming', async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<ConfirmDialog title="Delete?" confirmLabel="Delete" onConfirm={() => new Promise<void>(() => {})} onCancel={onCancel} />);
+
+    const notPrevented = fireEvent.mouseDown(screen.getByRole('alertdialog'));
+    expect(notPrevented).toBe(false);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });
