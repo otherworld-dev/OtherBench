@@ -60,3 +60,25 @@ test('overflowing content scrolls inside the panes, never the document', async (
   await fillThread(page);
   await expectPanesBounded(page);
 });
+
+test('panes stay bounded at 150% text size (set from Settings)', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 700 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('tab', { name: 'Appearance' }).click();
+  await page.getByRole('combobox', { name: 'Text size' }).selectOption('150');
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.fontSize)).toBe('150%');
+  await page.getByRole('button', { name: 'Close settings' }).click();
+  await fillThread(page);
+  await expectPanesBounded(page);
+});
+
+test('Ctrl+= / Ctrl+0 change and reset the text size, and it survives a reload', async ({ page }) => {
+  await page.goto('/');
+  await page.keyboard.press('Control+=');
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.fontSize)).toBe('115%');
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.fontSize)).toBe('115%');
+  await page.keyboard.press('Control+0');
+  await expect.poll(() => page.evaluate(() => document.documentElement.style.fontSize)).toBe('100%');
+});

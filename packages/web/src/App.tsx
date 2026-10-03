@@ -5,6 +5,7 @@ import { Inspector } from './panes/Inspector.js';
 import { Thread } from './panes/Thread.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
+import { useTextSizeShortcuts } from './state/textSize.js';
 import { useChatSync } from './state/useChatSync.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
@@ -86,12 +87,13 @@ export function App(): JSX.Element {
   }, [setConnections, setModels, setProfiles, setChats]);
 
   useChatSync(activeChatId);
+  useTextSizeShortcuts();
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
 
   return (
-    <div className="grid h-screen grid-cols-[260px_minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden" data-narrow={isNarrow || undefined}>
+    <div className="grid h-screen grid-cols-[16.25rem_minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden" data-narrow={isNarrow || undefined}>
       {unreachable && (
         <div
           role="alert"
@@ -146,7 +148,7 @@ export function App(): JSX.Element {
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
         {!isNarrow && (
-          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : 320 }}>
+          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : '20rem' }}>
             <Inspector
               chat={activeChat}
               profile={activeProfile}
@@ -168,7 +170,7 @@ export function App(): JSX.Element {
               onClick={() => setNarrowOverlayOpen(false)}
               className="absolute inset-0 z-10 bg-black/30"
             />
-            <div className="absolute inset-y-0 right-0 z-20 w-[320px] shadow-lg">
+            <div className="absolute inset-y-0 right-0 z-20 w-80 shadow-lg">
               <Inspector chat={activeChat} profile={activeProfile} collapsed={false} onToggleCollapsed={() => setNarrowOverlayOpen(false)} />
             </div>
           </>
