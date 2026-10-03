@@ -12,7 +12,7 @@ import {
   type MemoryUpdateOutcome,
 } from '@grunt/core/domain/memory.js';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
+import type { ChatEngine, EngineEvent } from '@grunt/core/ports/chat-engine.js';
 import type { Chat, Project, ProjectMemory, Store } from '@grunt/core/ports/store.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
@@ -73,6 +73,10 @@ export class ProjectMemoryService {
   private readonly queues = new Map<string, Promise<void>>();
   /** projectId -> its last failed update, until the next success. */
   private readonly failures = new Map<string, MemoryFailure>();
+  /** projectId + chatId -> an update that is queued but hasn't started; a repeat request joins it. */
+  private readonly waiting = new Map<string, Promise<MemoryUpdateOutcome>>();
+  /** Stops for the calls in flight, so dispose() can abort them. */
+  private readonly running = new Set<() => void>();
   private disposed = false;
 
   constructor(deps: ProjectMemoryServiceDeps) {
@@ -128,6 +132,7 @@ export class ProjectMemoryService {
    * timed for the rest of its quiet period otherwise.
    */
   sweep(): void {
+    if (this.disposed) return;
     const now = this.now();
     for (const chat of this.store.chats.list()) {
       if (!this.contributes(chat) || chat.projectId === null) continue;
@@ -153,11 +158,12 @@ export class ProjectMemoryService {
     }
   }
 
-  /** Drops every pending timer and schedules no more. Updates already running finish. */
+  /** Drops every pending timer, aborts calls in flight and refuses new work. */
   dispose(): void {
     this.disposed = true;
     for (const handle of this.timers.values()) this.scheduler.clearTimeout(handle);
     this.timers.clear();
+    for (const stop of [...this.running]) stop();
   }
 
   private contributes(chat: Chat): boolean {
@@ -180,8 +186,16 @@ export class ProjectMemoryService {
   }
 
   private enqueue(projectId: string, chatId: string): Promise<MemoryUpdateOutcome> {
+    if (this.disposed) return Promise.resolve(discarded('The memory service was shut down.'));
+    const key = `${projectId}\u0000${chatId}`;
+    const waiting = this.waiting.get(key);
+    if (waiting) return waiting;
     const previous = this.queues.get(projectId) ?? Promise.resolve();
-    const run = previous.then(() => this.runUpdate(projectId, chatId));
+    const run = previous.then(() => {
+      this.waiting.delete(key);
+      return this.runUpdate(projectId, chatId);
+    });
+    this.waiting.set(key, run);
     const tail = run.then(() => undefined);
     this.queues.set(projectId, tail);
     void tail.then(() => {
@@ -192,6 +206,7 @@ export class ProjectMemoryService {
 
   /** Never rejects: an unexpected throw is recorded like any other failure. */
   private async runUpdate(projectId: string, chatId: string): Promise<MemoryUpdateOutcome> {
+    if (this.disposed) return discarded('The memory service was shut down.');
     try {
       return await this.update(projectId, chatId);
     } catch (err) {
@@ -258,41 +273,63 @@ export class ProjectMemoryService {
     return null;
   }
 
-  /** One tool-less utility call, abandoned after `timeoutMs`. The whole instruction is one user message: Claude Code's utility path reads only that. */
+  /**
+   * One tool-less utility call, abandoned after `timeoutMs`. The whole
+   * instruction is one user message: Claude Code's utility path reads only
+   * that. Every wait on the stream races the timeout, so an engine that
+   * ignores the abort can't hold the project's queue.
+   */
   private async ask(profile: ResolvedProfile, chatId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
     const controller = new AbortController();
     let timedOut = false;
+    let stopped = false;
+    let wake!: () => void;
+    const interrupted = new Promise<'interrupted'>((resolve) => (wake = () => resolve('interrupted')));
+    const stop = (): void => {
+      stopped = true;
+      controller.abort();
+      wake();
+    };
+    this.running.add(stop);
     const timer = this.scheduler.setTimeout(() => {
       timedOut = true;
-      controller.abort();
+      stop();
     }, this.timeoutMs);
+    const timeoutFailure = { ok: false as const, error: `The model didn't answer within ${Math.round(this.timeoutMs / 1000)} s.` };
     let text = '';
     let finished = false;
+    let iterator: AsyncIterator<EngineEvent> | undefined;
     try {
-      for await (const event of this.engine.stream({
-        profile,
-        messages: [
-          {
-            id: `memory-prompt:${randomUUID()}`,
-            chatId,
-            parentId: null,
-            role: 'user',
-            parts: [{ type: 'text', text: prompt }],
-            status: 'complete',
-            error: null,
-            producedBy: null,
-            createdAt: this.now(),
-          },
-        ],
-        tools: [],
-        signal: controller.signal,
-        chatId,
-        messageId: `memory-update:${randomUUID()}`,
-        workspaceRoot: null,
-        purpose: 'utility',
-      })) {
+      iterator = this.engine
+        .stream({
+          profile,
+          messages: [
+            {
+              id: `memory-prompt:${randomUUID()}`,
+              chatId,
+              parentId: null,
+              role: 'user',
+              parts: [{ type: 'text', text: prompt }],
+              status: 'complete',
+              error: null,
+              producedBy: null,
+              createdAt: this.now(),
+            },
+          ],
+          tools: [],
+          signal: controller.signal,
+          chatId,
+          messageId: `memory-update:${randomUUID()}`,
+          workspaceRoot: null,
+          purpose: 'utility',
+        })
+        [Symbol.asyncIterator]();
+      for (;;) {
+        const step = await Promise.race([iterator.next(), interrupted]);
+        if (step === 'interrupted' || step.done) break;
+        const event = step.value;
         if (event.type === 'text-delta') text += event.text;
-        else if (event.type === 'error') return { ok: false, error: event.error.message };
+        else if (event.type === 'error') return timedOut ? timeoutFailure : { ok: false, error: event.error.message };
         else if (event.type === 'finish') {
           // The note is complete; a Claude Code stream can stay open after this.
           finished = true;
@@ -300,11 +337,21 @@ export class ProjectMemoryService {
         }
       }
     } catch (err) {
-      if (!timedOut) return { ok: false, error: errorMessage(err) };
+      return timedOut ? timeoutFailure : { ok: false, error: errorMessage(err) };
     } finally {
       this.scheduler.clearTimeout(timer);
+      this.running.delete(stop);
+      // Tear the call down (a Claude Code child, say) whether or not it finished.
+      controller.abort();
+      try {
+        void Promise.resolve(iterator?.return?.()).catch(() => undefined);
+      } catch {
+        /* the engine's own problem */
+      }
     }
-    if (timedOut && !finished) return { ok: false, error: `The model didn't answer within ${Math.round(this.timeoutMs / 1000)} s.` };
+    if (finished) return { ok: true, text };
+    if (timedOut) return timeoutFailure;
+    if (stopped) return { ok: false, error: 'The memory service was shut down.' };
     return { ok: true, text };
   }
 

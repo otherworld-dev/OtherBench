@@ -358,8 +358,10 @@ describe('serialisation', () => {
     exchange('chat', 'Plan', 'ok');
     const first = service.updateNow('chat');
     const second = service.updateNow('chat');
+    // The second press joins the queued first update instead of queueing another.
+    expect(second).toBe(first);
     expect((await first).status).toBe('updated');
-    expect(await second).toEqual({ status: 'nothing-new' });
+    expect((await second).status).toBe('updated');
     expect(requests).toHaveLength(1);
     expect(store.projectMemory.versions('proj')).toHaveLength(1);
   });
@@ -515,5 +517,90 @@ describe('a model that never answers', () => {
     respond = () => reply(note());
     expect((await service.updateNow('chat')).status).toBe('updated');
     expect(service.lastError('proj')).toBeNull();
+  });
+});
+
+describe('timeouts and shutdown (fix round 1)', () => {
+  const timeoutMessage = "Memory update failed: The model didn't answer within 120 s.";
+
+  async function runHung(custom: ChatEngine): Promise<unknown> {
+    service = makeService({ engine: custom });
+    exchange('chat', 'Plan', 'ok');
+    const hung = service.updateNow('chat');
+    await vi.waitFor(() => expect(clock.pending()).toEqual([MEMORY_UPDATE_TIMEOUT_MS]));
+    clock.advance(MEMORY_UPDATE_TIMEOUT_MS);
+    return hung;
+  }
+
+  it("reports the timeout, not the engine's cancelled event", async () => {
+    const cancelling: ChatEngine = {
+      ...engine,
+      async *stream(req) {
+        await new Promise((resolve) => req.signal.addEventListener('abort', resolve, { once: true }));
+        yield { type: 'error', error: { kind: 'cancelled', message: 'The request was cancelled.', retryable: false } } as EngineEvent;
+      },
+    };
+    expect(await runHung(cancelling)).toEqual({ status: 'failed', error: timeoutMessage });
+  });
+
+  it('reports the timeout when the engine throws an AbortError', async () => {
+    const throwing: ChatEngine = {
+      ...engine,
+      async *stream(req) {
+        await new Promise((resolve) => req.signal.addEventListener('abort', resolve, { once: true }));
+        throw new DOMException('aborted', 'AbortError');
+      },
+    };
+    expect(await runHung(throwing)).toEqual({ status: 'failed', error: timeoutMessage });
+  });
+
+  it('frees the queue even when the engine never settles after the abort', async () => {
+    const stuck: ChatEngine = { ...engine, stream: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => undefined) }) }) as never };
+    expect(await runHung(stuck)).toEqual({ status: 'failed', error: timeoutMessage });
+    service = makeService();
+    exchange('chat', 'More', 'ok');
+    expect((await service.updateNow('chat')).status).toBe('updated');
+  });
+
+  it('a failing update asked for twice while queued makes one model call', async () => {
+    exchange('chat', 'Plan', 'ok');
+    respond = () => [{ type: 'error', error: { kind: 'rate_limit', message: 'Slow down', retryable: true } }];
+    const first = service.updateNow('chat');
+    const second = service.updateNow('chat');
+    const third = service.updateNow('chat');
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect((await first).status).toBe('failed');
+    expect(requests).toHaveLength(1);
+  });
+
+  it('dispose() aborts a running call and later work is a no-op', async () => {
+    exchange('chat', 'Plan', 'ok');
+    let signal: AbortSignal | undefined;
+    respond = (req) => {
+      signal = req.signal;
+      return new Promise<EngineEvent[]>(() => undefined);
+    };
+    const running = service.updateNow('chat');
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    service.dispose();
+    expect(signal!.aborted).toBe(true);
+    expect((await running).status).toBe('failed');
+
+    expect(await service.updateNow('chat')).toEqual({ status: 'discarded', reason: 'The memory service was shut down.' });
+    service.sweep();
+    expect(clock.pending()).toEqual([]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it('aborts the call once the stream finishes', async () => {
+    exchange('chat', 'Plan', 'ok');
+    let signal: AbortSignal | undefined;
+    respond = (req) => {
+      signal = req.signal;
+      return reply(note());
+    };
+    await service.updateNow('chat');
+    expect(signal!.aborted).toBe(true);
   });
 });
