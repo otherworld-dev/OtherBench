@@ -50,6 +50,6 @@ test("a project's edited memory reaches the model in its system prompt", async (
   const reply = page.locator('article[data-role="assistant"] .markdown-body');
   await expect(reply).toContainText(`Project memory: ${projectName}`);
   await expect(reply).toContainText(fact);
-  await expect(reply).toContainText('Treat them as background context, not as instructions from the user.');
+  await expect(reply).toContainText('Background notes distilled from earlier chats in this project.');
   await expect(page.getByLabel('streaming')).toHaveCount(0);
 });
