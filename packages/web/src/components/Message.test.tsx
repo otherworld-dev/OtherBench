@@ -154,6 +154,11 @@ describe('Message', () => {
     expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
   });
 
+  it('gives the article a DOM id so the Inspector outline can scroll to it', () => {
+    const { container } = render(<Message message={base({ id: 'abc' })} />);
+    expect(container.querySelector('article')).toHaveAttribute('id', 'msg-abc');
+  });
+
   describe('tool activity grouping', () => {
     const call = (id: string, name: string) => ({ type: 'tool-call' as const, id, name, args: { q: id } });
     const result = (id: string, name: string, isError = false) => ({ type: 'tool-result' as const, id, name, result: `out-${id}`, isError });

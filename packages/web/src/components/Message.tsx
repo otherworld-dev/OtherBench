@@ -180,7 +180,7 @@ export function Message({
     : [];
 
   return (
-    <article data-role={message.role} data-status={message.status} className="space-y-1">
+    <article id={`msg-${message.id}`} data-role={message.role} data-status={message.status} className="space-y-1">
       <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
         <span className="font-medium text-[var(--text)]">{label}</span>
         {!isUser && message.producedBy && <span>{message.producedBy.modelId}</span>}

@@ -444,3 +444,90 @@ describe('Inspector audit trail', () => {
     expect(await within(auditSection()).findByText('No tool calls recorded in this chat yet.')).toBeInTheDocument();
   });
 });
+
+describe('Inspector conversation outline', () => {
+  beforeEach(() => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+
+  const user = (id: string, parentId: string | null, text: string): CanonMessage =>
+    makeMessage(id, { role: 'user', parentId, status: 'complete', producedBy: null, parts: [{ type: 'text', text }] });
+  const reply = (id: string, parentId: string, text: string, status: CanonMessage['status'] = 'complete'): CanonMessage =>
+    makeMessage(id, { parentId, status, parts: text ? [{ type: 'text', text }] : [] });
+  const outline = (): HTMLElement => screen.getByRole('heading', { name: 'Conversation' }).closest('section')!;
+  const renderFor = (head: string | null): void => {
+    render(<Inspector chat={makeChat({ headMessageId: head })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+  };
+
+  it('is hidden when the chat has no messages', () => {
+    renderFor(null);
+    expect(screen.queryByRole('heading', { name: 'Conversation' })).not.toBeInTheDocument();
+  });
+
+  it('sits above the audit trail', () => {
+    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'hi')], null);
+    renderFor('u1');
+    const headings = screen.getAllByRole('heading').map((h) => h.textContent);
+    expect(headings.indexOf('Conversation')).toBeGreaterThan(-1);
+    expect(headings.indexOf('Conversation')).toBeLessThan(headings.indexOf('Audit trail'));
+  });
+
+  it('lists user messages on the current branch with a truncated reply preview', () => {
+    const long = 'x'.repeat(100);
+    useGruntStore.getState().loadMessages('chat-1', [
+      user('u1', null, 'first question'), reply('a1', 'u1', long),
+      user('u2', 'a1', 'second question'), reply('a2', 'u2', '', 'streaming'),
+      user('u3', 'a2', 'third question'),
+      // a message on another branch must not show up
+      user('other', 'a1', 'abandoned branch'),
+    ], null);
+    renderFor('u3');
+    const entries = within(outline()).getAllByTestId(/^outline-/);
+    expect(entries.map((e) => e.getAttribute('data-testid'))).toEqual(['outline-u1', 'outline-u2', 'outline-u3']);
+    expect(entries[0]).toHaveTextContent('first question');
+    expect(entries[0]).toHaveTextContent('x'.repeat(80) + '…');
+    expect(entries[0]).not.toHaveTextContent('x'.repeat(81));
+    expect(entries[1]).toHaveTextContent('…'); // streaming
+    expect(entries[2]).toHaveTextContent('(no reply)');
+    expect(outline()).not.toHaveTextContent('abandoned branch');
+  });
+
+  it('truncates long user text to one line of about 60 characters', () => {
+    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, `${'y'.repeat(70)}
+second line`)], null);
+    renderFor('u1');
+    const entry = within(outline()).getByTestId('outline-u1');
+    expect(entry).toHaveTextContent('y'.repeat(60) + '…');
+    expect(entry).not.toHaveTextContent('second line');
+  });
+
+  it('scrolls the thread to the clicked message', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const target = document.createElement('article');
+    target.id = 'msg-u2';
+    document.body.appendChild(target);
+    const spy = vi.spyOn(target, 'scrollIntoView');
+    useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'a'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'b')], null);
+    renderFor('u2');
+    await userEvent.setup().click(within(outline()).getByTestId('outline-u2'));
+    expect(spy).toHaveBeenCalledWith({ block: 'start' });
+    target.remove();
+  });
+
+  it('shows the newest 10 with Show all', async () => {
+    const msgs: CanonMessage[] = [];
+    for (let i = 0; i < 12; i++) {
+      msgs.push(user(`u${i}`, i === 0 ? null : `a${i - 1}`, `q${i}`), reply(`a${i}`, `u${i}`, `r${i}`));
+    }
+    useGruntStore.getState().loadMessages('chat-1', msgs, null);
+    renderFor('a11');
+    expect(within(outline()).getAllByTestId(/^outline-/)).toHaveLength(10);
+    expect(within(outline()).queryByTestId('outline-u0')).not.toBeInTheDocument();
+    expect(within(outline()).getByTestId('outline-u11')).toBeInTheDocument();
+    await userEvent.setup().click(within(outline()).getByRole('button', { name: 'Show all (12)' }));
+    expect(within(outline()).getAllByTestId(/^outline-/)).toHaveLength(12);
+  });
+});
