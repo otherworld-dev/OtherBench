@@ -14,6 +14,7 @@ const mapping: CrudMapping<Chat> = {
     'pinned',
     'archived_at',
     'auto_mode',
+    'project_id',
     'created_at',
     'updated_at',
   ],
@@ -26,6 +27,7 @@ const mapping: CrudMapping<Chat> = {
     toBool(c.pinned),
     c.archivedAt,
     toBool(c.autoMode),
+    c.projectId,
     c.createdAt,
     c.updatedAt,
   ],
@@ -38,6 +40,7 @@ const mapping: CrudMapping<Chat> = {
     pinned: fromBool(row.pinned as number),
     archivedAt: row.archived_at as number | null,
     autoMode: fromBool(row.auto_mode as number),
+    projectId: row.project_id as string | null,
     createdAt: row.created_at as number,
     updatedAt: row.updated_at as number,
   }),
@@ -52,7 +55,13 @@ export class SqliteChatRepo implements ChatRepo {
 
   create(c: NewChat): Chat {
     const now = Date.now();
-    const full: Chat = { ...c, autoMode: c.autoMode ?? false, createdAt: c.createdAt ?? now, updatedAt: c.updatedAt ?? now };
+    const full: Chat = {
+      ...c,
+      autoMode: c.autoMode ?? false,
+      projectId: c.projectId ?? null,
+      createdAt: c.createdAt ?? now,
+      updatedAt: c.updatedAt ?? now,
+    };
     return this.crud.create(full);
   }
 

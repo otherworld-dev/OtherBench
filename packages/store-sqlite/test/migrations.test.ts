@@ -112,6 +112,39 @@ describe('runMigrations', () => {
     }
   });
 
+  it('projects adds the project table and chat.project_id: existing chats are in no project, and both foreign keys set NULL on delete', () => {
+    const projects = MIGRATIONS.find((m) => m.name.endsWith('-projects'));
+    expect(projects).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < projects!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p2', 'Spare', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+
+      runMigrations(db);
+
+      const projectIdOf = () => (db.prepare(`SELECT project_id FROM chat WHERE id = 'legacy'`).get() as { project_id: string | null }).project_id;
+      expect(projectIdOf()).toBeNull();
+      expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+
+      db.exec(`INSERT INTO project (id, name, default_profile_id, created_at, updated_at) VALUES ('proj', 'Alpha', 'p2', 1, 1)`);
+      db.exec(`UPDATE chat SET project_id = 'proj' WHERE id = 'legacy'`);
+      expect(projectIdOf()).toBe('proj');
+
+      db.exec(`DELETE FROM profile WHERE id = 'p2'`);
+      const project = db.prepare(`SELECT default_profile_id FROM project WHERE id = 'proj'`).get() as { default_profile_id: string | null };
+      expect(project.default_profile_id).toBeNull();
+
+      db.exec(`DELETE FROM project WHERE id = 'proj'`);
+      expect(projectIdOf()).toBeNull();
+      expect(db.prepare(`SELECT id FROM chat`).all()).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
   describe('003 plaintext residue', () => {
     let dir: string;
     afterEach(() => {
@@ -176,6 +209,7 @@ describe('runMigrations', () => {
         'mcp_server',
         'grant',
         'audit',
+        'project',
         'message_fts',
       ]) {
         expect(names).toContain(expected);

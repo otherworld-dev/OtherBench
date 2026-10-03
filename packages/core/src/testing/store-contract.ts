@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type {
   Store,
   Chat,
+  Project,
   Attachment,
   UsageRecord,
   McpServer,
@@ -290,6 +291,84 @@ export function runStoreContract(
 
       store.chats.create(makeChatInput({ id: 'chat-b', profileId, autoMode: true }));
       expect(store.chats.get('chat-b')!.autoMode).toBe(true);
+    });
+
+    describe('projects', () => {
+      function makeProjectInput(over: { id: string } & Partial<Project>) {
+        return { name: 'Test Project', workspaceRoot: null, defaultProfileId: null, ...over };
+      }
+
+      it('create/get round-trip, defaulting sortOrder to 0 and the timestamps to now', () => {
+        const created = store.projects.create(makeProjectInput({ id: 'proj-a', name: 'Alpha', workspaceRoot: '/ws/alpha' }));
+        expect(created.sortOrder).toBe(0);
+        expectRecentTimestamp(created.createdAt);
+        expectRecentTimestamp(created.updatedAt);
+        expect(store.projects.get('proj-a')).toEqual(created);
+        expect(store.projects.get('does-not-exist')).toBeNull();
+      });
+
+      it('list orders by sortOrder, then name ignoring ASCII case, then id', () => {
+        store.projects.create(makeProjectInput({ id: 'p3', name: 'beta', sortOrder: 1 }));
+        store.projects.create(makeProjectInput({ id: 'p5', name: 'Same', sortOrder: 1 }));
+        store.projects.create(makeProjectInput({ id: 'p2', name: 'Alpha', sortOrder: 1 }));
+        store.projects.create(makeProjectInput({ id: 'p4', name: 'same', sortOrder: 1 }));
+        store.projects.create(makeProjectInput({ id: 'p1', name: 'Zed', sortOrder: 0 }));
+
+        expect(store.projects.list().map((p) => p.id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
+      });
+
+      it('update persists a patch, update of an unknown id throws, and delete is idempotent', () => {
+        store.projects.create(makeProjectInput({ id: 'proj-a' }));
+
+        const updated = store.projects.update('proj-a', { name: 'Renamed', workspaceRoot: '/ws', sortOrder: 3 });
+
+        expect(updated).toMatchObject({ name: 'Renamed', workspaceRoot: '/ws', sortOrder: 3 });
+        expect(store.projects.get('proj-a')).toMatchObject({ name: 'Renamed', workspaceRoot: '/ws', sortOrder: 3 });
+        expect(() => store.projects.update('does-not-exist', { name: 'x' })).toThrow(Error);
+        store.projects.delete('proj-a');
+        expect(store.projects.get('proj-a')).toBeNull();
+        expect(() => store.projects.delete('proj-a')).not.toThrow();
+      });
+
+      it('chats: projectId defaults to null and round-trips through create, update and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.projects.create(makeProjectInput({ id: 'proj-a' }));
+
+        expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).projectId).toBeNull();
+        expect(store.chats.get('chat-a')!.projectId).toBeNull();
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, projectId: 'proj-a' }));
+        expect(store.chats.get('chat-b')!.projectId).toBe('proj-a');
+
+        store.chats.update('chat-a', { projectId: 'proj-a' });
+        expect(store.chats.list().filter((c) => c.projectId === 'proj-a').map((c) => c.id).sort()).toEqual(['chat-a', 'chat-b']);
+        store.chats.update('chat-b', { projectId: null });
+        expect(store.chats.get('chat-b')!.projectId).toBeNull();
+      });
+
+      it('deleting a project moves its chats to no project and keeps them, folder and all', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.projects.create(makeProjectInput({ id: 'proj-a' }));
+        store.projects.create(makeProjectInput({ id: 'proj-b' }));
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a', workspaceRoot: '/ws' }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, projectId: 'proj-b' }));
+
+        store.projects.delete('proj-a');
+
+        expect(store.chats.get('chat-a')).toMatchObject({ projectId: null, workspaceRoot: '/ws' });
+        expect(store.chats.get('chat-b')!.projectId).toBe('proj-b');
+      });
+
+      it("deleting a profile clears it as a project's default profile", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        const { profileId: otherId } = seedProfile(store, 'profile-b');
+        store.projects.create(makeProjectInput({ id: 'proj-a', defaultProfileId: profileId }));
+        store.projects.create(makeProjectInput({ id: 'proj-b', defaultProfileId: otherId }));
+
+        store.profiles.delete(profileId);
+
+        expect(store.projects.get('proj-a')!.defaultProfileId).toBeNull();
+        expect(store.projects.get('proj-b')!.defaultProfileId).toBe(otherId);
+      });
     });
 
     it('attachments: create/get round-trip', () => {

@@ -21,12 +21,16 @@ import type {
   UsageRepo,
   Chat,
   NewChat,
+  NewProject,
+  Project,
+  ProjectRepo,
   Attachment,
   UsageRecord,
   McpServer,
   Grant,
   AuditEntry,
 } from '../ports/store.js';
+import { compareProjects } from '../domain/projects.js';
 import type { ModelInfo, Profile } from '../types/config.js';
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 
@@ -205,6 +209,7 @@ class InMemoryModelRepo implements ModelRepo {
 
 class InMemoryProfileRepo implements ProfileRepo {
   private readonly repo = new InMemoryCrudRepo<Profile>();
+  constructor(private readonly projects: ProjectRepo) {}
   create(p: Profile): Profile {
     return this.repo.create(p);
   }
@@ -218,6 +223,10 @@ class InMemoryProfileRepo implements ProfileRepo {
     return this.repo.update(id, patch);
   }
   delete(id: string): void {
+    // Mirrors project.default_profile_id's ON DELETE SET NULL (migration 007).
+    for (const project of this.projects.list()) {
+      if (project.defaultProfileId === id) this.projects.update(project.id, { defaultProfileId: null });
+    }
     this.repo.delete(id);
   }
 }
@@ -226,7 +235,13 @@ class InMemoryChatRepo implements ChatRepo {
   private readonly repo = new InMemoryCrudRepo<Chat>();
   create(c: NewChat): Chat {
     const now = Date.now();
-    const full: Chat = { ...c, autoMode: c.autoMode ?? false, createdAt: c.createdAt ?? now, updatedAt: c.updatedAt ?? now };
+    const full: Chat = {
+      ...c,
+      autoMode: c.autoMode ?? false,
+      projectId: c.projectId ?? null,
+      createdAt: c.createdAt ?? now,
+      updatedAt: c.updatedAt ?? now,
+    };
     return this.repo.create(full);
   }
   get(id: string): Chat | null {
@@ -239,6 +254,31 @@ class InMemoryChatRepo implements ChatRepo {
     return this.repo.update(id, patch);
   }
   delete(id: string): void {
+    this.repo.delete(id);
+  }
+}
+
+class InMemoryProjectRepo implements ProjectRepo {
+  private readonly repo = new InMemoryCrudRepo<Project>();
+  constructor(private readonly chats: ChatRepo) {}
+  create(p: NewProject): Project {
+    const now = Date.now();
+    return this.repo.create({ ...p, sortOrder: p.sortOrder ?? 0, createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now });
+  }
+  get(id: string): Project | null {
+    return this.repo.get(id);
+  }
+  list(): Project[] {
+    return this.repo.list().sort(compareProjects);
+  }
+  update(id: string, patch: Partial<Omit<Project, 'id'>>): Project {
+    return this.repo.update(id, patch);
+  }
+  delete(id: string): void {
+    // Mirrors chat.project_id's ON DELETE SET NULL (migration 007).
+    for (const chat of this.chats.list()) {
+      if (chat.projectId === id) this.chats.update(chat.id, { projectId: null });
+    }
     this.repo.delete(id);
   }
 }
@@ -477,8 +517,9 @@ class InMemoryMessageRepo implements MessageRepo {
 export class InMemoryStore implements Store {
   readonly connections: ConnectionRepo = new InMemoryConnectionRepo();
   readonly models: ModelRepo = new InMemoryModelRepo();
-  readonly profiles: ProfileRepo = new InMemoryProfileRepo();
   readonly chats: ChatRepo = new InMemoryChatRepo();
+  readonly projects: ProjectRepo = new InMemoryProjectRepo(this.chats);
+  readonly profiles: ProfileRepo = new InMemoryProfileRepo(this.projects);
   readonly messages: MessageRepo = new InMemoryMessageRepo();
   readonly attachments: AttachmentRepo = new InMemoryAttachmentRepo();
   readonly usage: UsageRepo = new InMemoryUsageRepo();
