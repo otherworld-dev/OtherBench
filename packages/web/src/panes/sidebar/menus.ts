@@ -7,13 +7,15 @@ export interface ChatMenuHandlers {
   /** Sets the pin state the menu item asked for (the opposite of the state the menu was built with). */
   setPinned(pinned: boolean): void;
   moveTo(projectId: string | null): void;
+  /** Sets "Don't add to project memory" to the given state (the opposite of the chat's state when the menu was built). */
+  setMemoryExcluded(excluded: boolean): void;
   archive(): void;
   unarchive(): void;
   requestDelete(): void;
 }
 
 /**
- * The chat row menu (spec §3 "Chat context menu"). `orderedProjects` must be
+ * The chat row menu (spec §3 "Chat context menu", plus project memory's toggle). `orderedProjects` must be
  * in display order. A chat whose project isn't in the list counts as being in
  * No project, matching where the sidebar shows it. An archived chat gets
  * "Unarchive" in place of "Archive" (controller ruling R2).
@@ -21,6 +23,16 @@ export interface ChatMenuHandlers {
 export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMenuHandlers): MenuItem[] {
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
   const archived = chat.archivedAt !== null;
+  // Project memory (spec 2026-10-03-project-memory-design §5): only a chat in a project contributes.
+  const memory: MenuItem[] = inListedProject
+    ? [
+        {
+          id: 'memory',
+          label: chat.memoryExcluded ? 'Add to project memory' : "Don't add to project memory",
+          onSelect: () => h.setMemoryExcluded(!chat.memoryExcluded),
+        },
+      ]
+    : [];
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     ...(archived ? [] : [{ id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) }]),
@@ -32,6 +44,7 @@ export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMen
         { id: NO_PROJECT_KEY, label: 'No project', checked: !inListedProject, onSelect: () => h.moveTo(null) },
       ],
     },
+    ...memory,
     archived
       ? { id: 'unarchive', label: 'Unarchive', onSelect: h.unarchive }
       : { id: 'archive', label: 'Archive', onSelect: h.archive },

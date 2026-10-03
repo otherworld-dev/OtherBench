@@ -224,6 +224,11 @@ export function ChatList(): JSX.Element {
     if (await patchChat(chat, { pinned }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
   }
 
+  async function setMemoryExcluded(chat: Chat, excluded: boolean): Promise<void> {
+    const action = excluded ? "Couldn't stop this chat adding to project memory" : "Couldn't let this chat add to project memory";
+    if (await patchChat(chat, { memoryExcluded: excluded }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+  }
+
   /** Hides the chat from the sidebar (spec §3: reuses `archivedAt`). */
   async function archiveChat(chat: Chat): Promise<void> {
     const next = neighbourSelector(chat.id);
@@ -511,6 +516,7 @@ export function ChatList(): JSX.Element {
             rename: () => setRenamingChatId(menuChat.id),
             setPinned: (pinned) => void setPinned(menuChat, pinned),
             moveTo: (projectId) => void moveChat(menuChat.id, projectId),
+            setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
             archive: () => void archiveChat(menuChat),
             unarchive: () => void unarchiveChat(menuChat),
             requestDelete: () => setDeletingChatId(menuChat.id),

@@ -11,13 +11,33 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { rename: vi.fn(), setPinned: vi.fn(), moveTo: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { rename: vi.fn(), setPinned: vi.fn(), moveTo: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
   it('offers Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {
     expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', 'Archive', 'Delete…']);
     expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers())[1]!.label).toBe('Unpin');
+  });
+
+  it("offers Don't add to project memory after Move to project… for a chat in a project, and Add to project memory once it's excluded", () => {
+    const projects = [project('a', 'Alpha')];
+    const h = chatHandlers();
+
+    const items = chatMenuItems(chat({ projectId: 'a' }), projects, h);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', "Don't add to project memory", 'Archive', 'Delete…']);
+    items.find((i) => i.id === 'memory')!.onSelect!();
+    expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(true);
+
+    const excluded = chatMenuItems(chat({ projectId: 'a', memoryExcluded: true }), projects, h).find((i) => i.id === 'memory')!;
+    expect(excluded.label).toBe('Add to project memory');
+    excluded.onSelect!();
+    expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(false);
+  });
+
+  it('has no memory item for a chat outside any project, or whose project is gone', () => {
+    expect(chatMenuItems(chat(), [project('a', 'Alpha')], chatHandlers()).some((i) => i.id === 'memory')).toBe(false);
+    expect(chatMenuItems(chat({ projectId: 'gone' }), [project('a', 'Alpha')], chatHandlers()).some((i) => i.id === 'memory')).toBe(false);
   });
 
   it('offers Unarchive instead of Archive for an archived chat, and it calls unarchive, not archive (controller ruling R2)', () => {

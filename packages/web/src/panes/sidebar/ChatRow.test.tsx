@@ -19,6 +19,20 @@ function renderRow(props: Partial<ChatRowProps> = {}) {
 }
 
 describe('ChatRow', () => {
+  it('marks a project chat that is not added to project memory, without changing the row name', () => {
+    render(
+      <ul>
+        <ChatRow chat={{ ...chat, projectId: 'p-a', memoryExcluded: true }} active={false} onSelect={vi.fn()} onDragEnd={vi.fn()} />
+      </ul>
+    );
+    expect(screen.getByRole('img', { name: 'Not added to project memory' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    cleanup();
+
+    renderRow();
+    expect(screen.queryByTestId('memory-excluded-marker')).toBeNull();
+  });
+
   it('selects on click and marks the active row', async () => {
     const h = renderRow({ active: true });
     await userEvent.setup().click(screen.getByRole('button', { name: 'Notes' }));
