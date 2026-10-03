@@ -107,6 +107,19 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [chatId, chatMessages, extras, displayPath]);
 
+  // The scroller changes size without a scroll event (e.g. the conversation
+  // strip opening above it), which would leave a pinned thread's newest
+  // messages below the fold. Re-pin when we were following the bottom.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (nearBottomRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [chatId]);
+
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
 
   if (!chat) {

@@ -375,4 +375,32 @@ describe('Thread composer per chat', () => {
     expect(scroller.contains(strip)).toBe(false);
     expect(strip.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it('re-pins to the bottom when the scroller resizes while following, but not when scrolled up', () => {
+    let trigger: () => void = () => undefined;
+    class FakeRO {
+      constructor(cb: () => void) { trigger = cb; }
+      observe(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', FakeRO);
+    try {
+      useGruntStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
+      render(<Thread chat={makeChat({ id: 'chat-a', headMessageId: 'root-a' })} />);
+      const scroller = screen.getByTestId('thread-scroll');
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 });
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 });
+      scroller.scrollTop = 600; // at the bottom
+      fireEvent.scroll(scroller);
+      scroller.scrollTop = 500; // simulate the shrink leaving the view short of the bottom
+      trigger();
+      expect(scroller.scrollTop).toBe(1000);
+      scroller.scrollTop = 100; // user scrolls up
+      fireEvent.scroll(scroller);
+      trigger();
+      expect(scroller.scrollTop).toBe(100);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

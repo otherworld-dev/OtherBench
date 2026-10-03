@@ -681,7 +681,6 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
         <McpHealthSection />
       </Section>
 
-
       <Section title="Audit trail">
         {chat ? <AuditSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
