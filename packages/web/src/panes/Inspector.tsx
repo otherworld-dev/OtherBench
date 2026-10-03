@@ -583,7 +583,8 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
 
       {chat && memoryProject && (
         <Section title="Project memory">
-          <InspectorMemory chat={chat} project={memoryProject} />
+          {/* Keyed by project so a response still in flight for the previous project can never land in this one. */}
+          <InspectorMemory key={memoryProject.id} chat={chat} project={memoryProject} />
         </Section>
       )}
 
