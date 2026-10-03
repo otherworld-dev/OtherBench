@@ -135,7 +135,9 @@ function isToolErrorResult(result: unknown): boolean {
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
- * testing. Anything else -> a canned ~30-token markdown reply.
+ * testing. `#echo-system` -> the request's system prompt text (or "No system
+ * prompt."), so an end-to-end test can check what a turn sent, e.g. project
+ * memory. Anything else -> a canned ~30-token markdown reply.
  *
  * Every branch reports a `finish` event with a plausible (word-count-based)
  * `Usage`; this mock has no real pricing, so callers should treat its
@@ -178,6 +180,17 @@ export class MockChatEngine implements ChatEngine {
 
     if (prompt.includes('#long')) {
       yield* this.streamReply(req, LONG_REPLY, 40, 15, tokensIn);
+      return;
+    }
+
+    if (prompt.includes('#echo-system')) {
+      const system = req.messages
+        .filter((m) => m.role === 'system')
+        .flatMap((m) => m.parts)
+        .filter(isTextPart)
+        .map((p) => p.text)
+        .join('\n');
+      yield* this.streamReply(req, system.length > 0 ? system : 'No system prompt.', 8, 20, tokensIn);
       return;
     }
 
