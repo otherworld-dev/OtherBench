@@ -1267,3 +1267,63 @@ describe('project memory in the system prompt', () => {
     expect(engine.requests[1]!.profile.systemPrompt).toContain('- Ship v3');
   });
 });
+
+describe('TurnRunner variant teardown (approval cleanup)', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+
+  it('aborts a variant\'s signal when it ends by an error event, so anything awaiting on it (a pending approval) is released -- without touching the sibling', async () => {
+    const store = new InMemoryStore();
+    const { engine, push, requests } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Compare' }],
+      profiles: [makeResolvedProfile({ id: 'profile-a' }), makeResolvedProfile({ id: 'profile-b' })],
+    });
+    await flush();
+    const [idA, idB] = result.assistantMessageIds as [string, string];
+    const sigA = requests.find((r) => r.messageId === idA)!.signal;
+    const sigB = requests.find((r) => r.messageId === idB)!.signal;
+
+    push(idA, { type: 'error', error: { kind: 'unknown', message: 'boom' } } as EngineEvent);
+    await flush();
+
+    expect(store.messages.get(idA)?.status).toBe('error');
+    expect(sigA.aborted).toBe(true);
+    expect(sigB.aborted).toBe(false);
+    expect(store.messages.get(idB)?.status).toBe('streaming');
+
+    push(idB, { type: 'finish', usage, finishReason: 'stop' });
+    await flush();
+    expect(sigB.aborted).toBe(true); // a finished variant releases its signal too
+  });
+
+  it('aborts the signal when the engine throws', async () => {
+    const store = new InMemoryStore();
+    let captured: AbortSignal | undefined;
+    const engine: ChatEngine = {
+      // eslint-disable-next-line require-yield
+      async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+        captured = req.signal;
+        throw new Error('engine exploded');
+      },
+      async listModels() {
+        return [];
+      },
+      async testConnection() {
+        return { ok: true, message: 'ok', latencyMs: 0 };
+      },
+    };
+    const runner = new TurnRunner(store, engine);
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Go' }],
+      profiles: [makeResolvedProfile()],
+    });
+    await flush();
+    expect(store.messages.get(result.assistantMessageIds[0] as string)?.status).toBe('error');
+    expect(captured?.aborted).toBe(true);
+  });
+});

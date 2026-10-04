@@ -13,6 +13,14 @@ export type Decision =
   | { kind: 'deny'; reason: string }
   | { kind: 'ask'; request: ApprovalRequest };
 
+export interface PermissionBrokerOptions {
+  /** Hard cap on simultaneously pending approvals; the oldest is evicted past it. Default 200. */
+  maxPending?: number;
+}
+
+/** Generous: a person answers a handful of cards at a time, so reaching this means requests are leaking. */
+const DEFAULT_MAX_PENDING = 200;
+
 /** What `decide()` remembers about a pending 'ask' so `resolve()` can act on it later. */
 interface PendingRequest {
   tool: ToolSpec;
@@ -98,8 +106,36 @@ function isShellTool(tool: ToolSpec): boolean {
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly evictListeners = new Set<(requestId: string) => void>();
+  private readonly maxPending: number;
 
-  constructor(private readonly store: Store) {}
+  constructor(
+    private readonly store: Store,
+    options: PermissionBrokerOptions = {}
+  ) {
+    this.maxPending = options.maxPending ?? DEFAULT_MAX_PENDING;
+  }
+
+  /** How many approval requests are currently waiting for an answer. */
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
+  /** True while `requestId` is still waiting for an answer (not resolved, discarded or evicted). */
+  hasPending(requestId: string): boolean {
+    return this.pending.has(requestId);
+  }
+
+  /**
+   * Subscribes to the BACKSTOP evicting a request (see `enforceBound`). The
+   * eviction is a safety net for a request whose owner never ended it; whoever
+   * is waiting on it (GruntToolProvider) must settle that wait as a denial.
+   * Never fired by `resolve()`/`discard()`, which are the callers' own doing.
+   */
+  onEvict(cb: (requestId: string) => void): () => void {
+    this.evictListeners.add(cb);
+    return () => this.evictListeners.delete(cb);
+  }
 
   decide(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Decision {
     const policyDenial = checkPolicy(tool, policy);
@@ -159,6 +195,7 @@ export class PermissionBroker {
       args,
       summary: summarize(tool, args),
     };
+    this.enforceBound();
     this.pending.set(request.id, { tool, ctx, args });
     return { kind: 'ask', request };
   }
@@ -261,6 +298,42 @@ export class PermissionBroker {
    */
   discard(requestId: string): void {
     this.pending.delete(requestId);
+  }
+
+  /**
+   * Defence in depth for the pending map. Every request is meant to leave it
+   * through `resolve()` or `discard()` (the provider does both when a turn or
+   * variant ends), so this only fires when some path was missed. Before each
+   * new request is stored it (1) drops requests whose turn signal has aborted
+   * -- their turn is gone, nobody can answer them -- and (2) if the map is
+   * still at `maxPending`, evicts the oldest ones (Map keeps insertion order)
+   * to make room. Each eviction is logged with `console.warn` so a leak path
+   * stays visible instead of quietly masked, and reported to `onEvict`
+   * listeners so the waiting call is settled as a DENIAL. An evicted request
+   * is simply unknown afterwards: `resolve()` throws for it, so it can never
+   * become an allow or mint a grant.
+   */
+  private enforceBound(): void {
+    for (const [id, p] of this.pending) {
+      if (p.ctx.signal.aborted) this.evict(id, 'its turn was aborted but it was never discarded');
+    }
+    while (this.pending.size >= this.maxPending) {
+      const oldest = this.pending.keys().next().value;
+      if (oldest === undefined) break;
+      this.evict(oldest, `more than ${this.maxPending} approvals were pending`);
+    }
+  }
+
+  private evict(requestId: string, why: string): void {
+    this.pending.delete(requestId);
+    console.warn(`[PermissionBroker] backstop dropped pending approval "${requestId}": ${why}. A lifecycle path did not clean it up.`);
+    for (const cb of this.evictListeners) {
+      try {
+        cb(requestId);
+      } catch (err) {
+        console.error('[PermissionBroker] an evict listener threw:', err);
+      }
+    }
   }
 
   private findMatchingGrant(tool: ToolSpec, args: unknown, ctx: ToolContext): Grant | null {

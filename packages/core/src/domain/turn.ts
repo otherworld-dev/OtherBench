@@ -379,6 +379,10 @@ export class TurnRunner {
     let status: MessageStatus = 'complete';
     let error: SerializedError | null = null;
     let usage: Usage | null = null;
+    // Whether the signal was aborted by someone else (cancel()) BEFORE the
+    // teardown abort below -- that one must not turn a clean finish into a
+    // cancellation.
+    let cancelled = false;
 
     const checkpoint = (force: boolean): void => {
       const nowTs = this.now();
@@ -522,6 +526,13 @@ export class TurnRunner {
       error = classifyProviderError(err);
     } finally {
       this.controllers.delete(messageId);
+      cancelled = controller.signal.aborted;
+      // Whatever ended this variant (finish, error, throw, cancel), nothing
+      // may still be waiting on it. Aborting releases anything tied to its
+      // signal -- above all a tool call parked on an approval card, which the
+      // tool provider settles as a denial and drops from the broker. Only this
+      // variant's own controller: siblings have their own.
+      controller.abort();
     }
 
     // The engine can end a stream cleanly on abort (no `error` event at
@@ -529,7 +540,7 @@ export class TurnRunner {
     // do this, mirroring `streamText`'s observed behaviour, see
     // task-14-15-report.md). If nothing else already classified the
     // outcome, an aborted signal means this was a cancellation.
-    if (controller.signal.aborted && status === 'complete' && error === null) {
+    if (cancelled && status === 'complete' && error === null) {
       status = 'cancelled';
     }
 
