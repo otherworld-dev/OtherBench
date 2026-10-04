@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod hotkey;
+mod notify;
 mod sidecar;
 mod tray;
 
@@ -78,6 +79,12 @@ fn hide_quick(app: tauri::AppHandle) {
     hotkey::hide_quick(&app);
 }
 
+/// A desktop notification; clicking it opens `chat_id` (notify.rs).
+#[tauri::command]
+fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id: Option<String>) -> Result<(), String> {
+    notify::show(&app, &title, &body, chat_id)
+}
+
 /// Quick chat's Expand: the main window opens the chat and the quick window goes away.
 #[tauri::command]
 fn open_chat(app: tauri::AppHandle, chat_id: String) {
@@ -149,7 +156,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {

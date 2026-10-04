@@ -10,10 +10,6 @@ vi.mock('@tauri-apps/api/event', () => ({ listen }));
 vi.mock('@tauri-apps/plugin-autostart', () => ({ isEnabled, enable, disable }));
 const isFocused = vi.fn();
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused }) }));
-const isPermissionGranted = vi.fn();
-const requestPermission = vi.fn();
-const sendNotification = vi.fn();
-vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted, requestPermission, sendNotification }));
 const openDialog = vi.fn();
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: openDialog }));
 
@@ -111,23 +107,17 @@ describe('desktop bridge', () => {
     await expect(isMainWindowFocused()).resolves.toBe(true);
     await showNotification('t', 'b');
     expect(isFocused).not.toHaveBeenCalled();
-    expect(sendNotification).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('in the desktop app asks the window for focus, and sends a notification once permission is granted', async () => {
+  it('in the desktop app asks the window for focus, and shows a notification through the shell with its chat', async () => {
     enterDesktop();
     isFocused.mockResolvedValue(false);
     await expect(isMainWindowFocused()).resolves.toBe(false);
 
-    isPermissionGranted.mockResolvedValue(false);
-    requestPermission.mockResolvedValue('granted');
-    await showNotification('Trip', 'Reply finished');
-    expect(sendNotification).toHaveBeenCalledWith({ title: 'Trip', body: 'Reply finished' });
-
-    sendNotification.mockClear();
-    requestPermission.mockResolvedValue('denied');
-    await showNotification('Trip', 'Reply finished');
-    expect(sendNotification).not.toHaveBeenCalled();
+    invoke.mockResolvedValue(undefined);
+    await showNotification('Trip', 'Reply finished', 'c1');
+    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1' });
   });
 
   it('setTrayStatus sends the pending-approval count to the shell, and does nothing in a browser', async () => {

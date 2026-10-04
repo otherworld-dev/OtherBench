@@ -61,13 +61,14 @@ export async function isMainWindowFocused(): Promise<boolean> {
   return getCurrentWindow().isFocused();
 }
 
-/** Shows a desktop notification, asking for permission the first time if the OS wants that. No-op in a browser. */
-export async function showNotification(title: string, body: string): Promise<void> {
+/**
+ * Shows a desktop notification through the shell (desktop/src-tauri/src/notify.rs).
+ * On Windows clicking it opens `chatId` in the main window. No-op in a browser.
+ */
+export async function showNotification(title: string, body: string, chatId: string | null = null): Promise<void> {
   if (!isDesktop()) return;
-  const plugin = await import('@tauri-apps/plugin-notification');
-  let granted = await plugin.isPermissionGranted();
-  if (!granted) granted = (await plugin.requestPermission()) === 'granted';
-  if (granted) plugin.sendNotification({ title, body });
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('show_notification', { title, body, chatId });
 }
 
 /** Makes `accelerator` the global quick-chat hotkey. Rejects with the reason (unparsable, or taken by another app). */

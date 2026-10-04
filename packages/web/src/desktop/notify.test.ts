@@ -30,9 +30,9 @@ describe('Notifier', () => {
     await notifier.handle(finished('m2', 'error'));
     await notifier.handle(approval('r1'));
     expect(show.mock.calls).toEqual([
-      ['Trip plans', 'Reply finished'],
-      ['Trip plans', 'Reply failed'],
-      ['Trip plans', 'Approval needed: write_file'],
+      ['Trip plans', 'Reply finished', 'c1'],
+      ['Trip plans', 'Reply failed', 'c1'],
+      ['Trip plans', 'Approval needed: write_file', 'c1'],
     ]);
   });
 
@@ -69,7 +69,7 @@ describe('Notifier', () => {
     const { notifier, show } = setup();
     expect(notifier.takeLastChat()).toBeNull();
     await notifier.handle({ ...finished('m9'), chatId: 'unknown' });
-    expect(show).toHaveBeenLastCalledWith('Grunt', 'Reply finished');
+    expect(show).toHaveBeenLastCalledWith('Grunt', 'Reply finished', 'unknown');
     expect(notifier.takeLastChat()).toBe('unknown');
     expect(notifier.takeLastChat()).toBeNull();
   });
