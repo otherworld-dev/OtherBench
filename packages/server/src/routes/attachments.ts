@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
+import { basename, extname, isAbsolute } from 'node:path';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
@@ -7,6 +9,7 @@ import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js'
 import { sha256Of } from '@grunt/store-sqlite/blob-store.js';
 import type { Container } from '../container.js';
 import { extractAttachmentText } from '../attachment-text.js';
+import { requireNonEmptyString } from '../validation.js';
 
 /**
  * 25MB per-file cap (task 21 decision #1). Enforced twice below: once
@@ -90,6 +93,23 @@ const INLINE_SAFE_MIME_TYPES = new Set([
 ]);
 
 /** Strips any `;charset=...`-style parameter and normalises case/whitespace, so a stored MIME value like `"Image/PNG ; foo=bar"` still matches the allowlist by its base type. */
+/**
+ * What `POST /chats/:id/attachments/from-path` accepts, by extension, and the
+ * type each is stored as: inert raster images only, all in
+ * INLINE_SAFE_MIME_TYPES, so nothing read off disk this way is ever served
+ * as anything active (v2 plan, Task 39).
+ */
+const FROM_PATH_IMAGE_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.avif': 'image/avif',
+};
+
 function baseMimeType(mime: string): string {
   return (mime.split(';')[0] ?? '').trim().toLowerCase();
 }
@@ -153,6 +173,37 @@ export function contentDisposition(kind: 'inline' | 'attachment', filename: stri
  * `contentDisposition()` rather than interpolated directly, so it can
  * neither inject a header nor break out of the quoted value.
  */
+/**
+ * Stores `data` as a new unsent attachment on `chatId`. The blob is pinned
+ * from before it is written until the row referencing it exists
+ * (Important #3, task 32 fix round 1): closes the window where the blob is on
+ * disk but nothing references it yet, which a concurrent GC pass
+ * (`gcBlobIfOrphaned`/`sweepOrphanedBlobs`, both consult `isPinned`) would
+ * otherwise -- correctly, by its own point-in-time view -- see as garbage and
+ * remove out from under this upload. Hashed here (not read off
+ * `blob.sha256`) because pinning has to start BEFORE `blobStore.put()` is
+ * even called.
+ */
+async function storeAttachment(container: Container, chatId: string, data: Buffer, filename: string, mime: string): Promise<Attachment> {
+  const sha256 = sha256Of(data);
+  return withPinnedSha(sha256, async () => {
+    const blob = await container.blobStore.put(data);
+    const extractedText = await extractAttachmentText(data, mime, filename);
+
+    return container.store.attachments.create({
+      id: randomUUID(),
+      chatId,
+      messageId: null,
+      filename,
+      mime,
+      size: blob.size,
+      sha256: blob.sha256,
+      storagePath: blob.path,
+      extractedText,
+    });
+  });
+}
+
 export function attachmentsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -187,33 +238,48 @@ export function attachmentsRoutes(container: Container): Hono {
     if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(file.name, data.length);
 
     const mime = file.type || 'application/octet-stream';
+    const created = await storeAttachment(container, chatId, data, file.name, mime);
+    return c.json(toPublicAttachment(created), 201);
+  });
 
-    // Pinned from BEFORE the blob is written until AFTER the attachment row
-    // exists (Important #3, task 32 fix round 1): closes the window where
-    // the blob is on disk but nothing references it yet, which a concurrent
-    // GC pass (`gcBlobIfOrphaned`/`sweepOrphanedBlobs`, both consult
-    // `isPinned`) would otherwise -- correctly, by its own point-in-time
-    // view -- see as garbage and remove out from under this upload. Hashed
-    // here (not read off `blob.sha256`) because pinning has to start BEFORE
-    // `blobStore.put()` is even called.
-    const sha256 = sha256Of(data);
-    const created = await withPinnedSha(sha256, async () => {
-      const blob = await container.blobStore.put(data);
-      const extractedText = await extractAttachmentText(data, mime, file.name);
+  /**
+   * Attaches an image straight from a path on this machine (v2 plan, Task
+   * 39): the desktop app's "Send to Grunt" verb and `--send <file>`. Images
+   * only (FROM_PATH_IMAGE_TYPES), under the same 25MB cap as an upload. It
+   * reads a file the caller names, so it only ever belongs on the local
+   * listener, never the peer listener (Task 46). JSON only: a cross-site
+   * form can't send that without a CORS preflight this server never grants.
+   */
+  app.post('/chats/:id/attachments/from-path', async (c) => {
+    const chatId = c.req.param('id');
+    getChatOrThrow(container, chatId);
+    if (!(c.req.header('content-type') ?? '').toLowerCase().startsWith('application/json')) {
+      throw new HTTPException(415, { message: 'Expected a JSON body: {"path": "<absolute path>"}.' });
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { path?: unknown };
+    const path = requireNonEmptyString(body.path, 'path');
+    if (!isAbsolute(path)) throw new HTTPException(400, { message: `"path" must be an absolute path; got "${path}".` });
+    const mime = FROM_PATH_IMAGE_TYPES[extname(path).toLowerCase()];
+    if (!mime) {
+      throw new HTTPException(415, { message: `Only images can be attached from a path (${Object.keys(FROM_PATH_IMAGE_TYPES).join(', ')}).` });
+    }
 
-      return container.store.attachments.create({
-        id: randomUUID(),
-        chatId,
-        messageId: null,
-        filename: file.name,
-        mime,
-        size: blob.size,
-        sha256: blob.sha256,
-        storagePath: blob.path,
-        extractedText,
-      });
-    });
+    const name = basename(path);
+    let size: number;
+    try {
+      const info = await stat(path);
+      if (!info.isFile()) throw new HTTPException(400, { message: `"${path}" is not a file.` });
+      size = info.size;
+    } catch (err) {
+      if (err instanceof HTTPException) throw err;
+      throw new HTTPException(404, { message: `Couldn't read "${path}".` });
+    }
+    if (size > MAX_ATTACHMENT_BYTES) throw tooLarge(name, size);
+    const data = await readFile(path);
+    // The file may have grown since the stat.
+    if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(name, data.length);
 
+    const created = await storeAttachment(container, chatId, data, name, mime);
     return c.json(toPublicAttachment(created), 201);
   });
 

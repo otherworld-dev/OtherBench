@@ -26,10 +26,25 @@ export async function desktopBootstrap(): Promise<TransportConfig | null> {
  * tray menu). Resolves to the unsubscribe function; in a browser that is a
  * no-op and nothing is ever delivered.
  */
-export async function onDesktopEvent(name: string, cb: () => void): Promise<() => void> {
+export async function onDesktopEvent<T = unknown>(name: string, cb: (payload: T) => void): Promise<() => void> {
   if (!isDesktop()) return () => {};
   const { listen } = await import('@tauri-apps/api/event');
-  return listen(name, () => cb());
+  return listen<T>(name, (event) => cb(event.payload));
+}
+
+/** Opens the native folder picker. The chosen absolute path, or null if cancelled or outside the desktop app. */
+export async function pickFolder(title = 'Choose a workspace folder'): Promise<string | null> {
+  if (!isDesktop()) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const picked = await open({ directory: true, multiple: false, title });
+  return typeof picked === 'string' ? picked : null;
+}
+
+/** The arguments the desktop app was launched with, once; empty afterwards and in a browser. */
+export async function launchArgs(): Promise<string[]> {
+  if (!isDesktop()) return [];
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string[]>('launch_args');
 }
 
 /** Tells the shell how many tool calls are waiting for approval; its tray tooltip shows it. No-op in a browser. */

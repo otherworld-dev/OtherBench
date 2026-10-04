@@ -9,6 +9,12 @@ import { Inspector } from './Inspector.js';
 import { useGruntStore } from '../state/store.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, groupDomId, resetSidebarGroupsForTests } from '../state/sidebarGroups.js';
 
+vi.mock('../desktop/bridge.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../desktop/bridge.js')>()),
+  isDesktop: vi.fn(() => false),
+  pickFolder: vi.fn(),
+}));
+
 vi.mock('../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../state/api.js')>();
   return {
@@ -40,6 +46,7 @@ vi.mock('./InspectorMemory.js', () => ({
   InspectorMemory: ({ project }: { project: { id: string } }) => <div data-testid="inspector-memory">memory for {project.id}</div>,
 }));
 
+import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { ApiError, api } from '../state/api.js';
 
 const mockedUsageGet = vi.mocked(api.usage.get);
@@ -50,6 +57,8 @@ const mockedGrantsRevoke = vi.mocked(api.grants.revoke);
 const mockedAuditList = vi.mocked(api.audit.list);
 const mockedHealth = vi.mocked(api.health);
 const mockedChatsPatch = vi.mocked(api.chats.patch);
+const mockedIsDesktop = vi.mocked(isDesktop);
+const mockedPickFolder = vi.mocked(pickFolder);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -265,6 +274,22 @@ describe('Inspector workspace root', () => {
       />
     );
     expect(await within(workspaceSection()).findByText(/turned off by policy/i)).toBeInTheDocument();
+  });
+
+  it('in the desktop app, Choose folder… fills the field from the native picker; a browser has only the field', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
+    expect(within(workspaceSection()).queryByRole('button', { name: 'Choose folder…' })).not.toBeInTheDocument();
+    unmount();
+
+    mockedIsDesktop.mockReturnValue(true);
+    mockedPickFolder.mockResolvedValue('E:\\Work\\App');
+    render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await user.click(await within(workspaceSection()).findByRole('button', { name: /set workspace/i }));
+    await user.click(within(workspaceSection()).getByRole('button', { name: 'Choose folder…' }));
+    await waitFor(() => expect(within(workspaceSection()).getByRole('textbox', { name: 'Workspace folder' })).toHaveValue('E:\\Work\\App'));
+    mockedIsDesktop.mockReturnValue(false);
   });
 
   it('rejects a Git-Bash-style path on a Windows server with a specific, actionable message, and never saves it', async () => {

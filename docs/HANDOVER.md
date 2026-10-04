@@ -71,6 +71,20 @@ of work landed after that plan closed out:
   **Windows** -- the plugin doesn't report notification clicks on desktop,
   so clicking the tray icon (or Open Grunt) opens the chat last notified
   about. **Linux/macOS** -- same fallback; not checked by hand yet.
+- **Files and folders** (#776, Task 39). `GET /api/fs/dirs?path=<abs>` lists
+  one folder's sub-folder names (never files; links not listed; drive roots
+  on Windows). `POST /api/chats/:id/attachments/from-path {path}` attaches an
+  inert raster image straight from disk (by extension, 25MB cap, JSON body
+  only); it reads a caller-named file, so it must never be exposed on the
+  peer listener (Task 46). In the desktop app the Inspector's folder form
+  has **Choose folder…** (native dialog, `tauri-plugin-dialog`); the composer
+  has an **Attach** button in both modes (a file input, which WebView2 shows
+  as the native picker) and now loads a chat's unsent attachments as chips
+  when it opens. `--open-folder <path>` and `--send <file>...` open a new
+  chat (default profile) with that folder, or those images attached; the
+  first launch's arguments come from the `launch_args` command, once, later
+  launches' through `open-args`. Explorer verbs arrive with the installer
+  (Task 41).
 
 ## Settings UI
 

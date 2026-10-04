@@ -14,8 +14,10 @@ const isPermissionGranted = vi.fn();
 const requestPermission = vi.fn();
 const sendNotification = vi.fn();
 vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted, requestPermission, sendNotification }));
+const openDialog = vi.fn();
+vi.mock('@tauri-apps/plugin-dialog', () => ({ open: openDialog }));
 
-import { autostart, desktopBootstrap, isDesktop, isMainWindowFocused, onDesktopEvent, setTrayStatus, showNotification } from './bridge.js';
+import { autostart, desktopBootstrap, isDesktop, isMainWindowFocused, launchArgs, onDesktopEvent, pickFolder, setTrayStatus, showNotification } from './bridge.js';
 
 function enterDesktop() {
   (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = {};
@@ -40,6 +42,29 @@ describe('desktop bridge', () => {
     expect(isDesktop()).toBe(true);
     await expect(desktopBootstrap()).resolves.toEqual({ baseUrl: 'http://127.0.0.1:51234', token: 'tok' });
     expect(invoke).toHaveBeenCalledWith('bootstrap');
+  });
+
+  it('pickFolder and launchArgs do nothing in a browser', async () => {
+    await expect(pickFolder()).resolves.toBeNull();
+    await expect(launchArgs()).resolves.toEqual([]);
+    expect(openDialog).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('pickFolder opens the native folder dialog and returns the path, or null when cancelled', async () => {
+    enterDesktop();
+    openDialog.mockResolvedValueOnce('E:\\Work');
+    await expect(pickFolder()).resolves.toBe('E:\\Work');
+    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true, multiple: false }));
+    openDialog.mockResolvedValueOnce(null);
+    await expect(pickFolder()).resolves.toBeNull();
+  });
+
+  it("launchArgs asks the shell for this launch's arguments", async () => {
+    enterDesktop();
+    invoke.mockResolvedValue(['grunt.exe', '--send', 'a.png']);
+    await expect(launchArgs()).resolves.toEqual(['grunt.exe', '--send', 'a.png']);
+    expect(invoke).toHaveBeenCalledWith('launch_args');
   });
 
   it('in a browser the window counts as focused and notifications do nothing', async () => {
@@ -88,13 +113,13 @@ describe('desktop bridge', () => {
     listen.mockResolvedValue(unlisten);
     const cb = vi.fn();
 
-    const off = await onDesktopEvent('tray-new-chat', cb);
-    const handler = listen.mock.calls[0]![1] as () => void;
-    handler();
+    const off = await onDesktopEvent('open-args', cb);
+    const handler = listen.mock.calls[0]![1] as (event: { payload: unknown }) => void;
+    handler({ payload: ['grunt.exe', '--send', 'a.png'] });
     off();
 
-    expect(listen.mock.calls[0]![0]).toBe('tray-new-chat');
-    expect(cb).toHaveBeenCalledTimes(1);
+    expect(listen.mock.calls[0]![0]).toBe('open-args');
+    expect(cb).toHaveBeenCalledWith(['grunt.exe', '--send', 'a.png']);
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
