@@ -129,6 +129,12 @@ export interface TurnResult {
   assistantMessageIds: string[];
 }
 
+/** What `POST /chats/:id/regenerate` returns: the new reply, under the same user message. */
+export interface RegenerateResult {
+  userMessageId: string;
+  assistantMessageId: string;
+}
+
 export interface ChatMessagesResult {
   messages: CanonMessage[];
   headMessageId: string | null;
@@ -260,6 +266,9 @@ export const api = {
     cancel: (messageId: string) => post<void>(`/messages/${messageId}/cancel`),
     retry: (messageId: string) => post<{ messageId: string }>(`/messages/${messageId}/retry`),
     setHead: (chatId: string, messageId: string) => post<Chat>(`/chats/${chatId}/head`, { messageId }),
+    /** One more reply under the user message `messageId` answers, by the profile that wrote `messageId` (or `profileId`). Makes the new reply the head. */
+    regenerate: (chatId: string, messageId: string, profileId?: string) =>
+      post<RegenerateResult>(`/chats/${chatId}/regenerate`, { messageId, ...(profileId ? { profileId } : {}) }),
   },
 
   mcpServers: {

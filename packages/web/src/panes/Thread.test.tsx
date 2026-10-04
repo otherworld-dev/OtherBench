@@ -11,6 +11,8 @@ vi.mock('../state/api.js', () => ({
     turns: {
       setHead: vi.fn(),
       retry: vi.fn(),
+      regenerate: vi.fn(),
+      create: vi.fn(),
     },
     chats: { patch: vi.fn() },
     attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
@@ -22,6 +24,8 @@ import { api } from '../state/api.js';
 
 const mockedSetHead = vi.mocked(api.turns.setHead);
 const mockedRetry = vi.mocked(api.turns.retry);
+const mockedRegenerate = vi.mocked(api.turns.regenerate);
+const mockedCreate = vi.mocked(api.turns.create);
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -70,6 +74,8 @@ function reset(): void {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   mockedSetHead.mockReset();
   mockedRetry.mockReset();
+  mockedRegenerate.mockReset();
+  mockedCreate.mockReset();
 }
 
 /**
@@ -405,5 +411,179 @@ describe('Thread composer per chat', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('Thread regenerate, edit and branch switching', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  const asst = (id: string, parentId: string, createdAt: number, extra: Partial<CanonMessage> = {}): CanonMessage =>
+    variantMessage(id, parentId, {
+      createdAt,
+      parts: [{ type: 'text', text: `reply ${id}` }],
+      producedBy: { profileId: 'p1', profileName: 'Default', connectionId: 'c1', modelId: 'model-x', ...(extra.producedBy ?? {}) },
+      ...extra,
+    });
+  const usr = (id: string, parentId: string | null, createdAt: number, text = `text of ${id}`): CanonMessage =>
+    makeMessage(id, 'chat-1', { role: 'user', parentId, createdAt, parts: [{ type: 'text', text }] });
+  const load = (...ms: CanonMessage[]): void => useGruntStore.getState().loadMessages('chat-1', ms, null);
+  const regen = { regenerated: true, profileId: 'p1', profileName: 'Default', connectionId: 'c1', modelId: 'model-x' };
+
+  function seedProfile(): void {
+    useGruntStore.getState().setProfiles([
+      {
+        id: 'p1', name: 'Default', description: null, colour: null, connectionId: 'c1', modelId: 'model-x', systemPrompt: null,
+        params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null,
+      },
+    ]);
+  }
+
+  function mount(headMessageId: string) {
+    useGruntStore.getState().setChats([makeChat({ headMessageId })]);
+    return render(<ThreadForChat chatId="chat-1" />);
+  }
+
+  it('Regenerate calls the endpoint for that reply, registers the new reply and makes it the active branch', async () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2));
+    mockedRegenerate.mockResolvedValue({ userMessageId: 'u1', assistantMessageId: 'a2' });
+    mount('u1');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Regenerate' }));
+
+    await waitFor(() => expect(mockedRegenerate).toHaveBeenCalledWith('chat-1', 'a1'));
+    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('a2'));
+    expect(useGruntStore.getState().messages['a2']).toMatchObject({ parentId: 'u1', role: 'assistant', status: 'streaming' });
+    expect(useGruntStore.getState().messages['a2']?.producedBy).toMatchObject({ profileId: 'p1', regenerated: true });
+    // No compare tab strip -- a regenerated pair is browsed with the switcher.
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
+    expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 2');
+  });
+
+  it('shows the error and leaves the thread alone when regenerate is rejected', async () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2));
+    mockedRegenerate.mockRejectedValue(new Error('nope'));
+    mount('u1');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/regenerate/i);
+    expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('u1');
+  });
+
+  it('switches branches: the thread shows that branch down to its tip and head moves there', async () => {
+    // u1 -> a1 ; u1 -> a2 (regenerated) -> u2 -> a3
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a2', 'u1', 3, { producedBy: regen }), usr('u2', 'a2', 4), asst('a3', 'u2', 5));
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('a3');
+    const user = userEvent.setup();
+    expect(screen.getByText('reply a3')).toBeInTheDocument();
+    expect(screen.queryByText('reply a1')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'a1'));
+    expect(screen.getByText('reply a1')).toBeInTheDocument();
+    expect(screen.queryByText('reply a3')).not.toBeInTheDocument();
+    expect(screen.queryByText('text of u2')).not.toBeInTheDocument();
+
+    // And back: the tip of the regenerated branch is the last message below it.
+    await user.click(screen.getByRole('button', { name: 'Next branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenLastCalledWith('chat-1', 'a3'));
+    expect(screen.getByText('reply a3')).toBeInTheDocument();
+  });
+
+  it('displays a branch whose head is still on its user message down through a regenerated pair without opening compare tabs', () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a2', 'u1', 3, { producedBy: regen }));
+    mount('u1');
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
+    expect(screen.getByText('reply a2')).toBeInTheDocument();
+  });
+
+  it('rolls the switch back when the server rejects the new head', async () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a2', 'u1', 3, { producedBy: regen }));
+    mockedSetHead.mockRejectedValue(new Error('refused'));
+    mount('a2');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('a2'));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('Edit opens the message inline; saving posts a sibling user message under the same parent with the chat profile, and moves head to it', async () => {
+    seedProfile();
+    load(usr('u1', null, 1, 'first'), asst('a1', 'u1', 2), usr('u2', 'a1', 3, 'second'), asst('a2', 'u2', 4));
+    useGruntStore.getState().setChats([makeChat({ headMessageId: 'a2' })]);
+    mockedCreate.mockResolvedValue({ userMessageId: 'u2b', assistantMessageIds: ['a2b'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    render(<ThreadForChat chatId="chat-1" />);
+    const user = userEvent.setup();
+
+    const editButtons = screen.getAllByRole('button', { name: 'Edit' });
+    await user.click(editButtons[1]!); // the second user message
+    const box = screen.getByRole('textbox', { name: 'Edit message' });
+    expect(box).toHaveValue('second');
+    await user.clear(box);
+    await user.type(box, 'second, reworded');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith('chat-1', { parentId: 'a1', parts: [{ type: 'text', text: 'second, reworded' }], profileIds: ['p1'] })
+    );
+    await waitFor(() => expect(useGruntStore.getState().chats[0]?.headMessageId).toBe('u2b'));
+    expect(useGruntStore.getState().messages['u2b']).toMatchObject({ parentId: 'a1', role: 'user' });
+    expect(useGruntStore.getState().messages['a2b']).toMatchObject({ parentId: 'u2b', role: 'assistant' });
+    // The original is still in the tree, reachable by the switcher on the edited message.
+    expect(useGruntStore.getState().messages['u2']).toBeDefined();
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument());
+    expect(within(screen.getByTestId('thread-scroll')).getByText('second, reworded')).toBeInTheDocument();
+    const switchers = screen.getAllByTestId('branch-switcher');
+    expect(switchers[0]).toHaveTextContent('2 / 2');
+    expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument();
+  });
+
+  it('Cancel closes the editor without sending anything', async () => {
+    seedProfile();
+    load(usr('u1', null, 1), asst('a1', 'u1', 2));
+    mount('a1');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('textbox', { name: 'Edit message' })).not.toBeInTheDocument();
+    expect(mockedCreate).not.toHaveBeenCalled();
+  });
+
+  it('editing the FIRST message makes a sibling root, switchable', async () => {
+    seedProfile();
+    load(usr('u1', null, 1, 'hello'), asst('a1', 'u1', 2));
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1b', assistantMessageIds: ['a1b'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('a1');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.clear(screen.getByRole('textbox', { name: 'Edit message' }));
+    await user.type(screen.getByRole('textbox', { name: 'Edit message' }), 'hello there');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ parentId: null })));
+    await waitFor(() => expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 2'));
+  });
+
+  it('disables Regenerate and Edit while any reply in the chat is streaming', () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), usr('u2', 'a1', 3), asst('a2', 'u2', 4, { status: 'streaming', parts: [] }));
+    mount('u2');
+    for (const b of screen.getAllByRole('button', { name: 'Edit' })) expect(b).toBeDisabled();
+    for (const b of screen.getAllByRole('button', { name: 'Regenerate' })) expect(b).toBeDisabled();
+  });
+
+  it('does not offer Regenerate or the branch switcher inside a compare turn, which keeps its tabs', () => {
+    load(usr('u1', null, 1), asst('x', 'u1', 2), asst('y', 'u1', 2));
+    mount('u1');
+    expect(screen.getByTestId('variant-tabs')).toBeInTheDocument();
+    expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).not.toBeInTheDocument();
+  });
+
+  it('a resolved compare turn still shows its chip, not a switcher or Regenerate', () => {
+    load(usr('u1', null, 1), asst('x', 'u1', 2), asst('y', 'u1', 2));
+    mount('x');
+    expect(screen.getByTestId('reopen-variants-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).not.toBeInTheDocument();
   });
 });

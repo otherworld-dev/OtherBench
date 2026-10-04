@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { api } from '../state/api.js';
@@ -141,6 +141,115 @@ function renderParts(parts: Part[]): JSX.Element[] {
   return out;
 }
 
+/** Position within a set of sibling messages that aren't a compare turn: regenerated replies or edited prompts. */
+export interface BranchInfo {
+  /** Zero-based position of this message among its siblings. */
+  index: number;
+  total: number;
+  /** -1 for the previous sibling, 1 for the next. */
+  onSelect: (delta: -1 | 1) => void;
+}
+
+/** The compact `‹ 2 / 3 ›` control. Quiet by design: it only appears when there is something to switch to. */
+function BranchSwitcher({ branch }: { branch: BranchInfo }): JSX.Element {
+  const arrow =
+    'rounded px-1 leading-none hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent';
+  return (
+    <span data-testid="branch-switcher" className="inline-flex items-center gap-0.5 text-xs text-[var(--text-muted)]">
+      <button type="button" aria-label="Previous branch" disabled={branch.index <= 0} onClick={() => branch.onSelect(-1)} className={arrow}>
+        ‹
+      </button>
+      <span className="tabular-nums">
+        {branch.index + 1} / {branch.total}
+      </span>
+      <button type="button" aria-label="Next branch" disabled={branch.index >= branch.total - 1} onClick={() => branch.onSelect(1)} className={arrow}>
+        ›
+      </button>
+    </span>
+  );
+}
+
+type AttachmentPart = Extract<Part, { type: 'image' | 'file' }>;
+
+/**
+ * Inline editor for a user message: its text in a textarea, plus its
+ * attachment chips (removable -- only from this edit; the original message
+ * keeps them). Saving hands back the new parts; the caller sends them as a
+ * sibling message.
+ */
+function MessageEditor({
+  message,
+  editing,
+}: {
+  message: CanonMessage;
+  editing: NonNullable<MessageProps['editing']>;
+}): JSX.Element {
+  const [text, setText] = useState(() =>
+    message.parts
+      .map((p) => (p.type === 'text' ? p.text : ''))
+      .filter(Boolean)
+      .join('\n')
+  );
+  const [attachments, setAttachments] = useState<AttachmentPart[]>(() =>
+    message.parts.filter((p): p is AttachmentPart => p.type === 'image' || p.type === 'file')
+  );
+  const trimmed = text.trim();
+  const canSave = !editing.busy && (trimmed.length > 0 || attachments.length > 0);
+
+  function save(): void {
+    if (!canSave) return;
+    editing.onSave([...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []), ...attachments]);
+  }
+
+  return (
+    <div className="space-y-2">
+      <textarea
+        autoFocus
+        aria-label="Edit message"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') editing.onCancel();
+          else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save();
+        }}
+        rows={Math.min(12, Math.max(2, text.split('\n').length))}
+        className="w-full resize-y rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+      />
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {attachments.map((p, i) => (
+            <AttachmentChip
+              key={p.attachmentId}
+              filename={p.type === 'file' ? p.filename : imageDisplayName(p.attachmentId, p.mime)}
+              mime={p.mime}
+              previewUrl={api.attachments.previewable(p.mime) ? api.attachments.contentUrl(p.attachmentId) : undefined}
+              onRemove={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+            />
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={!canSave}
+          className="rounded bg-[var(--accent)] px-3 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+        >
+          Save and send
+        </button>
+        <button
+          type="button"
+          onClick={editing.onCancel}
+          className="rounded border border-[var(--border)] px-3 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+        >
+          Cancel
+        </button>
+        <span className="text-xs text-[var(--text-faint)]">Sends as a new branch; the original stays.</span>
+      </div>
+    </div>
+  );
+}
+
 export interface MessageProps {
   message: CanonMessage;
   /**
@@ -156,6 +265,16 @@ export interface MessageProps {
   pendingApprovals?: ApprovalRequest[];
   /** Required whenever `pendingApprovals` is non-empty; omitted (with an empty array) everywhere a message can never have one, e.g. read-only historical views. */
   onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
+  /** Shows the `‹ 2 / 3 ›` switcher: this message has non-compare siblings (a regenerated reply, an edited prompt). */
+  branch?: BranchInfo;
+  /** Offers "Regenerate" (assistant messages). Omit where it doesn't apply, e.g. a compare turn's variants. */
+  onRegenerate?: () => void;
+  /** Offers "Edit" (user messages). */
+  onEdit?: () => void;
+  /** Greys out Regenerate/Edit, e.g. while a reply in this chat is streaming. */
+  actionsDisabled?: boolean;
+  /** Replaces a user message's body with the inline editor. */
+  editing?: { onSave: (parts: Part[]) => void; onCancel: () => void; busy?: boolean };
 }
 
 /**
@@ -171,6 +290,11 @@ export function Message({
   onReopenVariants,
   pendingApprovals = [],
   onResolveApproval,
+  branch,
+  onRegenerate,
+  onEdit,
+  actionsDisabled = false,
+  editing,
 }: MessageProps): JSX.Element {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
@@ -184,12 +308,13 @@ export function Message({
     : [];
 
   return (
-    <article id={`msg-${message.id}`} data-role={message.role} data-status={message.status} className="space-y-1">
+    <article id={`msg-${message.id}`} data-role={message.role} data-status={message.status} className="group space-y-1">
       <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
         <span className="font-medium text-[var(--text)]">{label}</span>
         {!isUser && message.producedBy && <span>{message.producedBy.modelId}</span>}
         {message.status === 'error' && <span className="text-[var(--danger)]">error</span>}
         {message.status === 'cancelled' && <span>stopped</span>}
+        {branch && branch.total > 1 && <BranchSwitcher branch={branch} />}
         {otherVariantsCount > 0 && (
           <button
             type="button"
@@ -202,12 +327,16 @@ export function Message({
         )}
       </div>
 
+      {isUser && editing ? (
+        <MessageEditor message={message} editing={editing} />
+      ) : (
       <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
         {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : renderParts(message.parts)}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
+      )}
 
-      {userAttachmentParts.length > 0 && (
+      {userAttachmentParts.length > 0 && !editing && (
         <div className="flex flex-wrap gap-1.5">
           {userAttachmentParts.map((p, i) => (
             <AttachmentPartChip key={i} part={p} />
@@ -225,6 +354,31 @@ export function Message({
 
       {message.status === 'error' && message.error && (
         <p className="text-xs text-[var(--danger)]">{message.error.message}</p>
+      )}
+
+      {!editing && (onRegenerate || onEdit) && (
+        <div className="flex gap-3 text-xs text-[var(--text-faint)] opacity-50 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {onRegenerate && (
+            <button
+              type="button"
+              onClick={onRegenerate}
+              disabled={actionsDisabled}
+              className="hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-faint)]"
+            >
+              Regenerate
+            </button>
+          )}
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              disabled={actionsDisabled}
+              className="hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-faint)]"
+            >
+              Edit
+            </button>
+          )}
+        </div>
       )}
     </article>
   );

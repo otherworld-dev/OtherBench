@@ -3,35 +3,9 @@ import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { Connection, Profile } from '@grunt/core/types/config.js';
 import { api, ApiError } from '../state/api.js';
+import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { AttachmentChip } from './AttachmentChip.js';
-
-/**
- * Fabricates the local stubs for a just-created turn's messages so the
- * thread updates the instant the request resolves, without waiting for a
- * `GET /chats/:id/messages` round trip -- mirrors exactly what
- * `TurnRunner.run` creates server-side (packages/core/src/domain/turn.ts).
- * Any events that arrived over the still-open SSE connection before this
- * runs are already buffered under these same ids (see store.ts's
- * `applyTurnEvent`) and get folded in the moment `registerMessage` runs.
- */
-function buildUserStub(chat: Chat, id: string, parentId: string | null, parts: Part[]): CanonMessage {
-  return { id, chatId: chat.id, parentId, role: 'user', parts, status: 'complete', error: null, producedBy: null, createdAt: Date.now() };
-}
-
-function buildAssistantStub(chat: Chat, id: string, parentId: string, profile: { id: string; name: string; connectionId: string; modelId: string }): CanonMessage {
-  return {
-    id,
-    chatId: chat.id,
-    parentId,
-    role: 'assistant',
-    parts: [],
-    status: 'streaming',
-    error: null,
-    producedBy: { profileId: profile.id, profileName: profile.name, connectionId: profile.connectionId, modelId: profile.modelId },
-    createdAt: Date.now(),
-  };
-}
 
 /**
  * The `Part` an uploaded attachment becomes on the outgoing message (task

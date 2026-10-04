@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { Message } from './Message.js';
 
@@ -207,6 +207,101 @@ describe('Message', () => {
       expect(screen.getByText('Used 1 tool: Glob')).toBeInTheDocument();
       expect(screen.getByText('between')).toBeInTheDocument();
       expect(screen.getByText('Used 1 tool: Grep')).toBeInTheDocument();
+    });
+  });
+
+  describe('branch switcher', () => {
+    it('shows "‹ 2 / 3 ›" and steps to the previous/next sibling', async () => {
+      const onSelect = vi.fn();
+      render(<Message message={base()} branch={{ index: 1, total: 3, onSelect }} />);
+      expect(screen.getByTestId('branch-switcher')).toHaveTextContent('2 / 3');
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Previous branch' }));
+      await user.click(screen.getByRole('button', { name: 'Next branch' }));
+      expect(onSelect.mock.calls).toEqual([[-1], [1]]);
+    });
+
+    it('disables the arrow with nothing further in that direction', () => {
+      const { rerender } = render(<Message message={base()} branch={{ index: 0, total: 2, onSelect: vi.fn() }} />);
+      expect(screen.getByRole('button', { name: 'Previous branch' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Next branch' })).toBeEnabled();
+      rerender(<Message message={base()} branch={{ index: 1, total: 2, onSelect: vi.fn() }} />);
+      expect(screen.getByRole('button', { name: 'Next branch' })).toBeDisabled();
+    });
+
+    it('renders nothing without a branch prop', () => {
+      render(<Message message={base()} />);
+      expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('regenerate and edit actions', () => {
+    it('offers Regenerate on an assistant message only when a handler is given, and calls it', async () => {
+      const onRegenerate = vi.fn();
+      const { rerender } = render(<Message message={base()} />);
+      expect(screen.queryByRole('button', { name: 'Regenerate' })).not.toBeInTheDocument();
+      rerender(<Message message={base()} onRegenerate={onRegenerate} />);
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Regenerate' }));
+      expect(onRegenerate).toHaveBeenCalledOnce();
+    });
+
+    it('offers Edit on a user message, and disables both actions when actionsDisabled', async () => {
+      const onEdit = vi.fn();
+      const user = base({ role: 'user', producedBy: null });
+      const { rerender } = render(<Message message={user} onEdit={onEdit} />);
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
+      expect(onEdit).toHaveBeenCalledOnce();
+      rerender(<Message message={user} onEdit={onEdit} actionsDisabled />);
+      expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
+      rerender(<Message message={base()} onRegenerate={vi.fn()} actionsDisabled />);
+      expect(screen.getByRole('button', { name: 'Regenerate' })).toBeDisabled();
+    });
+
+    it('does not offer Regenerate while the message is streaming', () => {
+      render(<Message message={base({ status: 'streaming' })} onRegenerate={vi.fn()} actionsDisabled />);
+      expect(screen.getByRole('button', { name: 'Regenerate' })).toBeDisabled();
+    });
+  });
+
+  describe('inline editing', () => {
+    const userMsg = (parts: CanonMessage['parts']) => base({ role: 'user', producedBy: null, parts });
+
+    it('opens a textarea holding the message text; Save sends the edited text', async () => {
+      const onSave = vi.fn();
+      render(<Message message={userMsg([{ type: 'text', text: 'original' }])} editing={{ onSave, onCancel: vi.fn() }} />);
+      const box = screen.getByRole('textbox', { name: 'Edit message' });
+      expect(box).toHaveValue('original');
+      const user = userEvent.setup();
+      await user.clear(box);
+      await user.type(box, 'changed');
+      await user.click(screen.getByRole('button', { name: 'Save and send' }));
+      expect(onSave).toHaveBeenCalledWith([{ type: 'text', text: 'changed' }]);
+    });
+
+    it('keeps the attachment parts unless the user removes them', async () => {
+      const onSave = vi.fn();
+      const img = { type: 'image', attachmentId: 'a1', mime: 'image/png' } as const;
+      const file = { type: 'file', attachmentId: 'a2', mime: 'text/plain', filename: 'n.txt' } as const;
+      render(<Message message={userMsg([{ type: 'text', text: 'hi' }, img, file])} editing={{ onSave, onCancel: vi.fn() }} />);
+      const user = userEvent.setup();
+      expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2);
+      await user.click(screen.getAllByRole('button', { name: /remove/i })[0]!);
+      await user.click(screen.getByRole('button', { name: 'Save and send' }));
+      expect(onSave).toHaveBeenCalledWith([{ type: 'text', text: 'hi' }, file]);
+    });
+
+    it('will not save an empty edit, and Cancel/Escape leave without saving', async () => {
+      const onSave = vi.fn();
+      const onCancel = vi.fn();
+      render(<Message message={userMsg([{ type: 'text', text: 'x' }])} editing={{ onSave, onCancel }} />);
+      const user = userEvent.setup();
+      await user.clear(screen.getByRole('textbox', { name: 'Edit message' }));
+      expect(screen.getByRole('button', { name: 'Save and send' })).toBeDisabled();
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(onCancel).toHaveBeenCalledOnce();
+      await user.type(screen.getByRole('textbox', { name: 'Edit message' }), '{Escape}');
+      expect(onCancel).toHaveBeenCalledTimes(2);
+      expect(onSave).not.toHaveBeenCalled();
     });
   });
 });
