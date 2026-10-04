@@ -461,3 +461,30 @@ describe('Thread approval prompts that were discarded server-side', () => {
     expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
   });
 });
+
+describe('Thread error mid-step', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  it('keeps the approval card and the Stop button while the server is still streaming after an error event, and drops the card on the terminal status', () => {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const reply = variantMessage('reply', 'root', { status: 'streaming' });
+    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    const chat = makeChat({ headMessageId: 'reply' });
+    render(<Thread chat={chat} />);
+    act(() => {
+      useGruntStore.getState().applyTurnEvent({
+        messageId: 'reply',
+        type: 'approval-request',
+        request: { id: 'req-1', chatId: 'chat-1', messageId: 'reply', toolName: 'write_file', risk: 'mutate', source: 'fs', args: {}, summary: 'write_file(a.txt)' },
+      });
+      useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'error', error: { kind: 'rate_limit', message: 'overloaded', retryable: true } });
+    });
+
+    expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+
+    act(() => useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'error' }));
+    expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
+  });
+});
