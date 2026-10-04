@@ -579,7 +579,8 @@ describe('POST /api/chats/:id/regenerate', () => {
     expect(out.status).toBe(409);
     expect(JSON.stringify(await out.json())).toMatch(/compare/i);
     expect(container.store.messages.children(userMessageId)).toHaveLength(2);
-    expect(container.store.chats.get(chatId)!.headMessageId).toBeNull();
+    // Head stays where posting the turn put it: on the user message.
+    expect(container.store.chats.get(chatId)!.headMessageId).toBe(userMessageId);
   });
 
   it('409s for a streaming message and creates nothing', async () => {

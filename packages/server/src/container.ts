@@ -25,6 +25,7 @@ import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ProjectMemoryService } from './memory/service.js';
 import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
+import { AppEventBus, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 
 /** The wired-up dependency set every route handler is given. */
@@ -50,6 +51,12 @@ export interface Container {
    * that never touch memory can build a Container without one.
    */
   memory?: ProjectMemoryService;
+  /**
+   * App-wide events behind `GET /api/events` (v2 plan, Task 34). Always set by
+   * `createContainer`, whose store announces chat changes on it; optional
+   * only so route tests can build a Container without one.
+   */
+  events?: AppEventBus;
   close(): void;
 }
 
@@ -153,7 +160,9 @@ export async function createContainer(options: ContainerOptions): Promise<Contai
 async function openContainer(options: ContainerOptions): Promise<Container> {
   const db = openDatabase(options.dbPath);
   runMigrations(db);
-  const store = new SqliteStore(db);
+  // Every chat change, whoever makes it, is announced on the app-wide stream.
+  const events = new AppEventBus();
+  const store = withChatEvents(new SqliteStore(db), events);
 
   // A message row left `status: 'streaming'` means the process that was
   // writing it is gone -- ASSUMING a single Grunt server process per
@@ -265,11 +274,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     },
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
+  events.attach(turnRunner, store);
   const memory = new ProjectMemoryService({ store, engine, resolveProfile: (id) => resolveProfile({ store, secrets }, id) });
   memory.attach(turnRunner);
 
   const container: Container = {
     store,
+    events,
     secrets,
     engine,
     registry,

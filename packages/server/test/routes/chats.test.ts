@@ -533,7 +533,8 @@ describe('GET /api/chats/:id/messages', () => {
     expect(res.status).toBe(200);
     const body = (await json(res)) as { messages: { id: string }[]; headMessageId: string | null };
 
-    expect(body.headMessageId).toBeNull();
+    // Posting a turn moves the head to its user message (the compare turn stays unresolved).
+    expect(body.headMessageId).toBe(userMessageId);
     const ids = body.messages.map((m) => m.id);
     expect(ids).toContain(userMessageId);
     for (const id of assistantMessageIds) expect(ids).toContain(id);

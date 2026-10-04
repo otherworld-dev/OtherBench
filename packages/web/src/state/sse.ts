@@ -110,10 +110,17 @@ export function createFetchSseConnect(fetchImpl: typeof fetch = (...args) => fet
   };
 }
 
-export interface SseClientOptions {
+/**
+ * `H` is what the stream's `hello` carries and `E` each event. The defaults
+ * are one chat's turn stream; `GET /api/events` uses the same client with
+ * its own types (useAppEvents.ts).
+ */
+export interface SseClientOptions<H = HelloBuffer[], E = TurnEvent> {
   url: string;
-  onHello: (buffers: HelloBuffer[]) => void;
-  onEvent: (event: TurnEvent) => void;
+  onHello: (hello: H) => void;
+  onEvent: (event: E) => void;
+  /** Picks `H` out of the parsed `hello` payload. Defaults to the chat stream's `inFlight` array. */
+  readHello?: (payload: unknown) => H;
   onStatusChange?: (status: StreamConnectionStatus) => void;
   /** Injectable for tests; defaults to a `fetch`-based stream carrying the transport's auth header. */
   connect?: SseConnect;
@@ -129,14 +136,14 @@ export interface SseClientOptions {
  * snapshot, which `onHello` (wired to `useGruntStore.applyHello`) reconciles
  * without duplicating anything already applied live -- see reducer.ts.
  */
-export class SseClient {
-  private readonly opts: SseClientOptions;
+export class SseClient<H = HelloBuffer[], E = TurnEvent> {
+  private readonly opts: SseClientOptions<H, E>;
   private conn: SseConnection | null = null;
   private attempt = 0;
   private closed = true;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(opts: SseClientOptions) {
+  constructor(opts: SseClientOptions<H, E>) {
     this.opts = opts;
   }
 
@@ -168,12 +175,15 @@ export class SseClient {
         if (type === 'hello') {
           this.attempt = 0; // a successful connect resets the backoff schedule
           this.opts.onStatusChange?.('open');
-          const parsed = this.parse<{ inFlight: HelloBuffer[] }>(data);
-          if (parsed) this.opts.onHello(parsed.inFlight);
+          const parsed = this.parse<unknown>(data);
+          if (parsed) {
+            const read = this.opts.readHello ?? ((payload: unknown) => (payload as { inFlight: HelloBuffer[] }).inFlight as H);
+            this.opts.onHello(read(parsed));
+          }
         } else if (type === 'message') {
           // The registry's per-event sends (routes/turns.ts: `sink.send(null, event)`)
           // omit `event:`, which SSE treats as the default `message` type.
-          const event = this.parse<TurnEvent>(data);
+          const event = this.parse<E>(data);
           if (event) this.opts.onEvent(event);
         }
       },

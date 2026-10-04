@@ -8,6 +8,8 @@
 export interface SseSink {
   /** Writes one SSE record. `event: <name>` is omitted for `event === null` (an unnamed/default event). */
   send(event: string | null, data: unknown): void;
+  /** Writes an SSE comment line (`: text`), which clients ignore: a keepalive. */
+  comment(text: string): void;
 }
 
 /**
@@ -39,6 +41,9 @@ export function sseStream(setup: (sink: SseSink) => () => void): Response {
           }
           lines.push('', '');
           controller.enqueue(encoder.encode(lines.join('\n')));
+        },
+        comment(text) {
+          controller.enqueue(encoder.encode(`: ${text.replace(/\n/g, ' ')}\n\n`));
         },
       };
       cleanup = setup(sink);
