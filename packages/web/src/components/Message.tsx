@@ -148,6 +148,8 @@ export interface BranchInfo {
   total: number;
   /** -1 for the previous sibling, 1 for the next. */
   onSelect: (delta: -1 | 1) => void;
+  /** Both arrows inert, e.g. while a reply streams (a switch would move the head under it). */
+  disabled?: boolean;
 }
 
 /** The compact `‹ 2 / 3 ›` control. Quiet by design: it only appears when there is something to switch to. */
@@ -155,14 +157,19 @@ function BranchSwitcher({ branch }: { branch: BranchInfo }): JSX.Element {
   const arrow =
     'rounded px-1 leading-none hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent';
   return (
-    <span data-testid="branch-switcher" className="inline-flex items-center gap-0.5 text-xs text-[var(--text-muted)]">
-      <button type="button" aria-label="Previous branch" disabled={branch.index <= 0} onClick={() => branch.onSelect(-1)} className={arrow}>
+    <span
+      data-testid="branch-switcher"
+      role="group"
+      aria-label={`Branch ${branch.index + 1} of ${branch.total}`}
+      className="inline-flex items-center gap-0.5 text-xs text-[var(--text-muted)]"
+    >
+      <button type="button" aria-label="Previous branch" disabled={branch.disabled || branch.index <= 0} onClick={() => branch.onSelect(-1)} className={arrow}>
         ‹
       </button>
-      <span className="tabular-nums">
+      <span className="tabular-nums" aria-hidden="true">
         {branch.index + 1} / {branch.total}
       </span>
-      <button type="button" aria-label="Next branch" disabled={branch.index >= branch.total - 1} onClick={() => branch.onSelect(1)} className={arrow}>
+      <button type="button" aria-label="Next branch" disabled={branch.disabled || branch.index >= branch.total - 1} onClick={() => branch.onSelect(1)} className={arrow}>
         ›
       </button>
     </span>
@@ -244,7 +251,11 @@ function MessageEditor({
         >
           Cancel
         </button>
-        <span className="text-xs text-[var(--text-faint)]">Sends as a new branch; the original stays.</span>
+        <span className="text-xs text-[var(--text-muted)]">Sends as a new branch; the original stays.</span>
+      </div>
+      <div data-testid="edit-profile-note" className="text-xs text-[var(--text-muted)]">
+        {editing.profileName ? `Answered by ${editing.profileName}.` : 'Answered by the chat profile.'}
+        {editing.compareNote && ' This was a compare prompt; the edit goes to one profile only.'}
       </div>
     </div>
   );
@@ -274,7 +285,16 @@ export interface MessageProps {
   /** Greys out Regenerate/Edit, e.g. while a reply in this chat is streaming. */
   actionsDisabled?: boolean;
   /** Replaces a user message's body with the inline editor. */
-  editing?: { onSave: (parts: Part[]) => void; onCancel: () => void; busy?: boolean };
+  editing?: {
+    onSave: (parts: Part[]) => void;
+    onCancel: () => void;
+    /** Save is inert (a send is in flight, or a reply is streaming). */
+    busy?: boolean;
+    /** The profile that will answer the edit. */
+    profileName?: string;
+    /** The original was a compare turn's prompt: the edit goes to ONE profile. */
+    compareNote?: boolean;
+  };
 }
 
 /**
@@ -357,13 +377,13 @@ export function Message({
       )}
 
       {!editing && (onRegenerate || onEdit) && (
-        <div className="flex gap-3 text-xs text-[var(--text-faint)] opacity-50 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className="flex gap-3 text-xs text-[var(--text-muted)]">
           {onRegenerate && (
             <button
               type="button"
               onClick={onRegenerate}
               disabled={actionsDisabled}
-              className="hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-faint)]"
+              className="hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
             >
               Regenerate
             </button>
@@ -373,7 +393,7 @@ export function Message({
               type="button"
               onClick={onEdit}
               disabled={actionsDisabled}
-              className="hover:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-faint)]"
+              className="hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
             >
               Edit
             </button>

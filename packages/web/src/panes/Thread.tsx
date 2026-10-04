@@ -55,6 +55,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBusy, setEditBusy] = useState(false);
+  const [composerProfileId, setComposerProfileId] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
 
   const chatId = chat?.id ?? null;
   const chatMessages = useMemo(
@@ -157,7 +159,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }
 
   /** Branch switcher: head goes to the tip of `target`'s branch, so everything below it is shown. */
-  function selectBranch(target: CanonMessage): void {
+  function selectBranch(target: CanonMessage, siblings: CanonMessage[]): void {
+    setAnnouncement(`Branch ${siblings.findIndex((x) => x.id === target.id) + 1} of ${siblings.length}`);
     const tip = extendToTip(chatMessages, target.id).at(-1) ?? target;
     setEditingId(null);
     void moveHead(tip.id, "Couldn't switch branch -- the server rejected the change, so it was reverted. Please try again.");
@@ -181,10 +184,18 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     }
   }
 
-  /** The profile an edited message is re-sent with: the chat's own, else the one that answered the original, else the first available. */
+  /**
+   * The profile an edited message is re-sent with: the one that answered the
+   * original (what Regenerate uses too), else the composer picker's current
+   * choice, else the chat's own profile, else the first available.
+   */
   function editProfile(original: CanonMessage): { id: string; name: string; connectionId: string; modelId: string } | null {
-    const wanted = chat!.profileId ?? childrenOf(chatMessages, original.id).find((c) => c.producedBy)?.producedBy?.profileId ?? null;
-    return profiles.find((p) => p.id === wanted) ?? profiles.find((p) => p.archivedAt === null) ?? null;
+    const answeredBy = childrenOf(chatMessages, original.id).find((c) => c.producedBy)?.producedBy?.profileId ?? null;
+    for (const wanted of [answeredBy, composerProfileId, chat!.profileId]) {
+      const found = wanted ? profiles.find((p) => p.id === wanted) : undefined;
+      if (found) return found;
+    }
+    return profiles.find((p) => p.archivedAt === null) ?? null;
   }
 
   async function saveEdit(original: CanonMessage, parts: Part[]): Promise<void> {
@@ -320,8 +331,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                             total: siblings.length,
                             onSelect: (delta) => {
                               const target = siblings[siblings.findIndex((x) => x.id === m.id) + delta];
-                              if (target) selectBranch(target);
+                              if (target) selectBranch(target, siblings);
                             },
+                            disabled: chatStreaming || editBusy,
                           }
                         : undefined
                     }
@@ -330,7 +342,13 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     onEdit={m.role === 'user' ? () => setEditingId(m.id) : undefined}
                     editing={
                       editingId === m.id
-                        ? { onSave: (parts) => void saveEdit(m, parts), onCancel: () => setEditingId(null), busy: editBusy }
+                        ? {
+                            onSave: (parts) => void saveEdit(m, parts),
+                            onCancel: () => setEditingId(null),
+                            busy: editBusy || chatStreaming,
+                            profileName: editProfile(m)?.name,
+                            compareNote: isCompareSet(childrenOf(chatMessages, m.id)),
+                          }
                         : undefined
                     }
                   />
@@ -363,7 +381,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         )}
       </div>
-      <Composer key={chat.id} chat={chat} parentId={tailId} />
+      <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
+      <Composer key={chat.id} chat={chat} parentId={tailId} onPrimaryProfileChange={setComposerProfileId} />
     </main>
   );
 }

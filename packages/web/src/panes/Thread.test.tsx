@@ -586,4 +586,100 @@ describe('Thread regenerate, edit and branch switching', () => {
     expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Regenerate' })).not.toBeInTheDocument();
   });
+
+  const twoProfiles = (): void =>
+    useGruntStore.getState().setProfiles(
+      ['p1', 'p2'].map((id) => ({
+        id, name: `Profile ${id}`, description: null, colour: null, connectionId: 'c1', modelId: 'model-x', systemPrompt: null,
+        params: {}, toolPolicy: { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const }, isDefault: false, archivedAt: null,
+      }))
+    );
+
+  it('switching branches and then SENDING parents the new message on the switched branch tip, through a resolved compare turn', async () => {
+    seedProfile();
+    // u1 -> a1 ; u1 -> a1r (regenerated, newest).  a1 -> u2 -> {A, B(kept)} ; B -> u3 -> a3
+    load(
+      usr('u1', null, 1, 'k1'), asst('a1', 'u1', 2), asst('a1r', 'u1', 9, { producedBy: regen }),
+      usr('u2', 'a1', 3, 'k2'), asst('A', 'u2', 4), asst('B', 'u2', 4), usr('u3', 'B', 5, 'k3'), asst('a3', 'u3', 6)
+    );
+    mockedSetHead.mockResolvedValue(makeChat());
+    mockedCreate.mockResolvedValue({ userMessageId: 'u4', assistantMessageIds: ['a4'] });
+    mount('a1r');
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'a3'));
+    const scroll = within(screen.getByTestId('thread-scroll'));
+    expect(scroll.getByText('k3')).toBeInTheDocument();
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
+
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'k4{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ parentId: 'a3' })));
+  });
+
+  it('switching to a branch ending in an unresolved compare turn leaves the tabs open', async () => {
+    seedProfile();
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a1r', 'u1', 9, { producedBy: regen }), usr('u2', 'a1', 3), asst('A', 'u2', 4), asst('B', 'u2', 4));
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('a1r');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'u2'));
+    expect(screen.getByTestId('variant-tabs')).toBeInTheDocument();
+  });
+
+  it('Edit answers with the profile that answered the original reply, not chat.profileId, and says so', async () => {
+    twoProfiles();
+    load(usr('u1', null, 1), asst('a1', 'u1', 2, { producedBy: { profileId: 'p2', profileName: 'Profile p2', connectionId: 'c1', modelId: 'model-x' } }));
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1b', assistantMessageIds: ['a1b'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('a1');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByTestId('edit-profile-note')).toHaveTextContent('Profile p2');
+    await user.type(screen.getByRole('textbox', { name: 'Edit message' }), ' more');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ profileIds: ['p2'] })));
+  });
+
+  it('Edit with no reply to go by uses the composer picker selection before chat.profileId', async () => {
+    twoProfiles();
+    load(usr('u1', null, 1));
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1b', assistantMessageIds: ['a1b'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('u1');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /Profile p1/ }));
+    await user.click(screen.getByRole('option', { name: /Profile p2/ }));
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByTestId('edit-profile-note')).toHaveTextContent('Profile p2');
+    await user.type(screen.getByRole('textbox', { name: 'Edit message' }), '!');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ profileIds: ['p2'] })));
+  });
+
+  it('editing a compare prompt says the edit goes to one profile only', async () => {
+    seedProfile();
+    load(usr('u1', null, 1), asst('x', 'u1', 2), asst('y', 'u1', 2));
+    mount('x');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByTestId('edit-profile-note')).toHaveTextContent(/one profile/i);
+  });
+
+  it('disables the branch switcher while a reply streams', () => {
+    seedProfile();
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a1r', 'u1', 3, { producedBy: regen }), usr('u2', 'a1r', 4), asst('a2', 'u2', 5, { status: 'streaming', parts: [] }));
+    mount('u2');
+    expect(screen.getByRole('button', { name: 'Previous branch' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next branch' })).toBeDisabled();
+  });
+
+  it('announces a branch switch politely', async () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a2', 'u1', 3, { producedBy: regen }));
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('a2');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
+    const live = await screen.findByTestId('branch-announcer');
+    expect(live).toHaveAttribute('aria-live', 'polite');
+    expect(live).toHaveTextContent('Branch 1 of 2');
+  });
 });

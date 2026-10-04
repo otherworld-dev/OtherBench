@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { Connection, Profile } from '@grunt/core/types/config.js';
@@ -60,6 +60,8 @@ export interface ComposerProps {
    * back against a live server in the same chat.
    */
   parentId?: string | null;
+  /** Told the primary selected profile id whenever it changes (and on mount), so an inline edit elsewhere can use the picker's choice. */
+  onPrimaryProfileChange?: (profileId: string | null) => void;
 }
 
 /** True when the profile runs through Claude Code (its own tools, needs a workspace) rather than Grunt's tool layer. */
@@ -67,7 +69,7 @@ export function isClaudeCodeProfile(profile: Profile, connections: Connection[])
   return connections.find((c) => c.id === profile.connectionId)?.kind === 'claude_code';
 }
 
-export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
+export function Composer({ chat, parentId, onPrimaryProfileChange }: ComposerProps): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
   const connections = useGruntStore((s) => s.connections);
   const messages = useGruntStore((s) => s.messages);
@@ -89,6 +91,10 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const [autoError, setAutoError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const primaryId = selectedProfileIds[0] ?? null;
+  useEffect(() => {
+    onPrimaryProfileChange?.(primaryId);
+  }, [primaryId, onPrimaryProfileChange]);
 
   const selectedProfiles = selectedProfileIds.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p);
   const needsWorkspace = !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));

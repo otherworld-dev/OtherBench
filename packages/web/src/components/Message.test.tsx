@@ -229,6 +229,12 @@ describe('Message', () => {
       expect(screen.getByRole('button', { name: 'Next branch' })).toBeDisabled();
     });
 
+    it('gives the counter an accessible name and can be disabled wholesale', () => {
+      render(<Message message={base()} branch={{ index: 0, total: 2, disabled: true, onSelect: vi.fn() }} />);
+      expect(screen.getByRole('group', { name: 'Branch 1 of 2' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Next branch' })).toBeDisabled();
+    });
+
     it('renders nothing without a branch prop', () => {
       render(<Message message={base()} />);
       expect(screen.queryByTestId('branch-switcher')).not.toBeInTheDocument();
@@ -288,6 +294,18 @@ describe('Message', () => {
       await user.click(screen.getAllByRole('button', { name: /remove/i })[0]!);
       await user.click(screen.getByRole('button', { name: 'Save and send' }));
       expect(onSave).toHaveBeenCalledWith([{ type: 'text', text: 'hi' }, file]);
+    });
+
+    it('shows which profile will answer, a compare note, and will not save while busy', () => {
+      render(
+        <Message
+          message={userMsg([{ type: 'text', text: 'x' }])}
+          editing={{ onSave: vi.fn(), onCancel: vi.fn(), busy: true, profileName: 'Mock B', compareNote: true }}
+        />
+      );
+      expect(screen.getByTestId('edit-profile-note')).toHaveTextContent('Mock B');
+      expect(screen.getByTestId('edit-profile-note')).toHaveTextContent(/one profile/i);
+      expect(screen.getByRole('button', { name: 'Save and send' })).toBeDisabled();
     });
 
     it('will not save an empty edit, and Cancel/Escape leave without saving', async () => {
