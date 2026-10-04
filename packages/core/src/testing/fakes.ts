@@ -170,6 +170,13 @@ export interface FakeToolProviderOptions {
  * Claude Code auto mode's `deferAsk`). Tool bodies are stubs that return
  * `{ ok: true }` (MCP stubs return a text content array); nothing touches disk.
  */
+/** What GruntToolProvider returns when a turn ends before a call is authorised. */
+const FAKE_CANCELLED = {
+  ok: false as const,
+  code: 'cancelled' as const,
+  reason: 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.',
+};
+
 export class FakeToolProvider implements ToolProvider {
   readonly refreshed: string[] = [];
   readonly denials: { toolName: string; reason: string }[] = [];
@@ -257,7 +264,9 @@ export class FakeToolProvider implements ToolProvider {
     return {
       ...tool,
       execute: async (args: unknown, ctx: ToolContext): Promise<unknown> => {
-        const auth = await this.settle(this.broker.decide(tool, args, policy, ctx), ctx);
+        // Mirrors GruntToolProvider: a call that arrives after its turn ended
+        // never runs, even when a grant or policy would allow it.
+        const auth = ctx.signal.aborted ? FAKE_CANCELLED : await this.settle(this.broker.decide(tool, args, policy, ctx), ctx);
         if (!auth.ok) return { error: true, code: auth.code, message: auth.reason };
         return tool.execute(args, ctx);
       },
@@ -267,29 +276,35 @@ export class FakeToolProvider implements ToolProvider {
   private async settle(
     decision: ReturnType<PermissionBroker['decide']>,
     ctx: ToolContext
-  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied'; reason: string }> {
+  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled'; reason: string }> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
     if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
 
     const { request } = decision;
+    // The turn already ended: nobody can answer, so drop the request and raise no card.
+    if (ctx.signal.aborted) {
+      this.broker.discard(request.id);
+      return FAKE_CANCELLED;
+    }
     // Waiter registered BEFORE notifying so a listener may answer synchronously.
-    const pending = new Promise<ApprovalChoice>((resolve) => {
+    const pending = new Promise<{ choice: ApprovalChoice; cancelled: boolean }>((resolve) => {
       let done = false;
-      const settleChoice = (choice: ApprovalChoice): void => {
+      const settleChoice = (choice: ApprovalChoice, cancelled = false): void => {
         if (done) return;
         done = true;
         ctx.signal.removeEventListener('abort', onAbort);
         this.waiters.delete(request.id);
         this.broker.resolve(request.id, choice);
-        resolve(choice);
+        resolve({ choice, cancelled });
       };
-      const onAbort = (): void => settleChoice({ choice: 'deny' });
+      const onAbort = (): void => settleChoice({ choice: 'deny' }, true);
       ctx.signal.addEventListener('abort', onAbort, { once: true });
-      this.waiters.set(request.id, settleChoice);
+      this.waiters.set(request.id, (choice: ApprovalChoice) => settleChoice(choice));
     });
     this.notify({ type: 'request', request });
-    const choice = await pending;
+    const { choice, cancelled } = await pending;
     this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
+    if (cancelled) return FAKE_CANCELLED;
     if (choice.choice === 'deny') return { ok: false, code: 'approval_denied', reason: 'The user denied this tool call.' };
     return { ok: true, grantedBy: `ask:${choice.choice}` };
   }

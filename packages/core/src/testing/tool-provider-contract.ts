@@ -302,7 +302,7 @@ export function runToolProviderContract(
       expect(provider.resolveApproval(id, { choice: 'once' })).toBe(false);
     });
 
-    it('aborting the turn while a request is pending denies it', async () => {
+    it('aborting the turn while a request is pending refuses it as cancelled, not as the user denying it', async () => {
       const w = watch();
       const t = await tool(policy({ shell: true }), 'run_command');
       const ac = new AbortController();
@@ -310,8 +310,19 @@ export function runToolProviderContract(
       await new Promise((r) => setTimeout(r, 5));
       expect(w.requests).toHaveLength(1);
       ac.abort();
-      expect(isToolError(await running, 'approval_denied')).toBe(true);
+      expect(isToolError(await running, 'cancelled')).toBe(true);
       expect(w.events.at(-1)).toMatchObject({ type: 'resolved', choice: 'deny' });
+    });
+
+    it('a call on a turn that already ended is refused as cancelled, raising no card, even when policy allows it', async () => {
+      const w = watch({ choice: 'once' });
+      const ac = new AbortController();
+      ac.abort();
+      const asking = await tool(policy({ shell: true }), 'run_command');
+      expect(isToolError(await asking.execute(SHELL_ARGS, ctx({ signal: ac.signal })), 'cancelled')).toBe(true);
+      expect(w.requests).toHaveLength(0);
+      const allowed = await tool(policy({ fs: 'readwrite' }), 'read_file');
+      expect(isToolError(await allowed.execute(READ_ARGS, ctx({ signal: ac.signal })), 'cancelled')).toBe(true);
     });
 
     it('a listener that throws does not break the gate', async () => {
