@@ -361,7 +361,7 @@ describe('GruntToolProvider gating', () => {
 
     const result = (await promise) as Record<string, unknown>;
     expect(result.error).toBe(true);
-    expect(result.code).toBe('approval_denied');
+    expect(result.code).toBe('cancelled');
   });
 });
 
@@ -401,7 +401,7 @@ describe('requestApproval (external agent tools)', () => {
     const ac = new AbortController();
     const pending = provider.requestApproval(agentSpec('Edit', 'mutate'), { path: 'a.txt' }, policy(), ctx({ signal: ac.signal }));
     ac.abort();
-    expect(await pending).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+    expect(await pending).toMatchObject({ allowed: false, reason: expect.stringContaining('turn was stopped') });
   });
 });
 
@@ -493,7 +493,7 @@ describe('pending approvals end with their turn (approval cleanup)', () => {
     controller.abort();
     const result = (await promise) as Record<string, unknown>;
 
-    expect(result.code).toBe('approval_denied');
+    expect(result.code).toBe('cancelled');
     expect(broker.pendingCount).toBe(0);
     expect(events.map((e) => e.type)).toEqual(['request', 'resolved']);
     expect(events[1]).toMatchObject({ type: 'resolved', messageId: 'msg-1', choice: 'deny' });
@@ -514,7 +514,7 @@ describe('pending approvals end with their turn (approval cleanup)', () => {
     expect(broker.pendingCount).toBe(2);
 
     ca.abort();
-    expect(((await a) as Record<string, unknown>).code).toBe('approval_denied');
+    expect(((await a) as Record<string, unknown>).code).toBe('cancelled');
     expect(broker.pendingCount).toBe(1);
 
     const forB = requests.find((r) => r.messageId === 'variant-b')!;
@@ -533,7 +533,7 @@ describe('pending approvals end with their turn (approval cleanup)', () => {
 
     const result = (await writeFile.execute({ path: 'a.txt', content: 'x' }, ctx({ signal: controller.signal }))) as Record<string, unknown>;
 
-    expect(result.code).toBe('approval_denied');
+    expect(result.code).toBe('cancelled');
     expect(broker.pendingCount).toBe(0);
     expect(events).toEqual([]);
   });
@@ -584,12 +584,85 @@ describe('pending approvals end with their turn (approval cleanup)', () => {
     const next = writeFile.execute({ path: 'b.txt', content: 'b' }, ctx({ messageId: 'new', signal: second.signal }));
     await tick();
 
-    expect(((await first) as Record<string, unknown>).code).toBe('approval_denied');
+    expect(((await first) as Record<string, unknown>).code).toBe('approval_dropped');
     expect(broker.pendingCount).toBe(1);
     expect(existsSync(join(ws, 'a.txt'))).toBe(false);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
     second.abort();
     await next;
+  });
+});
+
+describe('non-user denials are honest (approval cleanup round 1)', () => {
+  const tick = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('an abort is audited deny:cancelled and the model is not told the user denied it', async () => {
+    const { provider, store } = makeProvider();
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const controller = new AbortController();
+    const promise = writeFile.execute({ path: 'a.txt', content: 'x' }, ctx({ signal: controller.signal }));
+    await tick();
+    controller.abort();
+    const result = (await promise) as { message: string };
+    expect(result.message).not.toMatch(/user denied/i);
+    expect(result.message).toMatch(/stopped/i);
+    expect(store.audit.list('chat-1').map((a) => a.grantedBy)).toEqual(['deny:cancelled']);
+  });
+
+  it('a real user denial is still deny:user', async () => {
+    const { provider, store } = makeProvider();
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const promise = writeFile.execute({ path: 'a.txt', content: 'x' }, ctx());
+    await tick();
+    provider.resolveApproval(requests[0]!.id, { choice: 'deny' });
+    await promise;
+    expect(store.audit.list('chat-1').map((a) => a.grantedBy)).toEqual(['deny:user']);
+  });
+
+  it('an eviction is audited deny:cancelled with its own message', async () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store, { maxPending: 1 });
+    const provider = new GruntToolProvider(store, broker, emptyMcp);
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const first = writeFile.execute({ path: 'a.txt', content: 'a' }, ctx({ messageId: 'old' }));
+    await tick();
+    const ac = new AbortController();
+    const next = writeFile.execute({ path: 'b.txt', content: 'b' }, ctx({ messageId: 'new', signal: ac.signal }));
+    await tick();
+    const result = (await first) as { message: string };
+    expect(result.message).toMatch(/dropped by the server/);
+    expect(store.audit.list('chat-1').map((a) => a.grantedBy)).toContain('deny:cancelled');
+    ac.abort();
+    await next;
+  });
+
+  it('a call arriving after its turn was cancelled does not run even when a grant would allow it (fs tool)', async () => {
+    const { provider, store } = makeProvider();
+    store.grants.create({ id: 'g1', chatId: null, profileId: null, toolName: 'write_file', source: 'fs', scope: 'always', constraint: null, expiresAt: null });
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const dead = new AbortController();
+    dead.abort();
+    const result = (await writeFile.execute({ path: 'ghost.txt', content: 'x' }, ctx({ signal: dead.signal }))) as Record<string, unknown>;
+    expect(result.code).toBe('cancelled');
+    expect(existsSync(join(ws, 'ghost.txt'))).toBe(false);
+  });
+
+  it('a policy-allowed read after cancel does not run either, and requestApproval refuses an allow for a dead turn', async () => {
+    const { provider } = makeProvider();
+    const readFile = (await provider.listTools(policy())).find((t) => t.name === 'read_file')!;
+    const dead = new AbortController();
+    dead.abort();
+    expect(((await readFile.execute({ path: 'x.txt' }, ctx({ signal: dead.signal }))) as Record<string, unknown>).code).toBe('cancelled');
+    const spec = { name: 'Read', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => undefined };
+    expect(await provider.requestApproval(spec, { file_path: 'x' }, policy(), ctx({ signal: dead.signal }))).toMatchObject({ allowed: false });
   });
 });
