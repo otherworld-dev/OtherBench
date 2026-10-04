@@ -23,13 +23,22 @@ test.beforeEach(async ({ request }) => {
 
 test('send, regenerate, switch back, edit an earlier message, switch back', async ({ page, request }) => {
   await page.goto('/');
+  const knownChatIds = new Set(((await (await request.get(`${BASE_URL}/api/chats`)).json()) as { id: string }[]).map((c) => c.id));
   await page.getByRole('button', { name: '+ New chat' }).click();
   const thread = page.getByTestId('thread-scroll');
   const box = page.getByRole('textbox', { name: /message/i });
-
-  // Two turns, so the first user message is genuinely "earlier".
   await box.fill('first question');
   await box.press('Enter');
+  let chatId = '';
+  await expect
+    .poll(async () => {
+      const all = (await (await request.get(`${BASE_URL}/api/chats`)).json()) as { id: string }[];
+      chatId = all.find((c) => !knownChatIds.has(c.id))?.id ?? '';
+      return chatId;
+    })
+    .not.toBe('');
+
+  // Two turns, so the first user message is genuinely "earlier".
   await expect(thread.getByText(/Here is a mock reply from Grunt/)).toBeVisible();
   await expect(page.getByLabel('streaming')).toHaveCount(0);
   await box.fill('second question');
@@ -75,15 +84,20 @@ test('send, regenerate, switch back, edit an earlier message, switch back', asyn
   await expect(thread.locator('article[data-role="assistant"]')).toHaveCount(2);
   await expect(thread.locator('article[data-role="assistant"]').last().getByTestId('branch-switcher')).toHaveText(/2 \/ 2/);
 
-  // --- The server's tree agrees, and the head survives a reload.
-  await page.reload();
-  await page.getByRole('navigation', { name: 'Chats' }).getByRole('button', { name: /mock reply/ }).click();
-  await expect(thread.getByText('second question')).toBeVisible();
-  const chats = (await (await request.get(`${BASE_URL}/api/chats`)).json()) as { id: string }[];
-  const chatId = chats[0]!.id;
-  const { messages } = (await (await request.get(`${BASE_URL}/api/chats/${chatId}/messages`)).json()) as {
-    messages: { id: string; role: string; parentId: string | null }[];
-  };
+  // --- The server's tree agrees, and it persisted the head on the regenerated tip.
+  const messages = (await (await request.get(`${BASE_URL}/api/chats/${chatId}/messages`)).json()).messages as {
+    id: string;
+    role: string;
+    parentId: string | null;
+    parts: { type: string; text?: string }[];
+    producedBy: { regenerated?: boolean } | null;
+  }[];
   expect(messages.filter((m) => m.role === 'user')).toHaveLength(3); // first, second, edited first
   expect(messages.filter((m) => m.role === 'assistant')).toHaveLength(4); // 2 + regenerated + reply to the edit
+  const second = messages.find((m) => m.parts.some((p) => p.text === 'second question'))!;
+  const replies = messages.filter((m) => m.parentId === second.id);
+  expect(replies).toHaveLength(2);
+  expect(replies.filter((m) => m.producedBy?.regenerated)).toHaveLength(1);
+  const chat = (await (await request.get(`${BASE_URL}/api/chats/${chatId}`)).json()) as { headMessageId: string };
+  expect(chat.headMessageId).toBe(replies.find((m) => m.producedBy?.regenerated)!.id);
 });
