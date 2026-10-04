@@ -4,6 +4,7 @@ import type { Container } from './container.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
+import { eventsRoutes } from './routes/events.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { modelsRoutes } from './routes/models.js';
@@ -91,6 +92,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', memoryRoutes(container));
   authed.route('/', searchRoutes(container));
   authed.route('/usage', usageRoutes(container));
+  authed.route('/events', eventsRoutes(container));
   // toolsRoutes, like turnsRoutes, defines full paths under several
   // different prefixes (/mcp-servers, /chats/:id/grants, /grants/:id,
   // /chats/:id/audit, /approvals/:id/resolve) rather than one fixed one, so

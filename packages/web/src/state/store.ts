@@ -3,6 +3,7 @@ import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
+import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@grunt/core/types/events.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 
@@ -54,6 +55,12 @@ export interface GruntState {
   setActiveChatId(chatId: string | null): void;
   /** Local-only optimistic (or server-confirmed) head move -- see api.turns.setHead. */
   setHeadMessageId(chatId: string, messageId: string): void;
+  /** Tool calls waiting for approval anywhere in the app, by request id, from `GET /api/events` (Task 34). */
+  appPendingApprovals: Record<string, PendingApprovalSummary>;
+  /** The events stream's `hello`: replaces the pending approvals with the server's list. */
+  applyAppHello(hello: AppEventsHello): void;
+  /** One app-wide event: keeps chats and the pending approvals current. */
+  applyAppEvent(event: AppEvent): void;
   /** Mirrors the server recording a keep on a compare variant (POST .../head) -- see `CanonMessage.keptAt`. */
   markKept(messageId: string, at: number): void;
 
@@ -245,6 +252,44 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
     })),
+  appPendingApprovals: {},
+  applyAppHello: (hello) => set({ appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])) }),
+  applyAppEvent: (event) =>
+    set((state) => {
+      switch (event.type) {
+        case 'chat-created':
+        case 'chat-updated': {
+          const idx = state.chats.findIndex((c) => c.id === event.chat.id);
+          if (idx === -1) return { chats: [...state.chats, event.chat] };
+          const chats = [...state.chats];
+          chats[idx] = event.chat;
+          return { chats };
+        }
+        case 'chat-deleted':
+          return {
+            chats: state.chats.filter((c) => c.id !== event.chatId),
+            activeChatId: state.activeChatId === event.chatId ? null : state.activeChatId,
+          };
+        case 'approval-requested': {
+          const { chatId, messageId, requestId, toolName } = event;
+          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName } } };
+        }
+        case 'approval-resolved': {
+          if (!(event.requestId in state.appPendingApprovals)) return state;
+          const next = { ...state.appPendingApprovals };
+          delete next[event.requestId];
+          return { appPendingApprovals: next };
+        }
+        case 'turn-finished': {
+          // Approvals end with their turn.
+          const entries = Object.entries(state.appPendingApprovals);
+          const kept = entries.filter(([, p]) => p.messageId !== event.messageId);
+          return kept.length === entries.length ? state : { appPendingApprovals: Object.fromEntries(kept) };
+        }
+        default:
+          return state;
+      }
+    }),
   markKept: (messageId, at) =>
     set((state) => {
       const message = state.messages[messageId];
@@ -369,3 +414,6 @@ export const useGruntStore = create<GruntState>()((set) => ({
   inspectorCollapsed: false,
   setInspectorCollapsed: (collapsed) => set({ inspectorCollapsed: collapsed }),
 }));
+
+/** How many tool calls are waiting for approval across the whole app. */
+export const selectPendingApprovalCount = (s: GruntState): number => Object.keys(s.appPendingApprovals).length;

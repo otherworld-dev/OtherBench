@@ -181,6 +181,25 @@ describe('SseClient', () => {
     expect(statuses).toEqual(['connecting', 'open']);
   });
 
+  it('with readHello, hands onHello its own hello shape and onEvent the stream\'s own events (the app-wide stream)', () => {
+    const onHello = vi.fn();
+    const onEvent = vi.fn();
+    const client = new SseClient<{ pendingApprovals: unknown[] }, { type: string }>({
+      url: '/api/events',
+      readHello: (payload) => payload as { pendingApprovals: unknown[] },
+      onHello,
+      onEvent,
+      connect: FakeEventSource.connect,
+    });
+    client.connect();
+    const es = FakeEventSource.instances[0]!;
+    es.emitHello({ pendingApprovals: [] });
+    es.emitMessage({ type: 'chat-deleted', chatId: 'c1' });
+    expect(onHello).toHaveBeenCalledWith({ pendingApprovals: [] });
+    expect(onEvent).toHaveBeenCalledWith({ type: 'chat-deleted', chatId: 'c1' });
+    client.close();
+  });
+
   it('dispatches a parsed default-event TurnEvent to onEvent', () => {
     const onEvent = vi.fn();
     const client = new SseClient({

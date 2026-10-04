@@ -336,4 +336,6 @@ export const api = {
 
   /** Not fetched via `request` -- opened by `state/sse.ts`'s streaming reader. */
   streamUrl: (chatId: string) => apiUrl(`/chats/${chatId}/stream`),
+  /** The app-wide event stream (v2 plan, Task 34). */
+  eventsUrl: () => apiUrl('/events'),
 };

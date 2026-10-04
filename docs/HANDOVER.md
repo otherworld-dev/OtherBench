@@ -51,6 +51,17 @@ of work landed after that plan closed out:
   attachment content). `GET /api/chats/:id/export?format=markdown|json`;
   the formatting is `packages/core/src/domain/export.ts`. The client fetches
   with auth and saves a blob, so it works in the desktop window too.
+- **App-wide events** (#771, v2 plan Task 34). `GET /api/events` is an SSE
+  stream of `AppEvent`s (`packages/core/src/types/events.ts`): chat
+  created/updated/deleted, turn started/finished, approval
+  requested/resolved, with a 25-second keepalive comment. It opens with a
+  `hello` listing pending approvals. Chat events come from the store's chat
+  repo being wrapped (`withChatEvents`, `server/src/stream/events.ts`), so
+  every change is announced whoever makes it; project delete announces the
+  chats it moved. Posting a turn now sets the chat head to the new user
+  message server-side, so the turn's chat-updated event never carries a
+  stale head. The web app subscribes once (`useAppEvents`) and keeps chats
+  and `selectPendingApprovalCount` current.
 
 ## Settings UI
 

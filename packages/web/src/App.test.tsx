@@ -18,6 +18,9 @@ vi.mock('./state/api.js', () => ({
   },
 }));
 
+// The app-wide event stream is tested on its own (state/store.test.ts, server events.test.ts).
+vi.mock('./state/useAppEvents.js', () => ({ useAppEvents: () => {} }));
+
 import { api } from './state/api.js';
 
 const mockedConnections = vi.mocked(api.connections.list);

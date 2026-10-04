@@ -98,8 +98,14 @@ export function projectsRoutes(container: Container): Hono {
     const id = c.req.param('id');
     getProjectOrThrow(container, id);
     // Its chats move to No project (chat.project_id ON DELETE SET NULL);
-    // streaming turns in them are unaffected.
+    // streaming turns in them are unaffected. That happens inside the
+    // database, past the chat repo, so announce each moved chat here.
+    const moved = container.store.chats.list().filter((chat) => chat.projectId === id).map((chat) => chat.id);
     container.store.projects.delete(id);
+    for (const chatId of moved) {
+      const chat = container.store.chats.get(chatId);
+      if (chat) container.events?.emit({ type: 'chat-updated', chat });
+    }
     return c.body(null, 204);
   });
 

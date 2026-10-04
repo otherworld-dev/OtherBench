@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
-import { useGruntStore } from './store.js';
+import { selectPendingApprovalCount, useGruntStore } from './store.js';
 
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
   return {
@@ -440,5 +440,40 @@ describe('useGruntStore', () => {
     useGruntStore.getState().removeConnection('conn-1');
 
     expect(useGruntStore.getState().projects[0]!.defaultProfileId).toBeNull();
+  });
+});
+
+describe('app-wide events (Task 34)', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+
+  it('chat-created adds a chat, chat-updated replaces it, chat-deleted removes it and clears it if active', () => {
+    const s = () => useGruntStore.getState();
+    s().setChats([makeChat({ id: 'a', title: 'A' })]);
+    s().applyAppEvent({ type: 'chat-created', chat: makeChat({ id: 'b', title: 'B' }) });
+    expect(s().chats.map((c) => c.id)).toEqual(['a', 'b']);
+
+    s().applyAppEvent({ type: 'chat-updated', chat: makeChat({ id: 'a', title: 'Renamed elsewhere' }) });
+    expect(s().chats.find((c) => c.id === 'a')!.title).toBe('Renamed elsewhere');
+
+    s().setActiveChatId('b');
+    s().applyAppEvent({ type: 'chat-deleted', chatId: 'b' });
+    expect(s().chats.map((c) => c.id)).toEqual(['a']);
+    expect(s().activeChatId).toBeNull();
+  });
+
+  it('counts pending approvals from the hello and events, dropping them on resolve or when their turn ends', () => {
+    const s = () => useGruntStore.getState();
+    s().applyAppHello({ pendingApprovals: [{ chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' }] });
+    expect(selectPendingApprovalCount(s())).toBe(1);
+    s().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm2', requestId: 'r2', toolName: 'run_command' });
+    s().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm2', requestId: 'r3', toolName: 'run_command' });
+    expect(selectPendingApprovalCount(s())).toBe(3);
+    s().applyAppEvent({ type: 'approval-resolved', chatId: 'c', requestId: 'r1' });
+    s().applyAppEvent({ type: 'turn-finished', chatId: 'c', messageId: 'm2', status: 'cancelled' });
+    expect(selectPendingApprovalCount(s())).toBe(0);
+    // A reconnect's hello replaces whatever was there.
+    s().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm9', requestId: 'r9', toolName: 'x' });
+    s().applyAppHello({ pendingApprovals: [] });
+    expect(selectPendingApprovalCount(s())).toBe(0);
   });
 });

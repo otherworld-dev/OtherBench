@@ -146,6 +146,12 @@ export function turnsRoutes(container: Container): Hono {
     // `GET /stream` racing this response never sees "unknown message" --
     // see the StreamRegistry class doc for why this ordering matters.
     container.streamRegistry.registerTurn(chatId, result.assistantMessageIds);
+    // The head goes to the new user message (what every client does next
+    // anyway) in the same update that marks the chat active, so the
+    // chat-updated event this sends never carries a stale head that would
+    // undo a client's own move (Task 34).
+    container.store.chats.update(chatId, { headMessageId: result.userMessageId, updatedAt: Date.now() });
+    container.events?.emit({ type: 'turn-started', chatId, messageIds: result.assistantMessageIds });
 
     return c.json(result, 202);
   });
@@ -191,6 +197,8 @@ export function turnsRoutes(container: Container): Hono {
     // fresh turn (see StreamRegistry.resetBuffer's doc).
     container.memory?.noteTurnStarted(message.chatId);
     container.streamRegistry.resetBuffer(message.chatId, messageId);
+    container.store.chats.update(message.chatId, { updatedAt: Date.now() });
+    container.events?.emit({ type: 'turn-started', chatId: message.chatId, messageIds: [messageId] });
     void container.turnRunner.retry(message.chatId, messageId, profile).catch((err: unknown) => {
       container.memory?.noteTurnCompleted(message.chatId);
       console.error(`[grunt-server] retry ${messageId} failed outside its own error handling:`, err);
@@ -242,7 +250,8 @@ export function turnsRoutes(container: Container): Hono {
       throw err;
     }
     container.streamRegistry.registerTurn(chatId, [result.assistantMessageId]);
-    container.store.chats.update(chatId, { headMessageId: result.assistantMessageId });
+    container.store.chats.update(chatId, { headMessageId: result.assistantMessageId, updatedAt: Date.now() });
+    container.events?.emit({ type: 'turn-started', chatId, messageIds: [result.assistantMessageId] });
 
     return c.json(result, 202);
   });
