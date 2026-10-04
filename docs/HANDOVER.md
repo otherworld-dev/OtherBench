@@ -65,12 +65,17 @@ of work landed after that plan closed out:
 - **Desktop notifications** (#775, Task 38). While the window isn't focused,
   a finished or failed reply and a tool call needing approval raise a native
   notification titled with the chat, once per message or request
-  (`packages/web/src/desktop/notify.ts`, via `tauri-plugin-notification`).
-  Settings → Desktop has a toggle for each, stored per device. The tray
-  tooltip counts pending approvals (#792). Click behaviour per platform:
-  **Windows** -- the plugin doesn't report notification clicks on desktop,
-  so clicking the tray icon (or Open Grunt) opens the chat last notified
-  about. **Linux/macOS** -- same fallback; not checked by hand yet.
+  (`packages/web/src/desktop/notify.ts`, shown by the shell's
+  `show_notification`, `desktop/src-tauri/src/notify.rs`). Settings →
+  Desktop has a toggle for each, stored per device. The tray tooltip counts
+  pending approvals (#792). Click behaviour per platform: **Windows** -- the
+  shell shows the toast itself (`tauri-winrt-notification`) with an
+  activation handler, so clicking it brings Grunt forward on that chat (a
+  dev build's toasts are shown under PowerShell's app id, as the
+  notification plugin does). Clicking the tray icon also opens the chat
+  last notified about. **Linux/macOS** -- `tauri-plugin-notification`,
+  which doesn't report clicks, so only the tray fallback; not checked by
+  hand yet.
 - **Files and folders** (#776, Task 39). `GET /api/fs/dirs?path=<abs>` lists
   one folder's sub-folder names (never files; links not listed; drive roots
   on Windows). `POST /api/chats/:id/attachments/from-path {path}` attaches an

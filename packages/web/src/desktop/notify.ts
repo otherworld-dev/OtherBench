@@ -38,7 +38,8 @@ export function saveNotifyPrefs(prefs: NotifyPrefs): void {
 export interface NotifierDeps {
   /** Whether the main window has focus right now; nothing is shown while it does. */
   isFocused(): Promise<boolean>;
-  show(title: string, body: string): Promise<void>;
+  /** `chatId` lets a click open the chat (Windows). */
+  show(title: string, body: string, chatId: string): Promise<void>;
   /** The chat's title for the notification's heading, or null if it isn't loaded. */
   chatTitle(chatId: string): string | null;
   prefs(): NotifyPrefs;
@@ -47,9 +48,10 @@ export interface NotifierDeps {
 /**
  * Turns app-wide events into desktop notifications (v2 plan, Task 38): a
  * reply finishing or failing, and a tool call needing approval, only while
- * the window isn't focused, once per message or request. Desktop
- * notifications don't report clicks, so it remembers the last chat it
- * notified about; opening Grunt from the tray goes there (`takeLastChat`).
+ * the window isn't focused, once per message or request. On Windows clicking
+ * the notification opens its chat; elsewhere clicks aren't reported, so it
+ * also remembers the last chat it notified about, and opening Grunt from the
+ * tray goes there (`takeLastChat`).
  */
 export class Notifier {
   private readonly sent = new Set<string>();
@@ -74,7 +76,7 @@ export class Notifier {
     if (this.sent.has(key) || (await this.deps.isFocused()) || this.sent.has(key)) return;
     this.sent.add(key);
     this.lastChatId = e.chatId;
-    await this.deps.show(this.deps.chatTitle(e.chatId) ?? 'Grunt', body);
+    await this.deps.show(this.deps.chatTitle(e.chatId) ?? 'Grunt', body, e.chatId);
   }
 
   /** The chat last notified about, once: opening from the tray consumes it. */
