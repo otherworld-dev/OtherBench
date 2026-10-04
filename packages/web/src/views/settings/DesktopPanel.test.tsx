@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../desktop/bridge.js', () => ({
   isDesktop: () => true,
   autostart: { isEnabled: vi.fn(), set: vi.fn() },
+  setHotkey: vi.fn(),
 }));
 
-import { autostart } from '../../desktop/bridge.js';
+import { autostart, setHotkey } from '../../desktop/bridge.js';
+import { useGruntStore } from '../../state/store.js';
 import { DesktopPanel } from './DesktopPanel.js';
 
 const mockedIsEnabled = vi.mocked(autostart.isEnabled);
@@ -53,6 +55,31 @@ describe('DesktopPanel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/registry says no/);
     expect(box).not.toBeChecked();
+  });
+
+  it('saving a new hotkey registers it and remembers it; a taken one says so and puts the old one back', async () => {
+    window.localStorage.clear();
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    mockedIsEnabled.mockResolvedValue(false);
+    const user = userEvent.setup();
+    render(<DesktopPanel />);
+    const field = screen.getByRole('textbox', { name: 'Quick chat hotkey' });
+    expect(field).toHaveValue('Ctrl+Alt+G');
+
+    vi.mocked(setHotkey).mockResolvedValue(undefined);
+    await user.clear(field);
+    await user.type(field, 'Ctrl+Shift+Space');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(window.localStorage.getItem('grunt.hotkey')).toBe('Ctrl+Shift+Space'));
+    expect(screen.queryByTestId('hotkey-error')).not.toBeInTheDocument();
+
+    vi.mocked(setHotkey).mockRejectedValueOnce('HotKey already registered').mockResolvedValueOnce(undefined);
+    await user.clear(field);
+    await user.type(field, 'Ctrl+C');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByTestId('hotkey-error')).toHaveTextContent("Couldn't use Ctrl+C: HotKey already registered");
+    expect(vi.mocked(setHotkey)).toHaveBeenLastCalledWith('Ctrl+Shift+Space');
+    expect(window.localStorage.getItem('grunt.hotkey')).toBe('Ctrl+Shift+Space');
   });
 
   it('notification toggles start on, and turning one off is saved for next time', async () => {

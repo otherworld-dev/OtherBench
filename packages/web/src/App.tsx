@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { isQuickView } from './desktop/bridge.js';
 import { useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
@@ -6,10 +7,12 @@ import { Thread } from './panes/Thread.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
+import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { useChatSync } from './state/useChatSync.js';
+import { QuickChat } from './views/QuickChat.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
 
@@ -23,7 +26,12 @@ const STREAM_STATUS_LABEL: Record<string, string> = {
   reconnecting: 'Reconnecting…',
 };
 
+/** The quick-chat window gets its own small view (`?view=quick`); everything else is the main app. */
 export function App(): JSX.Element {
+  return isQuickView() ? <QuickChat /> : <MainApp />;
+}
+
+function MainApp(): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
   const profiles = useGruntStore((s) => s.profiles);
   const activeChatId = useGruntStore((s) => s.activeChatId);
@@ -98,6 +106,7 @@ export function App(): JSX.Element {
   useAppEvents();
   useTrayStatus();
   useOpenArgs(loaded);
+  useDesktopShell();
   useTextSizeShortcuts();
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;

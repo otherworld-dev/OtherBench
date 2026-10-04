@@ -70,6 +70,40 @@ export async function showNotification(title: string, body: string): Promise<voi
   if (granted) plugin.sendNotification({ title, body });
 }
 
+/** Makes `accelerator` the global quick-chat hotkey. Rejects with the reason (unparsable, or taken by another app). */
+export async function setHotkey(accelerator: string): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('set_hotkey', { accelerator });
+}
+
+/** Hides the quick-chat window. */
+export async function hideQuick(): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('hide_quick');
+}
+
+/** Quick chat's Expand: the main window opens `chatId` and the quick window hides. */
+export async function openChatInMain(chatId: string): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_chat', { chatId });
+}
+
+/**
+ * True in the quick-chat window. It loads the app with `?view=quick`; its
+ * window label (`quick`, tauri.conf.json) is checked too, so the full app --
+ * with its hotkey registration and notifications -- can never run there a
+ * second time even if the shell dropped the query string.
+ */
+export function isQuickView(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (new URLSearchParams(window.location.search).get('view') === 'quick') return true;
+  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
+  return internals?.metadata?.currentWindow?.label === 'quick';
+}
+
 /** Start-at-login, via the shell's autostart plugin. Only meaningful when `isDesktop()`. */
 export const autostart = {
   async isEnabled(): Promise<boolean> {

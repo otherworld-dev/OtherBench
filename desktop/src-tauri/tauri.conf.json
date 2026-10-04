@@ -20,6 +20,18 @@
         "minHeight": 500,
         "visible": false,
         "dragDropEnabled": false
+      },
+      {
+        "label": "quick",
+        "title": "Grunt quick chat",
+        "url": "index.html?view=quick",
+        "width": 560,
+        "height": 380,
+        "visible": false,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "skipTaskbar": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

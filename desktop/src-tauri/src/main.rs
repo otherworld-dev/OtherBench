@@ -1,6 +1,7 @@
 // Release builds are GUI apps: no console window alongside the webview.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod hotkey;
 mod sidecar;
 mod tray;
 
@@ -65,6 +66,26 @@ fn set_tray_status(app: tauri::AppHandle, pending_approvals: u32) {
     tray::set_status(&app, pending_approvals);
 }
 
+/// Makes `accelerator` the global hotkey for quick chat (Settings → Desktop).
+/// The error, if any, is shown in Settings rather than failing silently.
+#[tauri::command]
+fn set_hotkey(app: tauri::AppHandle, accelerator: String) -> Result<(), String> {
+    hotkey::set(&app, &accelerator)
+}
+
+#[tauri::command]
+fn hide_quick(app: tauri::AppHandle) {
+    hotkey::hide_quick(&app);
+}
+
+/// Quick chat's Expand: the main window opens the chat and the quick window goes away.
+#[tauri::command]
+fn open_chat(app: tauri::AppHandle, chat_id: String) {
+    tray::show_main(&app);
+    let _ = app.emit_to("main", "open-chat", chat_id);
+    hotkey::hide_quick(&app);
+}
+
 /// The webview origins the bundled UI can be served from. Windows uses
 /// `http://tauri.localhost` by default; Linux and macOS use `tauri://localhost`.
 /// Debug builds load the Vite dev server instead.
@@ -127,12 +148,14 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args])
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
+            // The quick-chat window is only ever hidden too: the hotkey brings it back.
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                if window.label() == "main" || window.label() == hotkey::QUICK {
                     api.prevent_close();
                     let _ = window.hide();
                 }

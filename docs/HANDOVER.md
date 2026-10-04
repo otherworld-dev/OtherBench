@@ -85,6 +85,16 @@ of work landed after that plan closed out:
   first launch's arguments come from the `launch_args` command, once, later
   launches' through `open-args`. Explorer verbs arrive with the installer
   (Task 41).
+- **Quick chat** (#774, Task 37). A global hotkey (default `Ctrl+Alt+G`,
+  `tauri-plugin-global-shortcut`, `desktop/src-tauri/src/hotkey.rs`) shows a
+  second, always-on-top, undecorated window (`quick`) centred on the monitor
+  under the cursor. It loads the app with `?view=quick` and `App` renders
+  `views/QuickChat.tsx` there (also keyed off the window label, so the full
+  app never runs twice): a message box and the reply in a new chat with the
+  default profile. **Expand** hands the chat to the main window
+  (`open_chat`); `Esc` hides the window, keeping the chat. Settings →
+  Desktop changes the hotkey (stored per device); a key another app holds is
+  reported there and the previous one put back.
 
 ## Settings UI
 

@@ -17,7 +17,21 @@ vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted, request
 const openDialog = vi.fn();
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: openDialog }));
 
-import { autostart, desktopBootstrap, isDesktop, isMainWindowFocused, launchArgs, onDesktopEvent, pickFolder, setTrayStatus, showNotification } from './bridge.js';
+import {
+  autostart,
+  desktopBootstrap,
+  hideQuick,
+  isDesktop,
+  isMainWindowFocused,
+  isQuickView,
+  launchArgs,
+  onDesktopEvent,
+  openChatInMain,
+  pickFolder,
+  setHotkey,
+  setTrayStatus,
+  showNotification,
+} from './bridge.js';
 
 function enterDesktop() {
   (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = {};
@@ -42,6 +56,32 @@ describe('desktop bridge', () => {
     expect(isDesktop()).toBe(true);
     await expect(desktopBootstrap()).resolves.toEqual({ baseUrl: 'http://127.0.0.1:51234', token: 'tok' });
     expect(invoke).toHaveBeenCalledWith('bootstrap');
+  });
+
+  it('quick-chat commands go to the shell in the desktop app and do nothing in a browser', async () => {
+    await setHotkey('Ctrl+Alt+G');
+    await hideQuick();
+    await openChatInMain('c1');
+    expect(invoke).not.toHaveBeenCalled();
+
+    enterDesktop();
+    invoke.mockResolvedValue(undefined);
+    await setHotkey('Ctrl+Alt+G');
+    await hideQuick();
+    await openChatInMain('c1');
+    expect(invoke.mock.calls).toEqual([['set_hotkey', { accelerator: 'Ctrl+Alt+G' }], ['hide_quick'], ['open_chat', { chatId: 'c1' }]]);
+  });
+
+  it('isQuickView reads view=quick from the URL, or the quick window\'s label', () => {
+    expect(isQuickView()).toBe(false);
+    window.history.replaceState({}, '', '/?view=quick');
+    expect(isQuickView()).toBe(true);
+    window.history.replaceState({}, '', '/');
+
+    (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'main' } } };
+    expect(isQuickView()).toBe(false);
+    (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'quick' } } };
+    expect(isQuickView()).toBe(true);
   });
 
   it('pickFolder and launchArgs do nothing in a browser', async () => {
