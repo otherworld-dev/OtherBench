@@ -556,19 +556,7 @@ this on startup.
   launch (even one about to fail with `EADDRINUSE`) can reconcile out from
   under a still-live first process's stream, flipping its row to `error`
   while it's genuinely still streaming.
-- **`undici` carries multiple advisories in the production dependency
-  tree** — `npm audit --omit=dev` currently reports 11 (2 high, 9 moderate),
-  all via the same chain: `ai@6.0.253` → `@ai-sdk/provider-utils@4.0.45` →
-  `undici@5.29.0` (the same chain also reaches `@ai-sdk/anthropic`,
-  `@ai-sdk/openai`, `@ai-sdk/google`, and `@ai-sdk/openai-compatible`).
-  `npm audit fix --force` resolves it only by installing `ai@6.0.289`'s
-  dependency tree, which pulls a semver-major `@ai-sdk/*` bump this project
-  deliberately pinned away from — `ai@6.0.253` is pinned in every package
-  that depends on it because `ai@7` was already `latest` on npm when this
-  project chose to target the v6 line instead. Not remediated for that
-  reason; revisit once a v6-compatible `@ai-sdk/provider-utils` release
-  exists or the project is ready to evaluate the v7 migration on its own
-  terms.
+- **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 
 ## Deviations from the original spec
 
@@ -597,7 +585,7 @@ All deliberate, all recorded at the time in the plan's Global Constraints:
 The natural next steps, roughly in order of value:
 1. Task 29/30 (Tauri shell + packaging) if a desktop app is still wanted, or drop them from the plan and call `grunt serve` + browser the intended shape — this is the one item left from the original plan.
 2. Abandoned unsent attachments and the legacy shared blob directory are the two remaining places disk usage can grow without bound (see Known gaps above) — worth a look before running this unattended for a long time.
-3. The `undici` advisory chain, once a v6-compatible `@ai-sdk/provider-utils` exists or the v7 migration is worth evaluating on its own terms.
+3. Re-run `npm audit --omit=dev` periodically; evaluate the `ai@7` migration on its own terms.
 
 (The Settings UI and attachment deletion/blob GC that used to top this list
 are both done — see "What works today" above.)

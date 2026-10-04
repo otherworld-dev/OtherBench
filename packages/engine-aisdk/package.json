@@ -11,12 +11,12 @@
   },
   "dependencies": {
     "@grunt/core": "*",
-    "@ai-sdk/anthropic": "3.0.110",
-    "@ai-sdk/google": "3.0.108",
-    "@ai-sdk/openai": "3.0.96",
-    "@ai-sdk/openai-compatible": "2.0.67",
-    "@ai-sdk/provider": "3.0.15",
-    "ai": "6.0.253",
+    "@ai-sdk/anthropic": "3.0.127",
+    "@ai-sdk/google": "3.0.130",
+    "@ai-sdk/openai": "3.0.124",
+    "@ai-sdk/openai-compatible": "2.0.81",
+    "@ai-sdk/provider": "3.0.18",
+    "ai": "6.0.300",
     "zod": "4.4.3"
   },
   "devDependencies": {
