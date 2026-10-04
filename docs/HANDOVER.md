@@ -62,6 +62,15 @@ of work landed after that plan closed out:
   message server-side, so the turn's chat-updated event never carries a
   stale head. The web app subscribes once (`useAppEvents`) and keeps chats
   and `selectPendingApprovalCount` current.
+- **Desktop notifications** (#775, Task 38). While the window isn't focused,
+  a finished or failed reply and a tool call needing approval raise a native
+  notification titled with the chat, once per message or request
+  (`packages/web/src/desktop/notify.ts`, via `tauri-plugin-notification`).
+  Settings → Desktop has a toggle for each, stored per device. The tray
+  tooltip counts pending approvals (#792). Click behaviour per platform:
+  **Windows** -- the plugin doesn't report notification clicks on desktop,
+  so clicking the tray icon (or Open Grunt) opens the chat last notified
+  about. **Linux/macOS** -- same fallback; not checked by hand yet.
 
 ## Settings UI
 

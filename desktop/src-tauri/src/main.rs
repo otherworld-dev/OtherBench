@@ -114,6 +114,7 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![MINIMIZED_FLAG]),
         ))
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState { launch: launch.clone(), server: server.clone() })
         .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status])
         // Closing the main window hides it; the app keeps running in the

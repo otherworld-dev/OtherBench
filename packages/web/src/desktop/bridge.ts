@@ -39,6 +39,22 @@ export async function setTrayStatus(pendingApprovals: number): Promise<void> {
   await invoke('set_tray_status', { pendingApprovals });
 }
 
+/** Whether the main window has focus. Always true in a browser, where Grunt never notifies. */
+export async function isMainWindowFocused(): Promise<boolean> {
+  if (!isDesktop()) return true;
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow().isFocused();
+}
+
+/** Shows a desktop notification, asking for permission the first time if the OS wants that. No-op in a browser. */
+export async function showNotification(title: string, body: string): Promise<void> {
+  if (!isDesktop()) return;
+  const plugin = await import('@tauri-apps/plugin-notification');
+  let granted = await plugin.isPermissionGranted();
+  if (!granted) granted = (await plugin.requestPermission()) === 'granted';
+  if (granted) plugin.sendNotification({ title, body });
+}
+
 /** Start-at-login, via the shell's autostart plugin. Only meaningful when `isDesktop()`. */
 export const autostart = {
   async isEnabled(): Promise<boolean> {

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Permissions for the main window. App commands (bootstrap, set_tray_status) need no entry here.",
   "windows": ["main"],
-  "permissions": ["core:default", "autostart:default"]
+  "permissions": ["core:default", "autostart:default", "notification:default"]
 }

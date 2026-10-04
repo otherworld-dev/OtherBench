@@ -8,8 +8,14 @@ const disable = vi.fn();
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 vi.mock('@tauri-apps/plugin-autostart', () => ({ isEnabled, enable, disable }));
+const isFocused = vi.fn();
+vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused }) }));
+const isPermissionGranted = vi.fn();
+const requestPermission = vi.fn();
+const sendNotification = vi.fn();
+vi.mock('@tauri-apps/plugin-notification', () => ({ isPermissionGranted, requestPermission, sendNotification }));
 
-import { autostart, desktopBootstrap, isDesktop, onDesktopEvent, setTrayStatus } from './bridge.js';
+import { autostart, desktopBootstrap, isDesktop, isMainWindowFocused, onDesktopEvent, setTrayStatus, showNotification } from './bridge.js';
 
 function enterDesktop() {
   (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = {};
@@ -34,6 +40,29 @@ describe('desktop bridge', () => {
     expect(isDesktop()).toBe(true);
     await expect(desktopBootstrap()).resolves.toEqual({ baseUrl: 'http://127.0.0.1:51234', token: 'tok' });
     expect(invoke).toHaveBeenCalledWith('bootstrap');
+  });
+
+  it('in a browser the window counts as focused and notifications do nothing', async () => {
+    await expect(isMainWindowFocused()).resolves.toBe(true);
+    await showNotification('t', 'b');
+    expect(isFocused).not.toHaveBeenCalled();
+    expect(sendNotification).not.toHaveBeenCalled();
+  });
+
+  it('in the desktop app asks the window for focus, and sends a notification once permission is granted', async () => {
+    enterDesktop();
+    isFocused.mockResolvedValue(false);
+    await expect(isMainWindowFocused()).resolves.toBe(false);
+
+    isPermissionGranted.mockResolvedValue(false);
+    requestPermission.mockResolvedValue('granted');
+    await showNotification('Trip', 'Reply finished');
+    expect(sendNotification).toHaveBeenCalledWith({ title: 'Trip', body: 'Reply finished' });
+
+    sendNotification.mockClear();
+    requestPermission.mockResolvedValue('denied');
+    await showNotification('Trip', 'Reply finished');
+    expect(sendNotification).not.toHaveBeenCalled();
   });
 
   it('setTrayStatus sends the pending-approval count to the shell, and does nothing in a browser', async () => {
