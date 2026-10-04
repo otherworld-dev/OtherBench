@@ -12,6 +12,16 @@ export interface PricingSnapshot {
   currency: string;
 }
 
+/**
+ * What the server recorded for one finished reply: its tokens, the price list
+ * in force when it ran (so editing a model's price never changes what an
+ * older reply cost) and the engine call's measured latency (#819).
+ */
+export interface RecordedUsage extends Usage {
+  pricingSnapshot: PricingSnapshot;
+  latencyMs: number;
+}
+
 export function estimateCost(u: Usage, p: PricingSnapshot): number | null {
   if (p.priceInPer1m == null && p.priceOutPer1m == null) return null;
   const uncachedIn = Math.max(0, u.tokensIn - u.tokensCached);

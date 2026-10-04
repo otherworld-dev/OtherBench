@@ -5,6 +5,7 @@ import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
@@ -192,7 +193,21 @@ export function chatsRoutes(container: Container): Hono {
   app.get('/:id/messages', (c) => {
     const chat = getChatOrThrow(container, c.req.param('id'));
     const messages = collectMessageTree(container.store, chat.id);
-    return c.json({ messages, headMessageId: chat.headMessageId });
+    // Each finished reply's recorded usage, keyed by message id, so the
+    // compare tabs show what a reply cost at the price it ran at, after a
+    // reload too (#819). One row per message; a later one would win.
+    const usage: Record<string, RecordedUsage> = {};
+    for (const u of container.store.usage.list(chat.id)) {
+      usage[u.messageId] = {
+        tokensIn: u.tokensIn,
+        tokensOut: u.tokensOut,
+        tokensCached: u.tokensCached,
+        tokensReasoning: u.tokensReasoning,
+        pricingSnapshot: u.pricingSnapshot,
+        latencyMs: u.latencyMs,
+      };
+    }
+    return c.json({ messages, headMessageId: chat.headMessageId, usage });
   });
 
   return app;
