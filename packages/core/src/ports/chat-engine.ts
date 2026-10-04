@@ -88,4 +88,6 @@ export interface ChatEngine {
   stream(req: EngineRequest): AsyncIterable<EngineEvent>;
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]>;
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult>;
+  /** Stops anything the engine keeps running between turns (Claude Code's live processes). Called once, at shutdown. */
+  dispose?(): void;
 }

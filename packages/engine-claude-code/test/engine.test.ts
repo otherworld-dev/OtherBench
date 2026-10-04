@@ -423,3 +423,149 @@ describe('ClaudeCodeChatEngine auto mode', () => {
     expect(events.at(-1)).toEqual({ type: 'error', error: { kind: 'capability', retryable: false, message: AUTO_MSG } });
   });
 });
+
+describe('ClaudeCodeChatEngine live processes', () => {
+  /** A fake long-lived Claude Code: runs `turn` for every message pushed into its input, until the input ends or it is stopped. */
+  function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: number }) => AsyncGenerator<SDKMessage>) {
+    const starts: { options: Options; prompts: SDKUserMessage[]; stopped: () => boolean }[] = [];
+    const query: QueryFn = ({ prompt, options }) => {
+      const start = { options, prompts: [] as SDKUserMessage[], stopped: () => options.abortController?.signal.aborted ?? false };
+      starts.push(start);
+      const gen = (async function* () {
+        for await (const msg of prompt) {
+          if (start.stopped()) return;
+          start.prompts.push(msg);
+          yield* turn({ options, prompt: msg, n: start.prompts.length });
+        }
+      })();
+      return Object.assign(gen, { interrupt: async () => undefined, supportedModels: async () => [], accountInfo: async () => ({}) });
+    };
+    return { query, starts };
+  }
+
+  const answered = (sessionId = 'sess-1'): CanonMessage => ({ ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId, backend: 'claude', cwd: ws } });
+  const followUp = (o: Partial<EngineRequest> = {}): EngineRequest =>
+    req({ messages: [user('q1'), answered(), { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1', messageId: 'm2', ...o });
+  const textOfPrompt = (p: SDKUserMessage): string => ((p.message as { content: { text?: string }[] }).content[0]!.text ?? '');
+  const live = (query: QueryFn, extra: { liveIdleMs?: number; maxLive?: number } = {}) =>
+    new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, ...extra });
+
+  it('keeps the process alive: the next message in the session goes to the same Claude Code, without resume or seeded history', async () => {
+    const { query, starts } = liveQuery(async function* ({ n }) { yield init('sess-1'); yield delta(`reply ${n}`); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req()));
+    const events = await collect(e.stream(followUp()));
+
+    expect(starts).toHaveLength(1);
+    expect(starts[0]!.options.resume).toBeUndefined();
+    expect(starts[0]!.prompts.map(textOfPrompt)).toEqual(['hi', 'q2']);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'engine-meta', meta: expect.objectContaining({ sessionId: 'sess-1' }) }));
+    expect(events).toContainEqual({ type: 'text-delta', text: 'reply 2' });
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    e.dispose();
+    expect(starts[0]!.stopped()).toBe(true);
+  });
+
+  it('keeps the process when the server environment changes between messages (the Agent SDK changes it itself)', async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const baseEnv: NodeJS.ProcessEnv = { PATH: '/bin', CLAUDE_AGENT_SDK_VERSION: '1' };
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv });
+    await collect(e.stream(req()));
+    baseEnv['CLAUDE_AGENT_SDK_VERSION'] = '2';
+    await collect(e.stream(followUp()));
+    expect(starts).toHaveLength(1);
+    e.dispose();
+  });
+
+  it('a change of model (or any process option) closes the old process and resumes the session in a new one', async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req()));
+    await collect(e.stream(followUp({ profile: profile({ modelId: 'opus' }) })));
+
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.stopped()).toBe(true);
+    expect(starts[1]!.options).toMatchObject({ model: 'opus', resume: 'sess-1' });
+    e.dispose();
+  });
+
+  it('stopping a reply stops its process, and the next message resumes the session in a new one', async () => {
+    const { query, starts } = liveQuery(async function* ({ n, options }) {
+      yield init('sess-1');
+      if (n === 2) await new Promise<void>((resolve) => options.abortController!.signal.addEventListener('abort', () => resolve()));
+      yield success();
+    });
+    const e = live(query);
+    await collect(e.stream(req()));
+    const stop = new AbortController();
+    const running = collect(e.stream(followUp({ signal: stop.signal })));
+    await new Promise((r) => setTimeout(r, 10));
+    stop.abort();
+    await running;
+    expect(starts[0]!.stopped()).toBe(true);
+
+    await collect(e.stream(followUp({ messageId: 'm3' })));
+    expect(starts).toHaveLength(2);
+    expect(starts[1]!.options.resume).toBe('sess-1');
+    e.dispose();
+  });
+
+  it('an errored reply closes its process rather than keeping it for the next message', async () => {
+    const { query, starts } = liveQuery(async function* ({ n }) {
+      yield init('sess-1');
+      if (n === 1) yield success();
+      else yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['boom'], usage: {} } as unknown as SDKMessage;
+    });
+    const e = live(query);
+    await collect(e.stream(req()));
+    const events = await collect(e.stream(followUp()));
+    expect(events.at(-1)).toMatchObject({ type: 'error' });
+    expect(starts[0]!.stopped()).toBe(true);
+    e.dispose();
+  });
+
+  it("each reply's tool calls go through its own approvals context, and a call with no reply running is refused", async () => {
+    const seen: string[] = [];
+    approvals.requestApproval.mockImplementation(async (_tool: unknown, _args: unknown, _policy: unknown, ctx: { messageId: string }) => {
+      seen.push(ctx.messageId);
+      return { allowed: true as const, grantedBy: 'policy' };
+    });
+    const { query, starts } = liveQuery(async function* ({ options }) {
+      yield init('sess-1');
+      await options.canUseTool!('Bash', { command: 'git status' }, { signal: new AbortController().signal, toolUseID: 't' } as never);
+      yield success();
+    });
+    const e = live(query);
+    await collect(e.stream(req({ messageId: 'm1' })));
+    await collect(e.stream(followUp({ messageId: 'm2' })));
+    expect(seen).toEqual(['m1', 'm2']);
+
+    const between = await starts[0]!.options.canUseTool!('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 't2' } as never);
+    expect(between).toMatchObject({ behavior: 'deny', message: 'No Grunt reply is waiting on this tool call.' });
+    approvals.requestApproval.mockReset();
+    approvals.requestApproval.mockImplementation(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+    e.dispose();
+  });
+
+  it('closes a process left idle too long, and the longest-idle one when there are too many', async () => {
+    const idle = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e1 = live(idle.query, { liveIdleMs: 20 });
+    await collect(e1.stream(req()));
+    expect(idle.starts[0]!.stopped()).toBe(false);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(idle.starts[0]!.stopped()).toBe(true);
+    await collect(e1.stream(followUp()));
+    expect(idle.starts).toHaveLength(2);
+    e1.dispose();
+
+    let session = 0;
+    const capped = liveQuery(async function* ({ n }) { if (n === 1) session++; yield init(`sess-${session}`); yield success(); });
+    const e2 = live(capped.query, { maxLive: 1 });
+    await collect(e2.stream(req()));
+    await collect(e2.stream(req({ chatId: 'other-chat' })));
+    expect(capped.starts[0]!.stopped()).toBe(true);
+    expect(capped.starts[1]!.stopped()).toBe(false);
+    e2.dispose();
+    expect(capped.starts[1]!.stopped()).toBe(true);
+  });
+});

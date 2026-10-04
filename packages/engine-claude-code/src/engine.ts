@@ -1,16 +1,17 @@
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
-import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook } from './approval.js';
+import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate } from './approval.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
+import { LivePool, LiveProcess, liveKey, PromptQueue, type TurnBinding } from './live.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
@@ -28,6 +29,10 @@ export interface ClaudeCodeEngineDeps {
   baseEnv?: NodeJS.ProcessEnv;
   /** How long a model-list / connection-test probe may take. Defaults to 20 s. */
   probeTimeoutMs?: number;
+  /** How long an idle Claude Code process waits for the next message. Defaults to 30 minutes. */
+  liveIdleMs?: number;
+  /** How many idle Claude Code processes are kept. Defaults to 3. */
+  maxLive?: number;
 }
 
 const PROBE_TIMEOUT_MS = 20_000;
@@ -37,12 +42,15 @@ type PendingNotice = { text: string | null };
 
 type ContentBlock ={ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
+const userMessage = (content: ContentBlock[]): SDKUserMessage =>
+  ({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, origin: { kind: 'human' } }) as unknown as SDKUserMessage;
+
 /** A one-message prompt stream that stays open until `close()` -- hooks and canUseTool travel over the same channel, so input must not end before the result. */
 function promptStream(content: ContentBlock[]): { stream: AsyncIterable<SDKUserMessage>; close: () => void } {
   let close!: () => void;
   const closed = new Promise<void>((r) => (close = r));
   async function* gen(): AsyncGenerator<SDKUserMessage> {
-    yield { type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, origin: { kind: 'human' } } as unknown as SDKUserMessage;
+    yield userMessage(content);
     await closed;
   }
   return { stream: gen(), close };
@@ -73,8 +81,21 @@ const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? [])
  */
 export class ClaudeCodeChatEngine implements ChatEngine {
   private readonly claims = new SessionClaims();
+  /** Claude Code processes kept alive between replies, by session (see live.ts). */
+  private readonly pool: LivePool;
+  /** Every process started, so `dispose` can stop the busy ones too. */
+  private readonly processes = new Set<LiveProcess>();
 
-  constructor(private readonly deps: ClaudeCodeEngineDeps) {}
+  constructor(private readonly deps: ClaudeCodeEngineDeps) {
+    this.pool = new LivePool(deps.liveIdleMs, deps.maxLive);
+  }
+
+  /** Stops every Claude Code process this engine started (server shutdown). */
+  dispose(): void {
+    this.pool.closeAll();
+    for (const live of this.processes) live.close();
+    this.processes.clear();
+  }
 
   async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
     if (req.purpose === 'utility') {
@@ -113,9 +134,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   }
 
   /**
-   * One SDK query. Returns 'missing-session' (having yielded nothing) when a
-   * resume target is gone. Yields `notice.text` once, after the init message
-   * or before an error, and clears it.
+   * One reply. It continues the session's live Claude Code process when one
+   * is waiting with the same options (the planner already checked this
+   * message answers the session's tip), else starts a process -- resuming
+   * the session or fresh -- that stays alive afterwards for the next message.
+   * Returns 'missing-session' (having yielded nothing) when a resume target
+   * is gone. Yields `notice.text` once, after the init message or before an
+   * error, and clears it.
    */
   private async *runTurn(req: EngineRequest, plan: SessionPlan, backend: string, notice: PendingNotice): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const flushNotice = function* (): Generator<EngineEvent> {
@@ -127,20 +152,90 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const profile = req.profile;
     const cwd = req.workspaceRoot!;
     const content = await this.userContent(req, plan.mode === 'fresh');
-    const prompt = promptStream(content);
-    const abortController = new AbortController();
-    const onAbort = (): void => abortController.abort();
-    req.signal.addEventListener('abort', onAbort, { once: true });
-    // An 'abort' that fired before the listener existed never reaches it.
-    if (req.signal.aborted) abortController.abort();
 
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
     const autoMode = req.autoMode === true && backend === CLAUDE_BACKEND;
     const gateCtx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, workspaceRoot: cwd, signal: req.signal };
-    const gate = createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode });
-    const stderr: string[] = [];
-    const options: Options = {
+    const binding: TurnBinding = {
+      gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
+      ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
+    };
+    const options = this.processOptions(req, cwd, autoMode);
+    const key = liveKey(options, { backend, token: profile.apiKey });
+    const taken = plan.mode === 'continue' ? this.pool.take(plan.sessionId, key) : null;
+    const reused = taken !== null;
+    const live = taken ?? this.startProcess(options, key, plan);
+    live.binding = binding;
+
+    // Stopping a reply stops its process: the next message resumes the
+    // session in a new one, rather than trusting a half-finished turn.
+    const onAbort = (): void => live.close();
+    req.signal.addEventListener('abort', onAbort, { once: true });
+    // An 'abort' that fired before the listener existed never reaches it.
+    if (req.signal.aborted) live.close();
+    live.input.push(userMessage(content));
+
+    const mapper = new SdkEventMapper();
+    let sawInit = false;
+    let finished = false;
+    let rateLimitResetsAt: number | null = null;
+    try {
+      // Read by hand: a for-await `break` would end the process's output for good.
+      while (!finished) {
+        const next = await live.iterator.next();
+        if (next.done) break; // the process ended
+        for (const event of mapper.map(next.value)) {
+          if (event.type === 'init') {
+            sawInit = true;
+            live.sessionId = event.sessionId;
+            if (autoMode && event.permissionMode !== 'auto') {
+              // Claude Code started in another mode: auto mode isn't available
+              // for this account or model. Stop before the model does any work,
+              // and persist no session meta for this half-started session.
+              live.close();
+              yield* flushNotice();
+              yield { type: 'error', error: autoModeUnavailable() };
+              return 'done';
+            }
+            yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: event.sessionId, backend, cwd, tools: event.tools, mcpServers: event.mcpServers } };
+            yield* flushNotice();
+          } else if (event.type === 'rate-limited') {
+            rateLimitResetsAt = event.resetsAt;
+          } else if (event.type === 'result-error') {
+            live.close();
+            if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
+            yield* flushNotice();
+            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
+            return 'done';
+          } else {
+            if (event.type === 'finish') finished = true;
+            yield event;
+          }
+        }
+      }
+      if (!finished) yield* flushNotice(); // a stream that ended without a result
+    } catch (err) {
+      live.close();
+      if (req.signal.aborted) return 'done'; // TurnRunner marks the message cancelled
+      const text = [err instanceof Error ? err.message : String(err), ...live.stderr].join('\n');
+      if (!sawInit && !reused && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
+      yield* flushNotice();
+      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
+    } finally {
+      req.signal.removeEventListener('abort', onAbort);
+      // Only a cleanly finished reply leaves its process waiting for the next message.
+      if (finished && !req.signal.aborted && !live.isClosed) this.pool.release(live);
+      else live.close();
+      if (live.isClosed) this.processes.delete(live);
+    }
+    return 'done';
+  }
+
+  /** The options a Claude Code process is started with, minus what each process wires up itself (startProcess). */
+  private processOptions(req: EngineRequest, cwd: string, autoMode: boolean): Options {
+    const profile = req.profile;
+    return {
       cwd,
       model: profile.modelId,
       env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId),
@@ -152,69 +247,52 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // inside the 'internal' Skill tool, which gets no card (R14).
       settings: { disableSkillShellExecution: true },
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
+      systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
+      // MCP off: load no MCP config at all (none is passed), so the model isn't
+      // offered MCP tools and no server starts. The gate still denies MCP calls.
+      ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
+      ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
+    };
+  }
+
+  /**
+   * Starts a Claude Code process whose input stays open for later messages.
+   * Its hooks are fixed now, so they call through `live.binding`: whichever
+   * reply is running decides its tool calls, and with none running every
+   * call is refused.
+   */
+  private startProcess(options: Options, key: string, plan: SessionPlan): LiveProcess {
+    this.pool.makeRoom();
+    const input = new PromptQueue();
+    const abortController = new AbortController();
+    let live: LiveProcess | null = null;
+    const gate: Gate = (toolName, toolInput, signal, opts) =>
+      live?.binding ? live.binding.gate(toolName, toolInput, signal, opts) : Promise.resolve({ allow: false, reason: 'No Grunt reply is waiting on this tool call.' });
+    const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) =>
+      live?.binding?.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
+    const full: Options = {
+      ...options,
+      abortController,
+      stderr: (data: string) => {
+        if (!live) return;
+        live.stderr.push(data);
+        if (live.stderr.length > 50) live.stderr.shift();
+      },
       // The hook waits on a human; Claude Code's default hook timeout (60 s)
       // would cancel the call under an open card. 86400 s = one day.
       hooks: {
         PreToolUse: [{ hooks: [preToolUseHook(gate)], timeout: 86_400 }],
         // Classifier blocks are audited as deny:auto (auto mode only).
-        ...(autoMode ? { PermissionDenied: [{ hooks: [permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx })] }] } : {}),
+        ...(options.permissionMode === 'auto' ? { PermissionDenied: [{ hooks: [permissionDenied] }] } : {}),
       },
       canUseTool: canUseToolFor(gate),
-      systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
-      abortController,
-      stderr: (data: string) => { stderr.push(data); if (stderr.length > 50) stderr.shift(); },
-      // MCP off: load no MCP config at all (none is passed), so the model isn't
-      // offered MCP tools and no server starts. The gate still denies MCP calls.
-      ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
       ...(plan.mode === 'continue' ? { resume: plan.sessionId } : {}),
-      ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
     };
-
-    const mapper = new SdkEventMapper();
-    let sawInit = false;
-    let rateLimitResetsAt: number | null = null;
-    try {
-      for await (const msg of this.deps.query({ prompt: prompt.stream, options })) {
-        for (const event of mapper.map(msg)) {
-          if (event.type === 'init') {
-            sawInit = true;
-            if (autoMode && event.permissionMode !== 'auto') {
-              // Claude Code started in another mode: auto mode isn't available
-              // for this account or model. Stop before the model does any work,
-              // and persist no session meta for this half-started session.
-              abortController.abort();
-              yield* flushNotice();
-              yield { type: 'error', error: autoModeUnavailable() };
-              return 'done';
-            }
-            yield { type: 'engine-meta', meta: { engine: 'claude_code', sessionId: event.sessionId, backend, cwd, tools: event.tools, mcpServers: event.mcpServers } };
-            yield* flushNotice();
-          } else if (event.type === 'rate-limited') {
-            rateLimitResetsAt = event.resetsAt;
-          } else if (event.type === 'result-error') {
-            prompt.close();
-            if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(event.text)) return 'missing-session';
-            yield* flushNotice();
-            yield { type: 'error', error: classifyClaudeCodeFailure(event.text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
-            return 'done';
-          } else {
-            if (event.type === 'finish') prompt.close();
-            yield event;
-          }
-        }
-      }
-      yield* flushNotice(); // a stream that ended without init
-    } catch (err) {
-      if (req.signal.aborted) return 'done'; // TurnRunner marks the message cancelled
-      const text = [err instanceof Error ? err.message : String(err), ...stderr].join('\n');
-      if (!sawInit && plan.mode !== 'fresh' && isMissingSessionError(text)) return 'missing-session';
-      yield* flushNotice();
-      yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
-    } finally {
-      prompt.close();
-      req.signal.removeEventListener('abort', onAbort);
-    }
-    return 'done';
+    const process = new LiveProcess(key, input, abortController, this.deps.query({ prompt: input, options: full }));
+    live = process;
+    for (const p of this.processes) if (p.isClosed) this.processes.delete(p);
+    this.processes.add(process);
+    return process;
   }
 
   /** The new user message as content blocks: seeded history for a fresh session, text, and images when the model takes them. */
