@@ -564,6 +564,30 @@ describe('POST /api/chats/:id/attachments/from-path (Task 39)', () => {
     expect(container.store.attachments.list('chat-1')).toEqual([]);
   });
 
+  it('refuses a file named like an image whose bytes are not that image', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(dataDir, 'secrets.png'), 'API_KEY=sk-not-an-image');
+    await writeFile(join(dataDir, 'really-a-gif.png'), 'GIF89a....');
+    const res = await fromPath(join(dataDir, 'secrets.png'));
+    expect(res.status).toBe(415);
+    expect(((await res.json()) as { error: string }).error).toContain("doesn't look like a PNG image");
+    expect((await fromPath(join(dataDir, 'really-a-gif.png'))).status).toBe(415);
+    expect(container.store.attachments.list('chat-1')).toEqual([]);
+  });
+
+  it('refuses a link named like an image that leads to something else', async (ctx) => {
+    const { symlink, writeFile } = await import('node:fs/promises');
+    await writeFile(join(dataDir, 'notes.txt'), 'private notes');
+    try {
+      await symlink(join(dataDir, 'notes.txt'), join(dataDir, 'innocent.png'), 'file');
+    } catch {
+      ctx.skip(); // creating file symlinks needs Developer Mode or admin on Windows
+    }
+    const res = await fromPath(join(dataDir, 'innocent.png'));
+    expect(res.status).toBe(415);
+    expect(container.store.attachments.list('chat-1')).toEqual([]);
+  });
+
   it('refuses a file over the 25MB cap without reading it, and a non-JSON body', async () => {
     const { open } = await import('node:fs/promises');
     const big = join(dataDir, 'big.png');
