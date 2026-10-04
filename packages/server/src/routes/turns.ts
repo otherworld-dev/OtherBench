@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { InvalidAttachmentReferenceError } from '@grunt/core/domain/turn.js';
+import { InvalidAttachmentReferenceError, RegenerateError } from '@grunt/core/domain/turn.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { resolveProfile } from '../profile-resolution.js';
@@ -11,6 +11,11 @@ interface TurnBody {
   parentId?: unknown;
   parts?: unknown;
   profileIds?: unknown;
+}
+
+interface RegenerateBody {
+  messageId?: unknown;
+  profileId?: unknown;
 }
 
 interface HeadBody {
@@ -191,6 +196,50 @@ export function turnsRoutes(container: Container): Hono {
     });
 
     return c.json({ messageId }, 202);
+  });
+
+  // Regenerate: one more assistant reply under the user message that
+  // `messageId` answers, as a sibling of it (never a new user message). Uses
+  // the profile that produced `messageId` unless `profileId` says otherwise,
+  // makes the new reply the chat's head so it becomes the active branch, and
+  // streams in the background like POST .../turns.
+  app.post('/chats/:id/regenerate', async (c) => {
+    const chatId = c.req.param('id');
+    getChatOrThrow(container, chatId);
+
+    const body = (await c.req.json().catch(() => ({}))) as RegenerateBody;
+    const messageId = requireNonEmptyString(body.messageId, 'messageId');
+    const message = container.store.messages.get(messageId);
+    if (!message) throw new HTTPException(404, { message: `Message "${messageId}" not found.` });
+    if (message.chatId !== chatId) {
+      throw new HTTPException(400, { message: `Message "${messageId}" does not belong to chat "${chatId}".` });
+    }
+    if (message.role !== 'assistant') {
+      throw new HTTPException(400, { message: `Message "${messageId}" is not an assistant reply; only a reply can be regenerated.` });
+    }
+    const profileId =
+      body.profileId === undefined || body.profileId === null
+        ? message.producedBy?.profileId ?? container.store.chats.get(chatId)?.profileId ?? null
+        : requireNonEmptyString(body.profileId, 'profileId');
+    if (!profileId) throw new HTTPException(400, { message: 'No profile to regenerate with; pass "profileId".' });
+    const profile = await resolveProfile(container, profileId);
+
+    container.memory?.noteTurnStarted(chatId);
+    let result;
+    try {
+      result = await container.turnRunner.regenerate({ chatId, messageId, profile });
+    } catch (err) {
+      container.memory?.noteTurnCompleted(chatId);
+      if (err instanceof RegenerateError) {
+        const status = err.code === 'not_found' ? 404 : err.code === 'streaming' || err.code === 'compare' ? 409 : 400;
+        throw new HTTPException(status, { message: err.message });
+      }
+      throw err;
+    }
+    container.streamRegistry.registerTurn(chatId, [result.assistantMessageId]);
+    container.store.chats.update(chatId, { headMessageId: result.assistantMessageId });
+
+    return c.json(result, 202);
   });
 
   app.post('/chats/:id/head', async (c) => {

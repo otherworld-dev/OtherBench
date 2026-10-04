@@ -1,6 +1,6 @@
 import type { MemoryAuthor, ProjectMemory } from '../ports/store.js';
 import type { CanonMessage, Part } from '../types/messages.js';
-import { activePath, extendForward } from './tree.js';
+import { activePath, extendToTip } from './tree.js';
 
 // Project memory (spec docs/superpowers/specs/2026-10-03-project-memory-design.md):
 // the note format, the summariser's input and output rules, and the prompts.
@@ -252,15 +252,15 @@ export function renderMemoryTranscript(messages: CanonMessage[]): string {
 const byCreated = (a: CanonMessage, b: CanonMessage): number => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /**
- * The chat's active path: root to `headId`, then on through single replies
- * (the client parks the head on the last user message). An unset or unknown
+ * The chat's active path: root to `headId`, then on to the branch tip exactly as the
+ * thread shows it (`extendToTip`; the client parks the head on the last user message). An unset or unknown
  * head falls back to the newest root. Stops at an unresolved compare turn.
  */
 export function memoryPath(tree: CanonMessage[], headId: string | null): CanonMessage[] {
   const head = headId !== null && tree.some((m) => m.id === headId) ? headId : null;
   const start = head ?? tree.filter((m) => m.parentId === null).sort(byCreated).at(-1)?.id ?? null;
   if (start === null) return [];
-  return [...activePath(tree, start), ...extendForward(tree, start)];
+  return [...activePath(tree, start), ...extendToTip(tree, start)];
 }
 
 /**

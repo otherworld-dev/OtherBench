@@ -1,5 +1,5 @@
 import { useMemo, useState, type JSX } from 'react';
-import { activePath, childrenOf, extendForward } from '@grunt/core/domain/tree.js';
+import { activePath, childrenOf, extendToTip } from '@grunt/core/domain/tree.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { useGruntStore } from '../state/store.js';
@@ -52,7 +52,7 @@ export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element | null 
     try {
       path = activePath(chatMessages, chat.headMessageId);
       const tail = path[path.length - 1];
-      if (tail) path = [...path, ...extendForward(chatMessages, tail.id)];
+      if (tail) path = [...path, ...extendToTip(chatMessages, tail.id)];
     } catch {
       return []; // inconsistent/partially-loaded slice -- show nothing rather than throw.
     }

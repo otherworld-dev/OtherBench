@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CanonMessage, EngineMeta } from '@grunt/core/types/messages.js';
+import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { pickSession, samePath, SessionClaims } from '../src/session.js';
 
 let t = 0;
@@ -50,6 +51,44 @@ describe('pickSession', () => {
   it('ignores a leading system message', () => {
     const history = [msg('sys', 'system'), msg('u1', 'user'), msg('a1', 'assistant', meta()), msg('u2', 'user')];
     expect(pickSession({ ...base, history, claims: new SessionClaims(), latestMessageForSession: () => 'a1' }).mode).toBe('continue');
+  });
+});
+
+describe('pickSession when a branch is started from a non-tip point (regenerate / edit)', () => {
+  // u1 -> a1 (session s1) -> u2 -> a2 (continued s1, so a2 is s1's tip)
+  function seeded() {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'c', title: 't', profileId: null, headMessageId: null, workspaceRoot: '/ws', pinned: false, archivedAt: null });
+    const mk = (id: string, parentId: string | null, role: 'user' | 'assistant', createdAt: number, withMeta = false) => {
+      store.messages.create({ id, chatId: 'c', parentId, role, parts: [{ type: 'text', text: id }], status: 'complete', error: null, producedBy: null, createdAt });
+      if (withMeta) store.messages.updateEngineMeta(id, meta());
+    };
+    mk('u1', null, 'user', 1);
+    mk('a1', 'u1', 'assistant', 2, true);
+    mk('u2', 'a1', 'user', 3);
+    mk('a2', 'u2', 'assistant', 4, true);
+    return { store, mk };
+  }
+  const plan = (store: InMemoryStore, userId: string) =>
+    pickSession({ ...base, history: store.messages.pathToRoot(userId), claims: new SessionClaims(), latestMessageForSession: (id) => store.messages.latestBySession('c', id)?.id ?? null });
+
+  it('regenerating the latest reply starts fresh: a1 is no longer the session tip, a2 holds the replaced turn', () => {
+    const { store } = seeded();
+    expect(plan(store, 'u2')).toEqual({ mode: 'fresh' });
+  });
+  it('editing the latest user message (a sibling of u2 under a1) starts fresh', () => {
+    const { store, mk } = seeded();
+    mk('u2b', 'a1', 'user', 5);
+    expect(plan(store, 'u2b')).toEqual({ mode: 'fresh' });
+  });
+  it('regenerating the first reply (no assistant above) starts fresh', () => {
+    const { store } = seeded();
+    expect(plan(store, 'u1')).toEqual({ mode: 'fresh' });
+  });
+  it('a turn continuing straight on from the tip still resumes in place', () => {
+    const { store, mk } = seeded();
+    mk('u3', 'a2', 'user', 5);
+    expect(plan(store, 'u3')).toEqual({ mode: 'continue', sessionId: 's1' });
   });
 });
 

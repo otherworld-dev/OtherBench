@@ -485,6 +485,106 @@ describe('POST /api/messages/:id/retry', () => {
 // POST /api/chats/:id/head
 // ---------------------------------------------------------------------------
 
+describe('POST /api/chats/:id/regenerate', () => {
+  async function finishedTurn(profileCount = 1) {
+    const { chatId, profileIds } = seedChat(profileCount);
+    const res = await postTurn(chatId, [profileIds[0] as string]);
+    const { userMessageId, assistantMessageIds } = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    const assistantId = assistantMessageIds[0] as string;
+    push(assistantId, { type: 'text-delta', text: 'first' });
+    push(assistantId, FINISH);
+    await flush();
+    return { chatId, profileIds, userMessageId, assistantId };
+  }
+  function regenerate(chatId: string, body: unknown) {
+    return app().request(`/api/chats/${chatId}/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('adds an assistant sibling under the same user message with the same profile, moves head to it, and 202s', async () => {
+    const { chatId, userMessageId, assistantId } = await finishedTurn();
+    const res = await regenerate(chatId, { messageId: assistantId });
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { userMessageId: string; assistantMessageId: string };
+    expect(body.userMessageId).toBe(userMessageId);
+
+    const created = container.store.messages.get(body.assistantMessageId)!;
+    expect(created).toMatchObject({ parentId: userMessageId, role: 'assistant', status: 'streaming' });
+    expect(created.producedBy).toMatchObject({ profileId: 'profile-0', regenerated: true });
+    expect(container.store.messages.children(userMessageId).map((m) => m.id)).toEqual([assistantId, body.assistantMessageId]);
+    expect(container.store.chats.get(chatId)!.headMessageId).toBe(body.assistantMessageId);
+
+    // Events for the new reply reach SSE subscribers (its buffer was registered).
+    const reader = sseReader(await app().request(`/api/chats/${chatId}/stream`));
+    await reader.next(); // hello
+    push(body.assistantMessageId, { type: 'text-delta', text: 'second' });
+    expect((await reader.next())?.data).toEqual({ messageId: body.assistantMessageId, type: 'text-delta', text: 'second' });
+    await reader.cancel();
+  });
+
+  it('writes its own usage row for the new reply', async () => {
+    const { chatId, assistantId } = await finishedTurn();
+    const body = (await (await regenerate(chatId, { messageId: assistantId })).json()) as { assistantMessageId: string };
+    await flush();
+    push(body.assistantMessageId, FINISH);
+    await flush();
+    const rows = container.store.usage.list(chatId);
+    expect(rows.map((r) => r.messageId).sort()).toEqual([assistantId, body.assistantMessageId].sort());
+  });
+
+  it('uses profileId from the body when given', async () => {
+    const { chatId, profileIds, assistantId } = await finishedTurn(2);
+    const body = (await (await regenerate(chatId, { messageId: assistantId, profileId: profileIds[1] })).json()) as { assistantMessageId: string };
+    expect(container.store.messages.get(body.assistantMessageId)!.producedBy?.profileId).toBe(profileIds[1]);
+  });
+
+  it('404s for an unknown chat or message', async () => {
+    const { chatId } = await finishedTurn();
+    expect((await regenerate('nope', { messageId: 'x' })).status).toBe(404);
+    const res = await regenerate(chatId, { messageId: 'nope' });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: unknown }).error).toBeTruthy();
+  });
+
+  it('400s without a messageId, for a user message, and for a message from another chat', async () => {
+    const { chatId, userMessageId, assistantId } = await finishedTurn();
+    expect((await regenerate(chatId, {})).status).toBe(400);
+    const userRes = await regenerate(chatId, { messageId: userMessageId });
+    expect(userRes.status).toBe(400);
+    expect(JSON.stringify(await userRes.json())).toMatch(/assistant/i);
+
+    container.store.chats.create({ id: 'chat-2', title: 'Other', profileId: 'profile-0', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const otherRes = await regenerate('chat-2', { messageId: assistantId });
+    expect(otherRes.status).toBe(400);
+    expect(JSON.stringify(await otherRes.json())).toMatch(/does not belong/i);
+  });
+
+  it('409s for a variant of a compare turn, creating nothing and leaving head alone', async () => {
+    const { chatId, profileIds } = seedChat(2);
+    const res = await postTurn(chatId, profileIds);
+    const { userMessageId, assistantMessageIds } = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    for (const id of assistantMessageIds) push(id, FINISH);
+    await flush();
+    const out = await regenerate(chatId, { messageId: assistantMessageIds[0] });
+    expect(out.status).toBe(409);
+    expect(JSON.stringify(await out.json())).toMatch(/compare/i);
+    expect(container.store.messages.children(userMessageId)).toHaveLength(2);
+    expect(container.store.chats.get(chatId)!.headMessageId).toBeNull();
+  });
+
+  it('409s for a streaming message and creates nothing', async () => {
+    const { chatId, profileIds } = seedChat();
+    const res = await postTurn(chatId, profileIds);
+    const { userMessageId, assistantMessageIds } = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    const out = await regenerate(chatId, { messageId: assistantMessageIds[0] });
+    expect(out.status).toBe(409);
+    expect(container.store.messages.children(userMessageId)).toHaveLength(1);
+  });
+});
+
 describe('POST /api/chats/:id/head', () => {
   it('moves head_message_id to the given message', async () => {
     const { chatId, profileIds } = seedChat();

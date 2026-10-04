@@ -2,9 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Attachment } from '../src/ports/store.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
 import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config.js';
-import type { Part } from '../src/types/messages.js';
+import type { CanonMessage, Part } from '../src/types/messages.js';
 import { FakeChatEngine, InMemoryStore } from '../src/testing/fakes.js';
-import { InvalidAttachmentReferenceError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1325,5 +1325,121 @@ describe('TurnRunner variant teardown (approval cleanup)', () => {
     await flush();
     expect(store.messages.get(result.assistantMessageIds[0] as string)?.status).toBe('error');
     expect(captured?.aborted).toBe(true);
+  });
+});
+
+describe('TurnRunner.regenerate', () => {
+  function allMessages(store: InMemoryStore): CanonMessage[] {
+    const out: CanonMessage[] = [];
+    const walk = (m: CanonMessage): void => {
+      out.push(m);
+      store.messages.children(m.id).forEach(walk);
+    };
+    store.messages.roots('chat-1').forEach(walk);
+    return out;
+  }
+  const FINISH_2: EngineEvent = { type: 'finish', usage: { tokensIn: 2, tokensOut: 3, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+
+  async function completedTurn() {
+    const store = new InMemoryStore();
+    const m = manualEngine();
+    const runner = new TurnRunner(store, m.engine);
+    const result = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile()],
+    });
+    const assistantId = result.assistantMessageIds[0] as string;
+    await flush();
+    m.push(assistantId, { type: 'text-delta', text: 'first' });
+    m.push(assistantId, FINISH_2);
+    await flush();
+    return { store, m, runner, userId: result.userMessageId, assistantId };
+  }
+
+  it('adds a new assistant sibling under the SAME user message, without creating a user message', async () => {
+    const { store, m, runner, userId, assistantId } = await completedTurn();
+    const before = allMessages(store).length;
+
+    const out = await runner.regenerate({ chatId: 'chat-1', messageId: assistantId, profile: makeResolvedProfile() });
+    expect(out.userMessageId).toBe(userId);
+    expect(out.assistantMessageId).not.toBe(assistantId);
+
+    const created = store.messages.get(out.assistantMessageId)!;
+    expect(created).toMatchObject({ role: 'assistant', parentId: userId, status: 'streaming' });
+    expect(created.producedBy).toMatchObject({ profileId: 'profile-1', regenerated: true });
+    expect(allMessages(store)).toHaveLength(before + 1);
+    expect(allMessages(store).filter((x) => x.role === 'user')).toHaveLength(1);
+
+    await flush();
+    m.push(out.assistantMessageId, { type: 'text-delta', text: 'second' });
+    m.push(out.assistantMessageId, FINISH_2);
+    await flush();
+
+    expect(textParts(store.messages.get(out.assistantMessageId)!.parts)).toBe('second');
+    // The original reply is untouched.
+    expect(textParts(store.messages.get(assistantId)!.parts)).toBe('first');
+    expect(store.messages.get(assistantId)!.status).toBe('complete');
+  });
+
+  it('sends the same history (up to the user message) and writes its own usage row', async () => {
+    const { store, m, runner, assistantId } = await completedTurn();
+    const out = await runner.regenerate({ chatId: 'chat-1', messageId: assistantId, profile: makeResolvedProfile() });
+    await flush();
+    m.push(out.assistantMessageId, FINISH_2);
+    await flush();
+
+    const req = m.requests.find((r) => r.messageId === out.assistantMessageId)!;
+    expect(req.messages.map((x) => x.role)).toEqual(['user']);
+    expect(store.usage.list('chat-1').filter((u) => u.messageId === out.assistantMessageId)).toHaveLength(1);
+    expect(store.usage.list('chat-1').filter((u) => u.messageId === assistantId)).toHaveLength(1);
+  });
+
+  it('can regenerate an errored or cancelled reply too', async () => {
+    const store = new InMemoryStore();
+    const m = manualEngine();
+    const runner = new TurnRunner(store, m.engine);
+    const r = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'Hi' }], profiles: [makeResolvedProfile()] });
+    const id = r.assistantMessageIds[0] as string;
+    await flush();
+    m.push(id, { type: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
+    await flush();
+    const out = await runner.regenerate({ chatId: 'chat-1', messageId: id, profile: makeResolvedProfile() });
+    expect(store.messages.get(out.assistantMessageId)?.parentId).toBe(r.userMessageId);
+  });
+
+  it('rejects regenerating a variant of a compare turn: keeping a variant is the user choice', async () => {
+    const store = new InMemoryStore();
+    const m = manualEngine();
+    const runner = new TurnRunner(store, m.engine);
+    const r = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile({ id: 'pa' }), makeResolvedProfile({ id: 'pb' })],
+    });
+    await flush();
+    for (const id of r.assistantMessageIds) m.push(id, FINISH_2);
+    await flush();
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: r.assistantMessageIds[0]!, profile: makeResolvedProfile() })).rejects.toMatchObject({ code: 'compare' });
+    expect(store.messages.children(r.userMessageId)).toHaveLength(2);
+  });
+
+  it('rejects an unknown message, another chat, a user message, a streaming reply and a parentless reply', async () => {
+    const { store, runner, userId, assistantId } = await completedTurn();
+    const profile = makeResolvedProfile();
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: 'nope', profile })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(runner.regenerate({ chatId: 'chat-2', messageId: assistantId, profile })).rejects.toMatchObject({ code: 'wrong_chat' });
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: userId, profile })).rejects.toMatchObject({ code: 'not_assistant' });
+
+    store.messages.updateStatus(assistantId, 'streaming');
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: assistantId, profile })).rejects.toMatchObject({ code: 'streaming' });
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: assistantId, profile })).rejects.toBeInstanceOf(RegenerateError);
+
+    const orphan = store.messages.create({
+      id: 'orphan', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null,
+    });
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: orphan.id, profile })).rejects.toMatchObject({ code: 'no_parent' });
   });
 });

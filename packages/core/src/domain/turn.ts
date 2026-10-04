@@ -7,6 +7,7 @@ import type { ResolvedProfile } from '../types/config.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
+import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 
 /**
@@ -82,6 +83,23 @@ function attachmentIdsIn(parts: Part[]): string[] {
     if (part.type === 'image' || part.type === 'file') ids.add(part.attachmentId);
   }
   return [...ids];
+}
+
+export type RegenerateErrorCode = 'not_found' | 'wrong_chat' | 'not_assistant' | 'no_parent' | 'streaming' | 'compare';
+
+/**
+ * Thrown by `TurnRunner.regenerate()` when the target can't be regenerated.
+ * Like `InvalidAttachmentReferenceError`, a plain typed error the route maps
+ * to an HTTP status by `code`; nothing has been written when it is thrown.
+ */
+export class RegenerateError extends Error {
+  constructor(
+    readonly code: RegenerateErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = 'RegenerateError';
+  }
 }
 
 export interface TurnResult {
@@ -362,6 +380,71 @@ export class TurnRunner {
     this.emit({ messageId, type: 'status', status: 'streaming' });
 
     await this.runVariant(chatId, message.parentId, messageId, profile);
+  }
+
+  /**
+   * Adds one more assistant reply under the user message that `messageId`
+   * answers, using `profile` -- the third use of the sibling mechanism next
+   * to compare turns and edits. Never creates a user message: the new reply
+   * is a sibling of `messageId`, which stays in the tree untouched. Any
+   * reply that isn't mid-stream can be the seed (complete, errored or
+   * cancelled); the profile defaults are the caller's business.
+   *
+   * Everything after the row is created is `runVariant`, so streaming,
+   * checkpoints, usage, approvals and per-variant isolation are shared with
+   * `run()`. Like `run()` it returns once the row exists and streams in the
+   * background; it does not move `head_message_id`.
+   */
+  async regenerate(input: {
+    chatId: string;
+    messageId: string;
+    profile: ResolvedProfile;
+  }): Promise<{ userMessageId: string; assistantMessageId: string }> {
+    const target = this.store.messages.get(input.messageId);
+    if (!target) throw new RegenerateError('not_found', `Message "${input.messageId}" not found.`);
+    if (target.chatId !== input.chatId) {
+      throw new RegenerateError('wrong_chat', `Message "${input.messageId}" does not belong to chat "${input.chatId}".`);
+    }
+    if (target.role !== 'assistant') {
+      throw new RegenerateError('not_assistant', `Message "${input.messageId}" is not an assistant reply.`);
+    }
+    if (target.status === 'streaming') {
+      throw new RegenerateError('streaming', `Message "${input.messageId}" is still streaming; stop it first.`);
+    }
+    const parent = target.parentId ? this.store.messages.get(target.parentId) : null;
+    if (!parent || parent.role !== 'user') {
+      throw new RegenerateError('no_parent', `Message "${input.messageId}" has no user message to regenerate from.`);
+    }
+
+    // A compare turn's variant is picked by the user ("Keep"), never replaced
+    // by regenerating: that would add a reply to the tabs and move the head.
+    if (isCompareSet(this.store.messages.children(parent.id))) {
+      throw new RegenerateError('compare', `Message "${input.messageId}" is a variant of a compare turn; keep one instead of regenerating.`);
+    }
+
+    const profile = input.profile;
+    const assistantMessage = this.store.messages.create({
+      id: this.generateId(),
+      chatId: input.chatId,
+      parentId: parent.id,
+      role: 'assistant',
+      parts: [],
+      status: 'streaming',
+      error: null,
+      producedBy: {
+        profileId: profile.id,
+        profileName: profile.name,
+        connectionId: profile.connectionId,
+        modelId: profile.modelId,
+        regenerated: true,
+      },
+    });
+
+    void this.runVariant(input.chatId, parent.id, assistantMessage.id, profile).catch((err: unknown) => {
+      console.error(`[TurnRunner] variant ${assistantMessage.id} failed outside its own error handling:`, err);
+    });
+
+    return { userMessageId: parent.id, assistantMessageId: assistantMessage.id };
   }
 
   private async runVariant(

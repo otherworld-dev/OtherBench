@@ -1,12 +1,13 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { activePath, childrenOf, extendForward, siblingsOf } from '@grunt/core/domain/tree.js';
+import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@grunt/core/domain/tree.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Chat } from '@grunt/core/ports/store.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
 import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
 import { api, ApiError } from '../state/api.js';
+import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
 
@@ -23,6 +24,11 @@ const NEAR_BOTTOM_PX = 80;
  * reopens the same tab strip in place, letting the user pick a different
  * variant without losing the others -- they're never deleted, only unselected.
  *
+ * Every other sibling set (a reply added by Regenerate, a user message
+ * re-sent through Edit) is a branch: the message shows a `‹ 2 / 3 ›`
+ * switcher, and switching moves the head to that branch's tip (`extendToTip`)
+ * so the whole conversation below it changes with it.
+ *
  * `messages` in the store is a flat, cross-chat pool (every message loaded
  * or streamed into this session, never scoped or evicted per chat -- see
  * store.ts). `siblingsOf`/`childrenOf`/`extendForward` all group purely by
@@ -38,6 +44,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const extras = useGruntStore((s) => s.extras);
   const models = useGruntStore((s) => s.models);
   const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
+  const registerMessage = useGruntStore((s) => s.registerMessage);
+  const profiles = useGruntStore((s) => s.profiles);
   const resetMessageForRetry = useGruntStore((s) => s.resetMessageForRetry);
   const [switchError, setSwitchError] = useState<string | null>(null);
   // Which turn's tab strip has been manually reopened from its "⤺ N other
@@ -45,6 +53,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   // (there is at most one shared parent per turn, so this alone disambiguates).
   const [reopenedParentId, setReopenedParentId] = useState<string | null>(null);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [composerProfileId, setComposerProfileId] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
 
   const chatId = chat?.id ?? null;
   const chatMessages = useMemo(
@@ -63,7 +75,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const displayPath = useMemo(() => {
     if (path.length === 0) return [];
     const tail = path[path.length - 1]!;
-    return [...path, ...extendForward(chatMessages, tail.id)];
+    return [...path, ...extendToTip(chatMessages, tail.id)];
   }, [path, chatMessages]);
 
   const tailId = displayPath.at(-1)?.id ?? null;
@@ -121,6 +133,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }, [chatId]);
 
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
+  // Regenerate and Edit would race a running reply, so they wait for the chat to be quiet.
+  const chatStreaming = useMemo(() => chatMessages.some((m) => m.status === 'streaming'), [chatMessages]);
 
   if (!chat) {
     return (
@@ -128,6 +142,94 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
         Select a chat, or start a new one, to begin.
       </main>
     );
+  }
+
+  /** Moves the head to `messageId`, optimistically, rolling back (with a message) if the server refuses. */
+  async function moveHead(messageId: string, failure: string): Promise<boolean> {
+    const previousHeadId = chat!.headMessageId;
+    setSwitchError(null);
+    setHeadMessageId(chat!.id, messageId);
+    try {
+      await api.turns.setHead(chat!.id, messageId);
+    } catch (err) {
+      console.error('[grunt-web] failed to move head:', err);
+      if (previousHeadId) setHeadMessageId(chat!.id, previousHeadId);
+      setSwitchError(failure);
+      return false;
+    }
+    return true;
+  }
+
+  /** Branch switcher: head goes to the tip of `target`'s branch, so everything below it is shown. */
+  function selectBranch(target: CanonMessage, siblings: CanonMessage[]): void {
+    const text = `Branch ${siblings.findIndex((x) => x.id === target.id) + 1} of ${siblings.length}`;
+    const tip = extendToTip(chatMessages, target.id).at(-1) ?? target;
+    setEditingId(null);
+    void moveHead(tip.id, "Couldn't switch branch -- the server rejected the change, so it was reverted. Please try again.").then((ok) => {
+      // Only once the switch stuck; the alternating non-breaking space makes a
+      // repeat of identical words a real content change, so it is announced again.
+      if (ok) setAnnouncement((prev) => (prev.endsWith('\u00a0') ? text : `${text}\u00a0`));
+    });
+  }
+
+  async function regenerate(reply: CanonMessage): Promise<void> {
+    setSwitchError(null);
+    try {
+      const result = await api.turns.regenerate(chat!.id, reply.id);
+      const by = reply.producedBy;
+      if (by) {
+        registerMessage(
+          buildAssistantStub(chat!, result.assistantMessageId, result.userMessageId, { id: by.profileId, name: by.profileName, connectionId: by.connectionId, modelId: by.modelId }, true)
+        );
+      }
+      // The server already moved its head; mirror that here.
+      setHeadMessageId(chat!.id, result.assistantMessageId);
+    } catch (err) {
+      console.error('[grunt-web] failed to regenerate:', err);
+      setSwitchError("Couldn't regenerate that reply. Please try again.");
+    }
+  }
+
+  /**
+   * The profile an edited message is re-sent with: the one that answered the
+   * original (what Regenerate uses too), else the composer picker's current
+   * choice, else the chat's own profile, else the first available.
+   */
+  function editProfile(original: CanonMessage): { id: string; name: string; connectionId: string; modelId: string } | null {
+    // Prefer the reply on the displayed path (the kept variant of a compare turn), else any reply.
+    const next = displayPath[displayPath.findIndex((d) => d.id === original.id) + 1];
+    const onPath = next && next.parentId === original.id && next.producedBy ? next : null;
+    const answeredBy = (onPath ?? childrenOf(chatMessages, original.id).find((c) => c.producedBy))?.producedBy?.profileId ?? null;
+    for (const wanted of [answeredBy, composerProfileId, chat!.profileId]) {
+      const found = wanted ? profiles.find((p) => p.id === wanted) : undefined;
+      if (found) return found;
+    }
+    return profiles.find((p) => p.archivedAt === null) ?? null;
+  }
+
+  async function saveEdit(original: CanonMessage, parts: Part[]): Promise<void> {
+    const profile = editProfile(original);
+    if (!profile) {
+      setSwitchError('No profile is available to send the edited message with.');
+      return;
+    }
+    setEditBusy(true);
+    setSwitchError(null);
+    try {
+      const result = await api.turns.create(chat!.id, { parentId: original.parentId, parts, profileIds: [profile.id] });
+      registerMessage(buildUserStub(chat!, result.userMessageId, original.parentId, parts));
+      for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat!, id, result.userMessageId, profile));
+      // Same head rule as Composer: head lands on the new USER message and the
+      // thread walks into its lone reply.
+      setHeadMessageId(chat!.id, result.userMessageId);
+      void api.turns.setHead(chat!.id, result.userMessageId).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
+      setEditingId(null);
+    } catch (err) {
+      console.error('[grunt-web] failed to send edited message:', err);
+      setSwitchError("Couldn't send the edited message. Please try again.");
+    } finally {
+      setEditBusy(false);
+    }
   }
 
   async function keepVariant(messageId: string): Promise<void> {
@@ -216,7 +318,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                 } catch {
                   // m not found in chatMessages (shouldn't happen -- it came from the same set) -- fall back to "no siblings".
                 }
-                const isReopened = siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
+                const compare = isCompareSet(siblings);
+                const isReopened = compare && siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
                 if (isReopened) {
                   return (
                     <VariantTabs
@@ -237,16 +340,43 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                   <Message
                     key={m.id}
                     message={m}
-                    otherVariantsCount={siblings.length > 1 ? siblings.length - 1 : 0}
-                    onReopenVariants={siblings.length > 1 ? () => setReopenedParentId(m.parentId) : undefined}
+                    otherVariantsCount={compare ? siblings.length - 1 : 0}
+                    onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
                     pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
                     onResolveApproval={resolveApproval}
+                    branch={
+                      !compare && siblings.length > 1
+                        ? {
+                            index: siblings.findIndex((x) => x.id === m.id),
+                            total: siblings.length,
+                            onSelect: (delta) => {
+                              const target = siblings[siblings.findIndex((x) => x.id === m.id) + delta];
+                              if (target) selectBranch(target, siblings);
+                            },
+                            disabled: chatStreaming || editBusy,
+                          }
+                        : undefined
+                    }
+                    actionsDisabled={chatStreaming || editBusy}
+                    onRegenerate={m.role === 'assistant' && m.parentId !== null && !compare ? () => void regenerate(m) : undefined}
+                    onEdit={m.role === 'user' ? () => setEditingId(m.id) : undefined}
+                    editing={
+                      editingId === m.id
+                        ? {
+                            onSave: (parts) => void saveEdit(m, parts),
+                            onCancel: () => setEditingId(null),
+                            busy: editBusy || chatStreaming,
+                            profileName: editProfile(m)?.name,
+                            compareNote: isCompareSet(childrenOf(chatMessages, m.id)),
+                          }
+                        : undefined
+                    }
                   />
                 );
               })
             )}
 
-            {openVariants.length > 1 && (
+            {openVariants.length > 1 && isCompareSet(openVariants) && (
               <VariantTabs
                 key={`turn-open-${tailId}`}
                 variants={openVariants}
@@ -271,7 +401,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         )}
       </div>
-      <Composer key={chat.id} chat={chat} parentId={tailId} />
+      <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
+      <Composer key={chat.id} chat={chat} parentId={tailId} onPrimaryProfileChange={setComposerProfileId} />
     </main>
   );
 }

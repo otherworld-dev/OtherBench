@@ -99,6 +99,63 @@ export function extendForward(messages: CanonMessage[], tailId: string): CanonMe
 }
 
 /**
+ * True when `siblings` is a compare turn: two or more assistant replies that
+ * were fanned out together by one send. Replies added later by Regenerate
+ * (`producedBy.regenerated`) don't count, and neither do user-message
+ * siblings (edits), so those sets are browsed with the branch switcher and
+ * only a real compare set gets the tab UI.
+ */
+export function isCompareSet(siblings: CanonMessage[]): boolean {
+  return siblings.filter((m) => m.role === 'assistant' && !m.producedBy?.regenerated).length >= 2;
+}
+
+/**
+ * Like `extendForward`, but for choosing where a whole branch ends: at a
+ * point with several children that is NOT a compare turn (a regenerated
+ * reply, an edited message) it continues into the newest child instead of
+ * stopping. An UNRESOLVED compare turn (no variant continued) still stops the walk --
+ * which variant to keep is the user's call; a resolved one is walked through
+ * its continued variant. Used to find the tip to move the head to when switching
+ * branches, and to display a branch down to its end.
+ */
+export function extendToTip(messages: CanonMessage[], tailId: string): CanonMessage[] {
+  const extension: CanonMessage[] = [];
+  let currentId = tailId;
+  const seen = new Set<string>([tailId]);
+  for (;;) {
+    const children = childrenOf(messages, currentId);
+    if (children.length === 0) break;
+    let next: CanonMessage | undefined;
+    if (isCompareSet(children)) {
+      // A compare turn the user already resolved and continued: follow the
+      // variant that has a reply below it; if several do, the one whose
+      // subtree holds the newest message (the branch used last -- variants
+      // are created together, so their own timestamps say nothing).
+      // Stop only when none was continued -- then it is still unresolved.
+      let best = -1;
+      for (const c of children) {
+        if (childrenOf(messages, c.id).length === 0) continue;
+        const newest = Math.max(
+          ...[...descendantIds(messages, c.id)].map((id) => messages.find((m) => m.id === id)?.createdAt ?? 0)
+        );
+        if (newest >= best) {
+          best = newest;
+          next = c;
+        }
+      }
+      if (!next) break;
+    } else {
+      next = children[children.length - 1]!; // creation-ordered, so the newest
+    }
+    if (seen.has(next.id)) break;
+    extension.push(next);
+    seen.add(next.id);
+    currentId = next.id;
+  }
+  return extension;
+}
+
+/**
  * All descendant ids of `messageId` (children, grandchildren, ...),
  * excluding `messageId` itself. Used e.g. to cascade a delete or to grey
  * out an abandoned branch. Returns an empty set for a leaf, or for an id
