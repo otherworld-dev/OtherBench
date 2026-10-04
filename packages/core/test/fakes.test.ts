@@ -154,4 +154,4 @@ describe('FakeSecretStore', () => {
 runStoreContract('InMemoryStore', () => new InMemoryStore());
 
 runSecretStoreContract('FakeSecretStore', () => new FakeSecretStore());
-runToolProviderContract('FakeToolProvider', () => new FakeToolProvider());
+runToolProviderContract('FakeToolProvider', ({ mcpServers }) => new FakeToolProvider({ mcpServers }));

@@ -47,6 +47,7 @@ import type {
   ProjectMemoryVersion,
   SettingsRepo,
 } from '../ports/store.js';
+import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
@@ -142,41 +143,80 @@ function stubTool(name: string, risk: ToolSpec['risk'], source: ToolSpec['source
   };
 }
 
+/** An MCP server the fake should expose, in the same shape the shared contract describes. */
+export interface FakeMcpServer {
+  id: string;
+  name: string;
+  tools: { name: string; readOnly?: boolean }[];
+}
+
+export interface FakeToolProviderOptions {
+  /** Built-in (fs/shell) tools. Defaults to one read fs tool, one mutate fs tool and a shell tool. */
+  tools?: ToolSpec[];
+  /** MCP servers whose tools are offered when the policy enables their id. */
+  mcpServers?: FakeMcpServer[];
+}
+
 /**
- * A `ToolProvider` test double. By default it offers one read fs tool, one
- * mutate fs tool and a shell tool, filtered by policy exactly as the real
- * `GruntToolProvider` filters (fs off/read/readwrite, shell iff `policy.shell`,
- * mcp tools only from enabled `serverId`s). `requestApproval` mirrors the
- * broker's hard ceilings (policy, workspace) and auto-allows read-risk fs under
- * `ask_on_mutate`; anything the real broker would ASK about is answered by
- * `askAnswer` (default: allowed) since a fake has no human to wait on.
- * Held to the same shared contract as the real provider
- * (tool-provider-contract.ts). Records calls for assertions.
+ * A `ToolProvider` test double. It deliberately does NOT re-implement the
+ * permission rules: every decision is made by a real `PermissionBroker` over a
+ * private `InMemoryStore`, exactly as `GruntToolProvider` does, so the fake
+ * cannot drift from the real policy / grant / auto-approve / ask semantics.
+ * What it does mirror (and what the shared contract in
+ * tool-provider-contract.ts pins) is the provider's own orchestration: policy-
+ * filtered listing, `mcp__<server>__<tool>` namespacing with `_2`, `_3`...
+ * de-duplication, the gate that turns a denial into a tool-error result, and the
+ * approval request -> `resolveApproval` / abort -> resolved lifecycle (including
+ * Claude Code auto mode's `deferAsk`). Tool bodies are stubs that return
+ * `{ ok: true }` (MCP stubs return a text content array); nothing touches disk.
  */
 export class FakeToolProvider implements ToolProvider {
   readonly refreshed: string[] = [];
   readonly denials: { toolName: string; reason: string }[] = [];
   shutdownCalls = 0;
-  askAnswer: ApprovalOutcome = { allowed: true, grantedBy: 'fake' };
   private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
+  private readonly waiters = new Map<string, (choice: ApprovalChoice) => void>();
+  private readonly broker: PermissionBroker;
+  private readonly tools: ToolSpec[];
+  private readonly mcpServers: FakeMcpServer[];
 
-  constructor(
-    private readonly tools: ToolSpec[] = [
+  constructor(options: FakeToolProviderOptions = {}) {
+    this.broker = new PermissionBroker(new InMemoryStore());
+    this.tools = options.tools ?? [
       stubTool('read_file', 'read', 'fs'),
       stubTool('write_file', 'mutate', 'fs'),
       stubTool('run_command', 'execute', 'shell'),
-    ]
-  ) {}
-
-  private permitted(tool: ToolSpec, policy: ToolPolicy): boolean {
-    if (tool.source === 'fs') return policy.fs === 'readwrite' || (policy.fs === 'read' && tool.risk === 'read');
-    if (tool.source === 'shell') return policy.shell;
-    if (tool.source === 'mcp') return tool.serverId !== undefined && policy.mcpServerIds.includes(tool.serverId);
-    return false;
+    ];
+    this.mcpServers = options.mcpServers ?? [];
   }
 
   async listTools(policy: ToolPolicy): Promise<ToolSpec[]> {
-    return this.tools.filter((t) => this.permitted(t, policy));
+    const raw: ToolSpec[] = [];
+    if (policy.fs === 'readwrite') raw.push(...this.tools.filter((t) => t.source === 'fs'));
+    else if (policy.fs === 'read') raw.push(...this.tools.filter((t) => t.source === 'fs' && t.risk === 'read'));
+    if (policy.shell) raw.push(...this.tools.filter((t) => t.source === 'shell'));
+    for (const id of policy.mcpServerIds) {
+      const server = this.mcpServers.find((s) => s.id === id);
+      if (!server) continue;
+      for (const tool of server.tools) {
+        raw.push({
+          name: `mcp__${server.name}__${tool.name}`,
+          description: tool.name,
+          parameters: { type: 'object', properties: {} },
+          risk: tool.readOnly === true ? 'read' : 'mutate',
+          source: 'mcp',
+          serverId: server.id,
+          execute: async () => [{ type: 'text', text: 'ok' }],
+        });
+      }
+    }
+    const seen = new Map<string, number>();
+    const unique = raw.map((spec) => {
+      const prior = seen.get(spec.name) ?? 0;
+      seen.set(spec.name, prior + 1);
+      return prior === 0 ? spec : { ...spec, name: `${spec.name}_${prior + 1}` };
+    });
+    return unique.map((spec) => this.gate(spec, policy));
   }
 
   async refreshMcp(serverId: string): Promise<void> {
@@ -192,23 +232,76 @@ export class FakeToolProvider implements ToolProvider {
     return () => this.listeners.delete(cb);
   }
 
-  resolveApproval(_requestId: string, _choice: ApprovalChoice): boolean {
-    return false;
+  resolveApproval(requestId: string, choice: ApprovalChoice): boolean {
+    const settle = this.waiters.get(requestId);
+    if (!settle) return false;
+    settle(choice);
+    return true;
   }
 
-  async requestApproval(tool: ToolSpec, _args: unknown, policy: ToolPolicy, ctx: ToolContext, _opts?: ApprovalOptions): Promise<ApprovalOutcome> {
-    if (!this.permitted(tool, policy)) return { allowed: false, reason: `"${tool.name}" is not permitted by this profile's tool policy.` };
-    if ((tool.source === 'fs' || tool.source === 'shell') && !ctx.workspaceRoot) {
-      return { allowed: false, reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.` };
+  async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
+    const decision = this.broker.decide(tool, args, policy, ctx);
+    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+      this.broker.discard(decision.request.id);
+      return { deferred: true };
     }
-    if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read' && tool.source === 'fs') {
-      return { allowed: true, grantedBy: 'auto_read' };
-    }
-    return this.askAnswer;
+    const auth = await this.settle(decision, ctx);
+    return auth.ok ? { allowed: true, grantedBy: auth.grantedBy } : { allowed: false, reason: auth.reason };
   }
 
   recordAgentDenial(_ctx: ToolContext, toolName: string, _args: unknown, reason: string): void {
     this.denials.push({ toolName, reason });
+  }
+
+  private gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec {
+    return {
+      ...tool,
+      execute: async (args: unknown, ctx: ToolContext): Promise<unknown> => {
+        const auth = await this.settle(this.broker.decide(tool, args, policy, ctx), ctx);
+        if (!auth.ok) return { error: true, code: auth.code, message: auth.reason };
+        return tool.execute(args, ctx);
+      },
+    };
+  }
+
+  private async settle(
+    decision: ReturnType<PermissionBroker['decide']>,
+    ctx: ToolContext
+  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied'; reason: string }> {
+    if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
+    if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
+
+    const { request } = decision;
+    // Waiter registered BEFORE notifying so a listener may answer synchronously.
+    const pending = new Promise<ApprovalChoice>((resolve) => {
+      let done = false;
+      const settleChoice = (choice: ApprovalChoice): void => {
+        if (done) return;
+        done = true;
+        ctx.signal.removeEventListener('abort', onAbort);
+        this.waiters.delete(request.id);
+        this.broker.resolve(request.id, choice);
+        resolve(choice);
+      };
+      const onAbort = (): void => settleChoice({ choice: 'deny' });
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
+      this.waiters.set(request.id, settleChoice);
+    });
+    this.notify({ type: 'request', request });
+    const choice = await pending;
+    this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
+    if (choice.choice === 'deny') return { ok: false, code: 'approval_denied', reason: 'The user denied this tool call.' };
+    return { ok: true, grantedBy: `ask:${choice.choice}` };
+  }
+
+  private notify(event: ToolApprovalEvent): void {
+    for (const cb of this.listeners) {
+      try {
+        cb(event);
+      } catch {
+        /* a listener throwing must not break the gate */
+      }
+    }
   }
 }
 
