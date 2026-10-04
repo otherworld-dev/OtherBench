@@ -767,6 +767,14 @@ class InMemoryMessageRepo implements MessageRepo {
     m.engineMeta = structuredClone(meta);
   }
 
+  markKept(id: string, at: number): void {
+    const m = this.byId.get(id);
+    if (!m) {
+      throw new Error(`Not found: ${id}`);
+    }
+    m.keptAt = at;
+  }
+
   latestBySession(chatId: string, sessionId: string): CanonMessage | null {
     const matches = [...this.byId.values()]
       .filter((m) => m.chatId === chatId && m.engineMeta?.sessionId === sessionId)

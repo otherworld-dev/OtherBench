@@ -24,7 +24,7 @@ import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 //   - pathToRoot(): returns [] for an unknown id, it does NOT throw
 
 /** The columns of `message` that map onto CanonMessage, in a fixed order. */
-const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta';
+const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at';
 
 /**
  * Hard cap on how many ancestor hops `pathToRoot`'s recursive CTE will
@@ -117,6 +117,8 @@ function fromRow(row: Record<string, unknown>): CanonMessage {
   // existing shape -- see CanonMessage.engineMeta.
   const engineMeta = fromJsonNullable<EngineMeta>((row.engine_meta as string | null) ?? null);
   if (engineMeta) message.engineMeta = engineMeta;
+  const keptAt = (row.kept_at as number | null | undefined) ?? null;
+  if (keptAt !== null) message.keptAt = keptAt;
   return message;
 }
 
@@ -137,7 +139,7 @@ export class SqliteMessageRepo implements MessageRepo {
     this.db
       .prepare(
         `INSERT INTO message (${COLUMNS}, search_text)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         full.id,
@@ -150,6 +152,7 @@ export class SqliteMessageRepo implements MessageRepo {
         toJsonNullable(full.producedBy),
         full.createdAt,
         toJsonNullable(full.engineMeta ?? null),
+        full.keptAt ?? null,
         deriveSearchText(full.parts)
       );
     return full;
@@ -187,11 +190,11 @@ export class SqliteMessageRepo implements MessageRepo {
   pathToRoot(messageId: string): CanonMessage[] {
     const rows = this.db
       .prepare(
-        `WITH RECURSIVE ancestry(id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, depth) AS (
-           SELECT id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, 0
+        `WITH RECURSIVE ancestry(id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, depth) AS (
+           SELECT id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, 0
              FROM message WHERE id = ?
            UNION ALL
-           SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, m.engine_meta, a.depth + 1
+           SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, m.engine_meta, m.kept_at, a.depth + 1
              FROM message m JOIN ancestry a ON m.id = a.parent_id
             WHERE a.depth < ${MAX_PATH_DEPTH}
          )
@@ -230,6 +233,13 @@ export class SqliteMessageRepo implements MessageRepo {
 
   updateEngineMeta(id: string, meta: EngineMeta): void {
     const result = this.db.prepare(`UPDATE message SET engine_meta = ? WHERE id = ?`).run(toJson(meta), id);
+    if (Number(result.changes) === 0) {
+      throw new Error(`message: not found: ${id}`);
+    }
+  }
+
+  markKept(id: string, at: number): void {
+    const result = this.db.prepare(`UPDATE message SET kept_at = ? WHERE id = ?`).run(at, id);
     if (Number(result.changes) === 0) {
       throw new Error(`message: not found: ${id}`);
     }

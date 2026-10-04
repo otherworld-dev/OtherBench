@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { isCompareSet } from '@grunt/core/domain/tree.js';
 import { InvalidAttachmentReferenceError, RegenerateError } from '@grunt/core/domain/turn.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
-import { resolveProfile } from '../profile-resolution.js';
+import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { sseStream } from '../stream/sse.js';
 import { requireNonEmptyString } from '../validation.js';
 
@@ -217,9 +218,13 @@ export function turnsRoutes(container: Container): Hono {
     if (message.role !== 'assistant') {
       throw new HTTPException(400, { message: `Message "${messageId}" is not an assistant reply; only a reply can be regenerated.` });
     }
+    // With no profileId given, the reply's own profile, skipping one that has
+    // since been archived: then the chat's profile, then the app default.
+    const live = (id: string | null | undefined): string | null =>
+      id && container.store.profiles.get(id)?.archivedAt === null ? id : null;
     const profileId =
       body.profileId === undefined || body.profileId === null
-        ? message.producedBy?.profileId ?? container.store.chats.get(chatId)?.profileId ?? null
+        ? live(message.producedBy?.profileId) ?? live(container.store.chats.get(chatId)?.profileId) ?? appDefaultProfileId(container.store)
         : requireNonEmptyString(body.profileId, 'profileId');
     if (!profileId) throw new HTTPException(400, { message: 'No profile to regenerate with; pass "profileId".' });
     const profile = await resolveProfile(container, profileId);
@@ -252,6 +257,13 @@ export function turnsRoutes(container: Container): Hono {
     const message = container.store.messages.get(messageId);
     if (!message || message.chatId !== chatId) {
       throw new HTTPException(400, { message: `Message "${messageId}" does not belong to chat "${chatId}".` });
+    }
+
+    // Moving the head onto a compare variant is keeping it. Record that on the
+    // variant too, so the choice survives the head moving to another branch
+    // and back (extendToTip follows the variant kept or continued last).
+    if (message.role === 'assistant' && message.parentId && isCompareSet(container.store.messages.children(message.parentId))) {
+      container.store.messages.markKept(messageId, Date.now());
     }
 
     const updated = container.store.chats.update(chatId, { headMessageId: messageId });

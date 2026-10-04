@@ -113,10 +113,10 @@ export function isCompareSet(siblings: CanonMessage[]): boolean {
  * Like `extendForward`, but for choosing where a whole branch ends: at a
  * point with several children that is NOT a compare turn (a regenerated
  * reply, an edited message) it continues into the newest child instead of
- * stopping. An UNRESOLVED compare turn (no variant continued) still stops the walk --
- * which variant to keep is the user's call; a resolved one is walked through
- * its continued variant. Used to find the tip to move the head to when switching
- * branches, and to display a branch down to its end.
+ * stopping. An UNRESOLVED compare turn (no variant kept or continued) still
+ * stops the walk -- which variant to keep is the user's call; a resolved one
+ * is walked through the variant used last. Used to find the tip to move the
+ * head to when switching branches, and to display a branch down to its end.
  */
 export function extendToTip(messages: CanonMessage[], tailId: string): CanonMessage[] {
   const extension: CanonMessage[] = [];
@@ -127,19 +127,18 @@ export function extendToTip(messages: CanonMessage[], tailId: string): CanonMess
     if (children.length === 0) break;
     let next: CanonMessage | undefined;
     if (isCompareSet(children)) {
-      // A compare turn the user already resolved and continued: follow the
-      // variant that has a reply below it; if several do, the one whose
-      // subtree holds the newest message (the branch used last -- variants
-      // are created together, so their own timestamps say nothing).
-      // Stop only when none was continued -- then it is still unresolved.
+      // A compare turn the user already resolved: follow the variant used
+      // last -- the later of when it was kept (`keptAt`) and the newest
+      // message below it (it was continued). Variants are created together,
+      // so their own timestamps say nothing. Stop only when none was kept or
+      // continued -- then it is still unresolved.
       let best = -1;
       for (const c of children) {
-        if (childrenOf(messages, c.id).length === 0) continue;
-        const newest = Math.max(
-          ...[...descendantIds(messages, c.id)].map((id) => messages.find((m) => m.id === id)?.createdAt ?? 0)
-        );
-        if (newest >= best) {
-          best = newest;
+        const below = [...descendantIds(messages, c.id)].map((id) => messages.find((m) => m.id === id)?.createdAt ?? 0);
+        const lastUsed = Math.max(c.keptAt ?? -1, ...below);
+        if (lastUsed < 0) continue;
+        if (lastUsed >= best) {
+          best = lastUsed;
           next = c;
         }
       }
