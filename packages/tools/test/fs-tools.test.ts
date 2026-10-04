@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -520,6 +521,25 @@ describe('EEXIST from O_EXCL is disambiguated, not collapsed into io_error', () 
 });
 
 describe('TOCTOU guard (openVerified)', () => {
+  it('compares file identities exactly, not as rounded numbers', () => {
+    // Windows file ids are 64-bit and routinely above 2^53, where the number
+    // form Node returns by default is rounded and distinct files can compare
+    // equal. The identity must carry the exact id.
+    const files = Array.from({ length: 20 }, (_, i) => {
+      const p = join(ws, `id-${i}.txt`);
+      writeFileSync(p, String(i));
+      return p;
+    });
+    const ids = files.map((p) => __testing.identityOf(p)!);
+    for (const [i, p] of files.entries()) {
+      expect(ids[i]!.ino).toBe(statSync(p, { bigint: true }).ino);
+      expect(__testing.sameIdentity(ids[i]!, __testing.identityOf(p))).toBe(true);
+    }
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) expect(__testing.sameIdentity(ids[i]!, ids[j]!)).toBe(false);
+    }
+  });
+
   it('does not false-positive on an ordinary, unraced open', async () => {
     writeFileSync(join(ws, 'a.txt'), 'hello');
     const { handle } = await __testing.openVerified(ws, 'a.txt', fsConstants.O_RDONLY);

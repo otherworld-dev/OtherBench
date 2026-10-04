@@ -237,9 +237,17 @@ async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
 
 const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
+/**
+ * A file's identity: device and file id, as bigints. Not numbers: on Windows
+ * the file id is a 64-bit NTFS file reference (sequence number in the high
+ * bits), routinely above 2^53, so the number form Node returns by default is
+ * rounded -- measured, two files created back to back read as ...020 for a
+ * true id of ...019 -- and two DIFFERENT files can compare equal. That made
+ * the comparisons below pass for the attacker's file under load.
+ */
 interface Identity {
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 }
 
 function presentSync(p: string): boolean {
@@ -259,7 +267,7 @@ function presentSync(p: string): boolean {
  */
 function identityOf(p: string): Identity | null {
   try {
-    const st = statSync(p);
+    const st = statSync(p, { bigint: true });
     return { dev: st.dev, ino: st.ino };
   } catch {
     return null;
@@ -403,7 +411,7 @@ async function openVerified(
 
   try {
     // (E) What did we actually get?
-    const opened = await handle.stat();
+    const opened = await handle.stat({ bigint: true });
     openedIdentity = { dev: opened.dev, ino: opened.ino };
 
     // Hard links: see the module comment. A second directory entry for the
@@ -414,7 +422,7 @@ async function openVerified(
     // reports nlink > 1, and user-creatable directory hard links do not
     // exist on either platform. Callers that opened a directory by mistake
     // get the ordinary EISDIR further down.
-    if (!opened.isDirectory() && opened.nlink > 1) throw new HardLinkError(candidate, opened.nlink);
+    if (!opened.isDirectory() && opened.nlink > 1n) throw new HardLinkError(candidate, Number(opened.nlink));
 
     if (existed && !sameIdentity(midTarget, openedIdentity)) throw new ToctouGuardError(candidate);
 
@@ -980,4 +988,4 @@ export { ToctouGuardError, HardLinkError, AlreadyExistsError };
  * fs-tools.test.ts to drive the guards with a real, deterministic filesystem
  * race. Not part of this package's public API.
  */
-export const __testing = { openVerified, readdirVerified };
+export const __testing = { openVerified, readdirVerified, identityOf, sameIdentity };
