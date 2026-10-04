@@ -145,7 +145,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }
 
   /** Moves the head to `messageId`, optimistically, rolling back (with a message) if the server refuses. */
-  async function moveHead(messageId: string, failure: string): Promise<void> {
+  async function moveHead(messageId: string, failure: string): Promise<boolean> {
     const previousHeadId = chat!.headMessageId;
     setSwitchError(null);
     setHeadMessageId(chat!.id, messageId);
@@ -155,15 +155,21 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       console.error('[grunt-web] failed to move head:', err);
       if (previousHeadId) setHeadMessageId(chat!.id, previousHeadId);
       setSwitchError(failure);
+      return false;
     }
+    return true;
   }
 
   /** Branch switcher: head goes to the tip of `target`'s branch, so everything below it is shown. */
   function selectBranch(target: CanonMessage, siblings: CanonMessage[]): void {
-    setAnnouncement(`Branch ${siblings.findIndex((x) => x.id === target.id) + 1} of ${siblings.length}`);
+    const text = `Branch ${siblings.findIndex((x) => x.id === target.id) + 1} of ${siblings.length}`;
     const tip = extendToTip(chatMessages, target.id).at(-1) ?? target;
     setEditingId(null);
-    void moveHead(tip.id, "Couldn't switch branch -- the server rejected the change, so it was reverted. Please try again.");
+    void moveHead(tip.id, "Couldn't switch branch -- the server rejected the change, so it was reverted. Please try again.").then((ok) => {
+      // Only once the switch stuck; the alternating non-breaking space makes a
+      // repeat of identical words a real content change, so it is announced again.
+      if (ok) setAnnouncement((prev) => (prev.endsWith('\u00a0') ? text : `${text}\u00a0`));
+    });
   }
 
   async function regenerate(reply: CanonMessage): Promise<void> {
@@ -190,7 +196,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
    * choice, else the chat's own profile, else the first available.
    */
   function editProfile(original: CanonMessage): { id: string; name: string; connectionId: string; modelId: string } | null {
-    const answeredBy = childrenOf(chatMessages, original.id).find((c) => c.producedBy)?.producedBy?.profileId ?? null;
+    // Prefer the reply on the displayed path (the kept variant of a compare turn), else any reply.
+    const next = displayPath[displayPath.findIndex((d) => d.id === original.id) + 1];
+    const onPath = next && next.parentId === original.id && next.producedBy ? next : null;
+    const answeredBy = (onPath ?? childrenOf(chatMessages, original.id).find((c) => c.producedBy))?.producedBy?.profileId ?? null;
     for (const wanted of [answeredBy, composerProfileId, chat!.profileId]) {
       const found = wanted ? profiles.find((p) => p.id === wanted) : undefined;
       if (found) return found;

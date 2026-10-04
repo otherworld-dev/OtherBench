@@ -193,6 +193,16 @@ describe('extendToTip', () => {
     const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2), u('u2', 'y', 3), a('a2', 'u2', 4)];
     expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['y', 'u2', 'a2']);
   });
+  it('when both variants were continued, follows the one whose subtree holds the newest message, not the later-created variant', () => {
+    // x and y are created together (y sorts last); x's branch was used most recently.
+    const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2), u('uy', 'y', 3), u('ux', 'x', 4), a('ax', 'ux', 5), u('ux2', 'ax', 10)];
+    expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['x', 'ux', 'ax', 'ux2']);
+  });
+  it('when both variants were continued, follows the one whose subtree holds the newest message, not the later-created variant', () => {
+    // x and y are created together (y sorts last); x's branch was used most recently.
+    const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2), u('uy', 'y', 3), u('ux', 'x', 4), a('ax', 'ux', 5), u('ux2', 'ax', 10)];
+    expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['x', 'ux', 'ax', 'ux2']);
+  });
   it('follows the newest continued variant when several have children', () => {
     const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2), u('ux', 'x', 3), u('uy', 'y', 5)];
     expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['y', 'uy']);

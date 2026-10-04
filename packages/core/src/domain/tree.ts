@@ -128,9 +128,21 @@ export function extendToTip(messages: CanonMessage[], tailId: string): CanonMess
     let next: CanonMessage | undefined;
     if (isCompareSet(children)) {
       // A compare turn the user already resolved and continued: follow the
-      // variant that has a reply below it (the newest, if several do).
+      // variant that has a reply below it; if several do, the one whose
+      // subtree holds the newest message (the branch used last -- variants
+      // are created together, so their own timestamps say nothing).
       // Stop only when none was continued -- then it is still unresolved.
-      next = children.filter((c) => childrenOf(messages, c.id).length > 0).at(-1);
+      let best = -1;
+      for (const c of children) {
+        if (childrenOf(messages, c.id).length === 0) continue;
+        const newest = Math.max(
+          ...[...descendantIds(messages, c.id)].map((id) => messages.find((m) => m.id === id)?.createdAt ?? 0)
+        );
+        if (newest >= best) {
+          best = newest;
+          next = c;
+        }
+      }
       if (!next) break;
     } else {
       next = children[children.length - 1]!; // creation-ordered, so the newest

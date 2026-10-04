@@ -682,4 +682,46 @@ describe('Thread regenerate, edit and branch switching', () => {
     expect(live).toHaveAttribute('aria-live', 'polite');
     expect(live).toHaveTextContent('Branch 1 of 2');
   });
+
+  it('editing a compare prompt after keeping B answers with the KEPT variant\'s profile', async () => {
+    twoProfiles();
+    const by = (id: string) => ({ profileId: id, profileName: `Profile ${id}`, connectionId: 'c1', modelId: 'model-x' });
+    load(usr('u1', null, 1), asst('A', 'u1', 2, { producedBy: by('p1') }), asst('B', 'u1', 2, { producedBy: by('p2') }));
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1b', assistantMessageIds: ['a1b'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('B'); // B is the kept variant
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByTestId('edit-profile-note')).toHaveTextContent('Profile p2');
+    await user.type(screen.getByRole('textbox', { name: 'Edit message' }), '!');
+    await user.click(screen.getByRole('button', { name: 'Save and send' }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ profileIds: ['p2'] })));
+  });
+
+  it('does not announce a branch switch the server refused', async () => {
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a2', 'u1', 3, { producedBy: regen }));
+    mockedSetHead.mockRejectedValue(new Error('refused'));
+    mount('a2');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Previous branch' }));
+    await screen.findByRole('alert');
+    expect(screen.getByTestId('branch-announcer')).toHaveTextContent('');
+  });
+
+  it('a repeated identical announcement still changes the live region content', async () => {
+    // Two forks, both "2 / 2": switching each to "1 / 2" in a row announces the same words twice.
+    load(
+      usr('u1', null, 1), asst('a1', 'u1', 2), asst('a2', 'u1', 3, { producedBy: regen }),
+      usr('u2', 'a2', 4), asst('a3', 'u2', 5), asst('a3r', 'u2', 6, { producedBy: regen })
+    );
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('a3r');
+    const user = userEvent.setup();
+    const switchers = screen.getAllByTestId('branch-switcher'); // [fork at a2, fork at a3r]
+    await user.click(within(switchers[1]!).getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(screen.getByTestId('branch-announcer')).toHaveTextContent('Branch 1 of 2'));
+    const first = screen.getByTestId('branch-announcer').textContent;
+    await user.click(within(screen.getAllByTestId('branch-switcher')[0]!).getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(screen.getByTestId('branch-announcer').textContent).not.toBe(first));
+    expect(screen.getByTestId('branch-announcer')).toHaveTextContent('Branch 1 of 2');
+  });
 });
