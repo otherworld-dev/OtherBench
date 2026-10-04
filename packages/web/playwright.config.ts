@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
-const PORT = 4756;
+const PORT = Number(process.env.GRUNT_E2E_PORT ?? 4756);
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 // A fresh scratch dir per run -- keeps the e2e run from ever touching a
