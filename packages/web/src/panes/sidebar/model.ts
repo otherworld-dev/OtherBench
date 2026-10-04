@@ -7,7 +7,7 @@ export interface SidebarGroup {
   key: string;
   /** Null for No project. */
   project: Project | null;
-  /** The group's unpinned chats, newest activity first; only search matches while searching. */
+  /** The group's unpinned chats in sidebar order (`sortOrder`, highest first); only search matches while searching. */
   chats: Chat[];
   /** Every unarchived chat in the group, pinned ones included (they display under Pinned). */
   total: number;
@@ -21,6 +21,8 @@ export interface SidebarModel {
 }
 
 const byActivity = (a: Chat, b: Chat): number => b.updatedAt - a.updatedAt;
+/** Sidebar order (#823): `sortOrder`, highest first; activity, then id, only break ties. */
+const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder || byActivity(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /**
  * The sidebar's layout (spec 2026-10-03-projects-design §3): Pinned, each
@@ -43,11 +45,11 @@ export function buildSidebar(chats: Chat[], projects: Project[], matches: Readon
   ];
   const groups = slots.map(({ key, project }) => {
     const members = live.filter((c) => keyOf(c) === key);
-    return { key, project, total: members.length, chats: members.filter((c) => !c.pinned && shown(c)).sort(byActivity) };
+    return { key, project, total: members.length, chats: members.filter((c) => !c.pinned && shown(c)).sort(byOrder) };
   });
 
   return {
-    pinned: live.filter((c) => c.pinned && shown(c)).sort(byActivity),
+    pinned: live.filter((c) => c.pinned && shown(c)).sort(byOrder),
     groups: matches === null ? groups : groups.filter((g) => g.chats.length > 0),
     archived: chats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
   };
@@ -69,4 +71,50 @@ export function moveProjectPatches(projects: Project[], id: string, dir: -1 | 1)
   ordered[i] = ordered[j]!;
   ordered[j] = moving;
   return ordered.flatMap((p, index) => (p.sortOrder === index ? [] : [{ id: p.id, sortOrder: index }]));
+}
+
+/** Gap below which a new sortOrder can't sit strictly between two neighbours, so the section is renumbered. */
+const MIN_GAP = 1e-6;
+
+/**
+ * The `sortOrder` PATCHes that place `moving` in `section` (its chats in
+ * display order, highest sortOrder first) just above `beforeId`, or at the
+ * bottom when `beforeId` is null (#823). `moving` may come from another
+ * section. Normally one patch: the moving chat takes a value between its new
+ * neighbours (one above the top, one below the bottom). Only when the
+ * neighbours are too close to fit a value between them is the whole section
+ * renumbered, returning just the chats whose sortOrder changes. Empty when
+ * the chat is already there, or `beforeId` isn't in the section.
+ */
+export function placeChatPatches(section: Chat[], moving: Chat, beforeId: string | null): { id: string; sortOrder: number }[] {
+  const rest = section.filter((c) => c.id !== moving.id);
+  const at = beforeId === null ? rest.length : rest.findIndex((c) => c.id === beforeId);
+  if (at === -1) return [];
+  const above = rest[at - 1];
+  const below = rest[at];
+  const current = section.findIndex((c) => c.id === moving.id);
+  if (current !== -1 && section[current - 1] === above && section[current + 1] === below) return [];
+
+  let value: number;
+  if (above && below) value = (above.sortOrder + below.sortOrder) / 2;
+  else if (below) value = below.sortOrder + 1;
+  else if (above) value = above.sortOrder - 1;
+  else value = moving.sortOrder;
+  const fits = (!above || above.sortOrder - value > MIN_GAP) && (!below || value - below.sortOrder > MIN_GAP);
+  if (fits) return [{ id: moving.id, sortOrder: value }];
+
+  const ordered = [...rest.slice(0, at), moving, ...rest.slice(at)];
+  return ordered.flatMap((c, i) => {
+    const sortOrder = ordered.length - i;
+    return c.sortOrder === sortOrder && c.id !== moving.id ? [] : [{ id: c.id, sortOrder }];
+  });
+}
+
+/** Where to place `chatId` to move it one place up (-1) or down (+1) in `section`: above `beforeId` (null = the bottom). Undefined at either end. */
+export function moveTarget(section: Chat[], chatId: string, dir: -1 | 1): { beforeId: string | null } | undefined {
+  const i = section.findIndex((c) => c.id === chatId);
+  if (i === -1) return undefined;
+  if (dir === -1) return i === 0 ? undefined : { beforeId: section[i - 1]!.id };
+  if (i >= section.length - 1) return undefined;
+  return { beforeId: section[i + 2]?.id ?? null };
 }

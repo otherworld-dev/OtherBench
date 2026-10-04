@@ -36,6 +36,12 @@ of work landed after that plan closed out:
   started from the project's **+** copies when it is created (never later).
   Chats move between projects from the row menu (right-click, **⋯**,
   Shift+F10 or the ContextMenu key) or by dragging onto a group heading.
+  Chats keep a manual order (`chat.sort_order`, highest first; activity no
+  longer reorders them): drag a chat onto the top or bottom half of another
+  row to place it there, filing, pinning or unpinning it to match that
+  section, or use Move up / Move down in its menu. The desktop window sets
+  `dragDropEnabled: false`, without which WebView2 on Windows swallows HTML5
+  drag-and-drop (chat rows and files dropped on the composer alike).
   Deleting a project moves its chats to No project. Archive is reversible:
   archived chats sit in a "Show archived (N)" section at the bottom of the
   sidebar, where their menu offers Unarchive. See "Projects" below.

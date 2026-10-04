@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
@@ -19,7 +19,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      chats: { ...actual.api.chats, create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+      chats: { ...actual.api.chats, list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       projects: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       search: vi.fn(),
       health: vi.fn(),
@@ -35,6 +35,7 @@ import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 
 const mockedCreate = vi.mocked(api.chats.create);
 const mockedPatch = vi.mocked(api.chats.patch);
+const mockedChatList = vi.mocked(api.chats.list);
 const mockedDelete = vi.mocked(api.chats.delete);
 const mockedProjectList = vi.mocked(api.projects.list);
 const mockedProjectCreate = vi.mocked(api.projects.create);
@@ -68,6 +69,7 @@ const chat: Chat = {
   projectId: null,
   memoryCursor: null,
   memoryExcluded: false,
+  sortOrder: 0,
   archivedAt: null,
   createdAt: 1,
   updatedAt: 1,
@@ -317,15 +319,16 @@ describe('ChatList drag and drop', () => {
     fireEvent.drop(heading, { dataTransfer: dataTransfer('c1') });
     expect(heading).not.toHaveAttribute('data-drop-active');
 
-    expect(mockedPatch).toHaveBeenCalledWith('c1', { projectId: 'p-a' });
-    await waitFor(() => expect(rowIds('group-p-a').sort()).toEqual(['c1', 'c2']));
+    // Filed at the top of the project: one above its first chat.
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { projectId: 'p-a', sortOrder: 1 });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['c1', 'c2']));
   });
 
   it('dropping on No project moves the chat out of its project', async () => {
     render(<ChatList />);
     fireEvent.drop(screen.getByTestId(`group-heading-${NO_PROJECT_KEY}`), { dataTransfer: dataTransfer('c2') });
-    expect(mockedPatch).toHaveBeenCalledWith('c2', { projectId: null });
-    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['c1', 'c2']));
+    expect(mockedPatch).toHaveBeenCalledWith('c2', { projectId: null, sortOrder: 1 });
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c2', 'c1']));
   });
 
   it('ignores drags that are not chats, clears the highlight on leave, and sends nothing for a drop on the chat\'s own group (review focus 3)', () => {
@@ -507,7 +510,7 @@ describe('ChatList chat menu', () => {
     expect(within(sub).getByRole('menuitemradio', { name: 'Alpha' })).toHaveFocus();
     await user.click(within(sub).getByRole('menuitemradio', { name: 'Beta' }));
 
-    expect(mockedPatch).toHaveBeenCalledWith('c1', { projectId: 'p-b' });
+    expect(mockedPatch).toHaveBeenCalledWith('c1', expect.objectContaining({ projectId: 'p-b' }));
     await waitFor(() => expect(rowIds('group-p-b')).toEqual(['c1']));
     expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull();
   });
@@ -862,5 +865,106 @@ describe('ChatList archived section', () => {
 
     await waitFor(() => expect(archivedIds()).toEqual(['c3']));
     expect(toggle()).toHaveTextContent('Hide archived');
+  });
+});
+
+describe('ChatList reordering (#823)', () => {
+  beforeEach(() => {
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [
+        makeChat({ id: 'a', sortOrder: 30 }),
+        makeChat({ id: 'b', sortOrder: 20 }),
+        makeChat({ id: 'c', sortOrder: 10 }),
+        makeChat({ id: 'x', projectId: 'p-a', sortOrder: 5 }),
+        makeChat({ id: 'pin', pinned: true, sortOrder: 1 }),
+      ],
+    });
+  });
+
+  /** Drags `chatId` onto the top or bottom half of row `targetId`. jsdom rows have no height, so the half is set via clientY against a stubbed rect. */
+  function dropOnRow(chatId: string, targetId: string, half: 'top' | 'bottom'): void {
+    const row = screen.getByTestId(`chat-row-${targetId}`);
+    row.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+    // jsdom has no DragEvent, so clientY has to be put on the event by hand.
+    const at = (event: Event): Event => Object.defineProperty(event, 'clientY', { value: half === 'top' ? 105 : 115 });
+    fireEvent(row, at(createEvent.dragOver(row, { dataTransfer: dataTransfer(chatId) })));
+    expect(row).toHaveAttribute('data-drop-position', half === 'top' ? 'before' : 'after');
+    fireEvent(row, at(createEvent.drop(row, { dataTransfer: dataTransfer(chatId) })));
+    expect(row).not.toHaveAttribute('data-drop-position');
+  }
+
+  it('dropping on the top half of a row places the chat above it, with one PATCH half way between', async () => {
+    render(<ChatList />);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['a', 'b', 'c']);
+    dropOnRow('c', 'b', 'top');
+    expect(mockedPatch).toHaveBeenCalledTimes(1);
+    expect(mockedPatch).toHaveBeenCalledWith('c', { sortOrder: 25 });
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['a', 'c', 'b']));
+  });
+
+  it('dropping on the bottom half of a row places the chat below it', async () => {
+    render(<ChatList />);
+    dropOnRow('a', 'c', 'bottom');
+    expect(mockedPatch).toHaveBeenCalledWith('a', { sortOrder: 9 });
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['b', 'c', 'a']));
+  });
+
+  it('dropping on a row in another project moves the chat there, at that place, in one PATCH', async () => {
+    render(<ChatList />);
+    dropOnRow('b', 'x', 'top');
+    expect(mockedPatch).toHaveBeenCalledWith('b', { sortOrder: 6, projectId: 'p-a' });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['b', 'x']));
+  });
+
+  it('dropping a chat among the pinned ones pins it, and dropping a pinned chat into a group unpins it', async () => {
+    render(<ChatList />);
+    dropOnRow('a', 'pin', 'bottom');
+    expect(mockedPatch).toHaveBeenLastCalledWith('a', { sortOrder: 0, pinned: true });
+    await waitFor(() => expect(rowIds('group-pinned')).toEqual(['pin', 'a']));
+
+    dropOnRow('pin', 'b', 'top');
+    expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 21, pinned: false });
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['pin', 'b', 'c']));
+  });
+
+  it('dropping a chat onto itself, or where it already is, sends nothing', () => {
+    render(<ChatList />);
+    dropOnRow('b', 'b', 'top');
+    dropOnRow('b', 'a', 'bottom');
+    expect(mockedPatch).not.toHaveBeenCalled();
+  });
+
+  it('rows are not drop targets while searching or in Show archived', async () => {
+    mockedSearch.mockResolvedValue([{ messageId: 'm', chatId: 'a', snippet: 'a' }, { messageId: 'n', chatId: 'b', snippet: 'b' }]);
+    render(<ChatList />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'q' } });
+    await waitFor(() => expect(screen.queryByTestId('chat-row-c')).not.toBeInTheDocument());
+    const row = screen.getByTestId('chat-row-b');
+    fireEvent.dragOver(row, { dataTransfer: dataTransfer('a') });
+    expect(row).not.toHaveAttribute('data-drop-position');
+  });
+
+  it('Move up and Move down in the chat menu reorder within the section', async () => {
+    const user = userEvent.setup();
+    render(<ChatList />);
+    fireEvent.contextMenu(screen.getByTestId('chat-row-b').querySelector('[data-row-main]')!);
+    await user.click(screen.getByRole('menuitem', { name: 'Move up' }));
+    expect(mockedPatch).toHaveBeenLastCalledWith('b', { sortOrder: 31 });
+    await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['b', 'a', 'c']));
+
+    fireEvent.contextMenu(screen.getByTestId('chat-row-b').querySelector('[data-row-main]')!);
+    expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
+    await user.click(screen.getByRole('menuitem', { name: 'Move down' }));
+    expect(mockedPatch).toHaveBeenLastCalledWith('b', { sortOrder: 20 });
+  });
+
+  it('a failed reorder says so and reloads the server order', async () => {
+    mockedPatch.mockRejectedValueOnce(new Error('down'));
+    mockedChatList.mockResolvedValue(useGruntStore.getState().chats);
+    render(<ChatList />);
+    dropOnRow('c', 'a', 'top');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't move the chat");
+    expect(mockedChatList).toHaveBeenCalled();
   });
 });

@@ -8,7 +8,7 @@ import { ConversationStrip } from './ConversationStrip.js';
 
 const makeChat = (head: string | null): Chat => ({
   id: 'chat-1', title: 'Chat 1', profileId: 'p1', headMessageId: head, workspaceRoot: null,
-  pinned: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, archivedAt: null, createdAt: 1, updatedAt: 1,
+  pinned: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1,
 });
 const msg = (id: string, overrides: Partial<CanonMessage>): CanonMessage => ({
   id, chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 0, ...overrides,

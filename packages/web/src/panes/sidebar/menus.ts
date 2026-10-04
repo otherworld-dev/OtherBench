@@ -6,6 +6,8 @@ export interface ChatMenuHandlers {
   rename(): void;
   /** Sets the pin state the menu item asked for (the opposite of the state the menu was built with). */
   setPinned(pinned: boolean): void;
+  /** One place up (-1) or down (+1) within its sidebar section (#823). */
+  reorder(dir: -1 | 1): void;
   moveTo(projectId: string | null): void;
   /** Sets "Don't add to project memory" to the given state (the opposite of the chat's state when the menu was built). */
   setMemoryExcluded(excluded: boolean): void;
@@ -18,9 +20,16 @@ export interface ChatMenuHandlers {
  * The chat row menu (spec §3 "Chat context menu", plus project memory's toggle). `orderedProjects` must be
  * in display order. A chat whose project isn't in the list counts as being in
  * No project, matching where the sidebar shows it. An archived chat gets
- * "Unarchive" in place of "Archive" (controller ruling R2).
+ * "Unarchive" in place of "Archive" (controller ruling R2). `position` is the
+ * chat's place in its sidebar section; without it (archived, or while
+ * searching) there is no Move up / Move down.
  */
-export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMenuHandlers): MenuItem[] {
+export function chatMenuItems(
+  chat: Chat,
+  orderedProjects: Project[],
+  h: ChatMenuHandlers,
+  position: { index: number; count: number } | null = null
+): MenuItem[] {
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
   const archived = chat.archivedAt !== null;
   // Project memory (spec 2026-10-03-project-memory-design §5): only a chat in a project contributes.
@@ -36,6 +45,12 @@ export function chatMenuItems(chat: Chat, orderedProjects: Project[], h: ChatMen
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     ...(archived ? [] : [{ id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) }]),
+    ...(position
+      ? [
+          { id: 'up', label: 'Move up', disabled: position.index <= 0, onSelect: () => h.reorder(-1) },
+          { id: 'down', label: 'Move down', disabled: position.index >= position.count - 1, onSelect: () => h.reorder(1) },
+        ]
+      : []),
     {
       id: 'move',
       label: 'Move to project…',

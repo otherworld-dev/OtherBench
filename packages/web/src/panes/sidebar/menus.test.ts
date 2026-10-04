@@ -3,7 +3,7 @@ import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { chatMenuItems, projectMenuItems, type ChatMenuHandlers, type ProjectMenuHandlers } from './menus.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
-  return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, createdAt: 1, updatedAt: 1, ...over };
+  return { id: 'c1', title: 'Chat', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string): Project {
@@ -11,7 +11,7 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { rename: vi.fn(), setPinned: vi.fn(), moveTo: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
@@ -47,6 +47,20 @@ describe('chatMenuItems', () => {
     items.find((i) => i.label === 'Unarchive')!.onSelect!();
     expect(h.unarchive).toHaveBeenCalled();
     expect(h.archive).not.toHaveBeenCalled();
+  });
+
+  it('offers Move up and Move down after Pin when given the chat\'s place, disabled at the ends', () => {
+    const h = chatHandlers();
+    const middle = chatMenuItems(chat(), [], h, { index: 1, count: 3 });
+    expect(middle.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', 'Archive', 'Delete…']);
+    middle.find((i) => i.id === 'up')!.onSelect!();
+    expect(h.reorder).toHaveBeenLastCalledWith(-1);
+    middle.find((i) => i.id === 'down')!.onSelect!();
+    expect(h.reorder).toHaveBeenLastCalledWith(1);
+
+    expect(chatMenuItems(chat(), [], h, { index: 0, count: 3 }).find((i) => i.id === 'up')!.disabled).toBe(true);
+    expect(chatMenuItems(chat(), [], h, { index: 2, count: 3 }).find((i) => i.id === 'down')!.disabled).toBe(true);
+    expect(chatMenuItems(chat(), [], h).some((i) => i.id === 'up' || i.id === 'down')).toBe(false);
   });
 
   it('hides Pin and Unpin for an archived chat', () => {

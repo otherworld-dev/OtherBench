@@ -107,3 +107,29 @@ test('archiving a chat moves it to the archived section, and Unarchive brings it
   await expect(group.getByTestId(rowTestId)).toBeVisible();
   await expect(nav.getByTestId('archived-section')).toHaveCount(0);
 });
+
+test('dragging a chat onto the top half of another places it there, and the order survives a reload', async ({ page, request }) => {
+  const projectName = `E2E Order ${randomUUID().slice(0, 8)}`;
+  const project = (await (await request.post(`${BASE_URL}/api/projects`, { data: { name: projectName } })).json()) as { id: string };
+  const ids: string[] = [];
+  for (const title of ['first', 'second', 'third']) {
+    const res = await request.post(`${BASE_URL}/api/chats`, { data: { projectId: project.id, title } });
+    expect(res.ok()).toBeTruthy();
+    ids.push(((await res.json()) as { id: string }).id);
+    await new Promise((r) => setTimeout(r, 5)); // distinct createdAt, so a distinct starting order
+  }
+  const [first, second, third] = ids as [string, string, string];
+
+  await page.goto('/');
+  const group = page.getByRole('navigation', { name: 'Chats' }).getByRole('group', { name: projectName });
+  const order = () => group.locator('[data-testid^="chat-row-"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.slice('chat-row-'.length)));
+  await expect.poll(order).toEqual([third, second, first]);
+
+  const source = group.getByTestId(`chat-row-${first}`).locator('[data-row-main]');
+  const target = group.getByTestId(`chat-row-${third}`);
+  await source.dragTo(target, { targetPosition: { x: 20, y: 2 } });
+  await expect.poll(order).toEqual([first, third, second]);
+
+  await page.reload();
+  await expect.poll(order).toEqual([first, third, second]);
+});

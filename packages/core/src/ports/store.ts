@@ -63,12 +63,19 @@ export interface Chat {
   memoryCursor: string | null;
   /** "Don't add to project memory": the summariser skips this chat. It still receives the note. */
   memoryExcluded: boolean;
+  /**
+   * The chat's place in its sidebar section, higher first (#823). Set by
+   * dragging or Move up/down; chat activity never changes it. Defaults to
+   * `createdAt`, so a new chat lands at the top.
+   */
+  sortOrder: number;
   createdAt: number;
   updatedAt: number;
 }
 
-/** What `ChatRepo.create` takes: timestamps default to now, `autoMode` and `memoryExcluded` to false, `projectId` and `memoryCursor` to null. */
-export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'memoryCursor' | 'memoryExcluded'> & {
+/** What `ChatRepo.create` takes: timestamps default to now, `sortOrder` to `createdAt`, `autoMode` and `memoryExcluded` to false, `projectId` and `memoryCursor` to null. */
+export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder'> & {
+  sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;
   autoMode?: boolean;

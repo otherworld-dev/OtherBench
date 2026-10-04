@@ -36,6 +36,7 @@ function chat(over: Partial<Chat> = {}): Chat {
     projectId: 'proj',
     memoryCursor: null,
     memoryExcluded: false,
+    sortOrder: 0,
     createdAt: 1,
     updatedAt: 1,
     ...over,
