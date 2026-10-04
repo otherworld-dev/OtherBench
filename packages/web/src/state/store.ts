@@ -3,6 +3,7 @@ import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
+import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 
 /** One entry of an SSE `hello` reply's `inFlight` array (routes/turns.ts). */
@@ -83,7 +84,9 @@ export interface GruntState {
   setStreamStatus(status: StreamConnectionStatus): void;
 
   /** Bulk-hydrates a chat's whole message tree from `GET /chats/:id/messages`. Authoritative: replaces, never merges. */
-  loadMessages(chatId: string, messages: CanonMessage[], headMessageId: string | null): void;
+  loadMessages(chatId: string, messages: CanonMessage[], headMessageId: string | null, usage?: Record<string, RecordedUsage>): void;
+  /** Recorded usage of finished replies, by message id, as the server stored it (#819). */
+  recordedUsage: Record<string, RecordedUsage>;
 
   /**
    * Registers a message the client has just learned the id (and shell) of
@@ -271,12 +274,14 @@ export const useGruntStore = create<GruntState>()((set) => ({
   streamStatus: 'idle',
   setStreamStatus: (status) => set({ streamStatus: status }),
 
-  loadMessages: (_chatId, messages, headMessageId) =>
+  recordedUsage: {},
+  loadMessages: (_chatId, messages, headMessageId, usage) =>
     set((state) => {
       const nextMessages = { ...state.messages };
       for (const m of messages) nextMessages[m.id] = m;
       return {
         messages: nextMessages,
+        recordedUsage: usage ? { ...state.recordedUsage, ...usage } : state.recordedUsage,
         chats: headMessageId === null ? state.chats : state.chats.map((c) => (c.id === _chatId ? { ...c, headMessageId } : c)),
       };
     }),

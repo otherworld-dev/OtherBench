@@ -22,9 +22,9 @@ export function useChatSync(chatId: string | null): void {
 
     api.chats
       .messages(chatId)
-      .then(({ messages, headMessageId }) => {
+      .then(({ messages, headMessageId, usage }) => {
         if (cancelled) return;
-        loadMessages(chatId, messages, headMessageId);
+        loadMessages(chatId, messages, headMessageId, usage);
       })
       .catch((err: unknown) => {
         console.error(`[grunt-web] failed to load messages for chat ${chatId}:`, err);

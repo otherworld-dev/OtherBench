@@ -44,13 +44,6 @@ test('sending with compare tabs open continues from the tab on screen', async ({
   await expect(tabs).toHaveCount(2);
   await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
 
-  await main.getByRole('tab', { name: new RegExp(`^${SECOND}`) }).click();
-  await expect(page.getByText(`continues from ${SECOND}'s reply`, { exact: false })).toBeVisible();
-
-  await box.fill('follow up');
-  await box.press('Enter');
-  await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
-
   let chatId = '';
   await expect
     .poll(async () => {
@@ -59,6 +52,22 @@ test('sending with compare tabs open continues from the tab on screen', async ({
       return chatId;
     })
     .not.toBe('');
+
+  // #819: the tabs' token counts come back after a reload (from the server's recorded usage), not "…".
+  await expect(tabs.first()).toContainText(/\d tok/);
+  await page.reload();
+  await page.getByTestId(`chat-row-${chatId}`).locator('[data-row-main]').click();
+  await expect(tabs).toHaveCount(2);
+  await expect(tabs.first()).toContainText(/\d tok/);
+  await expect(tabs.nth(1)).toContainText(/\d tok/);
+
+  await main.getByRole('tab', { name: new RegExp(`^${SECOND}`) }).click();
+  await expect(page.getByText(`continues from ${SECOND}'s reply`, { exact: false })).toBeVisible();
+
+  await box.fill('follow up');
+  await box.press('Enter');
+  await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
+
   const { messages } = (await (await request.get(`${BASE_URL}/api/chats/${chatId}/messages`)).json()) as { messages: CanonMessage[] };
   const text = (m: CanonMessage) => m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('');
   const followUp = messages.find((m) => m.role === 'user' && text(m) === 'follow up')!;

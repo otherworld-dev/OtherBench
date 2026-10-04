@@ -2,13 +2,19 @@ import { useEffect, useReducer, useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { ModelInfo } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
-import type { PricingSnapshot, Usage } from '@grunt/core/types/usage.js';
+import type { PricingSnapshot, RecordedUsage, Usage } from '@grunt/core/types/usage.js';
 import { estimateCost } from '@grunt/core/types/usage.js';
 import { Message } from './Message.js';
 import type { MessageExtras } from '../state/reducer.js';
+import { useGruntStore } from '../state/store.js';
 
 /** All-null pricing -- `estimateCost` returns `null` for this, rendered as "—" rather than a misleading $0.00. */
 const UNKNOWN_PRICING: PricingSnapshot = { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
+
+// The live price a reply finished under, frozen the first time it is read, so
+// editing the model's price later in the same session doesn't reprice it. A
+// reload replaces this with the server's recorded snapshot (#819).
+const frozenPricingCache = new Map<string, PricingSnapshot>();
 
 /** Finds the `ModelInfo` row (if any) matching a variant's `producedBy`, for its pricing. `profile.modelId`/`producedBy.modelId` is free text -- see profile-resolution.ts -- so a miss (no model ever discovered/added for this connection) is normal, not an error. */
 function findPricing(models: ModelInfo[], variant: CanonMessage): PricingSnapshot {
@@ -69,6 +75,27 @@ function useLatencyMs(variant: CanonMessage): number | null {
   return frozenLatencyCache.get(variant.id) ?? null;
 }
 
+/**
+ * The tab and card numbers for one variant. A reply the server has recorded
+ * usage for (anything loaded from the server, so after a reload too) uses
+ * that: its tokens, the price snapshot taken when it ran, and the measured
+ * latency (#819). One still streaming, or finished live in this session,
+ * uses the stream's usage, the price at the time, frozen once finished,
+ * and a wall-clock latency.
+ */
+function useVariantMetrics(variant: CanonMessage, liveUsage: Usage | null, models: ModelInfo[]): { usage: Usage | null; cost: number | null; latencyMs: number | null } {
+  const recorded: RecordedUsage | undefined = useGruntStore((s) => s.recordedUsage[variant.id]);
+  const liveLatency = useLatencyMs(variant);
+  if (recorded) return { usage: recorded, cost: estimateCost(recorded, recorded.pricingSnapshot), latencyMs: recorded.latencyMs };
+  if (!liveUsage) return { usage: null, cost: null, latencyMs: liveLatency };
+  let pricing = frozenPricingCache.get(variant.id);
+  if (!pricing) {
+    pricing = findPricing(models, variant);
+    if (variant.status !== 'streaming') frozenPricingCache.set(variant.id, pricing);
+  }
+  return { usage: liveUsage, cost: estimateCost(liveUsage, pricing), latencyMs: liveLatency };
+}
+
 function StatusDot({ status }: { status: CanonMessage['status'] }): JSX.Element {
   const color =
     status === 'streaming'
@@ -114,8 +141,7 @@ export function VariantCard({
   pendingApprovals = [],
   onResolveApproval,
 }: VariantCardProps): JSX.Element {
-  const latencyMs = useLatencyMs(variant);
-  const cost = usage ? estimateCost(usage, findPricing(models, variant)) : null;
+  const metrics = useVariantMetrics(variant, usage, models);
 
   return (
     <div data-testid={`variant-card-${variant.id}`} className="space-y-2 rounded border border-[var(--border)] bg-[var(--bg)] p-3">
@@ -124,11 +150,11 @@ export function VariantCard({
         <span className="font-medium text-[var(--text)]">{variant.producedBy?.profileName ?? 'Unknown profile'}</span>
         <span className="text-[var(--text-muted)]">{variant.producedBy?.modelId}</span>
         <span className="ml-auto flex items-center gap-1.5 text-[var(--text-muted)]" data-testid={`variant-metrics-${variant.id}`}>
-          <span>{formatCost(cost)}</span>
+          <span>{formatCost(metrics.cost)}</span>
           <span aria-hidden="true">·</span>
-          <span>{formatLatency(latencyMs)}</span>
+          <span>{formatLatency(metrics.latencyMs)}</span>
           <span aria-hidden="true">·</span>
-          <span>{formatTokens(usage)}</span>
+          <span>{formatTokens(metrics.usage)}</span>
         </span>
       </div>
 
@@ -183,8 +209,7 @@ interface VariantTabProps {
  * component exists to avoid.
  */
 function VariantTab({ variant, usage, models, isKept, isActive, onSelect }: VariantTabProps): JSX.Element {
-  const latencyMs = useLatencyMs(variant);
-  const cost = usage ? estimateCost(usage, findPricing(models, variant)) : null;
+  const metrics = useVariantMetrics(variant, usage, models);
 
   return (
     <button
@@ -201,7 +226,7 @@ function VariantTab({ variant, usage, models, isKept, isActive, onSelect }: Vari
         {isKept && <span aria-label="kept">✓</span>}
       </span>
       <span className="text-[var(--text-muted)]">
-        {formatCost(cost)} · {formatLatency(latencyMs)} · {formatTokens(usage)}
+        {formatCost(metrics.cost)} · {formatLatency(metrics.latencyMs)} · {formatTokens(metrics.usage)}
       </span>
     </button>
   );

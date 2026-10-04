@@ -493,6 +493,22 @@ describe('GET /api/chats/:id/messages', () => {
     expect(body.messages).toHaveLength(1 + assistantMessageIds.length);
   });
 
+  it("returns each reply's recorded usage by message id, with the price snapshot it ran at (#819)", async () => {
+    const chatId = (await createChat())['id'] as string;
+    container.store.messages.create({ id: 'u-1', chatId, parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    container.store.messages.create({ id: 'a-1', chatId, parentId: 'u-1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const pricingSnapshot = { priceInPer1m: 3, priceOutPer1m: 15, priceCachedPer1m: null, currency: 'USD' };
+    container.store.usage.create({
+      id: 'usage-1', chatId, messageId: 'a-1', profileId: 'profile-1', connectionId: 'conn-1', modelId: 'model-1',
+      tokensIn: 100, tokensOut: 50, tokensCached: 10, tokensReasoning: 5, costEstimate: 0.00105, pricingSnapshot, latencyMs: 1234,
+    });
+
+    const body = (await json(await app().request(`/api/chats/${chatId}/messages`))) as { usage: Record<string, unknown> };
+    expect(body.usage).toEqual({
+      'a-1': { tokensIn: 100, tokensOut: 50, tokensCached: 10, tokensReasoning: 5, pricingSnapshot, latencyMs: 1234 },
+    });
+  });
+
   it('404s for an unknown chat', async () => {
     const res = await app().request('/api/chats/nope/messages');
     expect(res.status).toBe(404);

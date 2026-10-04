@@ -1,9 +1,10 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ModelInfo } from '@grunt/core/types/config.js';
 import type { MessageExtras } from '../state/reducer.js';
+import { useGruntStore } from '../state/store.js';
 import { VariantTabs } from './VariantTabs.js';
 
 function variant(id: string, overrides: Partial<CanonMessage> = {}): CanonMessage {
@@ -43,6 +44,7 @@ function extrasFor(usage: Partial<Record<string, MessageExtras>>): Record<string
 }
 
 describe('VariantTabs', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
   afterEach(cleanup);
 
   it('renders one tab per variant', () => {
@@ -155,14 +157,44 @@ describe('VariantTabs', () => {
     expect(screen.getByTestId('variant-tab-a')).toHaveTextContent('1,500,000 tok');
   });
 
+  it('after a reload (no stream usage), shows the recorded tokens, cost at the recorded price and measured latency (#819)', () => {
+    useGruntStore.setState({
+      recordedUsage: {
+        a: {
+          tokensIn: 1_000_000, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, latencyMs: 2500,
+          pricingSnapshot: { priceInPer1m: 1, priceOutPer1m: 1, priceCachedPer1m: null, currency: 'USD' },
+        },
+      },
+    });
+    // The model's price today is $3/1M in; the reply ran at $1/1M and must stay priced at that.
+    render(
+      <VariantTabs variants={[variant('a')]} extras={{}} models={[model]} keptId={null} onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} />
+    );
+    const tab = screen.getByTestId('variant-tab-a');
+    expect(tab).toHaveTextContent('$1.00');
+    expect(tab).toHaveTextContent('1,000,000 tok');
+    expect(tab).toHaveTextContent('2.5s');
+  });
+
+  it('a reply finished live keeps the price it finished at when the model price changes later', () => {
+    const extras = extrasFor({ a: { usage: { tokensIn: 1_000_000, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, pendingApprovals: [] } });
+    const props = { variants: [variant('live-a')], keptId: null, onKeep: vi.fn(), onRetry: vi.fn(), retryingIds: new Set<string>() };
+    const liveExtras = { 'live-a': extras['a']! };
+    const { rerender } = render(<VariantTabs {...props} extras={liveExtras} models={[model]} />);
+    expect(screen.getByTestId('variant-tab-live-a')).toHaveTextContent('$3.00');
+    rerender(<VariantTabs {...props} extras={liveExtras} models={[{ ...model, priceInPer1m: 9 }]} />);
+    expect(screen.getByTestId('variant-tab-live-a')).toHaveTextContent('$3.00');
+  });
+
   it('shows an unknown-pricing dash rather than a misleading $0.00 when there is no matching model', () => {
-    const variants = [variant('a')];
-    const extras = extrasFor({ a: { usage: { tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0 }, pendingApprovals: [] } });
+    // Its own id: a finished reply's price is frozen per message id for the page session, and real ids never repeat.
+    const variants = [variant('unpriced')];
+    const extras = extrasFor({ unpriced: { usage: { tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0 }, pendingApprovals: [] } });
     render(
       <VariantTabs variants={variants} extras={extras} models={[]} keptId={null} onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} />
     );
 
-    expect(screen.getByTestId('variant-tab-a')).toHaveTextContent('—');
+    expect(screen.getByTestId('variant-tab-unpriced')).toHaveTextContent('—');
   });
 
   it('the Split toggle swaps the single active card for a grid of every variant, using the same card renderer', async () => {

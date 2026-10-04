@@ -4,6 +4,7 @@ import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
@@ -140,6 +141,8 @@ export interface RegenerateResult {
 export interface ChatMessagesResult {
   messages: CanonMessage[];
   headMessageId: string | null;
+  /** Each finished reply's recorded usage, by message id (#819). */
+  usage?: Record<string, RecordedUsage>;
 }
 
 export interface SearchResult {
