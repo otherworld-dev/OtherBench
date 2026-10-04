@@ -215,3 +215,100 @@ describe('DELETE /api/profiles/:id', () => {
     expect(container.store.profiles.get((created as { id: string }).id)).toBeNull();
   });
 });
+
+describe('PATCH /api/profiles/:id toolPolicy merging', () => {
+  const full = {
+    fs: 'readwrite',
+    shell: true,
+    mcpServerIds: ['mcp-1', 'mcp-2'],
+    approvalMode: 'ask_on_mutate',
+    agentWeb: false,
+    agentMcp: true,
+  };
+
+  async function createWithPolicy(): Promise<string> {
+    const res = await app().request('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...basicProfileBody, toolPolicy: full }),
+    });
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  function patch(id: string, toolPolicy: unknown) {
+    return app().request(`/api/profiles/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolPolicy }),
+    });
+  }
+
+  it('a partial toolPolicy keeps mcpServerIds and every other untouched field', async () => {
+    const id = await createWithPolicy();
+    const res = await patch(id, { fs: 'read' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { toolPolicy: unknown }).toolPolicy).toEqual({ ...full, fs: 'read' });
+    expect(container.store.profiles.get(id)?.toolPolicy).toEqual({ ...full, fs: 'read' });
+  });
+
+  it('each single-field patch changes only that field', async () => {
+    const id = await createWithPolicy();
+    await patch(id, { shell: false });
+    await patch(id, { approvalMode: 'always_ask' });
+    await patch(id, { mcpServerIds: ['mcp-3'] });
+    await patch(id, { agentWeb: true });
+    expect(container.store.profiles.get(id)?.toolPolicy).toEqual({
+      fs: 'readwrite',
+      shell: false,
+      mcpServerIds: ['mcp-3'],
+      approvalMode: 'always_ask',
+      agentWeb: true,
+      agentMcp: true,
+    });
+  });
+
+  it('an explicit empty mcpServerIds still clears the list', async () => {
+    const id = await createWithPolicy();
+    await patch(id, { mcpServerIds: [] });
+    expect(container.store.profiles.get(id)?.toolPolicy.mcpServerIds).toEqual([]);
+  });
+
+  it('a full toolPolicy still replaces the whole policy', async () => {
+    const id = await createWithPolicy();
+    const next = { fs: 'off', shell: false, mcpServerIds: ['x'], approvalMode: 'always_ask' };
+    const res = await patch(id, next);
+    expect(res.status).toBe(200);
+    // agentWeb/agentMcp were not sent; they carry over (they are optional and untouched).
+    expect(container.store.profiles.get(id)?.toolPolicy).toMatchObject(next);
+  });
+
+  it('an empty toolPolicy object changes nothing', async () => {
+    const id = await createWithPolicy();
+    await patch(id, {});
+    expect(container.store.profiles.get(id)?.toolPolicy).toEqual(full);
+  });
+
+  it('invalid values are still 400 and leave the policy untouched', async () => {
+    const id = await createWithPolicy();
+    for (const bad of [{ fs: 'write' }, { approvalMode: 'never' }, { mcpServerIds: ['a', 1] }, { agentMcp: 'yes' }, 'nope', [1]]) {
+      const res = await patch(id, bad);
+      expect(res.status).toBe(400);
+    }
+    expect(container.store.profiles.get(id)?.toolPolicy).toEqual(full);
+  });
+
+  it('POST still defaults every omitted field', async () => {
+    const res = await app().request('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...basicProfileBody, toolPolicy: { fs: 'read' } }),
+    });
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as { toolPolicy: unknown }).toolPolicy).toEqual({
+      fs: 'read',
+      shell: false,
+      mcpServerIds: [],
+      approvalMode: 'always_ask',
+    });
+  });
+});
