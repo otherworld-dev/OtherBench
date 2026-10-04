@@ -12,7 +12,7 @@ export type GateDecision = { allow: true } | { allow: false; reason: string } | 
  * the PreToolUse hook: in auto mode a call the broker would ask about may then
  * go to Claude Code's classifier instead of a card.
  */
-type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean }) => Promise<GateDecision>;
+export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean }) => Promise<GateDecision>;
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
 

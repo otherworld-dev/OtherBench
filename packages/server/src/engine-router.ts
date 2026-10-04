@@ -20,6 +20,11 @@ export class RoutingChatEngine implements ChatEngine {
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult> {
     return this.pick(conn.kind).testConnection(conn, apiKey);
   }
+
+  dispose(): void {
+    this.aisdk.dispose?.();
+    this.claudeCode.dispose?.();
+  }
 }
 
 /**

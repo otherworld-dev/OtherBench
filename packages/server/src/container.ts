@@ -293,6 +293,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     close: () => {
       // First: aborts in-flight summariser calls and stops new ones before the store goes away.
       memory.dispose();
+      // Claude Code processes kept alive between replies.
+      engine.dispose();
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting

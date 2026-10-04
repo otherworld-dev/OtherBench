@@ -430,6 +430,21 @@ API that runs shell commands and holds the bearer token.
 
 ### Claude Code engine
 
+- Live processes (`engine-claude-code/src/live.ts`). A reply's Claude Code
+  process stays alive afterwards, input open, and the session's next message
+  is pushed into it instead of starting a process and resuming from disk:
+  measured on Haiku, the first word of a follow-up comes in about 1.7 s
+  instead of about 4 s. A process is reused only when the session planner
+  continues its session in place (the message being answered is the
+  session's tip) and the options it started with still match -- folder,
+  model, backend and credentials, tool policy, Auto, system prompt (which
+  carries project memory), thinking budget. Anything else starts a new
+  process that resumes the session, closing the old one. Stopping a reply,
+  or a reply ending in an error, closes its process. Idle processes close
+  after 30 minutes and at most 3 are kept (each runs its own MCP servers);
+  `container.close()` stops them all. Hooks are fixed when a process starts,
+  so they call through a per-reply binding; a tool call with no reply
+  running is refused.
 - Claude Code executes its own tools; Grunt gates them. A PreToolUse hook
   (matcher `*`) sends every call through `GruntToolProvider.requestApproval`
   -> `PermissionBroker` (`source: 'agent'`), ahead of any allow-rules in the
