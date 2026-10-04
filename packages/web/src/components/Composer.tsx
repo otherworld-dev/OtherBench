@@ -108,6 +108,24 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [autoError, setAutoError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Attachments already on the server but not yet sent -- left by a reload,
+  // or added from outside the composer (desktop `--send`) -- show as chips,
+  // so they're sent with the next message rather than forgotten.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve(api.attachments.list(chat.id))
+      .then((list) => {
+        if (cancelled || !Array.isArray(list)) return;
+        const unsent = list.filter((a) => a.messageId === null);
+        if (unsent.length > 0) setAttachments((prev) => [...prev, ...unsent.filter((a) => !prev.some((p) => p.id === a.id))]);
+      })
+      .catch((err: unknown) => console.error(`[grunt-web] failed to load unsent attachments for chat ${chat.id}:`, err));
+    return () => {
+      cancelled = true;
+    };
+  }, [chat.id]);
   const primaryId = selectedProfileIds[0] ?? null;
   useEffect(() => {
     onPrimaryProfileChange?.(primaryId);
@@ -435,6 +453,27 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       )}
 
       <div className="flex items-end gap-2">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          data-testid="composer-file-input"
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            e.target.value = ''; // so choosing the same file again still fires
+            if (files.length > 0) void uploadFiles(files);
+          }}
+        />
+        <button
+          type="button"
+          aria-label="Attach files"
+          title="Attach files"
+          onClick={() => fileInputRef.current?.click()}
+          className="rounded border border-[var(--border)] px-2.5 py-2 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+        >
+          <span aria-hidden="true">📎</span>
+        </button>
         <textarea
           ref={textareaRef}
           value={text}

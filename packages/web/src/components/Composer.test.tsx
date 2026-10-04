@@ -39,6 +39,7 @@ const mockedCreate = vi.mocked(api.turns.create);
 const mockedCancel = vi.mocked(api.turns.cancel);
 const mockedSetHead = vi.mocked(api.turns.setHead);
 const mockedUpload = vi.mocked(api.attachments.upload);
+const mockedAttachmentList = vi.mocked(api.attachments.list);
 const mockedDelete = vi.mocked(api.attachments.delete);
 const mockedChatsPatch = vi.mocked(api.chats.patch);
 
@@ -280,6 +281,32 @@ describe('Composer', () => {
 
       await waitFor(() => expect(mockedUpload).toHaveBeenCalledWith('chat-1', file));
       expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('photo.png');
+    });
+
+    it('the Attach button opens the file picker and uploads what is chosen', async () => {
+      mockedUpload.mockResolvedValue(makeAttachment({ id: 'att-3', filename: 'picked.png' }));
+      const user = userEvent.setup();
+      render(<Composer chat={makeChat()} />);
+      const input = screen.getByTestId('composer-file-input') as HTMLInputElement;
+      const click = vi.spyOn(input, 'click');
+      await user.click(screen.getByRole('button', { name: 'Attach files' }));
+      expect(click).toHaveBeenCalled();
+
+      const file = new File(['bytes'], 'picked.png', { type: 'image/png' });
+      await user.upload(input, file);
+      await waitFor(() => expect(mockedUpload).toHaveBeenCalledWith('chat-1', file));
+      expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('picked.png');
+    });
+
+    it('shows attachments already on the server but not yet sent as chips when it opens, and not sent ones', async () => {
+      mockedAttachmentList.mockResolvedValueOnce([
+        makeAttachment({ id: 'waiting', filename: 'waiting.png', messageId: null }),
+        makeAttachment({ id: 'sent', filename: 'sent.png', messageId: 'm-1' }),
+      ]);
+      render(<Composer chat={makeChat()} />);
+      expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('waiting.png');
+      expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1);
+      expect(mockedAttachmentList).toHaveBeenCalledWith('chat-1');
     });
 
     it('pasting a file into the message box uploads it and renders a chip', async () => {

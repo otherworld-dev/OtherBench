@@ -310,6 +310,8 @@ export const api = {
   attachments: {
     upload: (chatId: string, file: File) => uploadFile<PublicAttachment>(`/chats/${chatId}/attachments`, file),
     list: (chatId: string) => request<PublicAttachment[]>(`/chats/${chatId}/attachments`),
+    /** Attaches an image straight from a path on this machine (desktop `--send`). Images only, 25MB cap. */
+    fromPath: (chatId: string, path: string) => post<PublicAttachment>(`/chats/${chatId}/attachments/from-path`, { path }),
     /**
      * Deletes an UNSENT attachment (server-enforced: 409 if it's already
      * part of a sent message -- see routes/attachments.ts decision #1).

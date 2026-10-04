@@ -32,6 +32,16 @@ struct Launch {
 struct AppState {
     launch: Arc<Launch>,
     server: Arc<Mutex<Option<sidecar::Server>>>,
+    /// This launch's own arguments (`--open-folder`, `--send`), handed to the
+    /// web app once by `launch_args`; a second launch's arrive as `open-args`.
+    args: Mutex<Option<Vec<String>>>,
+}
+
+/// The arguments Grunt was started with, the first time it's asked and never
+/// again, so a reload of the web app doesn't act on them twice.
+#[tauri::command]
+fn launch_args(state: tauri::State<'_, AppState>) -> Vec<String> {
+    state.args.lock().map(|mut a| a.take().unwrap_or_default()).unwrap_or_default()
 }
 
 #[tauri::command]
@@ -115,8 +125,9 @@ fn main() {
             Some(vec![MINIMIZED_FLAG]),
         ))
         .plugin(tauri_plugin_notification::init())
-        .manage(AppState { launch: launch.clone(), server: server.clone() })
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status])
+        .plugin(tauri_plugin_dialog::init())
+        .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {

@@ -3,6 +3,7 @@ import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { usePolled } from '../lib/usePolled.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
@@ -150,6 +151,23 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
           placeholder={serverPlatform === 'win32' ? 'E:\\Git\\Grunt' : '/home/user/project'}
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 font-mono text-sm"
         />
+        {isDesktop() && (
+          <button
+            type="button"
+            onClick={() => {
+              pickFolder()
+                .then((picked) => {
+                  if (picked === null) return;
+                  setDraft(picked);
+                  setError(null);
+                })
+                .catch((err: unknown) => setError(`Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`));
+            }}
+            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs"
+          >
+            Choose folder…
+          </button>
+        )}
         <p className="text-xs text-[var(--text-muted)]">{WORKSPACE_ROOT_HELP}</p>
         {error && (
           <p data-testid="workspace-root-error" className="text-xs text-[var(--danger)]">

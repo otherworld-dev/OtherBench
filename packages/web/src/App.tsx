@@ -6,6 +6,7 @@ import { Thread } from './panes/Thread.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
+import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { useChatSync } from './state/useChatSync.js';
@@ -60,6 +61,8 @@ export function App(): JSX.Element {
   // partial/transient hiccup, not "there is no server to talk to" -- see
   // task 19/20 brief.
   const [unreachable, setUnreachable] = useState(false);
+  // Set once the first load has settled, so launch arguments act with the profiles loaded.
+  const [loaded, setLoaded] = useState(false);
 
   // Initial reference-data + chat-list load. Individual failures are logged,
   // not thrown -- a transient failure here shouldn't blank the whole shell;
@@ -83,6 +86,7 @@ export function App(): JSX.Element {
         if (r.status === 'rejected') console.error(`[grunt-web] failed to load ${labels[i]}:`, r.reason);
       });
       setUnreachable(results.every((r) => r.status === 'rejected'));
+      setLoaded(true);
     });
 
     return () => {
@@ -93,6 +97,7 @@ export function App(): JSX.Element {
   useChatSync(activeChatId);
   useAppEvents();
   useTrayStatus();
+  useOpenArgs(loaded);
   useTextSizeShortcuts();
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;

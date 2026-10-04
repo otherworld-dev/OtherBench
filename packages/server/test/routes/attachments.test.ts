@@ -529,3 +529,60 @@ describe('DELETE /api/attachments/:id', () => {
     expect(container.store.attachments.get(created.id)?.messageId).toBeNull();
   });
 });
+
+describe('POST /api/chats/:id/attachments/from-path (Task 39)', () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+
+  function fromPath(path: unknown, contentType = 'application/json') {
+    return app().request('/api/chats/chat-1/attachments/from-path', {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  it('attaches an image from a local path as an unsent attachment, typed by its extension', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const file = join(dataDir, 'Screen Shot.PNG');
+    await writeFile(file, PNG);
+    const res = await fromPath(file);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ chatId: 'chat-1', messageId: null, filename: 'Screen Shot.PNG', mime: 'image/png', size: PNG.length });
+    expect(body).not.toHaveProperty('storagePath');
+  });
+
+  it('refuses anything that is not an image, a relative path, a missing file and a folder', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    await writeFile(join(dataDir, 'notes.txt'), 'hello');
+    await mkdir(join(dataDir, 'folder.png'));
+    expect((await fromPath(join(dataDir, 'notes.txt'))).status).toBe(415);
+    expect((await fromPath(join(dataDir, 'page.svg'))).status).toBe(415);
+    expect((await fromPath('relative/pic.png')).status).toBe(400);
+    expect((await fromPath(join(dataDir, 'missing.png'))).status).toBe(404);
+    expect((await fromPath(join(dataDir, 'folder.png'))).status).toBe(400);
+    expect(container.store.attachments.list('chat-1')).toEqual([]);
+  });
+
+  it('refuses a file over the 25MB cap without reading it, and a non-JSON body', async () => {
+    const { open } = await import('node:fs/promises');
+    const big = join(dataDir, 'big.png');
+    const handle = await open(big, 'w');
+    await handle.truncate(25 * 1024 * 1024 + 1); // sparse: no 25MB actually written
+    await handle.close();
+    const res = await fromPath(big);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { error: string }).error).toContain('25MB');
+
+    expect((await fromPath(big, 'text/plain')).status).toBe(415);
+  });
+
+  it('404s for an unknown chat', async () => {
+    const res = await app().request('/api/chats/nope/attachments/from-path', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: join(dataDir, 'x.png') }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
