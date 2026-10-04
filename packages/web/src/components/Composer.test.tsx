@@ -241,6 +241,16 @@ describe('Composer', () => {
     expect(mockedCreate).not.toHaveBeenCalled();
   });
 
+  it('Enter sends nothing while a reply is still running, and keeps what was typed', async () => {
+    useGruntStore.getState().registerMessage(streamingMessage('a1'));
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat()} />);
+    const box = screen.getByRole('textbox', { name: /message/i });
+    await user.type(box, 'one more thing{Enter}');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(box).toHaveValue('one more thing');
+  });
+
   it('shows a stop button while a variant is streaming, and it cancels every in-flight variant', async () => {
     const chat = makeChat();
     useGruntStore.getState().registerMessage(streamingMessage('a1'));
@@ -586,6 +596,9 @@ describe('Composer', () => {
     await user.type(screen.getByRole('textbox', { name: /message/i }), 'hello');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(screen.getByText('Set a workspace folder to use Claude Code.')).toBeInTheDocument();
+    // Enter is held to the same rule as the disabled Send button.
+    await user.keyboard('{Enter}');
+    expect(mockedCreate).not.toHaveBeenCalled();
   });
 });
 
