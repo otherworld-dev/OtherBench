@@ -103,6 +103,8 @@ export type ChatPatchBody = Partial<{
   projectId: string | null;
   /** "Don't add to project memory": the summariser skips this chat. Never changes its place in the list. */
   memoryExcluded: boolean;
+  /** Its place in its sidebar section, higher first (#823). Not chat activity: leaves updatedAt alone. */
+  sortOrder: number;
 }>;
 
 export interface CreateProjectBody {

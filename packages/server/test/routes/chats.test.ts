@@ -857,6 +857,30 @@ describe('chats in projects', () => {
     expect(await json(await patchChat(id, { memoryExcluded: false }))).toMatchObject({ memoryExcluded: false, updatedAt });
   });
 
+  it('a new chat starts with sortOrder at its creation time; PATCH sortOrder reorders it without counting as activity', async () => {
+    const created = await json(await post({ projectId: 'proj-1' }));
+    const id = created['id'] as string;
+    expect(created['sortOrder']).toBe(created['createdAt']);
+    const updatedAt = container.store.chats.get(id)!.updatedAt;
+
+    const res = await patchChat(id, { sortOrder: 12.5 });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ sortOrder: 12.5, updatedAt });
+    // In one PATCH with a move between projects, as a drop onto another group sends it.
+    expect(await json(await patchChat(id, { sortOrder: 3, projectId: null, pinned: false }))).toMatchObject({ sortOrder: 3, projectId: null });
+  });
+
+  it('rejects a sortOrder that is not a finite number with 400 and leaves the chat unchanged', async () => {
+    const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    const before = container.store.chats.get(id)!.sortOrder;
+    for (const bad of ['1', null, true]) {
+      const res = await patchChat(id, { sortOrder: bad });
+      expect(res.status).toBe(400);
+      expect((await json(res))['error']).toBe('"sortOrder" must be a finite number.');
+    }
+    expect(container.store.chats.get(id)!.sortOrder).toBe(before);
+  });
+
   it('rejects a non-boolean memoryExcluded with 400 and leaves the chat unchanged', async () => {
     const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
     for (const bad of ['yes', 1, null]) {

@@ -19,10 +19,11 @@ interface ChatBody {
   autoMode?: unknown;
   projectId?: unknown;
   memoryExcluded?: unknown;
+  sortOrder?: unknown;
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'projectId', 'memoryExcluded']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'projectId', 'memoryExcluded', 'sortOrder']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -149,14 +150,19 @@ export function chatsRoutes(container: Container): Hono {
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
     if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
+    if (body.sortOrder !== undefined) {
+      if (typeof body.sortOrder !== 'number' || !Number.isFinite(body.sortOrder)) {
+        throw new HTTPException(400, { message: '"sortOrder" must be a finite number.' });
+      }
+      patch.sortOrder = body.sortOrder;
+    }
     if (body.projectId !== undefined) {
       // Moving files the chat; its folder and profile stay as they are (spec §2).
       patch.projectId = body.projectId === null ? null : requireExistingProject(container, body.projectId).id;
     }
 
-    // Toggling Auto, turning project memory off or on, or moving a chat to another project is not chat activity:
-    // such a PATCH must not move the chat in the list (ChatList sorts by
-    // updatedAt). Every other PATCH, including an empty one, still bumps it.
+    // Toggling Auto, turning project memory off or on, moving a chat to another project or reordering it is not
+    // chat activity: such a PATCH leaves updatedAt alone. Every other PATCH, including an empty one, still bumps it.
     const keys = Object.keys(patch);
     const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k));
     if (!nonActivity) patch.updatedAt = Date.now();

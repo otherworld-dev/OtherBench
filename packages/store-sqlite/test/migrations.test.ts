@@ -112,6 +112,26 @@ describe('runMigrations', () => {
     }
   });
 
+  it('chat-sort-order gives every existing chat its last activity as its place, keeping the old activity order', () => {
+    const sortOrder = MIGRATIONS.find((m) => m.name.endsWith('chat-sort-order'));
+    expect(sortOrder).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < sortOrder!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'P', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('older', 'A', 'p1', 1, 500), ('newer', 'B', 'p1', 2, 900)`);
+      runMigrations(db);
+      const rows = db.prepare(`SELECT id, sort_order FROM chat ORDER BY sort_order DESC`).all() as { id: string; sort_order: number }[];
+      expect(rows).toEqual([
+        { id: 'newer', sort_order: 900 },
+        { id: 'older', sort_order: 500 },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it('projects adds the project table and chat.project_id: existing chats are in no project, and both foreign keys set NULL on delete', () => {
     const projects = MIGRATIONS.find((m) => m.name.endsWith('-projects'));
     expect(projects).toBeDefined();

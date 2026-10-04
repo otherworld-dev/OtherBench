@@ -280,6 +280,16 @@ export function runStoreContract(
       expect(store.chats.get('chat-a')).toMatchObject({ id: 'chat-a', title: 'My Chat', profileId });
     });
 
+    it('chats: sortOrder defaults to createdAt and round-trips through create, update and list', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      const created = store.chats.create(makeChatInput({ id: 'chat-a', profileId, createdAt: 1000 }));
+      expect(created.sortOrder).toBe(1000);
+      expect(store.chats.create(makeChatInput({ id: 'chat-b', profileId, sortOrder: 2.5 })).sortOrder).toBe(2.5);
+      store.chats.update('chat-a', { sortOrder: 1234.75 });
+      expect(store.chats.get('chat-a')!.sortOrder).toBe(1234.75);
+      expect(store.chats.list().find((c) => c.id === 'chat-a')!.sortOrder).toBe(1234.75);
+    });
+
     it('chats: autoMode defaults to false and round-trips through create and update', () => {
       const { profileId } = seedProfile(store, 'profile-a');
       const created = store.chats.create(makeChatInput({ id: 'chat-a', profileId }));

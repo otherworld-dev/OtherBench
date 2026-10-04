@@ -1,4 +1,4 @@
-import type { JSX } from 'react';
+import type { DragEvent, JSX } from 'react';
 import type { Chat } from '@grunt/core/ports/store.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
 
@@ -11,6 +11,27 @@ export type MenuSource = 'button' | 'context';
 /** The keyboard's "open the context menu" gestures: the ContextMenu key, or Shift+F10. */
 export function isContextMenuKey(e: { key: string; shiftKey: boolean }): boolean {
   return e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10');
+}
+
+/** Which half of a row a dragged chat is over: it would be dropped above (`before`) or below (`after`) it. */
+export type DropPosition = 'before' | 'after';
+
+/** Reordering by drag (#823): the row is a drop target for other chats. */
+export interface RowReorder {
+  /** The line shown while a chat is dragged over this row, or null. */
+  indicator: DropPosition | null;
+  onOver: (position: DropPosition) => void;
+  onLeave: () => void;
+  onDrop: (chatId: string, position: DropPosition) => void;
+}
+
+function carriesChat(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME);
+}
+
+function positionIn(e: DragEvent<HTMLElement>): DropPosition {
+  const r = e.currentTarget.getBoundingClientRect();
+  return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
 }
 
 export interface ChatRowProps {
@@ -26,10 +47,12 @@ export interface ChatRowProps {
   onOpenMenu?: (position: { x: number; y: number }, source: MenuSource) => void;
   onRename?: (title: string) => void;
   onRenameCancel?: () => void;
+  /** Present when chats can be dropped onto this row to reorder; absent for archived rows and while searching. */
+  reorder?: RowReorder;
 }
 
-/** One chat in the sidebar: select it, drag it onto a group heading, or open its menu. */
-export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel }: ChatRowProps): JSX.Element {
+/** One chat in the sidebar: select it, drag it onto a group heading or between other chats, or open its menu. */
+export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder }: ChatRowProps): JSX.Element {
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -39,7 +62,48 @@ export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, r
   }
 
   return (
-    <li data-testid={`chat-row-${chat.id}`} className="group flex items-center gap-0.5">
+    <li
+      data-testid={`chat-row-${chat.id}`}
+      data-drop-position={reorder?.indicator ?? undefined}
+      onDragOver={
+        reorder
+          ? (e) => {
+              if (!carriesChat(e)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              const position = positionIn(e);
+              if (position !== reorder.indicator) reorder.onOver(position);
+            }
+          : undefined
+      }
+      onDragLeave={
+        reorder
+          ? (e) => {
+              if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+              reorder.onLeave();
+            }
+          : undefined
+      }
+      onDrop={
+        reorder
+          ? (e) => {
+              const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
+              const position = positionIn(e);
+              reorder.onLeave();
+              if (!chatId) return;
+              e.preventDefault();
+              reorder.onDrop(chatId, position);
+            }
+          : undefined
+      }
+      className={`group flex items-center gap-0.5 rounded ${
+        reorder?.indicator === 'before'
+          ? 'shadow-[inset_0_2px_0_var(--accent)]'
+          : reorder?.indicator === 'after'
+            ? 'shadow-[inset_0_-2px_0_var(--accent)]'
+            : ''
+      }`}
+    >
       <button
         type="button"
         data-row-main=""

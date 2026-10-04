@@ -8,9 +8,9 @@ import { onDesktopEvent } from '../desktop/bridge.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody, type PatchProjectBody } from '../state/api.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
-import { ChatRow, type MenuSource } from './sidebar/ChatRow.js';
+import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { chatMenuItems, projectMenuItems } from './sidebar/menus.js';
-import { buildSidebar, moveProjectPatches } from './sidebar/model.js';
+import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './sidebar/model.js';
 import { ProjectFolderEditor, ProjectProfileEditor } from './sidebar/ProjectEditors.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
 
@@ -51,6 +51,13 @@ function loadShowArchived(): boolean {
   }
 }
 
+/** A list of chats as the sidebar shows them: Pinned, or one project's group (null = No project). */
+interface Section {
+  chats: Chat[];
+  pinned: boolean;
+  projectId: string | null;
+}
+
 function headingSelector(projectId: string): string {
   return `[data-testid="group-heading-${projectId}"] [data-heading-main]`;
 }
@@ -81,6 +88,7 @@ export function ChatList(): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -167,11 +175,81 @@ export function ChatList(): JSX.Element {
     }
   }
 
-  /** Files a chat under a project (null = No project). A no-op when it's already there. */
+  /**
+   * Files a chat under a project (null = No project), at the top of that
+   * group. A pinned chat keeps its place under Pinned. A no-op when it's
+   * already there.
+   */
   async function moveChat(chatId: string, projectId: string | null): Promise<void> {
     const chat = useGruntStore.getState().chats.find((c) => c.id === chatId);
     if (!chat || chat.projectId === projectId) return;
-    if (await patchChat(chat, { projectId }, "Couldn't move the chat")) focusLater(chatRowSelector(chatId));
+    const group = sidebar.groups.find((g) => g.key === (projectId ?? NO_PROJECT_KEY))?.chats ?? [];
+    const top = chat.pinned ? [] : placeChatPatches(group, chat, group[0]?.id ?? null).filter((p) => p.id === chat.id);
+    const body: ChatPatchBody = { projectId, ...(top[0] ? { sortOrder: top[0].sortOrder } : {}) };
+    if (await patchChat(chat, body, "Couldn't move the chat")) focusLater(chatRowSelector(chatId));
+  }
+
+  /**
+   * Puts chat `chatId` in `section` just above `beforeId` (null = the bottom),
+   * filing, pinning or unpinning it to match the section (#823). Usually one
+   * PATCH; a renumbered section sends one per chat that changes.
+   */
+  async function placeChat(chatId: string, section: Section, beforeId: string | null): Promise<void> {
+    const chat = useGruntStore.getState().chats.find((c) => c.id === chatId);
+    if (!chat || chat.archivedAt !== null) return;
+    const patches = placeChatPatches(section.chats, chat, beforeId);
+    const own = patches.find((p) => p.id === chatId);
+    const body: ChatPatchBody = {
+      ...(own ? { sortOrder: own.sortOrder } : {}),
+      ...(chat.pinned !== section.pinned ? { pinned: section.pinned } : {}),
+      ...(!section.pinned && chat.projectId !== section.projectId ? { projectId: section.projectId } : {}),
+    };
+    if (Object.keys(body).length === 0) return;
+    setError(null);
+    try {
+      upsertChat(await api.chats.patch(chatId, body));
+      for (const p of patches) {
+        if (p.id === chatId) continue;
+        upsertChat(await api.chats.patch(p.id, { sortOrder: p.sortOrder }));
+      }
+    } catch (err) {
+      console.error('[grunt-web] failed to reorder chats:', err);
+      setError(errorText(err, "Couldn't move the chat"));
+      // Part of the reorder may have landed: show the server's order, not a guess.
+      try {
+        useGruntStore.getState().setChats(await api.chats.list());
+      } catch {
+        // the error line above already says something went wrong.
+      }
+    }
+    focusLater(chatRowSelector(chatId), LIST_SELECTOR);
+  }
+
+  /** The chat that a drop `position` relative to row `targetId` lands above, skipping the dragged chat itself. */
+  function beforeIdFor(section: Section, targetId: string, position: DropPosition, movingId: string): string | null {
+    if (position === 'before') return targetId;
+    const rest = section.chats.filter((c) => c.id !== movingId);
+    return rest[rest.findIndex((c) => c.id === targetId) + 1]?.id ?? null;
+  }
+
+  /** The section the sidebar shows `chat` in, or null when it isn't shown in one (archived). */
+  function sectionOf(chat: Chat): Section | null {
+    if (chat.archivedAt !== null) return null;
+    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectId: null };
+    const group = sidebar.groups.find((g) => g.chats.some((c) => c.id === chat.id));
+    return group ? { chats: group.chats, pinned: false, projectId: group.project?.id ?? null } : null;
+  }
+
+  /** The chat's place in its section, for the menu's Move up / Move down; null while searching or when archived. */
+  function menuPosition(chat: Chat): { index: number; count: number } | null {
+    const section = searching ? null : sectionOf(chat);
+    return section ? { index: section.chats.findIndex((c) => c.id === chat.id), count: section.chats.length } : null;
+  }
+
+  async function reorderChat(chat: Chat, dir: -1 | 1): Promise<void> {
+    const section = sectionOf(chat);
+    const target = section ? moveTarget(section.chats, chat.id, dir) : undefined;
+    if (section && target) await placeChat(chat.id, section, target.beforeId);
   }
 
   async function createProject(name: string): Promise<void> {
@@ -384,17 +462,34 @@ export function ChatList(): JSX.Element {
     }
   }
 
-  function renderRow(chat: Chat, muted = false): JSX.Element {
+  function renderRow(chat: Chat, section: Section | null): JSX.Element {
     return (
       <ChatRow
         key={chat.id}
         chat={chat}
         active={chat.id === activeChatId}
         onSelect={() => setActiveChatId(chat.id)}
-        onDragEnd={() => setDropTarget(null)}
+        onDragEnd={() => {
+          setDropTarget(null);
+          setRowDrop(null);
+        }}
+        reorder={
+          // Reordering against a filtered list would place chats relative to ones the user can't see.
+          section && !searching
+            ? {
+                indicator: rowDrop?.chatId === chat.id ? rowDrop.position : null,
+                onOver: (position) => setRowDrop({ chatId: chat.id, position }),
+                onLeave: () => setRowDrop((current) => (current?.chatId === chat.id ? null : current)),
+                onDrop: (draggedId, position) => {
+                  if (draggedId === chat.id) return;
+                  void placeChat(draggedId, section, beforeIdFor(section, chat.id, position, draggedId));
+                },
+              }
+            : undefined
+        }
         menuOpen={chatMenu?.chatId === chat.id}
         renaming={renamingChatId === chat.id}
-        muted={muted}
+        muted={section === null}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
@@ -422,7 +517,7 @@ export function ChatList(): JSX.Element {
         {sidebar.pinned.length > 0 && (
           <div className="mb-3" data-testid="group-pinned">
             <h2 className="px-2 pb-1 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">Pinned</h2>
-            <ul className="space-y-0.5">{sidebar.pinned.map((c) => renderRow(c))}</ul>
+            <ul className="space-y-0.5">{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
           </div>
         )}
 
@@ -446,7 +541,7 @@ export function ChatList(): JSX.Element {
               onDropChat={(chatId) => void moveChat(chatId, project?.id ?? null)}
               {...(project ? projectGroupProps(project) : {})}
             >
-              {group.chats.map((c) => renderRow(c))}
+              {group.chats.map((c) => renderRow(c, { chats: group.chats, pinned: false, projectId: project?.id ?? null }))}
             </ProjectGroup>
           );
         })}
@@ -461,7 +556,7 @@ export function ChatList(): JSX.Element {
             >
               {showArchived ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}
             </button>
-            {showArchived && <ul className="space-y-0.5">{sidebar.archived.map((c) => renderRow(c, true))}</ul>}
+            {showArchived && <ul className="space-y-0.5">{sidebar.archived.map((c) => renderRow(c, null))}</ul>}
           </div>
         )}
 
@@ -512,15 +607,21 @@ export function ChatList(): JSX.Element {
           key={`chat:${menuChat.id}`}
           label="Chat actions"
           position={chatMenu.position}
-          items={chatMenuItems(menuChat, orderedProjects, {
-            rename: () => setRenamingChatId(menuChat.id),
-            setPinned: (pinned) => void setPinned(menuChat, pinned),
-            moveTo: (projectId) => void moveChat(menuChat.id, projectId),
-            setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
-            archive: () => void archiveChat(menuChat),
-            unarchive: () => void unarchiveChat(menuChat),
-            requestDelete: () => setDeletingChatId(menuChat.id),
-          })}
+          items={chatMenuItems(
+            menuChat,
+            orderedProjects,
+            {
+              rename: () => setRenamingChatId(menuChat.id),
+              setPinned: (pinned) => void setPinned(menuChat, pinned),
+              reorder: (dir) => void reorderChat(menuChat, dir),
+              moveTo: (projectId) => void moveChat(menuChat.id, projectId),
+              setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
+              archive: () => void archiveChat(menuChat),
+              unarchive: () => void unarchiveChat(menuChat),
+              requestDelete: () => setDeletingChatId(menuChat.id),
+            },
+            menuPosition(menuChat)
+          )}
           onClose={(reason) => {
             setChatMenu(null);
             // Esc, Tab or a scroll: back to the opener. A click elsewhere keeps focus where the user put it.

@@ -40,6 +40,7 @@ const chatIn = (id: string, projectId: string): Chat => ({
   projectId,
   memoryCursor: null,
   memoryExcluded: false,
+  sortOrder: 0,
   archivedAt: null,
   createdAt: 1,
   updatedAt: 1,

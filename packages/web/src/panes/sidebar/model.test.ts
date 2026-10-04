@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
-import { buildSidebar, moveProjectPatches } from './model.js';
+import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
-  return { id, title: id, profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, createdAt: 1, updatedAt: 1, ...over };
+  return { id, title: id, profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string, sortOrder = 0): Project {
@@ -48,7 +48,23 @@ describe('buildSidebar', () => {
     expect(model.groups.find((g) => g.key === 'a')!.total).toBe(0);
   });
 
-  it('sorts every list newest activity first', () => {
+  it('sorts groups and Pinned by sortOrder, highest first, whatever the activity', () => {
+    const model = buildSidebar(
+      [
+        chat('low', { sortOrder: 1, updatedAt: 9 }),
+        chat('high', { sortOrder: 9, updatedAt: 1 }),
+        chat('mid', { sortOrder: 5 }),
+        chat('p1', { pinned: true, sortOrder: 1 }),
+        chat('p2', { pinned: true, sortOrder: 2 }),
+      ],
+      [],
+      null
+    );
+    expect(ids(model.groups[0]!.chats)).toEqual(['high', 'mid', 'low']);
+    expect(ids(model.pinned)).toEqual(['p2', 'p1']);
+  });
+
+  it('breaks sortOrder ties by newest activity', () => {
     const model = buildSidebar([chat('old', { updatedAt: 1 }), chat('new', { updatedAt: 9 }), chat('mid', { updatedAt: 5 })], [], null);
     expect(ids(model.groups[0]!.chats)).toEqual(['new', 'mid', 'old']);
   });
@@ -91,5 +107,53 @@ describe('moveProjectPatches', () => {
       { id: 'c', sortOrder: 1 },
       { id: 'b', sortOrder: 2 },
     ]);
+  });
+});
+
+describe('placeChatPatches', () => {
+  const section = [chat('a', { sortOrder: 30 }), chat('b', { sortOrder: 20 }), chat('c', { sortOrder: 10 })];
+
+  it('puts a chat between two others with one patch, half way', () => {
+    expect(placeChatPatches(section, section[2]!, 'b')).toEqual([{ id: 'c', sortOrder: 25 }]);
+  });
+
+  it('puts a chat at the top, one above the first, and at the bottom, one below the last', () => {
+    expect(placeChatPatches(section, section[2]!, 'a')).toEqual([{ id: 'c', sortOrder: 31 }]);
+    expect(placeChatPatches(section, section[0]!, null)).toEqual([{ id: 'a', sortOrder: 9 }]);
+  });
+
+  it('places a chat coming from another section', () => {
+    expect(placeChatPatches(section, chat('x', { sortOrder: 99 }), 'c')).toEqual([{ id: 'x', sortOrder: 15 }]);
+    expect(placeChatPatches([], chat('x', { sortOrder: 99 }), null)).toEqual([{ id: 'x', sortOrder: 99 }]);
+  });
+
+  it('returns nothing when the chat is already there, or the target is unknown', () => {
+    expect(placeChatPatches(section, section[1]!, 'c')).toEqual([]);
+    expect(placeChatPatches(section, section[2]!, null)).toEqual([]);
+    expect(placeChatPatches(section, section[0]!, 'nope')).toEqual([]);
+  });
+
+  it('renumbers the section when the neighbours are too close to fit a value between', () => {
+    const tight = [chat('a', { sortOrder: 1 }), chat('b', { sortOrder: 1 }), chat('c', { sortOrder: 0 })];
+    expect(placeChatPatches(tight, tight[2]!, 'b')).toEqual([
+      { id: 'a', sortOrder: 3 },
+      { id: 'c', sortOrder: 2 },
+    ]);
+  });
+});
+
+describe('moveTarget', () => {
+  const section = [chat('a'), chat('b'), chat('c')];
+
+  it('moves up above the previous chat, and down above the one after next', () => {
+    expect(moveTarget(section, 'b', -1)).toEqual({ beforeId: 'a' });
+    expect(moveTarget(section, 'a', 1)).toEqual({ beforeId: 'c' });
+    expect(moveTarget(section, 'b', 1)).toEqual({ beforeId: null });
+  });
+
+  it('is undefined at either end or for an unknown chat', () => {
+    expect(moveTarget(section, 'a', -1)).toBeUndefined();
+    expect(moveTarget(section, 'c', 1)).toBeUndefined();
+    expect(moveTarget(section, 'z', 1)).toBeUndefined();
   });
 });
