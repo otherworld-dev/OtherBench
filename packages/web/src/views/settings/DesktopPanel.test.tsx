@@ -55,6 +55,21 @@ describe('DesktopPanel', () => {
     expect(box).not.toBeChecked();
   });
 
+  it('notification toggles start on, and turning one off is saved for next time', async () => {
+    window.localStorage.clear();
+    mockedIsEnabled.mockResolvedValue(false);
+    const user = userEvent.setup();
+    render(<DesktopPanel />);
+    const replies = screen.getByRole('checkbox', { name: 'When a reply finishes' });
+    const approvals = screen.getByRole('checkbox', { name: 'When a tool call needs approval' });
+    expect(replies).toBeChecked();
+    expect(approvals).toBeChecked();
+
+    await user.click(replies);
+    expect(replies).not.toBeChecked();
+    expect(JSON.parse(window.localStorage.getItem('grunt.notifications')!)).toEqual({ replies: false, approvals: true });
+  });
+
   it('explains that closing the window keeps Grunt running in the tray', () => {
     mockedIsEnabled.mockResolvedValue(false);
 
