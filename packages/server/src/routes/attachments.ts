@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import type { Attachment, PublicAttachment } from '@grunt/core/ports/store.js';
 import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
@@ -15,6 +16,16 @@ import { extractAttachmentText } from '../attachment-text.js';
  * client, the second does not.
  */
 export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Cap on the whole multipart REQUEST body: the per-file cap plus allowance for
+ * the multipart framing (boundaries, part headers, any small extra fields).
+ * Enforced by `bodyLimit` BEFORE the body is parsed, so an oversized upload is
+ * rejected from its Content-Length up front, or aborted mid-stream, instead of
+ * being buffered whole by `parseBody()` and only then size-checked. The exact
+ * per-file check in the handler stays as the precise backstop.
+ */
+export const MAX_UPLOAD_BODY_BYTES = MAX_ATTACHMENT_BYTES + 1024 * 1024;
 
 function getChatOrThrow(container: Container, chatId: string): void {
   if (!container.store.chats.get(chatId)) {
@@ -145,7 +156,15 @@ function contentDisposition(kind: 'inline' | 'attachment', filename: string): st
 export function attachmentsRoutes(container: Container): Hono {
   const app = new Hono();
 
-  app.post('/chats/:id/attachments', async (c) => {
+  const limitUploadBody = bodyLimit({
+    maxSize: MAX_UPLOAD_BODY_BYTES,
+    // Thrown (not returned) so the app-wide onError renders the usual `{ error }` JSON.
+    onError: () => {
+      throw new HTTPException(413, { message: 'That upload is too large. Attachments are limited to 25MB per file.' });
+    },
+  });
+
+  app.post('/chats/:id/attachments', limitUploadBody, async (c) => {
     const chatId = c.req.param('id');
     getChatOrThrow(container, chatId);
 

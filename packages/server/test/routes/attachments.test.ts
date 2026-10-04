@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
@@ -128,6 +128,74 @@ describe('POST /api/chats/:id/attachments', () => {
 
     expect(res.status).toBe(413);
     expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+  });
+
+  describe('upload size limit is enforced before the file is read in full', () => {
+    const MB = 1024 * 1024;
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('rejects an over-limit body with 413 and the usual {error} shape, without the handler ever running', async () => {
+      const chatsGet = vi.spyOn(container.store.chats, 'get');
+      const attachmentsCreate = vi.spyOn(container.store.attachments, 'create');
+      const blobPut = vi.spyOn(container.blobStore, 'put');
+      const formData = vi.spyOn(Request.prototype, 'formData');
+
+      // Well past the cap plus multipart overhead; no Content-Length header, so
+      // this exercises the streaming path.
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        body: uploadForm('huge.bin', new Uint8Array(27 * MB), 'application/octet-stream'),
+      });
+
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as { error: string };
+      expect(Object.keys(body)).toEqual(['error']);
+      expect(body.error).toMatch(/25MB/);
+      expect(chatsGet).not.toHaveBeenCalled();
+      expect(formData).not.toHaveBeenCalled();
+      expect(blobPut).not.toHaveBeenCalled();
+      expect(attachmentsCreate).not.toHaveBeenCalled();
+      expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+    });
+
+    it('rejects up front on an oversized Content-Length without reading the body', async () => {
+      const formData = vi.spyOn(Request.prototype, 'formData');
+      const blobPut = vi.spyOn(container.blobStore, 'put');
+      const form = uploadForm('a.txt', 'tiny', 'text/plain');
+
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        headers: { 'content-length': String(40 * MB) },
+        body: form,
+      });
+
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ error: expect.stringMatching(/25MB/) });
+      expect(formData).not.toHaveBeenCalled();
+      expect(blobPut).not.toHaveBeenCalled();
+    });
+
+    it('still accepts a file of exactly the cap', async () => {
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        body: uploadForm('max.bin', new Uint8Array(25 * MB), 'application/octet-stream'),
+      });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { size: number }).size).toBe(25 * MB);
+    });
+
+    it('a file one byte over the cap but inside the multipart allowance is still refused by the post-read check, with the byte-count message', async () => {
+      const res = await app().request('/api/chats/chat-1/attachments', {
+        method: 'POST',
+        body: uploadForm('barely.bin', new Uint8Array(25 * MB + 1), 'application/octet-stream'),
+      });
+      expect(res.status).toBe(413);
+      expect(((await res.json()) as { error: string }).error).toMatch(/is \d+ bytes, over the/);
+      expect(container.store.attachments.list('chat-1')).toHaveLength(0);
+    });
   });
 
   it('404s for an unknown chat', async () => {
