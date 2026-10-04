@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CanonMessage } from '../src/types/messages.js';
-import { activePath, siblingsOf, descendantIds, childrenOf, extendForward } from '../src/domain/tree.js';
+import { activePath, siblingsOf, descendantIds, childrenOf, extendForward, isCompareSet, extendToTip } from '../src/domain/tree.js';
 
 function msg(over: Partial<CanonMessage> & { id: string; createdAt: number }): CanonMessage {
   return {
@@ -153,5 +153,44 @@ describe('extendForward', () => {
     const messages = [root, mid, variantA, variantB];
 
     expect(extendForward(messages, 'root').map((m) => m.id)).toEqual(['mid']);
+  });
+});
+
+describe('isCompareSet', () => {
+  const pb = (regenerated?: boolean) => ({ profileId: 'p', profileName: 'P', connectionId: 'c', modelId: 'm', ...(regenerated ? { regenerated } : {}) });
+  const asst = (id: string, createdAt: number, regenerated?: boolean) =>
+    msg({ id, parentId: 'u', role: 'assistant', createdAt, producedBy: pb(regenerated) });
+
+  it('is true for two or more assistant replies fanned out together', () => {
+    expect(isCompareSet([asst('a', 1), asst('b', 1)])).toBe(true);
+  });
+  it('is false for a single reply, with or without regenerated siblings', () => {
+    expect(isCompareSet([asst('a', 1)])).toBe(false);
+    expect(isCompareSet([asst('a', 1), asst('b', 2, true), asst('c', 3, true)])).toBe(false);
+  });
+  it('is false for user-message siblings (edits)', () => {
+    expect(isCompareSet([msg({ id: 'x', createdAt: 1 }), msg({ id: 'y', createdAt: 2 })])).toBe(false);
+  });
+});
+
+describe('extendToTip', () => {
+  const u = (id: string, parentId: string | null, createdAt: number) => msg({ id, parentId, createdAt });
+  const a = (id: string, parentId: string, createdAt: number, regenerated?: boolean) =>
+    msg({
+      id, parentId, role: 'assistant', createdAt,
+      producedBy: { profileId: 'p', profileName: 'P', connectionId: 'c', modelId: 'm', ...(regenerated ? { regenerated } : {}) },
+    });
+
+  it('walks a single-child chain to the leaf', () => {
+    const ms = [u('u1', null, 1), a('a1', 'u1', 2), u('u2', 'a1', 3), a('a2', 'u2', 4)];
+    expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['a1', 'u2', 'a2']);
+  });
+  it('picks the newest child where the branch point is a regenerate/edit set', () => {
+    const ms = [u('u1', null, 1), a('a1', 'u1', 2), a('a1b', 'u1', 3, true), u('u2', 'a1b', 4), u('u2b', 'a1b', 5), a('a3', 'u2b', 6)];
+    expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['a1b', 'u2b', 'a3']);
+  });
+  it('stops at an unresolved compare turn', () => {
+    const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2)];
+    expect(extendToTip(ms, 'u1')).toEqual([]);
   });
 });

@@ -26,6 +26,13 @@ export interface ProducedBy {
   profileName: string;
   connectionId: string;
   modelId: string;
+  /**
+   * Set on a reply added by "Regenerate": another sibling under a user
+   * message whose first reply already exists. It is what tells such a
+   * sibling set (switched with a `‹ 2 / 3 ›` control) apart from a compare
+   * turn (replies fanned out together, shown as tabs). Absent otherwise.
+   */
+  regenerated?: boolean;
 }
 
 /**
