@@ -208,3 +208,24 @@ test('an approval raised by one variant of a compare turn does not block its sib
 
   await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
 });
+
+test('stopping a turn while an approval card is up removes the card and ends the turn', async ({ page, request }) => {
+  const chatTitle = `Tool Approval E2E - stop - ${uniqueSuffix()}`;
+  await seedToolProfile(request, chatTitle);
+
+  await page.goto('/');
+  await page.getByRole('button', { name: chatTitle }).click();
+
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill('#tool secrets.txt');
+  await textbox.press('Enter');
+
+  const prompt = page.locator('[data-testid^="approval-prompt-"]');
+  await expect(prompt).toBeVisible();
+
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+
+  // The card goes away (nobody answered it) and the turn reaches a terminal state.
+  await expect(prompt).toHaveCount(0);
+  await expect(page.getByLabel('streaming')).toHaveCount(0, { timeout: 15_000 });
+});

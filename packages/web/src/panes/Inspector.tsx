@@ -369,6 +369,7 @@ function grantedByLabel(grantedBy: string): string {
     case 'deny:policy': return 'denied by policy';
     case 'deny:user': return 'denied by you';
     case 'auto': return 'auto mode';
+    case 'deny:cancelled': return 'stopped (not denied)';
     case 'deny:auto': return 'blocked by auto mode';
     default: return grantedBy;
   }

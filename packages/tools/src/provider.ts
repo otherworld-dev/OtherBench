@@ -35,7 +35,22 @@ interface ToolError {
 
 type Authorization =
   | { ok: true; grantedBy: string }
-  | { ok: false; code: 'permission_denied' | 'approval_denied'; reason: string; grantedBy: 'deny:policy' | 'deny:user' };
+  | {
+      ok: false;
+      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped';
+      reason: string;
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled';
+    };
+
+/** Why a pending approval ended: a person answered it, its turn ended, or the broker's backstop dropped it. */
+type SettleCause = 'user' | 'turn-ended' | 'dropped';
+
+const CANCELLED_REASON = 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.';
+const DROPPED_REASON = 'This approval request was dropped by the server (too many were pending), so the tool call did not run. Nobody denied it.';
+
+function cancelledAuth(): Authorization {
+  return { ok: false, code: 'cancelled', reason: CANCELLED_REASON, grantedBy: 'deny:cancelled' };
+}
 
 function toolError(code: string, message: string): ToolError {
   return { error: true, code, message };
@@ -136,7 +151,8 @@ function summarizeMcpContent(content: unknown): string {
  */
 export class GruntToolProvider implements ToolProvider {
   private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
-  private readonly waiters = new Map<string, (choice: ApprovalChoice) => void>();
+  /** requestId -> settle(choice, alreadyDroppedByBroker). One entry per card awaiting an answer; removed when it settles. */
+  private readonly waiters = new Map<string, (choice: ApprovalChoice, cause: SettleCause) => void>();
   private readonly generateId: () => string;
   private readonly now: () => number;
 
@@ -149,6 +165,11 @@ export class GruntToolProvider implements ToolProvider {
   ) {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
+    // The broker's backstop dropped a request nobody ended. Its waiter must
+    // not hang (or, worse, later be approved with the broker no longer
+    // knowing it): settle it as a denial, which also emits `resolved` so the
+    // UI drops the card.
+    this.broker.onEvict((requestId) => this.waiters.get(requestId)?.({ choice: 'deny' }, 'dropped'));
   }
 
   onApprovalEvent(cb: (event: ToolApprovalEvent) => void): () => void {
@@ -189,7 +210,7 @@ export class GruntToolProvider implements ToolProvider {
   resolveApproval(requestId: string, choice: ApprovalChoice): boolean {
     const settle = this.waiters.get(requestId);
     if (!settle) return false;
-    settle(choice);
+    settle(choice, 'user');
     return true;
   }
 
@@ -248,6 +269,13 @@ export class GruntToolProvider implements ToolProvider {
 
   async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const startedAt = this.now();
+    if (ctx.signal.aborted) {
+      const gone = cancelledAuth();
+      if (!gone.ok) {
+        this.audit(ctx, tool.name, args, toolError(gone.code, gone.reason), 0, gone.grantedBy);
+        return { allowed: false, reason: gone.reason };
+      }
+    }
     const decision = this.broker.decide(tool, args, policy, ctx);
     if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
       // Auto mode: Claude Code's classifier decides this call. No card, no
@@ -281,12 +309,20 @@ export class GruntToolProvider implements ToolProvider {
     if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
 
     const { request } = decision;
+    // The turn already ended: nobody is there to answer and an abort listener
+    // added now would never fire. Drop the request, raise no card.
+    if (ctx.signal.aborted) {
+      this.broker.discard(request.id);
+      return cancelledAuth();
+    }
     // Register the waiter BEFORE notifying so a listener that answers
     // synchronously from inside the 'request' event still reaches it.
     const pending = this.awaitApproval(request.id, ctx.signal);
     this.notify({ type: 'request', request });
-    const choice = await pending;
+    const { choice, cause } = await pending;
     this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
+    if (cause === 'turn-ended') return cancelledAuth();
+    if (cause === 'dropped') return { ok: false, code: 'approval_dropped', reason: DROPPED_REASON, grantedBy: 'deny:cancelled' };
     if (choice.choice === 'deny') return { ok: false, code: 'approval_denied', reason: 'The user denied this tool call.', grantedBy: 'deny:user' };
     return { ok: true, grantedBy: `ask:${choice.choice}` };
   }
@@ -296,7 +332,9 @@ export class GruntToolProvider implements ToolProvider {
       ...tool,
       execute: async (args: unknown, ctx: ToolContext): Promise<unknown> => {
         const startedAt = this.now();
-        const auth = await this.authorize(tool, args, policy, ctx);
+        // A call that arrives after its turn ended must not run, even when a
+        // grant or policy would allow it.
+        const auth = ctx.signal.aborted ? cancelledAuth() : await this.authorize(tool, args, policy, ctx);
         if (!auth.ok) {
           const result = toolError(auth.code, auth.reason);
           this.audit(ctx, tool.name, args, result, this.now() - startedAt, auth.grantedBy);
@@ -329,22 +367,29 @@ export class GruntToolProvider implements ToolProvider {
    * id). An abort is treated as an implicit denial: 'deny' persists no
    * grant, so this is always safe to do without asking anyone.
    */
-  private awaitApproval(requestId: string, signal: AbortSignal): Promise<ApprovalChoice> {
-    return new Promise<ApprovalChoice>((resolve) => {
+  private awaitApproval(requestId: string, signal: AbortSignal): Promise<{ choice: ApprovalChoice; cause: SettleCause }> {
+    return new Promise((resolve) => {
       let done = false;
-      const settle = (choice: ApprovalChoice): void => {
+      const settle = (choice: ApprovalChoice, cause: SettleCause): void => {
         if (done) return;
         done = true;
         signal.removeEventListener('abort', onAbort);
         this.waiters.delete(requestId);
-        try {
-          this.broker.resolve(requestId, choice);
-        } catch (err) {
-          console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+        let final = choice;
+        if (cause === 'dropped' || !this.broker.hasPending(requestId)) {
+          // The broker no longer knows this request, so it can neither record
+          // a grant nor vouch for the call. Fail closed.
+          final = { choice: 'deny' };
+        } else {
+          try {
+            this.broker.resolve(requestId, choice);
+          } catch (err) {
+            console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+          }
         }
-        resolve(choice);
+        resolve({ choice: final, cause: cause === 'user' && final.choice === 'deny' && choice.choice !== 'deny' ? 'dropped' : cause });
       };
-      const onAbort = (): void => settle({ choice: 'deny' });
+      const onAbort = (): void => settle({ choice: 'deny' }, 'turn-ended');
       signal.addEventListener('abort', onAbort, { once: true });
       this.waiters.set(requestId, settle);
     });

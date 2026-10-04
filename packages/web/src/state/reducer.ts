@@ -73,11 +73,18 @@ export function applyEventToMessage(
     case 'finish':
       return { message, extras: { ...extras, usage: event.usage } };
     case 'error': {
-      const status: MessageStatus = event.error.kind === 'cancelled' ? 'cancelled' : 'error';
-      return { message: { ...message, status, error: event.error }, extras };
+      // `error` does NOT end the turn on the server: the runner records it and
+      // keeps reading the stream (a tool may still be waiting on its card, and
+      // Stop must stay available). So neither the card nor the streaming
+      // status is touched here -- the terminal `status` event that always
+      // follows teardown sets the final status and drops the cards.
+      return { message: { ...message, status: message.status, error: event.error }, extras };
     }
     case 'status':
-      return { message: { ...message, status: event.status }, extras };
+      // A message that is no longer streaming cannot be waiting on anyone: drop
+      // any approval card still showing (the server settles these as denials,
+      // but the `approval-resolved` may be lost to a reconnect or arrive late).
+      return { message: { ...message, status: event.status }, extras: event.status === 'streaming' ? extras : withoutApprovals(extras) };
     case 'notice':
       // Task 21's capability-fallback disclosure -- appended as its own
       // Part (never merged into an adjacent text part, unlike
@@ -96,6 +103,10 @@ export function applyEventToMessage(
     default:
       return { message, extras };
   }
+}
+
+function withoutApprovals(extras: MessageExtras): MessageExtras {
+  return extras.pendingApprovals.length === 0 ? extras : { ...extras, pendingApprovals: [] };
 }
 
 /** Folds a whole ordered list of events onto a message, in order. */

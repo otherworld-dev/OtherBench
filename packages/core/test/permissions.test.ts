@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -539,5 +539,68 @@ describe('PermissionBroker', () => {
       const second = broker.decide(RUN_COMMAND(), { command: 'npm test' }, makePolicy(), makeCtx());
       expect(second.kind).toBe('allow');
     });
+  });
+});
+
+describe('pending-request lifecycle backstop', () => {
+  const ask = (broker: PermissionBroker, ctx = makeCtx()) =>
+    expectAsk(broker.decide(WRITE_FILE(), { path: 'a.txt' }, makePolicy(), ctx));
+
+  it('discard() removes the pending request, and resolving it afterwards throws the usual unknown-request error rather than granting', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const { request } = ask(broker);
+    expect(broker.pendingCount).toBe(1);
+    broker.discard(request.id);
+    expect(broker.pendingCount).toBe(0);
+    expect(() => broker.resolve(request.id, { choice: 'chat' })).toThrow(/unknown or already-resolved/);
+    expect(store.grants.list()).toHaveLength(0);
+  });
+
+  it('sweeps requests whose turn signal has aborted the next time decide() asks, and reports them', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const evicted: string[] = [];
+    broker.onEvict((id) => evicted.push(id));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dead = new AbortController();
+    const a = ask(broker, makeCtx({ signal: dead.signal }));
+    const b = ask(broker, makeCtx({ messageId: 'msg-2' }));
+    dead.abort();
+    ask(broker, makeCtx({ messageId: 'msg-3' })); // any later ask triggers the sweep
+    expect(evicted).toEqual([a.request.id]);
+    expect(broker.pendingCount).toBe(2);
+    expect(() => broker.resolve(b.request.id, { choice: 'once' })).not.toThrow();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('backstop'));
+    warn.mockRestore();
+  });
+
+  it('caps the pending map: past maxPending the oldest request is evicted and reported', () => {
+    const broker = new PermissionBroker(new InMemoryStore(), { maxPending: 3 });
+    const evicted: string[] = [];
+    broker.onEvict((id) => evicted.push(id));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ids = [1, 2, 3, 4, 5].map((i) => ask(broker, makeCtx({ messageId: `m${i}` })).request.id);
+    expect(broker.pendingCount).toBe(3);
+    expect(evicted).toEqual([ids[0], ids[1]]);
+    expect(() => broker.resolve(ids[0] as string, { choice: 'once' })).toThrow();
+    expect(() => broker.resolve(ids[4] as string, { choice: 'once' })).not.toThrow();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe('backstop eviction scope', () => {
+  it('a runaway message evicts its OWN oldest request, never a live card of another chat', () => {
+    const broker = new PermissionBroker(new InMemoryStore(), { maxPending: 3 });
+    const evicted: string[] = [];
+    broker.onEvict((id) => evicted.push(id));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const other = expectAsk(broker.decide(WRITE_FILE(), { path: 'o.txt' }, makePolicy(), makeCtx({ chatId: 'chat-2', messageId: 'other' })));
+    const mine = [1, 2, 3, 4].map((i) => expectAsk(broker.decide(WRITE_FILE(), { path: `a${i}.txt` }, makePolicy(), makeCtx({ messageId: 'runaway' }))).request.id);
+    expect(evicted).toEqual([mine[0], mine[1]]);
+    expect(broker.hasPending(other.request.id)).toBe(true);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('alone has raised too many'))).toBe(true);
+    expect(warn.mock.calls.every((c) => !String(c[0]).includes('lifecycle path did not'))).toBe(true);
+    warn.mockRestore();
   });
 });

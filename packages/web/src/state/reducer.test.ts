@@ -53,21 +53,16 @@ describe('applyEventToMessage', () => {
     expect(message.parts).toEqual([]);
   });
 
-  it('maps a cancelled error kind to cancelled status, other kinds to error status', () => {
-    const cancelled = applyEventToMessage(baseMessage(), emptyExtras, {
-      messageId: 'm1',
-      type: 'error',
-      error: { kind: 'cancelled', message: 'stopped', retryable: false },
-    });
-    expect(cancelled.message.status).toBe('cancelled');
-
-    const failed = applyEventToMessage(baseMessage(), emptyExtras, {
+  it('records an error event on the message but leaves its status alone: the server keeps the turn streaming until the terminal status event', () => {
+    const failed = applyEventToMessage(baseMessage({ status: 'streaming' }), emptyExtras, {
       messageId: 'm1',
       type: 'error',
       error: { kind: 'rate_limit', message: 'slow down', retryable: true },
     });
-    expect(failed.message.status).toBe('error');
+    expect(failed.message.status).toBe('streaming');
     expect(failed.message.error?.kind).toBe('rate_limit');
+    const ended = applyEventToMessage(failed.message, failed.extras, { messageId: 'm1', type: 'status', status: 'error' });
+    expect(ended.message.status).toBe('error');
   });
 
   it('applies a status event directly', () => {
@@ -145,5 +140,34 @@ describe('replayEvents', () => {
     const shell = baseMessage({ parts: [{ type: 'text', text: 'x' }] });
     const { message } = replayEvents(shell, emptyExtras, []);
     expect(message).toEqual(shell);
+  });
+});
+
+describe('dead approval prompts', () => {
+  const req = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
+
+  it.each(['complete', 'error', 'cancelled'] as const)('a terminal %s status drops every pending approval of that message', (status) => {
+    const acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request: req });
+    const after = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'status', status });
+    expect(after.extras.pendingApprovals).toEqual([]);
+  });
+
+  it('an error event does NOT drop them (the server may still be waiting on the card; only the terminal status ends it), and a streaming status does not either', () => {
+    const acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request: req });
+    expect(applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'status', status: 'streaming' }).extras.pendingApprovals).toEqual([req]);
+    expect(applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'error', error: { kind: 'rate_limit', message: 'x', retryable: true } }).extras.pendingApprovals).toEqual([req]);
+  });
+});
+
+describe('error mid-step (server keeps streaming)', () => {
+  const req = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
+
+  it('a hello replay of [approval-request, error] on a still-streaming message keeps the card and the streaming status', () => {
+    const { message, extras } = applyHelloBuffer(baseMessage(), [
+      { messageId: 'm1', type: 'approval-request', request: req },
+      { messageId: 'm1', type: 'error', error: { kind: 'rate_limit', message: 'overloaded', retryable: true } },
+    ], 'streaming');
+    expect(message.status).toBe('streaming');
+    expect(extras.pendingApprovals).toEqual([req]);
   });
 });
