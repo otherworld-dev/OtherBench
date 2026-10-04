@@ -588,3 +588,19 @@ describe('pending-request lifecycle backstop', () => {
     warn.mockRestore();
   });
 });
+
+describe('backstop eviction scope', () => {
+  it('a runaway message evicts its OWN oldest request, never a live card of another chat', () => {
+    const broker = new PermissionBroker(new InMemoryStore(), { maxPending: 3 });
+    const evicted: string[] = [];
+    broker.onEvict((id) => evicted.push(id));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const other = expectAsk(broker.decide(WRITE_FILE(), { path: 'o.txt' }, makePolicy(), makeCtx({ chatId: 'chat-2', messageId: 'other' })));
+    const mine = [1, 2, 3, 4].map((i) => expectAsk(broker.decide(WRITE_FILE(), { path: `a${i}.txt` }, makePolicy(), makeCtx({ messageId: 'runaway' }))).request.id);
+    expect(evicted).toEqual([mine[0], mine[1]]);
+    expect(broker.hasPending(other.request.id)).toBe(true);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('alone has raised too many'))).toBe(true);
+    expect(warn.mock.calls.every((c) => !String(c[0]).includes('lifecycle path did not'))).toBe(true);
+    warn.mockRestore();
+  });
+});

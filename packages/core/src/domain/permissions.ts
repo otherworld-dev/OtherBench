@@ -195,7 +195,7 @@ export class PermissionBroker {
       args,
       summary: summarize(tool, args),
     };
-    this.enforceBound();
+    this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
     return { kind: 'ask', request };
   }
@@ -313,20 +313,35 @@ export class PermissionBroker {
    * is simply unknown afterwards: `resolve()` throws for it, so it can never
    * become an allow or mint a grant.
    */
-  private enforceBound(): void {
+  private enforceBound(messageId: string): void {
     for (const [id, p] of this.pending) {
-      if (p.ctx.signal.aborted) this.evict(id, 'its turn was aborted but it was never discarded');
+      if (p.ctx.signal.aborted) this.evict(id, 'its turn was aborted but it was never discarded -- a lifecycle path missed it');
     }
     while (this.pending.size >= this.maxPending) {
-      const oldest = this.pending.keys().next().value;
-      if (oldest === undefined) break;
-      this.evict(oldest, `more than ${this.maxPending} approvals were pending`);
+      // Evict from the message that is asking first, so one runaway step
+      // cannot push out a live card belonging to another chat or variant.
+      let victim: string | undefined;
+      for (const [id, p] of this.pending) {
+        if (p.ctx.messageId === messageId) {
+          victim = id;
+          break;
+        }
+      }
+      const own = victim !== undefined;
+      victim ??= this.pending.keys().next().value;
+      if (victim === undefined) break;
+      this.evict(
+        victim,
+        own
+          ? `message "${messageId}" alone has raised too many approvals (cap ${this.maxPending}); dropping its oldest`
+          : `${this.maxPending} approvals are pending across all chats; dropping the oldest`
+      );
     }
   }
 
   private evict(requestId: string, why: string): void {
     this.pending.delete(requestId);
-    console.warn(`[PermissionBroker] backstop dropped pending approval "${requestId}": ${why}. A lifecycle path did not clean it up.`);
+    console.warn(`[PermissionBroker] backstop dropped pending approval "${requestId}": ${why}.`);
     for (const cb of this.evictListeners) {
       try {
         cb(requestId);
