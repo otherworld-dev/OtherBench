@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, extname, isAbsolute } from 'node:path';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -109,6 +109,32 @@ const FROM_PATH_IMAGE_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
 };
+
+/** True when `data` starts with the signature of the image type `mime` claims. */
+function hasImageSignature(data: Buffer, mime: string): boolean {
+  const at = (offset: number, bytes: number[] | string): boolean => {
+    const expected = typeof bytes === 'string' ? Buffer.from(bytes, 'latin1') : Buffer.from(bytes);
+    return data.length >= offset + expected.length && data.subarray(offset, offset + expected.length).equals(expected);
+  };
+  switch (mime) {
+    case 'image/png':
+      return at(0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    case 'image/jpeg':
+      return at(0, [0xff, 0xd8, 0xff]);
+    case 'image/gif':
+      return at(0, 'GIF87a') || at(0, 'GIF89a');
+    case 'image/webp':
+      return at(0, 'RIFF') && at(8, 'WEBP');
+    case 'image/bmp':
+      return at(0, 'BM');
+    case 'image/x-icon':
+      return at(0, [0x00, 0x00, 0x01, 0x00]);
+    case 'image/avif':
+      return at(4, 'ftyp') && (at(8, 'avif') || at(8, 'avis'));
+    default:
+      return false;
+  }
+}
 
 function baseMimeType(mime: string): string {
   return (mime.split(';')[0] ?? '').trim().toLowerCase();
@@ -245,9 +271,11 @@ export function attachmentsRoutes(container: Container): Hono {
   /**
    * Attaches an image straight from a path on this machine (v2 plan, Task
    * 39): the desktop app's "Send to Grunt" verb and `--send <file>`. Images
-   * only (FROM_PATH_IMAGE_TYPES), under the same 25MB cap as an upload. It
-   * reads a file the caller names, so it only ever belongs on the local
-   * listener, never the peer listener (Task 46). JSON only: a cross-site
+   * only (FROM_PATH_IMAGE_TYPES): the extension, the real file behind any
+   * link, and the file's own leading bytes must all agree, under the same
+   * 25MB cap as an upload. It reads a file the caller names, so it only ever
+   * belongs on the local listener: the peer listener (Task 46, #783) must
+   * mount its own router without it. JSON only: a cross-site
    * form can't send that without a CORS preflight this server never grants.
    */
   app.post('/chats/:id/attachments/from-path', async (c) => {
@@ -265,19 +293,30 @@ export function attachmentsRoutes(container: Container): Hono {
     }
 
     const name = basename(path);
+    // A link named like an image must lead to an image: the real file's
+    // extension has to be an image type too, and that file is what's read.
+    let real: string;
     let size: number;
     try {
-      const info = await stat(path);
+      real = await realpath(path);
+      const info = await stat(real);
       if (!info.isFile()) throw new HTTPException(400, { message: `"${path}" is not a file.` });
       size = info.size;
     } catch (err) {
       if (err instanceof HTTPException) throw err;
       throw new HTTPException(404, { message: `Couldn't read "${path}".` });
     }
+    if (FROM_PATH_IMAGE_TYPES[extname(real).toLowerCase()] !== mime) {
+      throw new HTTPException(415, { message: `"${path}" leads to a file that isn't the same kind of image.` });
+    }
     if (size > MAX_ATTACHMENT_BYTES) throw tooLarge(name, size);
-    const data = await readFile(path);
+    const data = await readFile(real);
     // The file may have grown since the stat.
     if (data.length > MAX_ATTACHMENT_BYTES) throw tooLarge(name, data.length);
+    // And it has to actually be one: the name alone proves nothing.
+    if (!hasImageSignature(data, mime)) {
+      throw new HTTPException(415, { message: `"${name}" doesn't look like a ${mime.slice('image/'.length).toUpperCase()} image.` });
+    }
 
     const created = await storeAttachment(container, chatId, data, name, mime);
     return c.json(toPublicAttachment(created), 201);
