@@ -84,15 +84,14 @@ async function drain(iterable: AsyncIterable<EngineEvent>): Promise<EngineEvent[
 }
 
 /**
- * `MockLanguageModelV3`'s array-based `doStream` indexes with
- * `array[this.doStreamCalls.length]` *after* pushing the just-received call,
- * so the first `doStream()` invocation reads index 1, not 0 (verified
- * empirically against the installed `ai@6.0.253` -- see
- * task-14-15-report.md). This helper hides that off-by-one so tests can list
- * steps in the natural order.
+ * Lists the per-call streams for `MockLanguageModelV3`'s array-based
+ * `doStream`, in the natural order. Older `ai` releases (up to at least
+ * 6.0.253) indexed the array with an off-by-one (the first call read index 1)
+ * and this helper padded a dummy step 0; that was fixed upstream by 6.0.300,
+ * so no padding is needed any more.
  */
 function stepsForModel(...steps: unknown[][]): { stream: ReadableStream<unknown> }[] {
-  return [{ stream: convertArrayToReadableStream([]) }, ...steps.map((chunks) => ({ stream: convertArrayToReadableStream(chunks) }))];
+  return steps.map((chunks) => ({ stream: convertArrayToReadableStream(chunks) }));
 }
 
 function resolverFor(model: MockLanguageModelV3): ProviderResolver {

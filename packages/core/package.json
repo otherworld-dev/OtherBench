@@ -13,8 +13,8 @@
     "build": "tsc -b"
   },
   "devDependencies": {
-    "@ai-sdk/provider": "3.0.15",
-    "ai": "6.0.253",
+    "@ai-sdk/provider": "3.0.18",
+    "ai": "6.0.300",
     "vitest": "^2.1.0"
   }
 }
