@@ -472,3 +472,124 @@ describe('recordAgentDenial', () => {
     expect(rows.find((r) => r.messageId === 'msg-blank')!.resultSummary).toBe('Blocked by Claude Code auto mode.');
   });
 });
+
+describe('pending approvals end with their turn (approval cleanup)', () => {
+  const tick = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('cancelling a variant removes its request from the broker, settles the waiter as a denial and emits a resolved event', async () => {
+    const { provider, broker } = makeProvider();
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => events.push(e));
+
+    const controller = new AbortController();
+    const promise = writeFile.execute({ path: 'a.txt', content: 'x' }, ctx({ signal: controller.signal }));
+    await tick();
+    expect(broker.pendingCount).toBe(1);
+
+    controller.abort();
+    const result = (await promise) as Record<string, unknown>;
+
+    expect(result.code).toBe('approval_denied');
+    expect(broker.pendingCount).toBe(0);
+    expect(events.map((e) => e.type)).toEqual(['request', 'resolved']);
+    expect(events[1]).toMatchObject({ type: 'resolved', messageId: 'msg-1', choice: 'deny' });
+  });
+
+  it("cancelling one variant leaves a sibling variant's pending approval untouched and answerable", async () => {
+    const { provider, broker } = makeProvider();
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+
+    const ca = new AbortController();
+    const a = writeFile.execute({ path: 'a.txt', content: 'a' }, ctx({ messageId: 'variant-a', signal: ca.signal }));
+    const b = writeFile.execute({ path: 'b.txt', content: 'b' }, ctx({ messageId: 'variant-b' }));
+    await tick();
+    expect(broker.pendingCount).toBe(2);
+
+    ca.abort();
+    expect(((await a) as Record<string, unknown>).code).toBe('approval_denied');
+    expect(broker.pendingCount).toBe(1);
+
+    const forB = requests.find((r) => r.messageId === 'variant-b')!;
+    expect(provider.resolveApproval(forB.id, { choice: 'once' })).toBe(true);
+    expect(((await b) as Record<string, unknown>).error).toBeUndefined();
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it('an already-aborted signal never raises a card, never leaves a pending request and still settles (as a denial)', async () => {
+    const { provider, broker } = makeProvider();
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => events.push(e));
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = (await writeFile.execute({ path: 'a.txt', content: 'x' }, ctx({ signal: controller.signal }))) as Record<string, unknown>;
+
+    expect(result.code).toBe('approval_denied');
+    expect(broker.pendingCount).toBe(0);
+    expect(events).toEqual([]);
+  });
+
+  it('the same holds for requestApproval (the Claude Code agent path): an aborted turn leaves nothing pending', async () => {
+    const { provider, broker } = makeProvider();
+    const spec = { name: 'Bash', description: '', parameters: {}, risk: 'execute' as const, source: 'agent' as const, execute: async () => undefined };
+    const ac = new AbortController();
+    const waiting = provider.requestApproval(spec, { command: 'ls' }, policy(), ctx({ signal: ac.signal }));
+    await tick();
+    expect(broker.pendingCount).toBe(1);
+    ac.abort();
+    expect(await waiting).toMatchObject({ allowed: false });
+    expect(broker.pendingCount).toBe(0);
+
+    const dead = new AbortController();
+    dead.abort();
+    expect(await provider.requestApproval(spec, { command: 'ls' }, policy(), ctx({ signal: dead.signal }))).toMatchObject({ allowed: false });
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it('resolving a request that was already discarded returns false and grants nothing', async () => {
+    const { provider, store } = makeProvider();
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const controller = new AbortController();
+    const promise = writeFile.execute({ path: 'a.txt', content: 'x' }, ctx({ signal: controller.signal }));
+    await tick();
+    controller.abort();
+    await promise;
+
+    expect(provider.resolveApproval(requests[0]!.id, { choice: 'always', constraint: null })).toBe(false);
+    expect(store.grants.list()).toHaveLength(0);
+  });
+
+  it('a request the broker backstop evicts is settled as a denial, never an allow, and the write does not happen', async () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store, { maxPending: 1 });
+    const provider = new GruntToolProvider(store, broker, emptyMcp);
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const second = new AbortController();
+    const first = writeFile.execute({ path: 'a.txt', content: 'a' }, ctx({ messageId: 'old' }));
+    await tick();
+    const next = writeFile.execute({ path: 'b.txt', content: 'b' }, ctx({ messageId: 'new', signal: second.signal }));
+    await tick();
+
+    expect(((await first) as Record<string, unknown>).code).toBe('approval_denied');
+    expect(broker.pendingCount).toBe(1);
+    expect(existsSync(join(ws, 'a.txt'))).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    second.abort();
+    await next;
+  });
+});

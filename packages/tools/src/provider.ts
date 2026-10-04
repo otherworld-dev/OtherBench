@@ -136,7 +136,8 @@ function summarizeMcpContent(content: unknown): string {
  */
 export class GruntToolProvider implements ToolProvider {
   private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
-  private readonly waiters = new Map<string, (choice: ApprovalChoice) => void>();
+  /** requestId -> settle(choice, alreadyDroppedByBroker). One entry per card awaiting an answer; removed when it settles. */
+  private readonly waiters = new Map<string, (choice: ApprovalChoice, alreadyDroppedByBroker?: boolean) => void>();
   private readonly generateId: () => string;
   private readonly now: () => number;
 
@@ -149,6 +150,11 @@ export class GruntToolProvider implements ToolProvider {
   ) {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
+    // The broker's backstop dropped a request nobody ended. Its waiter must
+    // not hang (or, worse, later be approved with the broker no longer
+    // knowing it): settle it as a denial, which also emits `resolved` so the
+    // UI drops the card.
+    this.broker.onEvict((requestId) => this.waiters.get(requestId)?.({ choice: 'deny' }, true));
   }
 
   onApprovalEvent(cb: (event: ToolApprovalEvent) => void): () => void {
@@ -189,7 +195,7 @@ export class GruntToolProvider implements ToolProvider {
   resolveApproval(requestId: string, choice: ApprovalChoice): boolean {
     const settle = this.waiters.get(requestId);
     if (!settle) return false;
-    settle(choice);
+    settle(choice, false);
     return true;
   }
 
@@ -281,6 +287,12 @@ export class GruntToolProvider implements ToolProvider {
     if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
 
     const { request } = decision;
+    // The turn already ended: nobody is there to answer and an abort listener
+    // added now would never fire. Drop the request, raise no card.
+    if (ctx.signal.aborted) {
+      this.broker.discard(request.id);
+      return { ok: false, code: 'approval_denied', reason: 'The turn was stopped before this tool call could be approved.', grantedBy: 'deny:user' };
+    }
     // Register the waiter BEFORE notifying so a listener that answers
     // synchronously from inside the 'request' event still reaches it.
     const pending = this.awaitApproval(request.id, ctx.signal);
@@ -332,19 +344,26 @@ export class GruntToolProvider implements ToolProvider {
   private awaitApproval(requestId: string, signal: AbortSignal): Promise<ApprovalChoice> {
     return new Promise<ApprovalChoice>((resolve) => {
       let done = false;
-      const settle = (choice: ApprovalChoice): void => {
+      const settle = (choice: ApprovalChoice, alreadyDroppedByBroker = false): void => {
         if (done) return;
         done = true;
         signal.removeEventListener('abort', onAbort);
         this.waiters.delete(requestId);
-        try {
-          this.broker.resolve(requestId, choice);
-        } catch (err) {
-          console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+        let final = choice;
+        if (alreadyDroppedByBroker || !this.broker.hasPending(requestId)) {
+          // The broker no longer knows this request, so it can neither record
+          // a grant nor vouch for the call. Fail closed.
+          final = { choice: 'deny' };
+        } else {
+          try {
+            this.broker.resolve(requestId, choice);
+          } catch (err) {
+            console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+          }
         }
-        resolve(choice);
+        resolve(final);
       };
-      const onAbort = (): void => settle({ choice: 'deny' });
+      const onAbort = (): void => settle({ choice: 'deny' }, false);
       signal.addEventListener('abort', onAbort, { once: true });
       this.waiters.set(requestId, settle);
     });
