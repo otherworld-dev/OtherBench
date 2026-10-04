@@ -293,6 +293,61 @@ describe('Composer', () => {
       expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('clip.png');
     });
 
+    describe('upload size pre-check (25MB cap)', () => {
+      const CAP = 25 * 1024 * 1024;
+      /** A File that reports a given size without allocating it. */
+      function fileOfSize(name: string, size: number): File {
+        const f = new File(['x'], name, { type: 'application/octet-stream' });
+        Object.defineProperty(f, 'size', { value: size });
+        return f;
+      }
+      const TOO_LARGE = 'That upload is too large. Attachments are limited to 25MB per file.';
+
+      it('refuses an oversized dropped file without starting an upload, and says why', async () => {
+        render(<Composer chat={makeChat()} />);
+
+        fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [fileOfSize('huge.bin', CAP + 1)] } });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(TOO_LARGE);
+        expect(mockedUpload).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('attachment-chip')).not.toBeInTheDocument();
+      });
+
+      it('refuses an oversized pasted file the same way', async () => {
+        render(<Composer chat={makeChat()} />);
+
+        fireEvent.paste(screen.getByRole('textbox', { name: /message/i }), { clipboardData: { files: [fileOfSize('huge.bin', 300 * 1024 * 1024)] } });
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(TOO_LARGE);
+        expect(mockedUpload).not.toHaveBeenCalled();
+      });
+
+      it('uploads a file of exactly the cap, and still uploads the OK files in a batch that includes an oversized one', async () => {
+        mockedUpload.mockResolvedValue(makeAttachment({ filename: 'ok.bin' }));
+        render(<Composer chat={makeChat()} />);
+        const ok = fileOfSize('ok.bin', CAP);
+        const big = fileOfSize('big.bin', CAP + 1);
+
+        fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [big, ok] } });
+
+        await waitFor(() => expect(mockedUpload).toHaveBeenCalledTimes(1));
+        expect(mockedUpload).toHaveBeenCalledWith('chat-1', ok);
+        expect(screen.getByRole('alert')).toHaveTextContent(TOO_LARGE);
+        expect(await screen.findByTestId('attachment-chip')).toHaveTextContent('ok.bin');
+      });
+
+      it('clears the message when the next upload batch starts', async () => {
+        mockedUpload.mockResolvedValue(makeAttachment());
+        render(<Composer chat={makeChat()} />);
+        fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [fileOfSize('big.bin', CAP + 1)] } });
+        await screen.findByRole('alert');
+
+        fireEvent.drop(screen.getByTestId('composer-dropzone'), { dataTransfer: { files: [new File(['hi'], 'a.txt', { type: 'text/plain' })] } });
+
+        await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+      });
+    });
+
     it('removes an attachment chip before sending when its remove button is clicked, by calling DELETE on the server', async () => {
       mockedUpload.mockResolvedValue(makeAttachment());
       mockedDelete.mockResolvedValue(undefined);

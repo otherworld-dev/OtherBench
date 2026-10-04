@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
 import type { ResolvedProfile } from '../src/types/config.js';
-import { FakeChatEngine, InMemoryStore, FakeSecretStore } from '../src/testing/fakes.js';
+import { FakeChatEngine, InMemoryStore, FakeSecretStore, FakeToolProvider } from '../src/testing/fakes.js';
+import { runSecretStoreContract } from '../src/testing/secret-store-contract.js';
+import { runToolProviderContract } from '../src/testing/tool-provider-contract.js';
 import { runStoreContract } from '../src/testing/store-contract.js';
 
 function makeResolvedProfile(over: Partial<ResolvedProfile> & { id: string }): ResolvedProfile {
@@ -150,3 +152,6 @@ describe('FakeSecretStore', () => {
 // Task 9's real SQLite adapter will be held to later -- that is the whole point of
 // having one exported suite instead of separate ad hoc tests per implementation.
 runStoreContract('InMemoryStore', () => new InMemoryStore());
+
+runSecretStoreContract('FakeSecretStore', () => new FakeSecretStore());
+runToolProviderContract('FakeToolProvider', ({ mcpServers }) => new FakeToolProvider({ mcpServers }));

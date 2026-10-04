@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { FakeToolProvider, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ModelInfo, ResolvedProfile } from '@grunt/core/types/config.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -402,15 +401,7 @@ describe('StreamRegistry', () => {
       mime: 'image/png', size: 10, sha256: 'x', storagePath: '/x', extractedText: null,
     });
     const { engine, push } = manualEngine();
-    const toolProvider: ToolProvider = {
-      listTools: async () => [],
-      refreshMcp: async () => {},
-      shutdown: async () => {},
-      onApprovalEvent: () => () => {},
-      resolveApproval: () => false,
-      requestApproval: async () => ({ allowed: true, grantedBy: 'policy' }),
-      recordAgentDenial: () => {},
-    };
+    const toolProvider = new FakeToolProvider();
     const runner = new TurnRunner(store, engine, { toolProvider });
     const registry = new StreamRegistry(runner, store);
     const profile = makeResolvedProfile({ model: makeModel({ supportsVision: false }) });

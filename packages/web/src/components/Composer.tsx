@@ -47,6 +47,16 @@ function attachmentToPart(attachment: PublicAttachment): Part {
 }
 
 /**
+ * Per-file upload cap. Mirrors the server's `MAX_ATTACHMENT_BYTES`
+ * (packages/server/src/routes/attachments.ts); keep the two in step. Checked
+ * here so a far-oversized file is refused before any bytes are sent: the server
+ * rejects an over-limit body without draining it, and for a very large one the
+ * socket resets before the client can read the 413 message.
+ */
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const UPLOAD_TOO_LARGE_MESSAGE = 'That upload is too large. Attachments are limited to 25MB per file.';
+
+/**
  * Reads dropped/pasted files off a `DataTransfer`. Prefers `.files` (what a
  * `drop` event, and a browser pasting an image, both populate) and falls
  * back to walking `.items` (`DataTransferItemList`) for anything that only
@@ -112,6 +122,7 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
   const [attachments, setAttachments] = useState<PublicAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [autoError, setAutoError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -169,7 +180,12 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
     // message -- it describes an attachment that may not even be in this
     // batch, and leaving it up reads as if the NEW upload just failed.
     setRemoveError(null);
+    setUploadError(null);
     for (const file of files) {
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setUploadError(UPLOAD_TOO_LARGE_MESSAGE);
+        continue;
+      }
       try {
         const created = await api.attachments.upload(chat.id, file);
         setAttachments((prev) => [...prev, created]);
@@ -397,6 +413,12 @@ export function Composer({ chat, parentId }: ComposerProps): JSX.Element {
               removeDisabled={sending}
             />
           ))}
+        </div>
+      )}
+
+      {uploadError && (
+        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+          {uploadError}
         </div>
       )}
 

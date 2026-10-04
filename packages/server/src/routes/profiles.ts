@@ -33,8 +33,14 @@ function parseParams(value: unknown): ModelParams {
   return value as ModelParams;
 }
 
-function parseToolPolicy(value: unknown): ToolPolicy {
-  if (value === undefined) return DEFAULT_TOOL_POLICY;
+/**
+ * Parses a `toolPolicy` body. Omitted fields fall back to `base`: the defaults
+ * on POST, the profile's EXISTING policy on PATCH -- so a partial PATCH such as
+ * `{"fs":"read"}` cannot silently reset `mcpServerIds` (an access-control list)
+ * or any other field it did not mention. Validation is identical either way.
+ */
+function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY): ToolPolicy {
+  if (value === undefined) return base;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new HTTPException(400, { message: '"toolPolicy" must be an object.' });
   }
@@ -53,18 +59,18 @@ function parseToolPolicy(value: unknown): ToolPolicy {
     }
   }
   return {
-    fs: (fs as ToolPolicy['fs']) ?? DEFAULT_TOOL_POLICY.fs,
-    shell: typeof v['shell'] === 'boolean' ? v['shell'] : DEFAULT_TOOL_POLICY.shell,
+    fs: (fs as ToolPolicy['fs']) ?? base.fs,
+    shell: typeof v['shell'] === 'boolean' ? v['shell'] : base.shell,
     // Every entry must be a string -- a non-string (e.g. `null`) survives
     // the old `Array.isArray` check unchanged and round-trips into storage,
     // where it defeats PermissionBroker's `mcpServerIds.length === 0`
     // fast-deny path (see permissions.ts) without ever matching a real
     // server id. `undefined` (the field omitted) still means "default to
     // the harmless empty policy", same as before.
-    mcpServerIds: v['mcpServerIds'] === undefined ? DEFAULT_TOOL_POLICY.mcpServerIds : optionalStringArray(v['mcpServerIds'], 'toolPolicy.mcpServerIds'),
-    approvalMode: (approvalMode as ToolPolicy['approvalMode']) ?? DEFAULT_TOOL_POLICY.approvalMode,
-    ...(typeof v['agentWeb'] === 'boolean' ? { agentWeb: v['agentWeb'] } : {}),
-    ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : {}),
+    mcpServerIds: v['mcpServerIds'] === undefined ? base.mcpServerIds : optionalStringArray(v['mcpServerIds'], 'toolPolicy.mcpServerIds'),
+    approvalMode: (approvalMode as ToolPolicy['approvalMode']) ?? base.approvalMode,
+    ...(typeof v['agentWeb'] === 'boolean' ? { agentWeb: v['agentWeb'] } : base.agentWeb !== undefined ? { agentWeb: base.agentWeb } : {}),
+    ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : base.agentMcp !== undefined ? { agentMcp: base.agentMcp } : {}),
   };
 }
 
@@ -101,7 +107,7 @@ export function profilesRoutes(container: Container): Hono {
 
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
-    getProfileOrThrow(container, id);
+    const existing = getProfileOrThrow(container, id);
     const body = (await c.req.json().catch(() => ({}))) as ProfileBody;
 
     const patch: Partial<Omit<Profile, 'id'>> = {};
@@ -112,7 +118,7 @@ export function profilesRoutes(container: Container): Hono {
     if (body.modelId !== undefined) patch.modelId = requireNonEmptyString(body.modelId, 'modelId');
     if (body.systemPrompt !== undefined) patch.systemPrompt = optionalNullableString(body.systemPrompt, 'systemPrompt') ?? null;
     if (body.params !== undefined) patch.params = parseParams(body.params);
-    if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(body.toolPolicy);
+    if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(body.toolPolicy, existing.toolPolicy);
     if (body.isDefault !== undefined) patch.isDefault = optionalBoolean(body.isDefault, 'isDefault', false);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);

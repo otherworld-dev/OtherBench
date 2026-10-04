@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
-import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { FakeSecretStore, FakeToolProvider, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -152,15 +151,7 @@ describe('capability-fallback notice: real HTTP round trip (regression)', () => 
     // Shaped like the real GruntToolProvider: a genuine `async` method with
     // no internal `await` -- this is what creates the race (see this file's
     // module doc).
-    const toolProvider: ToolProvider = {
-      listTools: async () => [],
-      refreshMcp: async () => {},
-      shutdown: async () => {},
-      onApprovalEvent: () => () => {},
-      resolveApproval: () => false,
-      requestApproval: async () => ({ allowed: true, grantedBy: 'policy' }),
-      recordAgentDenial: () => {},
-    };
+    const toolProvider = new FakeToolProvider();
     const turnRunner = new TurnRunner(store, engine, { toolProvider });
     const container: Container = {
       store,
