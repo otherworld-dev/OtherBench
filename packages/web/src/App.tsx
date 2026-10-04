@@ -6,6 +6,7 @@ import { Thread } from './panes/Thread.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
+import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { useChatSync } from './state/useChatSync.js';
 import { SettingsView } from './views/SettingsView.js';
@@ -91,6 +92,7 @@ export function App(): JSX.Element {
 
   useChatSync(activeChatId);
   useAppEvents();
+  useTrayStatus();
   useTextSizeShortcuts();
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;

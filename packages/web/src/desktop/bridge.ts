@@ -32,6 +32,13 @@ export async function onDesktopEvent(name: string, cb: () => void): Promise<() =
   return listen(name, () => cb());
 }
 
+/** Tells the shell how many tool calls are waiting for approval; its tray tooltip shows it. No-op in a browser. */
+export async function setTrayStatus(pendingApprovals: number): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('set_tray_status', { pendingApprovals });
+}
+
 /** Start-at-login, via the shell's autostart plugin. Only meaningful when `isDesktop()`. */
 export const autostart = {
   async isEnabled(): Promise<boolean> {

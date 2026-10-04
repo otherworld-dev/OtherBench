@@ -48,6 +48,13 @@ async fn bootstrap(state: tauri::State<'_, AppState>) -> Result<Bootstrap, Strin
     .map_err(|e| e.to_string())?
 }
 
+/// The web app's status for the tray (web/src/desktop/useTrayStatus.ts):
+/// the tooltip shows how many tool calls are waiting for approval.
+#[tauri::command]
+fn set_tray_status(app: tauri::AppHandle, pending_approvals: u32) {
+    tray::set_status(&app, pending_approvals);
+}
+
 /// The webview origins the bundled UI can be served from. Windows uses
 /// `http://tauri.localhost` by default; Linux and macOS use `tauri://localhost`.
 /// Debug builds load the Vite dev server instead.
@@ -108,7 +115,7 @@ fn main() {
             Some(vec![MINIMIZED_FLAG]),
         ))
         .manage(AppState { launch: launch.clone(), server: server.clone() })
-        .invoke_handler(tauri::generate_handler![bootstrap])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {

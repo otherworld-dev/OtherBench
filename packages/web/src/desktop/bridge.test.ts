@@ -9,7 +9,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen }));
 vi.mock('@tauri-apps/plugin-autostart', () => ({ isEnabled, enable, disable }));
 
-import { autostart, desktopBootstrap, isDesktop, onDesktopEvent } from './bridge.js';
+import { autostart, desktopBootstrap, isDesktop, onDesktopEvent, setTrayStatus } from './bridge.js';
 
 function enterDesktop() {
   (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = {};
@@ -34,6 +34,16 @@ describe('desktop bridge', () => {
     expect(isDesktop()).toBe(true);
     await expect(desktopBootstrap()).resolves.toEqual({ baseUrl: 'http://127.0.0.1:51234', token: 'tok' });
     expect(invoke).toHaveBeenCalledWith('bootstrap');
+  });
+
+  it('setTrayStatus sends the pending-approval count to the shell, and does nothing in a browser', async () => {
+    await setTrayStatus(2);
+    expect(invoke).not.toHaveBeenCalled();
+
+    enterDesktop();
+    invoke.mockResolvedValue(undefined);
+    await setTrayStatus(2);
+    expect(invoke).toHaveBeenCalledWith('set_tray_status', { pendingApprovals: 2 });
   });
 
   it('onDesktopEvent is a no-op subscription in a browser', async () => {
