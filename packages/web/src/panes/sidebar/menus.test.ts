@@ -11,12 +11,12 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
   it('offers Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {
-    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', 'Archive', 'Delete…']);
+    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
     expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers())[1]!.label).toBe('Unpin');
   });
 
@@ -25,7 +25,7 @@ describe('chatMenuItems', () => {
     const h = chatHandlers();
 
     const items = chatMenuItems(chat({ projectId: 'a' }), projects, h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', "Don't add to project memory", 'Archive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', "Don't add to project memory", 'Export…', 'Archive', 'Delete…']);
     items.find((i) => i.id === 'memory')!.onSelect!();
     expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(true);
 
@@ -43,7 +43,7 @@ describe('chatMenuItems', () => {
   it('offers Unarchive instead of Archive for an archived chat, and it calls unarchive, not archive (controller ruling R2)', () => {
     const h = chatHandlers();
     const items = chatMenuItems(chat({ archivedAt: 5 }), [], h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Move to project…', 'Unarchive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Rename', 'Move to project…', 'Export…', 'Unarchive', 'Delete…']);
     items.find((i) => i.label === 'Unarchive')!.onSelect!();
     expect(h.unarchive).toHaveBeenCalled();
     expect(h.archive).not.toHaveBeenCalled();
@@ -52,7 +52,7 @@ describe('chatMenuItems', () => {
   it('offers Move up and Move down after Pin when given the chat\'s place, disabled at the ends', () => {
     const h = chatHandlers();
     const middle = chatMenuItems(chat(), [], h, { index: 1, count: 3 });
-    expect(middle.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', 'Archive', 'Delete…']);
+    expect(middle.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
     middle.find((i) => i.id === 'up')!.onSelect!();
     expect(h.reorder).toHaveBeenLastCalledWith(-1);
     middle.find((i) => i.id === 'down')!.onSelect!();
@@ -61,6 +61,16 @@ describe('chatMenuItems', () => {
     expect(chatMenuItems(chat(), [], h, { index: 0, count: 3 }).find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(chatMenuItems(chat(), [], h, { index: 2, count: 3 }).find((i) => i.id === 'down')!.disabled).toBe(true);
     expect(chatMenuItems(chat(), [], h).some((i) => i.id === 'up' || i.id === 'down')).toBe(false);
+  });
+
+  it('Export… offers Markdown and JSON and passes the format on', () => {
+    const h = chatHandlers();
+    const exportItem = chatMenuItems(chat(), [], h).find((i) => i.id === 'export')!;
+    expect(exportItem.submenu!.map((i) => i.label)).toEqual(['Markdown (shown conversation)', 'JSON (every branch)']);
+    exportItem.submenu![0]!.onSelect!();
+    expect(h.exportAs).toHaveBeenLastCalledWith('markdown');
+    exportItem.submenu![1]!.onSelect!();
+    expect(h.exportAs).toHaveBeenLastCalledWith('json');
   });
 
   it('hides Pin and Unpin for an archived chat', () => {

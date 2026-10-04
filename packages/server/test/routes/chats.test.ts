@@ -462,6 +462,53 @@ describe('workspaceRoot validation', () => {
 // GET /:id/messages
 // ---------------------------------------------------------------------------
 
+describe('GET /api/chats/:id/export (#820)', () => {
+  async function seeded(): Promise<string> {
+    const chatId = (await createChat())['id'] as string;
+    container.store.chats.update(chatId, { title: 'Trip: plans/ideas' });
+    container.store.messages.create({ id: 'u-1', chatId, parentId: null, role: 'user', parts: [{ type: 'text', text: 'Where to?' }], status: 'complete', error: null, producedBy: null });
+    container.store.messages.create({
+      id: 'a-1', chatId, parentId: 'u-1', role: 'assistant', parts: [{ type: 'text', text: 'Lisbon.' }], status: 'complete', error: null,
+      producedBy: { profileId: 'profile-1', profileName: 'Profile One', connectionId: 'conn-1', modelId: 'model-1' },
+    });
+    container.store.chats.update(chatId, { headMessageId: 'a-1' });
+    return chatId;
+  }
+
+  it('downloads the shown conversation as Markdown by default, named after the chat', async () => {
+    const chatId = await seeded();
+    const res = await app().request(`/api/chats/${chatId}/export`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
+    expect(res.headers.get('content-disposition')).toContain('attachment; filename="Trip- plans-ideas.md"');
+    const text = await res.text();
+    expect(text).toContain('# Trip: plans/ideas');
+    expect(text).toContain('## You\n\nWhere to?');
+    expect(text).toContain('## Profile One (model-1)\n\nLisbon.');
+  });
+
+  it('downloads the whole tree as JSON with format=json', async () => {
+    const chatId = await seeded();
+    const res = await app().request(`/api/chats/${chatId}/export?format=json`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/json; charset=utf-8');
+    expect(res.headers.get('content-disposition')).toContain('filename="Trip- plans-ideas.json"');
+    const body = (await res.json()) as { format: string; shownPath: string[]; messages: { id: string }[]; chat: { id: string } };
+    expect(body.format).toBe('grunt-chat-export');
+    expect(body.chat.id).toBe(chatId);
+    expect(body.shownPath).toEqual(['u-1', 'a-1']);
+    expect(body.messages.map((m) => m.id)).toEqual(['u-1', 'a-1']);
+  });
+
+  it('400s for an unknown format and 404s for an unknown chat', async () => {
+    const chatId = await seeded();
+    const bad = await app().request(`/api/chats/${chatId}/export?format=pdf`);
+    expect(bad.status).toBe(400);
+    expect((await json(bad))['error']).toBe('"format" must be "markdown" or "json".');
+    expect((await app().request('/api/chats/nope/export')).status).toBe(404);
+  });
+});
+
 describe('GET /api/chats/:id/messages', () => {
   it('returns the full message tree plus headMessageId, including sibling variants', async () => {
     const created = await createChat();

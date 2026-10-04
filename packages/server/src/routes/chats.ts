@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { chatToJson, chatToMarkdown, exportFilename } from '@grunt/core/domain/export.js';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Store } from '@grunt/core/ports/store.js';
@@ -8,6 +9,7 @@ import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
+import { contentDisposition } from './attachments.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
 
@@ -188,6 +190,31 @@ export function chatsRoutes(container: Container): Hono {
     // purpose rather than silently no-op-ing.
     await sweepOrphanedBlobs(container.store, container.blobStore);
     return c.body(null, 204);
+  });
+
+  // Export (#820): the shown conversation as Markdown, or the whole tree as
+  // JSON, as a download. Attachment content is never included, only what
+  // each attachment was.
+  app.get('/:id/export', (c) => {
+    const chat = getChatOrThrow(container, c.req.param('id'));
+    const format = c.req.query('format') ?? 'markdown';
+    if (format !== 'markdown' && format !== 'json') {
+      throw new HTTPException(400, { message: '"format" must be "markdown" or "json".' });
+    }
+    const messages = collectMessageTree(container.store, chat.id);
+    const attachments = container.store.attachments.list(chat.id);
+    const now = new Date();
+    if (format === 'json') {
+      const body = chatToJson(chat, messages, attachments, container.store.usage.list(chat.id), now);
+      return c.body(JSON.stringify(body, null, 2), 200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': contentDisposition('attachment', exportFilename(chat.title, 'json')),
+      });
+    }
+    return c.body(chatToMarkdown(chat, messages, attachments, now), 200, {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': contentDisposition('attachment', exportFilename(chat.title, 'md')),
+    });
   });
 
   app.get('/:id/messages', (c) => {

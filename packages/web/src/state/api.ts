@@ -228,6 +228,12 @@ export const api = {
     patch: (id: string, body: ChatPatchBody) => patch<Chat>(`/chats/${id}`, body),
     delete: (id: string) => del(`/chats/${id}`),
     messages: (id: string) => request<ChatMessagesResult>(`/chats/${id}/messages`),
+    /** The chat as a file (#820): the shown conversation as Markdown, or the whole tree as JSON. */
+    export: async (id: string, format: 'markdown' | 'json'): Promise<Blob> => {
+      const res = await apiFetch(`/chats/${id}/export?format=${format}`);
+      if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
+      return res.blob();
+    },
   },
 
   projects: {

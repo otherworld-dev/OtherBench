@@ -45,6 +45,12 @@ of work landed after that plan closed out:
   Deleting a project moves its chats to No project. Archive is reversible:
   archived chats sit in a "Show archived (N)" section at the bottom of the
   sidebar, where their menu offers Unarchive. See "Projects" below.
+- **Export** (#820). A chat's menu has Export… > Markdown (the conversation
+  as shown: the head's branch, kept compare replies only) or JSON (every
+  message on every branch, usage rows and attachment references, never
+  attachment content). `GET /api/chats/:id/export?format=markdown|json`;
+  the formatting is `packages/core/src/domain/export.ts`. The client fetches
+  with auth and saves a blob, so it works in the desktop window too.
 
 ## Settings UI
 

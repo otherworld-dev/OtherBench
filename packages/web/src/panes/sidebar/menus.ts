@@ -9,6 +9,8 @@ export interface ChatMenuHandlers {
   /** One place up (-1) or down (+1) within its sidebar section (#823). */
   reorder(dir: -1 | 1): void;
   moveTo(projectId: string | null): void;
+  /** Downloads the chat (#820). */
+  exportAs(format: 'markdown' | 'json'): void;
   /** Sets "Don't add to project memory" to the given state (the opposite of the chat's state when the menu was built). */
   setMemoryExcluded(excluded: boolean): void;
   archive(): void;
@@ -60,6 +62,14 @@ export function chatMenuItems(
       ],
     },
     ...memory,
+    {
+      id: 'export',
+      label: 'Export…',
+      submenu: [
+        { id: 'markdown', label: 'Markdown (shown conversation)', onSelect: () => h.exportAs('markdown') },
+        { id: 'json', label: 'JSON (every branch)', onSelect: () => h.exportAs('json') },
+      ],
+    },
     archived
       ? { id: 'unarchive', label: 'Unarchive', onSelect: h.unarchive }
       : { id: 'archive', label: 'Archive', onSelect: h.archive },

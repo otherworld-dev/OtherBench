@@ -19,7 +19,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      chats: { ...actual.api.chats, list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+      chats: { ...actual.api.chats, list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), export: vi.fn() },
       projects: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       search: vi.fn(),
       health: vi.fn(),
@@ -27,6 +27,9 @@ vi.mock('../state/api.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
+
+import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type SearchResult } from '../state/api.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
@@ -36,6 +39,8 @@ import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 const mockedCreate = vi.mocked(api.chats.create);
 const mockedPatch = vi.mocked(api.chats.patch);
 const mockedChatList = vi.mocked(api.chats.list);
+const mockedExport = vi.mocked(api.chats.export);
+const mockedSaveFile = vi.mocked(saveFile);
 const mockedDelete = vi.mocked(api.chats.delete);
 const mockedProjectList = vi.mocked(api.projects.list);
 const mockedProjectCreate = vi.mocked(api.projects.create);
@@ -966,5 +971,40 @@ describe('ChatList reordering (#823)', () => {
     dropOnRow('c', 'a', 'top');
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't move the chat");
     expect(mockedChatList).toHaveBeenCalled();
+  });
+});
+
+describe('ChatList export (#820)', () => {
+  beforeEach(() => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'Trip: plans' })] });
+    mockedSaveFile.mockReset();
+  });
+
+  function openExport(): void {
+    fireEvent.contextMenu(screen.getByTestId('chat-row-c1').querySelector('[data-row-main]')!);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export…' }));
+  }
+
+  it('Export… > Markdown fetches the export and saves it named after the chat', async () => {
+    const blob = new Blob(['# Trip']);
+    mockedExport.mockResolvedValue(blob);
+    render(<ChatList />);
+    openExport();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Markdown (shown conversation)' }));
+    await waitFor(() => expect(mockedSaveFile).toHaveBeenCalledWith(blob, 'Trip- plans.md'));
+    expect(mockedExport).toHaveBeenCalledWith('c1', 'markdown');
+  });
+
+  it('Export… > JSON saves a .json file, and a failure says so', async () => {
+    mockedExport.mockResolvedValueOnce(new Blob(['{}']));
+    render(<ChatList />);
+    openExport();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'JSON (every branch)' }));
+    await waitFor(() => expect(mockedSaveFile).toHaveBeenCalledWith(expect.any(Blob), 'Trip- plans.json'));
+
+    mockedExport.mockRejectedValueOnce(new ApiError(500, 'disk full'));
+    openExport();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'JSON (every branch)' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't export the chat: disk full");
   });
 });

@@ -116,7 +116,7 @@ function baseMimeType(mime: string): string {
  *     which is percent-encoded and therefore cannot contain a literal
  *     quote, backslash, CR, LF, or any other header-breaking byte.
  */
-function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
+export function contentDisposition(kind: 'inline' | 'attachment', filename: string): string {
   const stripped = filename.replace(/[\x00-\x1f\x7f]/g, '');
   const asciiFallback = stripped.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'download';
   const encoded = encodeURIComponent(stripped) || 'download';

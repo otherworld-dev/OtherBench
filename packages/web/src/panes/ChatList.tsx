@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { exportFilename } from '@grunt/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { InlineNameInput } from '../components/InlineNameInput.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
+import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody, type PatchProjectBody } from '../state/api.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
@@ -305,6 +307,17 @@ export function ChatList(): JSX.Element {
   async function setMemoryExcluded(chat: Chat, excluded: boolean): Promise<void> {
     const action = excluded ? "Couldn't stop this chat adding to project memory" : "Couldn't let this chat add to project memory";
     if (await patchChat(chat, { memoryExcluded: excluded }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+  }
+
+  async function exportChat(chat: Chat, format: 'markdown' | 'json'): Promise<void> {
+    setError(null);
+    try {
+      saveFile(await api.chats.export(chat.id, format), exportFilename(chat.title, format === 'json' ? 'json' : 'md'));
+    } catch (err) {
+      console.error(`[grunt-web] failed to export chat ${chat.id}:`, err);
+      setError(errorText(err, "Couldn't export the chat"));
+    }
+    focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
   }
 
   /** Hides the chat from the sidebar (spec §3: reuses `archivedAt`). */
@@ -615,6 +628,7 @@ export function ChatList(): JSX.Element {
               setPinned: (pinned) => void setPinned(menuChat, pinned),
               reorder: (dir) => void reorderChat(menuChat, dir),
               moveTo: (projectId) => void moveChat(menuChat.id, projectId),
+              exportAs: (format) => void exportChat(menuChat, format),
               setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
               archive: () => void archiveChat(menuChat),
               unarchive: () => void unarchiveChat(menuChat),
