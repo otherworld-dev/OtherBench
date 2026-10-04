@@ -113,8 +113,9 @@ export function isCompareSet(siblings: CanonMessage[]): boolean {
  * Like `extendForward`, but for choosing where a whole branch ends: at a
  * point with several children that is NOT a compare turn (a regenerated
  * reply, an edited message) it continues into the newest child instead of
- * stopping. A compare turn still stops the walk -- which variant to keep is
- * the user's call. Used to find the tip to move the head to when switching
+ * stopping. An UNRESOLVED compare turn (no variant continued) still stops the walk --
+ * which variant to keep is the user's call; a resolved one is walked through
+ * its continued variant. Used to find the tip to move the head to when switching
  * branches, and to display a branch down to its end.
  */
 export function extendToTip(messages: CanonMessage[], tailId: string): CanonMessage[] {
@@ -123,8 +124,17 @@ export function extendToTip(messages: CanonMessage[], tailId: string): CanonMess
   const seen = new Set<string>([tailId]);
   for (;;) {
     const children = childrenOf(messages, currentId);
-    if (children.length === 0 || isCompareSet(children)) break;
-    const next = children[children.length - 1]!; // creation-ordered, so the newest
+    if (children.length === 0) break;
+    let next: CanonMessage | undefined;
+    if (isCompareSet(children)) {
+      // A compare turn the user already resolved and continued: follow the
+      // variant that has a reply below it (the newest, if several do).
+      // Stop only when none was continued -- then it is still unresolved.
+      next = children.filter((c) => childrenOf(messages, c.id).length > 0).at(-1);
+      if (!next) break;
+    } else {
+      next = children[children.length - 1]!; // creation-ordered, so the newest
+    }
     if (seen.has(next.id)) break;
     extension.push(next);
     seen.add(next.id);

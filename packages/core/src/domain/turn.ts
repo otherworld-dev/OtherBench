@@ -7,6 +7,7 @@ import type { ResolvedProfile } from '../types/config.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
+import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 
 /**
@@ -84,7 +85,7 @@ function attachmentIdsIn(parts: Part[]): string[] {
   return [...ids];
 }
 
-export type RegenerateErrorCode = 'not_found' | 'wrong_chat' | 'not_assistant' | 'no_parent' | 'streaming';
+export type RegenerateErrorCode = 'not_found' | 'wrong_chat' | 'not_assistant' | 'no_parent' | 'streaming' | 'compare';
 
 /**
  * Thrown by `TurnRunner.regenerate()` when the target can't be regenerated.
@@ -413,6 +414,12 @@ export class TurnRunner {
     const parent = target.parentId ? this.store.messages.get(target.parentId) : null;
     if (!parent || parent.role !== 'user') {
       throw new RegenerateError('no_parent', `Message "${input.messageId}" has no user message to regenerate from.`);
+    }
+
+    // A compare turn's variant is picked by the user ("Keep"), never replaced
+    // by regenerating: that would add a reply to the tabs and move the head.
+    if (isCompareSet(this.store.messages.children(parent.id))) {
+      throw new RegenerateError('compare', `Message "${input.messageId}" is a variant of a compare turn; keep one instead of regenerating.`);
     }
 
     const profile = input.profile;

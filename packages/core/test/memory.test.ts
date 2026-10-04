@@ -24,7 +24,7 @@ function note({ pinned = '', goals = '' }: { pinned?: string; goals?: string } =
   return [`## Pinned${pinned ? `\n${pinned}` : ''}`, `## Goals${goals ? `\n${goals}` : ''}`, '## Decisions', '## Current focus', '## Open questions'].join('\n\n');
 }
 
-function msg(id: string, parentId: string | null, role: Role, createdAt: number, extra: { status?: MessageStatus; parts?: Part[] } = {}): CanonMessage {
+function msg(id: string, parentId: string | null, role: Role, createdAt: number, extra: { status?: MessageStatus; parts?: Part[]; producedBy?: CanonMessage['producedBy'] } = {}): CanonMessage {
   return {
     id,
     chatId: 'chat',
@@ -33,7 +33,7 @@ function msg(id: string, parentId: string | null, role: Role, createdAt: number,
     parts: extra.parts ?? [{ type: 'text', text: id }],
     status: extra.status ?? 'complete',
     error: null,
-    producedBy: null,
+    producedBy: extra.producedBy ?? null,
     createdAt,
   };
 }
@@ -227,6 +227,19 @@ describe('memoryPath and pendingMemoryMessages', () => {
     const fork = [msg('u1', null, 'user', 1), msg('a1', 'u1', 'assistant', 2), msg('a1x', 'u1', 'assistant', 3)];
     expect(ids(memoryPath(fork, 'u1'))).toEqual(['u1']);
     expect(ids(memoryPath(fork, 'a1x'))).toEqual(['u1', 'a1x']);
+  });
+
+  it('reads the same path the thread shows: through a continued compare turn and a regenerated reply', () => {
+    const pb = { profileId: 'p', profileName: 'P', connectionId: 'c', modelId: 'm' };
+    const tree = [
+      msg('u1', null, 'user', 1),
+      msg('x', 'u1', 'assistant', 2),
+      msg('y', 'u1', 'assistant', 2),
+      msg('u2', 'y', 'user', 3),
+      msg('a2', 'u2', 'assistant', 4),
+      msg('a2r', 'u2', 'assistant', 5, { producedBy: { ...pb, regenerated: true } }),
+    ];
+    expect(ids(memoryPath(tree, 'u1'))).toEqual(['u1', 'y', 'u2', 'a2r']);
   });
 
   it('with no cursor, every completed message on the path is pending', () => {

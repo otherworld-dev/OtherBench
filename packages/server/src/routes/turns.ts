@@ -231,7 +231,7 @@ export function turnsRoutes(container: Container): Hono {
     } catch (err) {
       container.memory?.noteTurnCompleted(chatId);
       if (err instanceof RegenerateError) {
-        const status = err.code === 'not_found' ? 404 : err.code === 'streaming' ? 409 : 400;
+        const status = err.code === 'not_found' ? 404 : err.code === 'streaming' || err.code === 'compare' ? 409 : 400;
         throw new HTTPException(status, { message: err.message });
       }
       throw err;

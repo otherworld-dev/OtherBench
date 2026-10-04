@@ -189,6 +189,14 @@ describe('extendToTip', () => {
     const ms = [u('u1', null, 1), a('a1', 'u1', 2), a('a1b', 'u1', 3, true), u('u2', 'a1b', 4), u('u2b', 'a1b', 5), a('a3', 'u2b', 6)];
     expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['a1b', 'u2b', 'a3']);
   });
+  it('walks through a compare turn the user already resolved and continued (follows the variant with children)', () => {
+    const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2), u('u2', 'y', 3), a('a2', 'u2', 4)];
+    expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['y', 'u2', 'a2']);
+  });
+  it('follows the newest continued variant when several have children', () => {
+    const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2), u('ux', 'x', 3), u('uy', 'y', 5)];
+    expect(extendToTip(ms, 'u1').map((m) => m.id)).toEqual(['y', 'uy']);
+  });
   it('stops at an unresolved compare turn', () => {
     const ms = [u('u1', null, 1), a('x', 'u1', 2), a('y', 'u1', 2)];
     expect(extendToTip(ms, 'u1')).toEqual([]);

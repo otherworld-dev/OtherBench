@@ -1349,6 +1349,23 @@ describe('TurnRunner.regenerate', () => {
     expect(store.messages.get(out.assistantMessageId)?.parentId).toBe(r.userMessageId);
   });
 
+  it('rejects regenerating a variant of a compare turn: keeping a variant is the user choice', async () => {
+    const store = new InMemoryStore();
+    const m = manualEngine();
+    const runner = new TurnRunner(store, m.engine);
+    const r = await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [{ type: 'text', text: 'Hi' }],
+      profiles: [makeResolvedProfile({ id: 'pa' }), makeResolvedProfile({ id: 'pb' })],
+    });
+    await flush();
+    for (const id of r.assistantMessageIds) m.push(id, FINISH_2);
+    await flush();
+    await expect(runner.regenerate({ chatId: 'chat-1', messageId: r.assistantMessageIds[0]!, profile: makeResolvedProfile() })).rejects.toMatchObject({ code: 'compare' });
+    expect(store.messages.children(r.userMessageId)).toHaveLength(2);
+  });
+
   it('rejects an unknown message, another chat, a user message, a streaming reply and a parentless reply', async () => {
     const { store, runner, userId, assistantId } = await completedTurn();
     const profile = makeResolvedProfile();

@@ -488,7 +488,7 @@ describe('POST /api/messages/:id/retry', () => {
 describe('POST /api/chats/:id/regenerate', () => {
   async function finishedTurn(profileCount = 1) {
     const { chatId, profileIds } = seedChat(profileCount);
-    const res = await postTurn(chatId, profileIds);
+    const res = await postTurn(chatId, [profileIds[0] as string]);
     const { userMessageId, assistantMessageIds } = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
     const assistantId = assistantMessageIds[0] as string;
     push(assistantId, { type: 'text-delta', text: 'first' });
@@ -560,6 +560,19 @@ describe('POST /api/chats/:id/regenerate', () => {
     const otherRes = await regenerate('chat-2', { messageId: assistantId });
     expect(otherRes.status).toBe(400);
     expect(JSON.stringify(await otherRes.json())).toMatch(/does not belong/i);
+  });
+
+  it('409s for a variant of a compare turn, creating nothing and leaving head alone', async () => {
+    const { chatId, profileIds } = seedChat(2);
+    const res = await postTurn(chatId, profileIds);
+    const { userMessageId, assistantMessageIds } = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    for (const id of assistantMessageIds) push(id, FINISH);
+    await flush();
+    const out = await regenerate(chatId, { messageId: assistantMessageIds[0] });
+    expect(out.status).toBe(409);
+    expect(JSON.stringify(await out.json())).toMatch(/compare/i);
+    expect(container.store.messages.children(userMessageId)).toHaveLength(2);
+    expect(container.store.chats.get(chatId)!.headMessageId).toBeNull();
   });
 
   it('409s for a streaming message and creates nothing', async () => {
