@@ -9,6 +9,16 @@ import type {
 import type { Connection } from '../types/config.js';
 import type { SecretStore } from '../ports/secret-store.js';
 import type {
+  ApprovalChoice,
+  ApprovalOptions,
+  ApprovalOutcome,
+  ToolApprovalEvent,
+  ToolContext,
+  ToolProvider,
+  ToolSpec,
+} from '../ports/tool-provider.js';
+import type { ToolPolicy } from '../types/config.js';
+import type {
   AttachmentRepo,
   AuditRepo,
   ChatRepo,
@@ -114,6 +124,91 @@ export class FakeSecretStore implements SecretStore {
 
   async delete(ref: string): Promise<void> {
     this.secrets.delete(ref);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FakeToolProvider
+// ---------------------------------------------------------------------------
+
+function stubTool(name: string, risk: ToolSpec['risk'], source: ToolSpec['source']): ToolSpec {
+  return {
+    name,
+    description: `${name} (fake)`,
+    parameters: { type: 'object', properties: {} },
+    risk,
+    source,
+    execute: async () => ({ ok: true }),
+  };
+}
+
+/**
+ * A `ToolProvider` test double. By default it offers one read fs tool, one
+ * mutate fs tool and a shell tool, filtered by policy exactly as the real
+ * `GruntToolProvider` filters (fs off/read/readwrite, shell iff `policy.shell`,
+ * mcp tools only from enabled `serverId`s). `requestApproval` mirrors the
+ * broker's hard ceilings (policy, workspace) and auto-allows read-risk fs under
+ * `ask_on_mutate`; anything the real broker would ASK about is answered by
+ * `askAnswer` (default: allowed) since a fake has no human to wait on.
+ * Held to the same shared contract as the real provider
+ * (tool-provider-contract.ts). Records calls for assertions.
+ */
+export class FakeToolProvider implements ToolProvider {
+  readonly refreshed: string[] = [];
+  readonly denials: { toolName: string; reason: string }[] = [];
+  shutdownCalls = 0;
+  askAnswer: ApprovalOutcome = { allowed: true, grantedBy: 'fake' };
+  private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
+
+  constructor(
+    private readonly tools: ToolSpec[] = [
+      stubTool('read_file', 'read', 'fs'),
+      stubTool('write_file', 'mutate', 'fs'),
+      stubTool('run_command', 'execute', 'shell'),
+    ]
+  ) {}
+
+  private permitted(tool: ToolSpec, policy: ToolPolicy): boolean {
+    if (tool.source === 'fs') return policy.fs === 'readwrite' || (policy.fs === 'read' && tool.risk === 'read');
+    if (tool.source === 'shell') return policy.shell;
+    if (tool.source === 'mcp') return tool.serverId !== undefined && policy.mcpServerIds.includes(tool.serverId);
+    return false;
+  }
+
+  async listTools(policy: ToolPolicy): Promise<ToolSpec[]> {
+    return this.tools.filter((t) => this.permitted(t, policy));
+  }
+
+  async refreshMcp(serverId: string): Promise<void> {
+    this.refreshed.push(serverId);
+  }
+
+  async shutdown(): Promise<void> {
+    this.shutdownCalls += 1;
+  }
+
+  onApprovalEvent(cb: (event: ToolApprovalEvent) => void): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  resolveApproval(_requestId: string, _choice: ApprovalChoice): boolean {
+    return false;
+  }
+
+  async requestApproval(tool: ToolSpec, _args: unknown, policy: ToolPolicy, ctx: ToolContext, _opts?: ApprovalOptions): Promise<ApprovalOutcome> {
+    if (!this.permitted(tool, policy)) return { allowed: false, reason: `"${tool.name}" is not permitted by this profile's tool policy.` };
+    if ((tool.source === 'fs' || tool.source === 'shell') && !ctx.workspaceRoot) {
+      return { allowed: false, reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.` };
+    }
+    if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read' && tool.source === 'fs') {
+      return { allowed: true, grantedBy: 'auto_read' };
+    }
+    return this.askAnswer;
+  }
+
+  recordAgentDenial(_ctx: ToolContext, toolName: string, _args: unknown, reason: string): void {
+    this.denials.push({ toolName, reason });
   }
 }
 
