@@ -147,3 +147,19 @@ describe('replayEvents', () => {
     expect(message).toEqual(shell);
   });
 });
+
+describe('dead approval prompts', () => {
+  const req = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
+
+  it.each(['complete', 'error', 'cancelled'] as const)('a terminal %s status drops every pending approval of that message', (status) => {
+    const acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request: req });
+    const after = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'status', status });
+    expect(after.extras.pendingApprovals).toEqual([]);
+  });
+
+  it('an error event also drops them, but a still-streaming status does not', () => {
+    const acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'approval-request', request: req });
+    expect(applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'status', status: 'streaming' }).extras.pendingApprovals).toEqual([req]);
+    expect(applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'error', error: { kind: 'cancelled', message: 'x', retryable: false } }).extras.pendingApprovals).toEqual([]);
+  });
+});

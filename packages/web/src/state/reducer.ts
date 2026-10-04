@@ -74,10 +74,13 @@ export function applyEventToMessage(
       return { message, extras: { ...extras, usage: event.usage } };
     case 'error': {
       const status: MessageStatus = event.error.kind === 'cancelled' ? 'cancelled' : 'error';
-      return { message: { ...message, status, error: event.error }, extras };
+      return { message: { ...message, status, error: event.error }, extras: withoutApprovals(extras) };
     }
     case 'status':
-      return { message: { ...message, status: event.status }, extras };
+      // A message that is no longer streaming cannot be waiting on anyone: drop
+      // any approval card still showing (the server settles these as denials,
+      // but the `approval-resolved` may be lost to a reconnect or arrive late).
+      return { message: { ...message, status: event.status }, extras: event.status === 'streaming' ? extras : withoutApprovals(extras) };
     case 'notice':
       // Task 21's capability-fallback disclosure -- appended as its own
       // Part (never merged into an adjacent text part, unlike
@@ -96,6 +99,10 @@ export function applyEventToMessage(
     default:
       return { message, extras };
   }
+}
+
+function withoutApprovals(extras: MessageExtras): MessageExtras {
+  return extras.pendingApprovals.length === 0 ? extras : { ...extras, pendingApprovals: [] };
 }
 
 /** Folds a whole ordered list of events onto a message, in order. */

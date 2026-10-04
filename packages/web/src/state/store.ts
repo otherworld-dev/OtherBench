@@ -103,6 +103,8 @@ export interface GruntState {
    * `registerMessage` once the id becomes known.
    */
   applyTurnEvent(event: TurnEvent): void;
+  /** Removes an approval prompt locally (the server says the request no longer exists), wherever it is showing. */
+  dropApproval(requestId: string): void;
 
   /**
    * Reconciles an SSE `hello` reply (sent on connect and on every
@@ -287,6 +289,19 @@ export const useGruntStore = create<GruntState>()((set) => ({
         extras: { ...state.extras, [message.id]: finalExtras },
         pendingEvents: nextPending,
       };
+    }),
+
+  dropApproval: (requestId) =>
+    set((state) => {
+      let changed = false;
+      const extras = { ...state.extras };
+      for (const [messageId, e] of Object.entries(state.extras)) {
+        if (e.pendingApprovals.some((r) => r.id === requestId)) {
+          extras[messageId] = { ...e, pendingApprovals: e.pendingApprovals.filter((r) => r.id !== requestId) };
+          changed = true;
+        }
+      }
+      return changed ? { extras } : {};
     }),
 
   applyTurnEvent: (event) =>

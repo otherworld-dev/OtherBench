@@ -14,11 +14,18 @@ vi.mock('../state/api.js', () => ({
     },
     chats: { patch: vi.fn() },
     attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
+    approvals: { resolve: vi.fn() },
   },
-  ApiError: class ApiError extends Error {},
+  ApiError: class ApiError extends Error {
+    readonly status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
+  },
 }));
 
-import { api } from '../state/api.js';
+import { api, ApiError } from '../state/api.js';
 
 const mockedSetHead = vi.mocked(api.turns.setHead);
 const mockedRetry = vi.mocked(api.turns.retry);
@@ -405,5 +412,52 @@ describe('Thread composer per chat', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('Thread approval prompts that were discarded server-side', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  function setup(): void {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const reply = variantMessage('reply', 'root', { status: 'streaming' });
+    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'approval-request',
+      request: { id: 'req-1', chatId: 'chat-1', messageId: 'reply', toolName: 'write_file', risk: 'mutate', source: 'fs', args: { path: 'a.txt' }, summary: 'write_file(a.txt)' },
+    });
+  }
+
+  it('drops the prompt when the server says the request is gone (404), instead of leaving a dead card with a retry error', async () => {
+    setup();
+    vi.mocked(api.approvals.resolve).mockRejectedValue(new ApiError(404, 'unknown or already resolved'));
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+    expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('approval-deny'));
+
+    await waitFor(() => expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument());
+  });
+
+  it('keeps the prompt (and lets the user retry) on any other failure', async () => {
+    setup();
+    vi.mocked(api.approvals.resolve).mockRejectedValue(new ApiError(500, 'boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByTestId('approval-deny'));
+
+    await screen.findByText(/Could not send that decision/);
+    expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
+  });
+
+  it('removes the prompt when the variant is cancelled (terminal status arrives)', () => {
+    setup();
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+    expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
+    act(() => useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'cancelled' }));
+    expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
   });
 });

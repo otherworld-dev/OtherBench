@@ -6,7 +6,7 @@ import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
 import { Message } from '../components/Message.js';
 import { VariantTabs } from '../components/VariantTabs.js';
-import { api } from '../state/api.js';
+import { api, ApiError } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
 
@@ -158,7 +158,18 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
    * buttons (this just needs to let the rejection propagate back to it).
    */
   async function resolveApproval(requestId: string, choice: ApprovalChoice): Promise<void> {
-    await api.approvals.resolve(requestId, choice);
+    try {
+      await api.approvals.resolve(requestId, choice);
+    } catch (err) {
+      // 404: the server no longer knows this request (its turn ended, was
+      // cancelled or the server restarted). Retrying can never work, so drop
+      // the dead card instead of leaving it up with a retry error.
+      if (err instanceof ApiError && err.status === 404) {
+        useGruntStore.getState().dropApproval(requestId);
+        return;
+      }
+      throw err;
+    }
   }
 
   async function retryVariant(variant: CanonMessage): Promise<void> {
