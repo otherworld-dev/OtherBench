@@ -611,6 +611,21 @@ export function runStoreContract(
         expect(() => store.messages.updateEngineMeta('nope', meta)).toThrow();
       });
 
+      it('keptAt: absent by default, set by markKept, carried by get, children and pathToRoot', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        store.messages.create(makeMessageInput({ id: 'u1', chatId: chat.id }));
+        store.messages.create(makeMessageInput({ id: 'a1', chatId: chat.id, parentId: 'u1', role: 'assistant' }));
+        expect('keptAt' in store.messages.get('a1')!).toBe(false);
+        store.messages.markKept('a1', 1234);
+        expect(store.messages.get('a1')!.keptAt).toBe(1234);
+        expect(store.messages.children('u1')[0]!.keptAt).toBe(1234);
+        expect(store.messages.pathToRoot('a1')[1]!.keptAt).toBe(1234);
+        expect('keptAt' in store.messages.pathToRoot('a1')[0]!).toBe(false);
+        store.messages.markKept('a1', 5678);
+        expect(store.messages.get('a1')!.keptAt).toBe(5678);
+        expect(() => store.messages.markKept('nope', 1)).toThrow();
+      });
+
       it('latestBySession returns the newest message carrying that session id in the chat', () => {
         const { chat } = seedChat(store, 'chat-a');
         const meta = (sessionId: string) => ({ engine: 'claude_code' as const, sessionId, backend: 'claude', cwd: '/ws' });

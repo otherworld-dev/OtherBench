@@ -123,16 +123,20 @@ test('switching branches keeps a resolved compare choice, and the next message i
 
   // k2 as a compare turn, keep B.
   await page.getByRole('button', { name: '+ Compare' }).click();
-  await page.getByRole('listbox', { name: 'Compare profiles' }).getByLabel('Mock B').check();
+  await page.getByRole('listbox', { name: 'Compare profiles' }).getByLabel('Mock B', { exact: true }).check();
+  // Close the picker: left open it can cover the tab strip once other specs have added profiles.
+  await page.getByRole('button', { name: '+ Compare' }).click();
   await box.fill('k2');
   await box.press('Enter');
   await expect(page.getByTestId('variant-tabs')).toBeVisible();
   await idle();
-  await page.locator('[data-testid^="variant-tab-"]').filter({ hasText: 'Mock B' }).click();
+  await page.locator('[data-testid^="variant-tab-"]').filter({ hasText: /^Mock B(?!\w)/ }).click();
   await page.getByRole('button', { name: /keep this one/i }).click();
 
   // k3 continues under the kept variant (single profile again: drop the compare partner).
-  await page.getByRole('listbox', { name: 'Compare profiles' }).getByLabel('Mock B').uncheck();
+  await page.getByRole('button', { name: '+ Compare' }).click();
+  await page.getByRole('listbox', { name: 'Compare profiles' }).getByLabel('Mock B', { exact: true }).uncheck();
+  await page.getByRole('button', { name: '+ Compare' }).click();
   await box.fill('k3');
   await box.press('Enter');
   await expect(thread.getByText('k3', { exact: true })).toBeVisible();

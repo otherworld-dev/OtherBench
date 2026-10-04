@@ -541,6 +541,13 @@ describe('POST /api/chats/:id/regenerate', () => {
     expect(container.store.messages.get(body.assistantMessageId)!.producedBy?.profileId).toBe(profileIds[1]);
   });
 
+  it('skips a reply profile that has since been archived, falling back to a live one', async () => {
+    const { chatId, profileIds, assistantId } = await finishedTurn(2);
+    container.store.profiles.update(profileIds[0] as string, { archivedAt: Date.now() });
+    const body = (await (await regenerate(chatId, { messageId: assistantId })).json()) as { assistantMessageId: string };
+    expect(container.store.messages.get(body.assistantMessageId)!.producedBy?.profileId).toBe(profileIds[1]);
+  });
+
   it('404s for an unknown chat or message', async () => {
     const { chatId } = await finishedTurn();
     expect((await regenerate('nope', { messageId: 'x' })).status).toBe(404);
@@ -600,6 +607,38 @@ describe('POST /api/chats/:id/head', () => {
 
     expect(headRes.status).toBe(200);
     expect(container.store.chats.get(chatId)?.headMessageId).toBe(messageId);
+  });
+
+  function setHead(chatId: string, messageId: string) {
+    return app().request(`/api/chats/${chatId}/head`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId }),
+    });
+  }
+
+  it('records a keep on a compare variant it lands on, and only there', async () => {
+    const { chatId, profileIds } = seedChat(2);
+    const { userMessageId, assistantMessageIds } = (await (await postTurn(chatId, profileIds)).json()) as { userMessageId: string; assistantMessageIds: string[] };
+    for (const id of assistantMessageIds) push(id, FINISH);
+    await flush();
+    const [first, second] = assistantMessageIds as [string, string];
+
+    expect((await setHead(chatId, userMessageId)).status).toBe(200);
+    expect('keptAt' in container.store.messages.get(userMessageId)!).toBe(false);
+
+    expect((await setHead(chatId, second)).status).toBe(200);
+    expect(container.store.messages.get(second)!.keptAt).toEqual(expect.any(Number));
+    expect('keptAt' in container.store.messages.get(first)!).toBe(false);
+  });
+
+  it('does not mark a single reply as kept', async () => {
+    const { chatId, profileIds } = seedChat();
+    const { assistantMessageIds } = (await (await postTurn(chatId, profileIds)).json()) as { assistantMessageIds: string[] };
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+    expect((await setHead(chatId, assistantMessageIds[0] as string)).status).toBe(200);
+    expect('keptAt' in container.store.messages.get(assistantMessageIds[0] as string)!).toBe(false);
   });
 
   it('400s when the message does not belong to this chat', async () => {

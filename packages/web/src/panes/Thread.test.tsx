@@ -805,4 +805,63 @@ describe('Thread regenerate, edit and branch switching', () => {
     await waitFor(() => expect(screen.getByTestId('branch-announcer').textContent).not.toBe(first));
     expect(screen.getByTestId('branch-announcer')).toHaveTextContent('Branch 1 of 2');
   });
+
+  const by = (name: string) => ({ producedBy: { profileId: 'p1', profileName: name, connectionId: 'c1', modelId: 'model-x' } });
+
+  it('sending while compare tabs are open continues from the tab showing, and says so', async () => {
+    seedProfile();
+    load(usr('u1', null, 1), asst('A', 'u1', 2, by('Alpha')), asst('B', 'u1', 2, by('Beta')));
+    mockedCreate.mockResolvedValue({ userMessageId: 'u2', assistantMessageIds: ['a2'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('u1');
+    const user = userEvent.setup();
+
+    expect(screen.getByText(/continues from Alpha's reply/)).toBeInTheDocument();
+    await user.click(screen.getByTestId('variant-tab-B'));
+    expect(screen.getByText(/continues from Beta's reply/)).toBeInTheDocument();
+
+    await user.type(screen.getByRole('textbox', { name: 'Message' }), 'next{Enter}');
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith('chat-1', expect.objectContaining({ parentId: 'B' })));
+  });
+
+  it('shows no continue hint once a variant is kept', () => {
+    seedProfile();
+    load(usr('u1', null, 1), asst('A', 'u1', 2, by('Alpha')), asst('B', 'u1', 2, by('Beta')));
+    mount('B');
+    expect(screen.queryByText(/continues from/)).not.toBeInTheDocument();
+  });
+
+  it('a variant kept but never continued stays kept after switching branches away and back', async () => {
+    seedProfile();
+    // u1 -> {a1, a1r (regenerated)} ; a1 -> u2 -> {A, B}
+    load(usr('u1', null, 1), asst('a1', 'u1', 2), asst('a1r', 'u1', 9, { producedBy: regen }), usr('u2', 'a1', 3), asst('A', 'u2', 4), asst('B', 'u2', 4));
+    mockedSetHead.mockResolvedValue(makeChat());
+    mount('u2');
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTestId('variant-tab-B'));
+    await user.click(screen.getByRole('button', { name: /keep this one/i }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenCalledWith('chat-1', 'B'));
+
+    await user.click(screen.getByRole('button', { name: 'Next branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenLastCalledWith('chat-1', 'a1r'));
+    await user.click(screen.getByRole('button', { name: 'Previous branch' }));
+    await waitFor(() => expect(mockedSetHead).toHaveBeenLastCalledWith('chat-1', 'B'));
+    expect(screen.queryByTestId('variant-tabs')).not.toBeInTheDocument();
+    expect(screen.getByTestId('reopen-variants-chip')).toBeInTheDocument();
+  });
+
+  it('Edit skips an answering profile that has since been archived', async () => {
+    useGruntStore.getState().setProfiles(
+      ['p1', 'p2'].map((id) => ({
+        id, name: `Profile ${id}`, description: null, colour: null, connectionId: 'c1', modelId: 'model-x', systemPrompt: null,
+        params: {}, toolPolicy: { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const }, isDefault: false,
+        archivedAt: id === 'p2' ? 5 : null,
+      }))
+    );
+    load(usr('u1', null, 1), asst('a1', 'u1', 2, { producedBy: { profileId: 'p2', profileName: 'Profile p2', connectionId: 'c1', modelId: 'model-x' } }));
+    mount('a1');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByTestId('edit-profile-note')).toHaveTextContent('Profile p1');
+  });
 });

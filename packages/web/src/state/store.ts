@@ -53,6 +53,8 @@ export interface GruntState {
   setActiveChatId(chatId: string | null): void;
   /** Local-only optimistic (or server-confirmed) head move -- see api.turns.setHead. */
   setHeadMessageId(chatId: string, messageId: string): void;
+  /** Mirrors the server recording a keep on a compare variant (POST .../head) -- see `CanonMessage.keptAt`. */
+  markKept(messageId: string, at: number): void;
 
   // --- projects ---------------------------------------------------------------
   projects: Project[];
@@ -240,6 +242,12 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
     })),
+  markKept: (messageId, at) =>
+    set((state) => {
+      const message = state.messages[messageId];
+      if (!message) return state;
+      return { messages: { ...state.messages, [messageId]: { ...message, keptAt: at } } };
+    }),
 
   projects: [],
   setProjects: (projects) => set({ projects }),

@@ -64,6 +64,13 @@ export interface CanonMessage {
   producedBy: ProducedBy | null;
   /** Present only on assistant messages produced by an engine that keeps its own state. Absent otherwise (never null). */
   engineMeta?: EngineMeta;
+  /**
+   * When the user last kept this reply as the chosen variant of a compare
+   * turn (set by moving the head onto it). Absent otherwise (never null). It
+   * is how a kept-but-not-yet-continued variant stays chosen after the head
+   * moves elsewhere and back -- see `extendToTip`.
+   */
+  keptAt?: number;
   createdAt: number;
 }
 

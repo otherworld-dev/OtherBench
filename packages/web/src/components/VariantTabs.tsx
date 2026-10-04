@@ -221,6 +221,8 @@ export interface VariantTabsProps {
   /** Present only when this strip was reopened from a "⤺ N other variants" chip -- lets the user collapse back without picking a different variant. Omitted for a fresh, unresolved compare turn (nothing to collapse back to). */
   onClose?: () => void;
   onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
+  /** Told which variant's tab is showing, on mount and whenever it changes (the composer sends under it). */
+  onActiveChange?: (messageId: string) => void;
 }
 
 /**
@@ -242,10 +244,15 @@ export function VariantTabs({
   retryingIds,
   onClose,
   onResolveApproval,
+  onActiveChange,
 }: VariantTabsProps): JSX.Element {
   const [activeId, setActiveId] = useState<string>(() => keptId ?? variants[0]?.id ?? '');
   const [split, setSplit] = useState(false);
   const active = variants.find((v) => v.id === activeId) ?? variants[0];
+  const shownId = active?.id;
+  useEffect(() => {
+    if (shownId) onActiveChange?.(shownId);
+  }, [shownId, onActiveChange]);
 
   return (
     <div data-testid="variant-tabs" className="rounded border border-[var(--border)] bg-[var(--bg-raised)]">

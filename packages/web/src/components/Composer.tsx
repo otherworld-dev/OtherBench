@@ -70,6 +70,12 @@ export interface ComposerProps {
    * back against a live server in the same chat.
    */
   parentId?: string | null;
+  /**
+   * Set while a compare turn's tabs are open and none has been kept: the name
+   * of the reply whose tab is showing, which `parentId` already points at.
+   * Shown as a hint so it is clear which reply the next message continues.
+   */
+  continuesFrom?: string | null;
   /** Told the primary selected profile id whenever it changes (and on mount), so an inline edit elsewhere can use the picker's choice. */
   onPrimaryProfileChange?: (profileId: string | null) => void;
 }
@@ -79,7 +85,7 @@ export function isClaudeCodeProfile(profile: Profile, connections: Connection[])
   return connections.find((c) => c.id === profile.connectionId)?.kind === 'claude_code';
 }
 
-export function Composer({ chat, parentId, onPrimaryProfileChange }: ComposerProps): JSX.Element {
+export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfileChange }: ComposerProps): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
   const connections = useGruntStore((s) => s.connections);
   const messages = useGruntStore((s) => s.messages);
@@ -416,6 +422,12 @@ export function Composer({ chat, parentId, onPrimaryProfileChange }: ComposerPro
         <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
           {autoError}
         </div>
+      )}
+
+      {continuesFrom && (
+        <p role="status" className="mb-2 text-xs text-[var(--text-muted)]">
+          Sending continues from {continuesFrom}'s reply, the tab you're on. The other replies stay in the tabs.
+        </p>
       )}
 
       {autoActive && (

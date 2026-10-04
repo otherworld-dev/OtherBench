@@ -44,6 +44,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const extras = useGruntStore((s) => s.extras);
   const models = useGruntStore((s) => s.models);
   const setHeadMessageId = useGruntStore((s) => s.setHeadMessageId);
+  const markKept = useGruntStore((s) => s.markKept);
   const registerMessage = useGruntStore((s) => s.registerMessage);
   const profiles = useGruntStore((s) => s.profiles);
   const resetMessageForRetry = useGruntStore((s) => s.resetMessageForRetry);
@@ -57,6 +58,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const [editBusy, setEditBusy] = useState(false);
   const [composerProfileId, setComposerProfileId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
+  // The tab showing in an unresolved compare strip at the tail: sending
+  // continues from it (#821), rather than parenting the new message on the
+  // user message beside the variants.
+  const [shownVariantId, setShownVariantId] = useState<string | null>(null);
 
   const chatId = chat?.id ?? null;
   const chatMessages = useMemo(
@@ -133,6 +138,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }, [chatId]);
 
   const openVariants = useMemo(() => (tailId ? childrenOf(chatMessages, tailId) : []), [chatMessages, tailId]);
+  const openCompare = openVariants.length > 1 && isCompareSet(openVariants);
+  const sendUnder = openCompare ? (openVariants.find((v) => v.id === shownVariantId) ?? openVariants[0]!) : null;
   // Regenerate and Edit would race a running reply, so they wait for the chat to be quiet.
   const chatStreaming = useMemo(() => chatMessages.some((m) => m.status === 'streaming'), [chatMessages]);
 
@@ -156,6 +163,11 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       if (previousHeadId) setHeadMessageId(chat!.id, previousHeadId);
       setSwitchError(failure);
       return false;
+    }
+    // The server records landing on a compare variant as keeping it; mirror that.
+    const target = chatMessages.find((m) => m.id === messageId);
+    if (target?.role === 'assistant' && target.parentId && isCompareSet(childrenOf(chatMessages, target.parentId))) {
+      markKept(messageId, Date.now());
     }
     return true;
   }
@@ -201,7 +213,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     const onPath = next && next.parentId === original.id && next.producedBy ? next : null;
     const answeredBy = (onPath ?? childrenOf(chatMessages, original.id).find((c) => c.producedBy))?.producedBy?.profileId ?? null;
     for (const wanted of [answeredBy, composerProfileId, chat!.profileId]) {
-      const found = wanted ? profiles.find((p) => p.id === wanted) : undefined;
+      const found = wanted ? profiles.find((p) => p.id === wanted && p.archivedAt === null) : undefined;
       if (found) return found;
     }
     return profiles.find((p) => p.archivedAt === null) ?? null;
@@ -233,20 +245,10 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }
 
   async function keepVariant(messageId: string): Promise<void> {
-    const previousHeadId = chat!.headMessageId;
-    setSwitchError(null);
-    setHeadMessageId(chat!.id, messageId);
     setReopenedParentId(null); // collapses the tab strip back automatically
-    try {
-      await api.turns.setHead(chat!.id, messageId);
-    } catch (err) {
-      console.error('[grunt-web] failed to keep variant:', err);
-      // The server refused the switch (e.g. a stale/cross-chat id) -- don't
-      // leave the client rendering a state the server never accepted. Roll
-      // the optimistic update back and say so, rather than only logging it.
-      if (previousHeadId) setHeadMessageId(chat!.id, previousHeadId);
-      setSwitchError("Couldn't keep that variant -- the server rejected the change, so it was reverted. Please try again.");
-    }
+    // If the server refuses (e.g. a stale/cross-chat id), moveHead rolls the
+    // optimistic head back and says so rather than only logging it.
+    await moveHead(messageId, "Couldn't keep that variant -- the server rejected the change, so it was reverted. Please try again.");
   }
 
   /**
@@ -376,7 +378,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               })
             )}
 
-            {openVariants.length > 1 && isCompareSet(openVariants) && (
+            {openCompare && (
               <VariantTabs
                 key={`turn-open-${tailId}`}
                 variants={openVariants}
@@ -387,6 +389,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                 onRetry={(v) => void retryVariant(v)}
                 retryingIds={retryingIds}
                 onResolveApproval={resolveApproval}
+                onActiveChange={setShownVariantId}
               />
             )}
           </div>
@@ -404,7 +407,13 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
       <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
         {announcement}
       </div>
-      <Composer key={chat.id} chat={chat} parentId={tailId} onPrimaryProfileChange={setComposerProfileId} />
+      <Composer
+        key={chat.id}
+        chat={chat}
+        parentId={sendUnder?.id ?? tailId}
+        continuesFrom={sendUnder ? (sendUnder.producedBy?.profileName ?? 'the reply shown') : null}
+        onPrimaryProfileChange={setComposerProfileId}
+      />
     </main>
   );
 }

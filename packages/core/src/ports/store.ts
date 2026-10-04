@@ -208,6 +208,8 @@ export interface MessageRepo {
   updateEngineMeta(id: string, meta: EngineMeta): void;
   /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */
   latestBySession(chatId: string, sessionId: string): CanonMessage | null;
+  /** Records that the user kept this compare variant at `at` (see `CanonMessage.keptAt`). Throws when the id does not exist. */
+  markKept(id: string, at: number): void;
 }
 
 // --- attachments ----------------------------------------------------------------
