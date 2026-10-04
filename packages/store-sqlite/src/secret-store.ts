@@ -93,6 +93,16 @@ export class EncryptedFileSecretStore implements SecretStore {
    */
   private writeQueue: Promise<void> = Promise.resolve();
 
+  /**
+   * The key derived for the file's current salt. scrypt at these parameters
+   * costs tens of milliseconds and runs synchronously, so deriving it on every
+   * get/set blocked the event loop once per call. The salt only changes when
+   * the file is created, so one derivation per salt is enough; the passphrase
+   * it comes from is already held in memory, so caching the key exposes
+   * nothing new.
+   */
+  private cachedKey: { salt: string; key: Buffer } | null = null;
+
   constructor(
     private readonly filePath: string,
     private readonly passphrase: string
@@ -102,7 +112,7 @@ export class EncryptedFileSecretStore implements SecretStore {
     const envelope = await this.readEnvelope();
     const entry = envelope?.entries[ref];
     if (!envelope || !entry) return null;
-    const key = deriveKey(this.passphrase, envelope.salt);
+    const key = this.keyFor(envelope.salt);
     return decryptValue(entry, key);
   }
 
@@ -113,7 +123,7 @@ export class EncryptedFileSecretStore implements SecretStore {
         salt: randomBytes(SALT_LENGTH).toString('base64'),
         entries: {},
       };
-      const key = deriveKey(this.passphrase, envelope.salt);
+      const key = this.keyFor(envelope.salt);
       envelope.entries[ref] = encryptValue(value, key);
       await this.writeEnvelope(envelope);
     });
@@ -126,6 +136,13 @@ export class EncryptedFileSecretStore implements SecretStore {
       delete envelope.entries[ref];
       await this.writeEnvelope(envelope);
     });
+  }
+
+  private keyFor(salt: string): Buffer {
+    if (this.cachedKey?.salt !== salt) {
+      this.cachedKey = { salt, key: deriveKey(this.passphrase, salt) };
+    }
+    return this.cachedKey.key;
   }
 
   /** Runs `task` after every previously-enqueued task has settled. */
