@@ -20,6 +20,7 @@ vi.mock('./state/api.js', () => ({
 
 // The app-wide event stream is tested on its own (state/store.test.ts, server events.test.ts).
 vi.mock('./state/useAppEvents.js', () => ({ useAppEvents: () => {} }));
+vi.mock('./views/QuickChat.js', () => ({ QuickChat: () => <div data-testid="quick-chat-view" /> }));
 
 import { api } from './state/api.js';
 
@@ -158,5 +159,19 @@ describe('App bootstrap', () => {
 
     await user.click(screen.getByRole('button', { name: /close settings/i }));
     expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument();
+  });
+});
+
+describe('App view', () => {
+  afterEach(() => window.history.replaceState({}, '', '/'));
+
+  it('renders the quick-chat view when the URL has view=quick, and the main app otherwise', () => {
+    window.history.replaceState({}, '', '/?view=quick');
+    const { unmount } = render(<App />);
+    expect(screen.getByTestId('quick-chat-view')).toBeInTheDocument();
+    unmount();
+    window.history.replaceState({}, '', '/');
+    render(<App />);
+    expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
   });
 });

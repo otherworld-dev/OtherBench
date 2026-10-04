@@ -55,6 +55,9 @@ export interface GruntState {
   setActiveChatId(chatId: string | null): void;
   /** Local-only optimistic (or server-confirmed) head move -- see api.turns.setHead. */
   setHeadMessageId(chatId: string, messageId: string): void;
+  /** The quick-chat hotkey and whether registering it worked (desktop only; Task 37). Null until tried. */
+  hotkeyStatus: { accelerator: string; error: string | null } | null;
+  setHotkeyStatus(status: { accelerator: string; error: string | null }): void;
   /** Tool calls waiting for approval anywhere in the app, by request id, from `GET /api/events` (Task 34). */
   appPendingApprovals: Record<string, PendingApprovalSummary>;
   /** The events stream's `hello`: replaces the pending approvals with the server's list. */
@@ -252,6 +255,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
     })),
+  hotkeyStatus: null,
+  setHotkeyStatus: (status) => set({ hotkeyStatus: status }),
   appPendingApprovals: {},
   applyAppHello: (hello) => set({ appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])) }),
   applyAppEvent: (event) =>
