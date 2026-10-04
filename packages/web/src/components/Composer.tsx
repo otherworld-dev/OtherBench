@@ -256,6 +256,10 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   async function handleSend(): Promise<void> {
     const trimmed = text.trim();
     if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
+    // The same rules as the Send button, which Enter reaches without: never
+    // while a reply is still running (that would start a second reply beside
+    // it), and never for Claude Code without a workspace folder.
+    if (isStreaming || needsWorkspace) return;
 
     setSending(true);
     // A stale remove-failure message from before this send must not linger
