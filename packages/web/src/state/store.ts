@@ -14,7 +14,9 @@ import {
   openTab as openPaneTab,
   savePaneState,
   setLayout as setPaneLayout,
+  setSplitSizes as setPaneSplitSizes,
   showChat,
+  toggleMaximised as togglePaneMaximised,
   type Layout,
   type PaneState,
 } from './panes.js';
@@ -75,6 +77,10 @@ export interface GruntState {
   moveTab(chatId: string, beforeId: string | null): void;
   setLayout(layout: Layout): void;
   focusPane(index: number): void;
+  /** Remembers a dragged divider's sizes (`splitKey`). */
+  setSplitSizes(key: string, sizes: number[]): void;
+  /** Maximises the focused pane, or puts it back. */
+  toggleMaximised(): void;
   /** Local-only optimistic (or server-confirmed) head move -- see api.turns.setHead. */
   setHeadMessageId(chatId: string, messageId: string): void;
   /** The quick-chat hotkey and whether registering it worked (desktop only; Task 37). Null until tried. */
@@ -289,6 +295,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
   moveTab: (chatId, beforeId) => set((state) => ({ paneState: movePaneTab(synced(state), chatId, beforeId) })),
   setLayout: (layout) => set((state) => withPanes(setPaneLayout(synced(state), layout))),
   focusPane: (index) => set((state) => withPanes(focusPaneIn(synced(state), index))),
+  setSplitSizes: (key, sizes) => set((state) => ({ paneState: setPaneSplitSizes(state.paneState, key, sizes) })),
+  toggleMaximised: () => set((state) => ({ paneState: togglePaneMaximised(state.paneState) })),
   setChats: (chats) => set({ chats }),
   upsertChat: (chat) =>
     set((state) => {

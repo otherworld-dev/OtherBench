@@ -173,3 +173,44 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
   await expect(tabs).toHaveCount(1);
   await expect(nav.getByTestId(`chat-row-${loose.id}`)).toBeVisible();
 });
+
+test('dragging a divider resizes panes and is remembered; Ctrl+Shift+Enter maximises the focused pane (#824)', async ({ page, request }) => {
+  const run = randomUUID().slice(0, 8);
+  const profiles = (await (await request.get(`${BASE_URL}/api/profiles`)).json()) as { id: string }[];
+  const ids: string[] = [];
+  for (const title of [`One ${run}`, `Two ${run}`]) {
+    ids.push(((await (await request.post(`${BASE_URL}/api/chats`, { data: { profileId: profiles[0]!.id, title } })).json()) as { id: string }).id);
+  }
+
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  for (const id of ids) {
+    await nav.getByTestId(`chat-row-${id}`).locator('[data-row-main]').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
+  }
+  await page.getByRole('button', { name: 'Two side by side' }).click();
+  const main = page.getByRole('main');
+  const left = main.getByTestId('pane-0');
+  const before = (await left.boundingBox())!.width;
+
+  const divider = main.getByRole('separator', { name: 'Resize panes' });
+  const box = (await divider.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 150, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await left.boundingBox())!.width).toBeGreaterThan(before + 100);
+
+  await page.reload();
+  await expect.poll(async () => (await main.getByTestId('pane-0').boundingBox())!.width).toBeGreaterThan(before + 100);
+
+  await main.getByTestId('pane-1').click();
+  await page.keyboard.press('Control+Shift+Enter');
+  await expect(main.getByTestId('pane-0')).toBeHidden();
+  await expect(main.getByRole('button', { name: 'Restore pane' })).toBeVisible();
+  await page.keyboard.press('Control+Shift+Enter');
+  await expect(main.getByTestId('pane-0')).toBeVisible();
+
+  // Back to one chat for whatever runs next in this browser.
+  await page.getByRole('button', { name: 'One chat' }).click();
+});

@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
 
@@ -72,13 +73,57 @@ describe('PaneGrid (#824)', () => {
     expect(useGruntStore.getState().activeChatId).toBe('c');
   });
 
-  it('a narrow window shows only the focused pane', () => {
+  it('a narrow window shows only the focused pane; the others stay mounted, hidden, so nothing reconnects', () => {
     useGruntStore.getState().openTab('a');
     useGruntStore.getState().openTab('b');
     useGruntStore.getState().setLayout('columns-2');
     useGruntStore.getState().focusPane(1);
     render(<PaneGrid narrow />);
-    expect(threads()).toEqual(['Chat a']);
+    expect(screen.getByTestId('pane-1')).toBeVisible();
+    expect(screen.getByTestId('pane-0')).not.toBeVisible();
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+  });
+
+  it('maximise fills the area with the focused pane, keeps the others mounted, and restores the layout', async () => {
+    for (const id of ['a', 'b', 'c']) useGruntStore.getState().openTab(id);
+    useGruntStore.getState().setLayout('columns-3');
+    const user = userEvent.setup();
+    render(<PaneGrid narrow={false} />);
+    await user.click(within(screen.getByTestId('pane-2')).getByRole('button', { name: 'Maximise pane' }));
+    expect(useGruntStore.getState().paneState).toMatchObject({ maximised: true, focusedPane: 2 });
+    expect(screen.getByTestId('pane-2')).toBeVisible();
+    expect(screen.getByTestId('pane-0')).not.toBeVisible();
+    expect(threads()).toHaveLength(3);
+    await user.click(within(screen.getByTestId('pane-2')).getByRole('button', { name: 'Restore pane' }));
+    expect(screen.getByTestId('pane-0')).toBeVisible();
+  });
+
+  it('"one big, two stacked" and "four in a grid" lay out three and four panes with a divider per split', () => {
+    for (const id of ['a', 'b', 'c', 'd']) useGruntStore.getState().openTab(id);
+    useGruntStore.getState().setLayout('main-right-2');
+    const { rerender } = render(<PaneGrid narrow={false} />);
+    expect(threads()).toHaveLength(3);
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
+    useGruntStore.getState().setLayout('grid-4');
+    rerender(<PaneGrid narrow={false} />);
+    expect(threads()).toHaveLength(4);
+    expect(screen.getAllByRole('separator')).toHaveLength(3);
+  });
+
+  it('a divider moves with the arrow keys and is remembered per layout; a double-click evens it out', async () => {
+    useGruntStore.getState().setLayout('columns-2');
+    const user = userEvent.setup();
+    render(<PaneGrid narrow={false} />);
+    const divider = screen.getByRole('separator', { name: 'Resize panes' });
+    expect(divider).toHaveAttribute('aria-valuenow', '50');
+    divider.focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(divider).toHaveAttribute('aria-valuenow', '60');
+    const [left, right] = useGruntStore.getState().paneState.sizes['columns-2/root']!;
+    expect(left).toBeCloseTo(1.2);
+    expect(right).toBeCloseTo(0.8);
+    await user.dblClick(divider);
+    expect(useGruntStore.getState().paneState.sizes['columns-2/root']).toEqual([1, 1]);
   });
 
   it('opening a chat from elsewhere fills the focused pane, or focuses the pane already showing it', () => {

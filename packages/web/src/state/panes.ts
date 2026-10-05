@@ -8,14 +8,52 @@
  * device.
  */
 
-export type Layout = 'single' | 'columns-2' | 'rows-2' | 'columns-3';
+export type Layout = 'single' | 'columns-2' | 'rows-2' | 'columns-3' | 'main-right-2' | 'grid-4';
 
 export const LAYOUTS: readonly { id: Layout; label: string; panes: number }[] = [
   { id: 'single', label: 'One chat', panes: 1 },
   { id: 'columns-2', label: 'Two side by side', panes: 2 },
   { id: 'rows-2', label: 'Two stacked', panes: 2 },
   { id: 'columns-3', label: 'Three side by side', panes: 3 },
+  { id: 'main-right-2', label: 'One big, two stacked', panes: 3 },
+  { id: 'grid-4', label: 'Four in a grid', panes: 4 },
 ];
+
+/**
+ * How a layout splits the chat area: a tree of splits whose leaves are pane
+ * indexes. A 'row' split lays its children side by side, a 'column' split
+ * stacks them. Each split has its own id, so its sizes are remembered on
+ * their own (see `PaneState.sizes`).
+ */
+export type SplitNode = { pane: number } | { split: 'row' | 'column'; id: string; children: SplitNode[] };
+
+export const LAYOUT_TREES: Record<Layout, SplitNode> = {
+  single: { pane: 0 },
+  'columns-2': { split: 'row', id: 'root', children: [{ pane: 0 }, { pane: 1 }] },
+  'rows-2': { split: 'column', id: 'root', children: [{ pane: 0 }, { pane: 1 }] },
+  'columns-3': { split: 'row', id: 'root', children: [{ pane: 0 }, { pane: 1 }, { pane: 2 }] },
+  'main-right-2': { split: 'row', id: 'root', children: [{ pane: 0 }, { split: 'column', id: 'right', children: [{ pane: 1 }, { pane: 2 }] }] },
+  'grid-4': {
+    split: 'column',
+    id: 'root',
+    children: [
+      { split: 'row', id: 'top', children: [{ pane: 0 }, { pane: 1 }] },
+      { split: 'row', id: 'bottom', children: [{ pane: 2 }, { pane: 3 }] },
+    ],
+  },
+};
+
+/** The key a split's sizes are stored under. */
+export const splitKey = (layout: Layout, id: string): string => `${layout}/${id}`;
+
+/** A split's sizes before anyone drags it: even, except the big pane of "one big, two stacked". */
+export function defaultSizes(layout: Layout, id: string, count: number): number[] {
+  if (layout === 'main-right-2' && id === 'root') return [2, 1];
+  return Array.from({ length: count }, () => 1);
+}
+
+/** The smallest share of a split one child can be dragged down to. */
+export const MIN_SPLIT_SHARE = 0.15;
 
 export interface PaneState {
   /** Chat ids open as tabs, in tab order. */
@@ -24,9 +62,13 @@ export interface PaneState {
   /** The chat in each pane (null = empty), one entry per pane of `layout`. */
   panes: (string | null)[];
   focusedPane: number;
+  /** Sizes of each split the user has dragged, by `splitKey`, as relative weights. */
+  sizes: Record<string, number[]>;
+  /** The focused pane fills the whole chat area for now. */
+  maximised: boolean;
 }
 
-export const DEFAULT_PANE_STATE: PaneState = { tabs: [], layout: 'single', panes: [null], focusedPane: 0 };
+export const DEFAULT_PANE_STATE: PaneState = { tabs: [], layout: 'single', panes: [null], focusedPane: 0, sizes: {}, maximised: false };
 
 /** localStorage key for the tabs, layout and what each pane shows. Per device. */
 export const PANE_STATE_STORAGE_KEY = 'grunt.panes';
@@ -67,7 +109,37 @@ export function setLayout(state: PaneState, layout: Layout): PaneState {
   }
   const waiting = state.tabs.filter((id) => !panes.includes(id));
   for (let i = 0; i < panes.length; i++) if (panes[i] === null && waiting.length > 0) panes[i] = waiting.shift()!;
-  return { ...state, layout, panes, focusedPane };
+  return { ...state, layout, panes, focusedPane, maximised: false };
+}
+
+/** Remembers a split's sizes. Ignores a list of the wrong length or with a non-positive size. */
+export function setSplitSizes(state: PaneState, key: string, sizes: number[]): PaneState {
+  if (sizes.length < 2 || sizes.some((s) => !Number.isFinite(s) || s <= 0)) return state;
+  return { ...state, sizes: { ...state.sizes, [key]: sizes } };
+}
+
+/** Maximises the focused pane, or puts it back. Only meaningful with more than one pane. */
+export function toggleMaximised(state: PaneState): PaneState {
+  if (state.panes.length < 2) return state.maximised ? { ...state, maximised: false } : state;
+  return { ...state, maximised: !state.maximised };
+}
+
+/**
+ * Moves the divider after child `index` of a split by `delta` (a share of the
+ * whole split, positive = towards the end), keeping both neighbours at least
+ * MIN_SPLIT_SHARE. Returns new weights summing to the same total.
+ */
+export function resizeSplit(sizes: number[], index: number, delta: number): number[] {
+  const total = sizes.reduce((a, b) => a + b, 0);
+  const a = sizes[index];
+  const b = sizes[index + 1];
+  if (a === undefined || b === undefined || total <= 0) return sizes;
+  const min = MIN_SPLIT_SHARE * total;
+  const move = Math.max(min - a, Math.min(b - min, delta * total));
+  const next = [...sizes];
+  next[index] = a + move;
+  next[index + 1] = b - move;
+  return next;
 }
 
 /** Adds `chatId` as a tab (if it isn't one) and shows it. */
@@ -108,7 +180,14 @@ export function loadPaneState(): PaneState {
     const stored = Array.isArray(parsed.panes) ? parsed.panes : [];
     const panes = Array.from({ length: count }, (_, i) => (typeof stored[i] === 'string' ? (stored[i] as string) : null));
     const focusedPane = typeof parsed.focusedPane === 'number' && parsed.focusedPane >= 0 && parsed.focusedPane < count ? parsed.focusedPane : 0;
-    return { tabs: [...new Set(ids(parsed.tabs))], layout, panes, focusedPane };
+    const sizes: Record<string, number[]> = {};
+    if (parsed.sizes && typeof parsed.sizes === 'object' && !Array.isArray(parsed.sizes)) {
+      for (const [key, value] of Object.entries(parsed.sizes)) {
+        if (Array.isArray(value) && value.length >= 2 && value.every((v) => typeof v === 'number' && Number.isFinite(v) && v > 0)) sizes[key] = value as number[];
+      }
+    }
+    const maximised = parsed.maximised === true && count > 1;
+    return { tabs: [...new Set(ids(parsed.tabs))], layout, panes, focusedPane, sizes, maximised };
   } catch {
     return DEFAULT_PANE_STATE;
   }
