@@ -8,13 +8,13 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     ...actual,
     api: {
       node: { rename: vi.fn() },
-      peers: { overview: vi.fn(), startPairing: vi.fn(), currentPairing: vi.fn(), cancelPairing: vi.fn(), add: vi.fn(), patch: vi.fn(), remove: vi.fn() },
+      peers: { overview: vi.fn(), startPairing: vi.fn(), currentPairing: vi.fn(), cancelPairing: vi.fn(), add: vi.fn(), patch: vi.fn(), remove: vi.fn(), sync: vi.fn() },
     },
   };
 });
 
 import { ApiError, api, type PeersOverview } from '../../state/api.js';
-import { FIREWALL_NOTE, MachinesPanel, peerStatusText } from './MachinesPanel.js';
+import { FIREWALL_NOTE, MachinesPanel, peerStatusText, syncText } from './MachinesPanel.js';
 
 const at1402 = new Date(2026, 9, 5, 14, 2).getTime();
 
@@ -34,6 +34,8 @@ const overview: PeersOverview = {
       status: 'unreachable',
       since: at1402,
       error: 'connect ECONNREFUSED',
+      lastSyncedAt: null,
+      syncError: null,
     },
   ],
 };
@@ -56,6 +58,14 @@ describe('peerStatusText', () => {
     expect(peerStatusText({ status: 'reachable', since: 0 })).toBe('Connected');
     expect(peerStatusText({ status: 'unreachable', since: at1402 })).toMatch(/^Unreachable since 14:02/);
     expect(peerStatusText({ status: 'unknown', since: 0 })).toBe('Checking…');
+  });
+});
+
+describe('syncText', () => {
+  it('when it last synced, why it last failed, or that it has not yet', () => {
+    expect(syncText({ lastSyncedAt: 1000, syncError: null }, 1000 + 120_000)).toMatch(/^Synced 2 min/);
+    expect(syncText({ lastSyncedAt: 1000, syncError: 'PC runs a different version' })).toBe('Sync failed: PC runs a different version');
+    expect(syncText({ lastSyncedAt: null, syncError: null })).toBe('Not synced yet');
   });
 });
 
@@ -100,6 +110,15 @@ describe('MachinesPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(api.peers.add).toHaveBeenLastCalledWith('192.168.1.20:4748', 'abcd-efgh'));
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Code' })).toHaveValue(''));
+  });
+
+  it('syncs with a machine on request and shows when it last did', async () => {
+    vi.mocked(api.peers.sync).mockResolvedValue({ applied: 3 });
+    render(<MachinesPanel />);
+    const pc = await screen.findByTestId('peer-node-pc');
+    expect(within(pc).getByTestId('peer-sync')).toHaveTextContent('Not synced yet');
+    await userEvent.click(within(pc).getByRole('button', { name: 'Sync now' }));
+    await waitFor(() => expect(api.peers.sync).toHaveBeenCalledWith('node-pc'));
   });
 
   it('removes a machine after confirming', async () => {

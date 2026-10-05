@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
 import { ApiError, api, type CreateConnectionBody } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
@@ -72,6 +72,22 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
   const [discovering, setDiscovering] = useState(false);
   const [discoverMessage, setDiscoverMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Where it works (v2 spec §5): left to the server (decided from the address) until changed here.
+  const [availability, setAvailability] = useState<string | null>(connection?.availability ?? null);
+  const [keepKeyHere, setKeepKeyHere] = useState(connection?.syncSecret === false);
+  const [selfId, setSelfId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.node.get())
+      .then((node) => {
+        if (!cancelled) setSelfId(node.id);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const upsertModels = useGruntStore((s) => s.upsertModels);
   const models = useGruntStore((s) => s.models);
@@ -105,6 +121,8 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
         baseUrl: baseUrl.trim().length > 0 ? baseUrl.trim() : null,
         extraHeaders: rowsToHeaders(headerRows),
       };
+      if (keepKeyHere !== (connection?.syncSecret === false)) body.syncSecret = !keepKeyHere;
+      if (availability !== null && availability !== (connection?.availability ?? null)) body.availability = availability;
       if (clearApiKey) body.apiKey = null;
       else if (apiKeyDraft.trim().length > 0) body.apiKey = apiKeyDraft;
       // else: omit `apiKey` entirely -- the existing key (if any) is left untouched.
@@ -275,6 +293,34 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
             Clear the stored API key
           </label>
         )}
+        <label className="mt-1 flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          <input type="checkbox" checked={keepKeyHere} onChange={(e) => setKeepKeyHere(e.target.checked)} />
+          Keep the API key on this machine (paired machines get the connection without it)
+        </label>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[var(--text-muted)]" htmlFor="connection-availability">
+          Works on
+        </label>
+        <select
+          id="connection-availability"
+          aria-label="Works on"
+          value={availability === null ? '' : availability === 'anywhere' ? 'anywhere' : availability === selfId ? 'here' : 'other'}
+          onChange={(e) => {
+            const v = e.target.value;
+            setAvailability(v === 'anywhere' ? 'anywhere' : v === 'here' ? selfId : v === '' ? null : availability);
+          }}
+          className="rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-sm"
+        >
+          {availability === null && <option value="">Decide from the address</option>}
+          <option value="anywhere">Any machine</option>
+          {selfId && <option value="here">Only this machine</option>}
+          {availability !== null && availability !== 'anywhere' && availability !== selfId && <option value="other">Only another machine</option>}
+        </select>
+        <p className="mt-1 text-xs text-[var(--text-muted)]">
+          A local address (localhost) only works on the machine it runs on; chats on other machines can't use this connection.
+        </p>
       </div>
 
       <div>

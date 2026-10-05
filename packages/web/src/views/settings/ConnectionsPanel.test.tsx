@@ -180,6 +180,21 @@ describe('ConnectionsPanel', () => {
     expect(await screen.findByRole('button', { name: /^test$/i })).toBeInTheDocument();
   });
 
+  it('can keep the API key on this machine and say it works on any machine', async () => {
+    mockedCreate.mockResolvedValue(makeConnection({ id: 'new-conn', name: 'Ollama', kind: 'ollama' }));
+    const user = userEvent.setup();
+    render(<ConnectionsPanel />);
+
+    await user.click(screen.getByRole('button', { name: '+ New connection' }));
+    await user.type(screen.getByLabelText('Connection name'), 'Ollama');
+    await user.selectOptions(screen.getByLabelText('Connection kind'), 'ollama');
+    await user.click(screen.getByLabelText(/Keep the API key on this machine/));
+    await user.selectOptions(screen.getByLabelText('Works on'), 'anywhere');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Ollama', syncSecret: false, availability: 'anywhere' })));
+  });
+
   it('a failed Test renders its message instead of throwing', async () => {
     useGruntStore.getState().setConnections([makeConnection({ id: 'conn-1' })]);
     mockedTest.mockResolvedValue({ ok: false, message: 'Connection refused', latencyMs: 4 });
