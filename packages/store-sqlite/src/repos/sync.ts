@@ -1,14 +1,19 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
-import { SYNC_TABLES, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
+import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { SyncClock } from './clock.js';
 import { deriveSearchText } from './messages.js';
 
-/** Columns that never leave this machine: connection health, where a blob is on disk, derived search text. */
+/**
+ * Columns that never leave this machine: connection health, whether this
+ * machine shares a connection's key (each machine decides that for its own
+ * copy, so another can't switch it on to be sent the key), where a blob is
+ * on disk, and derived search text.
+ */
 const LOCAL_COLUMNS: Partial<Record<SyncTable, string[]>> = {
-  connection: ['status', 'status_message', 'checked_at'],
+  connection: ['status', 'status_message', 'checked_at', 'sync_secret'],
   attachment: ['storage_path'],
   message: ['search_text'],
 };
@@ -60,10 +65,12 @@ export class SqliteSyncRepo implements SyncRepo {
   }
 
   missingBlobs(): { id: string; sha256: string }[] {
-    return this.db.prepare("SELECT id, sha256 FROM attachment WHERE storage_path = '' ORDER BY id").all() as { id: string; sha256: string }[];
+    const rows = this.db.prepare("SELECT id, sha256 FROM attachment WHERE storage_path = '' ORDER BY id").all() as { id: string; sha256: string }[];
+    return rows.filter((r) => isSha256(r.sha256));
   }
 
   isSentBlob(sha256: string): boolean {
+    if (!isSha256(sha256)) return false;
     return this.db.prepare('SELECT 1 FROM attachment WHERE sha256 = ? AND message_id IS NOT NULL LIMIT 1').get(sha256) !== undefined;
   }
 
@@ -219,6 +226,16 @@ export class SqliteSyncRepo implements SyncRepo {
   private applyRow(u: Extract<ChangeRow, { op: 'upsert' }>): boolean {
     const row = { ...u.row };
     const local = this.select(u.tbl, u.id);
+    if (u.tbl === 'connection') {
+      // A connection whose key stays on this machine is configured here only:
+      // another machine re-pointing it would send that key to its new address.
+      if (local && local['sync_secret'] === 0) return false;
+      // Its key is always kept under its own reference, whatever the row says,
+      // so another machine can't make this one read or overwrite another secret.
+      if (row['secret_ref'] != null) row['secret_ref'] = connectionSecretRef(u.id);
+    }
+    // A file's hash names its blob on disk: anything but a SHA-256 is refused.
+    if (u.tbl === 'attachment' && !isSha256(row['sha256'])) return false;
     // A machine's own folder for a location is its to set; another machine
     // may only fill it in where there's none yet (adopting a location).
     if (u.tbl === 'location_path' && row['node_id'] === this.selfId() && local) return false;

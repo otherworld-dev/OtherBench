@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { defaultAvailability } from '@grunt/core/domain/availability.js';
+import { connectionSecretRef } from '@grunt/core/domain/sync.js';
 import type { DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
 import type { Connection, ConnectionKind, ModelInfo } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
@@ -163,7 +164,7 @@ export function connectionsRoutes(container: Container): Hono {
     const id = randomUUID();
     let secretRef: string | null = null;
     if (typeof body.apiKey === 'string' && body.apiKey.length > 0) {
-      secretRef = `conn:${id}`;
+      secretRef = connectionSecretRef(id);
       await container.secrets.set(secretRef, body.apiKey);
     } else if (body.apiKey !== undefined && body.apiKey !== null) {
       throw new HTTPException(400, { message: '"apiKey" must be a non-empty string, null, or omitted.' });
@@ -220,7 +221,7 @@ export function connectionsRoutes(container: Container): Hono {
         if (existing.secretRef) await container.secrets.delete(existing.secretRef);
         patch.secretRef = null;
       } else if (typeof body.apiKey === 'string' && body.apiKey.length > 0) {
-        const ref = existing.secretRef ?? `conn:${id}`;
+        const ref = existing.secretRef ?? connectionSecretRef(id);
         await container.secrets.set(ref, body.apiKey);
         patch.secretRef = ref;
       } else {

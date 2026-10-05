@@ -1,9 +1,10 @@
 import { PEER_PROTOCOL_VERSION } from '@grunt/core/domain/pairing.js';
-import type { ChangeBatch, ChangeRow } from '@grunt/core/domain/sync.js';
+import { connectionSecretRef, isSha256, type ChangeBatch, type ChangeRow } from '@grunt/core/domain/sync.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store, SyncRepo } from '@grunt/core/ports/store.js';
 import type { PeerInfo } from '@grunt/core/types/peer.js';
 import { sha256Of, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
+
 import type { AppEventBus } from '../stream/events.js';
 import { PeerError, type PeerService } from './service.js';
 
@@ -164,9 +165,9 @@ export class Syncer {
     const secrets = new Map(rows.filter((r) => r.op === 'upsert' && r.tbl === 'connection' && typeof r.secret === 'string').map((r) => [r.id, r]));
     for (const w of result.written) {
       const row = w.tbl === 'connection' ? secrets.get(w.id) : undefined;
-      if (row?.op !== 'upsert' || typeof row.secret !== 'string') continue;
-      const ref = row.row['secret_ref'];
-      if (typeof ref === 'string' && ref.length > 0) await this.options.secrets.set(ref, row.secret);
+      if (row?.op !== 'upsert' || typeof row.secret !== 'string' || row.row['secret_ref'] == null) continue;
+      // Under the connection's own reference only (the store rewrote the row's to match).
+      await this.options.secrets.set(connectionSecretRef(w.id), row.secret);
     }
     return result.applied;
   }
@@ -176,6 +177,7 @@ export class Syncer {
     const blobStore = this.options.blobStore;
     if (!blobStore) return;
     for (const missing of this.sync.missingBlobs()) {
+      if (!isSha256(missing.sha256)) continue;
       try {
         const existing = await blobStore.get(missing.sha256).catch(() => null);
         const data =
@@ -201,9 +203,11 @@ export class Syncer {
     const batch = this.sync.changesSince(since, Math.min(Math.max(limit, 1), 2000));
     for (const row of batch.rows) {
       if (row.op !== 'upsert' || row.tbl !== 'connection') continue;
-      const ref = row.row['secret_ref'];
-      if (row.row['sync_secret'] === 0 || typeof ref !== 'string' || !ref) continue;
-      const secret = await this.options.secrets.get(ref);
+      // Only a key this machine shares, and only from the connection's own
+      // reference: never whatever secret a row (perhaps synced in) names.
+      const local = this.options.store.connections.get(row.id);
+      if (!local || local.syncSecret === false || local.secretRef !== connectionSecretRef(row.id)) continue;
+      const secret = await this.options.secrets.get(connectionSecretRef(row.id));
       if (secret !== null) row.secret = secret;
     }
     return batch;

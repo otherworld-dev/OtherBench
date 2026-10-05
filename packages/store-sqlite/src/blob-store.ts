@@ -11,6 +11,15 @@ export interface StoredBlob {
   size: number;
 }
 
+/**
+ * A blob's hash becomes a path, and a hash can arrive from another machine
+ * (sync), so anything but a SHA-256 hex digest is refused before it gets
+ * near one: `../..` must never escape the store.
+ */
+function assertSha256(sha256: string): void {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error(`Not a blob hash: ${JSON.stringify(sha256.slice(0, 80))}`);
+}
+
 function isEnoentError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as NodeJS.ErrnoException).code === 'ENOENT';
 }
@@ -136,10 +145,12 @@ export class BlobStore {
    * same hash and skip re-uploading entirely) as well as after.
    */
   pathFor(sha256: string): string {
+    assertSha256(sha256);
     return join(this.root, sha256.slice(0, 2), sha256);
   }
 
   private legacyPathFor(sha256: string): string | null {
+    assertSha256(sha256);
     return this.legacyRoot ? join(this.legacyRoot, sha256.slice(0, 2), sha256) : null;
   }
 

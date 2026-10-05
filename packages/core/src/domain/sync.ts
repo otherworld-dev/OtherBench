@@ -21,6 +21,20 @@ export const SYNC_TABLES = [
 ] as const;
 export type SyncTable = (typeof SYNC_TABLES)[number];
 
+/**
+ * The SecretStore reference a connection's API key is kept under, always
+ * derived from its id: a synced row can't name another secret to be read
+ * or overwritten through it.
+ */
+export function connectionSecretRef(connectionId: string): string {
+  return `conn:${connectionId}`;
+}
+
+/** A blob's name on disk is its SHA-256: anything else is refused before it reaches a path. */
+export function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
 export function isSyncTable(t: string): t is SyncTable {
   return (SYNC_TABLES as readonly string[]).includes(t);
 }
