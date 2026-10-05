@@ -19,7 +19,16 @@ export interface PeerMonitorOptions {
   onMessage?: (nodeId: string, event: string, data: unknown) => void;
   /** A peer's stream (re)connected: a good moment to sync with it. */
   onConnected?: (nodeId: string) => void;
+  /** How long a stream may go without a byte (keepalives included) before it's taken as lost. */
+  idleTimeoutMs?: number;
 }
+
+/**
+ * A peer's `/peer/events` stream carries a keepalive every 25 s, so a minute
+ * with nothing at all means the connection died without closing (a laptop
+ * asleep, a network changed under it), which TCP alone may never report.
+ */
+const IDLE_TIMEOUT_MS = 60_000;
 
 interface Loop {
   stopped: boolean;
@@ -27,11 +36,16 @@ interface Loop {
   wake: (() => void) | null;
 }
 
-/** Calls `onEvent` for each event record in a text/event-stream body; resolves when the stream ends. */
-export async function readEventStream(response: IncomingMessage, onEvent: (event: string, data: unknown) => void): Promise<void> {
+/**
+ * Calls `onEvent` for each event record in a text/event-stream body, and
+ * `onChunk` for every chunk received (comments included); resolves when the
+ * stream ends.
+ */
+export async function readEventStream(response: IncomingMessage, onEvent: (event: string, data: unknown) => void, onChunk?: () => void): Promise<void> {
   let buffer = '';
   response.setEncoding('utf8');
   for await (const chunk of response) {
+    onChunk?.();
     buffer += chunk as string;
     let end: number;
     while ((end = buffer.indexOf('\n\n')) !== -1) {
@@ -68,6 +82,7 @@ export class PeerMonitor {
   private readonly now: () => number;
   private readonly minBackoff: number;
   private readonly maxBackoff: number;
+  private readonly idleTimeout: number;
 
   constructor(
     private readonly service: PeerService,
@@ -76,6 +91,7 @@ export class PeerMonitor {
     this.now = options.now ?? Date.now;
     this.minBackoff = options.minBackoffMs ?? 1_000;
     this.maxBackoff = options.maxBackoffMs ?? 60_000;
+    this.idleTimeout = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS;
   }
 
   start(): void {
@@ -160,11 +176,31 @@ export class PeerMonitor {
           this.set(nodeId, 'reachable');
           backoff = this.minBackoff;
           this.options.onConnected?.(nodeId);
-          await readEventStream(response, (event, data) => {
-            if (event !== 'hello') this.options.onMessage?.(nodeId, event, data);
-          });
+          let silent = false;
+          let idle: ReturnType<typeof setTimeout> | undefined;
+          const heardFrom = (): void => {
+            clearTimeout(idle);
+            idle = setTimeout(() => {
+              silent = true;
+              close();
+            }, this.idleTimeout);
+          };
+          heardFrom();
+          try {
+            await readEventStream(
+              response,
+              (event, data) => {
+                if (event !== 'hello') this.options.onMessage?.(nodeId, event, data);
+              },
+              heardFrom
+            );
+          } catch (err) {
+            if (!silent) throw err;
+          } finally {
+            clearTimeout(idle);
+          }
           close();
-          error = 'The connection closed.';
+          error = silent ? `Heard nothing from ${peer.name} in ${Math.round(this.idleTimeout / 1000)} s, so the connection was taken as lost.` : 'The connection closed.';
         }
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
