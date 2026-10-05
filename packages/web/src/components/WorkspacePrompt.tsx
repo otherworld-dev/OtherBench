@@ -4,6 +4,7 @@ import type { WorkspaceStatus } from '@grunt/core/types/workspace.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api, type InferLocationResult, type LocationView } from '../state/api.js';
+import { isReachablePeer, machineName } from '../state/machines.js';
 import { useGruntStore } from '../state/store.js';
 
 type Unresolved = Extract<WorkspaceStatus, { status: 'unresolved' }>;
@@ -43,6 +44,9 @@ export function WorkspacePrompt({ chat }: { chat: Chat }): JSX.Element | null {
 
 function UnresolvedPrompt({ chat, unresolved }: { chat: Chat; unresolved: Unresolved }): JSX.Element {
   const upsertChat = useGruntStore((s) => s.upsertChat);
+  const machines = useGruntStore((s) => s.machines);
+  // The folder is where it should be on another machine that's reachable: the chat can run there.
+  const runOn = unresolved.hint && unresolved.hint.nodeId !== chat.runsOn && isReachablePeer(machines, unresolved.hint.nodeId) ? unresolved.hint.nodeId : null;
   const serverPlatform = useServerPlatform();
   const locationId = chat.workspace?.kind === 'location' ? chat.workspace.locationId : null;
 
@@ -146,6 +150,13 @@ function UnresolvedPrompt({ chat, unresolved }: { chat: Chat; unresolved: Unreso
     });
   }
 
+  function runThere(): void {
+    if (!runOn) return;
+    void run(async () => {
+      upsertChat(await api.chats.patch(chat.id, { runsOn: runOn }));
+    });
+  }
+
   function withoutFolder(): void {
     void run(async () => {
       upsertChat(await api.chats.patch(chat.id, { workspace: null }));
@@ -232,9 +243,16 @@ function UnresolvedPrompt({ chat, unresolved }: { chat: Chat; unresolved: Unreso
         </div>
       )}
 
-      <button type="button" onClick={withoutFolder} disabled={busy} className="text-xs text-[var(--text-muted)] underline hover:text-[var(--text)] disabled:opacity-50">
-        Continue without a folder
-      </button>
+      <div className="flex flex-wrap items-center gap-3">
+        {runOn && (
+          <button type="button" onClick={runThere} disabled={busy} className={BUTTON}>
+            Run on {machineName(machines, runOn)}
+          </button>
+        )}
+        <button type="button" onClick={withoutFolder} disabled={busy} className="text-xs text-[var(--text-muted)] underline hover:text-[var(--text)] disabled:opacity-50">
+          Continue without a folder
+        </button>
+      </div>
       {error && (
         <p role="alert" data-testid="workspace-prompt-error" className="text-xs text-[var(--danger)]">
           {error}

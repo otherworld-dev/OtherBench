@@ -126,6 +126,23 @@ describe('WorkspacePrompt', () => {
     expect(api.locations.adopt).not.toHaveBeenCalled();
   });
 
+  it('offers to run the chat on the machine that has the folder, when that machine is reachable', async () => {
+    useGruntStore.setState({
+      machines: {
+        self: { id: 'node-laptop', name: 'Laptop', fingerprint: 'A' },
+        listening: { running: true, addresses: [] },
+        peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
+      },
+    });
+    const c = chat({ workspaceStatus: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'node-pc', path: 'E:\\Git\\Grunt' } } });
+    vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-pc' }));
+    render(<WorkspacePrompt chat={c} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run on PC' }));
+
+    await waitFor(() => expect(api.chats.patch).toHaveBeenCalledWith('chat-1', { runsOn: 'node-pc' }));
+  });
+
   it('a missing folder: choose where it is now, or continue without a folder', async () => {
     const c = chat({ workspaceStatus: { status: 'unresolved', reason: 'missing', hint: { nodeId: 'node-laptop', path: 'C:\\old' } } });
     vi.mocked(api.chats.patch).mockResolvedValue(chat({ workspaceStatus: { status: 'none' } }));

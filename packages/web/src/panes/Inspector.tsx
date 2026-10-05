@@ -75,6 +75,49 @@ function workspaceConsequence(profile: Profile | null): string {
   return `This chat's profile can ${parts.join(' and ')} under this folder, subject to approval for each call.`;
 }
 
+/** Where this chat's turns run (v2 spec §5): this machine or a paired one. Hidden until a machine is paired. */
+function RunsOnSection({ chat }: { chat: Chat }): JSX.Element | null {
+  const machines = useGruntStore((s) => s.machines);
+  const upsertChat = useGruntStore((s) => s.upsertChat);
+  const [error, setError] = useState<string | null>(null);
+  if (!machines || machines.peers.length === 0) return null;
+  const known = chat.runsOn === machines.self.id || machines.peers.some((p) => p.nodeId === chat.runsOn);
+
+  async function choose(nodeId: string): Promise<void> {
+    setError(null);
+    try {
+      upsertChat(await api.chats.patch(chat.id, { runsOn: nodeId }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't change where this chat runs.");
+    }
+  }
+
+  return (
+    <Section title="Runs on">
+      <select
+        aria-label="Runs on"
+        value={chat.runsOn}
+        onChange={(e) => void choose(e.target.value)}
+        className="w-full rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-sm"
+      >
+        <option value={machines.self.id}>{machines.self.name} (this machine)</option>
+        {machines.peers.map((p) => (
+          <option key={p.nodeId} value={p.nodeId}>
+            {p.name} ({p.status === 'reachable' ? 'connected' : p.status === 'unreachable' ? 'unreachable' : 'checking'})
+          </option>
+        ))}
+        {!known && <option value={chat.runsOn}>A machine no longer paired</option>}
+      </select>
+      <p className="mt-1 text-xs text-[var(--text-muted)]">Its folder, tools and local models are those of the machine it runs on.</p>
+      {error && (
+        <p role="alert" className="mt-1 text-xs text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+    </Section>
+  );
+}
+
 function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | null }): JSX.Element {
   const upsertChat = useGruntStore((s) => s.upsertChat);
   const serverPlatform = useServerPlatform();
@@ -648,6 +691,7 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
         </Section>
       )}
 
+      {chat && <RunsOnSection chat={chat} />}
       <Section title="Workspace">
         {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>

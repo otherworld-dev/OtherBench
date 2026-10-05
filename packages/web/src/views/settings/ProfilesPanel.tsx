@@ -3,6 +3,7 @@ import type { FsMode, ModelParams, Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { ApiError, api, type CreateProfileBody } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
+import { machineName } from '../../state/machines.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -159,7 +160,12 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       dependentChatCount > 0
         ? ` This deletes ${dependentChatCount} chat${dependentChatCount === 1 ? '' : 's'} built on it (including ${dependentChatCount === 1 ? 'its' : 'their'} message history).`
         : '';
-    const ok = window.confirm(`Delete profile "${profile.name}"?${consequence} This cannot be undone.`);
+    // With paired machines the deletion syncs, and their copies of those chats go too (v2 spec §4).
+    const everywhere =
+      dependentChatCount > 0 && (useGruntStore.getState().machines?.peers.length ?? 0) > 0
+        ? ' Paired machines delete them too when they next sync. Archive the profile instead to keep them.'
+        : '';
+    const ok = window.confirm(`Delete profile "${profile.name}"?${consequence}${everywhere} This cannot be undone.`);
     if (!ok) return;
     setDeleting(true);
     setError(null);
@@ -446,7 +452,20 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   );
 }
 
-function ProfileRow({ profile, connectionName, active, onSelect }: { profile: Profile; connectionName: string; active: boolean; onSelect: () => void }): JSX.Element {
+function ProfileRow({
+  profile,
+  connectionName,
+  onlyOn,
+  active,
+  onSelect,
+}: {
+  profile: Profile;
+  connectionName: string;
+  /** The other machine its connection only works on, if it does. */
+  onlyOn: string | null;
+  active: boolean;
+  onSelect: () => void;
+}): JSX.Element {
   return (
     <li>
       <button
@@ -468,6 +487,7 @@ function ProfileRow({ profile, connectionName, active, onSelect }: { profile: Pr
       </button>
       <p className={`px-2 pb-1 truncate text-xs ${active ? 'text-[var(--accent-text)]' : 'text-[var(--text-muted)]'}`}>
         {connectionName} · {profile.modelId}
+        {onlyOn && <span data-testid="profile-only-on"> · Runs on {onlyOn} only</span>}
       </p>
     </li>
   );
@@ -524,6 +544,13 @@ export function ProfilesPanel(): JSX.Element {
   const selected = editingId && editingId !== 'new' ? (profiles.find((p) => p.id === editingId) ?? null) : null;
   const showForm = editingId === 'new' || selected !== null;
   const connectionName = (id: string): string => connections.find((c) => c.id === id)?.name ?? 'Unknown connection';
+  const machines = useGruntStore((s) => s.machines);
+  /** A profile whose connection works only on another machine can only run chats there. */
+  const onlyOn = (connectionId: string): string | null => {
+    const availability = connections.find((c) => c.id === connectionId)?.availability ?? 'anywhere';
+    if (availability === 'anywhere' || availability === machines?.self.id) return null;
+    return machineName(machines, availability);
+  };
 
   function handleSaved(profile: Profile): void {
     upsertProfile(profile);
@@ -552,7 +579,14 @@ export function ProfilesPanel(): JSX.Element {
         ) : (
           <ul data-testid="profiles-list" className="space-y-0.5">
             {profiles.map((p) => (
-              <ProfileRow key={p.id} profile={p} connectionName={connectionName(p.connectionId)} active={p.id === editingId} onSelect={() => setEditingId(p.id)} />
+              <ProfileRow
+                key={p.id}
+                profile={p}
+                connectionName={connectionName(p.connectionId)}
+                onlyOn={onlyOn(p.connectionId)}
+                active={p.id === editingId}
+                onSelect={() => setEditingId(p.id)}
+              />
             ))}
           </ul>
         )}

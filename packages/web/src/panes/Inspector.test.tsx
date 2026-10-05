@@ -244,6 +244,33 @@ function workspaceSection(): HTMLElement {
   return screen.getByRole('heading', { name: 'Workspace' }).closest('section')!;
 }
 
+describe('Inspector runs on', () => {
+  afterEach(cleanup);
+
+  it('is hidden until a machine is paired, then lists this machine and each paired one, and moves the chat', async () => {
+    useGruntStore.setState({ machines: null });
+    const { unmount } = render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.queryByRole('combobox', { name: 'Runs on' })).toBeNull();
+    unmount();
+
+    useGruntStore.setState({
+      machines: {
+        self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
+        listening: { running: true, addresses: [] },
+        peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
+      },
+    });
+    mockedChatsPatch.mockResolvedValue(makeChat({ runsOn: 'node-pc' }));
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const select = screen.getByRole('combobox', { name: 'Runs on' });
+    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.textContent)).toEqual(['Laptop (this machine)', 'PC (connected)']);
+    await userEvent.selectOptions(select, 'node-pc');
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { runsOn: 'node-pc' }));
+    useGruntStore.setState({ machines: null });
+  });
+});
+
 describe('Inspector workspace root', () => {
   afterEach(cleanup);
 

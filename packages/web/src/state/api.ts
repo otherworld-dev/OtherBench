@@ -110,6 +110,8 @@ export type ChatPatchBody = Partial<{
   workspaceRoot: string | null;
   /** Only null: no folder. */
   workspace: null;
+  /** The machine its turns run on: this one or a paired one (v2 spec §5). */
+  runsOn: string;
   pinned: boolean;
   archivedAt: number | null;
   autoMode: boolean;
