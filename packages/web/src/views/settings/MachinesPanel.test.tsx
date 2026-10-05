@@ -17,6 +17,8 @@ import { ApiError, api, type PeersOverview } from '../../state/api.js';
 import { FIREWALL_NOTE, MachinesPanel, peerStatusText, syncText } from './MachinesPanel.js';
 
 const at1402 = new Date(2026, 9, 5, 14, 2).getTime();
+/** 14:02 as the panel shows it, in whatever locale the tests run in. */
+const shown1402 = new Date(at1402).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 const overview: PeersOverview = {
   self: { id: 'node-laptop', name: 'Laptop', fingerprint: 'AB12 CD34 EF56 7890' },
@@ -56,7 +58,7 @@ afterEach(cleanup);
 describe('peerStatusText', () => {
   it('connected, unreachable since a time, or still checking', () => {
     expect(peerStatusText({ status: 'reachable', since: 0 })).toBe('Connected');
-    expect(peerStatusText({ status: 'unreachable', since: at1402 })).toMatch(/^Unreachable since 14:02/);
+    expect(peerStatusText({ status: 'unreachable', since: at1402 })).toBe(`Unreachable since ${shown1402}`);
     expect(peerStatusText({ status: 'unknown', since: 0 })).toBe('Checking…');
   });
 });
@@ -74,7 +76,7 @@ describe('MachinesPanel', () => {
     render(<MachinesPanel />);
     const pc = await screen.findByTestId('peer-node-pc');
     expect(within(pc).getByText('PC')).toBeInTheDocument();
-    expect(within(pc).getByTestId('peer-status')).toHaveTextContent(/Unreachable since 14:02/);
+    expect(within(pc).getByTestId('peer-status')).toHaveTextContent(`Unreachable since ${shown1402}`);
     expect(within(pc).getByText('192.168.1.20:4748, pc.lan:4748')).toBeInTheDocument();
     expect(screen.getByTestId('this-machine')).toHaveTextContent('Laptop');
     expect(screen.getByTestId('this-machine')).toHaveTextContent('AB12 CD34 EF56 7890');
