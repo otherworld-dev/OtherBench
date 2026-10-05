@@ -4,10 +4,13 @@ import { HTTPException } from 'hono/http-exception';
 import { PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Project, Store } from '@grunt/core/ports/store.js';
 import type { Container } from '../container.js';
-import { optionalNullableString, optionalWorkspaceRoot } from '../validation.js';
+import { optionalNullableString } from '../validation.js';
+import { parseWorkspaceBody, projectView, projectViews } from '../workspace-view.js';
 
 interface ProjectBody {
   name?: unknown;
+  workspace?: unknown;
+  workspacePath?: unknown;
   workspaceRoot?: unknown;
   defaultProfileId?: unknown;
   sortOrder?: unknown;
@@ -59,18 +62,18 @@ export function clearProjectDefaultProfile(store: Store, profileId: string): voi
 export function projectsRoutes(container: Container): Hono {
   const app = new Hono();
 
-  app.get('/', (c) => c.json(container.store.projects.list()));
+  app.get('/', (c) => c.json(projectViews(container, container.store.projects.list())));
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ProjectBody;
     const name = requireProjectName(body.name);
-    const workspaceRoot = optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null;
+    const workspace = parseWorkspaceBody(container, body) ?? null;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
     // New projects go to the bottom of the sidebar.
     const sortOrder = container.store.projects.list().reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1;
 
-    const created = container.store.projects.create({ id: randomUUID(), name, workspaceRoot, defaultProfileId, sortOrder });
-    return c.json(created, 201);
+    const created = container.store.projects.create({ id: randomUUID(), name, workspace, defaultProfileId, sortOrder });
+    return c.json(projectView(container, created), 201);
   });
 
   app.patch('/:id', async (c) => {
@@ -81,7 +84,8 @@ export function projectsRoutes(container: Container): Hono {
     // Every field is validated before anything is written.
     const patch: Partial<Omit<Project, 'id'>> = {};
     if (body.name !== undefined) patch.name = requireProjectName(body.name);
-    if (body.workspaceRoot !== undefined) patch.workspaceRoot = optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null;
+    const workspace = parseWorkspaceBody(container, body);
+    if (workspace !== undefined) patch.workspace = workspace;
     if (body.defaultProfileId !== undefined) patch.defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
     if (body.sortOrder !== undefined) {
       if (typeof body.sortOrder !== 'number' || !Number.isInteger(body.sortOrder)) {
@@ -91,7 +95,7 @@ export function projectsRoutes(container: Container): Hono {
     }
     patch.updatedAt = Date.now();
 
-    return c.json(container.store.projects.update(id, patch));
+    return c.json(projectView(container, container.store.projects.update(id, patch)));
   });
 
   app.delete('/:id', (c) => {

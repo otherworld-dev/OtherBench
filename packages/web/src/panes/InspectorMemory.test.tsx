@@ -21,7 +21,7 @@ import { InspectorMemory } from './InspectorMemory.js';
 const m = vi.mocked(api.memory);
 
 const NOTE = '## Pinned\n- Stay on SQLite\n\n## Goals\n- Ship memory\n\n## Decisions\n\n## Current focus\n\n## Open questions';
-const project: Project = { id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const project: Project = { id: 'proj', name: 'Alpha', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 
 function chat(over: Partial<Chat> = {}): Chat {
   return {
@@ -29,6 +29,8 @@ function chat(over: Partial<Chat> = {}): Chat {
     title: 'Planning',
     profileId: 'p',
     headMessageId: null,
+    workspace: null,
+    runsOn: 'node-self',
     workspaceRoot: null,
     pinned: false,
     archivedAt: null,

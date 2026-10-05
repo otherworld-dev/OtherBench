@@ -64,6 +64,8 @@ export interface CanonMessage {
   producedBy: ProducedBy | null;
   /** Present only on assistant messages produced by an engine that keeps its own state. Absent otherwise (never null). */
   engineMeta?: EngineMeta;
+  /** The machine (node id) that wrote this message. Filled in by the store when not given. */
+  originNode?: string;
   /**
    * When the user last kept this reply as the chosen variant of a compare
    * turn (set by moving the head onto it). Absent otherwise (never null). It
@@ -83,4 +85,6 @@ export interface SerializedError {
 
 export type ErrorKind =
   | 'auth' | 'rate_limit' | 'context_overflow' | 'content_filter'
-  | 'model_not_found' | 'capability' | 'transient' | 'cancelled' | 'unknown';
+  | 'model_not_found' | 'capability' | 'transient' | 'cancelled' | 'unknown'
+  /** The chat's folder doesn't resolve on the machine the turn runs on (v2 spec §6). Never sent to the engine. */
+  | 'workspace_unresolved';

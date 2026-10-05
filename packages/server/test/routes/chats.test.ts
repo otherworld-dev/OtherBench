@@ -425,8 +425,8 @@ describe('workspaceRoot validation', () => {
       body: JSON.stringify({ workspaceRoot: '../..' }),
     });
     expect(res.status).toBe(400);
-    // Nothing was written -- the chat's workspaceRoot is unchanged.
-    expect(container.store.chats.get(created['id'] as string)?.workspaceRoot).toBeNull();
+    // Nothing was written -- the chat still has no folder.
+    expect(container.store.chats.get(created['id'] as string)?.workspace).toBeNull();
   });
 
   it.skipIf(process.platform !== 'win32')(

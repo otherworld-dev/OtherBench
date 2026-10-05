@@ -7,7 +7,7 @@ import { useGruntStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
 
 const makeChat = (head: string | null): Chat => ({
-  id: 'chat-1', title: 'Chat 1', profileId: 'p1', headMessageId: head, workspaceRoot: null,
+  id: 'chat-1', title: 'Chat 1', profileId: 'p1', headMessageId: head, workspace: null, runsOn: 'node-self', workspaceRoot: null,
   pinned: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1,
 });
 const msg = (id: string, overrides: Partial<CanonMessage>): CanonMessage => ({

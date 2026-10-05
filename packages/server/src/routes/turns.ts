@@ -1,12 +1,13 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { isCompareSet } from '@grunt/core/domain/tree.js';
-import { InvalidAttachmentReferenceError, RegenerateError } from '@grunt/core/domain/turn.js';
+import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMessage } from '@grunt/core/domain/turn.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { sseStream } from '../stream/sse.js';
 import { requireNonEmptyString } from '../validation.js';
+import { chatView, workspaceResolver } from '../workspace-view.js';
 
 interface TurnBody {
   parentId?: unknown;
@@ -111,12 +112,25 @@ function getChatOrThrow(container: Container, chatId: string) {
   return chat;
 }
 
+/**
+ * A 409 when the chat's folder doesn't resolve on this machine, before any
+ * row is written (v2 spec §6): the UI asks where the folder is instead. The
+ * turn runner refuses too, for anything that reaches it some other way.
+ */
+function workspaceRefusal(container: Container, c: Context, chatId: string): Response | null {
+  const chat = getChatOrThrow(container, chatId);
+  const status = workspaceResolver(container)(chat.workspace);
+  if (status.status !== 'unresolved') return null;
+  return c.json({ error: workspaceUnresolvedMessage(status), kind: 'workspace_unresolved', workspaceStatus: status }, 409);
+}
+
 export function turnsRoutes(container: Container): Hono {
   const app = new Hono();
 
   app.post('/chats/:id/turns', async (c) => {
     const chatId = c.req.param('id');
-    getChatOrThrow(container, chatId);
+    const refusal = workspaceRefusal(container, c, chatId);
+    if (refusal) return refusal;
 
     const body = (await c.req.json().catch(() => ({}))) as TurnBody;
     const parentId = parseParentId(body.parentId);
@@ -190,6 +204,8 @@ export function turnsRoutes(container: Container): Hono {
         message: `Message "${messageId}" is ${message.status}; only an errored message can be retried.`,
       });
     }
+    const refusal = workspaceRefusal(container, c, message.chatId);
+    if (refusal) return refusal;
 
     const profile = await resolveProfile(container, message.producedBy.profileId);
     // Reset the SSE buffer *before* kicking off the retry -- same
@@ -214,7 +230,8 @@ export function turnsRoutes(container: Container): Hono {
   // streams in the background like POST .../turns.
   app.post('/chats/:id/regenerate', async (c) => {
     const chatId = c.req.param('id');
-    getChatOrThrow(container, chatId);
+    const refusal = workspaceRefusal(container, c, chatId);
+    if (refusal) return refusal;
 
     const body = (await c.req.json().catch(() => ({}))) as RegenerateBody;
     const messageId = requireNonEmptyString(body.messageId, 'messageId');
@@ -276,7 +293,7 @@ export function turnsRoutes(container: Container): Hono {
     }
 
     const updated = container.store.chats.update(chatId, { headMessageId: messageId });
-    return c.json(updated);
+    return c.json(chatView(container, updated));
   });
 
   app.get('/chats/:id/stream', (c) => {

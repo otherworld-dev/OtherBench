@@ -28,12 +28,14 @@ import { Inspector } from './Inspector.js';
 const m = vi.mocked(api.memory);
 
 const noteFor = (name: string): string => `## Pinned\n\n## Goals\n- ${name} goal\n\n## Decisions\n\n## Current focus\n\n## Open questions`;
-const project = (id: string, name: string): Project => ({ id, name, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 });
+const project = (id: string, name: string): Project => ({ id, name, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 });
 const chatIn = (id: string, projectId: string): Chat => ({
   id,
   title: id,
   profileId: 'p1',
   headMessageId: null,
+  workspace: null,
+  runsOn: 'node-self',
   workspaceRoot: null,
   pinned: false,
   autoMode: false,

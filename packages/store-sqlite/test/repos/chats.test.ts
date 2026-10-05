@@ -64,7 +64,7 @@ describe('SqliteChatRepo', () => {
 
     const got = repo.get('chat-a');
     expect(got?.pinned).toBe(true);
-    expect(got?.workspaceRoot).toBe('/some/workspace');
+    expect(got?.workspace).toEqual({ kind: 'machine', nodeId: expect.any(String), root: '/some/workspace' });
     expect(repo.list().map((c) => c.id)).toEqual(['chat-a']);
     db.close();
   });

@@ -199,6 +199,42 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
     );
   }
 
+  // A folder that doesn't resolve here (v2 spec §6): say why rather than "no folder".
+  const status = localWorkspaceRoot === undefined ? chat.workspaceStatus : undefined;
+  if (status?.status === 'unresolved') {
+    const where =
+      status.reason === 'other-machine'
+        ? `This chat's folder is on another machine${status.hint ? `: ${status.hint.path}` : ''}.`
+        : status.reason === 'no-location-path'
+          ? `This chat's folder is in a location with no folder on this machine yet${status.hint ? ` (elsewhere: ${status.hint.path})` : ''}.`
+          : `${status.hint?.path ?? "This chat's folder"} doesn't exist on this machine.`;
+    return (
+      <div className="space-y-2" data-testid="workspace-section">
+        <p data-testid="workspace-unresolved" className="text-sm text-[var(--warn)]">
+          {where}
+        </p>
+        <div className="flex gap-2">
+          <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">
+            Choose folder…
+          </button>
+          <button
+            type="button"
+            onClick={() => void commit(null)}
+            disabled={saving}
+            className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+          >
+            No folder
+          </button>
+        </div>
+        {error && (
+          <p data-testid="workspace-root-error" className="text-xs text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   if (!displayedWorkspaceRoot) {
     return (
       <div className="space-y-2" data-testid="workspace-section">
@@ -215,6 +251,11 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
       <p data-testid="workspace-root-value" className="rounded bg-[var(--bg-sunken)] px-2 py-1 font-mono text-sm break-all">
         {displayedWorkspaceRoot}
       </p>
+      {localWorkspaceRoot === undefined && chat.workspace?.kind === 'location' && (
+        <p data-testid="workspace-in-location" className="text-xs text-[var(--text-muted)]">
+          In a location, so it works on any machine that knows where the location is.
+        </p>
+      )}
       <p className="text-xs text-[var(--text-muted)]">{workspaceConsequence(profile)}</p>
       <div className="flex gap-2">
         <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">

@@ -57,6 +57,8 @@ export interface Container {
    * only so route tests can build a Container without one.
    */
   events?: AppEventBus;
+  /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
+  pathExists?: (path: string) => boolean;
   close(): void;
 }
 

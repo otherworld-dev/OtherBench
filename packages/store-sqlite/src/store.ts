@@ -5,6 +5,7 @@ import type {
   ChatRepo,
   ConnectionRepo,
   GrantRepo,
+  LocationRepo,
   McpServerRepo,
   MessageRepo,
   ModelRepo,
@@ -20,9 +21,11 @@ import { SqliteAuditRepo } from './repos/audit.js';
 import { SqliteChatRepo } from './repos/chats.js';
 import { SqliteConnectionRepo } from './repos/connections.js';
 import { SqliteGrantRepo } from './repos/grants.js';
+import { SqliteLocationRepo } from './repos/locations.js';
 import { SqliteMcpServerRepo } from './repos/mcp-servers.js';
 import { SqliteMessageRepo } from './repos/messages.js';
 import { SqliteModelRepo } from './repos/models.js';
+import { SqliteNodeRepo } from './repos/nodes.js';
 import { SqliteProfileRepo } from './repos/profiles.js';
 import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
 import { SqliteProjectRepo } from './repos/projects.js';
@@ -38,6 +41,8 @@ import { SqliteUsageRepo } from './repos/usage.js';
  * opening (and migrating) the database; this type owns closing it.
  */
 export class SqliteStore implements Store {
+  readonly nodes: SqliteNodeRepo;
+  readonly locations: LocationRepo;
   readonly connections: ConnectionRepo;
   readonly models: ModelRepo;
   readonly profiles: ProfileRepo;
@@ -53,14 +58,17 @@ export class SqliteStore implements Store {
   readonly audit: AuditRepo;
 
   constructor(private readonly db: DatabaseSync) {
+    this.nodes = new SqliteNodeRepo(db);
+    const selfId = () => this.nodes.selfId();
+    this.locations = new SqliteLocationRepo(db);
     this.connections = new SqliteConnectionRepo(db);
     this.models = new SqliteModelRepo(db);
     this.profiles = new SqliteProfileRepo(db);
-    this.chats = new SqliteChatRepo(db);
-    this.projects = new SqliteProjectRepo(db);
+    this.chats = new SqliteChatRepo(db, selfId);
+    this.projects = new SqliteProjectRepo(db, selfId);
     this.projectMemory = new SqliteProjectMemoryRepo(db);
     this.settings = new SqliteSettingsRepo(db);
-    this.messages = new SqliteMessageRepo(db);
+    this.messages = new SqliteMessageRepo(db, selfId);
     this.attachments = new SqliteAttachmentRepo(db);
     this.usage = new SqliteUsageRepo(db);
     this.mcpServers = new SqliteMcpServerRepo(db);

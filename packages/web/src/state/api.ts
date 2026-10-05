@@ -5,6 +5,8 @@ import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
+import type { Location, LocationPath, NodeInfo } from '@grunt/core/types/workspace.js';
+import type { InferredMapping } from '@grunt/core/domain/workspace.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
@@ -88,15 +90,21 @@ export interface CreateChatBody {
   title?: string;
   /** Required unless `projectId` is given: the server then uses the project's default profile, else the app default. */
   profileId?: string;
+  /** An absolute path on this machine; stored relative to a location when it's inside one. */
+  workspacePath?: string | null;
   workspaceRoot?: string | null;
-  /** Files the new chat in this project; it starts with the project's folder unless `workspaceRoot` is given. */
+  /** Files the new chat in this project; it starts with the project's folder unless a folder is given. */
   projectId?: string;
 }
 
 export type ChatPatchBody = Partial<{
   title: string;
   profileId: string;
+  /** An absolute path on this machine; stored relative to a location when it's inside one. */
+  workspacePath: string | null;
   workspaceRoot: string | null;
+  /** Only null: no folder. */
+  workspace: null;
   pinned: boolean;
   archivedAt: number | null;
   autoMode: boolean;
@@ -120,6 +128,28 @@ export type PatchProjectBody = Partial<{
   defaultProfileId: string | null;
   sortOrder: number;
 }>;
+
+/** A location with every machine's path for it (`GET /api/locations`). */
+export interface LocationView extends Location {
+  paths: LocationPath[];
+}
+
+export interface InferLocationResult {
+  mapping: InferredMapping | null;
+  /** A location that already has one of the two roots. */
+  existing: Location | null;
+  /** Chats and projects on that machine that adopting the mapping would move into it. */
+  affected: number;
+}
+
+export interface AdoptLocationBody {
+  /** An existing location; otherwise `name` creates one. */
+  locationId?: string;
+  name?: string;
+  nodeId: string;
+  fromRoot: string;
+  toRoot: string;
+}
 
 export interface CreateTurnBody {
   parentId: string | null;
@@ -257,6 +287,24 @@ export const api = {
     restore: (projectId: string, versionId: string) => post<ProjectMemoryView>(`/projects/${projectId}/memory/versions/${versionId}/restore`),
     /** Folds this chat's new turns in now. Resolves when the update has finished; 409 when the chat isn't in a project or is excluded. */
     updateNow: (chatId: string) => post<MemoryUpdateOutcome>(`/chats/${chatId}/memory/update`),
+  },
+
+  /** Named places each machine keeps at its own path (v2 spec §6). */
+  locations: {
+    list: () => request<LocationView[]>('/locations'),
+    create: (body: { name: string; path?: string | null }) => post<LocationView>('/locations', body),
+    rename: (id: string, name: string) => patch<LocationView>(`/locations/${id}`, { name }),
+    /** This machine's path for it; null removes it. */
+    setPath: (id: string, path: string | null) => put<LocationView>(`/locations/${id}/path`, { path }),
+    delete: (id: string) => del(`/locations/${id}`),
+    infer: (body: { nodeId: string; fromPath: string; toPath: string }) => post<InferLocationResult>('/locations/infer', body),
+    adopt: (body: AdoptLocationBody) => post<{ location: LocationView; converted: number }>('/locations/adopt', body),
+  },
+
+  /** This machine. */
+  node: {
+    get: () => request<NodeInfo>('/node'),
+    rename: (name: string) => patch<NodeInfo>('/node', { name }),
   },
 
   settings: {

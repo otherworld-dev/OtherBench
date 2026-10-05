@@ -523,6 +523,45 @@ describe('TurnRunner.run', () => {
 // convert.ts fallback at all).
 // ---------------------------------------------------------------------------
 
+describe("TurnRunner and the chat's folder (v2 spec §6)", () => {
+  function chatWith(store: InMemoryStore, workspace: Parameters<InMemoryStore['chats']['create']>[0]['workspace']): void {
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspace, pinned: false, archivedAt: null });
+  }
+
+  it("ends the reply with workspace_unresolved, and never calls the engine, when the folder doesn't resolve here", async () => {
+    const store = new InMemoryStore('node-laptop');
+    chatWith(store, { kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git' });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine, { pathExists: () => true });
+    const statuses: string[] = [];
+    runner.on((e) => {
+      if (e.type === 'status') statuses.push(e.status);
+    });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('error'));
+
+    expect(store.messages.get(id)!.error).toMatchObject({ kind: 'workspace_unresolved', retryable: false, message: expect.stringContaining('another machine') });
+    expect(engine.requests).toEqual([]);
+    expect(statuses).toContain('error');
+  });
+
+  it('hands the engine the folder as resolved on this machine', async () => {
+    const store = new InMemoryStore('node-laptop');
+    store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    store.locations.setPath({ locationId: 'nc', nodeId: 'node-laptop', path: '/home/adam/Nextcloud' });
+    chatWith(store, { kind: 'location', locationId: 'nc', subpath: 'phd' });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine, { pathExists: (p) => p === '/home/adam/Nextcloud/phd' });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+
+    expect(engine.requests[0]!.workspaceRoot).toBe('/home/adam/Nextcloud/phd');
+  });
+});
+
 describe('TurnRunner capability fallback for image attachments', () => {
   it('leaves an image part untouched when the profile model supports vision', async () => {
     const store = new InMemoryStore();

@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ResolvedProfile } from '../types/config.js';
+import type { WorkspaceStatus } from '../types/workspace.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
+import { translateForNode } from './path-translate.js';
+import { resolveWorkspace } from './workspace.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -138,9 +142,31 @@ export interface TurnRunnerOptions {
    * parts, which is every test and caller before this task.
    */
   loadAttachment?: (id: string) => Promise<Buffer>;
+  /** Whether a folder exists, for resolving a chat's workspace. Defaults to `fs.existsSync`. */
+  pathExists?: (path: string) => boolean;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
+
+/** What a chat's unresolved folder means for a turn, in words for the error shown on the reply. */
+export function workspaceUnresolvedMessage(status: Extract<WorkspaceStatus, { status: 'unresolved' }>): string {
+  switch (status.reason) {
+    case 'no-location-path':
+      return "This chat's folder is in a location that has no path on this machine yet. Choose where it is here, or run the chat on the machine that has it.";
+    case 'other-machine':
+      return `This chat's folder (${status.hint?.path ?? 'on another machine'}) is on another machine. Choose a folder here, or run the chat on that machine.`;
+    case 'missing':
+      return `This chat's folder ${status.hint?.path ?? ''} doesn't exist on this machine any more. Choose where it is now.`;
+  }
+}
+
+/** Thrown inside a variant whose chat's folder doesn't resolve here: it ends the reply before the engine is called. */
+class WorkspaceUnresolvedError extends Error {
+  constructor(readonly status: Extract<WorkspaceStatus, { status: 'unresolved' }>) {
+    super(workspaceUnresolvedMessage(status));
+    this.name = 'WorkspaceUnresolvedError';
+  }
+}
 
 /**
  * Written for a variant cancelled before the engine ever reported usage --
@@ -195,6 +221,7 @@ export class TurnRunner {
   private readonly checkpointIntervalMs: number;
   private readonly toolProvider?: ToolProvider;
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
+  private readonly pathExists: (path: string) => boolean;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
 
@@ -208,6 +235,7 @@ export class TurnRunner {
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
     this.loadAttachment = options.loadAttachment;
+    this.pathExists = options.pathExists ?? existsSync;
     this.toolProvider?.onApprovalEvent((event) => {
       if (event.type === 'request') {
         this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
@@ -480,10 +508,24 @@ export class TurnRunner {
       // made between turns applies from the very next turn (and to a retry),
       // never mid-turn.
       const chat = this.store.chats.get(chatId);
-      const workspaceRoot = chat?.workspaceRoot ?? null;
+      // Resolved on this machine at turn time, never read raw: a folder from
+      // another machine, or a location with no path here, must not reach the
+      // tools as if it were local (v2 spec §6).
+      const selfNodeId = this.store.nodes.self().id;
+      const locationPaths = this.store.locations.allPaths();
+      const workspace = resolveWorkspace(chat?.workspace ?? null, selfNodeId, locationPaths, this.pathExists);
+      if (workspace.status === 'unresolved') {
+        // Yield first so the turns route has registered this reply's stream
+        // and the failure reaches live subscribers (see the notice comment below).
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        throw new WorkspaceUnresolvedError(workspace);
+      }
+      const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
       const autoMode = chat?.autoMode ?? false;
       const requestProfile = this.withProjectMemory(profile, chat);
-      const history = this.buildRequestMessages(userMessageId, requestProfile);
+      // Other machines' folder paths in tool calls and results, as they are
+      // on this machine (spec §6); the stored messages are untouched.
+      const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -606,7 +648,10 @@ export class TurnRunner {
       }
     } catch (err) {
       status = 'error';
-      error = classifyProviderError(err);
+      error =
+        err instanceof WorkspaceUnresolvedError
+          ? { kind: 'workspace_unresolved', message: err.message, retryable: false, detail: err.status }
+          : classifyProviderError(err);
     } finally {
       this.controllers.delete(messageId);
       cancelled = controller.signal.aborted;
