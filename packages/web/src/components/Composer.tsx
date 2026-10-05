@@ -107,6 +107,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [autoError, setAutoError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -272,6 +273,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     // A stale remove-failure message from before this send must not linger
     // over the (possibly different) attachments actually being sent now.
     setRemoveError(null);
+    setSendError(null);
     const parts: Part[] = [
       ...(trimmed.length > 0 ? [{ type: 'text', text: trimmed } as Part] : []),
       ...attachments.map(attachmentToPart),
@@ -305,6 +307,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       textareaRef.current?.focus();
     } catch (err) {
       console.error('[grunt-web] failed to send turn:', err);
+      // The message stays in the box to send again; say why it didn't go.
+      setSendError(err instanceof ApiError ? `Couldn't send: ${err.message}` : "Couldn't send the message. Please try again.");
     } finally {
       setSending(false);
     }
@@ -450,6 +454,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       {autoError && (
         <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
           {autoError}
+        </div>
+      )}
+
+      {sendError && (
+        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+          {sendError}
         </div>
       )}
 
