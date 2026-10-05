@@ -9,7 +9,7 @@ import { TAB_DRAG_MIME, TabBar } from './TabBar.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return {
-    id, title: `Chat ${id}`, profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false,
+    id, title: `Chat ${id}`, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false,
     projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
   };
 }

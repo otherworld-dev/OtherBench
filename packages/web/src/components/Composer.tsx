@@ -132,7 +132,10 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   }, [primaryId, onPrimaryProfileChange]);
 
   const selectedProfiles = selectedProfileIds.map((id) => profiles.find((p) => p.id === id)).filter((p): p is Profile => !!p);
-  const needsWorkspace = !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));
+  // A folder that doesn't resolve on this machine blocks sending until the
+  // prompt above the composer is answered (v2 spec §6).
+  const folderUnresolved = (storedChat ?? chat).workspaceStatus?.status === 'unresolved';
+  const needsWorkspace = !folderUnresolved && !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));
   // Auto mode (spec 2026-10-03-claude-code-auto-mode-design section 2): offered
   // when any selected profile runs through Claude Code; it needs the Claude
   // login, so it's unavailable when every such profile uses an endpoint backend.
@@ -259,7 +262,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     // The same rules as the Send button, which Enter reaches without: never
     // while a reply is still running (that would start a second reply beside
     // it), and never for Claude Code without a workspace folder.
-    if (isStreaming || needsWorkspace) return;
+    if (isStreaming || needsWorkspace || folderUnresolved) return;
 
     setSending(true);
     // A stale remove-failure message from before this send must not linger
@@ -501,7 +504,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           <button
             type="button"
             onClick={() => void handleSend()}
-            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace}
+            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved}
             className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
           >
             Send

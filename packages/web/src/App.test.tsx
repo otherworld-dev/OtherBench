@@ -79,7 +79,7 @@ describe('App bootstrap', () => {
     mockedProfiles.mockResolvedValue([]);
     mockedChats.mockResolvedValue([]);
     mockedProjects.mockResolvedValue([
-      { id: 'p-a', name: 'Alpha', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
+      { id: 'p-a', name: 'Alpha', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 },
     ]);
 
     render(<App />);

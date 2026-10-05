@@ -40,6 +40,8 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     title: 'Chat 1',
     profileId: 'p1',
     headMessageId: null,
+    workspace: null,
+    runsOn: 'node-self',
     workspaceRoot: null,
     pinned: false,
     autoMode: false,

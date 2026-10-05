@@ -66,6 +66,8 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     title: 'Test chat',
     profileId: 'p1',
     headMessageId: null,
+    workspace: null,
+    runsOn: 'node-self',
     workspaceRoot: null,
     pinned: false,
     autoMode: false,
@@ -249,6 +251,17 @@ describe('Composer', () => {
     await user.type(box, 'one more thing{Enter}');
     expect(mockedCreate).not.toHaveBeenCalled();
     expect(box).toHaveValue('one more thing');
+  });
+
+  it("sends nothing while the chat's folder doesn't resolve on this machine (the prompt above asks first)", async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ workspaceStatus: { status: 'unresolved', reason: 'other-machine' } })} />);
+    const box = screen.getByRole('textbox', { name: /message/i });
+    await user.type(box, 'hello');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(box).toHaveValue('hello');
   });
 
   it('shows a stop button while a variant is streaming, and it cancels every in-flight variant', async () => {

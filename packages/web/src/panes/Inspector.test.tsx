@@ -66,6 +66,8 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     title: 'Chat 1',
     profileId: 'p1',
     headMessageId: null,
+    workspace: null,
+    runsOn: 'node-self',
     workspaceRoot: null,
     pinned: false,
     autoMode: false,
@@ -499,7 +501,7 @@ describe('Inspector project', () => {
   });
 
   it("links to the chat's project: clicking expands its sidebar group and scrolls to it", async () => {
-    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(['p-w']));
     const target = document.createElement('div');
     target.id = groupDomId('p-w');
@@ -515,7 +517,7 @@ describe('Inspector project', () => {
   });
 
   it("moves focus to the project's group heading button after revealing it", async () => {
-    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     const target = document.createElement('div');
     target.id = groupDomId('p-w');
     target.scrollIntoView = vi.fn();
@@ -532,7 +534,7 @@ describe('Inspector project', () => {
   });
 
   it('shows a Project memory section only for a chat in a loaded project', () => {
-    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
+    useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(screen.getByRole('heading', { name: 'Project memory' })).toBeInTheDocument();
     expect(screen.getByTestId('inspector-memory')).toHaveTextContent('memory for p-w');

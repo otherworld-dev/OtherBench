@@ -29,7 +29,7 @@ const profile = (id: string, over: Partial<Profile> = {}): Profile => ({
   toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null, ...over,
 });
 const chat = (id: string): Chat => ({
-  id, title: 'New Chat', profileId: 'p-default', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false,
+  id, title: 'New Chat', profileId: 'p-default', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false,
   projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1,
 });
 

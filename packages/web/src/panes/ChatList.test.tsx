@@ -68,6 +68,8 @@ const chat: Chat = {
   title: 'New Chat',
   profileId: 'profile-1',
   headMessageId: null,
+  workspace: null,
+  runsOn: 'node-self',
   workspaceRoot: null,
   pinned: false,
   autoMode: false,
@@ -85,7 +87,7 @@ function makeChat(overrides: Partial<Chat> & { id: string }): Chat {
 }
 
 function makeProject(overrides: Partial<Project> & { id: string }): Project {
-  return { name: overrides.id, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { name: overrides.id, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 /** The chat ids shown in one sidebar group, top to bottom. */
@@ -209,7 +211,7 @@ describe('ChatList groups', () => {
 
   it("a project's + creates a chat with only its projectId, opens it, and expands the group if it was collapsed (review focus 1)", async () => {
     const user = userEvent.setup();
-    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha', workspaceRoot: '/w' })] });
+    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha', workspace: null, workspaceRoot: '/w' })] });
     window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(['p-a']));
     mockedCreate.mockResolvedValue(makeChat({ id: 'c-new', projectId: 'p-a', workspaceRoot: '/w' }));
     render(<ChatList />);

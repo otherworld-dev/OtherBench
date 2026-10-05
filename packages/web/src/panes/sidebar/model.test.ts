@@ -4,11 +4,11 @@ import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
-  return { id, title: id, profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
+  return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string, sortOrder = 0): Project {
-  return { id, name, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
+  return { id, name, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);
