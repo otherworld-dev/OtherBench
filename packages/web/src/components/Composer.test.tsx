@@ -231,6 +231,25 @@ describe('Composer', () => {
     expect(textbox).toHaveValue('');
   });
 
+  it('keeps the message and says why when the send fails, and clears that on the next one', async () => {
+    mockedCreate.mockRejectedValueOnce(new ApiError(500, 'FOREIGN KEY constraint failed'));
+    const chat = makeChat();
+    const user = userEvent.setup();
+    render(<Composer chat={chat} />);
+
+    const textbox = screen.getByRole('textbox', { name: /message/i });
+    await user.type(textbox, 'Hello{Enter}');
+
+    expect(textbox).toHaveValue('Hello');
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't send: FOREIGN KEY constraint failed");
+
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+    mockedSetHead.mockResolvedValue(makeChat());
+    await user.keyboard('{Enter}');
+    expect(textbox).toHaveValue('');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('does not send an empty or whitespace-only message', async () => {
     const chat = makeChat();
     const user = userEvent.setup();

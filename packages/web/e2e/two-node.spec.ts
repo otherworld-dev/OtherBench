@@ -128,8 +128,12 @@ test('pair through the UI, run a PC chat from the laptop, then run it on the lap
   const onPc = await api<{ messages: { originNode?: string }[] }>(PC, 'GET', `/chats/${chat.id}/messages`);
   expect(onPc.messages.length).toBeGreaterThanOrEqual(2);
 
-  // The PC goes away: the laptop offers to run the chat here.
+  // The PC goes away mid-reply: the laptop keeps what it said, and offers to run the chat here.
+  await box.fill('tell me slowly #slow');
+  await box.press('Enter');
+  await expect(thread.getByText(/This reply trickles/)).toBeVisible({ timeout: 20_000 });
   await stop(PC);
+  await expect(thread.getByText('PC stopped responding.')).toBeVisible({ timeout: 20_000 });
   await expect(laptop.getByTestId('unreachable-banner')).toBeVisible({ timeout: 20_000 });
   await laptop.getByRole('button', { name: 'Run here' }).click();
 
@@ -139,10 +143,12 @@ test('pair through the UI, run a PC chat from the laptop, then run it on the lap
   await laptop.getByRole('button', { name: 'Save' }).click();
   await expect(laptop.getByTestId('workspace-prompt')).toHaveCount(0);
 
+  // Carrying on from the cut-off reply works here.
   await box.fill('carrying on while the PC is off');
   await box.press('Enter');
   await expect(thread.getByText(/Here is a mock reply from Grunt/)).toHaveCount(2, { timeout: 20_000 });
   await expect(laptop.getByLabel('streaming')).toHaveCount(0);
+  await expect(thread.getByText(/This reply trickles/)).toBeVisible();
 
   // The PC comes back and picks up the branch written on the laptop.
   await start(PC);

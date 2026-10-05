@@ -183,7 +183,7 @@ const ZERO_USAGE: Usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensRe
  * A different kind arriving (e.g. a tool-call between two text spans, or
  * the very first delta) starts a new part instead.
  */
-function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): Part[] {
+export function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): Part[] {
   const last = parts.at(-1);
   if (last && last.type === kind) {
     const merged = { ...last, text: last.text + text } as Part;

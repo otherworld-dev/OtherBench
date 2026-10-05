@@ -178,6 +178,46 @@ describe('running a chat on the machine it runs on', () => {
     expect(await again.json()).toMatchObject({ kind: 'peer_unreachable', nodeId: pc.id });
   });
 
+  it("keeps what a cut-off reply said, so the chat carries on here after Run here, until the PC's own copy arrives", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const { userMessageId, assistantMessageIds } = (await res.json()) as { userMessageId: string; assistantMessageIds: string[] };
+    const replyId = assistantMessageIds[0]!;
+
+    let said = '';
+    await readStream(stream, async (e) => {
+      if (e.data.type === 'text-delta' && e.data.messageId === replyId) {
+        said += e.data['text'] as string;
+        if (said.split(' ').length >= 3) await pc.container.peers!.listener.stop();
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'error';
+    });
+
+    // The laptop keeps the reply as far as it saw it, under the question it answers, as the PC's.
+    const kept = laptop.container.store.messages.get(replyId)!;
+    expect(kept).toMatchObject({ role: 'assistant', status: 'error', parentId: userMessageId, originNode: pc.id, producedBy: { profileId } });
+    expect(kept.error).toMatchObject({ kind: 'peer_unreachable', retryable: false });
+    expect(kept.parts).toEqual([{ type: 'text', text: said }]);
+    expect(laptop.container.store.messages.get(userMessageId)).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'slowly #slow' }] });
+    expect(laptop.container.events!.runningTurns()).toEqual([]);
+
+    // Run here: the chat carries on from the cut-off reply. Retrying it in
+    // place is refused (the PC may still be writing it); a new message is fine.
+    expect((await laptop.api('PATCH', `/api/chats/${chatId}`, { runsOn: laptop.id, workspace: null })).status).toBe(200);
+    expect((await laptop.api('POST', `/api/messages/${replyId}/retry`)).status).toBe(409);
+    const next = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: replyId, parts: [{ type: 'text', text: 'carry on' }], profileIds: [profileId] });
+    expect(next.status).toBe(202);
+
+    // The PC finishes its reply its own way (here: stopped) and comes back: its copy replaces the laptop's, never the reverse.
+    pc.container.turnRunner.cancel(replyId);
+    await expect.poll(() => pc.container.store.messages.get(replyId)?.status).toBe('cancelled');
+    await pc.container.peers!.listener.start();
+    await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
+    await pc.container.peers!.syncerOrNull()!.pullFrom(laptop.id);
+    for (const m of [pc, laptop]) expect(m.container.store.messages.get(replyId)!.status).toBe('cancelled');
+  });
+
   it('a chat that runs here is still run here, and the peer listener refuses to run one it does not run', async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     // The laptop takes the chat over (Run here): from now on it runs on the laptop.
