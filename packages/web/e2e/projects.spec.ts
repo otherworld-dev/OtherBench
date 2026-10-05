@@ -134,30 +134,42 @@ test('dragging a chat onto the top half of another places it there, and the orde
   await expect.poll(order).toEqual([first, third, second]);
 });
 
-test('a project chat shows tabs: + opens another, switching and closing work, and open tabs survive a reload (#824)', async ({ page, request }) => {
-  const projectName = `E2E Tabs ${randomUUID().slice(0, 8)}`;
-  const project = (await (await request.post(`${BASE_URL}/api/projects`, { data: { name: projectName } })).json()) as { id: string };
-  const first = (await (await request.post(`${BASE_URL}/api/chats`, { data: { projectId: project.id, title: 'Planning' } })).json()) as { id: string };
+test('Open in new tab from any project, two side by side, and tabs and layout survive a reload (#824)', async ({ page, request }) => {
+  const run = randomUUID().slice(0, 8);
+  const project = (await (await request.post(`${BASE_URL}/api/projects`, { data: { name: `E2E Tabs ${run}` } })).json()) as { id: string };
+  const inProject = (await (await request.post(`${BASE_URL}/api/chats`, { data: { projectId: project.id, title: `Planning ${run}` } })).json()) as { id: string };
+  const profiles = (await (await request.get(`${BASE_URL}/api/profiles`)).json()) as { id: string }[];
+  const loose = (await (await request.post(`${BASE_URL}/api/chats`, { data: { profileId: profiles[0]!.id, title: `Admin ${run}` } })).json()) as { id: string };
 
   await page.goto('/');
-  await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${first.id}`).locator('[data-row-main]').click();
-  const strip = page.getByRole('tablist', { name: `${projectName} chats` });
-  await expect(strip.getByRole('tab')).toHaveText(['Planning']);
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  // A sidebar click shows a chat without opening a tab.
+  await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click();
+  await expect(page.getByTestId('tab-bar')).toHaveCount(0);
 
-  await page.getByRole('button', { name: `New chat in ${projectName}` }).first().click();
-  await expect(strip.getByRole('tab')).toHaveCount(2);
-  const second = strip.getByRole('tab', { selected: true });
-  await expect(second).not.toHaveText('Planning');
+  for (const id of [inProject.id, loose.id]) {
+    await nav.getByTestId(`chat-row-${id}`).locator('[data-row-main]').click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
+  }
+  const tabs = page.getByRole('tablist', { name: 'Open chats' }).getByRole('tab');
+  await expect(tabs).toHaveCount(2);
 
-  await strip.getByRole('tab', { name: 'Planning' }).click();
-  await expect(strip.getByRole('tab', { name: 'Planning' })).toHaveAttribute('aria-selected', 'true');
+  await page.getByRole('button', { name: 'Two side by side' }).click();
+  const main = page.getByRole('main');
+  await expect(main.getByTestId('pane-0')).toContainText(`Admin ${run}`);
+  await expect(main.getByTestId('pane-1')).toContainText(`Planning ${run}`);
+  await main.getByTestId('pane-1').click();
+  await expect(main.getByTestId('pane-1')).toHaveAttribute('data-focused', 'true');
 
   await page.reload();
-  await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${first.id}`).locator('[data-row-main]').click();
-  await expect(strip.getByRole('tab')).toHaveCount(2);
+  await expect(tabs).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Two side by side' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(main.getByTestId('pane-0')).toContainText(`Admin ${run}`);
+  await expect(main.getByTestId('pane-1')).toContainText(`Planning ${run}`);
 
-  await page.getByRole('button', { name: 'Close tab Planning' }).click();
-  await expect(strip.getByRole('tab')).toHaveCount(1);
-  // The chat is only out of the tab strip, not gone.
-  await expect(page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${first.id}`)).toBeVisible();
+  // Back to one chat for whatever runs next in this browser.
+  await page.getByRole('button', { name: 'One chat' }).click();
+  await page.getByRole('button', { name: `Close tab Admin ${run}` }).click();
+  await expect(tabs).toHaveCount(1);
+  await expect(nav.getByTestId(`chat-row-${loose.id}`)).toBeVisible();
 });

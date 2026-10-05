@@ -10,7 +10,6 @@ import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
-import { ProjectTabs } from './ProjectTabs.js';
 
 /** How close (px) to the bottom still counts as "following" the thread. */
 const NEAR_BOTTOM_PX = 80;
@@ -146,9 +145,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
 
   if (!chat) {
     return (
-      <main className="flex h-full w-full flex-1 items-center justify-center text-sm text-[var(--text-faint)]">
+      <section aria-label="No chat open" className="flex h-full w-full flex-1 items-center justify-center text-sm text-[var(--text-faint)]">
         Select a chat, or start a new one, to begin.
-      </main>
+      </section>
     );
   }
 
@@ -298,7 +297,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   }
 
   return (
-    <main className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
+    // A section, not <main>: the pane grid around it is the page's one main region, and may hold several threads.
+    <section aria-label={chat.title} className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
       {switchError && (
         <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-4 py-2 text-sm text-[var(--danger)]">
           <span>{switchError}</span>
@@ -307,7 +307,6 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         </div>
       )}
-      <ProjectTabs chat={chat} />
       <ConversationStrip chat={chat} />
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
@@ -416,6 +415,6 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
         continuesFrom={sendUnder ? (sendUnder.producedBy?.profileName ?? 'the reply shown') : null}
         onPrimaryProfileChange={setComposerProfileId}
       />
-    </main>
+    </section>
   );
 }

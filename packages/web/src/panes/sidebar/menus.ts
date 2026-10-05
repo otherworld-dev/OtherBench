@@ -3,6 +3,8 @@ import type { MenuItem } from '../../components/Menu.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 
 export interface ChatMenuHandlers {
+  /** Opens the chat as a tab (or goes to its tab) (#824). */
+  openInTab(): void;
   rename(): void;
   /** Sets the pin state the menu item asked for (the opposite of the state the menu was built with). */
   setPinned(pinned: boolean): void;
@@ -32,7 +34,8 @@ export function chatMenuItems(
   chat: Chat,
   orderedProjects: Project[],
   h: ChatMenuHandlers,
-  position: { index: number; count: number } | null = null
+  position: { index: number; count: number } | null = null,
+  isTab = false
 ): MenuItem[] {
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
   const archived = chat.archivedAt !== null;
@@ -47,6 +50,7 @@ export function chatMenuItems(
       ]
     : [];
   return [
+    { id: 'tab', label: isTab ? 'Go to tab' : 'Open in new tab', onSelect: h.openInTab },
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     ...(archived ? [] : [{ id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) }]),
     ...(position
