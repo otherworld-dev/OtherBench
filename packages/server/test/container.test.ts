@@ -179,10 +179,9 @@ describe('createContainer', () => {
 
     container.close();
     // close() removes it best-effort and unawaited (same fire-and-forget
-    // pattern as toolProvider.shutdown()) -- give it a tick to actually run.
-    await new Promise((r) => setTimeout(r, 50));
-
-    await expect(stat(tempRoot)).rejects.toThrow();
+    // pattern as toolProvider.shutdown()), so wait for it -- a fixed short
+    // sleep was too tight on a busy machine.
+    await vi.waitFor(() => expect(stat(tempRoot)).rejects.toThrow(), { timeout: 5_000, interval: 25 });
   });
 
   it('a real FILE database\'s attachments directory is NEVER removed on close -- it is the user\'s own attachment storage, not scratch', async () => {

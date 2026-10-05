@@ -163,7 +163,15 @@ describe('App bootstrap', () => {
 });
 
 describe('App view', () => {
-  afterEach(() => window.history.replaceState({}, '', '/'));
+  beforeEach(() => {
+    reset();
+    for (const list of [mockedConnections, mockedModels, mockedProfiles, mockedChats, mockedProjects]) list.mockResolvedValue([]);
+  });
+  // Unmount before jsdom goes away: a still-mounted App runs effects (matchMedia) after teardown.
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState({}, '', '/');
+  });
 
   it('renders the quick-chat view when the URL has view=quick, and the main app otherwise', () => {
     window.history.replaceState({}, '', '/?view=quick');

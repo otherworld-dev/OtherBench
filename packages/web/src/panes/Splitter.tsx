@@ -36,7 +36,8 @@ export function Splitter({ direction, sizes, index, onResize, onCommit, onReset 
     if (!container) return;
     const rect = container.getBoundingClientRect();
     drag.current = { start: vertical ? e.clientX : e.clientY, length: vertical ? rect.width : rect.height, sizes };
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Optional: older engines (and jsdom) have no pointer capture; dragging then just follows the pointer over the bar.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     e.preventDefault();
   }
 
@@ -50,7 +51,7 @@ export function Splitter({ direction, sizes, index, onResize, onCommit, onReset 
   function onPointerUp(e: PointerEvent<HTMLDivElement>): void {
     if (!drag.current) return;
     drag.current = null;
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    e.currentTarget.releasePointerCapture?.(e.pointerId);
     onCommit(latest.current);
   }
 
