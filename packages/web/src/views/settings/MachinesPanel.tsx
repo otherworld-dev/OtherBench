@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type JSX } from 'react';
 import { ConfirmDialog } from '../../components/ConfirmDialog.js';
+import { formatRelativeTime } from '../../lib/relativeTime.js';
 import { ApiError, api, type PairingView, type PeerView, type PeersOverview } from '../../state/api.js';
 
 export const FIREWALL_NOTE =
@@ -47,7 +48,15 @@ function PairingCode({ pairing, onCancel, now }: { pairing: PairingView; onCance
   );
 }
 
+/** "Synced 2 min ago", the last sync error, or "Not synced yet". */
+export function syncText(peer: Pick<PeerView, 'lastSyncedAt' | 'syncError'>, now = Date.now()): string {
+  if (peer.syncError) return `Sync failed: ${peer.syncError}`;
+  if (peer.lastSyncedAt !== null) return `Synced ${formatRelativeTime(peer.lastSyncedAt, now)}`;
+  return 'Not synced yet';
+}
+
 function PeerRow({ peer, onChanged, onRemove }: { peer: PeerView; onChanged: () => void; onRemove: () => void }): JSX.Element {
+  const [syncing, setSyncing] = useState(false);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(peer.name);
   const [addresses, setAddresses] = useState(peer.addresses.join(', '));
@@ -96,6 +105,22 @@ function PeerRow({ peer, onChanged, onRemove }: { peer: PeerView; onChanged: () 
             <button
               type="button"
               className={BUTTON}
+              disabled={syncing}
+              onClick={() => {
+                setSyncing(true);
+                setError(null);
+                api.peers
+                  .sync(peer.nodeId)
+                  .then(onChanged)
+                  .catch((err: unknown) => setError(failure(err)))
+                  .finally(() => setSyncing(false));
+              }}
+            >
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+            <button
+              type="button"
+              className={BUTTON}
               onClick={() => {
                 setName(peer.name);
                 setAddresses(peer.addresses.join(', '));
@@ -111,6 +136,11 @@ function PeerRow({ peer, onChanged, onRemove }: { peer: PeerView; onChanged: () 
         </div>
       )}
       {!editing && <p className="font-mono text-xs text-[var(--text-muted)]">{peer.addresses.join(', ')}</p>}
+      {!editing && (
+        <p data-testid="peer-sync" className={`text-xs ${peer.syncError ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>
+          {syncText(peer)}
+        </p>
+      )}
       {!editing && peer.status === 'unreachable' && peer.error && <p className="text-xs text-[var(--text-faint)]">{peer.error}</p>}
       {error && (
         <p role="alert" className="text-xs text-[var(--danger)]">

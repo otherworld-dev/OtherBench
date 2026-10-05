@@ -73,6 +73,10 @@ export interface CreateConnectionBody {
   baseUrl?: string | null;
   apiKey?: string | null;
   extraHeaders?: Record<string, string>;
+  /** 'anywhere', or the node id of the one machine it works on. Omitted on create: the server decides from the address. */
+  availability?: string;
+  /** False keeps the API key on this machine when chats sync. */
+  syncSecret?: boolean;
 }
 
 export interface CreateProfileBody {
@@ -157,6 +161,9 @@ export interface PeerView extends PublicPeer {
   status: 'unknown' | 'reachable' | 'unreachable';
   since: number;
   error?: string;
+  /** When the last pull from it finished, and why the last one failed (until one succeeds). */
+  lastSyncedAt: number | null;
+  syncError: string | null;
 }
 
 export interface PeersOverview {
@@ -334,6 +341,7 @@ export const api = {
     add: (address: string, code: string) => post<PublicPeer>('/peers', { address, code }),
     patch: (nodeId: string, body: { name?: string; addresses?: string[] }) => patch<PublicPeer>(`/peers/${nodeId}`, body),
     remove: (nodeId: string) => request<{ notified: boolean }>(`/peers/${nodeId}`, { method: 'DELETE' }),
+    sync: (nodeId: string) => post<{ applied: number }>(`/peers/${nodeId}/sync`),
   },
 
   /** This machine. */

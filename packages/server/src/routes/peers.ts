@@ -52,7 +52,10 @@ export function peersRoutes(container: Container): Hono {
     return c.json({
       self: { ...self, fingerprint: shortFingerprint(peers.fingerprint()) },
       listening: { running: peers.listener.running, addresses: peers.listener.addresses() },
-      peers: peers.list().map((p) => ({ ...p, ...peers.status(p.nodeId) })),
+      peers: peers.list().map((p) => {
+        const sync = container.peers?.syncerOrNull()?.status(p.nodeId);
+        return { ...p, ...peers.status(p.nodeId), lastSyncedAt: sync?.lastSyncedAt ?? null, syncError: sync?.error ?? null };
+      }),
     });
   });
 
@@ -84,6 +87,13 @@ export function peersRoutes(container: Container): Hono {
     }
     if (body.addresses !== undefined) patch.addresses = parseAddresses(body.addresses);
     return c.json(await guarded(() => service(container).rename(c.req.param('id'), patch)));
+  });
+
+  /** Syncs with the machine now. */
+  app.post('/:id/sync', async (c) => {
+    const peers = service(container);
+    if (!peers.peer(c.req.param('id'))) throw new HTTPException(404, { message: `No paired machine "${c.req.param('id')}".` });
+    return c.json({ applied: await guarded(() => peers.requireSyncer().pullFrom(c.req.param('id'))) });
   });
 
   /** Removes the machine here at once and tells it, if it can be reached. */

@@ -11,6 +11,8 @@ import { useGruntStore, type StreamConnectionStatus } from './store.js';
  * and on unmount. A `null` id (nothing selected) does nothing.
  */
 export function useChatSync(chatId: string | null, reportStatus = true): void {
+  // Another machine's changes may have added to this chat: reload its messages (the stream stays as it is).
+  const syncRevision = useGruntStore((s) => s.syncRevision);
   // With several panes open, only the focused one drives the header's
   // connection status. Focus moving between panes must not reconnect a
   // stream, so this is read through refs rather than restarting the effect.
@@ -21,6 +23,21 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
   useEffect(() => {
     if (reportStatus) useGruntStore.getState().setStreamStatus(statusRef.current);
   }, [reportStatus]);
+
+  useEffect(() => {
+    if (!chatId || syncRevision === 0) return;
+    let cancelled = false;
+    api.chats
+      .messages(chatId)
+      .then(({ messages, headMessageId, usage }) => {
+        if (!cancelled) useGruntStore.getState().loadMessages(chatId, messages, headMessageId, usage);
+      })
+      .catch((err: unknown) => console.error(`[grunt-web] failed to reload messages for chat ${chatId}:`, err));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a sync, not a chat switch (the effect below loads on that).
+  }, [syncRevision]);
 
   useEffect(() => {
     if (!chatId) return;

@@ -90,6 +90,8 @@ export interface GruntState {
   appPendingApprovals: Record<string, PendingApprovalSummary>;
   /** Replies being written anywhere in the app: chat id by message id (#824). */
   appRunningTurns: Record<string, string>;
+  /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
+  syncRevision: number;
   /** The events stream's `hello`: replaces the pending approvals and running replies with the server's lists. */
   applyAppHello(hello: AppEventsHello): void;
   /** One app-wide event: keeps chats and the pending approvals current. */
@@ -317,6 +319,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
   setHotkeyStatus: (status) => set({ hotkeyStatus: status }),
   appPendingApprovals: {},
   appRunningTurns: {},
+  syncRevision: 0,
   applyAppHello: (hello) =>
     set({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
@@ -361,6 +364,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
             ...(kept.length === entries.length ? {} : { appPendingApprovals: Object.fromEntries(kept) }),
           };
         }
+        case 'sync-applied':
+          return { syncRevision: state.syncRevision + 1 };
         default:
           return state;
       }

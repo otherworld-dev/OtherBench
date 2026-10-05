@@ -14,6 +14,19 @@ import { useGruntStore } from './store.js';
  * In the desktop app it also raises notifications (desktop/notify.ts), and
  * opening Grunt from the tray goes to the chat last notified about.
  */
+/** Another machine's changes were applied: chats, projects, profiles and connections may all have changed. */
+function refreshAfterSync(): void {
+  const { setChats, setProjects, setProfiles, setConnections } = useGruntStore.getState();
+  Promise.all([api.chats.list(), api.projects.list(), api.profiles.list(), api.connections.list()])
+    .then(([chats, projects, profiles, connections]) => {
+      setChats(chats);
+      setProjects(projects);
+      setProfiles(profiles);
+      setConnections(connections);
+    })
+    .catch((err: unknown) => console.error('[grunt-web] failed to reload after a sync:', err));
+}
+
 export function useAppEvents(): void {
   useEffect(() => {
     const { applyAppHello, applyAppEvent } = useGruntStore.getState();
@@ -31,6 +44,7 @@ export function useAppEvents(): void {
       onHello: applyAppHello,
       onEvent: (event) => {
         applyAppEvent(event);
+        if (event.type === 'sync-applied') refreshAfterSync();
         notifier?.handle(event).catch((err: unknown) => console.error('[grunt-web] failed to show a notification:', err));
       },
     });

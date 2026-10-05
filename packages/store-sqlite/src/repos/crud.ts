@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { SyncClock } from './clock.js';
 
 /** The subset of `node:sqlite`'s `SQLInputValue` this schema actually uses (no blobs, no bigint). */
 export type SqlBindValue = string | number | null;
@@ -42,16 +43,24 @@ export interface CrudMapping<T extends { id: string }> {
  *     -- a `DELETE ... WHERE id = ?` that matches zero rows isn't an error).
  */
 export class SqliteCrudRepo<T extends { id: string }> {
+  /**
+   * With `clock`, the table is synced (migration 013): every insert and
+   * update writes a fresh `hlc` stamp, and a delete first sets the stamp its
+   * tombstones get.
+   */
   constructor(
     private readonly db: DatabaseSync,
-    private readonly mapping: CrudMapping<T>
+    private readonly mapping: CrudMapping<T>,
+    private readonly clock?: SyncClock
   ) {}
 
-  create(entity: T): T {
-    const placeholders = this.mapping.columns.map(() => '?').join(', ');
+  /** `stamp` (synced tables only): the stamp to write, or omitted for a fresh one. */
+  create(entity: T, stamp?: string): T {
+    const columns = this.clock ? [...this.mapping.columns, 'hlc'] : this.mapping.columns;
+    const values = this.clock ? [...this.mapping.toRow(entity), stamp ?? this.clock.stamp()] : this.mapping.toRow(entity);
     this.db
-      .prepare(`INSERT INTO ${this.mapping.table} (${this.mapping.columns.join(', ')}) VALUES (${placeholders})`)
-      .run(...this.mapping.toRow(entity));
+      .prepare(`INSERT INTO ${this.mapping.table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
+      .run(...values);
     return entity;
   }
 
@@ -76,18 +85,27 @@ export class SqliteCrudRepo<T extends { id: string }> {
     return rows.map((r) => this.mapping.fromRow(r));
   }
 
-  update(id: string, patch: Partial<Omit<T, 'id'>>): T {
+  /**
+   * `stamp` (synced tables only): the stamp to write, `false` to leave the
+   * row's stamp alone (a change that isn't one to sync, like a health
+   * check), or omitted for a fresh one.
+   */
+  update(id: string, patch: Partial<Omit<T, 'id'>>, stamp?: string | false): T {
     const current = this.get(id);
     if (!current) {
       throw new Error(`${this.mapping.table}: not found: ${id}`);
     }
     const updated = { ...current, ...patch, id } as T;
-    const values = this.mapping.toRow(updated);
+    const values = this.mapping.toRow(updated).slice(1);
     const nonIdColumns = this.mapping.columns.slice(1);
+    if (this.clock && stamp !== false) {
+      nonIdColumns.push('hlc');
+      values.push(stamp ?? this.clock.stamp());
+    }
     const setClause = nonIdColumns.map((c) => `${c} = ?`).join(', ');
     const result = this.db
       .prepare(`UPDATE ${this.mapping.table} SET ${setClause} WHERE id = ?`)
-      .run(...values.slice(1), id);
+      .run(...values, id);
     if (Number(result.changes) === 0) {
       throw new Error(`${this.mapping.table}: not found: ${id}`);
     }
@@ -95,6 +113,7 @@ export class SqliteCrudRepo<T extends { id: string }> {
   }
 
   delete(id: string): void {
+    this.clock?.markDelete();
     this.db.prepare(`DELETE FROM ${this.mapping.table} WHERE id = ?`).run(id);
   }
 }

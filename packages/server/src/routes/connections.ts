@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { defaultAvailability } from '@grunt/core/domain/availability.js';
 import type { DiscoveredModel } from '@grunt/core/ports/chat-engine.js';
 import type { Connection, ConnectionKind, ModelInfo } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
@@ -17,6 +18,21 @@ interface ConnectionBody {
   baseUrl?: unknown;
   apiKey?: unknown;
   extraHeaders?: unknown;
+  availability?: unknown;
+  syncSecret?: unknown;
+}
+
+/** 'anywhere' or a known machine: this one or a paired one. */
+function parseAvailability(container: Container, value: unknown): string {
+  if (value === 'anywhere') return value;
+  const self = container.store.nodes.self().id;
+  if (typeof value === 'string' && (value === self || container.store.peers.get(value))) return value;
+  throw new HTTPException(400, { message: '"availability" must be "anywhere" or the id of this or a paired machine.' });
+}
+
+function parseSyncSecret(value: unknown): boolean {
+  if (typeof value !== 'boolean') throw new HTTPException(400, { message: '"syncSecret" must be true or false.' });
+  return value;
 }
 
 function parseKind(value: unknown): ConnectionKind {
@@ -163,6 +179,9 @@ export function connectionsRoutes(container: Container): Hono {
       status: 'unknown',
       statusMessage: null,
       checkedAt: null,
+      // A loopback address is only reachable on this machine (v2 spec §5), unless the caller says otherwise.
+      availability: body.availability !== undefined ? parseAvailability(container, body.availability) : defaultAvailability(kind, baseUrl ?? null, container.store.nodes.self().id),
+      syncSecret: body.syncSecret !== undefined ? parseSyncSecret(body.syncSecret) : true,
     });
     return c.json(created, 201);
   });
@@ -188,6 +207,13 @@ export function connectionsRoutes(container: Container): Hono {
     if (patch.kind !== undefined || patch.baseUrl !== undefined) {
       requireBaseUrlIfOpenaiCompatible(patch.kind ?? existing.kind, patch.baseUrl !== undefined ? patch.baseUrl : existing.baseUrl);
     }
+    if (body.availability !== undefined) {
+      patch.availability = parseAvailability(container, body.availability);
+    } else if (patch.baseUrl !== undefined || patch.kind !== undefined) {
+      // Re-pointed: where it can be used follows the new address.
+      patch.availability = defaultAvailability(patch.kind ?? existing.kind, patch.baseUrl !== undefined ? patch.baseUrl : existing.baseUrl, container.store.nodes.self().id);
+    }
+    if (body.syncSecret !== undefined) patch.syncSecret = parseSyncSecret(body.syncSecret);
 
     if ('apiKey' in body) {
       if (body.apiKey === null) {

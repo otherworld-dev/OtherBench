@@ -11,6 +11,14 @@ export interface Connection {
   status: 'unknown' | 'ok' | 'error';
   statusMessage: string | null;
   checkedAt: number | null;
+  /**
+   * Where it can be used (v2 spec §5): 'anywhere' (a cloud API), or a node
+   * id for a connection only that machine can reach (Ollama on the PC, say).
+   * Absent means 'anywhere'.
+   */
+  availability?: string;
+  /** False keeps its API key on this machine when it syncs. Absent means true. */
+  syncSecret?: boolean;
 }
 
 export interface ModelInfo {

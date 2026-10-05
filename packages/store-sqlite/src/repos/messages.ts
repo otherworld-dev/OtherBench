@@ -11,6 +11,7 @@ import type {
 } from '@grunt/core/types/messages.js';
 import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 import { selfIdOf } from './nodes.js';
+import { clockOf, type SyncClock } from './clock.js';
 
 // `message` is the one tree-shaped table, so it does not use SqliteCrudRepo
 // (see the comment there): `children`/`roots`/`pathToRoot` are graph queries,
@@ -59,7 +60,7 @@ const MAX_PATH_DEPTH = 10_000;
  * Non-text parts (images, tool calls, tool results) are deliberately excluded
  * so that e.g. a file path in a tool-call argument is not searchable prose.
  */
-function deriveSearchText(parts: Part[]): string {
+export function deriveSearchText(parts: Part[]): string {
   return parts
     .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
     .map((p) => p.text)
@@ -129,7 +130,8 @@ export class SqliteMessageRepo implements MessageRepo {
   /** `selfId` is this machine's node id, the default `originNode`. */
   constructor(
     private readonly db: DatabaseSync,
-    private readonly selfId: () => string = selfIdOf(db)
+    private readonly selfId: () => string = selfIdOf(db),
+    private readonly clock: SyncClock = clockOf(db, selfId)
   ) {}
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
@@ -145,8 +147,8 @@ export class SqliteMessageRepo implements MessageRepo {
     const full: CanonMessage = { ...m, originNode: m.originNode ?? this.selfId(), createdAt: m.createdAt ?? Date.now() };
     this.db
       .prepare(
-        `INSERT INTO message (${COLUMNS}, search_text)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO message (${COLUMNS}, search_text, hlc)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         full.id,
@@ -161,7 +163,8 @@ export class SqliteMessageRepo implements MessageRepo {
         toJsonNullable(full.engineMeta ?? null),
         full.keptAt ?? null,
         full.originNode ?? null,
-        deriveSearchText(full.parts)
+        deriveSearchText(full.parts),
+        this.clock.stamp()
       );
     return full;
   }
@@ -225,8 +228,8 @@ export class SqliteMessageRepo implements MessageRepo {
   // to `complete` after a failed attempt must not keep the stale error.
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void {
     const result = this.db
-      .prepare(`UPDATE message SET status = ?, error = ? WHERE id = ?`)
-      .run(status, toJsonNullable(error ?? null), id);
+      .prepare(`UPDATE message SET status = ?, error = ?, hlc = ? WHERE id = ?`)
+      .run(status, toJsonNullable(error ?? null), this.clock.stamp(), id);
     if (Number(result.changes) === 0) {
       throw new Error(`message: not found: ${id}`);
     }
@@ -240,14 +243,14 @@ export class SqliteMessageRepo implements MessageRepo {
   }
 
   updateEngineMeta(id: string, meta: EngineMeta): void {
-    const result = this.db.prepare(`UPDATE message SET engine_meta = ? WHERE id = ?`).run(toJson(meta), id);
+    const result = this.db.prepare(`UPDATE message SET engine_meta = ?, hlc = ? WHERE id = ?`).run(toJson(meta), this.clock.stamp(), id);
     if (Number(result.changes) === 0) {
       throw new Error(`message: not found: ${id}`);
     }
   }
 
   markKept(id: string, at: number): void {
-    const result = this.db.prepare(`UPDATE message SET kept_at = ? WHERE id = ?`).run(at, id);
+    const result = this.db.prepare(`UPDATE message SET kept_at = ?, hlc = ? WHERE id = ?`).run(at, this.clock.stamp(), id);
     if (Number(result.changes) === 0) {
       throw new Error(`message: not found: ${id}`);
     }

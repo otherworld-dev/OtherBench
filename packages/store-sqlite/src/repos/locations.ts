@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { LocationRepo } from '@grunt/core/ports/store.js';
 import type { Location, LocationPath } from '@grunt/core/types/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
+import { clockOf, type SyncClock } from './clock.js';
 
 const mapping: CrudMapping<Location> = {
   table: 'location',
@@ -18,8 +19,12 @@ function pathFromRow(row: Record<string, unknown>): LocationPath {
 export class SqliteLocationRepo implements LocationRepo {
   private readonly crud: SqliteCrudRepo<Location>;
 
-  constructor(private readonly db: DatabaseSync) {
-    this.crud = new SqliteCrudRepo(db, mapping);
+  /** Both tables are synced: `clock` stamps their changes (migration 013). */
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly clock: SyncClock = clockOf(db)
+  ) {
+    this.crud = new SqliteCrudRepo(db, mapping, clock);
   }
 
   list(): Location[] {
@@ -70,14 +75,17 @@ export class SqliteLocationRepo implements LocationRepo {
   setPath(p: LocationPath): LocationPath {
     this.db
       .prepare(
-        `INSERT INTO location_path (location_id, node_id, path) VALUES (?, ?, ?)
-         ON CONFLICT (location_id, node_id) DO UPDATE SET path = excluded.path`
+        `INSERT INTO location_path (location_id, node_id, path, hlc) VALUES (?, ?, ?, ?)
+         ON CONFLICT (location_id, node_id) DO UPDATE SET path = excluded.path, hlc = excluded.hlc`
       )
-      .run(p.locationId, p.nodeId, p.path);
+      .run(p.locationId, p.nodeId, p.path, this.clock.stamp());
+    // Set again after being removed: the removal no longer stands.
+    this.db.prepare("DELETE FROM tombstone WHERE tbl = 'location_path' AND row_id = ?").run(`${p.locationId}:${p.nodeId}`);
     return { locationId: p.locationId, nodeId: p.nodeId, path: p.path };
   }
 
   deletePath(locationId: string, nodeId: string): void {
+    this.clock.markDelete();
     this.db.prepare('DELETE FROM location_path WHERE location_id = ? AND node_id = ?').run(locationId, nodeId);
   }
 }

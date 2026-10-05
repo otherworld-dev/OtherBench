@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { MEMORY_VERSIONS_KEPT } from '@grunt/core/domain/memory.js';
 import type { MemoryAuthor, ProjectMemory, ProjectMemoryRepo, ProjectMemoryVersion } from '@grunt/core/ports/store.js';
+import { clockOf, type SyncClock } from './clock.js';
 
 function toMemory(row: Record<string, unknown>): ProjectMemory {
   return {
@@ -26,7 +27,11 @@ function toVersion(row: Record<string, unknown>): ProjectMemoryVersion {
 
 /** Project memory notes and their versions (migration 008). */
 export class SqliteProjectMemoryRepo implements ProjectMemoryRepo {
-  constructor(private readonly db: DatabaseSync) {}
+  /** The note is synced (`clock` stamps it, migration 013); its version history stays on this machine. */
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly clock: SyncClock = clockOf(db)
+  ) {}
 
   get(projectId: string): ProjectMemory | null {
     const row = this.db.prepare('SELECT * FROM project_memory WHERE project_id = ?').get(projectId) as Record<string, unknown> | undefined;
@@ -39,11 +44,11 @@ export class SqliteProjectMemoryRepo implements ProjectMemoryRepo {
     try {
       this.db
         .prepare(
-          `INSERT INTO project_memory (project_id, body, updated_at, updated_by, source_chat_id) VALUES (?, ?, ?, ?, ?)
+          `INSERT INTO project_memory (project_id, body, updated_at, updated_by, source_chat_id, hlc) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(project_id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at,
-             updated_by = excluded.updated_by, source_chat_id = excluded.source_chat_id`
+             updated_by = excluded.updated_by, source_chat_id = excluded.source_chat_id, hlc = excluded.hlc`
         )
-        .run(projectId, body, at, by, sourceChatId);
+        .run(projectId, body, at, by, sourceChatId, this.clock.stamp());
       this.db
         .prepare('INSERT INTO project_memory_version (id, project_id, body, created_at, created_by, source_chat_id) VALUES (?, ?, ?, ?, ?, ?)')
         .run(randomUUID(), projectId, body, at, by, sourceChatId);

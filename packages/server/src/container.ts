@@ -27,6 +27,7 @@ import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
 import { PeerService } from './peer/service.js';
+import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { AppEventBus, withChatEvents } from './stream/events.js';
@@ -307,6 +308,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
   });
+  const syncer = new Syncer({ store, secrets, blobStore, peers, events });
+  peers.attachSyncer(syncer);
 
   const container: Container = {
     store,
@@ -322,6 +325,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     blobStore,
     memory,
     close: () => {
+      syncer.stop();
       // Not awaited (close is synchronous): stops accepting peers' calls.
       void peers.close().catch((err: unknown) => console.error('[grunt-server] error stopping the peer listener:', err));
       // First: aborts in-flight summariser calls and stops new ones before the store goes away.
@@ -371,6 +375,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     console.error('[grunt-server] could not start the peer listener; paired machines cannot reach this one:', err);
   }
   peers.startMonitoring();
+  syncer.start();
 
   return container;
 }
