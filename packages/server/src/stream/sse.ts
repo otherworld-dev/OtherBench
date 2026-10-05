@@ -10,6 +10,8 @@ export interface SseSink {
   send(event: string | null, data: unknown): void;
   /** Writes an SSE comment line (`: text`), which clients ignore: a keepalive. */
   comment(text: string): void;
+  /** Ends the stream from this side (the cleanup still runs, once). */
+  close(): void;
 }
 
 /**
@@ -25,6 +27,12 @@ export interface SseSink {
 export function sseStream(setup: (sink: SseSink) => () => void): Response {
   const encoder = new TextEncoder();
   let cleanup: () => void = () => {};
+  let cleaned = false;
+  const runCleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    cleanup();
+  };
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -45,11 +53,19 @@ export function sseStream(setup: (sink: SseSink) => () => void): Response {
         comment(text) {
           controller.enqueue(encoder.encode(`: ${text.replace(/\n/g, ' ')}\n\n`));
         },
+        close() {
+          runCleanup();
+          try {
+            controller.close();
+          } catch {
+            // already closed, or cancelled by the client
+          }
+        },
       };
       cleanup = setup(sink);
     },
     cancel() {
-      cleanup();
+      runCleanup();
     },
   });
 

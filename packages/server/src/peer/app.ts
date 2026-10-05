@@ -1,0 +1,83 @@
+import type { IncomingMessage } from 'node:http';
+import type { TLSSocket } from 'node:tls';
+import { Hono, type Context } from 'hono';
+import { fingerprintOf } from '@grunt/core/domain/pairing.js';
+import type { Peer } from '@grunt/core/types/peer.js';
+import { sseStream } from '../stream/sse.js';
+import { PeerError, type PairRequest, type PeerService } from './service.js';
+
+/** How often an idle `/peer/events` stream sends a comment, so neither side takes it for dead. */
+export const PEER_EVENTS_KEEPALIVE_MS = 25_000;
+
+export interface PeerEnv {
+  Bindings: { incoming: IncomingMessage };
+  Variables: { peer: Peer };
+}
+
+/** The certificate the caller presented on this TLS connection, as a fingerprint. */
+export function callerFingerprint(c: Context<PeerEnv>): string | null {
+  const socket = c.env?.incoming?.socket as TLSSocket | undefined;
+  const raw = socket?.getPeerCertificate?.()?.raw as Buffer | undefined;
+  return raw && raw.length > 0 ? fingerprintOf(raw) : null;
+}
+
+function bearer(c: Context<PeerEnv>): string | null {
+  const header = c.req.header('Authorization') ?? '';
+  return header.startsWith('Bearer ') ? header.slice(7) : null;
+}
+
+/**
+ * What the peer listener serves (v2 plan, Task 46). Pairing is the one route
+ * a stranger can call; everything else needs a paired machine's pinned
+ * certificate AND the token we issued it. Nothing desktop-only is mounted
+ * here -- in particular not attaching a file by local path, and not the
+ * folder browser (v2 spec §8) -- and nothing is mounted by default: an
+ * unknown path is a 404 like any other.
+ */
+export function createPeerApp(service: PeerService): Hono<PeerEnv> {
+  const app = new Hono<PeerEnv>();
+
+  app.onError((err, c) => {
+    if (err instanceof PeerError) return c.json({ error: err.message }, err.status);
+    console.error('[grunt-server] peer listener error:', err);
+    return c.json({ error: 'Internal server error.' }, 500);
+  });
+
+  app.post('/peer/pair', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as PairRequest;
+    const remote = c.env?.incoming?.socket?.remoteAddress ?? null;
+    return c.json(await service.acceptPairing(body, callerFingerprint(c), remote));
+  });
+
+  // Every other /peer route: a paired machine only.
+  app.use('/peer/*', async (c, next) => {
+    const peer = service.authenticate(callerFingerprint(c), bearer(c));
+    if (!peer) return c.json({ error: 'Not a paired machine.' }, 401);
+    c.set('peer', peer);
+    await next();
+  });
+
+  app.get('/peer/info', (c) => c.json(service.info()));
+
+  /** Held open by each paired machine: a hello, then whatever this machine announces (Task 51: new changes). */
+  app.get('/peer/events', (c) => {
+    const peer = c.get('peer');
+    return sseStream((sink) => {
+      sink.send('hello', service.info());
+      const unregister = service.openEventStream(peer.nodeId, (event, data) => sink.send(event, data), () => sink.close());
+      const keepalive = setInterval(() => sink.comment('keepalive'), PEER_EVENTS_KEEPALIVE_MS);
+      return () => {
+        clearInterval(keepalive);
+        unregister();
+      };
+    });
+  });
+
+  /** The caller removed this machine: forget it here too. */
+  app.post('/peer/revoke', async (c) => {
+    await service.revokedBy(c.get('peer'));
+    return c.body(null, 204);
+  });
+
+  return app;
+}

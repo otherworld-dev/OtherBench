@@ -15,7 +15,7 @@ import { ClaudeCodeChatEngine, type QueryFn } from '@grunt/engine-claude-code/en
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import { createBlobStore, resolveAttachmentsRoots, type BlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
-import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
+import { runMigrations, SCHEMA_VERSION } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
@@ -23,6 +23,10 @@ import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ProjectMemoryService } from './memory/service.js';
+import { createPeerApp } from './peer/app.js';
+import { DEFAULT_PEER_PORT } from './peer/client.js';
+import { IdentityStore } from './peer/identity.js';
+import { PeerService } from './peer/service.js';
 import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { AppEventBus, withChatEvents } from './stream/events.js';
@@ -59,12 +63,22 @@ export interface Container {
   events?: AppEventBus;
   /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
   pathExists?: (path: string) => boolean;
+  /**
+   * Paired machines and the peer listener (v2 plan, Tasks 46-47). Always set
+   * by `createContainer`; optional so route tests can build a Container
+   * without one.
+   */
+  peers?: PeerService;
   close(): void;
 }
 
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
+  /** The peer listener's port (default 4748; 0 = any free port). */
+  peerPort?: number;
+  /** Addresses the peer listener binds (default every interface). */
+  peerHosts?: string[];
 }
 
 function isEnoent(err: unknown): boolean {
@@ -280,10 +294,25 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const memory = new ProjectMemoryService({ store, engine, resolveProfile: (id) => resolveProfile({ store, secrets }, id) });
   memory.attach(turnRunner);
 
+  // This machine's certificate lives beside the secrets file; an in-memory
+  // database gets one that lasts only as long as the process.
+  const identity = new IdentityStore(() => store.nodes.self().id, options.dbPath === ':memory:' ? null : dirname(options.secretsPath));
+  const peers = new PeerService({
+    store,
+    secrets,
+    events,
+    identity,
+    createApp: (service) => createPeerApp(service) as never,
+    port: options.peerPort ?? DEFAULT_PEER_PORT,
+    hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
+    schemaVersion: SCHEMA_VERSION,
+  });
+
   const container: Container = {
     store,
     events,
     secrets,
+    peers,
     engine,
     registry,
     turnRunner,
@@ -293,6 +322,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     blobStore,
     memory,
     close: () => {
+      // Not awaited (close is synchronous): stops accepting peers' calls.
+      void peers.close().catch((err: unknown) => console.error('[grunt-server] error stopping the peer listener:', err));
       // First: aborts in-flight summariser calls and stops new ones before the store goes away.
       memory.dispose();
       // Claude Code processes kept alive between replies.
@@ -331,6 +362,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     // Never let the memory sweep stop the server starting.
     console.warn('[grunt-server] project memory startup sweep failed:', err);
   }
+  // Listening for paired machines only if there are any. A failed bind
+  // (another Grunt on this port, say) leaves this machine working alone
+  // rather than stopping it starting.
+  try {
+    await peers.refreshListener();
+  } catch (err) {
+    console.error('[grunt-server] could not start the peer listener; paired machines cannot reach this one:', err);
+  }
+  peers.startMonitoring();
 
   return container;
 }

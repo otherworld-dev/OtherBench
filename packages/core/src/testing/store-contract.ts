@@ -701,6 +701,59 @@ export function runStoreContract(
       expect(store.audit.get('audit-a')).toMatchObject({ id: 'audit-a', chatId: chat.id });
     });
 
+    it('audit: records the machine a decision was made on, defaulting to this one', () => {
+      const { chat } = seedChat(store, 'chat-a');
+      const message = store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));
+      expect(store.audit.create(makeAuditInput({ id: 'a1', chatId: chat.id, messageId: message.id })).decidedOnNode).toBe(store.nodes.self().id);
+      store.audit.create({ ...makeAuditInput({ id: 'a2', chatId: chat.id, messageId: message.id }), decidedOnNode: 'laptop' });
+      expect(store.audit.get('a2')!.decidedOnNode).toBe('laptop');
+      expect(store.audit.get('a1')!.decidedOnNode).toBe(store.nodes.self().id);
+    });
+
+    describe('peers', () => {
+      function makePeer(nodeId: string, fingerprint: string) {
+        return {
+          nodeId,
+          name: `Machine ${nodeId}`,
+          fingerprint,
+          addresses: ['192.168.1.10:4748', 'pc.lan:4748'],
+          issuedTokenHash: 'ab'.repeat(32),
+          heldTokenRef: `peer-token:${nodeId}`,
+          platform: 'win32',
+          lastSeenAt: null,
+          lastSyncSeq: 0,
+          pairedAt: nodeId === 'pc' ? 1 : 2,
+        };
+      }
+
+      it('create/get round-trip, looked up by node id or fingerprint, listed by pairing time', () => {
+        store.peers.create(makePeer('pc', 'f1'.repeat(32)));
+        store.peers.create(makePeer('laptop', 'f2'.repeat(32)));
+        expect(store.peers.get('pc')).toEqual(makePeer('pc', 'f1'.repeat(32)));
+        expect(store.peers.getByFingerprint('f2'.repeat(32))!.nodeId).toBe('laptop');
+        expect(store.peers.getByFingerprint('nope')).toBeNull();
+        expect(store.peers.get('nope')).toBeNull();
+        expect(store.peers.list().map((p) => p.nodeId)).toEqual(['pc', 'laptop']);
+      });
+
+      it('refuses a second peer with the same node id or fingerprint', () => {
+        store.peers.create(makePeer('pc', 'f1'.repeat(32)));
+        expect(() => store.peers.create(makePeer('pc', 'f3'.repeat(32)))).toThrow();
+        expect(() => store.peers.create(makePeer('other', 'f1'.repeat(32)))).toThrow();
+      });
+
+      it('update persists a patch (addresses as a list), update of an unknown peer throws, delete is idempotent', () => {
+        store.peers.create(makePeer('pc', 'f1'.repeat(32)));
+        const updated = store.peers.update('pc', { name: 'PC', addresses: ['pc.lan:4748'], lastSeenAt: 5, lastSyncSeq: 42 });
+        expect(updated).toMatchObject({ name: 'PC', addresses: ['pc.lan:4748'], lastSeenAt: 5, lastSyncSeq: 42 });
+        expect(store.peers.get('pc')).toMatchObject({ name: 'PC', addresses: ['pc.lan:4748'], lastSeenAt: 5, lastSyncSeq: 42 });
+        expect(() => store.peers.update('nope', { name: 'x' })).toThrow(Error);
+        store.peers.delete('pc');
+        expect(store.peers.get('pc')).toBeNull();
+        expect(() => store.peers.delete('pc')).not.toThrow();
+      });
+    });
+
     describe('messages', () => {
       it('create/get round-trip, defaulting createdAt', () => {
         const { chat } = seedChat(store, 'chat-a');
