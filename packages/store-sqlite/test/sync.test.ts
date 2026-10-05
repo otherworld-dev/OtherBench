@@ -1,0 +1,408 @@
+import { describe, expect, it } from 'vitest';
+import type { DatabaseSync } from 'node:sqlite';
+import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { openDatabase } from '../src/db.js';
+import { MIGRATIONS, runMigrations } from '../src/migrations/index.js';
+import { SqliteStore } from '../src/store.js';
+
+interface Node {
+  id: string;
+  db: DatabaseSync;
+  store: SqliteStore;
+}
+
+function node(id: string): Node {
+  const db = openDatabase(':memory:');
+  runMigrations(db);
+  db.prepare('UPDATE node_self SET id = ?').run(id);
+  return { id, db, store: new SqliteStore(db) };
+}
+
+/** Pulls everything `from` has changed since `cursor` into `to`, in batches of `limit`. */
+function pull(from: Node, to: Node, cursor: { seq: number }, limit = 1000): void {
+  for (;;) {
+    const batch = from.store.sync.changesSince(cursor.seq, limit);
+    to.store.sync.apply(batch.rows);
+    cursor.seq = batch.nextSeq;
+    if (!batch.more) return;
+  }
+}
+
+function pair(a: Node, b: Node): { aToB: () => void; bToA: () => void; both: () => void } {
+  const fromA = { seq: 0 };
+  const fromB = { seq: 0 };
+  return {
+    aToB: () => pull(a, b, fromA),
+    bToA: () => pull(b, a, fromB),
+    both: () => {
+      for (let i = 0; i < 3; i++) {
+        pull(a, b, fromA);
+        pull(b, a, fromB);
+      }
+    },
+  };
+}
+
+function log(n: Node): { tbl: string; row_id: string; op: string }[] {
+  return n.db.prepare('SELECT tbl, row_id, op FROM change_log ORDER BY seq').all() as { tbl: string; row_id: string; op: string }[];
+}
+
+function since(n: Node, seq: number): string[] {
+  return (n.db.prepare('SELECT tbl, op FROM change_log WHERE seq > ? ORDER BY seq').all(seq) as { tbl: string; op: string }[]).map((r) => `${r.tbl}:${r.op}`);
+}
+
+function latest(n: Node): number {
+  return n.store.sync.latestSeq();
+}
+
+/** A connection, model and profile, made on `n`. */
+function seedProfile(n: Node, id = 'p1'): void {
+  n.store.connections.create({ id: 'c1', name: 'C', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+  n.store.models.create({
+    id: 'm1', connectionId: 'c1', modelId: 'm', displayName: 'M', source: 'manual', supportsVision: false, supportsTools: false,
+    supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
+  });
+  n.store.profiles.create({
+    id, name: 'P', description: null, colour: null, connectionId: 'c1', modelId: 'm1', systemPrompt: null, params: {},
+    toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null,
+  });
+}
+
+function chat(n: Node, id: string, over: Record<string, unknown> = {}): void {
+  n.store.chats.create({ id, title: id, profileId: 'p1', headMessageId: null, workspace: null, pinned: false, archivedAt: null, ...over });
+}
+
+function message(n: Node, id: string, chatId: string, parentId: string | null, over: Partial<CanonMessage> = {}): void {
+  n.store.messages.create({ id, chatId, parentId, role: 'user', parts: [{ type: 'text', text: id }], status: 'complete', error: null, producedBy: null, ...over });
+}
+
+describe('change log (Task 49)', () => {
+  it('deleting a chat logs a delete for each of its messages through the foreign-key cascade, with tombstones', () => {
+    const a = node('a');
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'm1', 'c', null);
+    message(a, 'm2', 'c', 'm1');
+    const before = latest(a);
+
+    a.store.chats.delete('c');
+
+    expect(since(a, before).sort()).toEqual(['chat:delete', 'message:delete', 'message:delete']);
+    const stones = a.db.prepare('SELECT tbl, row_id, hlc FROM tombstone ORDER BY row_id').all() as { tbl: string; row_id: string; hlc: string }[];
+    expect(stones.map((s) => `${s.tbl}:${s.row_id}`)).toEqual(['chat:c', 'message:m1', 'message:m2']);
+    expect(new Set(stones.map((s) => s.hlc)).size).toBe(1);
+    expect(stones[0]!.hlc).toMatch(/^\d{13}-\d{4}-a$/);
+  });
+
+  it('every synced table logs insert, update and delete; grants, audit and MCP servers never log', () => {
+    const a = node('a');
+    const start = latest(a);
+    seedProfile(a);
+    a.store.locations.create({ id: 'l', name: 'L' });
+    a.store.locations.setPath({ locationId: 'l', nodeId: 'a', path: '/l' });
+    a.store.projects.create({ id: 'pr', name: 'P', workspace: null, defaultProfileId: null });
+    a.store.projectMemory.save('pr', 'note', 'user', null);
+    chat(a, 'c');
+    message(a, 'm', 'c', null);
+    a.store.attachments.create({ id: 'at', chatId: 'c', messageId: 'm', filename: 'f', mime: 'text/plain', size: 1, sha256: 'x', storagePath: '/x', extractedText: null });
+    a.store.usage.create({
+      id: 'u', chatId: 'c', messageId: 'm', profileId: 'p1', connectionId: 'c1', modelId: 'm1', tokensIn: 1, tokensOut: 1, tokensCached: 0,
+      tokensReasoning: 0, costEstimate: null, pricingSnapshot: { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' }, latencyMs: 0,
+    });
+    a.store.grants.create({ id: 'g', chatId: 'c', profileId: null, toolName: 't', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
+    a.store.audit.create({ id: 'au', chatId: 'c', messageId: 'm', toolName: 't', argsRedacted: {}, resultSummary: '', durationMs: 0, grantedBy: 'user' });
+    a.store.mcpServers.create({ id: 'mcp', name: 'M', transport: 'stdio', command: 'x', args: [], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+
+    const inserted = new Set(since(a, start));
+    for (const t of ['location', 'location_path', 'connection', 'model', 'profile', 'project', 'project_memory', 'chat', 'message', 'attachment', 'usage']) {
+      expect(inserted, t).toContain(`${t}:upsert`);
+    }
+    for (const t of ['grant', 'audit', 'mcp_server']) expect([...inserted].some((e) => e.startsWith(`${t}:`)), t).toBe(false);
+
+    const mid = latest(a);
+    a.store.locations.update('l', { name: 'L2' });
+    a.store.connections.update('c1', { name: 'C2' });
+    a.store.models.update('m1', { displayName: 'M2' });
+    a.store.profiles.update('p1', { name: 'P2' });
+    a.store.projects.update('pr', { name: 'P2' });
+    a.store.chats.update('c', { title: 'T2' });
+    a.store.attachments.update('at', { filename: 'g' });
+    a.store.usage.update('u', { tokensOut: 2 });
+    expect(since(a, mid).sort()).toEqual(['attachment', 'chat', 'connection', 'location', 'model', 'profile', 'project', 'usage'].map((t) => `${t}:upsert`));
+
+    const end = latest(a);
+    a.store.locations.deletePath('l', 'a');
+    a.store.projects.delete('pr');
+    expect(since(a, end).sort()).toEqual(['location_path:delete', 'project:delete', 'project_memory:delete']);
+  });
+
+  it("a streaming reply's checkpoints don't log; it logs once it finishes; a connection's health check doesn't log", () => {
+    const a = node('a');
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'u', 'c', null);
+    const before = latest(a);
+    message(a, 'r', 'c', 'u', { role: 'assistant', status: 'streaming', parts: [] });
+    a.store.messages.updateParts('r', [{ type: 'text', text: 'partial' }]);
+    a.store.messages.updateParts('r', [{ type: 'text', text: 'partial more' }]);
+    expect(since(a, before)).toEqual([]);
+    a.store.messages.updateStatus('r', 'complete');
+    expect(since(a, before)).toEqual(['message:upsert']);
+
+    const health = latest(a);
+    a.store.connections.update('c1', { status: 'ok', statusMessage: 'fine', checkedAt: 5 });
+    expect(since(a, health)).toEqual([]);
+  });
+
+  it('the migration stamps and logs every existing row, so a first sync sends everything', () => {
+    const db = openDatabase(':memory:');
+    runMigrations(db, MIGRATIONS.filter((m) => m.version < 13));
+    db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+    db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'P', 'c1', 'm')`);
+    db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('c', 'A', 'p1', 1, 1000)`);
+    db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('m', 'c', NULL, 'user', '[]', 'complete', 500), ('s', 'c', 'm', 'assistant', '[]', 'streaming', 600)`);
+
+    runMigrations(db);
+
+    const self = (db.prepare('SELECT id FROM node_self').get() as { id: string }).id;
+    expect(db.prepare(`SELECT hlc FROM chat`).get()).toEqual({ hlc: `0000000001000-0000-${self}` });
+    expect(db.prepare(`SELECT hlc FROM message WHERE id = 'm'`).get()).toEqual({ hlc: `0000000000500-0000-${self}` });
+    const logged = (db.prepare('SELECT tbl, row_id FROM change_log ORDER BY seq').all() as { tbl: string; row_id: string }[]).map((r) => `${r.tbl}:${r.row_id}`);
+    expect(logged.sort()).toEqual(['chat:c', 'connection:c1', 'message:m', 'profile:p1']);
+    db.close();
+  });
+});
+
+describe('sync (Task 50)', () => {
+  it("a new machine receives everything, and a change coming back to where it started changes nothing", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c', { pinned: true });
+    message(a, 'm1', 'c', null);
+    message(a, 'm2', 'c', 'm1', { role: 'assistant' });
+    a.store.chats.update('c', { headMessageId: 'm1' });
+
+    s.aToB();
+
+    expect(b.store.chats.get('c')).toMatchObject({ title: 'c', pinned: true, headMessageId: 'm1', runsOn: 'a' });
+    expect(b.store.messages.pathToRoot('m2').map((m) => [m.id, m.originNode])).toEqual([['m1', 'a'], ['m2', 'a']]);
+    expect(b.store.profiles.get('p1')).toMatchObject({ name: 'P' });
+    expect(b.store.messages.searchText('m2', 5)).toHaveLength(1);
+
+    const aLog = latest(a);
+    s.bToA();
+    expect(latest(a)).toBe(aLog);
+  });
+
+  it('merges a chat field by field: a rename on one machine and a pin on the other both stand', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+
+    a.store.chats.update('c', { title: 'Renamed on A' });
+    b.store.chats.update('c', { pinned: true });
+    s.both();
+
+    for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ title: 'Renamed on A', pinned: true });
+  });
+
+  it('the same field edited on both: the later change wins on both machines', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+
+    a.store.chats.update('c', { title: 'first' });
+    // B's clock has seen A's change (no sync in between, but a later stamp).
+    b.store.sync.observe(a.db.prepare(`SELECT hlc FROM chat WHERE id = 'c'`).get() ? (a.db.prepare(`SELECT hlc FROM chat WHERE id = 'c'`).get() as { hlc: string }).hlc : '');
+    b.store.chats.update('c', { title: 'second' });
+    s.both();
+
+    for (const n of [a, b]) expect(n.store.chats.get('c')!.title).toBe('second');
+  });
+
+  it('delete wins over a concurrent edit, in either order', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'm', 'c', null);
+    s.both();
+
+    b.store.chats.update('c', { title: 'edited after' });
+    message(b, 'late', 'c', 'm');
+    a.store.chats.delete('c');
+    s.both();
+
+    for (const n of [a, b]) {
+      expect(n.store.chats.get('c')).toBeNull();
+      expect(n.store.messages.get('late')).toBeNull();
+    }
+  });
+
+  it('two machines continuing the same conversation end up with sibling branches', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'u1', 'c', null);
+    s.both();
+
+    message(a, 'from-a', 'c', 'u1');
+    message(b, 'from-b', 'c', 'u1');
+    s.both();
+
+    for (const n of [a, b]) expect(n.store.messages.children('u1').map((m) => m.id).sort()).toEqual(['from-a', 'from-b']);
+  });
+
+  it('a chat whose head is a message in a later batch gets its head once the message arrives', () => {
+    const a = node('a');
+    const b = node('b');
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'm1', 'c', null);
+    a.store.chats.update('c', { title: 'renamed' });
+    message(a, 'm2', 'c', 'm1');
+    a.store.chats.update('c', { headMessageId: 'm2' });
+
+    // Small batches: the chat (with head m2) can come before m2 itself.
+    pull(a, b, { seq: 0 }, 2);
+
+    expect(b.store.chats.get('c')).toMatchObject({ title: 'renamed', headMessageId: 'm2' });
+  });
+
+  it("a machine's own folder for a location is its own; another's may only fill a gap; a path set again beats its removal", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    a.store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    a.store.locations.setPath({ locationId: 'nc', nodeId: 'a', path: 'E:/Nextcloud' });
+    // A adopted the location for B too (Task 44).
+    a.store.locations.setPath({ locationId: 'nc', nodeId: 'b', path: 'C:/guess' });
+    b.store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    b.store.locations.setPath({ locationId: 'nc', nodeId: 'b', path: 'C:/Users/Adam/Nextcloud' });
+    s.both();
+
+    for (const n of [a, b]) {
+      const paths = Object.fromEntries(n.store.locations.paths('nc').map((p) => [p.nodeId, p.path]));
+      expect(paths['a']).toBe('E:/Nextcloud');
+    }
+    expect(b.store.locations.paths('nc').find((p) => p.nodeId === 'b')!.path).toBe('C:/Users/Adam/Nextcloud');
+
+    a.store.locations.deletePath('nc', 'a');
+    s.both();
+    expect(b.store.locations.paths('nc').some((p) => p.nodeId === 'a')).toBe(false);
+    a.store.locations.setPath({ locationId: 'nc', nodeId: 'a', path: 'D:/Nextcloud' });
+    s.both();
+    expect(b.store.locations.paths('nc').find((p) => p.nodeId === 'a')!.path).toBe('D:/Nextcloud');
+  });
+
+  it("files sync once sent, without this machine's path to their blob; unsent ones stay home", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'm', 'c', null);
+    a.store.attachments.create({ id: 'sent', chatId: 'c', messageId: null, filename: 'f', mime: 'image/png', size: 1, sha256: 'abc', storagePath: 'E:/blobs/abc', extractedText: null });
+    a.store.attachments.create({ id: 'unsent', chatId: 'c', messageId: null, filename: 'g', mime: 'image/png', size: 1, sha256: 'def', storagePath: 'E:/blobs/def', extractedText: null });
+    a.store.attachments.update('sent', { messageId: 'm' });
+
+    const batch = a.store.sync.changesSince(0, 1000);
+    expect(batch.rows.filter((r) => r.tbl === 'attachment').map((r) => r.id)).toEqual(['sent']);
+    expect(JSON.stringify(batch.rows)).not.toContain('E:/blobs');
+    const applied = b.store.sync.apply(batch.rows);
+    expect(applied.attachments).toEqual([{ id: 'sent', sha256: 'abc' }]);
+    expect(b.store.attachments.get('sent')).toMatchObject({ messageId: 'm', storagePath: '' });
+    b.store.sync.setStoragePath('sent', 'C:/blobs/abc');
+    expect(b.store.attachments.get('sent')!.storagePath).toBe('C:/blobs/abc');
+    s.both();
+    expect(a.store.attachments.get('sent')!.storagePath).toBe('E:/blobs/abc');
+  });
+
+  it.each([0x5eed, 1, 42, 2026, 99991])('converges after 500 random interleaved operations with partial syncs, leaving grants, audit and MCP servers alone (seed %i)', (start) => {
+    let seed = start;
+    const rand = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = seed;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T>(xs: T[]): T | undefined => xs[Math.floor(rand() * xs.length)];
+    const a = node('a');
+    const b = node('b');
+    const nodes = [a, b];
+    const s = pair(a, b);
+    seedProfile(a);
+    a.store.locations.create({ id: 'loc', name: 'Loc' });
+    s.both();
+    a.store.grants.create({ id: 'g', chatId: null, profileId: null, toolName: 't', source: 'fs', scope: 'always', constraint: null, expiresAt: null });
+    b.store.mcpServers.create({ id: 'mcp', name: 'M', transport: 'stdio', command: 'x', args: [], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+
+    let n = 0;
+    for (let i = 0; i < 500; i++) {
+      const at = pick(nodes)!;
+      const chats = at.store.chats.list();
+      const c = pick(chats);
+      const r = rand();
+      if (r < 0.15 || !c) {
+        chat(at, `c${n++}`, { projectId: null });
+      } else if (r < 0.3) {
+        at.store.chats.update(c.id, { title: `t${n++}` });
+      } else if (r < 0.4) {
+        at.store.chats.update(c.id, { pinned: !c.pinned, sortOrder: rand() });
+      } else if (r < 0.65) {
+        const parent = pick(at.store.messages.roots(c.id).flatMap((m) => [m, ...at.store.messages.children(m.id)])) ?? null;
+        const id = `m${n++}`;
+        message(at, id, c.id, parent?.id ?? null);
+        if (rand() < 0.5) at.store.chats.update(c.id, { headMessageId: id });
+      } else if (r < 0.72) {
+        const id = `r${n++}`;
+        message(at, id, c.id, null, { role: 'assistant', status: 'streaming', parts: [] });
+        at.store.messages.updateParts(id, [{ type: 'text', text: 'done' }]);
+        at.store.messages.updateStatus(id, rand() < 0.8 ? 'complete' : 'error');
+      } else if (r < 0.77) {
+        at.store.chats.delete(c.id);
+      } else if (r < 0.82) {
+        at.store.locations.setPath({ locationId: 'loc', nodeId: at.id, path: `/p${n++}` });
+      } else if (r < 0.86) {
+        at.store.projects.create({ id: `pr${n++}`, name: 'P', workspace: null, defaultProfileId: 'p1' });
+      } else if (r < 0.9) {
+        const project = pick(at.store.projects.list());
+        if (project) at.store.chats.update(c.id, { projectId: project.id });
+      } else if (r < 0.95) {
+        s.aToB();
+      } else {
+        s.bToA();
+      }
+    }
+    s.both();
+
+    const dump = (x: Node, sql: string): unknown => x.db.prepare(sql).all();
+    for (const sql of [
+      'SELECT id, title, profile_id, head_message_id, pinned, sort_order, project_id, runs_on, archived_at, field_hlc FROM chat ORDER BY id',
+      'SELECT id, chat_id, parent_id, role, parts, status, origin_node, hlc FROM message ORDER BY id',
+      'SELECT location_id, node_id, path, hlc FROM location_path ORDER BY location_id, node_id',
+      'SELECT id, name, default_profile_id, hlc FROM project ORDER BY id',
+      'SELECT tbl, row_id FROM tombstone ORDER BY tbl, row_id',
+    ]) {
+      expect(dump(a, sql), sql).toEqual(dump(b, sql));
+    }
+    expect((dump(a, 'SELECT id FROM chat') as unknown[]).length).toBeGreaterThan(5);
+    expect(dump(a, 'SELECT id FROM "grant"')).toEqual([{ id: 'g' }]);
+    expect(dump(b, 'SELECT id FROM "grant"')).toEqual([]);
+    expect(dump(a, 'SELECT id FROM mcp_server')).toEqual([]);
+    expect(dump(b, 'SELECT id FROM mcp_server')).toEqual([{ id: 'mcp' }]);
+    expect(log(a).length).toBeGreaterThan(0);
+  });
+});

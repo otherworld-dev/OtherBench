@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { UsageRecord, UsageRepo } from '@grunt/core/ports/store.js';
 import type { PricingSnapshot } from '@grunt/core/types/usage.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
+import { clockOf, type SyncClock } from './clock.js';
 import { fromJson, toJson } from './util.js';
 
 const mapping: CrudMapping<UsageRecord> = {
@@ -56,8 +57,9 @@ const mapping: CrudMapping<UsageRecord> = {
 export class SqliteUsageRepo implements UsageRepo {
   private readonly crud: SqliteCrudRepo<UsageRecord>;
 
-  constructor(db: DatabaseSync) {
-    this.crud = new SqliteCrudRepo(db, mapping);
+  /** A synced table: `clock` stamps its changes (migration 013). */
+  constructor(db: DatabaseSync, clock: SyncClock = clockOf(db)) {
+    this.crud = new SqliteCrudRepo(db, mapping, clock);
   }
 
   create(u: UsageRecord): UsageRecord {

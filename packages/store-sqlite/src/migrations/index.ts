@@ -11,6 +11,7 @@ import { MIGRATION_009_MESSAGE_KEPT_AT } from './009-message-kept-at.js';
 import { MIGRATION_010_CHAT_SORT_ORDER } from './010-chat-sort-order.js';
 import { MIGRATION_011_NODES_AND_LOCATIONS } from './011-nodes-and-locations.js';
 import { MIGRATION_012_PEERS } from './012-peers.js';
+import { MIGRATION_013_CHANGE_TRACKING } from './013-change-tracking.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -28,6 +29,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 10, name: '010-chat-sort-order', sql: MIGRATION_010_CHAT_SORT_ORDER },
   MIGRATION_011_NODES_AND_LOCATIONS,
   MIGRATION_012_PEERS,
+  MIGRATION_013_CHANGE_TRACKING,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

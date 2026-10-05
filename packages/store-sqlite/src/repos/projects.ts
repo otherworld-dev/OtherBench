@@ -4,6 +4,7 @@ import { toStoredWorkspace } from '@grunt/core/domain/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { WORKSPACE_COLUMNS, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { selfIdOf } from './nodes.js';
+import { clockOf, type SyncClock } from './clock.js';
 
 function projectMapping(selfId: () => string): CrudMapping<Project> {
   return {
@@ -28,10 +29,11 @@ export class SqliteProjectRepo implements ProjectRepo {
 
   constructor(
     private readonly db: DatabaseSync,
-    private readonly selfId: () => string = selfIdOf(db)
+    private readonly selfId: () => string = selfIdOf(db),
+    clock: SyncClock = clockOf(db, selfId)
   ) {
     this.mapping = projectMapping(selfId);
-    this.crud = new SqliteCrudRepo(db, this.mapping);
+    this.crud = new SqliteCrudRepo(db, this.mapping, clock);
   }
 
   create(p: NewProject): Project {

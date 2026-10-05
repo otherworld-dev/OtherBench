@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Attachment, AttachmentRepo } from '@grunt/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
+import { clockOf, type SyncClock } from './clock.js';
 
 const mapping: CrudMapping<Attachment> = {
   table: 'attachment',
@@ -22,8 +23,12 @@ const mapping: CrudMapping<Attachment> = {
 export class SqliteAttachmentRepo implements AttachmentRepo {
   private readonly crud: SqliteCrudRepo<Attachment>;
 
-  constructor(private readonly db: DatabaseSync) {
-    this.crud = new SqliteCrudRepo(db, mapping);
+  /** A synced table: `clock` stamps its changes (migration 013). */
+  constructor(
+    private readonly db: DatabaseSync,
+    clock: SyncClock = clockOf(db)
+  ) {
+    this.crud = new SqliteCrudRepo(db, mapping, clock);
   }
 
   create(a: Attachment): Attachment {

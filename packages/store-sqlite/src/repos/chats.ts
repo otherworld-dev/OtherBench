@@ -5,6 +5,8 @@ import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromBool, toBool } from './util.js';
 import { WORKSPACE_COLUMNS, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { selfIdOf } from './nodes.js';
+import { clockOf, type SyncClock } from './clock.js';
+import { CHAT_FIELDS } from '@grunt/core/domain/sync.js';
 
 function chatMapping(selfId: () => string): CrudMapping<Chat> {
   return {
@@ -67,11 +69,13 @@ export class SqliteChatRepo implements ChatRepo {
   private readonly crud: SqliteCrudRepo<Chat>;
 
   /** `selfId` is this machine's node id (`NodeRepo`), the default for `runsOn` and for a bare `workspaceRoot`. */
+  /** A synced table: `clock` stamps the row and each field it changes (migration 013). */
   constructor(
-    db: DatabaseSync,
-    private readonly selfId: () => string = selfIdOf(db)
+    private readonly db: DatabaseSync,
+    private readonly selfId: () => string = selfIdOf(db),
+    private readonly clock: SyncClock = clockOf(db, selfId)
   ) {
-    this.crud = new SqliteCrudRepo(db, chatMapping(selfId));
+    this.crud = new SqliteCrudRepo(db, chatMapping(selfId), clock);
   }
 
   create(c: NewChat): Chat {
@@ -89,7 +93,16 @@ export class SqliteChatRepo implements ChatRepo {
       createdAt: c.createdAt ?? now,
       updatedAt: c.updatedAt ?? now,
     };
-    return this.crud.create(full);
+    // Every field starts stamped with the chat's creation, so a field's
+    // stamp never depends on later changes to other fields.
+    const stamp = this.clock.stamp();
+    const created = this.crud.create(full, stamp);
+    this.writeFieldStamps(c.id, Object.fromEntries(Object.keys(CHAT_FIELDS).map((f) => [f, stamp])));
+    return created;
+  }
+
+  private writeFieldStamps(id: string, fieldHlc: Record<string, string>): void {
+    this.db.prepare('UPDATE chat SET field_hlc = ? WHERE id = ?').run(JSON.stringify(fieldHlc), id);
   }
 
   get(id: string): Chat | null {
@@ -105,7 +118,21 @@ export class SqliteChatRepo implements ChatRepo {
     const current = this.crud.get(id);
     const stored = toStoredWorkspace(patch, this.selfId()) as Partial<Omit<Chat, 'id'>>;
     const moved = current !== null && stored.projectId !== undefined && stored.projectId !== current.projectId;
-    return this.crud.update(id, moved ? { ...stored, memoryCursor: null } : stored);
+    const next = moved ? { ...stored, memoryCursor: null } : stored;
+    const previous = this.db.prepare('SELECT hlc, field_hlc FROM chat WHERE id = ?').get(id) as { hlc: string; field_hlc: string } | undefined;
+    const stamp = this.clock.stamp();
+    const updated = this.crud.update(id, next, stamp);
+    // Each field the patch sets is stamped on its own, so another machine's
+    // change to a different field of this chat isn't lost when they merge.
+    const fields = Object.keys(next).filter((k) => k in CHAT_FIELDS);
+    if (fields.length > 0 && previous) {
+      const fieldHlc = JSON.parse(previous.field_hlc || '{}') as Record<string, string>;
+      // A field never stamped on its own keeps the stamp the row had until now.
+      for (const f of Object.keys(CHAT_FIELDS)) fieldHlc[f] ??= previous.hlc;
+      for (const f of fields) fieldHlc[f] = stamp;
+      this.writeFieldStamps(id, fieldHlc);
+    }
+    return updated;
   }
 
   delete(id: string): void {

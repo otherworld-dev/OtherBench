@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { ProfileRepo } from '@grunt/core/ports/store.js';
 import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
+import { clockOf, type SyncClock } from './clock.js';
 import { fromBool, fromJson, toBool, toJson } from './util.js';
 
 // `profile.model_id` deliberately has no FK to `model.id` -- see the module
@@ -54,8 +55,9 @@ const mapping: CrudMapping<Profile> = {
 export class SqliteProfileRepo implements ProfileRepo {
   private readonly crud: SqliteCrudRepo<Profile>;
 
-  constructor(db: DatabaseSync) {
-    this.crud = new SqliteCrudRepo(db, mapping);
+  /** A synced table: `clock` stamps its changes (migration 013). */
+  constructor(db: DatabaseSync, clock: SyncClock = clockOf(db)) {
+    this.crud = new SqliteCrudRepo(db, mapping, clock);
   }
 
   create(p: Profile): Profile {

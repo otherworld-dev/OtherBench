@@ -46,7 +46,19 @@ describe('SqliteConnectionRepo', () => {
       status: 'ok',
       statusMessage: 'all good',
       checkedAt: 12345,
+      availability: 'anywhere',
+      syncSecret: true,
     });
+    db.close();
+  });
+
+  it('round-trips availability and keeping the key on this machine', () => {
+    const db = freshDb();
+    const repo = new SqliteConnectionRepo(db);
+    repo.create(makeConnection({ id: 'conn-a', availability: 'node-pc', syncSecret: false }));
+    expect(repo.get('conn-a')).toMatchObject({ availability: 'node-pc', syncSecret: false });
+    repo.update('conn-a', { availability: 'anywhere', syncSecret: true });
+    expect(repo.get('conn-a')).toMatchObject({ availability: 'anywhere', syncSecret: true });
     db.close();
   });
 
