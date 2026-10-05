@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, scrypt, timingSafeEqual } from 'node:crypto';
 
 /**
  * Pairing two machines with a one-time code (v2 spec §3). Pure helpers: the
@@ -40,13 +40,34 @@ export function isPlausiblePairingCode(input: string): boolean {
 }
 
 /**
- * `HMAC-SHA256(code, firstFp ‖ secondFp)` as hex. The initiator sends
- * `pairingMac(code, ownFp, responderFpAsSeen)`; the responder answers with
- * `pairingMac(code, ownFp, initiatorFp)`. A machine in the middle with its
- * own certificate changes a fingerprint one side sees, so a MAC fails.
+ * scrypt cost for the pairing key: ~16 MiB and tens of milliseconds per
+ * guess, once per side per pairing. A plain HMAC of an 8-character code is
+ * only 2^40 guesses, which a GPU gets through within the code's 10 minutes
+ * if someone in the middle captures a MAC; scrypt puts that out of reach.
  */
-export function pairingMac(code: string, firstFp: string, secondFp: string): string {
-  return createHmac('sha256', normalisePairingCode(code)).update(`${firstFp}|${secondFp}`).digest('hex');
+const PAIRING_SCRYPT = { N: 2 ** 14, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+/**
+ * The key a pairing's MACs are made with: scrypt of the code, salted with
+ * both certificate fingerprints (in a fixed order, so both sides derive the
+ * same key from the same pair). A different fingerprint on either side
+ * gives a different key.
+ */
+export function pairingKey(code: string, fpA: string, fpB: string): Promise<Buffer> {
+  const salt = `grunt-pairing|${[fpA, fpB].sort().join('|')}`;
+  return new Promise((resolve, reject) => {
+    scrypt(normalisePairingCode(code), salt, 32, PAIRING_SCRYPT, (err, key) => (err ? reject(err) : resolve(key)));
+  });
+}
+
+/**
+ * `HMAC-SHA256(key, firstFp ‖ secondFp)` as hex, `key` from `pairingKey`. The
+ * initiator sends `pairingMac(key, ownFp, responderFpAsSeen)`; the responder
+ * answers with `pairingMac(key, ownFp, initiatorFp)`. A machine in the middle
+ * with its own certificate changes a fingerprint one side sees, so a MAC fails.
+ */
+export function pairingMac(key: Buffer, firstFp: string, secondFp: string): string {
+  return createHmac('sha256', key).update(`${firstFp}|${secondFp}`).digest('hex');
 }
 
 /** Constant-time comparison of two hex digests. */
