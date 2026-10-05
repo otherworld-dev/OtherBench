@@ -125,8 +125,32 @@ describe('syncing two machines over the peer listener', () => {
 
     await laptop.syncer.pullFrom('node-PC');
 
-    expect(laptop.store.connections.get('c1')).toMatchObject({ syncSecret: false });
     expect(await laptop.secrets.get('conn:c1')).toBeNull();
+    // Whether to share a key is each machine's own setting: the laptop can't
+    // switch the PC's back on (or re-point it) to be sent the key.
+    laptop.store.connections.update('c1', { name: 'Renamed', baseUrl: 'https://evil.example', syncSecret: true });
+    await pc.syncer.pullFrom('node-Laptop');
+    expect(pc.store.connections.get('c1')).toMatchObject({ name: 'Anthropic', baseUrl: null, syncSecret: false });
+    expect(JSON.stringify(await pc.syncer.changesFor(0, 1000))).not.toContain('sk-home-only');
+  });
+
+  it("never stores a key under, or sends one from, any reference but the connection's own", async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    await pc.secrets.set('conn:c1', 'sk-c1');
+    await pc.secrets.set('peer-token:node-Other', 'token-for-another-machine');
+    await pairNodes(pc, laptop);
+    await laptop.syncer.pullFrom('node-PC');
+
+    // The laptop points the connection at another secret and sends a key with it.
+    laptop.store.connections.update('c1', { secretRef: 'peer-token:node-Other' });
+    await laptop.secrets.set('peer-token:node-Other', 'overwritten');
+    await pc.syncer.pullFrom('node-Laptop');
+
+    expect(await pc.secrets.get('peer-token:node-Other')).toBe('token-for-another-machine');
+    expect(pc.store.connections.get('c1')!.secretRef).toBe('conn:c1');
+    expect(JSON.stringify(await pc.syncer.changesFor(0, 1000))).not.toContain('token-for-another-machine');
   });
 
   it("fetches a sent file's blob and checks it; an unsent file's blob never leaves; a corrupt one is refused and retried", async () => {

@@ -313,20 +313,42 @@ describe('sync (Task 50)', () => {
     seedProfile(a);
     chat(a, 'c');
     message(a, 'm', 'c', null);
-    a.store.attachments.create({ id: 'sent', chatId: 'c', messageId: null, filename: 'f', mime: 'image/png', size: 1, sha256: 'abc', storagePath: 'E:/blobs/abc', extractedText: null });
-    a.store.attachments.create({ id: 'unsent', chatId: 'c', messageId: null, filename: 'g', mime: 'image/png', size: 1, sha256: 'def', storagePath: 'E:/blobs/def', extractedText: null });
+    const abc = 'a'.repeat(64);
+    a.store.attachments.create({ id: 'sent', chatId: 'c', messageId: null, filename: 'f', mime: 'image/png', size: 1, sha256: abc, storagePath: 'E:/blobs/abc', extractedText: null });
+    a.store.attachments.create({ id: 'unsent', chatId: 'c', messageId: null, filename: 'g', mime: 'image/png', size: 1, sha256: 'd'.repeat(64), storagePath: 'E:/blobs/def', extractedText: null });
     a.store.attachments.update('sent', { messageId: 'm' });
 
     const batch = a.store.sync.changesSince(0, 1000);
     expect(batch.rows.filter((r) => r.tbl === 'attachment').map((r) => r.id)).toEqual(['sent']);
     expect(JSON.stringify(batch.rows)).not.toContain('E:/blobs');
     const applied = b.store.sync.apply(batch.rows);
-    expect(applied.attachments).toEqual([{ id: 'sent', sha256: 'abc' }]);
+    expect(applied.attachments).toEqual([{ id: 'sent', sha256: abc }]);
     expect(b.store.attachments.get('sent')).toMatchObject({ messageId: 'm', storagePath: '' });
     b.store.sync.setStoragePath('sent', 'C:/blobs/abc');
     expect(b.store.attachments.get('sent')!.storagePath).toBe('C:/blobs/abc');
     s.both();
     expect(a.store.attachments.get('sent')!.storagePath).toBe('E:/blobs/abc');
+  });
+
+  it("refuses what another machine can't be trusted to set: a key reference, a blob name that isn't a hash", () => {
+    const a = node('a');
+    const b = node('b');
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'm', 'c', null);
+    const batch = a.store.sync.changesSince(0, 1000);
+    for (const r of batch.rows) {
+      if (r.op === 'upsert' && r.tbl === 'connection') r.row['secret_ref'] = 'peer-token:node-other';
+    }
+    batch.rows.push({
+      tbl: 'attachment', id: 'evil', op: 'upsert', hlc: '9999999999999-0000-a',
+      row: { id: 'evil', chat_id: 'c', message_id: 'm', filename: 'x', mime: 'image/png', size: 1, sha256: '../../secrets.json', extracted_text: null },
+    });
+
+    b.store.sync.apply(batch.rows);
+
+    expect(b.store.connections.get('c1')!.secretRef).toBe('conn:c1');
+    expect(b.store.attachments.get('evil')).toBeNull();
   });
 
   it.each([0x5eed, 1, 42, 2026, 99991])('converges after 500 random interleaved operations with partial syncs, leaving grants, audit and MCP servers alone (seed %i)', (start) => {
