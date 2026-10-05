@@ -135,7 +135,11 @@ export interface GruntState {
   streamStatus: StreamConnectionStatus;
   setStreamStatus(status: StreamConnectionStatus): void;
 
-  /** Bulk-hydrates a chat's whole message tree from `GET /chats/:id/messages`. Authoritative: replaces, never merges. */
+  /**
+   * Bulk-hydrates a chat's whole message tree from `GET /chats/:id/messages`.
+   * Authoritative (replaces, never merges), except for a reply still being
+   * written, whose stream knows more than its stored checkpoint.
+   */
   loadMessages(chatId: string, messages: CanonMessage[], headMessageId: string | null, usage?: Record<string, RecordedUsage>): void;
   /** Recorded usage of finished replies, by message id, as the server stored it (#819). */
   recordedUsage: Record<string, RecordedUsage>;
@@ -426,12 +430,29 @@ export const useGruntStore = create<GruntState>()((set) => ({
   loadMessages: (_chatId, messages, headMessageId, usage) =>
     set((state) => {
       const nextMessages = { ...state.messages };
-      for (const m of messages) nextMessages[m.id] = m;
-      // Events buffered for a message before it was loaded are already in what was loaded, or will be by the next reload.
+      const nextExtras = { ...state.extras };
       const pendingEvents = { ...state.pendingEvents };
-      for (const m of messages) delete pendingEvents[m.id];
+      for (const m of messages) {
+        const pending = pendingEvents[m.id];
+        delete pendingEvents[m.id];
+        if (m.status === 'streaming') {
+          // A reply still being written belongs to its stream: what was stored
+          // is only its last checkpoint. One this window is following stays as
+          // it is; one it has only buffered events for (they start when the
+          // turn did) is rebuilt from them.
+          if (state.messages[m.id]?.status === 'streaming') continue;
+          if (pending && pending.length > 0) {
+            const replayed = replayEvents({ ...m, parts: [], error: null }, emptyExtras, pending);
+            nextMessages[m.id] = replayed.message;
+            nextExtras[m.id] = replayed.extras;
+            continue;
+          }
+        }
+        nextMessages[m.id] = m;
+      }
       return {
         messages: nextMessages,
+        extras: nextExtras,
         pendingEvents,
         recordedUsage: usage ? { ...state.recordedUsage, ...usage } : state.recordedUsage,
         chats: headMessageId === null ? state.chats : state.chats.map((c) => (c.id === _chatId ? { ...c, headMessageId } : c)),

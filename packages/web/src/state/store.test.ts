@@ -517,11 +517,42 @@ describe('running replies from app-wide events (#824)', () => {
     expect(s().chatReloads).toEqual({ c1: 2 });
   });
 
-  it('loading a message drops the events buffered for it before it was known', () => {
+  it('loading a finished message drops the events buffered for it before it was known', () => {
     const s = () => useGruntStore.getState();
     s().applyTurnEvent({ messageId: 'theirs', type: 'text-delta', text: 'early' });
     expect(s().pendingEvents['theirs']).toHaveLength(1);
-    s().loadMessages('c1', [{ id: 'theirs', chatId: 'c1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'early' }], status: 'streaming', error: null, producedBy: null, createdAt: 1 }], null);
+    s().loadMessages('c1', [stubAssistant('theirs', { parts: [{ type: 'text', text: 'early and late' }], status: 'complete' })], null);
     expect(s().pendingEvents['theirs']).toBeUndefined();
+    expect(s().messages['theirs']?.parts).toEqual([{ type: 'text', text: 'early and late' }]);
+  });
+
+  // A reload (another window's turn, a sync) can land while a reply is still
+  // being written. What it brings back for that reply is only its last
+  // checkpoint; the stream has everything.
+  it('a reload leaves a reply this window is streaming as its stream has it', () => {
+    const s = () => useGruntStore.getState();
+    s().registerMessage(stubAssistant('mine'));
+    s().applyTurnEvent({ messageId: 'mine', type: 'text-delta', text: 'Project memory: Alpha' });
+    s().loadMessages('chat-1', [stubAssistant('mine', { parts: [{ type: 'text', text: 'Project' }] })], null);
+    s().applyTurnEvent({ messageId: 'mine', type: 'text-delta', text: '.' });
+    expect(s().messages['mine']?.parts).toEqual([{ type: 'text', text: 'Project memory: Alpha.' }]);
+
+    // Once it has finished, the stored copy is the final word.
+    s().loadMessages('chat-1', [stubAssistant('mine', { parts: [{ type: 'text', text: 'Project memory: Alpha. Done.' }], status: 'complete' })], null);
+    expect(s().messages['mine']).toMatchObject({ status: 'complete', parts: [{ type: 'text', text: 'Project memory: Alpha. Done.' }] });
+  });
+
+  it('a reply loaded mid-stream is rebuilt from the events buffered for it, not from its checkpoint', () => {
+    const s = () => useGruntStore.getState();
+    s().applyTurnEvent({ messageId: 'theirs', type: 'notice', text: '1 image attachment was left out' });
+    s().applyTurnEvent({ messageId: 'theirs', type: 'text-delta', text: 'Hel' });
+    s().applyTurnEvent({ messageId: 'theirs', type: 'text-delta', text: 'lo' });
+    s().loadMessages('chat-1', [stubAssistant('theirs', { parts: [{ type: 'notice', text: '1 image attachment was left out' }, { type: 'text', text: 'Hel' }] })], null);
+    expect(s().pendingEvents['theirs']).toBeUndefined();
+    s().applyTurnEvent({ messageId: 'theirs', type: 'text-delta', text: ' there' });
+    expect(s().messages['theirs']?.parts).toEqual([
+      { type: 'notice', text: '1 image attachment was left out' },
+      { type: 'text', text: 'Hello there' },
+    ]);
   });
 });
