@@ -351,6 +351,32 @@ describe('sync (Task 50)', () => {
     expect(b.store.attachments.get('evil')).toBeNull();
   });
 
+  it("refuses a change whose id names one row while its key names another, so no check can be passed on the wrong row", () => {
+    const a = node('a');
+    const b = node('b');
+    seedProfile(b);
+    // On B: a connection that keeps its key home, a deleted chat, and B's own folder for a location.
+    b.store.connections.update('c1', { syncSecret: false, baseUrl: null });
+    chat(b, 'gone');
+    b.store.chats.delete('gone');
+    b.store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    b.store.locations.setPath({ locationId: 'nc', nodeId: 'b', path: '/b/nextcloud' });
+    const hlc = '9999999999999-0000-a';
+
+    const result = b.store.sync.apply([
+      { tbl: 'connection', id: 'harmless', op: 'upsert', hlc, row: { id: 'c1', name: 'C', kind: 'mock', base_url: 'https://evil.example', secret_ref: null, extra_headers: '{}', availability: 'anywhere' } },
+      { tbl: 'chat', id: 'fresh', op: 'upsert', hlc, row: { id: 'gone', title: 'back from the dead', profile_id: 'p1', pinned: 0, auto_mode: 0, memory_excluded: 0, sort_order: 0, runs_on: 'a', created_at: 1, updated_at: 1 } },
+      { tbl: 'location_path', id: 'nc:elsewhere', op: 'upsert', hlc, row: { location_id: 'nc', node_id: 'b', path: '/evil' } },
+    ]);
+
+    expect(result.applied).toBe(0);
+    expect(b.store.connections.get('c1')!.baseUrl).toBeNull();
+    expect(b.store.chats.get('gone')).toBeNull();
+    expect(b.store.chats.get('fresh')).toBeNull();
+    expect(b.store.locations.paths('nc')).toEqual([{ locationId: 'nc', nodeId: 'b', path: '/b/nextcloud' }]);
+    expect(a.id).toBe('a');
+  });
+
   it.each([0x5eed, 1, 42, 2026, 99991])('converges after 500 random interleaved operations with partial syncs, leaving grants, audit and MCP servers alone (seed %i)', (start) => {
     let seed = start;
     const rand = (): number => {
