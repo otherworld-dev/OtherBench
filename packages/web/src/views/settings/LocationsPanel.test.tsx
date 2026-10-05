@@ -56,6 +56,14 @@ describe('LocationsPanel', () => {
     expect(within(g).getByRole('button', { name: 'Set' })).toBeInTheDocument();
   });
 
+  it("reloads when another machine's changes arrive", async () => {
+    render(<LocationsPanel />);
+    await screen.findByTestId('location-nc');
+    expect(api.locations.list).toHaveBeenCalledTimes(1);
+    useGruntStore.setState({ syncRevision: 1 });
+    await waitFor(() => expect(api.locations.list).toHaveBeenCalledTimes(2));
+  });
+
   it('adds a location with a path here, checking the path first', async () => {
     vi.mocked(api.locations.create).mockResolvedValue({ id: 'docs', name: 'Docs', paths: [{ locationId: 'docs', nodeId: 'node-pc', path: 'E:\\Docs' }] });
     render(<LocationsPanel />);

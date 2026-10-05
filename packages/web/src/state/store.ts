@@ -93,6 +93,12 @@ export interface GruntState {
   appRunningTurns: Record<string, string>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
+  /**
+   * Per chat, bumped when a turn starts or finishes there that this window
+   * didn't start and hasn't loaded (sent from another window, or from the
+   * other machine): an open chat reloads its messages (useChatSync).
+   */
+  chatReloads: Record<string, number>;
   /** This machine and its paired ones, with reachability (state/machines.ts); null until loaded. */
   machines: PeersOverview | null;
   setMachines(machines: PeersOverview | null): void;
@@ -218,6 +224,10 @@ function withPanes(next: PaneState): { paneState: PaneState; activeChatId: strin
 
 const initialPanes = loadPaneState();
 
+function bump(counts: Record<string, number>, chatId: string): Record<string, number> {
+  return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
+}
+
 export const useGruntStore = create<GruntState>()((set) => ({
   connections: [],
   models: [],
@@ -324,6 +334,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
   appPendingApprovals: {},
   appRunningTurns: {},
   syncRevision: 0,
+  chatReloads: {},
   machines: null,
   setMachines: (machines) => set({ machines }),
   applyAppHello: (hello) =>
@@ -357,7 +368,9 @@ export const useGruntStore = create<GruntState>()((set) => ({
         case 'turn-started': {
           const running = { ...state.appRunningTurns };
           for (const id of event.messageIds) running[id] = event.chatId;
-          return { appRunningTurns: running };
+          // Replies this window knows nothing of: show them by reloading the chat.
+          const unknown = event.messageIds.some((id) => !state.messages[id]);
+          return { appRunningTurns: running, ...(unknown ? { chatReloads: bump(state.chatReloads, event.chatId) } : {}) };
         }
         case 'turn-finished': {
           // Approvals end with their turn.
@@ -365,9 +378,13 @@ export const useGruntStore = create<GruntState>()((set) => ({
           const kept = entries.filter(([, p]) => p.messageId !== event.messageId);
           const running = { ...state.appRunningTurns };
           delete running[event.messageId];
+          // A reply this window hasn't seen finish (or at all): reload the chat for its final state.
+          const known = state.messages[event.messageId];
+          const stale = !known || known.status === 'streaming';
           return {
             appRunningTurns: running,
             ...(kept.length === entries.length ? {} : { appPendingApprovals: Object.fromEntries(kept) }),
+            ...(stale ? { chatReloads: bump(state.chatReloads, event.chatId) } : {}),
           };
         }
         case 'sync-applied':
@@ -410,8 +427,12 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set((state) => {
       const nextMessages = { ...state.messages };
       for (const m of messages) nextMessages[m.id] = m;
+      // Events buffered for a message before it was loaded are already in what was loaded, or will be by the next reload.
+      const pendingEvents = { ...state.pendingEvents };
+      for (const m of messages) delete pendingEvents[m.id];
       return {
         messages: nextMessages,
+        pendingEvents,
         recordedUsage: usage ? { ...state.recordedUsage, ...usage } : state.recordedUsage,
         chats: headMessageId === null ? state.chats : state.chats.map((c) => (c.id === _chatId ? { ...c, headMessageId } : c)),
       };

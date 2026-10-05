@@ -193,6 +193,8 @@ function LocationRow({
 /** Settings → Locations (v2 plan, Task 43). */
 export function LocationsPanel(): JSX.Element {
   const setProjects = useGruntStore((s) => s.setProjects);
+  // Another machine's locations, and its paths for them, arrive by sync.
+  const syncRevision = useGruntStore((s) => s.syncRevision);
   const serverPlatform = useServerPlatform();
   const [locations, setLocations] = useState<LocationView[] | null>(null);
   const [self, setSelf] = useState<NodeInfo | null>(null);
@@ -217,7 +219,7 @@ export function LocationsPanel(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [syncRevision]);
 
   /** A project's folder can be in a location too; its view changes with the location's paths. */
   function refreshProjects(): void {

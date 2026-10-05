@@ -46,6 +46,18 @@ function requireName(value: unknown, what: string): string {
   return trimmed;
 }
 
+/**
+ * One location per name (ignoring case): two machines each adding "Nextcloud"
+ * would otherwise make two, and a chat's folder in one wouldn't resolve on
+ * the machine that set its path on the other.
+ */
+function assertNameFree(container: Container, name: string, except?: string): void {
+  const clash = container.store.locations.list().find((l) => l.id !== except && l.name.toLowerCase() === name.toLowerCase());
+  if (clash) {
+    throw new HTTPException(409, { message: `There's already a location called ${clash.name}. Set this machine's folder for it instead of adding another.` });
+  }
+}
+
 function getLocationOrThrow(container: Container, id: string): Location {
   const location = container.store.locations.get(id);
   if (!location) throw new HTTPException(404, { message: `Location "${id}" not found.` });
@@ -83,6 +95,7 @@ export function locationsRoutes(container: Container): Hono {
     const body = (await c.req.json().catch(() => ({}))) as LocationBody;
     const name = requireName(body.name, 'A location');
     const path = optionalWorkspaceRoot(body.path, 'path') ?? null;
+    assertNameFree(container, name);
     const location = container.store.locations.create({ id: randomUUID(), name });
     if (path !== null) container.store.locations.setPath({ locationId: location.id, nodeId: container.store.nodes.self().id, path });
     return c.json(locationView(container, location), 201);
@@ -92,7 +105,12 @@ export function locationsRoutes(container: Container): Hono {
     const id = c.req.param('id');
     getLocationOrThrow(container, id);
     const body = (await c.req.json().catch(() => ({}))) as LocationBody;
-    const updated = body.name === undefined ? getLocationOrThrow(container, id) : container.store.locations.update(id, { name: requireName(body.name, 'A location') });
+    let updated = getLocationOrThrow(container, id);
+    if (body.name !== undefined) {
+      const name = requireName(body.name, 'A location');
+      assertNameFree(container, name, id);
+      updated = container.store.locations.update(id, { name });
+    }
     return c.json(locationView(container, updated));
   });
 
