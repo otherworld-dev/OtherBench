@@ -2,6 +2,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { Container } from './container.js';
+import { availableOn } from '@grunt/core/domain/availability.js';
 
 /**
  * Resolves a stored `Profile` into the `ResolvedProfile` a `ChatEngine`
@@ -27,6 +28,13 @@ export async function resolveProfile(container: Pick<Container, 'store' | 'secre
     throw new HTTPException(500, {
       message: `Profile "${profileId}" references connection "${profile.connectionId}", which no longer exists.`,
     });
+  }
+
+  // A connection bound to another machine (its Ollama, say) can't be reached from this one (v2 spec §5).
+  const self = container.store.nodes.self().id;
+  if (!availableOn(connection, self)) {
+    const machine = container.store.peers.get(connection.availability ?? '')?.name ?? 'another machine';
+    throw new HTTPException(409, { message: `Profile "${profile.name}" uses ${connection.name}, which only works on ${machine}. Run this chat there, or choose another profile.` });
   }
 
   const apiKey = connection.secretRef ? await container.secrets.get(connection.secretRef) : null;

@@ -196,6 +196,13 @@ describe('quiet timer', () => {
     expect(clock.pending()).toEqual([]);
   });
 
+  it('starts no timer for a chat that runs on another machine: that machine summarises it', () => {
+    addChat('elsewhere');
+    store.chats.update('elsewhere', { runsOn: 'node-other' });
+    service.noteTurnCompleted('elsewhere');
+    expect(clock.pending()).toEqual([]);
+  });
+
   it('a timer whose chat was excluded before it fired does nothing', async () => {
     exchange('chat', 'Plan', 'ok');
     service.noteTurnCompleted('chat');

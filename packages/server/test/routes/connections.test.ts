@@ -153,6 +153,46 @@ describe('POST /api/connections', () => {
   });
 });
 
+describe('where a connection can be used (v2 spec §5)', () => {
+  async function create(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const res = await app().request('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    expect(res.status).toBe(201);
+    return json(res);
+  }
+
+  it('binds a loopback connection to this machine, leaves a cloud one anywhere, and takes an explicit choice', async () => {
+    const self = container.store.nodes.self().id;
+    expect(await create({ name: 'Ollama', kind: 'ollama' })).toMatchObject({ availability: self, syncSecret: true });
+    expect(await create({ name: 'LM Studio', kind: 'openai_compatible', baseUrl: 'http://127.0.0.1:1234/v1' })).toMatchObject({ availability: self });
+    expect(await create({ name: 'Anthropic', kind: 'anthropic' })).toMatchObject({ availability: 'anywhere' });
+    expect(await create({ name: 'Shared Ollama', kind: 'ollama', availability: 'anywhere', syncSecret: false })).toMatchObject({ availability: 'anywhere', syncSecret: false });
+    const bad = await app().request('/api/connections', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'X', kind: 'anthropic', availability: 'node-unknown' }) });
+    expect(bad.status).toBe(400);
+  });
+
+  it('follows a new address unless told otherwise', async () => {
+    const created = await create({ name: 'Compat', kind: 'openai_compatible', baseUrl: 'https://api.example.com/v1' });
+    const patched = await app().request(`/api/connections/${created['id'] as string}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseUrl: 'http://localhost:8080/v1' }) });
+    expect(await json(patched)).toMatchObject({ availability: container.store.nodes.self().id });
+  });
+
+  it("refuses to run a profile whose connection only works on another machine", async () => {
+    container.store.peers.create({ nodeId: 'node-pc', name: 'PC', fingerprint: 'f'.repeat(64), addresses: [], issuedTokenHash: 'h', heldTokenRef: 'r', platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1 });
+    const conn = await create({ name: 'PC Ollama', kind: 'ollama', availability: 'node-pc' });
+    container.store.profiles.create({
+      id: 'p-pc', name: 'Local Llama', description: null, colour: null, connectionId: conn['id'] as string, modelId: 'llama', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null,
+    });
+    container.store.chats.create({ id: 'c', title: 'T', profileId: 'p-pc', headMessageId: null, workspace: null, pinned: false, archivedAt: null });
+
+    const res = await app().request('/api/chats/c/turns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parts: [{ type: 'text', text: 'hi' }], profileIds: ['p-pc'] }) });
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('only works on PC');
+    expect(container.store.messages.roots('c')).toEqual([]);
+  });
+});
+
 describe('GET /api/connections and GET /api/connections/:id', () => {
   it('never includes an apiKey field, even after a key was set', async () => {
     const created = await json(

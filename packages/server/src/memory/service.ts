@@ -177,8 +177,18 @@ export class ProjectMemoryService {
     for (const stop of [...this.running]) stop();
   }
 
+  /**
+   * Only the machine a chat runs on summarises it into project memory: with
+   * paired machines, two summarisers working through the same chats would
+   * do the work twice and overwrite each other's notes.
+   */
   private contributes(chat: Chat): boolean {
-    return chat.projectId !== null && !chat.memoryExcluded && this.store.projects.get(chat.projectId) !== null;
+    return (
+      chat.projectId !== null &&
+      !chat.memoryExcluded &&
+      chat.runsOn === this.store.nodes.self().id &&
+      this.store.projects.get(chat.projectId) !== null
+    );
   }
 
   private pending(chat: Chat): CanonMessage[] {

@@ -64,6 +64,8 @@ export interface PeerRequest {
 export interface ResponseLimits {
   timeoutMs?: number;
   maxBytes?: number;
+  /** The body as bytes (a blob) rather than parsed JSON. */
+  binary?: boolean;
 }
 
 /** Room for a sync batch (Task 50 sizes its batches to stay well under this). */
@@ -201,6 +203,7 @@ export class PeerClient {
     } finally {
       clearTimeout(timer);
     }
+    if (limits.binary) return { status: res.statusCode ?? 0, body: Buffer.concat(chunks), address: conn.address, fingerprint: conn.fingerprint };
     const text = Buffer.concat(chunks).toString('utf8');
     let body: unknown = text;
     try {

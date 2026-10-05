@@ -75,6 +75,24 @@ export function createPeerApp(service: PeerService): Hono<PeerEnv> {
     });
   });
 
+  /** This machine's changes after the caller's cursor (Task 50), keys included unless kept here. */
+  app.get('/peer/changes', async (c) => {
+    const since = Number(c.req.query('since') ?? 0);
+    const limit = Number(c.req.query('limit') ?? 500);
+    if (!Number.isInteger(since) || since < 0 || !Number.isInteger(limit) || limit < 1) return c.json({ error: 'Bad since or limit.' }, 400);
+    return c.json(await service.requireSyncer().changesFor(since, limit));
+  });
+
+  /** A file's bytes by hash: only files sent in a message ever leave this machine. */
+  app.get('/peer/blobs/:sha256', async (c) => {
+    const data = await service.requireSyncer().blob(c.req.param('sha256'));
+    if (!data) return c.json({ error: 'No such file.' }, 404);
+    return c.body(new Uint8Array(data), 200, { 'Content-Type': 'application/octet-stream' });
+  });
+
+  /** The caller has changes for this machine: pull them now, and answer when done (before forwarding a turn, Task 52). */
+  app.post('/peer/sync-request', async (c) => c.json({ applied: await service.requireSyncer().pullFrom(c.get('peer').nodeId) }));
+
   /** The caller removed this machine: forget it here too. */
   app.post('/peer/revoke', async (c) => {
     await service.revokedBy(c.get('peer'));

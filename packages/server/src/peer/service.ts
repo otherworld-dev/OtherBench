@@ -15,11 +15,12 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { Peer, PeerInfo, PublicPeer } from '@grunt/core/types/peer.js';
 import type { Hono } from 'hono';
 import type { AppEventBus } from '../stream/events.js';
-import { PeerClient, PeerUnreachableError, parsePeerAddress, type PeerRequest, type PeerResponse } from './client.js';
+import { PeerClient, PeerUnreachableError, parsePeerAddress, type PeerRequest, type PeerResponse, type ResponseLimits } from './client.js';
 import type { IdentityStore } from './identity.js';
 import { PeerListener } from './listener.js';
 import { PeerMonitor, type PeerMonitorOptions, type PeerStatus } from './monitor.js';
 import { PairingSessions } from './pairing.js';
+import type { Syncer } from './syncer.js';
 
 /** How long the machine entering a code waits for the other's answer: long enough to derive a key, too short to crack one. */
 const PAIRING_RESPONSE_TIMEOUT_MS = 15_000;
@@ -114,6 +115,8 @@ export class PeerService {
   private readonly platform: string;
   /** Set while this machine is entering a code: the listener runs so the other side can be told where to reach it. */
   private pairingOut = 0;
+  /** Pulls changes from peers (Task 50); attached by the container once it exists. */
+  private syncer: Syncer | null = null;
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -121,7 +124,34 @@ export class PeerService {
     this.client = new PeerClient(() => options.identity.get());
     this.pairing = new PairingSessions(this.now);
     this.listener = new PeerListener(options.createApp(this), options.identity, options.port, options.hosts);
-    this.monitor = new PeerMonitor(this, { ...options.monitor, ...(options.events ? { events: options.events } : {}), now: this.now });
+    this.monitor = new PeerMonitor(this, {
+      ...options.monitor,
+      ...(options.events ? { events: options.events } : {}),
+      now: this.now,
+      // A peer that (re)connects, or says it has changes, is pulled from.
+      onConnected: (nodeId) => {
+        options.monitor?.onConnected?.(nodeId);
+        this.syncer?.pullSoon(nodeId);
+      },
+      onMessage: (nodeId, event, data) => {
+        options.monitor?.onMessage?.(nodeId, event, data);
+        if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
+      },
+    });
+  }
+
+  attachSyncer(syncer: Syncer): void {
+    this.syncer = syncer;
+  }
+
+  syncerOrNull(): Syncer | null {
+    return this.syncer;
+  }
+
+  /** The syncer, for the peer listener's sync routes. */
+  requireSyncer(): Syncer {
+    if (!this.syncer) throw new PeerError('Sync is not available on this machine.', 503);
+    return this.syncer;
   }
 
   /** Starts watching every paired machine's event stream; the container calls it once it's up. */
@@ -406,13 +436,13 @@ export class PeerService {
    * working address first. A success moves that address to the front and
    * records when the machine was last seen.
    */
-  async call(nodeId: string, req: Omit<PeerRequest, 'token'>): Promise<PeerResponse> {
+  async call(nodeId: string, req: Omit<PeerRequest, 'token'>, limits: ResponseLimits = {}): Promise<PeerResponse> {
     const peer = this.store.peers.get(nodeId);
     if (!peer) throw new PeerError(`No paired machine "${nodeId}".`, 404);
     const token = await this.options.secrets.get(peer.heldTokenRef);
     if (!token) throw new PeerError(`The token for ${peer.name} is missing; pair again.`, 409);
     try {
-      const res = await this.client.request({ addresses: peer.addresses, fingerprint: peer.fingerprint }, { ...req, token });
+      const res = await this.client.request({ addresses: peer.addresses, fingerprint: peer.fingerprint }, { ...req, token }, limits);
       this.noteReached(peer, res.address);
       return res;
     } catch (err) {
