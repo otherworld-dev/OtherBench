@@ -5,6 +5,8 @@ import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import { RoutingChatEngine } from '../src/engine-router.js';
 
 const ws = '/ws';
+// The folder is never touched (the engines are fakes); it only has to resolve.
+const pathExists = (): boolean => true;
 const usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
 
 const profile: ResolvedProfile = {
@@ -38,7 +40,7 @@ describe('claude_code turns through the routing engine', () => {
         { type: 'finish', usage, finishReason: 'stop' },
       ];
     });
-    const runner = new TurnRunner(store, new RoutingChatEngine(aisdk, cc));
+    const runner = new TurnRunner(store, new RoutingChatEngine(aisdk, cc), { pathExists });
     const chat = store.chats.create({ id: 'chat-1', title: 't', profileId: null, headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null });
 
     const first = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'one' }], profiles: [profile] });
@@ -55,7 +57,7 @@ describe('claude_code turns through the routing engine', () => {
   it('hands the chat\'s auto mode to the Claude Code engine through the router', async () => {
     const store = new InMemoryStore();
     const cc = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
-    const runner = new TurnRunner(store, new RoutingChatEngine(new FakeChatEngine([]), cc));
+    const runner = new TurnRunner(store, new RoutingChatEngine(new FakeChatEngine([]), cc), { pathExists });
     const chat = store.chats.create({ id: 'chat-1', title: 't', profileId: 'p1', headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null, autoMode: true });
 
     const first = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'one' }], profiles: [profile] });

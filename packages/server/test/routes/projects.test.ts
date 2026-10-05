@@ -176,7 +176,7 @@ describe('DELETE /api/projects/:id', () => {
 
     expect(res.status).toBe(204);
     expect(container.store.projects.get('p1')).toBeNull();
-    expect(container.store.chats.get('c1')).toMatchObject({ projectId: null, workspaceRoot: NATIVE_ABSOLUTE });
+    expect(container.store.chats.get('c1')).toMatchObject({ projectId: null, workspace: { kind: 'machine', root: NATIVE_ABSOLUTE } });
   });
 
   it('404s for an unknown project', async () => {

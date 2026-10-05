@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AppEventsHello } from '@grunt/core/types/events.js';
 import type { Container } from '../container.js';
 import { sseStream } from '../stream/sse.js';
+import { eventView } from '../workspace-view.js';
 
 /** How often an idle `GET /api/events` sends a comment, so proxies and the client's reader don't treat it as dead. */
 export const EVENTS_KEEPALIVE_MS = 25_000;
@@ -18,7 +19,7 @@ export function eventsRoutes(container: Container): Hono {
 
   app.get('/', () =>
     sseStream((sink) => {
-      const unsubscribe = container.events?.subscribe((e) => sink.send(null, e)) ?? (() => {});
+      const unsubscribe = container.events?.subscribe((e) => sink.send(null, eventView(container, e))) ?? (() => {});
       const hello: AppEventsHello = {
         pendingApprovals: container.events?.pendingApprovals() ?? [],
         runningTurns: container.events?.runningTurns() ?? [],

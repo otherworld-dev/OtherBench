@@ -11,11 +11,14 @@ import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
-import { optionalBoolean, optionalWorkspaceRoot, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, requireNonEmptyString } from '../validation.js';
+import { chatView, chatViews, parseWorkspaceBody } from '../workspace-view.js';
 
 interface ChatBody {
   title?: unknown;
   profileId?: unknown;
+  workspace?: unknown;
+  workspacePath?: unknown;
   workspaceRoot?: unknown;
   pinned?: unknown;
   archivedAt?: unknown;
@@ -94,7 +97,7 @@ export function collectMessageTree(store: Store, chatId: string): CanonMessage[]
 export function chatsRoutes(container: Container): Hono {
   const app = new Hono();
 
-  app.get('/', (c) => c.json(container.store.chats.list()));
+  app.get('/', (c) => c.json(chatViews(container, container.store.chats.list())));
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ChatBody;
@@ -109,26 +112,27 @@ export function chatsRoutes(container: Container): Hono {
     }
 
     const title = typeof body.title === 'string' && body.title.length > 0 ? body.title : DEFAULT_TITLE;
-    // The project's folder only when the request has no workspaceRoot at all:
-    // an explicit null means "no folder". The folder is not checked on disk --
-    // a missing one gives the usual workspace warnings when tools run (spec §5).
-    const workspaceRoot =
-      body.workspaceRoot !== undefined ? (optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null) : (project?.workspaceRoot ?? null);
+    // The project's folder only when the request names no folder at all: an
+    // explicit null means "no folder". It's copied as stored, so a project
+    // folder in a location resolves on whichever machine the chat is used on.
+    // Not checked on disk here: the chat shows where it doesn't resolve.
+    const requested = parseWorkspaceBody(container, body);
+    const workspace = requested !== undefined ? requested : (project?.workspace ?? null);
 
     const created = container.store.chats.create({
       id: randomUUID(),
       title,
       profileId,
       headMessageId: null,
-      workspaceRoot,
+      workspace,
       pinned: false,
       archivedAt: null,
       projectId: project?.id ?? null,
     });
-    return c.json(created, 201);
+    return c.json(chatView(container, created), 201);
   });
 
-  app.get('/:id', (c) => c.json(getChatOrThrow(container, c.req.param('id'))));
+  app.get('/:id', (c) => c.json(chatView(container, getChatOrThrow(container, c.req.param('id')))));
 
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
@@ -146,7 +150,8 @@ export function chatsRoutes(container: Container): Hono {
       requireExistingProfile(container, profileId);
       patch.profileId = profileId;
     }
-    if (body.workspaceRoot !== undefined) patch.workspaceRoot = optionalWorkspaceRoot(body.workspaceRoot, 'workspaceRoot') ?? null;
+    const workspace = parseWorkspaceBody(container, body);
+    if (workspace !== undefined) patch.workspace = workspace;
     if (body.pinned !== undefined) patch.pinned = optionalBoolean(body.pinned, 'pinned', false);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
@@ -173,7 +178,7 @@ export function chatsRoutes(container: Container): Hono {
     const updated = container.store.chats.update(id, patch);
     // A chat that stops contributing, or changes project, drops its pending memory timer.
     if (patch.memoryExcluded === true || patch.projectId !== undefined) container.memory?.cancel(id);
-    return c.json(updated);
+    return c.json(chatView(container, updated));
   });
 
   app.delete('/:id', async (c) => {
