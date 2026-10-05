@@ -103,6 +103,17 @@ describe('/api/locations', () => {
     expect((await send('PATCH', '/api/locations/nope', { name: 'x' })).status).toBe(404);
   });
 
+  it('refuses a second location with the same name, ignoring case, when adding or renaming', async () => {
+    await createNextcloud();
+    const again = await send('POST', '/api/locations', { name: 'nextcloud', path: dataDir });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: string }).error).toContain("already a location called Nextcloud");
+    const git = await json<{ id: string }>(await send('POST', '/api/locations', { name: 'Git' }));
+    expect((await send('PATCH', `/api/locations/${git.id}`, { name: 'NEXTCLOUD' })).status).toBe(409);
+    expect((await send('PATCH', `/api/locations/${git.id}`, { name: 'git' })).status).toBe(200);
+    expect(store.locations.list()).toHaveLength(2);
+  });
+
   it("PUT path sets or removes only this machine's path, and re-announces the chats in the location", async () => {
     const id = await createNextcloud();
     const chat = await json<Chat>(await send('POST', '/api/chats', { profileId: 'profile-1', workspacePath: join(nextcloud, 'phd') }));

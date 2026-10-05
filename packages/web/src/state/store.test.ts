@@ -496,4 +496,32 @@ describe('running replies from app-wide events (#824)', () => {
     s().applyAppHello({ pendingApprovals: [], runningTurns: [{ chatId: 'c9', messageId: 'm9' }] });
     expect(s().appRunningTurns).toEqual({ m9: 'c9' });
   });
+
+  it('asks a chat to reload when a turn this window knows nothing of starts or finishes there, but not for its own', () => {
+    const s = () => useGruntStore.getState();
+    const reply = (id: string, status: CanonMessage['status']): CanonMessage => ({
+      id, chatId: 'c1', parentId: null, role: 'assistant', parts: [], status, error: null, producedBy: null, createdAt: 1,
+    });
+
+    // Sent from another window or machine: unknown here.
+    s().applyAppEvent({ type: 'turn-started', chatId: 'c1', messageIds: ['theirs'] });
+    expect(s().chatReloads).toEqual({ c1: 1 });
+    s().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'theirs', status: 'complete' });
+    expect(s().chatReloads).toEqual({ c1: 2 });
+
+    // Sent from here: known, and already finished when its finish arrives.
+    s().registerMessage(reply('mine', 'streaming'));
+    s().applyAppEvent({ type: 'turn-started', chatId: 'c1', messageIds: ['mine'] });
+    s().applyTurnEvent({ messageId: 'mine', type: 'status', status: 'complete' });
+    s().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'mine', status: 'complete' });
+    expect(s().chatReloads).toEqual({ c1: 2 });
+  });
+
+  it('loading a message drops the events buffered for it before it was known', () => {
+    const s = () => useGruntStore.getState();
+    s().applyTurnEvent({ messageId: 'theirs', type: 'text-delta', text: 'early' });
+    expect(s().pendingEvents['theirs']).toHaveLength(1);
+    s().loadMessages('c1', [{ id: 'theirs', chatId: 'c1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'early' }], status: 'streaming', error: null, producedBy: null, createdAt: 1 }], null);
+    expect(s().pendingEvents['theirs']).toBeUndefined();
+  });
 });
