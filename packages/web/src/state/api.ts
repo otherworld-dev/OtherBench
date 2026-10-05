@@ -7,6 +7,7 @@ import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import type { Location, LocationPath, NodeInfo } from '@grunt/core/types/workspace.js';
 import type { InferredMapping } from '@grunt/core/domain/workspace.js';
+import type { PublicPeer } from '@grunt/core/types/peer.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
@@ -149,6 +150,27 @@ export interface AdoptLocationBody {
   nodeId: string;
   fromRoot: string;
   toRoot: string;
+}
+
+/** A paired machine as Settings → Machines shows it: the stored peer plus whether it's reachable now. */
+export interface PeerView extends PublicPeer {
+  status: 'unknown' | 'reachable' | 'unreachable';
+  since: number;
+  error?: string;
+}
+
+export interface PeersOverview {
+  self: NodeInfo & { fingerprint: string };
+  listening: { running: boolean; addresses: string[] };
+  peers: PeerView[];
+}
+
+/** A pairing code this machine is showing. */
+export interface PairingView {
+  code: string;
+  expiresAt: number;
+  addresses: string[];
+  fingerprint: string;
 }
 
 export interface CreateTurnBody {
@@ -299,6 +321,19 @@ export const api = {
     delete: (id: string) => del(`/locations/${id}`),
     infer: (body: { nodeId: string; fromPath: string; toPath: string }) => post<InferLocationResult>('/locations/infer', body),
     adopt: (body: AdoptLocationBody) => post<{ location: LocationView; converted: number }>('/locations/adopt', body),
+  },
+
+  /** Paired machines (v2 spec §3). */
+  peers: {
+    overview: () => request<PeersOverview>('/peers'),
+    /** Shows a code here for the other machine to enter. */
+    startPairing: () => post<PairingView>('/peers/pairing'),
+    currentPairing: () => request<PairingView | null>('/peers/pairing'),
+    cancelPairing: () => del('/peers/pairing'),
+    /** Enters the code the other machine is showing. */
+    add: (address: string, code: string) => post<PublicPeer>('/peers', { address, code }),
+    patch: (nodeId: string, body: { name?: string; addresses?: string[] }) => patch<PublicPeer>(`/peers/${nodeId}`, body),
+    remove: (nodeId: string) => request<{ notified: boolean }>(`/peers/${nodeId}`, { method: 'DELETE' }),
   },
 
   /** This machine. */

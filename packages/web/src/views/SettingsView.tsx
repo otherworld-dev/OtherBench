@@ -4,12 +4,13 @@ import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
 import { AppearancePanel } from './settings/AppearancePanel.js';
 import { DesktopPanel } from './settings/DesktopPanel.js';
 import { LocationsPanel } from './settings/LocationsPanel.js';
+import { MachinesPanel } from './settings/MachinesPanel.js';
 import { McpServersPanel } from './settings/McpServersPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 import { ProjectsPanel } from './settings/ProjectsPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'projects' | 'locations' | 'mcpServers' | 'appearance' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'projects' | 'locations' | 'machines' | 'mcpServers' | 'appearance' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -17,6 +18,7 @@ const TAB_LABEL: Record<Tab, string> = {
   profiles: 'Profiles',
   projects: 'Projects',
   locations: 'Locations',
+  machines: 'Machines',
   mcpServers: 'MCP Servers',
   appearance: 'Appearance',
   desktop: 'Desktop',
@@ -72,6 +74,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'profiles' && <ProfilesPanel />}
         {tab === 'projects' && <ProjectsPanel />}
         {tab === 'locations' && <LocationsPanel />}
+        {tab === 'machines' && <MachinesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
         {tab === 'appearance' && <AppearancePanel />}
         {tab === 'desktop' && <DesktopPanel />}
