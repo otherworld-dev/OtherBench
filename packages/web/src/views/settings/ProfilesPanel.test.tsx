@@ -265,6 +265,35 @@ describe('ProfilesPanel', () => {
     confirmSpy.mockRestore();
   });
 
+  it('with paired machines, the delete confirmation says their copies go too, and offers archiving; a profile bound to another machine says so', async () => {
+    useGruntStore.setState({
+      machines: {
+        self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
+        listening: { running: true, addresses: [] },
+        peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
+      },
+    });
+    useGruntStore.getState().setConnections([makeConnection({ availability: 'node-pc' })]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ id: 'profile-1', name: 'Local Llama' })]);
+    useGruntStore.getState().setChats([
+      { id: 'chat-1', title: 'A', profileId: 'profile-1', headMessageId: null, workspace: null, runsOn: 'node-pc', workspaceRoot: null, pinned: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1 },
+    ]);
+    mockedDelete.mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    expect(screen.getByTestId('profile-only-on')).toHaveTextContent('Runs on PC only');
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalled());
+    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/Paired machines delete them too.*Archive the profile instead/);
+    confirmSpy.mockRestore();
+    useGruntStore.setState({ machines: null });
+  });
+
   it('the delete confirmation omits the chat clause when no chat depends on this profile', async () => {
     useGruntStore.getState().setConnections([makeConnection()]);
     useGruntStore.getState().setModels([makeModel()]);

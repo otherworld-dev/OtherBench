@@ -87,4 +87,6 @@ export type ErrorKind =
   | 'auth' | 'rate_limit' | 'context_overflow' | 'content_filter'
   | 'model_not_found' | 'capability' | 'transient' | 'cancelled' | 'unknown'
   /** The chat's folder doesn't resolve on the machine the turn runs on (v2 spec §6). Never sent to the engine. */
-  | 'workspace_unresolved';
+  | 'workspace_unresolved'
+  /** The machine the chat runs on stopped responding mid-reply (v2 spec §5). */
+  | 'peer_unreachable';

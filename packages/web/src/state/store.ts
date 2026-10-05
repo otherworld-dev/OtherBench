@@ -21,6 +21,7 @@ import {
   type PaneState,
 } from './panes.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
+import type { PeersOverview } from './api.js';
 
 /** One entry of an SSE `hello` reply's `inFlight` array (routes/turns.ts). */
 export interface HelloBuffer {
@@ -92,6 +93,9 @@ export interface GruntState {
   appRunningTurns: Record<string, string>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
+  /** This machine and its paired ones, with reachability (state/machines.ts); null until loaded. */
+  machines: PeersOverview | null;
+  setMachines(machines: PeersOverview | null): void;
   /** The events stream's `hello`: replaces the pending approvals and running replies with the server's lists. */
   applyAppHello(hello: AppEventsHello): void;
   /** One app-wide event: keeps chats and the pending approvals current. */
@@ -320,6 +324,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
   appPendingApprovals: {},
   appRunningTurns: {},
   syncRevision: 0,
+  machines: null,
+  setMachines: (machines) => set({ machines }),
   applyAppHello: (hello) =>
     set({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),

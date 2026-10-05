@@ -3,6 +3,7 @@ import type { AppEvent, AppEventsHello } from '@grunt/core/types/events.js';
 import { isDesktop, isMainWindowFocused, onDesktopEvent, showNotification } from '../desktop/bridge.js';
 import { loadNotifyPrefs, Notifier } from '../desktop/notify.js';
 import { api } from './api.js';
+import { refreshMachines } from './machines.js';
 import { SseClient } from './sse.js';
 import { useGruntStore } from './store.js';
 
@@ -45,10 +46,12 @@ export function useAppEvents(): void {
       onEvent: (event) => {
         applyAppEvent(event);
         if (event.type === 'sync-applied') refreshAfterSync();
+        if (event.type === 'peers-changed' || event.type === 'peer-status') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[grunt-web] failed to show a notification:', err));
       },
     });
     client.connect();
+    refreshMachines();
 
     let offTray: (() => void) | null = null;
     let disposed = false;

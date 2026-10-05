@@ -6,6 +6,7 @@ import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { AttachmentChip } from './AttachmentChip.js';
+import { remoteUnreachable } from '../state/machines.js';
 
 /**
  * The `Part` an uploaded attachment becomes on the outgoing message (task
@@ -135,6 +136,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   // A folder that doesn't resolve on this machine blocks sending until the
   // prompt above the composer is answered (v2 spec §6).
   const folderUnresolved = (storedChat ?? chat).workspaceStatus?.status === 'unresolved';
+  // A chat that runs on a machine that can't be reached waits for it, or for Run here (UnreachableBanner).
+  const machines = useGruntStore((s) => s.machines);
+  const elsewhereUnreachable = remoteUnreachable(machines, storedChat ?? chat);
   const needsWorkspace = !folderUnresolved && !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));
   // Auto mode (spec 2026-10-03-claude-code-auto-mode-design section 2): offered
   // when any selected profile runs through Claude Code; it needs the Claude
@@ -262,7 +266,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     // The same rules as the Send button, which Enter reaches without: never
     // while a reply is still running (that would start a second reply beside
     // it), and never for Claude Code without a workspace folder.
-    if (isStreaming || needsWorkspace || folderUnresolved) return;
+    if (isStreaming || needsWorkspace || folderUnresolved || elsewhereUnreachable) return;
 
     setSending(true);
     // A stale remove-failure message from before this send must not linger
@@ -504,7 +508,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           <button
             type="button"
             onClick={() => void handleSend()}
-            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved}
+            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved || elsewhereUnreachable}
             className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
           >
             Send
