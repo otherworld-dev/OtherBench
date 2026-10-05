@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve as nodeServe } from '@hono/node-server';
 import { createApp } from './app.js';
@@ -285,7 +285,20 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
   }
 }
 
-const isMainModule = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1];
+/**
+ * Whether two paths name the same file, allowing for how the desktop shell
+ * can pass this script's path on Windows: with a `\\?\` prefix, or in
+ * another case.
+ */
+export function sameScriptPath(a: string, b: string): boolean {
+  const norm = (p: string): string => {
+    const plain = resolve(p.replace(/^\\\\\?\\/, ''));
+    return process.platform === 'win32' ? plain.toLowerCase() : plain;
+  };
+  return norm(a) === norm(b);
+}
+
+const isMainModule = process.argv[1] !== undefined && sameScriptPath(fileURLToPath(import.meta.url), process.argv[1]);
 if (isMainModule) {
   main(process.argv.slice(2)).catch((err: unknown) => {
     console.error(err);

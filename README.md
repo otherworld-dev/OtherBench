@@ -100,9 +100,22 @@ npm run app:dev -w @grunt/desktop        # dev: Vite dev server + hot reload
 cd desktop && npx tauri build --debug --no-bundle   # a runnable build with the UI embedded
 ```
 
-For now the app finds `node` on `PATH` and the server in this checkout's
-`packages/server/dist` (`GRUNT_NODE` / `GRUNT_SERVER_SCRIPT` override both).
-There are no installers yet.
+Run from the checkout like this, the app finds `node` on `PATH` and the
+server in `packages/server/dist` (`GRUNT_NODE` / `GRUNT_SERVER_SCRIPT`
+override both).
+
+To make a Windows installer that carries its own server and Node runtime:
+
+```sh
+npm run app:installer -w @grunt/desktop
+```
+
+It builds everything, bundles the server into one file (`npm run bundle -w
+@grunt/server`, with the Claude Code runtime and PDF reader beside it),
+smoke-tests the bundle, and writes
+`desktop/src-tauri/target/release/bundle/nsis/Grunt_<version>_x64-setup.exe`
+(about 100 MB). The installer is per-user and unsigned, so Windows
+SmartScreen warns before it runs (*More info* → *Run anyway*).
 
 ## Two machines
 

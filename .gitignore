@@ -8,6 +8,9 @@ build/
 out/
 target/
 *.tsbuildinfo
+# The bundled server, and what the desktop installer stages (desktop/scripts/stage.mjs)
+dist-bundle/
+desktop/src-tauri/bundle-resources/
 
 # Test / coverage
 coverage/
