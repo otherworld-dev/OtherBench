@@ -11,13 +11,14 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
-  it('offers Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {
-    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
-    expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers())[1]!.label).toBe('Unpin');
+  it('offers Open in new tab (Go to tab once open), Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {
+    expect(chatMenuItems(chat(), [], chatHandlers(), null, true)[0]!.label).toBe('Go to tab');
+    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
+    expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers()).find((i) => i.id === 'pin')!.label).toBe('Unpin');
   });
 
   it("offers Don't add to project memory after Move to project… for a chat in a project, and Add to project memory once it's excluded", () => {
@@ -25,7 +26,7 @@ describe('chatMenuItems', () => {
     const h = chatHandlers();
 
     const items = chatMenuItems(chat({ projectId: 'a' }), projects, h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move to project…', "Don't add to project memory", 'Export…', 'Archive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to project memory", 'Export…', 'Archive', 'Delete…']);
     items.find((i) => i.id === 'memory')!.onSelect!();
     expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(true);
 
@@ -43,7 +44,7 @@ describe('chatMenuItems', () => {
   it('offers Unarchive instead of Archive for an archived chat, and it calls unarchive, not archive (controller ruling R2)', () => {
     const h = chatHandlers();
     const items = chatMenuItems(chat({ archivedAt: 5 }), [], h);
-    expect(items.map((i) => i.label)).toEqual(['Rename', 'Move to project…', 'Export…', 'Unarchive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Move to project…', 'Export…', 'Unarchive', 'Delete…']);
     items.find((i) => i.label === 'Unarchive')!.onSelect!();
     expect(h.unarchive).toHaveBeenCalled();
     expect(h.archive).not.toHaveBeenCalled();
@@ -52,7 +53,7 @@ describe('chatMenuItems', () => {
   it('offers Move up and Move down after Pin when given the chat\'s place, disabled at the ends', () => {
     const h = chatHandlers();
     const middle = chatMenuItems(chat(), [], h, { index: 1, count: 3 });
-    expect(middle.map((i) => i.label)).toEqual(['Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
+    expect(middle.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
     middle.find((i) => i.id === 'up')!.onSelect!();
     expect(h.reorder).toHaveBeenLastCalledWith(-1);
     middle.find((i) => i.id === 'down')!.onSelect!();

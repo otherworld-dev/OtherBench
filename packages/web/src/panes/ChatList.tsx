@@ -82,6 +82,8 @@ export function ChatList(): JSX.Element {
   const removeChat = useGruntStore((s) => s.removeChat);
   const removeProject = useGruntStore((s) => s.removeProject);
   const setProjects = useGruntStore((s) => s.setProjects);
+  const openTab = useGruntStore((s) => s.openTab);
+  const paneTabs = useGruntStore((s) => s.paneState.tabs);
   const collapsedGroups = useCollapsedGroups();
 
   const [query, setQuery] = useState('');
@@ -638,6 +640,7 @@ export function ChatList(): JSX.Element {
             menuChat,
             orderedProjects,
             {
+              openInTab: () => openTab(menuChat.id),
               rename: () => setRenamingChatId(menuChat.id),
               setPinned: (pinned) => void setPinned(menuChat, pinned),
               reorder: (dir) => void reorderChat(menuChat, dir),
@@ -649,7 +652,8 @@ export function ChatList(): JSX.Element {
               unarchive: () => void unarchiveChat(menuChat),
               requestDelete: () => setDeletingChatId(menuChat.id),
             },
-            menuPosition(menuChat)
+            menuPosition(menuChat),
+            paneTabs.includes(menuChat.id)
           )}
           onClose={(reason) => {
             setChatMenu(null);

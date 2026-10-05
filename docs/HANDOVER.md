@@ -45,16 +45,21 @@ of work landed after that plan closed out:
   Deleting a project moves its chats to No project. Archive is reversible:
   archived chats sit in a "Show archived (N)" section at the bottom of the
   sidebar, where their menu offers Unarchive. See "Projects" below.
-- **Project tabs** (#824). A chat in a project shows a tab strip above the
-  conversation (`panes/ProjectTabs.tsx`): the project's chats open on this
-  device (`state/projectTabs.ts`, localStorage), in sidebar order. Opening a
-  chat opens its tab; ✕ only closes the tab; + starts a chat in the project.
-  A dot marks a tab whose chat is replying or waiting for an approval, from
-  the app-wide stream, whose `hello` now also lists running replies.
-  Arrow keys, Home/End and Delete work in the strip. Tabs are deliberately
-  chats, not a second conversation inside one chat: each keeps its own
-  profile, Auto, cost and Claude Code session. Move to project… > New
-  project… turns a lone chat into a project to tab from.
+- **Tabs and layouts** (#824). Tabs are chats the user opens as tabs --
+  right-click → Open in new tab, or drag a chat onto the tab bar -- from any
+  project; a sidebar click shows a chat without making it a tab. The tab bar
+  (`panes/TabBar.tsx`) has a layout picker: one chat, two side by side, two
+  stacked, three side by side (`panes/PaneGrid.tsx`). Each pane is a full
+  thread with its own live connection (`useChatSync` per pane; only the
+  focused pane reports the header's connection status). The focused pane's
+  chat is always `activeChatId`, so anything that opens a chat fills the
+  focused pane, or focuses the pane already showing it; the Inspector
+  follows. Drag a chat or a tab onto a pane to show it there; drag tabs to
+  reorder. ✕ only closes the tab. Dots mark a tab replying or waiting for an
+  approval (the app-wide stream's `hello` lists running replies). Tabs,
+  layout and panes are stored per device (`state/panes.ts`); a narrow window
+  shows only the focused pane. Threads are `<section>`s inside the grid's
+  one `<main>`.
 - **Export** (#820). A chat's menu has Export… > Markdown (the conversation
   as shown: the head's branch, kept compare replies only) or JSON (every
   message on every branch, usage rows and attachment references, never

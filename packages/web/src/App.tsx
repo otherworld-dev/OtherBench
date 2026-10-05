@@ -3,7 +3,8 @@ import { isQuickView } from './desktop/bridge.js';
 import { useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
-import { Thread } from './panes/Thread.js';
+import { PaneGrid } from './panes/PaneGrid.js';
+import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
@@ -11,7 +12,6 @@ import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
-import { useChatSync } from './state/useChatSync.js';
 import { QuickChat } from './views/QuickChat.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
@@ -102,7 +102,6 @@ function MainApp(): JSX.Element {
     };
   }, [setConnections, setModels, setProfiles, setChats, setProjects]);
 
-  useChatSync(activeChatId);
   useAppEvents();
   useTrayStatus();
   useOpenArgs(loaded);
@@ -164,7 +163,10 @@ function MainApp(): JSX.Element {
       </div>
 
       <div className="relative row-start-3 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
-        <Thread chat={activeChat} />
+        <div className="flex h-full min-h-0 min-w-0 flex-col">
+          <TabBar narrow={isNarrow} />
+          <PaneGrid narrow={isNarrow} />
+        </div>
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
         {!isNarrow && (

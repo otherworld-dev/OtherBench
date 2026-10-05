@@ -5,6 +5,19 @@ import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js
 import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
 import type { AppEvent, AppEventsHello, PendingApprovalSummary } from '@grunt/core/types/events.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
+import {
+  closeTab as closePaneTab,
+  focusPane as focusPaneIn,
+  forgetChat,
+  loadPaneState,
+  moveTab as movePaneTab,
+  openTab as openPaneTab,
+  savePaneState,
+  setLayout as setPaneLayout,
+  showChat,
+  type Layout,
+  type PaneState,
+} from './panes.js';
 import { applyEventToMessage, applyHelloBuffer, emptyExtras, replayEvents, type MessageExtras } from './reducer.js';
 
 /** One entry of an SSE `hello` reply's `inFlight` array (routes/turns.ts). */
@@ -53,6 +66,15 @@ export interface GruntState {
   upsertChat(chat: Chat): void;
   removeChat(chatId: string): void;
   setActiveChatId(chatId: string | null): void;
+  /** Tabs, layout and the chat in each pane (#824). The focused pane's chat is always `activeChatId`. */
+  paneState: PaneState;
+  /** Adds the chat as a tab (once) and shows it in the focused pane. */
+  openTab(chatId: string): void;
+  /** Removes the tab only; a pane showing the chat keeps it. */
+  closeTab(chatId: string): void;
+  moveTab(chatId: string, beforeId: string | null): void;
+  setLayout(layout: Layout): void;
+  focusPane(index: number): void;
   /** Local-only optimistic (or server-confirmed) head move -- see api.turns.setHead. */
   setHeadMessageId(chatId: string, messageId: string): void;
   /** The quick-chat hotkey and whether registering it worked (desktop only; Task 37). Null until tried. */
@@ -165,6 +187,25 @@ function clearDefaultProfiles(projects: Project[], profileIds: ReadonlySet<strin
   return projects.map((p) => (hit(p) ? { ...p, defaultProfileId: null } : p));
 }
 
+/**
+ * The pane state with the focused pane holding `activeChatId`, which is the
+ * source of truth for the active chat (tests and callers may set it directly).
+ */
+function synced(state: { paneState: PaneState; activeChatId: string | null }): PaneState {
+  const { paneState, activeChatId } = state;
+  if (paneState.panes[paneState.focusedPane] === activeChatId) return paneState;
+  const panes = [...paneState.panes];
+  panes[paneState.focusedPane] = activeChatId;
+  return { ...paneState, panes };
+}
+
+/** A pane-state change, with `activeChatId` following the focused pane. */
+function withPanes(next: PaneState): { paneState: PaneState; activeChatId: string | null } {
+  return { paneState: next, activeChatId: next.panes[next.focusedPane] ?? null };
+}
+
+const initialPanes = loadPaneState();
+
 export const useGruntStore = create<GruntState>()((set) => ({
   connections: [],
   models: [],
@@ -241,7 +282,13 @@ export const useGruntStore = create<GruntState>()((set) => ({
     }),
 
   chats: [],
-  activeChatId: null,
+  activeChatId: initialPanes.panes[initialPanes.focusedPane] ?? null,
+  paneState: initialPanes,
+  openTab: (chatId) => set((state) => withPanes(openPaneTab(synced(state), chatId))),
+  closeTab: (chatId) => set((state) => ({ paneState: closePaneTab(synced(state), chatId) })),
+  moveTab: (chatId, beforeId) => set((state) => ({ paneState: movePaneTab(synced(state), chatId, beforeId) })),
+  setLayout: (layout) => set((state) => withPanes(setPaneLayout(synced(state), layout))),
+  focusPane: (index) => set((state) => withPanes(focusPaneIn(synced(state), index))),
   setChats: (chats) => set({ chats }),
   upsertChat: (chat) =>
     set((state) => {
@@ -251,8 +298,9 @@ export const useGruntStore = create<GruntState>()((set) => ({
       next[idx] = chat;
       return { chats: next };
     }),
-  removeChat: (chatId) => set((state) => ({ chats: state.chats.filter((c) => c.id !== chatId) })),
-  setActiveChatId: (chatId) => set({ activeChatId: chatId }),
+  removeChat: (chatId) => set((state) => ({ chats: state.chats.filter((c) => c.id !== chatId), ...withPanes(forgetChat(synced(state), chatId)) })),
+  // Fills the focused pane, or focuses the pane already showing the chat.
+  setActiveChatId: (chatId) => set((state) => withPanes(showChat(synced(state), chatId))),
   setHeadMessageId: (chatId, messageId) =>
     set((state) => ({
       chats: state.chats.map((c) => (c.id === chatId ? { ...c, headMessageId: messageId } : c)),
@@ -278,10 +326,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
           return { chats };
         }
         case 'chat-deleted':
-          return {
-            chats: state.chats.filter((c) => c.id !== event.chatId),
-            activeChatId: state.activeChatId === event.chatId ? null : state.activeChatId,
-          };
+          return { chats: state.chats.filter((c) => c.id !== event.chatId), ...withPanes(forgetChat(synced(state), event.chatId)) };
         case 'approval-requested': {
           const { chatId, messageId, requestId, toolName } = event;
           return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName } } };
@@ -439,3 +484,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
 
 /** How many tool calls are waiting for approval across the whole app. */
 export const selectPendingApprovalCount = (s: GruntState): number => Object.keys(s.appPendingApprovals).length;
+
+// Tabs, layout and panes are remembered on this device.
+useGruntStore.subscribe((state, previous) => {
+  if (state.paneState !== previous.paneState) savePaneState(state.paneState);
+});

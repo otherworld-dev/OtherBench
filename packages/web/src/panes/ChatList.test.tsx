@@ -375,15 +375,15 @@ describe('ChatList chat menu', () => {
   }
   const row = (title: string) => screen.getByRole('button', { name: title });
 
-  it('right-click opens the menu on Rename; Escape closes it and returns focus to the row', async () => {
+  it('right-click opens the menu on its first item; Escape closes it and returns focus to the row', async () => {
     const user = setup();
     fireEvent.contextMenu(row('First'), { clientX: 40, clientY: 50 });
 
     expect(screen.getByRole('menu', { name: 'Chat actions' })).toBeInTheDocument();
-    for (const name of ['Rename', 'Pin', 'Move to project…', 'Archive', 'Delete…']) {
+    for (const name of ['Open in new tab', 'Rename', 'Pin', 'Move to project…', 'Archive', 'Delete…']) {
       expect(screen.getByRole('menuitem', { name })).toBeInTheDocument();
     }
-    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Open in new tab' })).toHaveFocus();
 
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).toBeNull();
@@ -518,6 +518,17 @@ describe('ChatList chat menu', () => {
     expect(mockedPatch).toHaveBeenCalledWith('c1', expect.objectContaining({ projectId: 'p-b' }));
     await waitFor(() => expect(rowIds('group-p-b')).toEqual(['c1']));
     expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull();
+  });
+
+  it('Open in new tab adds the chat as a tab and shows it; once open the item reads Go to tab (#824)', async () => {
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Open in new tab' }));
+    expect(useGruntStore.getState().paneState.tabs).toEqual(['c1']);
+    expect(useGruntStore.getState().activeChatId).toBe('c1');
+
+    fireEvent.contextMenu(row('First'));
+    expect(screen.getByRole('menuitem', { name: 'Go to tab' })).toBeInTheDocument();
   });
 
   it('Move to project… > New project… makes a project named after the chat and moves the chat into it (#824)', async () => {
