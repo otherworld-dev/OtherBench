@@ -100,6 +100,19 @@ describe('VariantTabs', () => {
     expect(onRetry).toHaveBeenCalledWith(failing);
   });
 
+  it('offers no Retry for a variant cut off when the machine writing it went away', async () => {
+    const cutOff = variant('cut', { status: 'error', error: { kind: 'peer_unreachable', message: 'Gigabyte stopped responding.', retryable: false } });
+    const user = userEvent.setup();
+    render(
+      <VariantTabs variants={[variant('ok'), cutOff]} extras={{}} models={[]} keptId={null} onKeep={vi.fn()} onRetry={vi.fn()} retryingIds={new Set()} />
+    );
+
+    await user.click(screen.getByTestId('variant-tab-cut'));
+
+    expect(screen.getByText('Gigabyte stopped responding.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
+  });
+
   it('shows "Retrying…" and disables the button while that variant id is in retryingIds', async () => {
     const failing = variant('fail', { status: 'error', error: { kind: 'rate_limit', message: 'boom', retryable: true } });
     const user = userEvent.setup();

@@ -161,7 +161,8 @@ export function VariantCard({
       <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} />
 
       <div className="flex items-center justify-between gap-2">
-        {variant.status === 'error' ? (
+        {/* One cut off when its machine went away is that machine's to finish: regenerate instead (forward.ts keepCutOffReply). */}
+        {variant.status === 'error' && variant.error?.kind !== 'peer_unreachable' ? (
           <button
             type="button"
             onClick={onRetry}

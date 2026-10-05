@@ -204,6 +204,13 @@ export function turnsRoutes(container: Container): Hono {
         message: `Message "${messageId}" is ${message.status}; only an errored message can be retried.`,
       });
     }
+    // A reply cut off when the machine writing it went away is that machine's
+    // (forward.ts keepCutOffReply), and it may still be writing it: rewriting
+    // it here would have two machines writing one message. A new reply beside
+    // it (regenerate) is this machine's own.
+    if (message.error?.kind === 'peer_unreachable') {
+      throw new HTTPException(409, { message: `Message "${messageId}" was cut off on another machine; regenerate it instead.` });
+    }
     const refusal = workspaceRefusal(container, c, message.chatId);
     if (refusal) return refusal;
 
