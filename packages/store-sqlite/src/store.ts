@@ -8,6 +8,7 @@ import type {
   LocationRepo,
   McpServerRepo,
   MessageRepo,
+  PeerRepo,
   ModelRepo,
   ProfileRepo,
   ProjectMemoryRepo,
@@ -26,6 +27,7 @@ import { SqliteMcpServerRepo } from './repos/mcp-servers.js';
 import { SqliteMessageRepo } from './repos/messages.js';
 import { SqliteModelRepo } from './repos/models.js';
 import { SqliteNodeRepo } from './repos/nodes.js';
+import { SqlitePeerRepo } from './repos/peers.js';
 import { SqliteProfileRepo } from './repos/profiles.js';
 import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
 import { SqliteProjectRepo } from './repos/projects.js';
@@ -43,6 +45,7 @@ import { SqliteUsageRepo } from './repos/usage.js';
 export class SqliteStore implements Store {
   readonly nodes: SqliteNodeRepo;
   readonly locations: LocationRepo;
+  readonly peers: PeerRepo;
   readonly connections: ConnectionRepo;
   readonly models: ModelRepo;
   readonly profiles: ProfileRepo;
@@ -61,6 +64,7 @@ export class SqliteStore implements Store {
     this.nodes = new SqliteNodeRepo(db);
     const selfId = () => this.nodes.selfId();
     this.locations = new SqliteLocationRepo(db);
+    this.peers = new SqlitePeerRepo(db);
     this.connections = new SqliteConnectionRepo(db);
     this.models = new SqliteModelRepo(db);
     this.profiles = new SqliteProfileRepo(db);
@@ -73,7 +77,7 @@ export class SqliteStore implements Store {
     this.usage = new SqliteUsageRepo(db);
     this.mcpServers = new SqliteMcpServerRepo(db);
     this.grants = new SqliteGrantRepo(db);
-    this.audit = new SqliteAuditRepo(db);
+    this.audit = new SqliteAuditRepo(db, selfId);
   }
 
   close(): void {

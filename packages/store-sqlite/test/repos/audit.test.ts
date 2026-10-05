@@ -32,6 +32,7 @@ describe('SqliteAuditRepo', () => {
       resultSummary: 'read 42 bytes',
       durationMs: 12,
       grantedBy: 'user',
+      decidedOnNode: expect.any(String),
       createdAt: created.createdAt,
     });
     db.close();

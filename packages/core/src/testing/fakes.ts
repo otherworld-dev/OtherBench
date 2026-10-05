@@ -48,7 +48,9 @@ import type {
   SettingsRepo,
   NodeRepo,
   LocationRepo,
+  PeerRepo,
 } from '../ports/store.js';
+import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
 import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
@@ -501,6 +503,37 @@ class InMemoryLocationRepo implements LocationRepo {
   }
 }
 
+class InMemoryPeerRepo implements PeerRepo {
+  private readonly byId = new Map<string, Peer>();
+  list(): Peer[] {
+    return [...this.byId.values()].sort((a, b) => a.pairedAt - b.pairedAt || (a.nodeId < b.nodeId ? -1 : 1)).map((p) => structuredClone(p));
+  }
+  get(nodeId: string): Peer | null {
+    const p = this.byId.get(nodeId);
+    return p ? structuredClone(p) : null;
+  }
+  getByFingerprint(fingerprint: string): Peer | null {
+    const p = [...this.byId.values()].find((x) => x.fingerprint === fingerprint);
+    return p ? structuredClone(p) : null;
+  }
+  create(p: Peer): Peer {
+    if (this.byId.has(p.nodeId)) throw new Error(`peer: duplicate node id: ${p.nodeId}`);
+    if (this.getByFingerprint(p.fingerprint)) throw new Error(`peer: duplicate fingerprint: ${p.fingerprint}`);
+    this.byId.set(p.nodeId, structuredClone(p));
+    return structuredClone(p);
+  }
+  update(nodeId: string, patch: Partial<Omit<Peer, 'nodeId'>>): Peer {
+    const current = this.byId.get(nodeId);
+    if (!current) throw new Error(`peer: not found: ${nodeId}`);
+    const next = { ...current, ...structuredClone(patch), nodeId };
+    this.byId.set(nodeId, next);
+    return structuredClone(next);
+  }
+  delete(nodeId: string): void {
+    this.byId.delete(nodeId);
+  }
+}
+
 class InMemoryChatRepo implements ChatRepo {
   private readonly repo = new InMemoryCrudRepo<Chat>();
   constructor(private readonly selfNodeId: string) {}
@@ -729,8 +762,9 @@ class InMemoryGrantRepo implements GrantRepo {
 
 class InMemoryAuditRepo implements AuditRepo {
   private readonly repo = new InMemoryCrudRepo<AuditEntry>();
+  constructor(private readonly selfNodeId: string) {}
   create(a: Omit<AuditEntry, 'createdAt'> & { createdAt?: number }): AuditEntry {
-    const full: AuditEntry = { ...a, createdAt: a.createdAt ?? Date.now() };
+    const full: AuditEntry = { ...a, decidedOnNode: a.decidedOnNode ?? this.selfNodeId, createdAt: a.createdAt ?? Date.now() };
     return this.repo.create(full);
   }
   get(id: string): AuditEntry | null {
@@ -887,6 +921,7 @@ class InMemoryMessageRepo implements MessageRepo {
 export class InMemoryStore implements Store {
   readonly nodes: NodeRepo;
   readonly locations: LocationRepo;
+  readonly peers: PeerRepo = new InMemoryPeerRepo();
   readonly connections: ConnectionRepo = new InMemoryConnectionRepo();
   readonly models: ModelRepo = new InMemoryModelRepo();
   readonly chats: ChatRepo;
@@ -899,7 +934,7 @@ export class InMemoryStore implements Store {
   readonly usage: UsageRepo = new InMemoryUsageRepo();
   readonly mcpServers: McpServerRepo = new InMemoryMcpServerRepo();
   readonly grants: GrantRepo = new InMemoryGrantRepo();
-  readonly audit: AuditRepo = new InMemoryAuditRepo();
+  readonly audit: AuditRepo;
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {
@@ -907,6 +942,7 @@ export class InMemoryStore implements Store {
     const chats = new InMemoryChatRepo(selfNodeId);
     this.chats = chats;
     this.messages = new InMemoryMessageRepo(selfNodeId);
+    this.audit = new InMemoryAuditRepo(selfNodeId);
     // The project and memory repos refer to each other lazily (existence check, cascade on delete).
     const memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
     this.projectMemory = memoryRepo;

@@ -10,6 +10,7 @@ import { MIGRATION_008_PROJECT_MEMORY } from './008-project-memory.js';
 import { MIGRATION_009_MESSAGE_KEPT_AT } from './009-message-kept-at.js';
 import { MIGRATION_010_CHAT_SORT_ORDER } from './010-chat-sort-order.js';
 import { MIGRATION_011_NODES_AND_LOCATIONS } from './011-nodes-and-locations.js';
+import { MIGRATION_012_PEERS } from './012-peers.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -26,7 +27,11 @@ export const MIGRATIONS: Migration[] = [
   { version: 9, name: '009-message-kept-at', sql: MIGRATION_009_MESSAGE_KEPT_AT },
   { version: 10, name: '010-chat-sort-order', sql: MIGRATION_010_CHAT_SORT_ORDER },
   MIGRATION_011_NODES_AND_LOCATIONS,
+  MIGRATION_012_PEERS,
 ];
+
+/** The schema version a fully migrated database has: compared between machines before syncing. */
+export const SCHEMA_VERSION = Math.max(...MIGRATIONS.map((m) => m.version));
 
 /**
  * Applies every migration in `migrations` (defaults to {@link MIGRATIONS})

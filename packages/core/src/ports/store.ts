@@ -2,6 +2,7 @@ import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } f
 import type { Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import type { Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
+import type { Peer } from '../types/peer.js';
 
 // --- connections ---------------------------------------------------------
 
@@ -428,6 +429,8 @@ export interface AuditEntry {
   resultSummary: string;
   durationMs: number;
   grantedBy: string;
+  /** The machine the decision was made on (v2 spec §3): this one unless approved from a paired machine. Filled in by the store when not given. */
+  decidedOnNode?: string;
   createdAt: number;
 }
 
@@ -465,9 +468,21 @@ export interface LocationRepo {
   deletePath(locationId: string, nodeId: string): void;
 }
 
+/** Paired machines (v2 spec §3). Never synced. */
+export interface PeerRepo {
+  list(): Peer[];
+  get(nodeId: string): Peer | null;
+  getByFingerprint(fingerprint: string): Peer | null;
+  /** A second peer with the same node id or fingerprint throws. */
+  create(p: Peer): Peer;
+  update(nodeId: string, patch: Partial<Omit<Peer, 'nodeId'>>): Peer;
+  delete(nodeId: string): void;
+}
+
 export interface Store {
   nodes: NodeRepo;
   locations: LocationRepo;
+  peers: PeerRepo;
   connections: ConnectionRepo;
   models: ModelRepo;
   profiles: ProfileRepo;

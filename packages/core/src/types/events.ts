@@ -14,7 +14,10 @@ export type AppEvent =
   | { type: 'turn-finished'; chatId: string; messageId: string; status: MessageStatus }
   | { type: 'approval-requested'; chatId: string; messageId: string; requestId: string; toolName: string }
   | { type: 'approval-resolved'; chatId: string; requestId: string }
-  | { type: 'peer-status'; nodeId: string; status: 'reachable' | 'unreachable' | 'pairing' }
+  /** A machine was paired, renamed or removed: re-read the list. */
+  | { type: 'peers-changed' }
+  /** A paired machine became reachable or unreachable; `since` is when. */
+  | { type: 'peer-status'; nodeId: string; status: 'reachable' | 'unreachable'; since: number }
   | { type: 'sync-applied'; nodeId: string; changed: number };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */

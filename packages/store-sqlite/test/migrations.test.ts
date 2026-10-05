@@ -270,6 +270,30 @@ describe('runMigrations', () => {
     }
   });
 
+  it('peers adds the peer table, and binds every earlier audit decision to this machine', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-peers'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('c', 'A', 'p1', 1, 1)`);
+      db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('m', 'c', NULL, 'user', '[]', 'complete', 1)`);
+      db.exec(`INSERT INTO audit (id, chat_id, message_id, tool_name, args_redacted, result_summary, duration_ms, granted_by, created_at) VALUES ('a', 'c', 'm', 't', '{}', 'ok', 1, 'user', 1)`);
+
+      runMigrations(db);
+
+      const self = (db.prepare(`SELECT id FROM node_self`).get() as { id: string }).id;
+      expect(db.prepare(`SELECT decided_on_node FROM audit`).all()).toEqual([{ decided_on_node: self }]);
+      db.exec(`INSERT INTO peer (node_id, name, fingerprint, issued_token_hash, held_token_ref, paired_at) VALUES ('pc', 'PC', 'fp', 'h', 'r', 1)`);
+      expect(() => db.exec(`INSERT INTO peer (node_id, name, fingerprint, issued_token_hash, held_token_ref, paired_at) VALUES ('other', 'X', 'fp', 'h', 'r', 1)`)).toThrow();
+      expect(db.prepare(`SELECT addresses, last_sync_seq FROM peer`).get()).toEqual({ addresses: '[]', last_sync_seq: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
   describe('003 plaintext residue', () => {
     let dir: string;
     afterEach(() => {
@@ -342,6 +366,7 @@ describe('runMigrations', () => {
         'node_self',
         'location',
         'location_path',
+        'peer',
       ]) {
         expect(names).toContain(expected);
       }
