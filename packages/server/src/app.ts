@@ -9,6 +9,7 @@ import { fsRoutes } from './routes/fs.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
 import { locationsRoutes, nodeRoutes } from './routes/locations.js';
+import { forwardingRoutes } from './peer/forward.js';
 import { peersRoutes } from './routes/peers.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
@@ -91,6 +92,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // collisions with chatsRoutes: that owns /chats, /chats/:id,
   // /chats/:id/messages; this owns /chats/:id/turns, /chats/:id/stream,
   // /chats/:id/head, /messages/:id/cancel.
+  // A chat that runs on a paired machine is run there (Task 52): these
+  // handlers forward its calls, and pass everything else on to the routes below.
+  if (container.peers && container.remoteRuns) authed.route('/', forwardingRoutes(container, container.remoteRuns));
   authed.route('/', turnsRoutes(container));
   // memoryRoutes defines full paths under /projects/:id/memory and
   // /chats/:id/memory, so it also mounts at the authed root. No collisions:

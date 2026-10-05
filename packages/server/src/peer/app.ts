@@ -35,7 +35,12 @@ function bearer(c: Context<PeerEnv>): string | null {
  * folder browser (v2 spec §8) -- and nothing is mounted by default: an
  * unknown path is a 404 like any other.
  */
-export function createPeerApp(service: PeerService): Hono<PeerEnv> {
+export interface PeerAppDeps {
+  /** The part of this machine's API a paired machine may call (forward.ts); null until the container is up. */
+  forwardedApi?: () => { fetch: (req: Request, env: { peerNodeId: string }) => Response | Promise<Response> } | null;
+}
+
+export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hono<PeerEnv> {
   const app = new Hono<PeerEnv>();
 
   app.onError((err, c) => {
@@ -51,12 +56,23 @@ export function createPeerApp(service: PeerService): Hono<PeerEnv> {
     return c.json(await service.acceptPairing(body, callerFingerprint(c), remote));
   });
 
-  // Every other /peer route: a paired machine only.
-  app.use('/peer/*', async (c, next) => {
+  // Every other route: a paired machine only.
+  const pairedOnly = async (c: Context<PeerEnv>, next: () => Promise<void>): Promise<Response | void> => {
     const peer = service.authenticate(callerFingerprint(c), bearer(c));
     if (!peer) return c.json({ error: 'Not a paired machine.' }, 401);
     c.set('peer', peer);
     await next();
+  };
+  app.use('/peer/*', pairedOnly);
+  app.use('/api/*', pairedOnly);
+
+  /** Running a chat that runs here, for the paired machine whose UI it's open in (Task 52). */
+  app.all('/api/*', async (c) => {
+    const api = deps.forwardedApi?.();
+    if (!api) return c.json({ error: 'Not found.' }, 404);
+    const url = new URL(c.req.url);
+    url.pathname = url.pathname.replace(/^\/api/, '');
+    return api.fetch(new Request(url, c.req.raw), { peerNodeId: c.get('peer').nodeId });
   });
 
   app.get('/peer/info', (c) => c.json(service.info()));

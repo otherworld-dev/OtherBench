@@ -183,7 +183,7 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   };
 }
 
-function parseApprovalChoice(body: ApprovalBody): ApprovalChoice {
+export function parseApprovalChoice(body: ApprovalBody): ApprovalChoice {
   const choice = body.choice;
   if (choice === 'deny') return { choice: 'deny' };
   if (choice === 'once') return { choice: 'once' };

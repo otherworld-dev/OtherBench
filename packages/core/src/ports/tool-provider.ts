@@ -114,7 +114,8 @@ export interface ToolProvider {
    * stale double-submit or a request that was already implicitly denied by
    * its turn being cancelled.
    */
-  resolveApproval(requestId: string, choice: ApprovalChoice): boolean;
+  /** `decidedOnNode`: the paired machine the answer came from (its audit records it); this machine when omitted. */
+  resolveApproval(requestId: string, choice: ApprovalChoice, decidedOnNode?: string): boolean;
   /**
    * The permission gate for a tool call that something else will execute
    * (Claude Code's own tools, `source: 'agent'`). Same decide -> approval card

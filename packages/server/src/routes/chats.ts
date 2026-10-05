@@ -26,6 +26,7 @@ interface ChatBody {
   projectId?: unknown;
   memoryExcluded?: unknown;
   sortOrder?: unknown;
+  runsOn?: unknown;
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
@@ -150,7 +151,15 @@ export function chatsRoutes(container: Container): Hono {
       requireExistingProfile(container, profileId);
       patch.profileId = profileId;
     }
-    const workspace = parseWorkspaceBody(container, body);
+    if (body.runsOn !== undefined) {
+      const self = container.store.nodes.self().id;
+      if (typeof body.runsOn !== 'string' || (body.runsOn !== self && !container.store.peers.get(body.runsOn))) {
+        throw new HTTPException(400, { message: '"runsOn" must be this machine or a paired one.' });
+      }
+      patch.runsOn = body.runsOn;
+    }
+    // A folder is a path on the machine the chat runs on (after this patch).
+    const workspace = parseWorkspaceBody(container, body, patch.runsOn ?? getChatOrThrow(container, id).runsOn);
     if (workspace !== undefined) patch.workspace = workspace;
     if (body.pinned !== undefined) patch.pinned = optionalBoolean(body.pinned, 'pinned', false);
     if (body.archivedAt !== undefined) {
@@ -399,7 +408,12 @@ async function applyAutoTitle(container: Container, chatId: string, assistantMes
     container.store.chats.update(chatId, { title: title.length > 0 ? title : fallback });
   } catch (err) {
     console.warn(`[grunt] auto-title for chat ${chatId} failed (${(err instanceof Error ? err.message : String(err)).slice(0, 300)}); using the first message as the title.`);
-    container.store.chats.update(chatId, { title: fallback });
+    try {
+      container.store.chats.update(chatId, { title: fallback });
+    } catch (updateErr) {
+      // The chat was deleted meanwhile, or the server is shutting down: nothing to title.
+      console.warn(`[grunt] auto-title for chat ${chatId} could not be saved:`, updateErr);
+    }
   }
 }
 

@@ -18,12 +18,16 @@ function existsFor(container: Container): (path: string) => boolean {
   return container.pathExists ?? existsSync;
 }
 
-/** A resolver for one request: this machine's id and the location paths are read once, however many folders it resolves. */
-export function workspaceResolver(container: Container): (ws: Workspace | null) => WorkspaceStatus {
+/**
+ * A resolver for one request: this machine's id and the location paths are
+ * read once, however many folders it resolves. `on` resolves for another
+ * machine (a chat that runs there), whose disk this one can't check.
+ */
+export function workspaceResolver(container: Container): (ws: Workspace | null, on?: string) => WorkspaceStatus {
   const self = container.store.nodes.self().id;
   const paths = container.store.locations.allPaths();
   const exists = existsFor(container);
-  return (ws) => resolveWorkspace(ws, self, paths, exists);
+  return (ws, on = self) => resolveWorkspace(ws, on, paths, on === self ? exists : () => true);
 }
 
 /**
@@ -37,8 +41,9 @@ function viewRoot(status: WorkspaceStatus): string | null {
   return null;
 }
 
+/** A chat as the API shows it: its folder resolved on the machine it runs on. */
 export function chatView(container: Container, chat: Chat, resolve = workspaceResolver(container)): Chat {
-  const status = resolve(chat.workspace);
+  const status = resolve(chat.workspace, chat.runsOn);
   return { ...chat, workspaceRoot: viewRoot(status), workspaceStatus: status };
 }
 
@@ -76,7 +81,7 @@ interface WorkspaceBody {
  * machine's locations; `workspace: null` clears it. A full `Workspace` object
  * is never accepted from a client.
  */
-export function parseWorkspaceBody(container: Container, body: WorkspaceBody): Workspace | null | undefined {
+export function parseWorkspaceBody(container: Container, body: WorkspaceBody, on?: string): Workspace | null | undefined {
   if (body.workspace !== undefined) {
     if (body.workspace !== null) {
       throw new HTTPException(400, { message: '"workspace" can only be null here; set a folder with "workspacePath".' });
@@ -88,6 +93,6 @@ export function parseWorkspaceBody(container: Container, body: WorkspaceBody): W
   const path = optionalWorkspaceRoot(raw, field);
   if (path === undefined) return undefined;
   if (path === null) return null;
-  const self = container.store.nodes.self().id;
-  return classifyPath(path, self, container.store.locations.pathsForNode(self));
+  const node = on ?? container.store.nodes.self().id;
+  return classifyPath(path, node, container.store.locations.pathsForNode(node));
 }

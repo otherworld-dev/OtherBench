@@ -26,6 +26,7 @@ import { ProjectMemoryService } from './memory/service.js';
 import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
+import { forwardedApi, RemoteRuns } from './peer/forward.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
@@ -64,6 +65,8 @@ export interface Container {
   events?: AppEventBus;
   /** Whether a folder exists, for resolving chat folders; unset means the real disk. Tests set it. */
   pathExists?: (path: string) => boolean;
+  /** Replies and approvals running on paired machines, for the calls this machine forwards (Task 52). */
+  remoteRuns?: RemoteRuns;
   /**
    * Paired machines and the peer listener (v2 plan, Tasks 46-47). Always set
    * by `createContainer`; optional so route tests can build a Container
@@ -297,13 +300,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   // This machine's certificate lives beside the secrets file; an in-memory
   // database gets one that lasts only as long as the process.
+  // Filled in once the container exists: the peer listener's view of this machine's API.
+  let forwarded: ReturnType<typeof forwardedApi> | null = null;
   const identity = new IdentityStore(() => store.nodes.self().id, options.dbPath === ':memory:' ? null : dirname(options.secretsPath));
   const peers = new PeerService({
     store,
     secrets,
     events,
     identity,
-    createApp: (service) => createPeerApp(service) as never,
+    createApp: (service) => createPeerApp(service, { forwardedApi: () => forwarded }) as never,
     port: options.peerPort ?? DEFAULT_PEER_PORT,
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
@@ -316,6 +321,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     events,
     secrets,
     peers,
+    remoteRuns: new RemoteRuns(),
     engine,
     registry,
     turnRunner,
@@ -374,6 +380,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   } catch (err) {
     console.error('[grunt-server] could not start the peer listener; paired machines cannot reach this one:', err);
   }
+  forwarded = forwardedApi(container);
   peers.startMonitoring();
   syncer.start();
 
