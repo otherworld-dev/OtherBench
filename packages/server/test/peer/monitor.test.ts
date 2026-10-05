@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AppEvent } from '@grunt/core/types/events.js';
-import { makeNode, pair, type TestNode } from './helpers.js';
+import { freezableProxy, makeNode, pair, type TestNode } from './helpers.js';
 
 const nodes: TestNode[] = [];
 function node(name: string, onMessage?: (nodeId: string, event: string, data: unknown) => void): TestNode {
@@ -50,6 +50,27 @@ describe('PeerMonitor', () => {
     pc.service.announce('changes-available', { seq: 7 });
 
     await expect.poll(() => heard).toEqual([{ nodeId: 'node-PC', event: 'changes-available', data: { seq: 7 } }]);
+  });
+
+  it('treats a stream that goes silent as gone, but not one kept alive while quiet', async () => {
+    const pc = makeNode('PC', undefined, { keepaliveMs: 50 });
+    const laptop = makeNode('Laptop', { minBackoffMs: 20, maxBackoffMs: 80, idleTimeoutMs: 300 });
+    nodes.push(pc, laptop);
+    await pair(pc, laptop);
+    const proxy = await freezableProxy(laptop.store.peers.get('node-PC')!.addresses[0]!);
+    laptop.store.peers.update('node-PC', { addresses: [proxy.address] });
+    laptop.service.startMonitoring();
+
+    await expect.poll(() => laptop.service.status('node-PC').status).toBe('reachable');
+    // Nothing announced for longer than the idle limit: the keepalives hold it.
+    await new Promise((r) => setTimeout(r, 600));
+    expect(statusEvents(laptop, 'node-PC')).toEqual(['reachable']);
+
+    // The connection dies without closing (a laptop asleep, a network gone).
+    proxy.freeze();
+    await expect.poll(() => laptop.service.status('node-PC').status).toBe('unreachable');
+    expect(laptop.service.status('node-PC').error).toMatch(/heard nothing/i);
+    proxy.close();
   });
 
   it('stops watching a removed machine, and the removed machine is refused from then on', async () => {

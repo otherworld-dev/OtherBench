@@ -38,6 +38,8 @@ function bearer(c: Context<PeerEnv>): string | null {
 export interface PeerAppDeps {
   /** The part of this machine's API a paired machine may call (forward.ts); null until the container is up. */
   forwardedApi?: () => { fetch: (req: Request, env: { peerNodeId: string }) => Response | Promise<Response> } | null;
+  /** How often an idle `/peer/events` stream sends a keepalive; defaults to PEER_EVENTS_KEEPALIVE_MS. */
+  keepaliveMs?: number;
 }
 
 export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hono<PeerEnv> {
@@ -83,7 +85,7 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
     return sseStream((sink) => {
       sink.send('hello', service.info());
       const unregister = service.openEventStream(peer.nodeId, (event, data) => sink.send(event, data), () => sink.close());
-      const keepalive = setInterval(() => sink.comment('keepalive'), PEER_EVENTS_KEEPALIVE_MS);
+      const keepalive = setInterval(() => sink.comment('keepalive'), deps.keepaliveMs ?? PEER_EVENTS_KEEPALIVE_MS);
       return () => {
         clearInterval(keepalive);
         unregister();
