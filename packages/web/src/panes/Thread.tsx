@@ -10,6 +10,7 @@ import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
+import { ProjectTabs } from './ProjectTabs.js';
 
 /** How close (px) to the bottom still counts as "following" the thread. */
 const NEAR_BOTTOM_PX = 80;
@@ -306,6 +307,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           </button>
         </div>
       )}
+      <ProjectTabs chat={chat} />
       <ConversationStrip chat={chat} />
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">

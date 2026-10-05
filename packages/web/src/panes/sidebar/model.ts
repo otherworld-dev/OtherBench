@@ -22,7 +22,7 @@ export interface SidebarModel {
 
 const byActivity = (a: Chat, b: Chat): number => b.updatedAt - a.updatedAt;
 /** Sidebar order (#823): `sortOrder`, highest first; activity, then id, only break ties. */
-const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder || byActivity(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder || byActivity(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /**
  * The sidebar's layout (spec 2026-10-03-projects-design §3): Pinned, each

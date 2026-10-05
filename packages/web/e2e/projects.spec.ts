@@ -133,3 +133,31 @@ test('dragging a chat onto the top half of another places it there, and the orde
   await page.reload();
   await expect.poll(order).toEqual([first, third, second]);
 });
+
+test('a project chat shows tabs: + opens another, switching and closing work, and open tabs survive a reload (#824)', async ({ page, request }) => {
+  const projectName = `E2E Tabs ${randomUUID().slice(0, 8)}`;
+  const project = (await (await request.post(`${BASE_URL}/api/projects`, { data: { name: projectName } })).json()) as { id: string };
+  const first = (await (await request.post(`${BASE_URL}/api/chats`, { data: { projectId: project.id, title: 'Planning' } })).json()) as { id: string };
+
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${first.id}`).locator('[data-row-main]').click();
+  const strip = page.getByRole('tablist', { name: `${projectName} chats` });
+  await expect(strip.getByRole('tab')).toHaveText(['Planning']);
+
+  await page.getByRole('button', { name: `New chat in ${projectName}` }).first().click();
+  await expect(strip.getByRole('tab')).toHaveCount(2);
+  const second = strip.getByRole('tab', { selected: true });
+  await expect(second).not.toHaveText('Planning');
+
+  await strip.getByRole('tab', { name: 'Planning' }).click();
+  await expect(strip.getByRole('tab', { name: 'Planning' })).toHaveAttribute('aria-selected', 'true');
+
+  await page.reload();
+  await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${first.id}`).locator('[data-row-main]').click();
+  await expect(strip.getByRole('tab')).toHaveCount(2);
+
+  await page.getByRole('button', { name: 'Close tab Planning' }).click();
+  await expect(strip.getByRole('tab')).toHaveCount(1);
+  // The chat is only out of the tab strip, not gone.
+  await expect(page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${first.id}`)).toBeVisible();
+});

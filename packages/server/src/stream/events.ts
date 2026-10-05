@@ -1,6 +1,6 @@
 import type { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { Chat, ChatRepo, NewChat, Store } from '@grunt/core/ports/store.js';
-import type { AppEvent, PendingApprovalSummary } from '@grunt/core/types/events.js';
+import type { AppEvent, PendingApprovalSummary, RunningTurnSummary } from '@grunt/core/types/events.js';
 
 /**
  * The app-wide event bus behind `GET /api/events` (v2 plan, Task 34). Chat
@@ -11,20 +11,26 @@ import type { AppEvent, PendingApprovalSummary } from '@grunt/core/types/events.
  * which know the chat and the new reply ids.
  *
  * It also keeps the pending approvals it has seen requested and not yet
- * resolved, so a subscriber that connects later starts from the right count
- * (the `hello` event). A turn ending drops whatever it still had pending:
- * approvals end with their turn.
+ * resolved, and the replies started and not yet finished, so a subscriber
+ * that connects later starts from the right state (the `hello` event). A
+ * turn ending drops whatever it still had pending: approvals end with their
+ * turn.
  */
 export class AppEventBus {
   private readonly listeners = new Set<(e: AppEvent) => void>();
   private readonly pending = new Map<string, PendingApprovalSummary>();
+  /** Replies being written, by message id. */
+  private readonly running = new Map<string, string>();
 
   emit(e: AppEvent): void {
     if (e.type === 'approval-requested') {
       this.pending.set(e.requestId, { chatId: e.chatId, messageId: e.messageId, requestId: e.requestId, toolName: e.toolName });
     } else if (e.type === 'approval-resolved') {
       this.pending.delete(e.requestId);
+    } else if (e.type === 'turn-started') {
+      for (const messageId of e.messageIds) this.running.set(messageId, e.chatId);
     } else if (e.type === 'turn-finished') {
+      this.running.delete(e.messageId);
       for (const [id, p] of this.pending) if (p.messageId === e.messageId) this.pending.delete(id);
     }
     for (const fn of this.listeners) {
@@ -47,6 +53,11 @@ export class AppEventBus {
   /** Approvals requested and not yet resolved, oldest first. */
   pendingApprovals(): PendingApprovalSummary[] {
     return [...this.pending.values()];
+  }
+
+  /** Replies started and not yet finished. */
+  runningTurns(): RunningTurnSummary[] {
+    return [...this.running].map(([messageId, chatId]) => ({ chatId, messageId }));
   }
 
   /** Turns the runner's per-message events into app events. Returns the unsubscribe. */

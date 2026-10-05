@@ -11,7 +11,7 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
@@ -94,18 +94,21 @@ describe('chatMenuItems', () => {
       ['Alpha', false],
       ['Beta', true],
       ['No project', false],
+      ['New project…', undefined],
     ]);
     move.submenu![0]!.onSelect!();
     move.submenu![2]!.onSelect!();
     expect(h.moveTo).toHaveBeenNthCalledWith(1, 'a');
     expect(h.moveTo).toHaveBeenNthCalledWith(2, null);
+    move.submenu![3]!.onSelect!();
+    expect(h.moveToNewProject).toHaveBeenCalled();
   });
 
   it('marks No project when the chat has none, or its project is not in the list', () => {
     const noProject = chatMenuItems(chat(), [project('a', 'Alpha')], chatHandlers()).find((i) => i.id === 'move')!;
     const orphan = chatMenuItems(chat({ projectId: 'gone' }), [project('a', 'Alpha')], chatHandlers()).find((i) => i.id === 'move')!;
-    expect(noProject.submenu!.at(-1)!.checked).toBe(true);
-    expect(orphan.submenu!.map((i) => i.checked)).toEqual([false, true]);
+    expect(noProject.submenu!.find((i) => i.label === 'No project')!.checked).toBe(true);
+    expect(orphan.submenu!.map((i) => i.checked)).toEqual([false, true, undefined]);
   });
 });
 

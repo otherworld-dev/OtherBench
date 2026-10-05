@@ -25,7 +25,15 @@ export interface PendingApprovalSummary {
   toolName: string;
 }
 
+/** A reply still being written, as the app-wide stream reports it. */
+export interface RunningTurnSummary {
+  chatId: string;
+  messageId: string;
+}
+
 /** The `hello` that opens `GET /api/events`: the state a new subscriber can't rebuild from later events. */
 export interface AppEventsHello {
   pendingApprovals: PendingApprovalSummary[];
+  /** Replies started and not yet finished, so a window opened mid-reply knows which chats are working (#824). */
+  runningTurns: RunningTurnSummary[];
 }

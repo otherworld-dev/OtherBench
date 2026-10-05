@@ -60,7 +60,9 @@ export interface GruntState {
   setHotkeyStatus(status: { accelerator: string; error: string | null }): void;
   /** Tool calls waiting for approval anywhere in the app, by request id, from `GET /api/events` (Task 34). */
   appPendingApprovals: Record<string, PendingApprovalSummary>;
-  /** The events stream's `hello`: replaces the pending approvals with the server's list. */
+  /** Replies being written anywhere in the app: chat id by message id (#824). */
+  appRunningTurns: Record<string, string>;
+  /** The events stream's `hello`: replaces the pending approvals and running replies with the server's lists. */
   applyAppHello(hello: AppEventsHello): void;
   /** One app-wide event: keeps chats and the pending approvals current. */
   applyAppEvent(event: AppEvent): void;
@@ -258,7 +260,12 @@ export const useGruntStore = create<GruntState>()((set) => ({
   hotkeyStatus: null,
   setHotkeyStatus: (status) => set({ hotkeyStatus: status }),
   appPendingApprovals: {},
-  applyAppHello: (hello) => set({ appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])) }),
+  appRunningTurns: {},
+  applyAppHello: (hello) =>
+    set({
+      appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
+      appRunningTurns: Object.fromEntries((hello.runningTurns ?? []).map((t) => [t.messageId, t.chatId])),
+    }),
   applyAppEvent: (event) =>
     set((state) => {
       switch (event.type) {
@@ -285,11 +292,21 @@ export const useGruntStore = create<GruntState>()((set) => ({
           delete next[event.requestId];
           return { appPendingApprovals: next };
         }
+        case 'turn-started': {
+          const running = { ...state.appRunningTurns };
+          for (const id of event.messageIds) running[id] = event.chatId;
+          return { appRunningTurns: running };
+        }
         case 'turn-finished': {
           // Approvals end with their turn.
           const entries = Object.entries(state.appPendingApprovals);
           const kept = entries.filter(([, p]) => p.messageId !== event.messageId);
-          return kept.length === entries.length ? state : { appPendingApprovals: Object.fromEntries(kept) };
+          const running = { ...state.appRunningTurns };
+          delete running[event.messageId];
+          return {
+            appRunningTurns: running,
+            ...(kept.length === entries.length ? {} : { appPendingApprovals: Object.fromEntries(kept) }),
+          };
         }
         default:
           return state;
