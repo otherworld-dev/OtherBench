@@ -102,8 +102,32 @@ cd desktop && npx tauri build --debug --no-bundle   # a runnable build with the 
 
 For now the app finds `node` on `PATH` and the server in this checkout's
 `packages/server/dist` (`GRUNT_NODE` / `GRUNT_SERVER_SCRIPT` override both).
-Installers, a bundled Node runtime, tray, hotkey, notifications and native
-file pickers are the next tasks in the v2 plan.
+There are no installers yet.
+
+## Two machines
+
+Two Grunt installs can share chats, and a chat can run on whichever machine
+has its folder.
+
+1. **Pair them.** On one machine, Settings → Machines → *Show a code*. On the
+   other, Settings → Machines → *Add a machine*: enter the address shown
+   (`host:4748`) and the code. The first time Grunt listens for other
+   machines, Windows asks whether to allow it: allow it on **Private**
+   networks only. Pairing pins each machine's certificate, so something in
+   between can't pass itself off as either.
+2. **Set up locations.** Settings → Locations: a location is a folder you
+   keep on both machines (say Nextcloud), wherever each one has it. A chat
+   folder inside a location works on both. A chat whose folder isn't on this
+   machine asks where it is before it sends anything.
+3. **Choose where a chat runs.** The Inspector's *Runs on* picks the machine
+   whose folder, tools and local models the chat uses. If that machine is
+   off, the chat offers to run here instead.
+
+Chats, messages, profiles, connections (with their keys, unless a
+connection is set to keep its key on its machine), projects and locations
+sync both ways. Grants, MCP servers and the audit log stay on each machine.
+`grunt serve` takes `--peer-port` and `--peer-host` to choose where it
+listens for paired machines.
 
 ## Claude Code
 

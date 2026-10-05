@@ -9,10 +9,74 @@ so is the execution ledger it pointed readers at
 during cleanup). Where this doc used to cite that ledger for specifics, it
 now cites the source file it lives in instead.
 
-**Status:** 953 unit/integration tests pass (3 skipped), `npm run typecheck`
-and `npm run build` are clean (verified against this HEAD). `README.md` has
-a verified install → build → run → mock-provider walkthrough — follow that
-first if you just want to see it work.
+**Status (5 October 2026):** 2,222 unit and integration tests pass (4
+skipped) and 25 Playwright tests pass, including a two-server test of
+pairing, sync and running a chat on the other machine; `npm run typecheck`
+and `npm run build` are clean. `README.md` has a verified install → build →
+run → mock-provider walkthrough, and how to pair two machines. The v2
+section below says what v2 added; the sections after it were written for
+v1 and still hold.
+
+## v2: desktop app, machines and sync
+
+v2 (plan *Products/Grunt/Design/Plans/2026-10-02-grunt-v2*, spec
+*.../Specs/2026-10-02-grunt-v2-desktop-and-sync-design*) turns Grunt into a
+desktop app and lets two machines share chats. Built so far:
+
+- **Desktop shell** (`desktop/`, Tauri v2): bundled UI, the server as a
+  sidecar on a random loopback port with a per-launch token, tray, single
+  instance, start at login, a global hotkey with a quick-chat window,
+  native notifications, native file and folder pickers, drag and drop, and
+  `--open-folder` / `--send` arguments. Installers and a bundled Node
+  runtime (Tasks 40-41, Deck #777-#778) are **not** built: the app still
+  finds `node` on `PATH` and the server in this checkout.
+- **Machines** (`packages/server/src/peer/`): every install is a node with
+  an id (`node_self`) and a self-signed ECDSA P-256 certificate, made on
+  first use and kept beside the secrets file as `node-<id>.crt/.key`. Its
+  SHA-256 fingerprint is its identity. Settings → Machines pairs two
+  machines with a one-time code; each pins the other's certificate and
+  holds a bearer token from it (stored only as a hash on the issuing side).
+  The peer listener (HTTPS, default port 4748, `--peer-port`/`--peer-host`)
+  runs only while a peer exists or a code is shown.
+- **Locations and portable folders** (`core/src/domain/workspace.ts`): a
+  chat's (or project's) folder is either relative to a named location that
+  each machine maps to its own path, or bound to one machine's absolute
+  path. It's resolved per machine at turn time; a folder that doesn't
+  resolve here blocks sending and asks where it is (or offers to make a
+  location, or to run the chat on the machine that has it). Tool calls and
+  results from another machine have that machine's location paths
+  translated in the copy sent to the model; stored history is untouched.
+- **Sync** (`store-sqlite/src/repos/sync.ts`, `peer/syncer.ts`): triggers
+  keep a change log and tombstones; every synced row carries a hybrid
+  logical clock stamp, chats one per field. A machine pulls from a peer when
+  it connects, when the peer announces changes, and every minute while it's
+  reachable. Newer stamp wins, chats merge field by field, delete wins over
+  a concurrent edit, and divergent continuations become sibling branches.
+  Synced: locations and their paths, connections (keys too, unless *keep
+  the key on this machine*), models, profiles, projects and project memory,
+  chats, messages (once not streaming), sent attachments and their blobs,
+  usage. Never synced: grants, MCP servers, the audit log, peers, settings,
+  unsent attachments, connection health, project memory history.
+- **Running a chat on another machine** (`peer/forward.ts`): a chat's
+  *Runs on* (Inspector) picks the machine whose folder, tools and local
+  models it uses. Calls for a remote chat are forwarded over the peer
+  listener and its stream relayed back; approvals are answered on the
+  machine running the turn and audited with the machine they came from. If
+  that machine is unreachable, the chat offers to run here instead.
+
+**Notification clicks:** on Windows a notification is a WinRT toast shown
+by `desktop/src-tauri/src/notify.rs`, and clicking it opens the chat. On
+other platforms the Tauri notification plugin can't report clicks, so
+clicking the tray icon opens the last chat notified about instead.
+
+**Tested how:** two-node behaviour is tested with real servers over real TLS
+on loopback, never mocks of each other: `server/test/peer/*.test.ts`
+(pairing, an intercepting proxy, monitor, sync, remote runs) and
+`web/e2e/two-node.spec.ts` (pair through the UI, run a chat on the other
+machine, stop it, run here, see the branch arrive when it's back). A
+seeded 500-operation run across two stores converges on five seeds
+(`store-sqlite/test/sync.test.ts`). It has **not** yet been tried across two
+physical machines.
 
 ## What works today
 
@@ -323,14 +387,33 @@ as regression tests.
 
 ## What is NOT built
 
-**Task 29 (Tauri v2 sidecar) and Task 30 (packaging) do not exist.** There is
-no `desktop/` directory, no Rust code, no `Cargo.toml`, no `.msi`/`.AppImage`
-build, and `grunt serve --port 0 --announce` (the handshake T29 needed) was
-never added to the CLI. **Grunt today is `grunt serve` (or `npm run serve`)
-plus a browser.** `packages/web/src/App.tsx` is an ordinary web app; nothing
-about it assumes or benefits from a native shell.
+- **Installers and a bundled Node runtime** (v2 Tasks 40-41). The desktop
+  app runs from this checkout with `node` on `PATH`; there's no `.exe`
+  installer, AppImage or release workflow, and no SEA-or-bundled-Node
+  decision yet (Task 40 was to try a Node SEA first).
+- **The tray's machine status line** (part of Task 48): the peer statuses
+  exist (Settings → Machines, `peer-status` events) but the tray menu
+  doesn't show them yet. It needs a Rust change in `tray.rs`.
+- **A folder browser for another machine's folders** (part of Task 53).
+  The plan forwarded `GET /api/fs/dirs` over the peer listener; that route
+  is deliberately never mounted there (it lists directories anywhere on the
+  machine), so choosing a folder for a chat that runs elsewhere is a typed
+  path, classified against that machine's locations.
+- **"Also active on PC"** in the workspace header (Task 53) is not shown.
 
 ## Security posture, stated without euphemism
+
+**The peer listener is remote control of this machine, by design.** A
+paired machine can run a chat here, and that chat's turn can run the
+unsandboxed shell tool once a person approves it. The defences: mutual TLS
+with both certificates pinned at pairing plus a per-peer token; the
+listener off until pairing and bound only to the chosen hosts (default:
+every interface; `--peer-host` to narrow it); only the chat-running routes
+and `/peer/*` mounted on it, never settings, folder browsing or attaching
+by path; immediate revocation; approvals never delegated (each tool call
+still needs an approval or a grant on the machine running it); every
+approval audited with the machine it came from. Pairing codes are
+single-use, last ten minutes, and are cancelled after five wrong guesses.
 
 **The shell tool (`run_command`) is unsandboxed by design.** It executes
 whatever command string the model produces on the real OS with the real
@@ -645,17 +728,36 @@ this on startup.
   itself recent — `blob-store.ts`'s own comment notes 28 such directories
   were found already accumulated on this machine before it landed. Safe to
   delete by hand; nothing references them once their server process exits.
-- **Startup reconciliation of orphaned `streaming` messages assumes a
-  single server process per database.** `createContainer` treats every
-  message row still marked `streaming` at boot as abandoned by a now-dead
-  process, since this process's own turn tracking is empty on a fresh
-  start — but nothing enforces one-process-per-database: `openDatabase`'s
-  WAL mode and busy-timeout actively allow a second process to open the same
-  file, and this reconciliation runs before the port bind, so a second
-  launch (even one about to fail with `EADDRINUSE`) can reconcile out from
-  under a still-live first process's stream, flipping its row to `error`
-  while it's genuinely still streaming.
+- **A paired machine is trusted with what syncs.** It can change any
+  synced row: rename chats, delete profiles (and so their chats), re-point
+  a connection whose key it already has. It can't read or overwrite this
+  machine's other secrets, switch on sharing of a key kept here, re-point a
+  kept-here connection, or name a blob outside the store (all refused, with
+  tests). Pairing is between your own machines; treat a paired machine as
+  you would your own account on it.
+- **Changes from another machine show up after a refresh of the lists.**
+  A sync reloads the chat list, projects, profiles and connections, and
+  open chats reload their messages; there's no finer-grained live update.
+- **Project memory is summarised only by the machine a chat runs on**, so
+  two machines don't redo and overwrite each other's notes. Its version
+  history stays on the machine that wrote it.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
+
+## Deviations from the v2 spec and plan
+
+| Plan or spec said | Built | Why |
+| --- | --- | --- |
+| Migrations numbered from 005 | 011-013 | v1 work after the plan was written had already used up to 010 |
+| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`) | Avoids a new dependency for one fixed certificate shape; Node signs and parses certificates, it just can't build one |
+| `undici` Agent for the pinned client | `node:tls` + `node:http` with `createConnection` (`peer/client.ts`) | No new dependency, and the fingerprint is checked before any byte (the token included) is written |
+| Pairing MAC: `HMAC(code, fpA ‖ fpB)` | HMAC with a key derived by scrypt (N=2^14, r=8) from the code, salted with both fingerprints; the answer must come within 15 s | A security review showed a captured MAC of an 8-character code (2^40 guesses) falls to a GPU well inside the code's 10 minutes; the spec's "impractical" was wrong |
+| Messages are insert-only | Last writer wins by stamp | A retried reply and *keep* marks change a message in place; insert-only would never deliver them |
+| — | Projects and project memory sync too | They were added to v1 after the spec was written |
+| — | `sync_secret` (keep the key here) is each machine's own setting, not synced | Otherwise a peer could switch it back on and be sent the key |
+| The InMemoryStore mirrors change tracking | Change tracking is SQLite-only (triggers); sync tests use real SQLite stores | The fake would need its own change log on every repository for no gain over testing the real thing |
+| `apply` refuses every `location_path` row for this machine | Refuses them only when this machine already has a path for that location | Adopting a location (Task 44) writes the other machine's path, which that machine needs to resolve the chats it was given |
+| `GET /fs/dirs` forwarded with `?node=` | Never mounted on the peer listener | It lists directories anywhere on the machine; see What is NOT built |
+| `WorkspaceStatus.hint.nodeName` | `hint.nodeId` | The UI names machines from the paired list; the server needn't |
 
 ## Deviations from the original spec
 
@@ -682,9 +784,8 @@ All deliberate, all recorded at the time in the plan's Global Constraints:
 ## If you're picking this back up
 
 The natural next steps, roughly in order of value:
-1. Task 29/30 (Tauri shell + packaging) if a desktop app is still wanted, or drop them from the plan and call `grunt serve` + browser the intended shape — this is the one item left from the original plan.
-2. Abandoned unsent attachments and the legacy shared blob directory are the two remaining places disk usage can grow without bound (see Known gaps above) — worth a look before running this unattended for a long time.
-3. Re-run `npm audit --omit=dev` periodically; evaluate the `ai@7` migration on its own terms.
-
-(The Settings UI and attachment deletion/blob GC that used to top this list
-are both done — see "What works today" above.)
+1. Try two physical machines: pair the PC and the laptop over the LAN (allow the firewall prompt on Private networks only), then over the VPN. `docs/desktop-checklist.md` has the steps.
+2. Tasks 40-41: installers and a bundled Node runtime, so the app doesn't need this checkout.
+3. The tray's machine status line, and the small v2 UI gaps under What is NOT built.
+4. Abandoned unsent attachments and the legacy shared blob directory are the two remaining places disk usage can grow without bound (see Known gaps above).
+5. Re-run `npm audit --omit=dev` periodically; evaluate the `ai@7` migration on its own terms.
