@@ -18,6 +18,7 @@ export type PairingCheck = 'ok' | 'no-session' | 'wrong-code' | 'cancelled';
  */
 export class PairingSessions {
   private session: (PairingSession & { failures: number }) | null = null;
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -39,20 +40,31 @@ export class PairingSessions {
   /**
    * Checks an attempt against the open code: `matches(code)` says whether the
    * attempt's MAC was made with it. A match uses the session up; the fifth
-   * miss cancels it.
+   * miss cancels it. Attempts run one at a time, so two can never both use
+   * one code.
    */
-  attempt(matches: (code: string) => boolean): PairingCheck {
-    const session = this.current();
-    if (!session || !this.session) return 'no-session';
-    if (matches(session.code)) {
-      this.session = null;
-      return 'ok';
-    }
-    this.session.failures++;
-    if (this.session.failures >= PAIRING_MAX_FAILURES) {
-      this.session = null;
-      return 'cancelled';
-    }
-    return 'wrong-code';
+  attempt(matches: (code: string) => Promise<boolean>): Promise<PairingCheck> {
+    const run = this.queue.then(async (): Promise<PairingCheck> => {
+      const session = this.current();
+      if (!session) return 'no-session';
+      const ok = await matches(session.code);
+      // Cancelled or replaced while the key was being derived.
+      if (!this.session || this.session.code !== session.code) return 'no-session';
+      if (ok) {
+        this.session = null;
+        return 'ok';
+      }
+      this.session.failures++;
+      if (this.session.failures >= PAIRING_MAX_FAILURES) {
+        this.session = null;
+        return 'cancelled';
+      }
+      return 'wrong-code';
+    });
+    this.queue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
   }
 }

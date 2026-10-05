@@ -60,6 +60,16 @@ export interface PeerRequest {
   headers?: Record<string, string>;
 }
 
+/** Limits on one JSON exchange with a peer. */
+export interface ResponseLimits {
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+/** Room for a sync batch (Task 50 sizes its batches to stay well under this). */
+const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 60_000;
+
 export interface PeerResponse {
   status: number;
   body: unknown;
@@ -156,16 +166,41 @@ export class PeerClient {
   }
 
   /** A JSON request to the peer: connect (pinned), send, read the whole body. */
-  async request(target: PeerTarget, req: PeerRequest): Promise<PeerResponse> {
+  async request(target: PeerTarget, req: PeerRequest, limits: ResponseLimits = {}): Promise<PeerResponse> {
     const conn = await this.connect(target);
-    return this.requestOn(conn, req);
+    return this.requestOn(conn, req, limits);
   }
 
-  /** As `request`, on a connection already made (pairing reuses the one it inspected). */
-  async requestOn(conn: PeerConnection, req: PeerRequest): Promise<PeerResponse> {
-    const res = await this.send(conn, req);
-    const chunks: Buffer[] = [];
-    for await (const chunk of res) chunks.push(chunk as Buffer);
+  /**
+   * As `request`, on a connection already made (pairing reuses the one it
+   * inspected). The whole exchange must finish within `timeoutMs` and the
+   * body stay under `maxBytes`, or the connection is dropped: a peer, or
+   * whatever answered in its place, can't hold this machine waiting or fill
+   * its memory.
+   */
+  async requestOn(conn: PeerConnection, req: PeerRequest, limits: ResponseLimits = {}): Promise<PeerResponse> {
+    const timeoutMs = limits.timeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
+    const maxBytes = limits.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+    const timer = setTimeout(() => conn.socket.destroy(new Error(`no answer within ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+    let chunks: Buffer[];
+    let res: IncomingMessage;
+    try {
+      res = await this.send(conn, req);
+      const declared = Number(res.headers['content-length'] ?? 0);
+      if (declared > maxBytes) throw new Error(`answer too large (${declared} bytes)`);
+      chunks = [];
+      let size = 0;
+      for await (const chunk of res) {
+        size += (chunk as Buffer).length;
+        if (size > maxBytes) throw new Error(`answer too large (over ${maxBytes} bytes)`);
+        chunks.push(chunk as Buffer);
+      }
+    } catch (err) {
+      conn.socket.destroy();
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     const text = Buffer.concat(chunks).toString('utf8');
     let body: unknown = text;
     try {

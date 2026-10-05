@@ -6,6 +6,7 @@ import {
   hashPeerToken,
   isPlausiblePairingCode,
   normalisePairingCode,
+  pairingKey,
   pairingMac,
   shortFingerprint,
 } from '@grunt/core/domain/pairing.js';
@@ -19,6 +20,9 @@ import type { IdentityStore } from './identity.js';
 import { PeerListener } from './listener.js';
 import { PeerMonitor, type PeerMonitorOptions, type PeerStatus } from './monitor.js';
 import { PairingSessions } from './pairing.js';
+
+/** How long the machine entering a code waits for the other's answer: long enough to derive a key, too short to crack one. */
+const PAIRING_RESPONSE_TIMEOUT_MS = 15_000;
 
 /** A pairing attempt or a call to a peer that failed in a way the user should read. */
 export class PeerError extends Error {
@@ -209,10 +213,11 @@ export class PeerService {
       throw new PeerError('Malformed pairing request.', 400);
     }
     const ownFp = this.fingerprint();
-    let code = '';
-    const result = this.pairing.attempt((candidate) => {
-      const ok = digestsEqual(req.mac, pairingMac(candidate, initiatorFp, ownFp));
-      if (ok) code = candidate;
+    let key: Buffer | null = null;
+    const result = await this.pairing.attempt(async (candidate) => {
+      const derived = await pairingKey(candidate, initiatorFp, ownFp);
+      const ok = digestsEqual(req.mac, pairingMac(derived, initiatorFp, ownFp));
+      if (ok) key = derived;
       return ok;
     });
     if (result === 'no-session') throw new PeerError('This machine has no pairing code open.', 410);
@@ -220,10 +225,11 @@ export class PeerService {
       this.refreshListenerSoon();
       throw new PeerError('Wrong code too many times: pairing was cancelled on the other machine.', 403);
     }
-    if (result === 'wrong-code') throw new PeerError('Wrong code, or something between the two machines changed the connection.', 403);
+    if (result === 'wrong-code' || key === null) throw new PeerError('Wrong code, or something between the two machines changed the connection.', 403);
 
     const self = this.store.nodes.self();
     if (req.nodeId === self.id) throw new PeerError('A machine cannot pair with itself.', 409);
+    this.assertNoIdentityClash(req.nodeId, initiatorFp);
     const issued = generatePeerToken();
     const advertised = Array.isArray(req.addresses) ? req.addresses.filter((a): a is string => typeof a === 'string') : [];
     // Where the call came from, at the port it says it listens on.
@@ -242,7 +248,23 @@ export class PeerService {
       pairedAt: this.now(),
     }, req.token);
     await this.refreshListener();
-    return { nodeId: self.id, name: self.name, platform: this.platform, addresses: this.listener.addresses(), mac: pairingMac(code, ownFp, initiatorFp), token: issued };
+    return { nodeId: self.id, name: self.name, platform: this.platform, addresses: this.listener.addresses(), mac: pairingMac(key, ownFp, initiatorFp), token: issued };
+  }
+
+  /**
+   * A machine id already paired under a different certificate, or a
+   * certificate already paired as a different machine, is refused: pairing
+   * again must not let a machine that knows the code take over another
+   * machine's identity. The same machine and certificate pairing again just
+   * replaces the old pairing.
+   */
+  private assertNoIdentityClash(nodeId: string, fingerprint: string): void {
+    const byId = this.store.peers.get(nodeId);
+    const byFp = this.store.peers.getByFingerprint(fingerprint);
+    if ((byId && byId.fingerprint !== fingerprint) || (byFp && byFp.nodeId !== nodeId)) {
+      const name = (byId ?? byFp)!.name;
+      throw new PeerError(`This doesn't match the machine already paired as ${name}. Remove ${name} first if it really is the same machine.`, 409);
+    }
   }
 
   // --- pairing, this machine entering the code -----------------------------
@@ -273,22 +295,27 @@ export class PeerService {
     const responderFp = conn.fingerprint;
     const self = this.store.nodes.self();
     const issued = generatePeerToken();
-    const body: PairRequest = { nodeId: self.id, name: self.name, platform: this.platform, addresses: this.listener.addresses(), mac: pairingMac(code, ownFp, responderFp), token: issued };
+    const key = await pairingKey(code, ownFp, responderFp);
+    const body: PairRequest = { nodeId: self.id, name: self.name, platform: this.platform, addresses: this.listener.addresses(), mac: pairingMac(key, ownFp, responderFp), token: issued };
     let res;
     try {
-      res = await this.client.requestOn(conn, { method: 'POST', path: '/peer/pair', body });
+      // A short wait and a small answer: the other side only has to check a MAC.
+      res = await this.client.requestOn(conn, { method: 'POST', path: '/peer/pair', body }, { timeoutMs: PAIRING_RESPONSE_TIMEOUT_MS, maxBytes: 64 * 1024 });
     } catch (err) {
+      conn.socket.destroy();
       throw new PeerError(`Pairing failed: ${err instanceof Error ? err.message : String(err)}`, 502);
     }
     if (res.status !== 200) {
       const message = typeof res.body === 'object' && res.body !== null && typeof (res.body as { error?: unknown }).error === 'string' ? (res.body as { error: string }).error : `HTTP ${res.status}`;
-      throw new PeerError(`Pairing failed: ${message}`, res.status === 403 || res.status === 410 ? 403 : 502);
+      throw new PeerError(`Pairing failed: ${message}`, res.status === 409 ? 409 : res.status === 403 || res.status === 410 ? 403 : 502);
     }
     const answer = res.body as PairResponse;
-    if (typeof answer?.mac !== 'string' || !digestsEqual(answer.mac, pairingMac(code, responderFp, ownFp))) {
+    if (typeof answer?.mac !== 'string' || !digestsEqual(answer.mac, pairingMac(key, responderFp, ownFp))) {
       throw new PeerError("Pairing failed: the other machine's answer doesn't match. Something between the two machines may be intercepting the connection.", 403);
     }
-    if (typeof answer.token !== 'string' || typeof answer.nodeId !== 'string') throw new PeerError('Pairing failed: malformed answer.', 502);
+    if (typeof answer.token !== 'string' || answer.token.length < 32 || typeof answer.nodeId !== 'string') throw new PeerError('Pairing failed: malformed answer.', 502);
+    if (answer.nodeId === self.id) throw new PeerError('A machine cannot pair with itself.', 409);
+    this.assertNoIdentityClash(answer.nodeId, responderFp);
     const advertised = Array.isArray(answer.addresses) ? answer.addresses.filter((a): a is string => typeof a === 'string') : [];
     const peer = await this.savePeer({
       nodeId: answer.nodeId,
@@ -305,7 +332,7 @@ export class PeerService {
     return toPublic(peer);
   }
 
-  /** Stores a new pairing, replacing an earlier one with the same machine (re-pairing after a reinstall, say). */
+  /** Stores a new pairing, replacing an earlier one with the same machine and certificate (see `assertNoIdentityClash`). */
   private async savePeer(peer: Peer, heldToken: string): Promise<Peer> {
     const existing = this.store.peers.get(peer.nodeId) ?? this.store.peers.getByFingerprint(peer.fingerprint);
     if (existing) await this.forget(existing);

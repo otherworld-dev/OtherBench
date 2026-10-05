@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { TLSSocket } from 'node:tls';
 import { Hono, type Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { fingerprintOf } from '@grunt/core/domain/pairing.js';
 import type { Peer } from '@grunt/core/types/peer.js';
 import { sseStream } from '../stream/sse.js';
@@ -43,7 +44,8 @@ export function createPeerApp(service: PeerService): Hono<PeerEnv> {
     return c.json({ error: 'Internal server error.' }, 500);
   });
 
-  app.post('/peer/pair', async (c) => {
+  // Anyone who can reach the listener can call this one while a code is open, so its body is kept small.
+  app.post('/peer/pair', bodyLimit({ maxSize: 64 * 1024, onError: (c) => c.json({ error: 'Pairing request too large.' }, 413) }), async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as PairRequest;
     const remote = c.env?.incoming?.socket?.remoteAddress ?? null;
     return c.json(await service.acceptPairing(body, callerFingerprint(c), remote));

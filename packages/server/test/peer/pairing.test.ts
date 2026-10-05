@@ -133,6 +133,36 @@ describe('pairing', () => {
     expect(pc.store.peers.list()).toEqual([]);
   });
 
+  it("refuses a machine that knows the code but claims an already-paired machine's id, on either side", async () => {
+    const pc = node('PC');
+    const laptop = node('Laptop');
+    await pair(pc, laptop);
+    const original = laptop.store.peers.get('node-PC')!;
+    // Another machine with the PC's node id, but its own certificate.
+    const impostor = node('PC');
+
+    // It enters the laptop's code...
+    const shown = await laptop.service.startPairing();
+    expect(await failure(impostor.service.pairWith(shown.addresses[0]!, shown.code))).toMatchObject({ status: 409 });
+    expect(impostor.store.peers.list()).toEqual([]);
+    // ...or shows one for the laptop to enter. (The impostor, answering first,
+    // keeps its own one-sided record; the laptop stores nothing.)
+    const offered = await impostor.service.startPairing();
+    expect(await failure(laptop.service.pairWith(offered.addresses[0]!, offered.code))).toMatchObject({ status: 409, message: expect.stringContaining('already paired as PC') });
+
+    expect(laptop.store.peers.list()).toEqual([original]);
+  });
+
+  it('caps the size of a pairing request', async () => {
+    const pc = node('PC');
+    const laptop = node('Laptop');
+    const view = await pc.service.startPairing();
+    const conn = await laptop.service.client.connectTo(view.addresses[0]!, null);
+    const res = await laptop.service.client.requestOn(conn, { method: 'POST', path: '/peer/pair', body: { padding: 'x'.repeat(100 * 1024) } });
+    expect(res.status).toBe(413);
+    expect(pc.service.currentPairing()).not.toBeNull();
+  });
+
   it('refuses a code that cannot be one, before connecting', async () => {
     const laptop = node('Laptop');
     expect(await failure(laptop.service.pairWith('127.0.0.1:1', 'O0I1'))).toMatchObject({ status: 400 });
