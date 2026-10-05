@@ -1,23 +1,27 @@
-import { useState, type DragEvent, type JSX } from 'react';
-import type { Layout } from '../state/panes.js';
+import { Fragment, useState, type DragEvent, type JSX } from 'react';
+import { defaultSizes, LAYOUT_TREES, splitKey, type Layout, type SplitNode } from '../state/panes.js';
 import { useGruntStore } from '../state/store.js';
 import { useChatSync } from '../state/useChatSync.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
+import { Splitter } from './Splitter.js';
 import { TAB_DRAG_MIME } from './TabBar.js';
 import { Thread } from './Thread.js';
 
-const GRID: Record<Layout, string> = {
-  single: 'grid-cols-1 grid-rows-1',
-  'columns-2': 'grid-cols-2 grid-rows-1',
-  'rows-2': 'grid-cols-1 grid-rows-2',
-  'columns-3': 'grid-cols-3 grid-rows-1',
-};
+interface PaneProps {
+  index: number;
+  chatId: string | null;
+  focused: boolean;
+  /** The layout has more than one pane: show a header, accept drops. */
+  multi: boolean;
+  maximised: boolean;
+}
 
 /** One pane: its own live connection to its chat, and a full thread with its own message box. */
-function Pane({ index, chatId, focused, multi }: { index: number; chatId: string | null; focused: boolean; multi: boolean }): JSX.Element {
+function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Element {
   const chat = useGruntStore((s) => (chatId ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useGruntStore((s) => s.focusPane);
   const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
+  const toggleMaximised = useGruntStore((s) => s.toggleMaximised);
   const [dropActive, setDropActive] = useState(false);
   useChatSync(chatId, focused);
 
@@ -51,14 +55,30 @@ function Pane({ index, chatId, focused, multi }: { index: number; chatId: string
         focusPane(index);
         setActiveChatId(id);
       }}
-      className={`flex min-h-0 min-w-0 flex-col ${multi ? 'border border-[var(--border)]' : ''} ${
+      className={`flex h-full min-h-0 w-full min-w-0 flex-col ${multi ? 'border border-[var(--border)]' : ''} ${
         multi && focused ? 'border-[var(--accent)]' : ''
       } ${dropActive ? 'ring-2 ring-inset ring-[var(--accent)]' : ''}`}
     >
       {multi && (
-        <div className={`truncate border-b border-[var(--border)] px-3 py-1 text-xs ${focused ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}>
-          <span className="mr-1.5 tabular-nums text-[var(--text-faint)]">{index + 1}</span>
-          {chat?.title ?? 'Empty -- pick a chat or drag one here'}
+        <div
+          onDoubleClick={toggleMaximised}
+          className={`flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-1 text-xs ${focused ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
+        >
+          <span className="tabular-nums text-[var(--text-faint)]">{index + 1}</span>
+          <span className="min-w-0 flex-1 truncate">{chat?.title ?? 'Empty -- pick a chat or drag one here'}</span>
+          <button
+            type="button"
+            aria-label={maximised ? 'Restore pane' : 'Maximise pane'}
+            aria-pressed={maximised}
+            title={maximised ? 'Restore the layout (Ctrl+Shift+Enter)' : 'Fill the chat area with this pane (Ctrl+Shift+Enter)'}
+            onClick={() => {
+              focusPane(index);
+              toggleMaximised();
+            }}
+            className="shrink-0 rounded px-1 text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+          >
+            <span aria-hidden="true">{maximised ? '⤡' : '⤢'}</span>
+          </button>
         </div>
       )}
       <Thread chat={chat} />
@@ -66,24 +86,87 @@ function Pane({ index, chatId, focused, multi }: { index: number; chatId: string
   );
 }
 
+function containsPane(node: SplitNode, index: number): boolean {
+  return 'split' in node ? node.children.some((c) => containsPane(c, index)) : node.pane === index;
+}
+
+interface SplitProps {
+  layout: Layout;
+  node: SplitNode;
+  renderPane: (index: number) => JSX.Element;
+  /** Show only this pane (maximised, or a narrow window); the rest stay mounted but hidden, so nothing reconnects or loses a draft. */
+  only: number | null;
+}
+
+/** A split from the layout tree: its children side by side or stacked, with a draggable divider between each pair. */
+function Split({ layout, node, renderPane, only }: SplitProps): JSX.Element {
+  const stored = useGruntStore((s) => ('split' in node ? s.paneState.sizes[splitKey(layout, node.id)] : undefined));
+  const setSplitSizes = useGruntStore((s) => s.setSplitSizes);
+  const [dragging, setDragging] = useState<number[] | null>(null);
+  if (!('split' in node)) return renderPane(node.pane);
+
+  const key = splitKey(layout, node.id);
+  const start = defaultSizes(layout, node.id, node.children.length);
+  const sizes = dragging ?? (stored && stored.length === node.children.length ? stored : start);
+
+  return (
+    <div className={`flex h-full min-h-0 w-full min-w-0 ${node.split === 'row' ? 'flex-row' : 'flex-col'}`} data-split={node.id}>
+      {node.children.map((child, i) => (
+        <Fragment key={i}>
+          {i > 0 && only === null && (
+            <Splitter
+              direction={node.split}
+              sizes={sizes}
+              index={i - 1}
+              onResize={setDragging}
+              onCommit={(next) => {
+                setDragging(null);
+                setSplitSizes(key, next);
+              }}
+              onReset={() => {
+                setDragging(null);
+                setSplitSizes(key, start);
+              }}
+            />
+          )}
+          <div
+            className="min-h-0 min-w-0"
+            style={only !== null && !containsPane(child, only) ? { display: 'none' } : { flex: only === null ? `${sizes[i] ?? 1} 1 0` : '1 1 0' }}
+          >
+            <Split layout={layout} node={child} renderPane={renderPane} only={only} />
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
 /**
- * The chat area (#824): one, two or three panes in the chosen layout, each a
- * full chat. The focused pane's chat is the active one, so the Inspector and
- * the sidebar highlight follow it. A narrow window always shows just the
- * focused pane.
+ * The chat area (#824): the chosen layout's panes, each a full chat, split by
+ * draggable dividers whose sizes are remembered per layout. The focused pane's
+ * chat is the active one, so the Inspector and the sidebar highlight follow
+ * it. A maximised pane, or a narrow window, shows just the focused pane.
  */
 export function PaneGrid({ narrow }: { narrow: boolean }): JSX.Element {
   const paneState = useGruntStore((s) => s.paneState);
   const activeChatId = useGruntStore((s) => s.activeChatId);
-  const layout: Layout = narrow ? 'single' : paneState.layout;
-  const indices = narrow ? [paneState.focusedPane] : paneState.panes.map((_, i) => i);
-  const multi = indices.length > 1;
+  const multi = !narrow && paneState.panes.length > 1;
+  const solo = narrow || paneState.maximised;
+
+  const renderPane = (i: number): JSX.Element => (
+    <Pane
+      key={i}
+      index={i}
+      chatId={i === paneState.focusedPane ? activeChatId : (paneState.panes[i] ?? null)}
+      focused={i === paneState.focusedPane}
+      multi={multi}
+      maximised={multi && paneState.maximised}
+    />
+  );
 
   return (
-    <main className={`grid h-full min-h-0 min-w-0 flex-1 gap-1 ${multi ? 'p-1' : ''} ${GRID[layout]}`}>
-      {indices.map((i) => (
-        <Pane key={i} index={i} chatId={i === paneState.focusedPane ? activeChatId : (paneState.panes[i] ?? null)} focused={i === paneState.focusedPane} multi={multi} />
-      ))}
+    <main className={`flex h-full min-h-0 min-w-0 flex-1 ${multi && !solo ? 'p-1' : ''}`}>
+      <Split layout={paneState.layout} node={LAYOUT_TREES[paneState.layout]} renderPane={renderPane} only={solo ? paneState.focusedPane : null} />
     </main>
   );
 }

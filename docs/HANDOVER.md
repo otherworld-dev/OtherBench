@@ -49,7 +49,15 @@ of work landed after that plan closed out:
   right-click → Open in new tab, or drag a chat onto the tab bar -- from any
   project; a sidebar click shows a chat without making it a tab. The tab bar
   (`panes/TabBar.tsx`) has a layout picker: one chat, two side by side, two
-  stacked, three side by side (`panes/PaneGrid.tsx`). Each pane is a full
+  stacked, three side by side, one big with two stacked, four in a grid
+  (`panes/PaneGrid.tsx`). Each layout is a tree of splits (`LAYOUT_TREES`);
+  the bar between panes drags, or moves with the arrow keys, and each
+  split's sizes are remembered per layout (`Splitter.tsx`; double-click to
+  even out). A pane's header button, a double-click on the header or
+  Ctrl+Shift+Enter maximises the focused pane; the others stay mounted,
+  hidden, so they keep streaming and keep their drafts. Ctrl+1..4 (or
+  Alt+1..4) focuses a pane and Ctrl+Tab / Ctrl+Shift+Tab cycles tabs
+  (`usePaneShortcuts`; a browser keeps Ctrl+Tab for itself). Each pane is a full
   thread with its own live connection (`useChatSync` per pane; only the
   focused pane reports the header's connection status). The focused pane's
   chat is always `activeChatId`, so anything that opens a chat fills the

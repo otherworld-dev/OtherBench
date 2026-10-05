@@ -8,9 +8,12 @@ import {
   moveTab,
   openTab,
   PANE_STATE_STORAGE_KEY,
+  resizeSplit,
   savePaneState,
   setLayout,
+  setSplitSizes,
   showChat,
+  toggleMaximised,
   type PaneState,
 } from './panes.js';
 
@@ -62,6 +65,32 @@ describe('pane state (#824)', () => {
     expect(moveTab(s, 'a', 'a')).toBe(s);
   });
 
+  it('a divider keeps both neighbours at least 15% of the split, and keeps the total', () => {
+    const near = (actual: number[], expected: number[]): void => expected.forEach((v, i) => expect(actual[i]).toBeCloseTo(v));
+    near(resizeSplit([1, 1], 0, 0.25), [1.5, 0.5]);
+    near(resizeSplit([1, 1], 0, 0.9), [1.7, 0.3]);
+    near(resizeSplit([1, 1, 1], 1, -0.5), [1, 0.45, 1.55]);
+    expect(resizeSplit([1, 1], 5, 0.1)).toEqual([1, 1]);
+  });
+
+  it('remembers split sizes, ignoring bad ones; maximise needs two panes and a layout change ends it', () => {
+    const s = state({ layout: 'columns-2', panes: ['a', 'b'] });
+    expect(setSplitSizes(s, 'columns-2/root', [2, 1]).sizes).toEqual({ 'columns-2/root': [2, 1] });
+    expect(setSplitSizes(s, 'columns-2/root', [2, 0])).toBe(s);
+    expect(setSplitSizes(s, 'columns-2/root', [2])).toBe(s);
+    const big = toggleMaximised(s);
+    expect(big.maximised).toBe(true);
+    expect(toggleMaximised(big).maximised).toBe(false);
+    expect(setLayout(big, 'columns-3').maximised).toBe(false);
+    expect(toggleMaximised(state())).toEqual(state());
+  });
+
+  it('the new layouts have three and four panes, filled from tabs', () => {
+    const s = state({ tabs: ['a', 'b', 'c', 'd'], panes: ['a'] });
+    expect(setLayout(s, 'main-right-2').panes).toEqual(['a', 'b', 'c']);
+    expect(setLayout(s, 'grid-4').panes).toEqual(['a', 'b', 'c', 'd']);
+  });
+
   describe('storage', () => {
     beforeEach(() => window.localStorage.clear());
 
@@ -70,8 +99,13 @@ describe('pane state (#824)', () => {
       savePaneState(s);
       expect(loadPaneState()).toEqual(s);
 
-      window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify({ tabs: ['a', 7, 'a'], layout: 'columns-3', panes: ['a'], focusedPane: 9 }));
-      expect(loadPaneState()).toEqual({ tabs: ['a'], layout: 'columns-3', panes: ['a', null, null], focusedPane: 0 });
+      window.localStorage.setItem(
+        PANE_STATE_STORAGE_KEY,
+        JSON.stringify({ tabs: ['a', 7, 'a'], layout: 'columns-3', panes: ['a'], focusedPane: 9, sizes: { 'columns-3/root': [1, 0, 2], 'grid-4/top': [1, 3] }, maximised: true })
+      );
+      expect(loadPaneState()).toEqual({
+        tabs: ['a'], layout: 'columns-3', panes: ['a', null, null], focusedPane: 0, sizes: { 'grid-4/top': [1, 3] }, maximised: true,
+      });
 
       window.localStorage.setItem(PANE_STATE_STORAGE_KEY, JSON.stringify({ layout: 'mosaic' }));
       expect(loadPaneState()).toEqual(DEFAULT_PANE_STATE);

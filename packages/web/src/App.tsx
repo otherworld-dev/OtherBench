@@ -12,6 +12,7 @@ import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
+import { usePaneShortcuts } from './state/usePaneShortcuts.js';
 import { QuickChat } from './views/QuickChat.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
@@ -107,6 +108,7 @@ function MainApp(): JSX.Element {
   useOpenArgs(loaded);
   useDesktopShell();
   useTextSizeShortcuts();
+  usePaneShortcuts(isNarrow);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
