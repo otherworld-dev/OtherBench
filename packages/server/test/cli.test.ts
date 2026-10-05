@@ -13,6 +13,7 @@ import {
   NonLoopbackWithoutTokenError,
   parseServeArgs,
   runServe,
+  sameScriptPath,
 } from '../src/cli.js';
 
 function fakeContainer(): Container {
@@ -75,6 +76,17 @@ describe('isLoopbackHost', () => {
 
   it.each(['0.0.0.0', '192.168.1.5', '::', 'example.com'])('treats %s as non-loopback', (host) => {
     expect(isLoopbackHost(host)).toBe(false);
+  });
+});
+
+describe('sameScriptPath', () => {
+  it('matches the same path, and on Windows ignores a \\\\?\\ prefix and case', () => {
+    expect(sameScriptPath('/srv/grunt/cli.js', '/srv/grunt/cli.js')).toBe(true);
+    expect(sameScriptPath('/srv/grunt/cli.js', '/srv/other/cli.js')).toBe(false);
+    if (process.platform === 'win32') {
+      expect(sameScriptPath('C:\\Program Files\\Grunt\\server\\cli.js', '\\\\?\\C:\\Program Files\\Grunt\\server\\cli.js')).toBe(true);
+      expect(sameScriptPath('C:\\Grunt\\server\\cli.js', 'c:\\grunt\\SERVER\\cli.js')).toBe(true);
+    }
   });
 });
 

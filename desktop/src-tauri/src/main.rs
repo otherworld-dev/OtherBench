@@ -130,10 +130,20 @@ fn server_script(app: &tauri::AppHandle) -> PathBuf {
         .join("cli.js")
 }
 
-/// `GRUNT_NODE` overrides; otherwise `node` from PATH. Task 40 replaces this
-/// with a bundled runtime.
-fn node_binary() -> PathBuf {
-    std::env::var("GRUNT_NODE").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("node"))
+/// `GRUNT_NODE` overrides; otherwise the Node runtime the installer carries
+/// (`node/node.exe` among the resources, Task 40), else `node` from PATH --
+/// which is what dev runs use.
+fn node_binary(app: &tauri::AppHandle) -> PathBuf {
+    if let Ok(p) = std::env::var("GRUNT_NODE") {
+        return PathBuf::from(p);
+    }
+    if let Ok(dir) = app.path().resource_dir() {
+        let bundled = dir.join("node").join(if cfg!(windows) { "node.exe" } else { "node" });
+        if bundled.exists() {
+            return bundled;
+        }
+    }
+    PathBuf::from("node")
 }
 
 fn main() {
@@ -177,7 +187,7 @@ fn main() {
             }
 
             let spec = sidecar::LaunchSpec {
-                node: node_binary(),
+                node: node_binary(app.handle()),
                 script: server_script(app.handle()),
                 cors_origins: cors_origins(),
                 log_dir: app.path().app_log_dir()?,

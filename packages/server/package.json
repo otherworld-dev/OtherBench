@@ -8,7 +8,9 @@
   },
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsc -b && node dist/cli.js serve"
+    "dev": "tsc -b && node dist/cli.js serve",
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.287",

@@ -387,10 +387,11 @@ as regression tests.
 
 ## What is NOT built
 
-- **Installers and a bundled Node runtime** (v2 Tasks 40-41). The desktop
-  app runs from this checkout with `node` on `PATH`; there's no `.exe`
-  installer, AppImage or release workflow, and no SEA-or-bundled-Node
-  decision yet (Task 40 was to try a Node SEA first).
+- **A release pipeline** (v2 Task 41). `npm run app:installer -w
+  @grunt/desktop` makes a per-user Windows installer locally (bundled
+  server, bundled Node runtime); there's no `release.yml`, no code signing,
+  no Explorer verbs (*Open folder in Grunt*, *Send to Grunt*), and no Linux
+  packages. Task 40's Node SEA wasn't tried: see Deviations.
 - **The tray's machine status line** (part of Task 48): the peer statuses
   exist (Settings → Machines, `peer-status` events) but the tray menu
   doesn't show them yet. It needs a Rust change in `tray.rs`.
@@ -758,6 +759,7 @@ this on startup.
 | `apply` refuses every `location_path` row for this machine | Refuses them only when this machine already has a path for that location | Adopting a location (Task 44) writes the other machine's path, which that machine needs to resolve the chats it was given |
 | `GET /fs/dirs` forwarded with `?node=` | Never mounted on the peer listener | It lists directories anywhere on the machine; see What is NOT built |
 | `WorkspaceStatus.hint.nodeName` | `hint.nodeId` | The UI names machines from the paired list; the server needn't |
+| Task 40: try a Node SEA first, else ship a pinned `node` | Ships the build machine's own `node.exe` beside an esbuild bundle (`packages/server/scripts/bundle.mjs`), with the Claude Agent SDK, its native Claude Code runtime and `unpdf` copied beside the bundle rather than bundled | The Agent SDK starts a 237 MB per-platform native runtime and unpdf loads PDF.js from its own folder; neither survives bundling or a SEA. Shipping the node that ran the tests avoids a download and checksum step for now; a pinned, CI-downloaded node comes with the release workflow |
 
 ## Deviations from the original spec
 
