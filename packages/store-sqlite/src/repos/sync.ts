@@ -33,6 +33,12 @@ function keyWhere(tbl: SyncTable): string {
   return tbl === 'location_path' ? "location_id || ':' || node_id = ?" : `${keyColumns(tbl)[0]} = ?`;
 }
 
+/** A row's own key, as a change id: what the write will actually land on. */
+function rowKey(tbl: SyncTable, row: SyncRow): string | null {
+  const parts = keyColumns(tbl).map((c) => row[c]);
+  return parts.every((p) => typeof p === 'string' && p.length > 0) ? (parts as string[]).join(':') : null;
+}
+
 /**
  * Change tracking and applying other machines' changes over SQLite (v2 plan,
  * Tasks 49-50). The triggers from migration 013 keep the change log and
@@ -225,6 +231,10 @@ export class SqliteSyncRepo implements SyncRepo {
 
   private applyRow(u: Extract<ChangeRow, { op: 'upsert' }>): boolean {
     const row = { ...u.row };
+    // Every check below looks the row up by the change's id, and the write
+    // lands on the row's own key: a change whose two differ is refused, or a
+    // peer could pass the checks on one row and overwrite another.
+    if (rowKey(u.tbl, row) !== u.id) return false;
     const local = this.select(u.tbl, u.id);
     if (u.tbl === 'connection') {
       // A connection whose key stays on this machine is configured here only:
@@ -250,6 +260,8 @@ export class SqliteSyncRepo implements SyncRepo {
   }
 
   private applyChat(u: Extract<ChangeRow, { op: 'upsert' }>, pendingHeads: { chatId: string; head: string; stamp: string }[]): boolean {
+    // As in applyRow: the change's id and the row's own key must agree.
+    if (rowKey('chat', u.row) !== u.id) return false;
     if (this.tombstone('chat', u.id) !== null) return false;
     const local = this.select('chat', u.id);
     const accept = (field: string, row: SyncRow): boolean => {
