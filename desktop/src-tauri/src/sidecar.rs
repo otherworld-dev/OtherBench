@@ -16,6 +16,21 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// A Windows path without its `\\?\` (verbatim) prefix. Tauri's resource
+/// directory carries one, and Node can't start a script from such a path
+/// (it fails with `EISDIR: lstat 'C:'`). `\\?\UNC\server\share` becomes
+/// `\\server\share`; any other path is returned as it was.
+pub fn plain_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
 /// How long to wait for the announce line before giving up.
 const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long the server gets to exit on its own after stdin closes before it is killed.
@@ -74,8 +89,8 @@ pub fn start(spec: &LaunchSpec) -> Result<Server, String> {
     let log_path = spec.log_dir.join("server.log");
     let mut log = File::create(&log_path).map_err(|e| format!("cannot create {}: {e}", log_path.display()))?;
 
-    let mut cmd = Command::new(&spec.node);
-    cmd.arg(&spec.script).args(["serve", "--port", "0", "--announce"]);
+    let mut cmd = Command::new(plain_path(&spec.node));
+    cmd.arg(plain_path(&spec.script)).args(["serve", "--port", "0", "--announce"]);
     for origin in &spec.cors_origins {
         cmd.args(["--cors-origin", origin]);
     }
@@ -193,6 +208,16 @@ mod tests {
     fn rejects_port_zero_and_out_of_range() {
         assert!(parse_announce("{\"port\":0}").is_err());
         assert!(parse_announce("{\"port\":70000}").is_err());
+    }
+
+    #[test]
+    fn strips_the_verbatim_prefix_node_cannot_start_a_script_from() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\Users\Adam\AppData\Local\Grunt\server\cli.js")),
+            PathBuf::from(r"C:\Users\Adam\AppData\Local\Grunt\server\cli.js")
+        );
+        assert_eq!(plain_path(Path::new(r"\\?\UNC\server\share\cli.js")), PathBuf::from(r"\\server\share\cli.js"));
+        assert_eq!(plain_path(Path::new(r"C:\plain\cli.js")), PathBuf::from(r"C:\plain\cli.js"));
     }
 
     #[test]
