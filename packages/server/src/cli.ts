@@ -44,6 +44,10 @@ export interface ServeOptions {
   /** Desktop handshake: print `{"port":N}` as the only stdout line, exit when stdin closes. */
   announce: boolean;
   corsOrigins: string[];
+  /** The peer listener's port; unset uses the default (4748). */
+  peerPort?: number;
+  /** Addresses the peer listener binds; empty means every interface. */
+  peerHosts: string[];
 }
 
 /**
@@ -61,6 +65,8 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
       token: { type: 'string' },
       announce: { type: 'boolean' },
       'cors-origin': { type: 'string', multiple: true },
+      'peer-port': { type: 'string' },
+      'peer-host': { type: 'string', multiple: true },
     },
     strict: false,
   });
@@ -71,7 +77,14 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
   const dbPath = typeof values['db'] === 'string' ? values['db'] : defaultDbPath();
   const envToken = env['GRUNT_TOKEN'];
   const corsOrigins = values['cors-origin'];
+  const peerHosts = values['peer-host'];
+  const peerPort = values['peer-port'] !== undefined ? Number(values['peer-port']) : undefined;
+  if (peerPort !== undefined && (typeof values['peer-port'] === 'boolean' || !Number.isInteger(peerPort) || peerPort < 0 || peerPort > 65535)) {
+    throw new Error(`Invalid --peer-port "${String(values['peer-port'])}": must be an integer between 0 and 65535.`);
+  }
   return {
+    ...(peerPort !== undefined ? { peerPort } : {}),
+    peerHosts: Array.isArray(peerHosts) ? peerHosts.filter((h): h is string => typeof h === 'string') : [],
     port,
     host: typeof values['host'] === 'string' ? values['host'] : DEFAULT_HOST,
     dbPath,
@@ -132,7 +145,7 @@ export class AnnounceWithoutTokenError extends Error {
 }
 
 export interface ServeDeps {
-  createContainer: (opts: { dbPath: string; secretsPath: string }) => Promise<Container>;
+  createContainer: (opts: { dbPath: string; secretsPath: string; peerPort?: number; peerHosts?: string[] }) => Promise<Container>;
   createApp: typeof createApp;
   serve: typeof nodeServe;
   /** Where the announce line goes. Defaults to `process.stdout`. */
@@ -184,7 +197,12 @@ export async function runServe(
   const options = parseServeArgs(argv, env);
   assertServeSecurity(options);
 
-  const container = await buildContainer({ dbPath: options.dbPath, secretsPath: defaultSecretsPath(options.dbPath) });
+  const container = await buildContainer({
+    dbPath: options.dbPath,
+    secretsPath: defaultSecretsPath(options.dbPath),
+    ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
+    peerHosts: options.peerHosts,
+  });
 
   // Filled in by the listening callback; the Host check reads it per request,
   // and no request can arrive before the port is bound.
@@ -242,7 +260,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
 
   if (command !== 'serve') {
     console.error(
-      'Usage: grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce] [--cors-origin <origin>]...'
+      'Usage: grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...'
     );
     exit(1);
     return;

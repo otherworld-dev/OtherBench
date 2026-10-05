@@ -95,6 +95,17 @@ describe('parseServeArgs', () => {
     expect(parseServeArgs(['--port', '0']).port).toBe(0);
   });
 
+  it('parses --peer-port and repeated --peer-host; neither is set by default', () => {
+    expect(parseServeArgs(['--peer-port', '5000', '--peer-host', '192.168.1.2', '--peer-host', '10.0.0.2'])).toMatchObject({
+      peerPort: 5000,
+      peerHosts: ['192.168.1.2', '10.0.0.2'],
+    });
+    const defaults = parseServeArgs([]);
+    expect(defaults.peerPort).toBeUndefined();
+    expect(defaults.peerHosts).toEqual([]);
+    expect(() => parseServeArgs(['--peer-port', '70000'])).toThrow(/Invalid --peer-port/);
+  });
+
   it.each(['-1', '65536', '1.5', 'abc'])('still rejects --port=%s', (port) => {
     expect(() => parseServeArgs([`--port=${port}`])).toThrow(/Invalid --port/);
   });
