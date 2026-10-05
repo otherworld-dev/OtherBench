@@ -180,7 +180,7 @@ interface RunResult {
 export const runCommandTool: ToolSpec = {
   name: 'run_command',
   description:
-    'Runs a shell command with cwd forced to the workspace root. Default timeout 120s (hard cap 600s); ' +
+    'Runs a shell command with cwd forced to the workspace root; prefer paths relative to it, since absolute ones differ between machines. Default timeout 120s (hard cap 600s); ' +
     'combined stdout+stderr is captured up to 100KB. On timeout the command and its process tree are killed ' +
     'on a best-effort basis, but a process that fully detaches itself (its own process group, or a Windows ' +
     'DETACHED_PROCESS/START-launched child) survives and keeps running after this tool returns.',

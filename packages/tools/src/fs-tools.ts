@@ -570,7 +570,7 @@ export const readFileTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the workspace root (or absolute).' },
+      path: { type: 'string', description: 'Path to the file, relative to the workspace root. Prefer relative paths: absolute ones differ between machines.' },
       startLine: { type: 'integer', minimum: 1, description: '1-indexed first line to include (optional).' },
       endLine: { type: 'integer', minimum: 1, description: '1-indexed last line to include, inclusive (optional).' },
     },
@@ -868,7 +868,7 @@ export const writeFileTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the workspace root (or absolute).' },
+      path: { type: 'string', description: 'Path to the file, relative to the workspace root. Prefer relative paths: absolute ones differ between machines.' },
       content: { type: 'string', description: 'The full text content to write.' },
     },
     required: ['path', 'content'],
@@ -920,7 +920,7 @@ export const editFileTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the workspace root (or absolute).' },
+      path: { type: 'string', description: 'Path to the file, relative to the workspace root. Prefer relative paths: absolute ones differ between machines.' },
       oldString: { type: 'string', description: 'Exact text to find; must occur exactly once in the file.' },
       newString: { type: 'string', description: 'Text to replace it with.' },
     },

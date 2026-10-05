@@ -11,6 +11,7 @@ import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
+import { translateForNode } from './path-translate.js';
 import { resolveWorkspace } from './workspace.js';
 
 /**
@@ -510,7 +511,9 @@ export class TurnRunner {
       // Resolved on this machine at turn time, never read raw: a folder from
       // another machine, or a location with no path here, must not reach the
       // tools as if it were local (v2 spec §6).
-      const workspace = resolveWorkspace(chat?.workspace ?? null, this.store.nodes.self().id, this.store.locations.allPaths(), this.pathExists);
+      const selfNodeId = this.store.nodes.self().id;
+      const locationPaths = this.store.locations.allPaths();
+      const workspace = resolveWorkspace(chat?.workspace ?? null, selfNodeId, locationPaths, this.pathExists);
       if (workspace.status === 'unresolved') {
         // Yield first so the turns route has registered this reply's stream
         // and the failure reaches live subscribers (see the notice comment below).
@@ -520,7 +523,9 @@ export class TurnRunner {
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
       const autoMode = chat?.autoMode ?? false;
       const requestProfile = this.withProjectMemory(profile, chat);
-      const history = this.buildRequestMessages(userMessageId, requestProfile);
+      // Other machines' folder paths in tool calls and results, as they are
+      // on this machine (spec §6); the stored messages are untouched.
+      const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
