@@ -15,6 +15,9 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
   // window didn't start ran in it: reload its messages (the stream stays as it is).
   const syncRevision = useGruntStore((s) => s.syncRevision);
   const chatReload = useGruntStore((s) => (chatId ? (s.chatReloads[chatId] ?? 0) : 0));
+  // The server picks the machine a stream comes from when it opens (this one,
+  // or relayed from the one the chat runs on), so a change reopens it.
+  const runsOn = useGruntStore((s) => (chatId ? s.chats.find((c) => c.id === chatId)?.runsOn : undefined));
   // With several panes open, only the focused one drives the header's
   // connection status. Focus moving between panes must not reconnect a
   // stream, so this is read through refs rather than restarting the effect.
@@ -77,5 +80,5 @@ export function useChatSync(chatId: string | null, reportStatus = true): void {
       client.close();
       report('idle');
     };
-  }, [chatId]);
+  }, [chatId, runsOn]);
 }
