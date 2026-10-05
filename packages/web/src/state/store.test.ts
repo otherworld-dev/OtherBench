@@ -463,7 +463,7 @@ describe('app-wide events (Task 34)', () => {
 
   it('counts pending approvals from the hello and events, dropping them on resolve or when their turn ends', () => {
     const s = () => useGruntStore.getState();
-    s().applyAppHello({ pendingApprovals: [{ chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' }] });
+    s().applyAppHello({ pendingApprovals: [{ chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' }], runningTurns: [] });
     expect(selectPendingApprovalCount(s())).toBe(1);
     s().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm2', requestId: 'r2', toolName: 'run_command' });
     s().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm2', requestId: 'r3', toolName: 'run_command' });
@@ -473,7 +473,21 @@ describe('app-wide events (Task 34)', () => {
     expect(selectPendingApprovalCount(s())).toBe(0);
     // A reconnect's hello replaces whatever was there.
     s().applyAppEvent({ type: 'approval-requested', chatId: 'c', messageId: 'm9', requestId: 'r9', toolName: 'x' });
-    s().applyAppHello({ pendingApprovals: [] });
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
     expect(selectPendingApprovalCount(s())).toBe(0);
+  });
+});
+
+describe('running replies from app-wide events (#824)', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+
+  it('tracks replies from turn-started to turn-finished, and a hello replaces the set', () => {
+    const s = () => useGruntStore.getState();
+    s().applyAppEvent({ type: 'turn-started', chatId: 'c1', messageIds: ['m1', 'm2'] });
+    expect(s().appRunningTurns).toEqual({ m1: 'c1', m2: 'c1' });
+    s().applyAppEvent({ type: 'turn-finished', chatId: 'c1', messageId: 'm1', status: 'complete' });
+    expect(s().appRunningTurns).toEqual({ m2: 'c1' });
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [{ chatId: 'c9', messageId: 'm9' }] });
+    expect(s().appRunningTurns).toEqual({ m9: 'c9' });
   });
 });

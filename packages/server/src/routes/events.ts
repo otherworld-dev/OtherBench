@@ -19,7 +19,10 @@ export function eventsRoutes(container: Container): Hono {
   app.get('/', () =>
     sseStream((sink) => {
       const unsubscribe = container.events?.subscribe((e) => sink.send(null, e)) ?? (() => {});
-      const hello: AppEventsHello = { pendingApprovals: container.events?.pendingApprovals() ?? [] };
+      const hello: AppEventsHello = {
+        pendingApprovals: container.events?.pendingApprovals() ?? [],
+        runningTurns: container.events?.runningTurns() ?? [],
+      };
       sink.send('hello', hello);
       const keepalive = setInterval(() => sink.comment('keepalive'), EVENTS_KEEPALIVE_MS);
       return () => {

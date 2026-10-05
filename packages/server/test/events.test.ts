@@ -93,6 +93,13 @@ describe('AppEventBus', () => {
     errors.mockRestore();
   });
 
+  it('tracks replies from turn-started until turn-finished, for the hello', () => {
+    const bus = new AppEventBus();
+    bus.emit({ type: 'turn-started', chatId: 'c', messageIds: ['m1', 'm2'] });
+    bus.emit({ type: 'turn-finished', chatId: 'c', messageId: 'm1', status: 'complete' });
+    expect(bus.runningTurns()).toEqual([{ chatId: 'c', messageId: 'm2' }]);
+  });
+
   it('tracks pending approvals: added on request, removed on resolve or when their turn ends', () => {
     const bus = new AppEventBus();
     bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
@@ -159,6 +166,8 @@ describe('app-wide events', () => {
     const first = new TextDecoder().decode((await reader.read()).value);
     expect(first).toContain('event: hello');
     expect(first).toContain(`"requestId":"${requestId}"`);
+    // The reply waiting on that approval is still running.
+    expect(first).toContain(`"runningTurns":[{"chatId":"chat-1","messageId":"${messageId}"}]`);
 
     await post(`/api/approvals/${requestId}/resolve`, { choice: 'deny' });
     await running;

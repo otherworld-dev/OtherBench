@@ -520,6 +520,18 @@ describe('ChatList chat menu', () => {
     expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull();
   });
 
+  it('Move to project… > New project… makes a project named after the chat and moves the chat into it (#824)', async () => {
+    mockedProjectCreate.mockResolvedValue(makeProject({ id: 'p-new', name: 'First' }));
+    const user = setup();
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Move to project…' }));
+    await user.click(screen.getByRole('menuitem', { name: 'New project…' }));
+
+    expect(mockedProjectCreate).toHaveBeenCalledWith({ name: 'First' });
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('c1', expect.objectContaining({ projectId: 'p-new' })));
+    await waitFor(() => expect(rowIds('group-p-new')).toEqual(['c1']));
+  });
+
   it('a chat whose project no longer exists shows under No project; its menu marks No project, and choosing it cleans up (review focus 5)', async () => {
     useGruntStore.setState({ projects: [], chats: [makeChat({ id: 'c9', title: 'Orphan', projectId: 'gone' })] });
     render(<ChatList />);

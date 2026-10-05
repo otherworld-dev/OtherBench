@@ -254,6 +254,20 @@ export function ChatList(): JSX.Element {
     if (section && target) await placeChat(chat.id, section, target.beforeId);
   }
 
+  /** A new project named after the chat, with the chat moved into it, so its conversations can open as tabs (#824). */
+  async function moveToNewProject(chat: Chat): Promise<void> {
+    setError(null);
+    try {
+      const name = chat.title.trim().slice(0, PROJECT_NAME_MAX) || 'New project';
+      const project = await api.projects.create({ name });
+      upsertProject(project);
+      await moveChat(chat.id, project.id);
+    } catch (err) {
+      console.error('[grunt-web] failed to create a project for the chat:', err);
+      setError(errorText(err, "Couldn't create the project"));
+    }
+  }
+
   async function createProject(name: string): Promise<void> {
     setError(null);
     try {
@@ -628,6 +642,7 @@ export function ChatList(): JSX.Element {
               setPinned: (pinned) => void setPinned(menuChat, pinned),
               reorder: (dir) => void reorderChat(menuChat, dir),
               moveTo: (projectId) => void moveChat(menuChat.id, projectId),
+              moveToNewProject: () => void moveToNewProject(menuChat),
               exportAs: (format) => void exportChat(menuChat, format),
               setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
               archive: () => void archiveChat(menuChat),

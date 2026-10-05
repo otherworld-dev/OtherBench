@@ -9,6 +9,8 @@ export interface ChatMenuHandlers {
   /** One place up (-1) or down (+1) within its sidebar section (#823). */
   reorder(dir: -1 | 1): void;
   moveTo(projectId: string | null): void;
+  /** Makes a new project named after the chat and moves the chat into it. */
+  moveToNewProject(): void;
   /** Downloads the chat (#820). */
   exportAs(format: 'markdown' | 'json'): void;
   /** Sets "Don't add to project memory" to the given state (the opposite of the chat's state when the menu was built). */
@@ -59,6 +61,7 @@ export function chatMenuItems(
       submenu: [
         ...orderedProjects.map((p) => ({ id: p.id, label: p.name, checked: chat.projectId === p.id, onSelect: () => h.moveTo(p.id) })),
         { id: NO_PROJECT_KEY, label: 'No project', checked: !inListedProject, onSelect: () => h.moveTo(null) },
+        { id: 'new-project', label: 'New project…', onSelect: h.moveToNewProject },
       ],
     },
     ...memory,

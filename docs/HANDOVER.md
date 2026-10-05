@@ -45,6 +45,16 @@ of work landed after that plan closed out:
   Deleting a project moves its chats to No project. Archive is reversible:
   archived chats sit in a "Show archived (N)" section at the bottom of the
   sidebar, where their menu offers Unarchive. See "Projects" below.
+- **Project tabs** (#824). A chat in a project shows a tab strip above the
+  conversation (`panes/ProjectTabs.tsx`): the project's chats open on this
+  device (`state/projectTabs.ts`, localStorage), in sidebar order. Opening a
+  chat opens its tab; ✕ only closes the tab; + starts a chat in the project.
+  A dot marks a tab whose chat is replying or waiting for an approval, from
+  the app-wide stream, whose `hello` now also lists running replies.
+  Arrow keys, Home/End and Delete work in the strip. Tabs are deliberately
+  chats, not a second conversation inside one chat: each keeps its own
+  profile, Auto, cost and Claude Code session. Move to project… > New
+  project… turns a lone chat into a project to tab from.
 - **Export** (#820). A chat's menu has Export… > Markdown (the conversation
   as shown: the head's branch, kept compare replies only) or JSON (every
   message on every branch, usage rows and attachment references, never
