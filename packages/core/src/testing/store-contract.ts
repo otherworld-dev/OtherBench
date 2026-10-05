@@ -78,7 +78,7 @@ function makeChatInput(over: { id: string; profileId: string } & Partial<Chat>) 
   return {
     title: 'Test Chat',
     headMessageId: null,
-    workspaceRoot: null,
+    workspace: null,
     pinned: false,
     archivedAt: null,
     ...over,
@@ -306,11 +306,14 @@ export function runStoreContract(
 
     describe('projects', () => {
       function makeProjectInput(over: { id: string } & Partial<Project>) {
-        return { name: 'Test Project', workspaceRoot: null, defaultProfileId: null, ...over };
+        return { name: 'Test Project', workspace: null, defaultProfileId: null, ...over };
       }
 
       it('create/get round-trip, defaulting sortOrder to 0 and the timestamps to now', () => {
-        const created = store.projects.create(makeProjectInput({ id: 'proj-a', name: 'Alpha', workspaceRoot: '/ws/alpha' }));
+        const workspace = { kind: 'location' as const, locationId: 'loc-a', subpath: 'alpha' };
+        store.locations.create({ id: 'loc-a', name: 'Work' });
+        const created = store.projects.create(makeProjectInput({ id: 'proj-a', name: 'Alpha', workspace }));
+        expect(created.workspace).toEqual(workspace);
         expect(created.sortOrder).toBe(0);
         expectRecentTimestamp(created.createdAt);
         expectRecentTimestamp(created.updatedAt);
@@ -331,10 +334,13 @@ export function runStoreContract(
       it('update persists a patch, update of an unknown id throws, and delete is idempotent', () => {
         store.projects.create(makeProjectInput({ id: 'proj-a' }));
 
+        // A bare workspaceRoot (the shape before locations) is kept as a folder on this machine.
         const updated = store.projects.update('proj-a', { name: 'Renamed', workspaceRoot: '/ws', sortOrder: 3 });
 
-        expect(updated).toMatchObject({ name: 'Renamed', workspaceRoot: '/ws', sortOrder: 3 });
-        expect(store.projects.get('proj-a')).toMatchObject({ name: 'Renamed', workspaceRoot: '/ws', sortOrder: 3 });
+        const workspace = { kind: 'machine', nodeId: store.nodes.self().id, root: '/ws' };
+        expect(updated).toMatchObject({ name: 'Renamed', workspace, sortOrder: 3 });
+        expect(updated).not.toHaveProperty('workspaceRoot');
+        expect(store.projects.get('proj-a')).toMatchObject({ name: 'Renamed', workspace, sortOrder: 3 });
         expect(() => store.projects.update('does-not-exist', { name: 'x' })).toThrow(Error);
         store.projects.delete('proj-a');
         expect(store.projects.get('proj-a')).toBeNull();
@@ -360,12 +366,12 @@ export function runStoreContract(
         const { profileId } = seedProfile(store, 'profile-a');
         store.projects.create(makeProjectInput({ id: 'proj-a' }));
         store.projects.create(makeProjectInput({ id: 'proj-b' }));
-        store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a', workspaceRoot: '/ws' }));
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a', workspace: { kind: 'machine', nodeId: 'pc', root: '/ws' } }));
         store.chats.create(makeChatInput({ id: 'chat-b', profileId, projectId: 'proj-b' }));
 
         store.projects.delete('proj-a');
 
-        expect(store.chats.get('chat-a')).toMatchObject({ projectId: null, workspaceRoot: '/ws' });
+        expect(store.chats.get('chat-a')).toMatchObject({ projectId: null, workspace: { kind: 'machine', root: '/ws' } });
         expect(store.chats.get('chat-b')!.projectId).toBe('proj-b');
       });
 
@@ -379,6 +385,104 @@ export function runStoreContract(
 
         expect(store.projects.get('proj-a')!.defaultProfileId).toBeNull();
         expect(store.projects.get('proj-b')!.defaultProfileId).toBe(otherId);
+      });
+    });
+
+    describe('nodes and locations', () => {
+      it('this machine has one stable id, and a rename persists', () => {
+        const self = store.nodes.self();
+        expect(self.id).toEqual(expect.any(String));
+        expect(self.id.length).toBeGreaterThan(0);
+        expect(store.nodes.rename('Laptop')).toEqual({ id: self.id, name: 'Laptop' });
+        expect(store.nodes.self()).toEqual({ id: self.id, name: 'Laptop' });
+      });
+
+      it('location CRUD, listed by name', () => {
+        store.locations.create({ id: 'loc-b', name: 'Nextcloud' });
+        store.locations.create({ id: 'loc-a', name: 'Git' });
+        expect(store.locations.list().map((l) => l.id)).toEqual(['loc-a', 'loc-b']);
+        expect(store.locations.get('loc-a')).toEqual({ id: 'loc-a', name: 'Git' });
+        expect(store.locations.get('nope')).toBeNull();
+        expect(store.locations.update('loc-a', { name: 'Code' })).toEqual({ id: 'loc-a', name: 'Code' });
+        expect(() => store.locations.update('nope', { name: 'x' })).toThrow(Error);
+        store.locations.delete('loc-a');
+        expect(store.locations.get('loc-a')).toBeNull();
+        expect(() => store.locations.delete('loc-a')).not.toThrow();
+      });
+
+      it('one path per location per machine: setPath replaces it, and the path queries filter by location and machine', () => {
+        store.locations.create({ id: 'nc', name: 'Nextcloud' });
+        store.locations.create({ id: 'git', name: 'Git' });
+        store.locations.setPath({ locationId: 'nc', nodeId: 'pc', path: 'E:\\Nextcloud' });
+        store.locations.setPath({ locationId: 'nc', nodeId: 'laptop', path: 'C:\\Users\\Adam\\Nextcloud' });
+        store.locations.setPath({ locationId: 'git', nodeId: 'pc', path: 'E:\\Git' });
+        expect(store.locations.setPath({ locationId: 'nc', nodeId: 'pc', path: 'D:\\Nextcloud' })).toEqual({ locationId: 'nc', nodeId: 'pc', path: 'D:\\Nextcloud' });
+
+        const sorted = (rows: { locationId: string; nodeId: string }[]) => rows.map((r) => `${r.locationId}@${r.nodeId}`).sort();
+        expect(sorted(store.locations.allPaths())).toEqual(['git@pc', 'nc@laptop', 'nc@pc']);
+        expect(store.locations.paths('nc').find((p) => p.nodeId === 'pc')!.path).toBe('D:\\Nextcloud');
+        expect(sorted(store.locations.paths('nc'))).toEqual(['nc@laptop', 'nc@pc']);
+        expect(sorted(store.locations.pathsForNode('pc'))).toEqual(['git@pc', 'nc@pc']);
+
+        store.locations.deletePath('nc', 'pc');
+        expect(sorted(store.locations.allPaths())).toEqual(['git@pc', 'nc@laptop']);
+        expect(() => store.locations.deletePath('nc', 'pc')).not.toThrow();
+        expect(() => store.locations.setPath({ locationId: 'nope', nodeId: 'pc', path: '/x' })).toThrow();
+      });
+
+      it("a chat's folder and machine round-trip; runsOn defaults to this machine; a bare workspaceRoot becomes a folder on it", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        const self = store.nodes.self().id;
+        store.locations.create({ id: 'nc', name: 'Nextcloud' });
+
+        const loc = { kind: 'location' as const, locationId: 'nc', subpath: 'phd/notes' };
+        const a = store.chats.create(makeChatInput({ id: 'chat-a', profileId, workspace: loc }));
+        expect(a).toMatchObject({ workspace: loc, runsOn: self });
+        expect(store.chats.get('chat-a')).toMatchObject({ workspace: loc, runsOn: self });
+
+        const machine = { kind: 'machine' as const, nodeId: 'other-node', root: 'E:\\Git' };
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, workspace: machine, runsOn: 'other-node' }));
+        expect(store.chats.get('chat-b')).toMatchObject({ workspace: machine, runsOn: 'other-node' });
+
+        const { workspace: _w, ...legacy } = makeChatInput({ id: 'chat-c', profileId });
+        store.chats.create({ ...legacy, workspaceRoot: '/ws' });
+        const c = store.chats.get('chat-c')!;
+        expect(c.workspace).toEqual({ kind: 'machine', nodeId: self, root: '/ws' });
+        expect(c).not.toHaveProperty('workspaceRoot');
+        expect(c).not.toHaveProperty('workspaceStatus');
+
+        store.chats.update('chat-c', { workspaceRoot: null });
+        expect(store.chats.get('chat-c')!.workspace).toBeNull();
+        store.chats.update('chat-a', { workspace: machine, runsOn: 'other-node' });
+        expect(store.chats.get('chat-a')).toMatchObject({ workspace: machine, runsOn: 'other-node' });
+        store.chats.update('chat-a', { workspace: null });
+        expect(store.chats.list().find((x) => x.id === 'chat-a')!.workspace).toBeNull();
+      });
+
+      it("deleting a location removes its paths and clears the folder of its chats and projects, keeping them", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.locations.create({ id: 'nc', name: 'Nextcloud' });
+        store.locations.setPath({ locationId: 'nc', nodeId: 'pc', path: '/nc' });
+        const loc = { kind: 'location' as const, locationId: 'nc', subpath: 'a' };
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId, workspace: loc }));
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, workspaceRoot: '/elsewhere', workspace: undefined }));
+        store.projects.create({ id: 'proj-a', name: 'P', workspace: loc, defaultProfileId: null });
+
+        store.locations.delete('nc');
+
+        expect(store.locations.allPaths()).toEqual([]);
+        expect(store.chats.get('chat-a')!.workspace).toBeNull();
+        expect(store.chats.get('chat-b')!.workspace).toMatchObject({ kind: 'machine', root: '/elsewhere' });
+        expect(store.projects.get('proj-a')!.workspace).toBeNull();
+      });
+
+      it('a message records the machine that wrote it, defaulting to this one', () => {
+        const chatId = seedChat(store, 'chat-a').chat.id;
+        const self = store.nodes.self().id;
+        expect(store.messages.create(makeMessageInput({ id: 'm1', chatId })).originNode).toBe(self);
+        store.messages.create(makeMessageInput({ id: 'm2', chatId, parentId: 'm1', originNode: 'laptop' }));
+        expect(store.messages.get('m1')!.originNode).toBe(self);
+        expect(store.messages.pathToRoot('m2').map((m) => m.originNode)).toEqual([self, 'laptop']);
       });
     });
 

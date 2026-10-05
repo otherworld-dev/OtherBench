@@ -46,7 +46,11 @@ import type {
   ProjectMemoryRepo,
   ProjectMemoryVersion,
   SettingsRepo,
+  NodeRepo,
+  LocationRepo,
 } from '../ports/store.js';
+import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
+import { toStoredWorkspace } from '../domain/workspace.js';
 import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
@@ -443,12 +447,76 @@ class InMemoryProfileRepo implements ProfileRepo {
   }
 }
 
+class InMemoryNodeRepo implements NodeRepo {
+  private node: NodeInfo;
+  constructor(id: string) {
+    this.node = { id, name: 'This machine' };
+  }
+  self(): NodeInfo {
+    return { ...this.node };
+  }
+  rename(name: string): NodeInfo {
+    this.node = { ...this.node, name };
+    return { ...this.node };
+  }
+}
+
+class InMemoryLocationRepo implements LocationRepo {
+  private readonly repo = new InMemoryCrudRepo<Location>();
+  private pathRows: LocationPath[] = [];
+  constructor(private readonly onDelete: (locationId: string) => void) {}
+  list(): Location[] {
+    return this.repo.list().sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1));
+  }
+  get(id: string): Location | null {
+    return this.repo.get(id);
+  }
+  create(l: Location): Location {
+    return this.repo.create(l);
+  }
+  update(id: string, patch: Partial<Omit<Location, 'id'>>): Location {
+    return this.repo.update(id, patch);
+  }
+  delete(id: string): void {
+    this.repo.delete(id);
+    this.pathRows = this.pathRows.filter((p) => p.locationId !== id);
+    this.onDelete(id);
+  }
+  allPaths(): LocationPath[] {
+    return this.pathRows.map((p) => ({ ...p }));
+  }
+  paths(locationId: string): LocationPath[] {
+    return this.pathRows.filter((p) => p.locationId === locationId).map((p) => ({ ...p }));
+  }
+  pathsForNode(nodeId: string): LocationPath[] {
+    return this.pathRows.filter((p) => p.nodeId === nodeId).map((p) => ({ ...p }));
+  }
+  setPath(p: LocationPath): LocationPath {
+    if (!this.repo.get(p.locationId)) throw new Error(`location: not found: ${p.locationId}`);
+    this.pathRows = [...this.pathRows.filter((r) => !(r.locationId === p.locationId && r.nodeId === p.nodeId)), { ...p }];
+    return { ...p };
+  }
+  deletePath(locationId: string, nodeId: string): void {
+    this.pathRows = this.pathRows.filter((r) => !(r.locationId === locationId && r.nodeId === nodeId));
+  }
+}
+
 class InMemoryChatRepo implements ChatRepo {
   private readonly repo = new InMemoryCrudRepo<Chat>();
+  constructor(private readonly selfNodeId: string) {}
+  /** A deleted location takes its chats' folders with it (the SQL schema's ON DELETE SET NULL). */
+  clearLocation(locationId: string): void {
+    for (const chat of this.repo.list()) {
+      if (chat.workspace?.kind === 'location' && chat.workspace.locationId === locationId) this.repo.update(chat.id, { workspace: null });
+    }
+  }
   create(c: NewChat): Chat {
     const now = Date.now();
+    const fields = toStoredWorkspace(c, this.selfNodeId);
     const full: Chat = {
-      ...c,
+      ...fields,
+      workspace: fields.workspace ?? null,
+      runsOn: c.runsOn ?? this.selfNodeId,
       autoMode: c.autoMode ?? false,
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
@@ -468,8 +536,9 @@ class InMemoryChatRepo implements ChatRepo {
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat {
     // A chat that changes project starts over in the new project's memory (ChatRepo.update's doc).
     const current = this.repo.get(id);
-    const moved = current !== null && patch.projectId !== undefined && patch.projectId !== current.projectId;
-    return this.repo.update(id, moved ? { ...patch, memoryCursor: null } : patch);
+    const stored = toStoredWorkspace(patch, this.selfNodeId) as Partial<Omit<Chat, 'id'>>;
+    const moved = current !== null && stored.projectId !== undefined && stored.projectId !== current.projectId;
+    return this.repo.update(id, moved ? { ...stored, memoryCursor: null } : stored);
   }
   delete(id: string): void {
     this.repo.delete(id);
@@ -480,11 +549,19 @@ class InMemoryProjectRepo implements ProjectRepo {
   private readonly repo = new InMemoryCrudRepo<Project>();
   constructor(
     private readonly chats: ChatRepo,
-    private readonly onDelete: (projectId: string) => void
+    private readonly onDelete: (projectId: string) => void,
+    private readonly selfNodeId: string
   ) {}
   create(p: NewProject): Project {
     const now = Date.now();
-    return this.repo.create({ ...p, sortOrder: p.sortOrder ?? 0, createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now });
+    const fields = toStoredWorkspace(p, this.selfNodeId);
+    return this.repo.create({ ...fields, workspace: fields.workspace ?? null, sortOrder: p.sortOrder ?? 0, createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now });
+  }
+  /** A deleted location takes its projects' folders with it, as for chats. */
+  clearLocation(locationId: string): void {
+    for (const p of this.repo.list()) {
+      if (p.workspace?.kind === 'location' && p.workspace.locationId === locationId) this.repo.update(p.id, { workspace: null });
+    }
   }
   get(id: string): Project | null {
     return this.repo.get(id);
@@ -493,7 +570,7 @@ class InMemoryProjectRepo implements ProjectRepo {
     return this.repo.list().sort(compareProjects);
   }
   update(id: string, patch: Partial<Omit<Project, 'id'>>): Project {
-    return this.repo.update(id, patch);
+    return this.repo.update(id, toStoredWorkspace(patch, this.selfNodeId));
   }
   delete(id: string): void {
     // Mirrors chat.project_id's ON DELETE SET NULL (migration 007); the chat
@@ -690,6 +767,7 @@ const MAX_PATH_DEPTH = 10_000;
 
 class InMemoryMessageRepo implements MessageRepo {
   private readonly byId = new Map<string, CanonMessage>();
+  constructor(private readonly selfNodeId: string) {}
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
     if (this.byId.has(m.id)) {
@@ -698,7 +776,7 @@ class InMemoryMessageRepo implements MessageRepo {
     if (m.parentId === m.id) {
       throw new Error(`message: parentId cannot equal id (self-referencing message): ${m.id}`);
     }
-    const full: CanonMessage = { ...m, createdAt: m.createdAt ?? Date.now() };
+    const full: CanonMessage = { ...m, originNode: m.originNode ?? this.selfNodeId, createdAt: m.createdAt ?? Date.now() };
     this.byId.set(full.id, structuredClone(full));
     return structuredClone(full);
   }
@@ -807,21 +885,39 @@ class InMemoryMessageRepo implements MessageRepo {
 
 /** A `Store` test double backed entirely by in-memory `Map`s. No SQL, no I/O. */
 export class InMemoryStore implements Store {
+  readonly nodes: NodeRepo;
+  readonly locations: LocationRepo;
   readonly connections: ConnectionRepo = new InMemoryConnectionRepo();
   readonly models: ModelRepo = new InMemoryModelRepo();
-  readonly chats: ChatRepo = new InMemoryChatRepo();
-  // The project and memory repos refer to each other lazily (existence check, cascade on delete).
-  private readonly memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
-  readonly projectMemory: ProjectMemoryRepo = this.memoryRepo;
-  readonly projects: ProjectRepo = new InMemoryProjectRepo(this.chats, (id) => this.memoryRepo.removeProject(id));
-  readonly profiles: ProfileRepo = new InMemoryProfileRepo(this.projects);
+  readonly chats: ChatRepo;
+  readonly projectMemory: ProjectMemoryRepo;
+  readonly projects: ProjectRepo;
+  readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();
-  readonly messages: MessageRepo = new InMemoryMessageRepo();
+  readonly messages: MessageRepo;
   readonly attachments: AttachmentRepo = new InMemoryAttachmentRepo();
   readonly usage: UsageRepo = new InMemoryUsageRepo();
   readonly mcpServers: McpServerRepo = new InMemoryMcpServerRepo();
   readonly grants: GrantRepo = new InMemoryGrantRepo();
   readonly audit: AuditRepo = new InMemoryAuditRepo();
+
+  /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
+  constructor(selfNodeId = 'node-self') {
+    this.nodes = new InMemoryNodeRepo(selfNodeId);
+    const chats = new InMemoryChatRepo(selfNodeId);
+    this.chats = chats;
+    this.messages = new InMemoryMessageRepo(selfNodeId);
+    // The project and memory repos refer to each other lazily (existence check, cascade on delete).
+    const memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
+    this.projectMemory = memoryRepo;
+    const projects = new InMemoryProjectRepo(this.chats, (id) => memoryRepo.removeProject(id), selfNodeId);
+    this.projects = projects;
+    this.locations = new InMemoryLocationRepo((id) => {
+      chats.clearLocation(id);
+      projects.clearLocation(id);
+    });
+    this.profiles = new InMemoryProfileRepo(this.projects);
+  }
 
   close(): void {
     // Nothing to release -- no file handle, no connection pool.

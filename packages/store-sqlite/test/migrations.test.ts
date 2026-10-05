@@ -225,6 +225,51 @@ describe('runMigrations', () => {
     }
   });
 
+  it('nodes-and-locations creates this machine once and binds every existing folder, chat and message to it', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-nodes-and-locations'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO project (id, name, workspace_root, created_at, updated_at) VALUES ('proj-ws', 'A', '/git', 1, 1), ('proj-none', 'B', NULL, 1, 1)`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, workspace_root, created_at, updated_at) VALUES ('ws', 'A', 'p1', '/git/grunt', 1, 1), ('none', 'B', 'p1', NULL, 1, 1)`);
+      db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('m1', 'ws', NULL, 'user', '[]', 'complete', 1)`);
+
+      runMigrations(db);
+
+      const nodes = db.prepare(`SELECT id, name FROM node_self`).all() as { id: string; name: string }[];
+      expect(nodes).toHaveLength(1);
+      const self = nodes[0]!.id;
+      expect(nodes[0]!.name.length).toBeGreaterThan(0);
+      const chats = db.prepare(`SELECT id, workspace_root, workspace_node, workspace_location_id, runs_on FROM chat ORDER BY id`).all();
+      expect(chats).toEqual([
+        { id: 'none', workspace_root: null, workspace_node: null, workspace_location_id: null, runs_on: self },
+        { id: 'ws', workspace_root: '/git/grunt', workspace_node: self, workspace_location_id: null, runs_on: self },
+      ]);
+      expect(db.prepare(`SELECT id, workspace_node FROM project ORDER BY id`).all()).toEqual([
+        { id: 'proj-none', workspace_node: null },
+        { id: 'proj-ws', workspace_node: self },
+      ]);
+      expect(db.prepare(`SELECT origin_node FROM message`).all()).toEqual([{ origin_node: self }]);
+
+      runMigrations(db);
+      expect(db.prepare(`SELECT id FROM node_self`).all()).toEqual([{ id: self }]);
+
+      // A location's paths go with it; a chat using it keeps existing, without a folder.
+      db.exec(`INSERT INTO location (id, name) VALUES ('nc', 'Nextcloud')`);
+      db.exec(`INSERT INTO location_path (location_id, node_id, path) VALUES ('nc', '${self}', '/nextcloud')`);
+      expect(() => db.exec(`INSERT INTO location_path (location_id, node_id, path) VALUES ('nc', '${self}', '/x')`)).toThrow();
+      db.exec(`UPDATE chat SET workspace_location_id = 'nc', workspace_subpath = 'phd' WHERE id = 'none'`);
+      db.exec(`DELETE FROM location WHERE id = 'nc'`);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM location_path`).get()).toEqual({ n: 0 });
+      expect(db.prepare(`SELECT workspace_location_id FROM chat WHERE id = 'none'`).get()).toEqual({ workspace_location_id: null });
+    } finally {
+      db.close();
+    }
+  });
+
   describe('003 plaintext residue', () => {
     let dir: string;
     afterEach(() => {
@@ -294,6 +339,9 @@ describe('runMigrations', () => {
         'project_memory_version',
         'app_setting',
         'message_fts',
+        'node_self',
+        'location',
+        'location_path',
       ]) {
         expect(names).toContain(expected);
       }

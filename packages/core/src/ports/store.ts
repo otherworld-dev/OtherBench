@@ -1,6 +1,7 @@
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
+import type { Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
 
 // --- connections ---------------------------------------------------------
 
@@ -39,7 +40,19 @@ export interface Chat {
   title: string;
   profileId: string;
   headMessageId: string | null;
-  workspaceRoot: string | null;
+  /** The chat's folder, portable across machines (v2 spec §6); null for none. */
+  workspace: Workspace | null;
+  /** The machine (node id) this chat's turns run on: its folder, tools and node-bound models. */
+  runsOn: string;
+  /**
+   * API only: the folder on THIS machine, resolved from `workspace` (null when
+   * there is none or it doesn't resolve here), and why it did or didn't
+   * resolve. The server fills both on every chat it returns
+   * (server/src/workspace-view.ts); the store never does, so server code
+   * must resolve `workspace` itself.
+   */
+  workspaceRoot?: string | null;
+  workspaceStatus?: WorkspaceStatus;
   pinned: boolean;
   archivedAt: number | null;
   /**
@@ -73,8 +86,20 @@ export interface Chat {
   updatedAt: number;
 }
 
-/** What `ChatRepo.create` takes: timestamps default to now, `sortOrder` to `createdAt`, `autoMode` and `memoryExcluded` to false, `projectId` and `memoryCursor` to null. */
-export type NewChat = Omit<Chat, 'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder'> & {
+/**
+ * What `ChatRepo.create` takes: timestamps default to now, `sortOrder` to
+ * `createdAt`, `autoMode` and `memoryExcluded` to false, `projectId` and
+ * `memoryCursor` to null, `runsOn` to this machine. `workspace` defaults to
+ * null; a bare `workspaceRoot` is still accepted and stored as a folder
+ * bound to this machine (callers that know about locations classify first).
+ */
+export type NewChat = Omit<
+  Chat,
+  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
+> & {
+  workspace?: Workspace | null;
+  workspaceRoot?: string | null;
+  runsOn?: string;
   sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -88,7 +113,11 @@ export interface ChatRepo {
   create(c: NewChat): Chat;
   get(id: string): Chat | null;
   list(): Chat[];
-  /** A patch that changes `projectId` also sets `memoryCursor: null`: the chat starts over in its new project's memory. */
+  /**
+   * A patch that changes `projectId` also sets `memoryCursor: null`: the chat
+   * starts over in its new project's memory. A `workspaceRoot` in the patch
+   * (and no `workspace`) is stored as a folder bound to this machine.
+   */
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat;
   delete(id: string): void;
 }
@@ -104,7 +133,11 @@ export interface ChatRepo {
 export interface Project {
   id: string;
   name: string;
-  workspaceRoot: string | null;
+  /** The default folder for new chats, portable across machines like `Chat.workspace`. */
+  workspace: Workspace | null;
+  /** API only, as on `Chat`: `workspace` resolved on this machine, filled by the server. */
+  workspaceRoot?: string | null;
+  workspaceStatus?: WorkspaceStatus;
   /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
   defaultProfileId: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareProjects`. */
@@ -113,8 +146,10 @@ export interface Project {
   updatedAt: number;
 }
 
-/** What `ProjectRepo.create` takes: timestamps default to now, `sortOrder` to 0. */
-export type NewProject = Omit<Project, 'createdAt' | 'updatedAt' | 'sortOrder'> & {
+/** What `ProjectRepo.create` takes: timestamps default to now, `sortOrder` to 0; `workspace` and a bare `workspaceRoot` as on `NewChat`. */
+export type NewProject = Omit<Project, 'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus'> & {
+  workspace?: Workspace | null;
+  workspaceRoot?: string | null;
   sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;
@@ -125,6 +160,7 @@ export interface ProjectRepo {
   get(id: string): Project | null;
   /** Every project, in sidebar order (`compareProjects`). */
   list(): Project[];
+  /** A `workspaceRoot` in the patch (and no `workspace`) is stored as a folder bound to this machine. */
   update(id: string, patch: Partial<Omit<Project, 'id'>>): Project;
   /**
    * Deletes the project and its memory note and versions. Its chats move to
@@ -405,7 +441,33 @@ export interface AuditRepo {
 
 // --- store ----------------------------------------------------------------
 
+// --- machines and locations (v2 spec §6) ------------------------------------
+
+export interface NodeRepo {
+  /** This machine: created once, with a random id, when the database is first opened. */
+  self(): NodeInfo;
+  rename(name: string): NodeInfo;
+}
+
+export interface LocationRepo {
+  list(): Location[];
+  get(id: string): Location | null;
+  create(l: Location): Location;
+  update(id: string, patch: Partial<Omit<Location, 'id'>>): Location;
+  /** Also removes its paths; chats using it lose their folder (ON DELETE SET NULL). */
+  delete(id: string): void;
+  /** Every machine's path for every location. */
+  allPaths(): LocationPath[];
+  paths(locationId: string): LocationPath[];
+  pathsForNode(nodeId: string): LocationPath[];
+  /** Creates or replaces `nodeId`'s path for the location. */
+  setPath(p: LocationPath): LocationPath;
+  deletePath(locationId: string, nodeId: string): void;
+}
+
 export interface Store {
+  nodes: NodeRepo;
+  locations: LocationRepo;
   connections: ConnectionRepo;
   models: ModelRepo;
   profiles: ProfileRepo;

@@ -10,6 +10,7 @@ import type {
   SerializedError,
 } from '@grunt/core/types/messages.js';
 import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
+import { selfIdOf } from './nodes.js';
 
 // `message` is the one tree-shaped table, so it does not use SqliteCrudRepo
 // (see the comment there): `children`/`roots`/`pathToRoot` are graph queries,
@@ -24,7 +25,7 @@ import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 //   - pathToRoot(): returns [] for an unknown id, it does NOT throw
 
 /** The columns of `message` that map onto CanonMessage, in a fixed order. */
-const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at';
+const COLUMNS = 'id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, origin_node';
 
 /**
  * Hard cap on how many ancestor hops `pathToRoot`'s recursive CTE will
@@ -119,11 +120,17 @@ function fromRow(row: Record<string, unknown>): CanonMessage {
   if (engineMeta) message.engineMeta = engineMeta;
   const keptAt = (row.kept_at as number | null | undefined) ?? null;
   if (keptAt !== null) message.keptAt = keptAt;
+  const originNode = (row.origin_node as string | null | undefined) ?? null;
+  if (originNode !== null) message.originNode = originNode;
   return message;
 }
 
 export class SqliteMessageRepo implements MessageRepo {
-  constructor(private readonly db: DatabaseSync) {}
+  /** `selfId` is this machine's node id, the default `originNode`. */
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly selfId: () => string = selfIdOf(db)
+  ) {}
 
   create(m: Omit<CanonMessage, 'createdAt'> & { createdAt?: number }): CanonMessage {
     if (m.parentId === m.id) {
@@ -135,11 +142,11 @@ export class SqliteMessageRepo implements MessageRepo {
       // (see MAX_PATH_DEPTH above).
       throw new Error(`message: parentId cannot equal id (self-referencing message): ${m.id}`);
     }
-    const full: CanonMessage = { ...m, createdAt: m.createdAt ?? Date.now() };
+    const full: CanonMessage = { ...m, originNode: m.originNode ?? this.selfId(), createdAt: m.createdAt ?? Date.now() };
     this.db
       .prepare(
         `INSERT INTO message (${COLUMNS}, search_text)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         full.id,
@@ -153,6 +160,7 @@ export class SqliteMessageRepo implements MessageRepo {
         full.createdAt,
         toJsonNullable(full.engineMeta ?? null),
         full.keptAt ?? null,
+        full.originNode ?? null,
         deriveSearchText(full.parts)
       );
     return full;
@@ -190,11 +198,11 @@ export class SqliteMessageRepo implements MessageRepo {
   pathToRoot(messageId: string): CanonMessage[] {
     const rows = this.db
       .prepare(
-        `WITH RECURSIVE ancestry(id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, depth) AS (
-           SELECT id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, 0
+        `WITH RECURSIVE ancestry(id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, origin_node, depth) AS (
+           SELECT id, chat_id, parent_id, role, parts, status, error, produced_by, created_at, engine_meta, kept_at, origin_node, 0
              FROM message WHERE id = ?
            UNION ALL
-           SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, m.engine_meta, m.kept_at, a.depth + 1
+           SELECT m.id, m.chat_id, m.parent_id, m.role, m.parts, m.status, m.error, m.produced_by, m.created_at, m.engine_meta, m.kept_at, m.origin_node, a.depth + 1
              FROM message m JOIN ancestry a ON m.id = a.parent_id
             WHERE a.depth < ${MAX_PATH_DEPTH}
          )
