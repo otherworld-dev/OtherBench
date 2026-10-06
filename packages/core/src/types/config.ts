@@ -52,6 +52,14 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  */
 export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent';
 
+/** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
+export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+
+export function isClaudeEffort(value: unknown): value is ClaudeEffort {
+  return typeof value === 'string' && (CLAUDE_EFFORTS as readonly string[]).includes(value);
+}
+
 export interface ToolPolicy {
   fs: FsMode;
   shell: boolean;

@@ -252,6 +252,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // offered MCP tools and no server starts. The gate still denies MCP calls.
       ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
       ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
+      // The chat's effort (chosen in the chat window) over the user's Claude Code settings; unset leaves those to decide.
+      ...(req.effort ? { effort: req.effort } : {}),
     };
   }
 

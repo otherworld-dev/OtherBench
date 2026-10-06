@@ -7,6 +7,7 @@ import { WORKSPACE_COLUMNS, workspaceFromRow, workspaceToRow } from './workspace
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';
 import { CHAT_FIELDS } from '@grunt/core/domain/sync.js';
+import { isClaudeEffort } from '@grunt/core/types/config.js';
 
 function chatMapping(selfId: () => string): CrudMapping<Chat> {
   return {
@@ -21,6 +22,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       'pinned',
       'archived_at',
       'auto_mode',
+      'effort',
       'project_id',
       'memory_cursor',
       'memory_excluded',
@@ -38,6 +40,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       toBool(c.pinned),
       c.archivedAt,
       toBool(c.autoMode),
+      c.effort ?? null,
       c.projectId,
       c.memoryCursor,
       toBool(c.memoryExcluded),
@@ -55,6 +58,8 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       pinned: fromBool(row.pinned as number),
       archivedAt: row.archived_at as number | null,
       autoMode: fromBool(row.auto_mode as number),
+      // Unset, or a level this version doesn't know, follows Claude Code's own settings.
+      ...(isClaudeEffort(row.effort) ? { effort: row.effort } : {}),
       projectId: row.project_id as string | null,
       memoryCursor: row.memory_cursor as string | null,
       memoryExcluded: fromBool(row.memory_excluded as number),

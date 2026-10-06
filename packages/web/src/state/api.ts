@@ -2,7 +2,7 @@ import type { AppSettings, AuditEntry, Chat, Grant, McpServer, Project, ProjectM
 import type { MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
-import type { Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import type { Location, LocationPath, NodeInfo } from '@grunt/core/types/workspace.js';
@@ -115,6 +115,8 @@ export type ChatPatchBody = Partial<{
   pinned: boolean;
   archivedAt: number | null;
   autoMode: boolean;
+  /** Claude Code's effort from the next message; null follows the user's Claude Code settings. */
+  effort: ClaudeEffort | null;
   /** Moves the chat between projects (null = No project); never changes its folder or profile. */
   projectId: string | null;
   /** "Don't add to project memory": the summariser skips this chat. Never changes its place in the list. */

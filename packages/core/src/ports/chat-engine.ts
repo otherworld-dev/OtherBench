@@ -1,5 +1,5 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
-import type { Connection, ResolvedProfile } from '../types/config.js';
+import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { Usage } from '../types/usage.js';
 import type { ToolSpec } from './tool-provider.js';
 
@@ -58,6 +58,8 @@ export interface EngineRequest {
    * engine ignores it.
    */
   autoMode?: boolean;
+  /** The chat's effort (`Chat.effort`), read fresh for every turn. Only the Claude Code engine reads it; unset follows the user's Claude Code settings. */
+  effort?: ClaudeEffort;
 }
 
 export type EngineEvent =
