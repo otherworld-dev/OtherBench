@@ -1,5 +1,5 @@
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
-import type { Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
+import type { ClaudeEffort, Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import type { Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
 import type { Peer } from '../types/peer.js';
@@ -64,6 +64,13 @@ export interface Chat {
    * TurnRunner on every turn. Other engines ignore it.
    */
   autoMode: boolean;
+  /**
+   * Claude Code's effort for this chat's turns, chosen in the chat window;
+   * absent or null follows the user's Claude Code settings. Read fresh by
+   * TurnRunner on every turn, so a change applies from the next message.
+   * Other engines ignore it.
+   */
+  effort?: ClaudeEffort | null;
   /**
    * The project this chat is filed under, or null for "No project" (spec
    * 2026-10-03-projects-design). Purely organisational: moving a chat never

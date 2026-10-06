@@ -522,6 +522,7 @@ export class TurnRunner {
       }
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
       const autoMode = chat?.autoMode ?? false;
+      const effort = chat?.effort ?? null;
       const requestProfile = this.withProjectMemory(profile, chat);
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
@@ -573,6 +574,7 @@ export class TurnRunner {
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
         autoMode,
+        ...(effort ? { effort } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 

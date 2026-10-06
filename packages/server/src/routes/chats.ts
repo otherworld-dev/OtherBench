@@ -5,6 +5,7 @@ import { chatToJson, chatToMarkdown, exportFilename } from '@grunt/core/domain/e
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Store } from '@grunt/core/ports/store.js';
+import { CLAUDE_EFFORTS, isClaudeEffort } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
@@ -23,6 +24,7 @@ interface ChatBody {
   pinned?: unknown;
   archivedAt?: unknown;
   autoMode?: unknown;
+  effort?: unknown;
   projectId?: unknown;
   memoryExcluded?: unknown;
   sortOrder?: unknown;
@@ -30,7 +32,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'projectId', 'memoryExcluded', 'sortOrder']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'projectId', 'memoryExcluded', 'sortOrder']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -166,6 +168,12 @@ export function chatsRoutes(container: Container): Hono {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
+    if (body.effort !== undefined) {
+      if (body.effort !== null && !isClaudeEffort(body.effort)) {
+        throw new HTTPException(400, { message: `"effort" must be null or one of ${CLAUDE_EFFORTS.join(', ')}.` });
+      }
+      patch.effort = body.effort;
+    }
     if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
     if (body.sortOrder !== undefined) {
       if (typeof body.sortOrder !== 'number' || !Number.isFinite(body.sortOrder)) {

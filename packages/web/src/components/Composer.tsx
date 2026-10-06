@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { Connection, Profile } from '@grunt/core/types/config.js';
+import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@grunt/core/types/config.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
@@ -30,6 +30,8 @@ function attachmentToPart(attachment: PublicAttachment): Part {
  */
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const UPLOAD_TOO_LARGE_MESSAGE = 'That upload is too large. Attachments are limited to 25MB per file.';
+
+const EFFORT_LABELS: Record<ClaudeEffort, string> = { low: 'low', medium: 'medium', high: 'high', xhigh: 'extra high', max: 'max' };
 
 /**
  * Reads dropped/pasted files off a `DataTransfer`. Prefers `.files` (what a
@@ -107,6 +109,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [autoError, setAutoError] = useState<string | null>(null);
+  const [effortSaving, setEffortSaving] = useState(false);
+  const [effortError, setEffortError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -149,6 +153,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const autoUnavailable = showAutoToggle && claudeCodeProfiles.every((p) => !!connections.find((c) => c.id === p.connectionId)?.baseUrl);
   const autoMode = (storedChat ?? chat).autoMode;
   const autoActive = autoMode && !autoUnavailable;
+  const effort = (storedChat ?? chat).effort ?? null;
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
 
@@ -183,6 +188,25 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       setAutoError(err instanceof ApiError ? err.message : "Couldn't change auto mode. Please try again.");
     } finally {
       setAutoSaving(false);
+    }
+  }
+
+  /** Sets the chat's Claude Code effort optimistically; a failed save reverts only `effort` and shows why. Applies from the next message. */
+  async function changeEffort(next: ClaudeEffort | null): Promise<void> {
+    if (effortSaving) return;
+    const previous = effort;
+    const latest = (): Chat => useGruntStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    setEffortError(null);
+    setEffortSaving(true);
+    upsertChat({ ...latest(), effort: next });
+    try {
+      upsertChat(await api.chats.patch(chat.id, { effort: next }));
+    } catch (err) {
+      const current = useGruntStore.getState().chats.find((c) => c.id === chat.id);
+      if (current) upsertChat({ ...current, effort: previous });
+      setEffortError(err instanceof ApiError ? err.message : "Couldn't change the effort. Please try again.");
+    } finally {
+      setEffortSaving(false);
     }
   }
 
@@ -385,6 +409,24 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           </button>
         )}
 
+        {showAutoToggle && (
+          <select
+            aria-label="Effort"
+            value={effort ?? ''}
+            disabled={effortSaving}
+            title="How much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
+            onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
+            className="rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+          >
+            <option value="">Effort: default</option>
+            {CLAUDE_EFFORTS.map((level) => (
+              <option key={level} value={level}>
+                Effort: {EFFORT_LABELS[level]}
+              </option>
+            ))}
+          </select>
+        )}
+
         {comparedProfiles.map((p) => (
           <span key={p.id} className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)]">
             + {p.name}
@@ -454,6 +496,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       {autoError && (
         <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
           {autoError}
+        </div>
+      )}
+
+      {effortError && (
+        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+          {effortError}
         </div>
       )}
 

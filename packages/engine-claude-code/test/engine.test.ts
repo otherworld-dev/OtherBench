@@ -489,6 +489,19 @@ describe('ClaudeCodeChatEngine live processes', () => {
     e.dispose();
   });
 
+  it("runs at the chat's effort, none set meaning Claude Code's own settings, and a change resumes the session in a new process", async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req()));
+    await collect(e.stream(followUp({ effort: 'high' })));
+
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.options.effort).toBeUndefined();
+    expect(starts[0]!.stopped()).toBe(true);
+    expect(starts[1]!.options).toMatchObject({ effort: 'high', resume: 'sess-1' });
+    e.dispose();
+  });
+
   it('stopping a reply stops its process, and the next message resumes the session in a new one', async () => {
     const { query, starts } = liveQuery(async function* ({ n, options }) {
       yield init('sess-1');

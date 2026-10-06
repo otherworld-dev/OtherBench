@@ -112,6 +112,22 @@ describe('runMigrations', () => {
     }
   });
 
+  it("chat-effort adds chat.effort, every existing chat following Claude Code's own settings", () => {
+    const effort = MIGRATIONS.find((m) => m.name.endsWith('chat-effort'));
+    expect(effort).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < effort!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'CC', 'claude_code')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Opus', 'c1', 'opus')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT effort FROM chat WHERE id = 'legacy'`).get()).toEqual({ effort: null });
+    } finally {
+      db.close();
+    }
+  });
+
   it('chat-sort-order gives every existing chat its last activity as its place, keeping the old activity order', () => {
     const sortOrder = MIGRATIONS.find((m) => m.name.endsWith('chat-sort-order'));
     expect(sortOrder).toBeDefined();

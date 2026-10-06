@@ -211,6 +211,24 @@ describe('sync (Task 50)', () => {
     for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ title: 'Renamed on A', pinned: true });
   });
 
+  it("a chat's effort is a field of its own: set on one machine while the other renames the chat, both stand", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+
+    a.store.chats.update('c', { effort: 'high' });
+    b.store.chats.update('c', { title: 'renamed' });
+    s.both();
+
+    for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ title: 'renamed', effort: 'high' });
+    a.store.chats.update('c', { effort: null });
+    s.both();
+    expect(b.store.chats.get('c')!.effort).toBeUndefined();
+  });
+
   it('the same field edited on both: the later change wins on both machines', () => {
     const a = node('a');
     const b = node('b');

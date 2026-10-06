@@ -1186,6 +1186,22 @@ describe('engine meta and notices', () => {
     expect(engine.requests[1]!.autoMode).toBe(true);
   });
 
+  it("passes the chat's effort, read fresh for every turn, and none while it follows Claude Code's settings", async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    const chat = newChat(store);
+    const first = await runner.run({ chatId: chat.id, parentId: null, userParts: [{ type: 'text', text: 'one' }], profiles: [makeResolvedProfile()] });
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+    expect(engine.requests[0]!.effort).toBeUndefined();
+
+    store.chats.update(chat.id, { effort: 'medium' });
+    await runner.run({ chatId: chat.id, parentId: firstId, userParts: [{ type: 'text', text: 'two' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+    expect(engine.requests[1]!.effort).toBe('medium');
+  });
+
   it('retries an errored turn with the chat\'s current autoMode, not the one it failed with', async () => {
     const store = new InMemoryStore();
     const engine = new FakeChatEngine((req) =>

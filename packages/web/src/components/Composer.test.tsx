@@ -743,4 +743,41 @@ describe('Composer auto mode toggle', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Gone.');
     expect(useGruntStore.getState().chats).toEqual([]);
   });
+
+  describe('effort', () => {
+    const effort = () => screen.getByRole('combobox', { name: 'Effort' });
+
+    it("shows beside Auto for a Claude Code profile, on Claude Code's own setting by default, and not otherwise", () => {
+      renderWith({ profileId: 'sonnet' });
+      expect(effort()).toHaveValue('');
+      expect(effort()).toHaveDisplayValue('Effort: default');
+      cleanup();
+      renderWith({ profileId: 'qwen' });
+      expect(screen.queryByRole('combobox', { name: 'Effort' })).not.toBeInTheDocument();
+    });
+
+    it("changes the chat's effort from the next message, and back to the default", async () => {
+      mockedChatsPatch.mockImplementation(async (_id, body) => ({ ...useGruntStore.getState().chats[0]!, ...body }) as Chat);
+      renderWith({ profileId: 'sonnet' });
+      const user = userEvent.setup();
+
+      await user.selectOptions(effort(), 'Effort: high');
+      expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { effort: 'high' });
+      await waitFor(() => expect(useGruntStore.getState().chats[0]!.effort).toBe('high'));
+      expect(effort()).toHaveValue('high');
+
+      await user.selectOptions(effort(), 'Effort: default');
+      expect(mockedChatsPatch).toHaveBeenLastCalledWith('chat-1', { effort: null });
+      await waitFor(() => expect(effort()).toHaveValue(''));
+    });
+
+    it('goes back to what it was and says why when saving fails', async () => {
+      mockedChatsPatch.mockRejectedValue(new ApiError(500, 'Database is locked.'));
+      renderWith({ profileId: 'sonnet', effort: 'medium' });
+      await userEvent.setup().selectOptions(effort(), 'Effort: max');
+      expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
+      expect(effort()).toHaveValue('medium');
+      expect(useGruntStore.getState().chats[0]!.effort).toBe('medium');
+    });
+  });
 });

@@ -332,6 +332,33 @@ describe('chats CRUD', () => {
     expect(container.store.chats.get(id)!.autoMode).toBe(false);
   });
 
+  it('sets and clears the effort via PATCH effort, without moving the chat in the list, and refuses an unknown level', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    expect(created['effort']).toBeUndefined();
+    const before = container.store.chats.get(id)!.updatedAt;
+    const patch = (body: unknown) =>
+      app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+    const set = await patch({ effort: 'high' });
+    expect(set.status).toBe(200);
+    const setBody = await json(set);
+    expect(setBody['effort']).toBe('high');
+    expect(setBody['updatedAt']).toBe(before);
+    expect((await json(await app().request(`/api/chats/${id}`)))['effort']).toBe('high');
+
+    for (const bad of ['extreme', 3, true]) {
+      const res = await patch({ effort: bad });
+      expect(res.status).toBe(400);
+      expect((await json(res))['error']).toBe('"effort" must be null or one of low, medium, high, xhigh, max.');
+    }
+    expect(container.store.chats.get(id)!.effort).toBe('high');
+
+    // Cleared: absent or null, both meaning "follow Claude Code's settings".
+    expect((await json(await patch({ effort: null })))['effort'] ?? null).toBeNull();
+    expect(container.store.chats.get(id)!.effort ?? null).toBeNull();
+  });
+
   it('ignores headMessageId in the generic PATCH body (moving it stays POST /:id/head only)', async () => {
     const created = await createChat();
     const res = await app().request(`/api/chats/${created['id'] as string}`, {
