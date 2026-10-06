@@ -247,7 +247,7 @@ export class ProjectMemoryService {
     const answer = await this.ask(profile, chatId, memoryUpdatePrompt(start.project.name, currentBody, renderMemoryTranscript(pending)));
     if (!answer.ok) return this.fail(projectId, chatId, `Memory update failed: ${answer.error}`);
     const checked = finaliseSummary(currentBody, answer.text);
-    if (!checked.ok) return this.fail(projectId, chatId, `The memory model's note was rejected: ${checked.reason}`);
+    if (!checked.ok) return this.fail(projectId, chatId, `The memory model (${profile.name}) wrote a note that was rejected: ${checked.reason}`);
 
     // Anything may have changed while the model was answering (spec §6).
     const end = this.check(projectId, chatId);
@@ -278,13 +278,18 @@ export class ProjectMemoryService {
 
   /** Spec §2: the Memory model setting, then the project's default, then the app default -- the first that exists, isn't archived and resolves. */
   private async pickProfile(project: Project): Promise<ResolvedProfile | null> {
-    const candidates = [this.store.settings.get().memoryProfileId, project.defaultProfileId, appDefaultProfileId(this.store)];
+    const chosen = this.store.settings.get().memoryProfileId;
+    const candidates = [chosen, project.defaultProfileId, appDefaultProfileId(this.store)];
     for (const id of new Set(candidates)) {
       if (id === null) continue;
       const row = this.store.profiles.get(id);
       if (!row || row.archivedAt !== null) continue;
       try {
-        return await this.resolveProfile(id);
+        const profile = await this.resolveProfile(id);
+        // The mock engine answers everything with the same canned reply, so
+        // it can never write a note: only use it when it's the chosen model.
+        if (profile.connection.kind === 'mock' && id !== chosen) continue;
+        return profile;
       } catch {
         continue;
       }

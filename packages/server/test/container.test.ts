@@ -2,6 +2,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
@@ -156,8 +157,10 @@ describe('createContainer', () => {
     const second = await createContainer({ dbPath, secretsPath });
     try {
       await second.memory!.idle();
-      // The mock model's canned reply isn't a note, so the update is rejected -- which proves the startup sweep ran it.
-      expect(second.memory!.lastError('proj')).toMatchObject({ chatId: 'chat', message: expect.stringContaining('rejected') });
+      // The only profile is the mock, which project memory never picks by
+      // itself (it can't write a note), so the update fails for want of a
+      // model -- which proves the startup sweep ran it.
+      expect(second.memory!.lastError('proj')).toMatchObject({ chatId: 'chat', message: NO_MEMORY_MODEL_MESSAGE });
       expect(second.store.chats.get('chat')!.memoryCursor).toBeNull();
     } finally {
       second.close();

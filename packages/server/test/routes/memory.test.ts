@@ -59,7 +59,8 @@ beforeEach(async () => {
   memory.attach(turnRunner);
   container.memory = memory;
 
-  store.connections.create({ id: 'conn-1', name: 'Conn', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+  // Any real kind: the scripted engine answers, never the connection.
+  store.connections.create({ id: 'conn-1', name: 'Conn', kind: 'ollama', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
   store.profiles.create({
     id: 'profile-1',
     name: 'Profile One',
@@ -230,7 +231,7 @@ describe('POST /api/chats/:id/memory/update', () => {
     respond = () => reply('not a note');
     expect(await json(await send('POST', '/api/chats/chat-1/memory/update'))).toMatchObject({ status: 'failed' });
     const view = await json<{ lastError: Record<string, unknown> | null }>(await send('GET', '/api/projects/proj/memory'));
-    expect(view.lastError).toEqual({ message: `The memory model's note was rejected: ${MEMORY_FORMAT_ERROR}`, at: clock.time, chatId: 'chat-1' });
+    expect(view.lastError).toEqual({ message: `The memory model (Profile One) wrote a note that was rejected: ${MEMORY_FORMAT_ERROR}`, at: clock.time, chatId: 'chat-1' });
 
     respond = () => reply(note({ goals: '- Fixed' }));
     await send('POST', '/api/chats/chat-1/memory/update');
