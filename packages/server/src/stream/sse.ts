@@ -5,6 +5,21 @@
  * body directly) and works unmodified whether the app is served over
  * `@hono/node-server` or exercised in-process via `app.request()`.
  */
+/** How often an otherwise quiet stream sends a keepalive comment, so the other end can tell it's alive. */
+export const STREAM_KEEPALIVE_MS = 25_000;
+/**
+ * How long a paired machine's stream may go without a byte (keepalives
+ * included) before it's taken as lost: a connection that died without
+ * closing (a laptop asleep, a network gone) may never be reported by TCP.
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
+/** Stream timings, shortened by tests. */
+export interface StreamTimings {
+  keepaliveMs: number;
+  idleTimeoutMs: number;
+}
+
 export interface SseSink {
   /** Writes one SSE record. `event: <name>` is omitted for `event === null` (an unnamed/default event). */
   send(event: string | null, data: unknown): void;

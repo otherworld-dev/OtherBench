@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { createContainer, type Container } from '../../src/container.js';
+import type { StreamTimings } from '../../src/stream/sse.js';
+import { freezableProxy } from './helpers.js';
 
 interface Machine {
   name: string;
@@ -17,9 +19,9 @@ afterEach(async () => {
   for (const c of cleanup.splice(0).reverse()) await c();
 });
 
-async function machine(name: string): Promise<Machine> {
+async function machine(name: string, streamTimings?: StreamTimings): Promise<Machine> {
   const dir = mkdtempSync(join(tmpdir(), `grunt-remote-${name}-`));
-  const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), peerPort: 0, peerHosts: ['127.0.0.1'] });
+  const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), peerPort: 0, peerHosts: ['127.0.0.1'], ...(streamTimings ? { streamTimings } : {}) });
   container.store.nodes.rename(name);
   const app = createApp(container);
   cleanup.push(async () => {
@@ -41,9 +43,9 @@ async function machine(name: string): Promise<Machine> {
 }
 
 /** The PC has a chat running on it, in a folder of its own with a file in it; the laptop has synced it. */
-async function setup(): Promise<{ pc: Machine; laptop: Machine; chatId: string; profileId: string; folder: string }> {
-  const pc = await machine('PC');
-  const laptop = await machine('Laptop');
+async function setup(streamTimings?: StreamTimings): Promise<{ pc: Machine; laptop: Machine; chatId: string; profileId: string; folder: string }> {
+  const pc = await machine('PC', streamTimings);
+  const laptop = await machine('Laptop', streamTimings);
   const view = await pc.container.peers!.startPairing();
   await laptop.container.peers!.pairWith(view.addresses[0]!, view.code);
 
@@ -216,6 +218,34 @@ describe('running a chat on the machine it runs on', () => {
     await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
     await pc.container.peers!.syncerOrNull()!.pullFrom(laptop.id);
     for (const m of [pc, laptop]) expect(m.container.store.messages.get(replyId)!.status).toBe('cancelled');
+  });
+
+  it('a relayed reply whose connection goes silent ends here within the idle limit, but a quiet one kept alive does not', async () => {
+    const { pc, laptop, chatId, profileId } = await setup({ keepaliveMs: 50, idleTimeoutMs: 300 });
+    const proxy = await freezableProxy(laptop.container.store.peers.get(pc.id)!.addresses[0]!);
+    cleanup.push(() => proxy.close());
+    laptop.container.store.peers.update(pc.id, { addresses: [proxy.address] });
+
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+
+    // #slow pauses 400 ms between words, longer than the idle limit: the
+    // keepalives hold the relay open until the connection goes silent.
+    let words = 0;
+    let frozenAt = 0;
+    const events = await readStream(stream, (e) => {
+      if (e.data.type === 'text-delta' && e.data.messageId === replyId && ++words === 3) {
+        proxy.freeze();
+        frozenAt = Date.now();
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'error';
+    }, 5_000);
+
+    expect(words).toBe(3);
+    expect(Date.now() - frozenAt).toBeLessThan(2_000);
+    expect(events.some((e) => e.data.type === 'error' && JSON.stringify(e.data).includes('peer_unreachable'))).toBe(true);
+    expect(laptop.container.store.messages.get(replyId)).toMatchObject({ status: 'error', parts: [{ type: 'text' }] });
   });
 
   it('a chat that runs here is still run here, and the peer listener refuses to run one it does not run', async () => {

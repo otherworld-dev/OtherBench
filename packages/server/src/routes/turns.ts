@@ -5,7 +5,7 @@ import { InvalidAttachmentReferenceError, RegenerateError, workspaceUnresolvedMe
 import type { Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
-import { sseStream } from '../stream/sse.js';
+import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { requireNonEmptyString } from '../validation.js';
 import { chatView, workspaceResolver } from '../workspace-view.js';
 
@@ -320,7 +320,13 @@ export function turnsRoutes(container: Container): Hono {
       sink.send('hello', {
         inFlight: snapshot.map((b) => ({ messageId: b.messageId, status: b.status, events: b.events })),
       });
-      return unsubscribe;
+      // A reply can go quiet for minutes (thinking, an approval card): the
+      // keepalive tells a machine relaying this stream that it's still alive.
+      const keepalive = setInterval(() => sink.comment('keepalive'), container.streamTimings?.keepaliveMs ?? STREAM_KEEPALIVE_MS);
+      return () => {
+        clearInterval(keepalive);
+        unsubscribe();
+      };
     });
   });
 

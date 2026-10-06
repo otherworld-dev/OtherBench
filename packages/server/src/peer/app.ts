@@ -4,11 +4,8 @@ import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { fingerprintOf } from '@grunt/core/domain/pairing.js';
 import type { Peer } from '@grunt/core/types/peer.js';
-import { sseStream } from '../stream/sse.js';
+import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
 import { PeerError, type PairRequest, type PeerService } from './service.js';
-
-/** How often an idle `/peer/events` stream sends a comment, so neither side takes it for dead. */
-export const PEER_EVENTS_KEEPALIVE_MS = 25_000;
 
 export interface PeerEnv {
   Bindings: { incoming: IncomingMessage };
@@ -38,7 +35,7 @@ function bearer(c: Context<PeerEnv>): string | null {
 export interface PeerAppDeps {
   /** The part of this machine's API a paired machine may call (forward.ts); null until the container is up. */
   forwardedApi?: () => { fetch: (req: Request, env: { peerNodeId: string }) => Response | Promise<Response> } | null;
-  /** How often an idle `/peer/events` stream sends a keepalive; defaults to PEER_EVENTS_KEEPALIVE_MS. */
+  /** How often an idle `/peer/events` stream sends a keepalive; defaults to STREAM_KEEPALIVE_MS. */
   keepaliveMs?: number;
 }
 
@@ -85,7 +82,7 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
     return sseStream((sink) => {
       sink.send('hello', service.info());
       const unregister = service.openEventStream(peer.nodeId, (event, data) => sink.send(event, data), () => sink.close());
-      const keepalive = setInterval(() => sink.comment('keepalive'), deps.keepaliveMs ?? PEER_EVENTS_KEEPALIVE_MS);
+      const keepalive = setInterval(() => sink.comment('keepalive'), deps.keepaliveMs ?? STREAM_KEEPALIVE_MS);
       return () => {
         clearInterval(keepalive);
         unregister();

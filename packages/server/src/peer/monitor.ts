@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import type { AppEventBus } from '../stream/events.js';
+import { STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import type { PeerService } from './service.js';
 
 export interface PeerStatus {
@@ -22,13 +23,6 @@ export interface PeerMonitorOptions {
   /** How long a stream may go without a byte (keepalives included) before it's taken as lost. */
   idleTimeoutMs?: number;
 }
-
-/**
- * A peer's `/peer/events` stream carries a keepalive every 25 s, so a minute
- * with nothing at all means the connection died without closing (a laptop
- * asleep, a network changed under it), which TCP alone may never report.
- */
-const IDLE_TIMEOUT_MS = 60_000;
 
 interface Loop {
   stopped: boolean;
@@ -91,7 +85,7 @@ export class PeerMonitor {
     this.now = options.now ?? Date.now;
     this.minBackoff = options.minBackoffMs ?? 1_000;
     this.maxBackoff = options.maxBackoffMs ?? 60_000;
-    this.idleTimeout = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS;
+    this.idleTimeout = options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
   }
 
   start(): void {
