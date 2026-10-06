@@ -140,7 +140,8 @@ beforeEach(() => {
   unresolvable = new Set();
   tips = new Map();
   seq = 0;
-  store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+  // Any real kind: the scripted engine above answers, never the connection.
+  store.connections.create({ id: 'conn', name: 'Local', kind: 'ollama', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
   store.profiles.create(profileRow('p-app', { isDefault: true }));
   store.profiles.create(profileRow('p-project'));
   store.profiles.create(profileRow('p-memory'));
@@ -261,7 +262,7 @@ describe('an update', () => {
   it('rejects a note with missing or reordered headings: nothing changes and the failure is recorded', async () => {
     exchange('chat', 'Plan', 'ok');
     respond = () => reply('## Goals\n- Only one heading');
-    const error = `The memory model's note was rejected: ${MEMORY_FORMAT_ERROR}`;
+    const error = `The memory model (p-project) wrote a note that was rejected: ${MEMORY_FORMAT_ERROR}`;
 
     expect(await service.updateNow('chat')).toEqual({ status: 'failed', error });
 
@@ -490,6 +491,20 @@ describe('which model runs it', () => {
     exchange('chat', 'Three', 'ok');
     await service.updateNow('chat');
     expect(requests[2]!.profile.id).toBe('p-app');
+  });
+
+  it("never picks the mock engine by itself, since it can't write a note, but uses it when it's the chosen Memory model", async () => {
+    store.connections.create({ id: 'mock', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    store.profiles.create(profileRow('p-mock', { connectionId: 'mock' }));
+    store.projects.update('proj', { defaultProfileId: 'p-mock' });
+    exchange('chat', 'One', 'ok');
+    await service.updateNow('chat');
+    expect(requests[0]!.profile.id).toBe('p-app');
+
+    store.settings.update({ memoryProfileId: 'p-mock' });
+    exchange('chat', 'Two', 'ok');
+    await service.updateNow('chat');
+    expect(requests[1]!.profile.id).toBe('p-mock');
   });
 
   it('skips a profile that cannot be resolved', async () => {
