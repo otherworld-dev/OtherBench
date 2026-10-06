@@ -271,6 +271,29 @@ describe('Inspector runs on', () => {
   });
 });
 
+describe('Inspector also active elsewhere', () => {
+  afterEach(() => {
+    cleanup();
+    useGruntStore.setState({ machines: null, chats: [] });
+  });
+
+  it("says when the other machine has a reply running in another chat in this chat's folder", () => {
+    const workspace = { kind: 'location' as const, locationId: 'nc', subpath: 'Testing' };
+    const chat = makeChat({ workspace, workspaceRoot: 'C:\\Users\\Adam\\Nextcloud\\Testing' });
+    useGruntStore.setState({
+      chats: [chat, makeChat({ id: 'chat-pc', title: 'Refactor', workspace })],
+      machines: {
+        self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
+        listening: { running: true, addresses: [] },
+        peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null, activeChats: ['chat-pc'] }],
+      },
+    });
+    render(<Inspector chat={chat} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    expect(within(workspaceSection()).getByTestId('workspace-also-active')).toHaveTextContent('Also active on PC: "Refactor" has a reply running in this folder.');
+  });
+});
+
 describe('Inspector workspace root', () => {
   afterEach(cleanup);
 

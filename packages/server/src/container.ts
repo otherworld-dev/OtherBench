@@ -322,6 +322,15 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   });
   const syncer = new Syncer({ store, secrets, blobStore, peers, events });
   peers.attachSyncer(syncer);
+  // Which of this machine's own chats have a reply running, for paired
+  // machines' "also active" hint (#790); told again whenever one starts or ends.
+  peers.attachActivity(() => {
+    const self = store.nodes.self().id;
+    return [...new Set(events.runningTurns().map((t) => t.chatId))].filter((id) => store.chats.get(id)?.runsOn === self);
+  });
+  events.subscribe((e) => {
+    if (e.type === 'turn-started' || e.type === 'turn-finished') peers.announce('activity', peers.activity());
+  });
 
   const container: Container = {
     store,

@@ -46,7 +46,7 @@ export function useAppEvents(): void {
       onEvent: (event) => {
         applyAppEvent(event);
         if (event.type === 'sync-applied') refreshAfterSync();
-        if (event.type === 'peers-changed' || event.type === 'peer-status') refreshMachines();
+        if (event.type === 'peers-changed' || event.type === 'peer-status' || event.type === 'peer-activity') refreshMachines();
         notifier?.handle(event).catch((err: unknown) => console.error('[grunt-web] failed to show a notification:', err));
       },
     });

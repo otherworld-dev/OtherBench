@@ -81,6 +81,7 @@ export function createPeerApp(service: PeerService, deps: PeerAppDeps = {}): Hon
     const peer = c.get('peer');
     return sseStream((sink) => {
       sink.send('hello', service.info());
+      sink.send('activity', service.activity());
       const unregister = service.openEventStream(peer.nodeId, (event, data) => sink.send(event, data), () => sink.close());
       const keepalive = setInterval(() => sink.comment('keepalive'), deps.keepaliveMs ?? STREAM_KEEPALIVE_MS);
       return () => {

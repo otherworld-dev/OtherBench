@@ -18,7 +18,9 @@ export type AppEvent =
   | { type: 'peers-changed' }
   /** A paired machine became reachable or unreachable; `since` is when. */
   | { type: 'peer-status'; nodeId: string; status: 'reachable' | 'unreachable'; since: number }
-  | { type: 'sync-applied'; nodeId: string; changed: number };
+  | { type: 'sync-applied'; nodeId: string; changed: number }
+  /** A paired machine said which of its chats have a reply running: re-read the list (#790). */
+  | { type: 'peer-activity'; nodeId: string };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {

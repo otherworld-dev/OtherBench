@@ -28,6 +28,29 @@ export function remoteUnreachable(machines: PeersOverview | null, chat: Pick<Cha
   return !peer || peer.status === 'unreachable';
 }
 
+/**
+ * Other machines with a reply running in another chat in this chat's folder
+ * (the same location and subfolder). Grunt can't lock files across machines,
+ * so the workspace says so (v2 spec, "Concurrent work in the same folder").
+ */
+export function alsoActive(machines: PeersOverview | null, chats: Chat[], chat: Pick<Chat, 'id' | 'workspace'>): { machine: string; chatId: string; title: string }[] {
+  const here = chat.workspace;
+  if (!machines || here?.kind !== 'location') return [];
+  const out: { machine: string; chatId: string; title: string }[] = [];
+  for (const peer of machines.peers) {
+    if (peer.status !== 'reachable') continue;
+    for (const id of peer.activeChats ?? []) {
+      if (id === chat.id) continue;
+      const other = chats.find((c) => c.id === id);
+      const there = other?.workspace;
+      if (other && there?.kind === 'location' && there.locationId === here.locationId && there.subpath === here.subpath) {
+        out.push({ machine: peer.name, chatId: other.id, title: other.title });
+      }
+    }
+  }
+  return out;
+}
+
 export function isReachablePeer(machines: PeersOverview | null, nodeId: string): boolean {
   return machines?.peers.some((p) => p.nodeId === nodeId && p.status === 'reachable') ?? false;
 }

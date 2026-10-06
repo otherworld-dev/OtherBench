@@ -248,6 +248,25 @@ describe('running a chat on the machine it runs on', () => {
     expect(laptop.container.store.messages.get(replyId)).toMatchObject({ status: 'error', parts: [{ type: 'text' }] });
   });
 
+  it("tells the laptop which of the PC's chats have a reply running, for the also-active hint", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const activeOnPc = async (): Promise<string[]> => {
+      const overview = (await (await laptop.api('GET', '/api/peers')).json()) as { peers: { nodeId: string; activeChats: string[] }[] };
+      return overview.peers.find((p) => p.nodeId === pc.id)?.activeChats ?? [];
+    };
+    await expect.poll(() => laptop.container.peers!.status(pc.id).status).toBe('reachable');
+    expect(await activeOnPc()).toEqual([]);
+
+    // A reply started on the PC itself, in its own chat.
+    const res = await pc.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: 'slowly #slow' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await expect.poll(activeOnPc).toEqual([chatId]);
+    expect(laptop.container.events!.runningTurns()).toEqual([]);
+
+    pc.container.turnRunner.cancel(replyId);
+    await expect.poll(activeOnPc).toEqual([]);
+  });
+
   it('a chat that runs here is still run here, and the peer listener refuses to run one it does not run', async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     // The laptop takes the chat over (Run here): from now on it runs on the laptop.

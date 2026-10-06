@@ -49,7 +49,11 @@ describe('PeerMonitor', () => {
 
     pc.service.announce('changes-available', { seq: 7 });
 
-    await expect.poll(() => heard).toEqual([{ nodeId: 'node-PC', event: 'changes-available', data: { seq: 7 } }]);
+    // Its running replies come first, right after the hello (none here).
+    await expect.poll(() => heard).toEqual([
+      { nodeId: 'node-PC', event: 'activity', data: { chatIds: [] } },
+      { nodeId: 'node-PC', event: 'changes-available', data: { seq: 7 } },
+    ]);
   });
 
   it('treats a stream that goes silent as gone, but not one kept alive while quiet', async () => {
