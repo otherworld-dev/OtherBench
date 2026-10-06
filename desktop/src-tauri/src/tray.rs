@@ -2,7 +2,7 @@
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// Brings the main window back from the tray and tells the web app, which
 /// opens the chat it last sent a notification about: desktop notifications
@@ -31,19 +31,60 @@ pub fn tooltip_text(pending_approvals: u32) -> String {
     }
 }
 
-/// Updates the tooltip; the web app calls this whenever its count changes.
-pub fn set_status(app: &AppHandle, pending_approvals: u32) {
+/// At most this many machine lines in the menu, each at most this many
+/// characters: the text comes from the web app.
+const MAX_MACHINE_LINES: usize = 4;
+const MAX_LINE_CHARS: usize = 80;
+
+/// The machine status lines as the menu shows them: blank ones dropped, the
+/// rest trimmed and capped in number and length.
+pub fn machine_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .take(MAX_MACHINE_LINES)
+        .map(|line| {
+            if line.chars().count() > MAX_LINE_CHARS {
+                format!("{}…", line.chars().take(MAX_LINE_CHARS - 1).collect::<String>())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Open Grunt, New chat, each paired machine's status (greyed out, for
+/// reading), Quit.
+fn menu(app: &AppHandle, machines: &[String]) -> tauri::Result<Menu<Wry>> {
+    let open = MenuItem::with_id(app, "open", "Open Grunt", true, None::<&str>)?;
+    let new_chat = MenuItem::with_id(app, "new-chat", "New chat", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &new_chat])?;
+    let lines = machine_lines(machines);
+    if !lines.is_empty() {
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+        for (i, line) in lines.iter().enumerate() {
+            menu.append(&MenuItem::with_id(app, format!("machine-{i}"), line, false, None::<&str>)?)?;
+        }
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit Grunt", true, None::<&str>)?)?;
+    Ok(menu)
+}
+
+/// Updates the tooltip and the machine lines; the web app calls this
+/// whenever either changes.
+pub fn set_status(app: &AppHandle, pending_approvals: u32, machines: &[String]) {
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(tooltip_text(pending_approvals)));
+        if let Ok(menu) = menu(app, machines) {
+            let _ = tray.set_menu(Some(menu));
+        }
     }
 }
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open Grunt", true, None::<&str>)?;
-    let new_chat = MenuItem::with_id(app, "new-chat", "New chat", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Grunt", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &new_chat, &separator, &quit])?;
+    let menu = menu(app, &[])?;
 
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip(tooltip_text(0))
@@ -84,5 +125,15 @@ mod tests {
     fn tooltip_counts_pending_approvals() {
         assert_eq!(tooltip_text(1), "Grunt: 1 tool call waiting for approval");
         assert_eq!(tooltip_text(3), "Grunt: 3 tool calls waiting for approval");
+    }
+
+    #[test]
+    fn machine_lines_drop_blanks_and_are_capped_in_number_and_length() {
+        let lines = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(machine_lines(&lines(&["  PC: connected  ", "", "   "])), vec!["PC: connected"]);
+        assert_eq!(machine_lines(&lines(&["a", "b", "c", "d", "e"])), vec!["a", "b", "c", "d"]);
+        let long = machine_lines(&lines(&[&"x".repeat(100)]));
+        assert_eq!(long[0].chars().count(), 80);
+        assert!(long[0].ends_with('…'));
     }
 }

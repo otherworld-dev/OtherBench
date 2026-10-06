@@ -47,11 +47,15 @@ export async function launchArgs(): Promise<string[]> {
   return invoke<string[]>('launch_args');
 }
 
-/** Tells the shell how many tool calls are waiting for approval; its tray tooltip shows it. No-op in a browser. */
-export async function setTrayStatus(pendingApprovals: number): Promise<void> {
+/**
+ * Tells the shell how many tool calls are waiting for approval (its tray
+ * tooltip shows it) and each paired machine's status line (its tray menu
+ * shows them). No-op in a browser.
+ */
+export async function setTrayStatus(pendingApprovals: number, machines: string[] = []): Promise<void> {
   if (!isDesktop()) return;
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('set_tray_status', { pendingApprovals });
+  await invoke('set_tray_status', { pendingApprovals, machines });
 }
 
 /** Whether the main window has focus. Always true in a browser, where Grunt never notifies. */

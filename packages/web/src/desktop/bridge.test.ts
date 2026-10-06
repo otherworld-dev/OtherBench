@@ -120,14 +120,16 @@ describe('desktop bridge', () => {
     expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1' });
   });
 
-  it('setTrayStatus sends the pending-approval count to the shell, and does nothing in a browser', async () => {
-    await setTrayStatus(2);
+  it("setTrayStatus sends the pending-approval count and the machines' status lines to the shell, and does nothing in a browser", async () => {
+    await setTrayStatus(2, ['PC: connected']);
     expect(invoke).not.toHaveBeenCalled();
 
     enterDesktop();
     invoke.mockResolvedValue(undefined);
-    await setTrayStatus(2);
-    expect(invoke).toHaveBeenCalledWith('set_tray_status', { pendingApprovals: 2 });
+    await setTrayStatus(2, ['PC: connected']);
+    expect(invoke).toHaveBeenCalledWith('set_tray_status', { pendingApprovals: 2, machines: ['PC: connected'] });
+    await setTrayStatus(0);
+    expect(invoke).toHaveBeenLastCalledWith('set_tray_status', { pendingApprovals: 0, machines: [] });
   });
 
   it('onDesktopEvent is a no-op subscription in a browser', async () => {
