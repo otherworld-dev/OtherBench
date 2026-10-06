@@ -61,10 +61,11 @@ async fn bootstrap(state: tauri::State<'_, AppState>) -> Result<Bootstrap, Strin
 }
 
 /// The web app's status for the tray (web/src/desktop/useTrayStatus.ts):
-/// the tooltip shows how many tool calls are waiting for approval.
+/// the tooltip shows how many tool calls are waiting for approval, and the
+/// menu each paired machine's status line.
 #[tauri::command]
-fn set_tray_status(app: tauri::AppHandle, pending_approvals: u32) {
-    tray::set_status(&app, pending_approvals);
+fn set_tray_status(app: tauri::AppHandle, pending_approvals: u32, machines: Option<Vec<String>>) {
+    tray::set_status(&app, pending_approvals, &machines.unwrap_or_default());
 }
 
 /// Makes `accelerator` the global hotkey for quick chat (Settings → Desktop).
