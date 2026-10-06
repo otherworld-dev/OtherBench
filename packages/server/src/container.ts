@@ -33,6 +33,7 @@ import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { AppEventBus, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
+import type { StreamTimings } from './stream/sse.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -73,6 +74,8 @@ export interface Container {
    * without one.
    */
   peers?: PeerService;
+  /** Keepalive and idle limits for streams; unset means the defaults in stream/sse.ts. */
+  streamTimings?: StreamTimings;
   close(): void;
 }
 
@@ -83,6 +86,8 @@ export interface ContainerOptions {
   peerPort?: number;
   /** Addresses the peer listener binds (default every interface). */
   peerHosts?: string[];
+  /** Keepalive and idle limits for streams (defaults in stream/sse.ts); tests shorten them. */
+  streamTimings?: StreamTimings;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -308,10 +313,12 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     secrets,
     events,
     identity,
-    createApp: (service) => createPeerApp(service, { forwardedApi: () => forwarded }) as never,
+    createApp: (service) =>
+      createPeerApp(service, { forwardedApi: () => forwarded, ...(options.streamTimings ? { keepaliveMs: options.streamTimings.keepaliveMs } : {}) }) as never,
     port: options.peerPort ?? DEFAULT_PEER_PORT,
     hosts: options.peerHosts && options.peerHosts.length > 0 ? options.peerHosts : ['0.0.0.0'],
     schemaVersion: SCHEMA_VERSION,
+    ...(options.streamTimings ? { monitor: { idleTimeoutMs: options.streamTimings.idleTimeoutMs } } : {}),
   });
   const syncer = new Syncer({ store, secrets, blobStore, peers, events });
   peers.attachSyncer(syncer);
@@ -319,6 +326,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const container: Container = {
     store,
     events,
+    ...(options.streamTimings ? { streamTimings: options.streamTimings } : {}),
     secrets,
     peers,
     remoteRuns: new RemoteRuns(),

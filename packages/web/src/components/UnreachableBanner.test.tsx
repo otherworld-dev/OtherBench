@@ -71,4 +71,31 @@ describe('UnreachableBanner', () => {
     await waitFor(() => expect(api.chats.patch).toHaveBeenCalledWith('c', { runsOn: 'node-laptop' }));
     await waitFor(() => expect(useGruntStore.getState().chats[0]!.runsOn).toBe('node-laptop'));
   });
+
+  it('says where the chat runs once it has moved, until dismissed', async () => {
+    useGruntStore.setState({ machines: machines('unreachable'), chats: [chat()] });
+    vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-laptop' }));
+    const { rerender } = render(<UnreachableBanner chat={chat()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run here' }));
+    await waitFor(() => expect(api.chats.patch).toHaveBeenCalled());
+    rerender(<UnreachableBanner chat={chat({ runsOn: 'node-laptop' })} />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('This chat now runs on Laptop. Send a message to carry on.');
+    expect(screen.queryByTestId('unreachable-banner')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it("doesn't carry the note over to another chat shown in the same place", async () => {
+    useGruntStore.setState({ machines: machines('unreachable'), chats: [chat()] });
+    vi.mocked(api.chats.patch).mockResolvedValue(chat({ runsOn: 'node-laptop' }));
+    const { rerender } = render(<UnreachableBanner chat={chat()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Run here' }));
+    await waitFor(() => expect(api.chats.patch).toHaveBeenCalled());
+    rerender(<UnreachableBanner chat={chat({ id: 'other', runsOn: 'node-laptop' })} />);
+
+    expect(screen.queryByRole('status')).toBeNull();
+  });
 });

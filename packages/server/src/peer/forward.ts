@@ -7,7 +7,7 @@ import type { Part, ProducedBy, SerializedError } from '@grunt/core/types/messag
 import type { Container } from '../container.js';
 import { parseApprovalChoice } from '../routes/tools.js';
 import { turnsRoutes } from '../routes/turns.js';
-import { sseStream } from '../stream/sse.js';
+import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { PeerError } from './service.js';
 
 /**
@@ -182,11 +182,16 @@ async function forward(container: Container, c: Context, nodeId: string, path: s
   }
 }
 
-/** Calls the record handler for each SSE record (raw text kept for passing through), in order, awaiting each. */
-async function eachRecord(response: IncomingMessage, onRecord: (raw: string, event: string, data: unknown) => Promise<void>): Promise<void> {
+/**
+ * Calls the record handler for each SSE record (raw text kept for passing
+ * through), in order, awaiting each; `onChunk` hears every chunk received,
+ * keepalives included.
+ */
+async function eachRecord(response: IncomingMessage, onRecord: (raw: string, event: string, data: unknown) => Promise<void>, onChunk?: () => void): Promise<void> {
   let buffer = '';
   response.setEncoding('utf8');
   for await (const chunk of response) {
+    onChunk?.();
     buffer += chunk as string;
     let end: number;
     while ((end = buffer.indexOf('\n\n')) !== -1) {
@@ -234,6 +239,15 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
     /** What each reply has said so far, in case its machine goes away before it's finished. */
     const seen = new Map<string, Part[]>();
     let open = true;
+    // Not a byte from the other machine, keepalives included, for this long:
+    // the connection died without closing. Ending it here ends the relay as
+    // a closed one would.
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const heardFrom = (): void => {
+      clearTimeout(idle);
+      idle = setTimeout(close, container.streamTimings?.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS);
+    };
+    heardFrom();
     void eachRecord(response, async (_raw, event, data) => {
       if (!open) return;
       if (event === 'hello') {
@@ -262,9 +276,10 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
         container.events?.emit({ type: 'turn-finished', chatId, messageId: e.messageId, status: e.status as 'complete' });
       }
       sink.send(null, data);
-    })
+    }, heardFrom)
       .catch(() => {})
       .finally(() => {
+        clearTimeout(idle);
         if (!open) return;
         // The other machine went away mid-reply: end each reply still
         // running, so nothing here waits forever, keeping what it said so far
@@ -281,6 +296,7 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
       });
     return () => {
       open = false;
+      clearTimeout(idle);
       close();
     };
   });
