@@ -161,4 +161,14 @@ test('pair through the UI, run a PC chat from the laptop, then run it on the lap
       { timeout: 30_000 }
     )
     .toBe(true);
+
+  // Another chat on the PC in the same folder says so while the laptop has a reply running in it.
+  await api(PC, 'POST', '/chats', { title: 'Beside it', profileId: profile.id, workspacePath: join(pcFolder, 'project') });
+  await pc.reload();
+  await pc.getByText('Beside it').first().click();
+  await box.fill('tell me slowly again #slow');
+  await box.press('Enter');
+  await expect(pc.getByTestId('workspace-also-active')).toContainText('Also active on Laptop: "', { timeout: 20_000 });
+  await expect(laptop.getByLabel('streaming')).toHaveCount(0, { timeout: 20_000 });
+  await expect(pc.getByTestId('workspace-also-active')).toHaveCount(0, { timeout: 10_000 });
 });
