@@ -8,13 +8,26 @@ import { useGruntStore } from '../state/store.js';
  * Shown on a chat that runs on another machine which can't be reached (v2
  * spec §5): offers to run it here instead. That moves the chat; its folder
  * is then resolved on this machine, and the folder prompt takes over if it
- * isn't here.
+ * isn't here. Once moved, it says so until dismissed, since nothing else on
+ * screen changes.
  */
 export function UnreachableBanner({ chat }: { chat: Chat }): JSX.Element | null {
   const machines = useGruntStore((s) => s.machines);
   const upsertChat = useGruntStore((s) => s.upsertChat);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The chat this banner moved here, and this machine's name. */
+  const [moved, setMoved] = useState<{ chatId: string; name: string } | null>(null);
+  if (moved && moved.chatId === chat.id && chat.runsOn === machines?.self.id) {
+    return (
+      <div data-testid="moved-here" role="status" className="mx-4 mb-2 flex items-center gap-2 rounded border border-[var(--border)] bg-[var(--bg-raised)] p-3 text-sm">
+        <span className="flex-1">This chat now runs on {moved.name}. Send a message to carry on.</span>
+        <button type="button" onClick={() => setMoved(null)} aria-label="Dismiss" className="rounded px-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]">
+          ×
+        </button>
+      </div>
+    );
+  }
   if (!machines || !remoteUnreachable(machines, chat)) return null;
   const name = machineName(machines, chat.runsOn);
 
@@ -24,6 +37,7 @@ export function UnreachableBanner({ chat }: { chat: Chat }): JSX.Element | null 
     setError(null);
     try {
       upsertChat(await api.chats.patch(chat.id, { runsOn: machines.self.id }));
+      setMoved({ chatId: chat.id, name: machines.self.name });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't move the chat. Please try again.");
     } finally {
