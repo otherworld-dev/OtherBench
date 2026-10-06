@@ -7,6 +7,7 @@ import { isDesktop, pickFolder } from '../desktop/bridge.js';
 import { usePolled } from '../lib/usePolled.js';
 import { WORKSPACE_ROOT_HELP, useServerPlatform, validateWorkspaceRoot } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
+import { alsoActive } from '../state/machines.js';
 import { useGruntStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
@@ -120,6 +121,9 @@ function RunsOnSection({ chat }: { chat: Chat }): JSX.Element | null {
 
 function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | null }): JSX.Element {
   const upsertChat = useGruntStore((s) => s.upsertChat);
+  const machines = useGruntStore((s) => s.machines);
+  const chats = useGruntStore((s) => s.chats);
+  const activeElsewhere = alsoActive(machines, chats, chat);
   const serverPlatform = useServerPlatform();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(chat.workspaceRoot ?? '');
@@ -299,6 +303,11 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
           In a location, so it works on any machine that knows where the location is.
         </p>
       )}
+      {activeElsewhere.map((a) => (
+        <p key={`${a.machine}:${a.chatId}`} data-testid="workspace-also-active" role="status" className="text-xs text-[var(--warn)]">
+          Also active on {a.machine}: "{a.title}" has a reply running in this folder.
+        </p>
+      ))}
       <p className="text-xs text-[var(--text-muted)]">{workspaceConsequence(profile)}</p>
       <div className="flex gap-2">
         <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">

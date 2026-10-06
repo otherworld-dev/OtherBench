@@ -168,6 +168,8 @@ export interface PeerView extends PublicPeer {
   /** When the last pull from it finished, and why the last one failed (until one succeeds). */
   lastSyncedAt: number | null;
   syncError: string | null;
+  /** Its own chats with a reply running there now, while it's reachable (#790); absent means none. */
+  activeChats?: string[];
 }
 
 export interface PeersOverview {

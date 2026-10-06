@@ -97,6 +97,9 @@ function plainIp(address: string): string {
   return address.startsWith('::ffff:') ? address.slice(7) : address;
 }
 
+/** At most this many of a peer's running chats are kept: far more than anyone has running at once. */
+const MAX_ACTIVE_CHATS = 200;
+
 /**
  * Machines this one is paired with, and the peer listener they reach it on
  * (v2 plan, Tasks 46-47). Owns pairing in both directions, revocation, and
@@ -117,6 +120,10 @@ export class PeerService {
   private pairingOut = 0;
   /** Pulls changes from peers (Task 50); attached by the container once it exists. */
   private syncer: Syncer | null = null;
+  /** This machine's chats with a reply running, as told to its peers (attached by the container). */
+  private runningHere: () => string[] = () => [];
+  /** Each peer's chats with a reply running there, as it last said. */
+  private readonly activityByPeer = new Map<string, string[]>();
 
   constructor(private readonly options: PeerServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -136,6 +143,11 @@ export class PeerService {
       onMessage: (nodeId, event, data) => {
         options.monitor?.onMessage?.(nodeId, event, data);
         if (event === 'changes-available') this.syncer?.pullSoon(nodeId);
+        if (event === 'activity') {
+          const ids = (data as { chatIds?: unknown } | null)?.chatIds;
+          this.activityByPeer.set(nodeId, Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string').slice(0, MAX_ACTIVE_CHATS) : []);
+          options.events?.emit({ type: 'peer-activity', nodeId });
+        }
       },
     });
   }
@@ -146,6 +158,21 @@ export class PeerService {
 
   syncerOrNull(): Syncer | null {
     return this.syncer;
+  }
+
+  /** Where this machine's running replies come from: the ids of its own chats with one running. */
+  attachActivity(runningHere: () => string[]): void {
+    this.runningHere = runningHere;
+  }
+
+  /** What this machine tells its peers about its running replies (#790's "also active" hint). */
+  activity(): { chatIds: string[] } {
+    return { chatIds: this.runningHere() };
+  }
+
+  /** The chats with a reply running on `nodeId`, as it last said; none while it isn't reachable. */
+  activeChats(nodeId: string): string[] {
+    return this.status(nodeId).status === 'reachable' ? (this.activityByPeer.get(nodeId) ?? []) : [];
   }
 
   /** The syncer, for the peer listener's sync routes. */
@@ -380,6 +407,7 @@ export class PeerService {
     for (const close of [...(this.closers.get(peer.nodeId) ?? [])]) close();
     this.streams.delete(peer.nodeId);
     this.closers.delete(peer.nodeId);
+    this.activityByPeer.delete(peer.nodeId);
   }
 
   // --- after pairing ---------------------------------------------------------

@@ -9,7 +9,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { api, type PeersOverview } from '../state/api.js';
-import { machineName, remoteUnreachable } from '../state/machines.js';
+import { alsoActive, machineName, remoteUnreachable } from '../state/machines.js';
 import { useGruntStore } from '../state/store.js';
 import { UnreachableBanner } from './UnreachableBanner.js';
 
@@ -46,6 +46,27 @@ describe('where a chat runs', () => {
     expect(remoteUnreachable(machines('unknown'), chat())).toBe(false);
     expect(remoteUnreachable(m, chat({ runsOn: 'node-laptop' }))).toBe(false);
     expect(remoteUnreachable(m, chat({ runsOn: 'node-gone' }))).toBe(true);
+  });
+
+  it("finds another machine's running replies in this chat's folder: same location and subfolder, other chats only, while it's reachable", () => {
+    const nc = (subpath: string) => ({ kind: 'location' as const, locationId: 'nc', subpath });
+    const here = chat({ id: 'here', workspace: nc('Testing') });
+    const chats = [
+      here,
+      chat({ id: 'same-folder', title: 'Refactor', workspace: nc('Testing') }),
+      chat({ id: 'other-folder', title: 'Notes', workspace: nc('Elsewhere') }),
+      chat({ id: 'machine-bound', title: 'Local', workspace: { kind: 'machine', nodeId: 'node-pc', root: 'E:\\Nextcloud\\Testing' } }),
+    ];
+    const withActive = (status: 'reachable' | 'unreachable', activeChats: string[]): PeersOverview => {
+      const m = machines(status);
+      return { ...m, peers: m.peers.map((p) => ({ ...p, activeChats })) };
+    };
+    const busy = ['here', 'same-folder', 'other-folder', 'machine-bound'];
+
+    expect(alsoActive(withActive('reachable', busy), chats, here)).toEqual([{ machine: 'PC', chatId: 'same-folder', title: 'Refactor' }]);
+    expect(alsoActive(withActive('unreachable', busy), chats, here)).toEqual([]);
+    expect(alsoActive(withActive('reachable', busy), chats, chat({ id: 'nowhere', workspace: null }))).toEqual([]);
+    expect(alsoActive(machines('reachable'), chats, here)).toEqual([]);
   });
 });
 
