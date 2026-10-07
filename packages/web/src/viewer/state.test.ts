@@ -10,6 +10,16 @@ beforeEach(() => {
 });
 
 describe('viewer state', () => {
+  it('keeps artifact items in history, telling versions apart', () => {
+    const s = useViewerStore.getState();
+    s.openItem('c1', { kind: 'artifact', artifactId: 'art', title: 'Calc' });
+    s.openItem('c1', { kind: 'artifact', artifactId: 'art', title: 'Calc' });
+    s.openItem('c1', { kind: 'artifact', artifactId: 'art', title: 'Calc', versionId: 'v1' });
+    expect(v().history).toHaveLength(2);
+    const saved = JSON.parse(window.localStorage.getItem(VIEWER_STORAGE_KEY)!) as Record<string, { history: unknown[] }>;
+    expect(saved['c1']!.history).toHaveLength(2);
+  });
+
   it('opens an item in the panel, with back and forward, dropping forward history on a new item', () => {
     const s = useViewerStore.getState();
     expect(v()).toEqual(DEFAULT_VIEWER);

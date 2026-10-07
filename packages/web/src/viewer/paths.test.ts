@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { looksLikePath, toolPath } from './paths.js';
+import { artifactOutcomeOf, isArtifactTool, looksLikePath, toolPath } from './paths.js';
 
 describe('looksLikePath', () => {
   it('takes absolute, explicitly relative and folder/file paths, and bare file names it knows', () => {
@@ -22,5 +22,19 @@ describe('toolPath', () => {
     for (const [name, args] of [['list_dir', { path: '.' }], ['LS', { path: '/x' }], ['Glob', { path: 'src' }], ['Grep', { path: 'src' }], ['search_files', { path: 'src' }], ['read_file', {}], ['read_file', null], ['read_file', { path: '  ' }]] as const) {
       expect(toolPath(name, args)).toBeNull();
     }
+  });
+});
+
+describe('artifactOutcomeOf', () => {
+  it("reads an artifact call's outcome from a result string, an MCP content list or an object", () => {
+    const outcome = { ok: true, command: 'create', artifactId: 'art', slug: 'calc', title: 'Calc', kind: 'html', number: 1, versionId: 'v1' };
+    expect(artifactOutcomeOf(JSON.stringify(outcome))).toMatchObject({ artifactId: 'art', number: 1 });
+    expect(artifactOutcomeOf([{ type: 'text', text: JSON.stringify(outcome) }])).toMatchObject({ title: 'Calc' });
+    expect(artifactOutcomeOf(outcome)).toMatchObject({ command: 'create' });
+    for (const no of [null, 'oops', { error: true }, { ...outcome, command: 'view' }, [{ type: 'image' }]]) expect(artifactOutcomeOf(no)).toBeNull();
+    expect(isArtifactTool('artifact')).toBe(true);
+    // Both engines report Grunt's tool as `artifact`; a server named grunt is just an MCP server.
+    expect(isArtifactTool('mcp__grunt__artifact')).toBe(false);
+    expect(isArtifactTool('read_file')).toBe(false);
   });
 });

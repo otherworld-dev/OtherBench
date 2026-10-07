@@ -4,7 +4,7 @@ import { openSite } from '../desktop/bridge.js';
 import { useGruntStore } from '../state/store.js';
 import { FileTree } from './FileTree.js';
 import { ItemView } from './ItemView.js';
-import { viewTabId } from './items.js';
+import { itemKey, viewTabId } from './items.js';
 import { useViewerStore, viewerFor } from './state.js';
 
 const BAR_BUTTON = 'rounded px-1.5 py-0.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] disabled:opacity-40';
@@ -51,7 +51,7 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
         >
           <input
             aria-label="Open a path or web address"
-            placeholder={current?.path ?? 'Path, or https://…'}
+            placeholder={current?.kind === 'file' ? current.path : (current?.title ?? 'Path, or https://…')}
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             className="w-full rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-0.5 font-mono text-xs"
@@ -79,7 +79,7 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {showingItem ? (
-          <ItemView key={current.path} chatId={chat.id} item={current} />
+          <ItemView key={itemKey(current)} chatId={chat.id} item={current} />
         ) : (
           <FileTree chatId={chat.id} onOpen={(path) => openItem(chat.id, { kind: 'file', path })} />
         )}
