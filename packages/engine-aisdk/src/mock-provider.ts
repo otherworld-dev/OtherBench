@@ -131,7 +131,9 @@ function isToolErrorResult(result: unknown): boolean {
  * `ConnectionKind` `'mock'`.
  *
  * Triggers (checked against the prompt text, first match wins, in this
- * order): `#fail` -> a single `rate_limit` error event. `#tool` -> a
+ * order): `#fail` -> a single `rate_limit` error event. `#artifact` -> an
+ * `artifact` create through the real tool when offered (Deck #896), then
+ * "I made the artifact.". `#tool` -> a
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
@@ -165,6 +167,11 @@ export class MockChatEngine implements ChatEngine {
           retryable: true,
         },
       };
+      return;
+    }
+
+    if (prompt.includes('#artifact')) {
+      yield* this.streamArtifactTurn(req, tokensIn);
       return;
     }
 
@@ -231,6 +238,27 @@ export class MockChatEngine implements ChatEngine {
    * file's own `#tool` tests below) -- unchanged behaviour from before this
    * routing existed.
    */
+  /** `#artifact` (Deck #896): one `artifact` create through the real tool when offered, so the e2e drives the whole path. */
+  private async *streamArtifactTurn(req: EngineRequest, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-artifact-${randomUUID()}`;
+    const args = { command: 'create', id: 'page', kind: 'html', title: 'Mock page', content: '<!doctype html><h1 id="h">Mock artifact</h1>' };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'artifact', args };
+    const tool = req.tools.find((t) => t.name === 'artifact');
+    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
+    const answer = isError ? `The artifact didn't work: ${JSON.stringify(result)}` : 'I made the artifact.';
+    for (const chunk of splitIntoChunks(answer, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
   private async *streamToolTurn(req: EngineRequest, prompt: string, tokensIn: number): AsyncGenerator<EngineEvent> {
     const path = extractToolArgPath(prompt);
     const callId = `mock-tool-${randomUUID()}`;
