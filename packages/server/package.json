@@ -21,6 +21,7 @@
     "@grunt/tools": "*",
     "@hono/node-server": "2.1.3",
     "hono": "4.13.12",
+    "mermaid": "12.1.0",
     "unpdf": "1.8.0"
   },
   "devDependencies": {
