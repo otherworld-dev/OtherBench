@@ -21,6 +21,7 @@ import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
 import { claudeRoutes } from './routes/claude.js';
 import { viewRoutes } from './routes/view.js';
+import { viewServeRoutes } from './routes/view-serve.js';
 import { mountStatic } from './static.js';
 import { ViewLinks } from './view/links.js';
 
@@ -126,6 +127,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // of those own /chats/:id/attachments or /attachments/*.
   authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
+  // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
+  app.route('/view', viewServeRoutes(viewLinks));
 
   if (options.webDistDir) {
     mountStatic(app, { webDistDir: options.webDistDir });
