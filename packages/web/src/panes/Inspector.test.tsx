@@ -1,7 +1,8 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Chat } from '@grunt/core/ports/store.js';
+import type { Chat, Project } from '@grunt/core/ports/store.js';
+import type { FolderView } from '@grunt/core/types/workspace.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { Profile } from '@grunt/core/types/config.js';
@@ -38,6 +39,9 @@ vi.mock('../state/api.js', async (importOriginal) => {
       chats: {
         patch: vi.fn(),
       },
+      projects: {
+        patch: vi.fn(),
+      },
     },
   };
 });
@@ -57,6 +61,7 @@ const mockedGrantsRevoke = vi.mocked(api.grants.revoke);
 const mockedAuditList = vi.mocked(api.audit.list);
 const mockedHealth = vi.mocked(api.health);
 const mockedChatsPatch = vi.mocked(api.chats.patch);
+const mockedProjectsPatch = vi.mocked(api.projects.patch);
 const mockedIsDesktop = vi.mocked(isDesktop);
 const mockedPickFolder = vi.mocked(pickFolder);
 
@@ -138,6 +143,7 @@ beforeEach(() => {
   mockedAuditList.mockReset().mockResolvedValue([]);
   mockedHealth.mockReset().mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
   mockedChatsPatch.mockReset();
+  mockedProjectsPatch.mockReset();
 });
 
 describe('Inspector session spend', () => {
@@ -242,6 +248,9 @@ function auditSection(): HTMLElement {
 }
 function workspaceSection(): HTMLElement {
   return screen.getByRole('heading', { name: 'Workspace' }).closest('section')!;
+}
+function foldersSection(): HTMLElement {
+  return screen.getByRole('heading', { name: 'Other folders' }).closest('section')!;
 }
 
 describe('Inspector runs on', () => {
@@ -596,5 +605,128 @@ describe('Inspector project', () => {
 
     render(<Inspector chat={makeChat({ projectId: 'deleted' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(screen.queryByTestId('inspector-memory')).toBeNull();
+  });
+});
+
+describe('Inspector other folders', () => {
+  const refs = { kind: 'machine' as const, nodeId: 'node-self', root: 'E:\\Refs' };
+  const refsView: FolderView = { workspace: refs, access: 'read', root: 'E:\\Refs', status: { status: 'ok', root: 'E:\\Refs' } };
+  const workspace = { kind: 'machine' as const, nodeId: 'node-self', root: 'E:\\Git\\Grunt' };
+  const withFolders = (views: FolderView[]): Chat =>
+    makeChat({ workspace, workspaceRoot: 'E:\\Git\\Grunt', folders: views.map((v) => ({ workspace: v.workspace, access: v.access })), folderViews: views });
+
+  beforeEach(() => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+
+  it("lists the chat's folders; adding, changing access and removing each save the whole list, keeping folders in their stored form", async () => {
+    mockedChatsPatch.mockResolvedValue(withFolders([refsView]));
+    const user = userEvent.setup();
+    render(<Inspector chat={withFolders([refsView])} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const section = foldersSection();
+    expect(within(section).getByTestId('extra-folder')).toHaveTextContent('E:\\Refs');
+    expect(within(section).getByRole('combobox', { name: 'Access to E:\\Refs' })).toHaveValue('read');
+
+    await user.type(within(section).getByRole('textbox', { name: 'Add a folder for this chat' }), 'E:\\Scratch');
+    await user.selectOptions(within(section).getByRole('combobox', { name: 'Access to the new folder for this chat' }), 'readwrite');
+    await user.click(within(section).getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', {
+        folders: [
+          { workspace: refs, access: 'read' },
+          { path: 'E:\\Scratch', access: 'readwrite' },
+        ],
+      })
+    );
+    await waitFor(() => expect(within(section).getByRole('textbox', { name: 'Add a folder for this chat' })).toHaveValue(''));
+
+    await user.selectOptions(within(section).getByRole('combobox', { name: 'Access to E:\\Refs' }), 'readwrite');
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenLastCalledWith('chat-1', { folders: [{ workspace: refs, access: 'readwrite' }] }));
+
+    await user.click(within(section).getByRole('button', { name: 'Remove E:\\Refs' }));
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenLastCalledWith('chat-1', { folders: [] }));
+  });
+
+  it('refuses a relative path without saving, and shows what the server refused', async () => {
+    const user = userEvent.setup();
+    render(<Inspector chat={withFolders([])} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const section = foldersSection();
+    expect(within(section).getByText('None.')).toBeInTheDocument();
+    const input = within(section).getByRole('textbox', { name: 'Add a folder for this chat' });
+
+    await user.type(input, 'refs{Enter}');
+    expect(await within(section).findByRole('alert')).toBeInTheDocument();
+    expect(mockedChatsPatch).not.toHaveBeenCalled();
+
+    mockedChatsPatch.mockRejectedValue(new ApiError(400, '"folders[0]" is the workspace folder itself; it\'s already available.'));
+    await user.clear(input);
+    await user.type(input, 'E:\\Git\\Grunt{Enter}');
+    await waitFor(() => expect(within(section).getByRole('alert')).toHaveTextContent('is the workspace folder itself'));
+    // A refused folder stays in the field, to fix and try again.
+    expect(input).toHaveValue('E:\\Git\\Grunt');
+  });
+
+  it("marks a folder that isn't on the machine running the chat, by where it's known to be", () => {
+    const away: FolderView = {
+      workspace: { kind: 'machine', nodeId: 'node-pc', root: 'D:\\Shared' },
+      access: 'readwrite',
+      root: null,
+      status: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'node-pc', path: 'D:\\Shared' } },
+    };
+    render(<Inspector chat={withFolders([away])} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = within(foldersSection()).getByTestId('extra-folder');
+    expect(row).toHaveTextContent('D:\\Shared');
+    expect(row).toHaveTextContent('not on this machine');
+  });
+
+  it("for a chat in a project, also lists the project's folders and saves those on the project", async () => {
+    const project: Project = {
+      id: 'p-w',
+      name: 'Website',
+      workspace: null,
+      workspaceRoot: null,
+      defaultProfileId: null,
+      sortOrder: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      folders: [{ workspace: refs, access: 'read' }],
+      folderViews: [refsView],
+    };
+    useGruntStore.setState({ projects: [project] });
+    mockedProjectsPatch.mockResolvedValue(project);
+    const user = userEvent.setup();
+    render(<Inspector chat={{ ...withFolders([]), projectId: 'p-w' }} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const section = foldersSection();
+    expect(within(section).getByRole('heading', { name: 'Every chat in Website' })).toBeInTheDocument();
+    expect(within(section).getByRole('heading', { name: 'This chat' })).toBeInTheDocument();
+
+    await user.type(within(section).getByRole('textbox', { name: 'Add a folder for the project' }), 'E:\\Brand{Enter}');
+    await waitFor(() =>
+      expect(mockedProjectsPatch).toHaveBeenCalledWith('p-w', {
+        folders: [
+          { workspace: refs, access: 'read' },
+          { path: 'E:\\Brand', access: 'read' },
+        ],
+      })
+    );
+    expect(mockedChatsPatch).not.toHaveBeenCalled();
+  });
+
+  it('in the desktop app, Choose… adds a picked folder, but only for a chat that runs on this machine', async () => {
+    mockedIsDesktop.mockReturnValue(true);
+    mockedPickFolder.mockResolvedValue('E:\\Picked');
+    mockedChatsPatch.mockResolvedValue(withFolders([]));
+    const user = userEvent.setup();
+    const { unmount } = render(<Inspector chat={withFolders([])} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await user.click(within(foldersSection()).getByRole('button', { name: 'Choose…' }));
+    await waitFor(() => expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { folders: [{ path: 'E:\\Picked', access: 'read' }] }));
+    unmount();
+
+    useGruntStore.setState({ machines: { self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' }, listening: { running: true, addresses: [] }, peers: [] } });
+    render(<Inspector chat={{ ...withFolders([]), runsOn: 'node-pc' }} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(within(foldersSection()).queryByRole('button', { name: 'Choose…' })).toBeNull();
+    mockedIsDesktop.mockReturnValue(false);
   });
 });

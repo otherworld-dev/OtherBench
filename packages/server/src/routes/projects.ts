@@ -5,7 +5,7 @@ import { PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Project, Store } from '@grunt/core/ports/store.js';
 import type { Container } from '../container.js';
 import { optionalNullableString } from '../validation.js';
-import { parseWorkspaceBody, projectView, projectViews } from '../workspace-view.js';
+import { parseFoldersBody, parseWorkspaceBody, projectView, projectViews } from '../workspace-view.js';
 
 interface ProjectBody {
   name?: unknown;
@@ -14,6 +14,7 @@ interface ProjectBody {
   workspaceRoot?: unknown;
   defaultProfileId?: unknown;
   sortOrder?: unknown;
+  folders?: unknown;
 }
 
 /** Spec §2: trimmed, 1-80 characters. */
@@ -78,7 +79,7 @@ export function projectsRoutes(container: Container): Hono {
 
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
-    getProjectOrThrow(container, id);
+    const current = getProjectOrThrow(container, id);
     const body = (await c.req.json().catch(() => ({}))) as ProjectBody;
 
     // Every field is validated before anything is written.
@@ -86,6 +87,9 @@ export function projectsRoutes(container: Container): Hono {
     if (body.name !== undefined) patch.name = requireProjectName(body.name);
     const workspace = parseWorkspaceBody(container, body);
     if (workspace !== undefined) patch.workspace = workspace;
+    if (body.folders !== undefined) {
+      patch.folders = parseFoldersBody(container, body.folders, current.folders ?? [], patch.workspace !== undefined ? patch.workspace : current.workspace);
+    }
     if (body.defaultProfileId !== undefined) patch.defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
     if (body.sortOrder !== undefined) {
       if (typeof body.sortOrder !== 'number' || !Number.isInteger(body.sortOrder)) {

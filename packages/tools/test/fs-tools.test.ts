@@ -875,3 +875,42 @@ describe('under a real, unhooked concurrent racer', () => {
     RACE_MS + 20_000
   );
 });
+
+describe('extra folders (spec 2026-10-07-extra-folders)', () => {
+  let refs: string, notes: string, vendor: string;
+  beforeEach(() => {
+    refs = join(base, 'refs');
+    notes = join(base, 'notes');
+    vendor = join(ws, 'vendor');
+    for (const d of [refs, notes, vendor]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(refs, 'paper.md'), 'line one\nthe key result\n');
+    writeFileSync(join(vendor, 'lib.js'), 'original');
+  });
+  const withFolders = () =>
+    ctx({ folders: [{ root: refs, access: 'read' }, { root: notes, access: 'readwrite' }, { root: vendor, access: 'read' }] });
+
+  it('reads, lists and searches an extra folder by absolute path, reporting absolute paths there', async () => {
+    expect(await readFileTool.execute({ path: join(refs, 'paper.md') }, withFolders())).toMatchObject({ path: join(refs, 'paper.md'), content: 'line one\nthe key result\n' });
+    expect(await listDirTool.execute({ path: refs }, withFolders())).toMatchObject({ path: refs, entries: [{ name: 'paper.md', type: 'file' }] });
+    expect(await searchFilesTool.execute({ path: refs, query: 'key result' }, withFolders())).toMatchObject({ matches: [{ path: 'paper.md', line: 2 }] });
+  });
+
+  it('writes and edits in a read & write folder, and refuses either in a read-only one, however the path is written', async () => {
+    expect(await writeFileTool.execute({ path: join(notes, 'n.md'), content: 'hello' }, withFolders())).toMatchObject({ path: join(notes, 'n.md'), bytesWritten: 5 });
+    expect(readFileSync(join(notes, 'n.md'), 'utf8')).toBe('hello');
+
+    for (const path of [join(refs, 'paper.md'), join(vendor, 'lib.js'), 'vendor/lib.js']) {
+      expect(await writeFileTool.execute({ path, content: 'x' }, withFolders())).toMatchObject({ error: true, code: 'read_only_folder' });
+      expect(await editFileTool.execute({ path, oldString: 'o', newString: 'x' }, withFolders())).toMatchObject({ error: true, code: 'read_only_folder' });
+    }
+    expect(readFileSync(join(refs, 'paper.md'), 'utf8')).toBe('line one\nthe key result\n');
+    expect(readFileSync(join(vendor, 'lib.js'), 'utf8')).toBe('original');
+  });
+
+  it('still keeps relative paths in the workspace, and refuses folders the chat was not given', async () => {
+    expect(await writeFileTool.execute({ path: 'a.txt', content: 'ws' }, withFolders())).toMatchObject({ path: 'a.txt' });
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('ws');
+    expect(await readFileTool.execute({ path: join(outside, 'secret.txt') }, withFolders())).toMatchObject({ error: true, code: 'path_escape' });
+    expect(await readFileTool.execute({ path: join(refs, 'paper.md') }, ctx())).toMatchObject({ error: true, code: 'path_escape' });
+  });
+});

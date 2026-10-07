@@ -560,6 +560,33 @@ describe("TurnRunner and the chat's folder (v2 spec §6)", () => {
 
     expect(engine.requests[0]!.workspaceRoot).toBe('/home/adam/Nextcloud/phd');
   });
+
+  it("hands the engine the project's and the chat's extra folders that resolve here, and tells the model about them", async () => {
+    const store = new InMemoryStore('node-laptop');
+    store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    store.locations.setPath({ locationId: 'nc', nodeId: 'node-laptop', path: '/home/adam/Nextcloud' });
+    const nc = (subpath: string) => ({ kind: 'location' as const, locationId: 'nc', subpath });
+    store.projects.create({ id: 'proj', name: 'PhD', workspaceRoot: null, defaultProfileId: null, folders: [{ workspace: nc('refs'), access: 'read' }] });
+    store.chats.create({
+      id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: nc('phd'), pinned: false, archivedAt: null, projectId: 'proj',
+      folders: [{ workspace: nc('notes'), access: 'readwrite' }, { workspace: nc('not-here'), access: 'read' }],
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine, { pathExists: (p) => p !== '/home/adam/Nextcloud/not-here' });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+
+    const request = engine.requests[0]!;
+    expect(request.folders).toEqual([
+      { root: '/home/adam/Nextcloud/refs', access: 'read' },
+      { root: '/home/adam/Nextcloud/notes', access: 'readwrite' },
+    ]);
+    const system = request.messages.find((m) => m.role === 'system')?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+    expect(system).toContain('/home/adam/Nextcloud/refs (read-only)');
+    expect(system).toContain('/home/adam/Nextcloud/notes (read and write)');
+    expect(system).not.toContain('not-here');
+  });
 });
 
 describe('TurnRunner capability fallback for image attachments', () => {

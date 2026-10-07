@@ -1,5 +1,6 @@
 import type { Grant } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
+import type { ResolvedFolder } from '../types/workspace.js';
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
@@ -18,6 +19,12 @@ export interface ToolContext {
    */
   profileId: string;
   workspaceRoot: string | null;
+  /**
+   * The chat's extra folders on this machine, each read-only or read & write
+   * (spec 2026-10-07-extra-folders). Paths in them are absolute; a relative
+   * path always means the workspace. Absent means none.
+   */
+  folders?: ResolvedFolder[];
   signal: AbortSignal;
 }
 

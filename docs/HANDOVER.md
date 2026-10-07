@@ -501,6 +501,18 @@ reach both:
   in-module, and the in-module version is the one that stays in sync with
   the code as it keeps changing — this section already lagged it once.
 
+**Extra folders widen containment, not past it.** A chat (and its project)
+can name up to 10 other folders, each read-only or read & write
+(`chat.folders`, `project.folders`; schema 15). File tools go through
+`containPathIn`, which checks the workspace and each folder with the same
+`containPath` and lets the innermost root decide, so a read-only folder
+inside a writable one stays read-only. A write into a read-only folder is
+refused before any card (PermissionBroker for the API tools, the PreToolUse
+gate for Claude Code, and again in fs-tools). Claude Code gets the folders as
+`additionalDirectories`. Shell commands are not path-contained, so read-only
+binds file tools only; shell approval is still the control. A folder missing
+on the machine running the reply is left out of that turn.
+
 **Shell grant defaults — the shipped UI follows the controller ruling.**
 An `always`-scope shell grant using `commandPrefix` (matching a command *and
 any arguments after it*) is, for most real programs, equivalent to an
@@ -590,7 +602,8 @@ API that runs shell commands and holds the bearer token.
   with a capability error ("Auto mode isn't available for this account or
   model. Turn it off to continue."). Use a model whose `supportsAutoMode` is
   true (sonnet here).
-- File-tool paths are checked with `containPath`; outside the workspace is
+- File-tool paths are checked with `containPathIn` (the workspace and the
+  chat's extra folders); anywhere else, or a write into a read-only folder, is
   denied without a card. The agent shell tools (Bash, BashOutput, KillShell,
   PowerShell, Monitor) are not path-contained; their grants are pinned to the
   exact command like `run_command`.

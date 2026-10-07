@@ -86,16 +86,16 @@ export class LiveProcess {
  * The options that fix a process's behaviour for its whole life. A reply can
  * reuse a live process only when these are identical; anything else -- a
  * different model, folder, tool policy, auto mode, system prompt (which
- * carries project memory), thinking budget, effort, backend or credentials -- starts
+ * carries project memory), extra folders, thinking budget, effort, backend or credentials -- starts
  * a fresh process. `connection` stands in for the child environment, which
  * can't be compared whole: the Agent SDK itself changes the server's
  * environment (`CLAUDE_AGENT_SDK_VERSION`) each time it starts a process.
  * Hashed, so no second plaintext copy of a credential is kept.
  */
 export function liveKey(options: Options, connection: { backend: string; token: string | null }): string {
-  const { cwd, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
+  const { cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, cwd, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 

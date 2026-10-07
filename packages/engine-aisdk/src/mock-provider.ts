@@ -251,6 +251,7 @@ export class MockChatEngine implements ChatEngine {
         messageId: req.messageId,
         profileId: req.profile.id,
         workspaceRoot: req.workspaceRoot,
+        ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
         signal: req.signal,
       };
       const result = await realTool.execute(args, ctx);

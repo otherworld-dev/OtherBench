@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { adoptIntoLocation, classifyPath, inferLocationMapping, joinSubpath, relativeSegments, resolveWorkspace } from '../src/domain/workspace.js';
-import type { LocationPath } from '../src/types/workspace.js';
+import { adoptIntoLocation, classifyPath, inferLocationMapping, joinSubpath, mergeFolders, parseFolders, relativeSegments, resolveFolders, resolveWorkspace, sameWorkspace } from '../src/domain/workspace.js';
+import type { ExtraFolder, LocationPath } from '../src/types/workspace.js';
 
 const PC = 'node-pc';
 const LAPTOP = 'node-laptop';
@@ -104,5 +104,62 @@ describe('adoptIntoLocation', () => {
     expect(adoptIntoLocation({ kind: 'machine', nodeId: PC, root: 'E:\\Gitlab' }, PC, 'E:\\Git', 'git')).toBeNull();
     expect(adoptIntoLocation({ kind: 'location', locationId: 'nc', subpath: 'x' }, PC, 'E:\\Git', 'git')).toBeNull();
     expect(adoptIntoLocation(null, PC, 'E:\\Git', 'git')).toBeNull();
+  });
+});
+
+describe('extra folders', () => {
+  const nc = (subpath: string): ExtraFolder['workspace'] => ({ kind: 'location', locationId: 'nc', subpath });
+  const paths: LocationPath[] = [
+    { locationId: 'nc', nodeId: 'pc', path: 'E:\\Nextcloud' },
+    { locationId: 'nc', nodeId: 'laptop', path: 'C:\\Users\\Adam\\Nextcloud' },
+  ];
+
+  it('tells the same place by location and subfolder, or by machine and path (any case on Windows)', () => {
+    expect(sameWorkspace(nc('PhD/papers'), nc('PhD/papers'))).toBe(true);
+    expect(sameWorkspace(nc('PhD/papers'), nc('PhD'))).toBe(false);
+    expect(sameWorkspace({ kind: 'machine', nodeId: 'pc', root: 'E:\\Git\\Grunt' }, { kind: 'machine', nodeId: 'pc', root: 'e:\\git\\grunt\\' })).toBe(true);
+    expect(sameWorkspace({ kind: 'machine', nodeId: 'pc', root: 'E:\\Git' }, { kind: 'machine', nodeId: 'laptop', root: 'E:\\Git' })).toBe(false);
+    expect(sameWorkspace(nc('Git'), { kind: 'machine', nodeId: 'pc', root: 'E:\\Nextcloud\\Git' })).toBe(false);
+  });
+
+  it("merges a project's folders and a chat's: each place once, the stricter access winning", () => {
+    const project: ExtraFolder[] = [{ workspace: nc('refs'), access: 'readwrite' }, { workspace: nc('notes'), access: 'readwrite' }];
+    const chat: ExtraFolder[] = [{ workspace: nc('refs'), access: 'read' }, { workspace: nc('data'), access: 'read' }];
+    expect(mergeFolders(project, chat)).toEqual([
+      { workspace: nc('refs'), access: 'read' },
+      { workspace: nc('notes'), access: 'readwrite' },
+      { workspace: nc('data'), access: 'read' },
+    ]);
+    expect(mergeFolders(undefined, undefined)).toEqual([]);
+  });
+
+  it('resolves the folders on this machine, leaving out any not here and the workspace itself', () => {
+    const folders: ExtraFolder[] = [
+      { workspace: nc('refs'), access: 'read' },
+      { workspace: nc('project'), access: 'readwrite' },
+      { workspace: { kind: 'machine', nodeId: 'pc', root: 'E:\\Scratch' }, access: 'readwrite' },
+      { workspace: { kind: 'location', locationId: 'gone', subpath: '' }, access: 'read' },
+    ];
+    expect(resolveFolders(folders, 'laptop', paths, () => true, 'C:\\Users\\Adam\\Nextcloud\\project')).toEqual([{ root: 'C:\\Users\\Adam\\Nextcloud\\refs', access: 'read' }]);
+    expect(resolveFolders(folders, 'pc', paths, (p) => p !== 'E:\\Nextcloud\\refs', null)).toEqual([
+      { root: 'E:\\Nextcloud\\project', access: 'readwrite' },
+      { root: 'E:\\Scratch', access: 'readwrite' },
+    ]);
+  });
+
+  it('reads a stored list, dropping anything malformed or reaching out of its location (it arrives through sync too)', () => {
+    expect(parseFolders([
+      { workspace: nc('PhD'), access: 'read' },
+      { workspace: nc('../../Windows'), access: 'readwrite' },
+      { workspace: { kind: 'machine', nodeId: 'pc', root: 'E:\\Data' }, access: 'readwrite' },
+      { workspace: { kind: 'machine', nodeId: 'pc', root: '' }, access: 'read' },
+      { workspace: nc('x'), access: 'admin' },
+      'nonsense',
+    ])).toEqual([
+      { workspace: nc('PhD'), access: 'read' },
+      { workspace: { kind: 'machine', nodeId: 'pc', root: 'E:\\Data' }, access: 'readwrite' },
+    ]);
+    expect(parseFolders(null)).toEqual([]);
+    expect(parseFolders(Array.from({ length: 15 }, (_, i) => ({ workspace: nc(`f${i}`), access: 'read' })))).toHaveLength(10);
   });
 });

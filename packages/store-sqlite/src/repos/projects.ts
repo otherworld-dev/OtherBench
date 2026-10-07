@@ -2,19 +2,20 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { NewProject, Project, ProjectRepo } from '@grunt/core/ports/store.js';
 import { toStoredWorkspace } from '@grunt/core/domain/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
-import { WORKSPACE_COLUMNS, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
+import { WORKSPACE_COLUMNS, foldersFromRow, foldersToRow, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';
 
 function projectMapping(selfId: () => string): CrudMapping<Project> {
   return {
     table: 'project',
-    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'default_profile_id', 'sort_order', 'created_at', 'updated_at'],
-    toRow: (p) => [p.id, p.name, ...workspaceToRow(p.workspace), p.defaultProfileId, p.sortOrder, p.createdAt, p.updatedAt],
+    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'folders', 'default_profile_id', 'sort_order', 'created_at', 'updated_at'],
+    toRow: (p) => [p.id, p.name, ...workspaceToRow(p.workspace), foldersToRow(p.folders), p.defaultProfileId, p.sortOrder, p.createdAt, p.updatedAt],
     fromRow: (row) => ({
       id: row.id as string,
       name: row.name as string,
       workspace: workspaceFromRow(row, selfId),
+      ...foldersFromRow(row),
       defaultProfileId: row.default_profile_id as string | null,
       sortOrder: row.sort_order as number,
       createdAt: row.created_at as number,

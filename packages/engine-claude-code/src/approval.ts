@@ -1,9 +1,10 @@
 import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
-import { containPath } from '@grunt/core/domain/paths.js';
+import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
+import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 
 export type GateDecision = { allow: true } | { allow: false; reason: string } | { defer: true };
 /**
@@ -51,18 +52,24 @@ function staticPrefix(pattern: string): string {
  * or contain `..` must have a contained static prefix. A path outside the
  * workspace is reported as `outside`; a non-string/empty one as `unusable`.
  * Neither is ever sent to the broker.
+ *
+ * `folders` are the chat's extra folders (spec 2026-10-07-extra-folders): a
+ * path in one is contained too (containPathIn), and its `path` is absolute,
+ * since it isn't under the workspace. A file-write into a read-only one is
+ * reported as `readOnly`, and never sent to the broker either.
  */
 export function normaliseAgentArgs(
   toolName: string,
   input: Record<string, unknown>,
   workspaceRoot: string,
-): { args: Record<string, unknown> } | { outside: string } | { unusable: string } {
+  folders: readonly ResolvedFolder[] = [],
+): { args: Record<string, unknown> } | { outside: string } | { unusable: string } | { readOnly: string } {
   const { category } = classifyAgentTool(toolName);
   if (category !== 'file-read' && category !== 'file-write') return { args: { ...input } };
-  const contain = (raw: string): string | null => {
+  const contain = (raw: string): ContainedIn | null => {
     if (raw.startsWith('~') || isDriveLetterPosixPath(raw)) return null;
     try {
-      return containPath(workspaceRoot, raw);
+      return containPathIn(workspaceRoot, folders, raw);
     } catch {
       return null;
     }
@@ -74,9 +81,14 @@ export function normaliseAgentArgs(
     if (typeof v !== 'string' || v.trim().length === 0) return { unusable: key };
     const contained = contain(v.trim());
     if (contained === null) return { outside: v };
+    if (category === 'file-write' && !contained.writable) return { readOnly: v };
     if (rel === undefined) {
-      const r = relative(containPath(workspaceRoot, '.'), contained).split(sep).join('/');
-      rel = r === '' ? '.' : r;
+      if (contained.root === workspaceRoot) {
+        const r = relative(containPath(workspaceRoot, '.'), contained.path).split(sep).join('/');
+        rel = r === '' ? '.' : r;
+      } else {
+        rel = contained.path;
+      }
     }
   }
   const patKey = PATTERN_KEYS[toolName];
@@ -104,9 +116,12 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
       if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
-      const normalised = normaliseAgentArgs(toolName, input, workspaceRoot);
+      const normalised = normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
+      }
+      if ('readOnly' in normalised) {
+        return { allow: false, reason: `"${toolName}" was blocked: ${normalised.readOnly} is in a read-only folder.` };
       }
       if ('unusable' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: it has an unusable path argument (${normalised.unusable}).` };
@@ -199,7 +214,7 @@ export function permissionDeniedHook(deps: { approvals: Pick<ToolProvider, 'reco
       let args: Record<string, unknown> = raw;
       try {
         const root = deps.ctx.workspaceRoot;
-        const normalised = root ? normaliseAgentArgs(toolName, raw, root) : null;
+        const normalised = root ? normaliseAgentArgs(toolName, raw, root, deps.ctx.folders ?? []) : null;
         if (normalised && 'args' in normalised) args = normalised.args;
       } catch {
         // keep the raw args

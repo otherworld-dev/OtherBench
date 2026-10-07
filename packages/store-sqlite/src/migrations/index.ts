@@ -13,6 +13,7 @@ import { MIGRATION_011_NODES_AND_LOCATIONS } from './011-nodes-and-locations.js'
 import { MIGRATION_012_PEERS } from './012-peers.js';
 import { MIGRATION_013_CHANGE_TRACKING } from './013-change-tracking.js';
 import { MIGRATION_014_CHAT_EFFORT } from './014-chat-effort.js';
+import { MIGRATION_015_EXTRA_FOLDERS } from './015-extra-folders.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -32,6 +33,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_012_PEERS,
   MIGRATION_013_CHANGE_TRACKING,
   { version: 14, name: '014-chat-effort', sql: MIGRATION_014_CHAT_EFFORT },
+  { version: 15, name: '015-extra-folders', sql: MIGRATION_015_EXTRA_FOLDERS },
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

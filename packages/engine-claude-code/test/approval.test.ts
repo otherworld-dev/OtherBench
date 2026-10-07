@@ -350,3 +350,43 @@ describe('permissionDeniedHook', () => {
     expect(calls[2]![2]).toEqual({});
   });
 });
+
+describe('extra folders (spec 2026-10-07-extra-folders)', () => {
+  let refs: string, notes: string;
+  beforeEach(() => {
+    refs = mkdtempSync(join(tmpdir(), 'grunt-cc-refs-'));
+    notes = mkdtempSync(join(tmpdir(), 'grunt-cc-notes-'));
+  });
+  afterEach(() => {
+    rmSync(refs, { recursive: true, force: true });
+    rmSync(notes, { recursive: true, force: true });
+  });
+  const folders = () => [{ root: refs, access: 'read' as const }, { root: notes, access: 'readwrite' as const }];
+
+  it('lets a path in an extra folder through as an absolute path, and keeps workspace paths relative', () => {
+    expect(normaliseAgentArgs('Read', { file_path: join(refs, 'paper.md') }, ws, folders())).toEqual({ args: { file_path: join(refs, 'paper.md'), path: join(refs, 'paper.md') } });
+    expect(normaliseAgentArgs('Write', { file_path: join(notes, 'n.md'), content: 'x' }, ws, folders())).toMatchObject({ args: { path: join(notes, 'n.md') } });
+    expect(normaliseAgentArgs('Read', { file_path: join(ws, 'src', 'a.ts') }, ws, folders())).toMatchObject({ args: { path: 'src/a.ts' } });
+    expect(normaliseAgentArgs('Grep', { pattern: 'x', path: refs }, ws, folders())).toMatchObject({ args: { path: refs } });
+  });
+
+  it('reports a write into a read-only folder, but not a read of it', () => {
+    expect(normaliseAgentArgs('Write', { file_path: join(refs, 'paper.md'), content: 'x' }, ws, folders())).toEqual({ readOnly: join(refs, 'paper.md') });
+    expect(normaliseAgentArgs('Edit', { file_path: join(refs, 'paper.md') }, ws, folders())).toEqual({ readOnly: join(refs, 'paper.md') });
+    expect(normaliseAgentArgs('Read', { file_path: join(refs, 'paper.md') }, ws, folders())).toHaveProperty('args');
+  });
+
+  it('the gate blocks a write into a read-only folder without asking, and asks about one in a read & write folder', async () => {
+    const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'ask:once' }));
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: { ...ctx(), folders: folders() } });
+    expect(await gate('Write', { file_path: join(refs, 'paper.md'), content: 'x' })).toEqual({ allow: false, reason: expect.stringContaining('read-only folder') });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(await gate('Write', { file_path: join(notes, 'n.md'), content: 'x' })).toEqual({ allow: true });
+    expect(requestApproval.mock.calls[0]![1]).toMatchObject({ path: join(notes, 'n.md') });
+  });
+
+  it('still blocks a folder the chat was not given', async () => {
+    const gate = createGate({ approvals: { requestApproval: vi.fn() }, policy, ctx: ctx() });
+    expect(await gate('Read', { file_path: join(refs, 'paper.md') })).toEqual({ allow: false, reason: expect.stringContaining('outside') });
+  });
+});

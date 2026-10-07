@@ -98,6 +98,7 @@ export const CHAT_FIELDS: Record<string, string[]> = {
   archivedAt: ['archived_at'],
   autoMode: ['auto_mode'],
   effort: ['effort'],
+  folders: ['folders'],
   projectId: ['project_id'],
   memoryCursor: ['memory_cursor'],
   memoryExcluded: ['memory_excluded'],

@@ -1,4 +1,4 @@
-import type { LocationPath, Workspace, WorkspaceStatus } from '../types/workspace.js';
+import type { ExtraFolder, LocationPath, ResolvedFolder, Workspace, WorkspaceStatus } from '../types/workspace.js';
 
 /** The fields a chat or project carries for its folder: the stored one and the API-only view of it. */
 interface WorkspaceFields {
@@ -170,4 +170,91 @@ export function adoptIntoLocation(ws: Workspace | null, nodeId: string, fromRoot
   if (ws?.kind !== 'machine' || ws.nodeId !== nodeId) return null;
   const rest = relativeSegments(fromRoot, ws.root);
   return rest === null ? null : { kind: 'location', locationId, subpath: rest.join('/') };
+}
+
+// --- Extra folders (spec 2026-10-07-extra-folders) ----------------------------
+
+/** Most extra folders a chat or project may list. */
+export const MAX_EXTRA_FOLDERS = 10;
+
+/** Whether two absolute paths are the same folder: whole segments, any case on Windows, trailing separators ignored. */
+export function samePath(a: string, b: string): boolean {
+  return relativeSegments(a, b)?.length === 0 && relativeSegments(b, a)?.length === 0;
+}
+
+/** Whether two stored folders are the same place: one location and subfolder, or one machine's path. */
+export function sameWorkspace(a: Workspace, b: Workspace): boolean {
+  if (a.kind === 'location' && b.kind === 'location') return a.locationId === b.locationId && segments(a.subpath).join('/') === segments(b.subpath).join('/');
+  if (a.kind === 'machine' && b.kind === 'machine') return a.nodeId === b.nodeId && samePath(a.root, b.root);
+  return false;
+}
+
+/** A chat's extra folders: its project's, then its own, each place once, the stricter access winning when both list it. */
+export function mergeFolders(...lists: (readonly ExtraFolder[] | undefined)[]): ExtraFolder[] {
+  const out: ExtraFolder[] = [];
+  for (const list of lists) {
+    for (const folder of list ?? []) {
+      const i = out.findIndex((o) => sameWorkspace(o.workspace, folder.workspace));
+      if (i === -1) out.push(folder);
+      else if (folder.access === 'read') out[i] = { ...out[i]!, access: 'read' };
+    }
+  }
+  return out;
+}
+
+/**
+ * The extra folders a turn's tools may reach on this machine: each one that
+ * resolves here (one that doesn't is left out), once, and never the
+ * workspace itself.
+ */
+export function resolveFolders(
+  folders: readonly ExtraFolder[],
+  selfNodeId: string,
+  paths: LocationPath[],
+  exists: (p: string) => boolean,
+  workspaceRoot: string | null
+): ResolvedFolder[] {
+  const out: ResolvedFolder[] = [];
+  for (const folder of folders) {
+    const status = resolveWorkspace(folder.workspace, selfNodeId, paths, exists);
+    if (status.status !== 'ok') continue;
+    if (workspaceRoot !== null && samePath(status.root, workspaceRoot)) continue;
+    const i = out.findIndex((o) => samePath(o.root, status.root));
+    if (i === -1) out.push({ root: status.root, access: folder.access });
+    else if (folder.access === 'read') out[i] = { root: out[i]!.root, access: 'read' };
+  }
+  return out;
+}
+
+/**
+ * A stored `folders` list, anything malformed dropped and at most
+ * MAX_EXTRA_FOLDERS kept. It arrives through sync too, so a location
+ * subfolder that climbs out of its location (`..`) is refused.
+ */
+export function parseFolders(value: unknown): ExtraFolder[] {
+  if (!Array.isArray(value)) return [];
+  const out: ExtraFolder[] = [];
+  for (const item of value) {
+    if (out.length === MAX_EXTRA_FOLDERS) break;
+    if (!item || typeof item !== 'object') continue;
+    const { workspace, access } = item as Record<string, unknown>;
+    if ((access !== 'read' && access !== 'readwrite') || !workspace || typeof workspace !== 'object') continue;
+    const w = workspace as Record<string, unknown>;
+    if (w['kind'] === 'location' && typeof w['locationId'] === 'string' && typeof w['subpath'] === 'string') {
+      if (segments(w['subpath']).includes('..')) continue;
+      out.push({ workspace: { kind: 'location', locationId: w['locationId'], subpath: w['subpath'] }, access });
+    } else if (w['kind'] === 'machine' && typeof w['nodeId'] === 'string' && typeof w['root'] === 'string' && w['root'] !== '') {
+      out.push({ workspace: { kind: 'machine', nodeId: w['nodeId'], root: w['root'] }, access });
+    }
+  }
+  return out;
+}
+
+/** The system-prompt block naming a turn's extra folders, so the model knows it may use them and how. */
+export function extraFoldersPrompt(folders: readonly ResolvedFolder[]): string {
+  return [
+    '# Other folders',
+    'Besides the workspace folder, you can use these folders. Refer to anything in them by its absolute path; a relative path always means the workspace.',
+    ...folders.map((f) => `- ${f.root} (${f.access === 'read' ? 'read-only' : 'read and write'})`),
+  ].join('\n');
 }

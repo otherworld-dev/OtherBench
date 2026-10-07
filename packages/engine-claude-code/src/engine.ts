@@ -156,7 +156,14 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
     const autoMode = req.autoMode === true && backend === CLAUDE_BACKEND;
-    const gateCtx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: profile.id, workspaceRoot: cwd, signal: req.signal };
+    const gateCtx: ToolContext = {
+      chatId: req.chatId,
+      messageId: req.messageId,
+      profileId: profile.id,
+      workspaceRoot: cwd,
+      ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
+      signal: req.signal,
+    };
     const binding: TurnBinding = {
       gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
@@ -254,6 +261,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
       // The chat's effort (chosen in the chat window) over the user's Claude Code settings; unset leaves those to decide.
       ...(req.effort ? { effort: req.effort } : {}),
+      // The chat's extra folders, which Claude Code may work in beside cwd; Grunt's gate still checks every path.
+      ...(req.folders && req.folders.length > 0 ? { additionalDirectories: req.folders.map((f) => f.root) } : {}),
     };
   }
 
