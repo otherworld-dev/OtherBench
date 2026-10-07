@@ -27,3 +27,15 @@ export function compareProjects(a: Project, b: Project): number {
   if (an !== bn) return an < bn ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
+
+/**
+ * The block a project chat's system prompt gets for the project's instructions
+ * (spec 2026-10-08-project-page-design §2), or null when they're blank. The
+ * user wrote them, so unlike project memory they are framed as instructions to
+ * follow and not fenced off as untrusted background.
+ */
+export function projectInstructionsPrompt(projectName: string, instructions: string): string | null {
+  const text = instructions.replace(/\r\n?/g, '\n').trim();
+  if (text.length === 0) return null;
+  return `# Project instructions: ${projectName}\nInstructions from the user for every chat in this project. Follow them unless the user says otherwise in this chat.\n\n${text}`;
+}
