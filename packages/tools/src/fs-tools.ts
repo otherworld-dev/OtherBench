@@ -1022,6 +1022,8 @@ export const fsTools: ToolSpec[] = [readFileTool, listDirTool, searchFilesTool, 
 
 // Re-exported for tests that want to assert on these guards specifically.
 export { ToctouGuardError, HardLinkError, AlreadyExistsError };
+/** The verified open and listing the file tools use, and their binary check, for other readers of a chat's folders (the viewer, Deck #826). */
+export { openVerified, readdirVerified, sniffBinary };
 
 /**
  * Test-only access to internals that have no seam on the public `ToolSpec`
