@@ -30,21 +30,15 @@ test('a project with a folder: a chat from its + inherits the folder, then moves
     await page.goto('/');
     const nav = page.getByRole('navigation', { name: 'Chats' });
 
-    // Create the project.
+    // Create the project, with its folder, on the project page.
     await nav.getByRole('button', { name: '+ New project' }).click();
-    const nameInput = nav.getByRole('textbox', { name: 'Project name' });
-    await nameInput.fill(projectName);
-    await nameInput.press('Enter');
+    const projectPage = page.getByTestId('project-view');
+    await projectPage.getByRole('textbox', { name: 'Name' }).fill(projectName);
+    await projectPage.getByRole('textbox', { name: 'Main folder' }).fill(folder);
+    await projectPage.getByRole('button', { name: 'Create project' }).click();
+    await expect(projectPage).toHaveCount(0);
     const group = nav.getByRole('group', { name: projectName });
     await expect(group).toBeVisible();
-
-    // Give it a folder from its ⋯ menu.
-    await group.getByRole('button', { name: 'Project actions' }).click();
-    await page.getByRole('menuitem', { name: 'Set folder…' }).click();
-    const folderInput = group.getByRole('textbox', { name: 'Project folder' });
-    await folderInput.fill(folder);
-    await group.getByRole('button', { name: 'Save' }).click();
-    await expect(folderInput).toHaveCount(0);
 
     // A chat from the project's + opens, starting in that folder.
     await group.getByRole('button', { name: `New chat in ${projectName}` }).click();
@@ -77,9 +71,8 @@ test('archiving a chat moves it to the archived section, and Unarchive brings it
   const nav = page.getByRole('navigation', { name: 'Chats' });
 
   await nav.getByRole('button', { name: '+ New project' }).click();
-  const nameInput = nav.getByRole('textbox', { name: 'Project name' });
-  await nameInput.fill(projectName);
-  await nameInput.press('Enter');
+  await page.getByRole('textbox', { name: 'Name' }).fill(projectName);
+  await page.getByRole('button', { name: 'Create project' }).click();
   const group = nav.getByRole('group', { name: projectName });
   await expect(group).toBeVisible();
 
@@ -213,4 +206,35 @@ test('dragging a divider resizes panes and is remembered; Ctrl+Shift+Enter maxim
 
   // Back to one chat for whatever runs next in this browser.
   await page.getByRole('button', { name: 'One chat' }).click();
+});
+
+test("a project's instructions, set from Project settings…, reach the model in every chat", async ({ page, request }) => {
+  const projectName = `E2E Instructions ${randomUUID().slice(0, 8)}`;
+  const rule = `rule-${randomUUID().slice(0, 8)}`;
+  const created = await request.post(`${BASE_URL}/api/projects`, { data: { name: projectName } });
+  expect(created.ok()).toBeTruthy();
+
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  const group = nav.getByRole('group', { name: projectName });
+
+  // Set the instructions on the project page, opened from the project's ⋯ menu.
+  await group.getByRole('button', { name: 'Project actions' }).click();
+  await page.getByRole('menuitem', { name: 'Project settings…' }).click();
+  const projectPage = page.getByTestId('project-view');
+  await projectPage.getByRole('textbox', { name: 'Instructions' }).fill(`Always mention ${rule}.`);
+  await projectPage.getByRole('button', { name: 'Save' }).click();
+  await expect(projectPage).toHaveCount(0);
+
+  // A chat in the project: the mock model echoes its system prompt.
+  await group.getByRole('button', { name: `New chat in ${projectName}` }).click();
+  await expect(group.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill('#echo-system');
+  await textbox.press('Enter');
+
+  const reply = page.locator('article[data-role="assistant"] .markdown-body');
+  await expect(reply).toContainText(`Project instructions: ${projectName}`);
+  await expect(reply).toContainText(`Always mention ${rule}.`);
+  await expect(page.getByLabel('streaming')).toHaveCount(0);
 });
