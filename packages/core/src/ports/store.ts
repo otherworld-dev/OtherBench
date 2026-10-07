@@ -551,12 +551,19 @@ export interface ArtifactVersion {
   number: number;
   title: string;
   content: string;
+  /** This version's kind: a rewrite may change it (a note made into a page), so the artifact's own kind is only the one it was created as. */
+  kind: ArtifactKind;
+  /** A code version's language (ts, py), else null. */
+  language: string | null;
   madeBy: 'model' | 'user';
   /** The reply that made it (your edit: the newest message on the branch you were on). Not a foreign key: it may arrive by sync before its message. */
   messageId: string | null;
   parentVersionId: string | null;
   createdAt: number;
 }
+
+/** A version to add: everything but its number, with kind and language defaulting to the artifact's. */
+export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language'> & { kind?: ArtifactKind; language?: string | null };
 
 export interface ArtifactRepo {
   create(a: Artifact): Artifact;
@@ -565,7 +572,8 @@ export interface ArtifactRepo {
   /** Oldest first. */
   listByChat(chatId: string): Artifact[];
   /** Adds a version numbered after the artifact's highest. */
-  addVersion(v: Omit<ArtifactVersion, 'number'>): ArtifactVersion;
+  /** Numbers the version next; its kind and language are the artifact's unless given. */
+  addVersion(v: NewArtifactVersion): ArtifactVersion;
   getVersion(id: string): ArtifactVersion | null;
   /** Oldest (lowest number) first. */
   versions(artifactId: string): ArtifactVersion[];

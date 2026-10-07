@@ -52,7 +52,9 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   }, [chatId, item.artifactId, stamp, reload]);
 
   const versionId = picked ?? detail?.currentVersionId ?? detail?.versions.at(-1)?.id ?? null;
-  const kind = detail?.artifact.kind;
+  // Each version is its own kind (a note made into a page), with its own file name.
+  const shown = detail?.versions.find((v) => v.id === versionId);
+  const kind = shown?.kind;
 
   useEffect(() => {
     if (!versionId || !kind) return;
@@ -76,11 +78,11 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   }, [chatId, item.artifactId, versionId, kind]);
 
   if (error) return <p role="alert" className="p-3 text-sm text-[var(--danger)]">{error}</p>;
-  if (!detail || !kind) return <p className="p-3 text-sm text-[var(--text-faint)]">Opening…</p>;
+  if (!detail || !shown || !kind) return <p className="p-3 text-sm text-[var(--text-faint)]">Opening…</p>;
 
   const onBranch = detail.versions.filter((v) => v.onBranch);
   const elsewhere = detail.versions.filter((v) => !v.onBranch);
-  const name = opened?.name ?? detail.fileName;
+  const name = opened?.name ?? shown.fileName;
 
   async function saveEdit(): Promise<void> {
     if (draft === null || !versionId) return;
@@ -121,7 +123,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   } else if (!version) {
     body = <p className="p-3 text-sm text-[var(--text-faint)]">Loading…</p>;
   } else if (kind === 'code' || source) {
-    body = <CodeView text={version.content} language={kind === 'code' ? (detail.artifact.language ?? '') : SOURCE_LANGUAGE[kind]} />;
+    body = <CodeView text={version.content} language={kind === 'code' ? (shown.language ?? '') : SOURCE_LANGUAGE[kind]} />;
   } else if (kind === 'markdown') {
     body = <div className="p-4"><MarkdownBody text={version.content} /></div>;
   } else if (!opened?.url) {
@@ -155,10 +157,10 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
           <button type="button" onClick={() => void navigator.clipboard.writeText(version.content).catch(() => setError("Couldn't copy to the clipboard."))} className={BUTTON}>Copy</button>
         )}
         {version && (
-          <button type="button" onClick={() => saveFile(new Blob([version.content], { type: 'text/plain' }), detail.fileName)} className={BUTTON}>Download</button>
+          <button type="button" onClick={() => saveFile(new Blob([version.content], { type: 'text/plain' }), shown.fileName)} className={BUTTON}>Download</button>
         )}
         {workspaceHere && version && (
-          <button type="button" onClick={() => setSaving({ path: detail.fileName, exists: null, done: null })} className={BUTTON}>Save to workspace</button>
+          <button type="button" onClick={() => setSaving({ path: shown.fileName, exists: null, done: null })} className={BUTTON}>Save to workspace</button>
         )}
       </div>
       {saving && (

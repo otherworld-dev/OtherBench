@@ -3,7 +3,7 @@ import { constants as fsConstants } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { artifactFileName, artifactsOnBranch, artifactTitleOk, currentVersion, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_TITLE } from '@grunt/core/domain/artifacts.js';
+import { artifactFileName, artifactsOnBranch, artifactTitleOk, currentVersion, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_TITLE, versionFileName } from '@grunt/core/domain/artifacts.js';
 import { containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
 import { activePath, extendToTip } from '@grunt/core/domain/tree.js';
 import type { Artifact, Chat, Store } from '@grunt/core/ports/store.js';
@@ -59,7 +59,7 @@ export function artifactsRoutes(container: Container): Hono {
     const { onBranch } = chatBranch(store, chat);
     return c.json({
       artifacts: artifactsOnBranch(store, chat.id, onBranch).map(({ artifact, current }) => ({
-        id: artifact.id, slug: artifact.slug, kind: artifact.kind, language: artifact.language,
+        id: artifact.id, slug: artifact.slug, kind: current.kind, language: current.language,
         title: current.title, versionId: current.id, number: current.number, madeBy: current.madeBy,
       })),
     });
@@ -69,11 +69,16 @@ export function artifactsRoutes(container: Container): Hono {
     const { chat, artifact } = artifactOrThrow(container, c.req.param('id'), c.req.param('artifactId'));
     const { onBranch } = chatBranch(store, chat);
     const versions = store.artifacts.versions(artifact.id);
+    const current = currentVersion(versions, onBranch);
+    // Each version is its own kind (a note made into a page), so each has its own file name.
     return c.json({
       artifact,
-      fileName: artifactFileName(artifact),
-      currentVersionId: currentVersion(versions, onBranch)?.id ?? null,
-      versions: versions.map((v) => ({ id: v.id, number: v.number, title: v.title, madeBy: v.madeBy, createdAt: v.createdAt, onBranch: v.messageId !== null && onBranch(v.messageId) })),
+      fileName: current ? versionFileName(artifact, current) : artifactFileName(artifact),
+      currentVersionId: current?.id ?? null,
+      versions: versions.map((v) => ({
+        id: v.id, number: v.number, title: v.title, madeBy: v.madeBy, createdAt: v.createdAt, onBranch: v.messageId !== null && onBranch(v.messageId),
+        kind: v.kind, language: v.language, fileName: versionFileName(artifact, v),
+      })),
     });
   });
 
@@ -102,6 +107,8 @@ export function artifactsRoutes(container: Container): Hono {
       artifactId: artifact.id,
       title: typeof body.title === 'string' ? body.title.trim() : (from?.title ?? artifact.slug),
       content: body.content,
+      // Your edit is the kind of the version it was made from.
+      ...(from ? { kind: from.kind, language: from.language } : {}),
       madeBy: 'user',
       messageId: tip,
       parentVersionId: from?.id ?? null,

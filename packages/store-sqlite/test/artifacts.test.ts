@@ -28,6 +28,15 @@ describe('SqliteArtifactRepo', () => {
     expect(s.artifacts.getVersion('v2')).toEqual({ ...v2 });
   });
 
+  it("keeps each version's own kind and language, the artifact's unless given", () => {
+    const s = store();
+    s.artifacts.create({ id: 'a1', chatId: 'c1', slug: 'bear', kind: 'markdown', language: null, createdAt: 1 });
+    const v1 = s.artifacts.addVersion({ id: 'v1', artifactId: 'a1', title: 'Bear', content: '# Bear', madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2 });
+    const v2 = s.artifacts.addVersion({ id: 'v2', artifactId: 'a1', title: 'Bear', content: 'print(1)', kind: 'code', language: 'py', madeBy: 'model', messageId: null, parentVersionId: 'v1', createdAt: 3 });
+    expect([v1.kind, v1.language, v2.kind, v2.language]).toEqual(['markdown', null, 'code', 'py']);
+    expect(s.artifacts.versions('a1').map((v) => `${v.kind}:${v.language}`)).toEqual(['markdown:null', 'code:py']);
+  });
+
   it('goes with its chat, and logs every change for sync', () => {
     const s = store();
     s.artifacts.create({ id: 'a1', chatId: 'c1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });

@@ -557,15 +557,18 @@ languages reach the model that way, so a title is one line (the tool and
 your edits alike) and a language is a short token, and the note flattens and
 quotes both. Versions never change and follow the branch (the newest whose
 reply is on it); a reply on another branch that creates an existing id gets
-that branch's first version of the same artifact. `message_id` isn't a
-foreign key, so a synced version can arrive before its reply. Web pages and Mermaid diagrams are served from
+that branch's first version of the same artifact. Each version has its own
+kind and language (schema 17): a rewrite can make a note into a page, so how
+a version renders, what type it's served as and its file name all follow the
+version, never the artifact. `message_id` isn't a foreign key, so a synced
+version can arrive before its reply. Web pages and Mermaid diagrams are served from
 the database through `/view/` links in the sandbox (Mermaid is Grunt's own
 copy, bundled into `assets/`, in strict mode, with the source HTML-escaped);
 SVG only as an image; Markdown through React and code through highlight.js.
 Edit and Save to workspace are JSON-only. Saving goes through `containPathIn`
 and `openVerified`, refuses read-only folders, writes before it truncates,
 and replaces a file only when asked. The web must never import
-`@grunt/core/domain/artifacts.js`: it pulls in `node:crypto`. Schema 16.
+`@grunt/core/domain/artifacts.js`: it pulls in `node:crypto`. Schemas 16 and 17.
 
 **Shell grant defaults — the shipped UI follows the controller ruling.**
 An `always`-scope shell grant using `commandPrefix` (matching a command *and

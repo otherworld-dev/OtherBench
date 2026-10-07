@@ -55,14 +55,29 @@ describe('artifact routes', () => {
     const detail = await json(await app().request('/api/chats/c1/artifacts/art'));
     expect(detail).toMatchObject({ fileName: 'calc.html', currentVersionId: 'v1' });
     expect(detail['versions']).toEqual([
-      { id: 'v1', number: 1, title: 'Calc', madeBy: 'model', createdAt: 2, onBranch: true },
-      { id: 'v2', number: 2, title: 'Calc B', madeBy: 'model', createdAt: 3, onBranch: false },
+      { id: 'v1', number: 1, title: 'Calc', madeBy: 'model', createdAt: 2, onBranch: true, kind: 'html', language: null, fileName: 'calc.html' },
+      { id: 'v2', number: 2, title: 'Calc B', madeBy: 'model', createdAt: 3, onBranch: false, kind: 'html', language: null, fileName: 'calc.html' },
     ]);
     // Switching to the other reply switches the artifact.
     container.store.chats.update('c1', { headMessageId: 'a2' });
     expect((await json(await app().request('/api/chats/c1/artifacts/art')))['currentVersionId']).toBe('v2');
     expect((await json(await app().request('/api/chats/c1/artifacts/art/versions/v1')))['content']).toBe('<p>1</p>');
     expect((await app().request('/api/chats/c1/artifacts/nope')).status).toBe(404);
+  });
+
+  it('shows each version as its own kind: a note made into a page lists, names and edits as a page', async () => {
+    const store = container.store;
+    store.artifacts.create({ id: 'bear', chatId: 'c1', slug: 'bear', kind: 'markdown', language: null, createdAt: 4 });
+    store.artifacts.addVersion({ id: 'b1', artifactId: 'bear', title: 'Bear', content: '# Bear', madeBy: 'model', messageId: 'u1', parentVersionId: null, createdAt: 5 });
+    store.artifacts.addVersion({ id: 'b2', artifactId: 'bear', title: 'Bear', content: '<button>Bear</button>', kind: 'html', language: null, madeBy: 'model', messageId: 'a1', parentVersionId: 'b1', createdAt: 6 });
+    const listed = ((await json(await app().request('/api/chats/c1/artifacts')))['artifacts'] as { id: string }[]).find((a) => a.id === 'bear');
+    expect(listed).toMatchObject({ kind: 'html', number: 2 });
+    const detail = await json(await app().request('/api/chats/c1/artifacts/bear'));
+    expect(detail).toMatchObject({ fileName: 'bear.html', currentVersionId: 'b2' });
+    expect((detail['versions'] as { kind: string; fileName: string }[]).map((v) => `${v.kind}:${v.fileName}`)).toEqual(['markdown:bear.md', 'html:bear.html']);
+    // Your edit keeps the kind of the version it was made from.
+    expect(await json(await send('PUT', '/api/chats/c1/artifacts/bear', { content: '<button>Mine</button>' }))).toMatchObject({ kind: 'html', parentVersionId: 'b2' });
+    expect(await json(await send('PUT', '/api/chats/c1/artifacts/bear', { content: '# Mine', fromVersionId: 'b1' }))).toMatchObject({ kind: 'markdown', parentVersionId: 'b1' });
   });
 
   it('saves your edit as a new version on the branch you are on, JSON only, within the limits', async () => {
