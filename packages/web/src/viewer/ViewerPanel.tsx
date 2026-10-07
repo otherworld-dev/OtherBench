@@ -63,8 +63,10 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
             aria-label="Open as tab"
             title="Open this in its own tab"
             onClick={() => {
+              // Popped out, not in both places: the chat's panel closes.
               openTab(chat.id);
               openTab(viewTabId(chat.id, current));
+              setOpen(chat.id, false);
             }}
             className={BAR_BUTTON}
           >

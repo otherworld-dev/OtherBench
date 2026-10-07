@@ -311,7 +311,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
   activeChatId: initialPanes.panes[initialPanes.focusedPane] ?? null,
   paneState: initialPanes,
   openTab: (chatId) => set((state) => withPanes(openPaneTab(synced(state), chatId))),
-  closeTab: (chatId) => set((state) => ({ paneState: closePaneTab(synced(state), chatId) })),
+  // A closed viewer tab can hand its pane back to its chat, so the active chat follows the pane.
+  closeTab: (chatId) => set((state) => withPanes(closePaneTab(synced(state), chatId))),
   moveTab: (chatId, beforeId) => set((state) => ({ paneState: movePaneTab(synced(state), chatId, beforeId) })),
   setLayout: (layout) => set((state) => withPanes(setPaneLayout(synced(state), layout))),
   focusPane: (index) => set((state) => withPanes(focusPaneIn(synced(state), index))),

@@ -62,6 +62,9 @@ describe('ViewerPanel', () => {
 
     await user.click(screen.getByRole('button', { name: 'Open as tab' }));
     expect(useGruntStore.getState().paneState.tabs).toEqual(['c1', viewTabId('c1', { kind: 'file', path: 'docs/c.md' })]);
+    // Popped out, not in both places: the chat's panel closes.
+    expect(viewer().open).toBe(false);
+    useViewerStore.getState().setOpen('c1', true);
 
     await user.click(screen.getByRole('button', { name: 'Close viewer' }));
     expect(viewer().open).toBe(false);
