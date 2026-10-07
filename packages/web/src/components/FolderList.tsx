@@ -71,43 +71,45 @@ export function FolderList({
       ) : (
         <ul className="space-y-1">
           {views.map((view, i) => (
-            <li key={`${folderPath(view)}:${i}`} data-testid="extra-folder" className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="min-w-0 flex-1 break-all font-mono">{folderPath(view)}</span>
-              {view.status.status !== 'ok' && <span className="text-[var(--warn)]">not on this machine</span>}
-              <select
-                aria-label={`Access to ${folderPath(view)}`}
-                value={view.access}
-                disabled={saving}
-                onChange={(e) => void save(views.map((v, j) => ({ workspace: v.workspace, access: j === i ? (e.target.value as FolderAccess) : v.access })))}
-                className="rounded border border-[var(--border)] bg-[var(--bg-raised)] px-1 py-0.5"
-              >
-                <option value="read">{ACCESS_LABEL.read}</option>
-                <option value="readwrite">{ACCESS_LABEL.readwrite}</option>
-              </select>
-              <button
-                type="button"
-                aria-label={`Remove ${folderPath(view)}`}
-                disabled={saving}
-                onClick={() => void save(kept(views.filter((_, j) => j !== i)))}
-                className="rounded border border-[var(--border)] px-1.5 py-0.5 hover:bg-[var(--bg-sunken)] disabled:opacity-50"
-              >
-                Remove
-              </button>
+            <li key={`${folderPath(view)}:${i}`} data-testid="extra-folder" className="space-y-1 text-xs">
+              <div className="break-all font-mono">{folderPath(view)}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {view.status.status !== 'ok' && <span className="text-[var(--warn)]">not on this machine</span>}
+                <select
+                  aria-label={`Access to ${folderPath(view)}`}
+                  value={view.access}
+                  disabled={saving}
+                  onChange={(e) => void save(views.map((v, j) => ({ workspace: v.workspace, access: j === i ? (e.target.value as FolderAccess) : v.access })))}
+                  className="rounded border border-[var(--border)] bg-[var(--bg-raised)] px-1 py-0.5"
+                >
+                  <option value="read">{ACCESS_LABEL.read}</option>
+                  <option value="readwrite">{ACCESS_LABEL.readwrite}</option>
+                </select>
+                <button
+                  type="button"
+                  aria-label={`Remove ${folderPath(view)}`}
+                  disabled={saving}
+                  onClick={() => void save(kept(views.filter((_, j) => j !== i)))}
+                  className="rounded border border-[var(--border)] px-1.5 py-0.5 hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              </div>
             </li>
           ))}
         </ul>
       )}
+      <input
+        aria-label={`Add a folder for ${label}`}
+        placeholder="Folder path"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && draft.trim() !== '') void add(draft);
+        }}
+        className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 font-mono text-xs"
+      />
       <div className="flex flex-wrap items-center gap-2">
-        <input
-          aria-label={`Add a folder for ${label}`}
-          placeholder="Folder path"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && draft.trim() !== '') void add(draft);
-          }}
-          className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 font-mono text-xs"
-        />
         <select
           aria-label={`Access to the new folder for ${label}`}
           value={access}
