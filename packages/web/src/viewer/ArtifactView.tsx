@@ -38,8 +38,10 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const workspaceHere = useGruntStore((s) => s.chats.find((c) => c.id === chatId)?.workspaceStatus?.status === 'ok');
   const stamp = useArtifactsStamp(chatId);
 
+  // Each load starts clean, so a failure (a version not synced yet, say) clears on the next change.
   useEffect(() => {
     let cancelled = false;
+    setError(null);
     api.artifacts.get(chatId, item.artifactId).then(
       (d) => !cancelled && setDetail(d),
       (err: unknown) => !cancelled && setError(failure(err))
@@ -55,6 +57,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   useEffect(() => {
     if (!versionId || !kind) return;
     let cancelled = false;
+    setError(null);
     setVersion(null);
     setOpened(null);
     api.artifacts.version(chatId, item.artifactId, versionId).then(

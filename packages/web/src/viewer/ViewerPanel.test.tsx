@@ -40,12 +40,14 @@ describe('ViewerPanel', () => {
     expect(viewer()).toMatchObject({ mode: 'item', history: [{ kind: 'artifact', artifactId: 'art', title: 'Calc' }] });
   });
 
-  it('lists them again when the shown reply changes, so one made mid-reply appears', async () => {
+  it('lists them again as a reply streams, with the head on your message as an ordinary send leaves it', async () => {
     vi.mocked(api.artifacts.list).mockClear();
-    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'r1' } as never], messages: { r1: { id: 'r1', status: 'streaming', parts: [] } as never } });
+    const mine = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+    const reply = (parts: unknown[]) => ({ id: 'r1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts, status: 'streaming', error: null, producedBy: null, createdAt: 2 });
+    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1' } as never], messages: { u1: mine, r1: reply([]) } as never });
     render(<ViewerPanel chat={chat} />);
     await waitFor(() => expect(api.artifacts.list).toHaveBeenCalledTimes(1));
-    act(() => useGruntStore.setState({ messages: { r1: { id: 'r1', status: 'streaming', parts: [{ type: 'text', text: 'x' }] } as never } }));
+    act(() => useGruntStore.setState({ messages: { u1: mine, r1: reply([{ type: 'text', text: 'x' }]) } as never }));
     await waitFor(() => expect(api.artifacts.list).toHaveBeenCalledTimes(2));
   });
 

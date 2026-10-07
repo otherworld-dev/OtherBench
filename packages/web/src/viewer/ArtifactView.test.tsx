@@ -40,13 +40,26 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ArtifactView', () => {
-  it('picks up a change the shown reply makes: a new part on it reloads the artifact', async () => {
-    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'r1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { r1: { id: 'r1', status: 'streaming', parts: [] } as never } });
+  it('picks up a change the reply makes as it streams, with the head on your message as an ordinary send leaves it', async () => {
+    const reply = (parts: unknown[], status = 'streaming') => ({ id: 'r1', chatId: 'c1', parentId: 'u1', role: 'assistant', parts, status, error: null, producedBy: null, createdAt: 2 });
+    const mine = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'make it blue' }], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { u1: mine, r1: reply([]) } as never });
     render(<ArtifactView chatId="c1" item={item} />);
     await screen.findByTitle('calc.html');
     vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v1' });
-    act(() => useGruntStore.setState({ messages: { r1: { id: 'r1', status: 'streaming', parts: [{ type: 'tool-result', id: 'a', name: 'artifact', result: '{}', isError: false }] } as never } }));
+    act(() => useGruntStore.setState({ messages: { u1: mine, r1: reply([{ type: 'tool-result', id: 'a', name: 'artifact', result: '{}', isError: false }]) } as never }));
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
+  });
+
+  it("recovers from a failed load on the next change, e.g. a version that hadn't synced yet", async () => {
+    const mine = { id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'u1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { u1: mine } as never });
+    vi.mocked(api.artifacts.get).mockRejectedValueOnce(new ApiError(404, 'Artifact not found in this chat.'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Artifact not found in this chat.');
+    act(() => useGruntStore.setState({ messages: { u1: mine, r1: { ...mine, id: 'r1', parentId: 'u1', role: 'assistant', createdAt: 2 } } as never }));
+    expect(await screen.findByTitle('calc.html')).toHaveAttribute('src', '/view/x-v2/calc.html');
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it("shows the branch's current version in the sandbox, and switches versions, other branches included", async () => {

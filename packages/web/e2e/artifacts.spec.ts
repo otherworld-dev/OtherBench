@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type APIRequestContext } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
 
 /**
@@ -22,7 +22,8 @@ test.afterEach(() => {
   }
 });
 
-test('the model makes a page; it opens sandboxed, takes an edit, and saves to the workspace', async ({ page, request }) => {
+/** A Mock profile and a chat in `ws`; returns the chat's title. */
+async function mockChat(request: APIRequestContext): Promise<string> {
   const suffix = randomUUID().slice(0, 8);
   const conn = await request.post(`${BASE_URL}/api/connections`, { data: { name: `Mock ${suffix}`, kind: 'mock' } });
   const { id: connectionId } = await conn.json();
@@ -32,7 +33,11 @@ test('the model makes a page; it opens sandboxed, takes an edit, and saves to th
   const { id: profileId } = await profile.json();
   const title = `Artifacts E2E - ${suffix}`;
   expect((await request.post(`${BASE_URL}/api/chats`, { data: { title, profileId, workspaceRoot: ws } })).ok()).toBeTruthy();
+  return title;
+}
 
+test('the model makes a page; it opens sandboxed, takes an edit, and saves to the workspace', async ({ page, request }) => {
+  const title = await mockChat(request);
   await page.goto('/');
   await page.getByRole('button', { name: title }).click();
   const textbox = page.getByRole('textbox', { name: /message/i });
@@ -54,4 +59,22 @@ test('the model makes a page; it opens sandboxed, takes an edit, and saves to th
   await viewer.getByRole('button', { name: 'Save file' }).click();
   await expect(viewer.getByRole('status')).toContainText('Saved to');
   expect(readFileSync(join(ws, 'page.html'), 'utf8')).toContain('Edited');
+});
+
+test("an open viewer lists the page as the reply makes it, and opens it following the branch", async ({ page, request }) => {
+  const title = await mockChat(request);
+  await page.goto('/');
+  await page.getByRole('button', { name: title }).click();
+  await page.getByRole('button', { name: 'Viewer', exact: true }).click();
+  const viewer = page.getByRole('complementary', { name: 'Viewer' });
+
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill('#artifact');
+  await textbox.press('Enter');
+  await expect(page.getByLabel('streaming')).toHaveCount(0);
+
+  const listed = viewer.getByRole('list', { name: 'Artifacts' }).getByRole('button', { name: /Mock page/ });
+  await expect(listed).toBeVisible();
+  await listed.click();
+  await expect(viewer.frameLocator('iframe[title="page.html"]').locator('#h')).toHaveText('Mock artifact');
 });
