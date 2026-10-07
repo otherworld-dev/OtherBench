@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
+import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
@@ -67,6 +68,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   if (options.corsOrigins && options.corsOrigins.length > 0) {
     app.use('/api/*', corsAllowlist(options.corsOrigins));
   }
+  // Every mode (Deck #897): browser mode has no token to stop another site's form.
+  app.use('/api/*', refuseCrossSiteWrites(options.corsOrigins ?? []));
 
   app.route('/api', healthRoutes());
 

@@ -609,6 +609,19 @@ This was a real path from "uploaded a file" to "ran a command on the
 machine," not an alert box in a sandboxed viewer: this origin also hosts the
 API that runs shell commands and holds the bearer token.
 
+**Other sites can't write to the API** (Deck #897). Browser mode (`grunt
+serve` with no token) had no defence against a page on another site posting
+a hidden `text/plain` form to `/api/...`: every write route reads its body as
+JSON whatever its type, so a form could create a connection or a profile.
+`cross-site.ts` refuses a POST, PUT, PATCH or DELETE under `/api` with 403
+unless the browser marks it `Sec-Fetch-Site: same-origin` (which a page
+can't set; `npm run dev` through Vite's proxy passes this way), or its
+`Origin` is the server's own or one of the desktop webview's
+`--cors-origin`s, or it carries neither header (curl, scripts, tests). An
+opaque `null` origin is refused. Reads aren't checked, since CORS already
+stops another site reading them. It runs in every mode, behind the Host
+check, so the desktop's token is no longer the only defence.
+
 ### Claude Code engine
 
 - Live processes (`engine-claude-code/src/live.ts`). A reply's Claude Code
