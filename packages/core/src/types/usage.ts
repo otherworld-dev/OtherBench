@@ -22,6 +22,24 @@ export interface RecordedUsage extends Usage {
   latencyMs: number;
 }
 
+/** One of a Claude plan's usage limits (Deck #825): the 5-hour window, the weekly one, or a per-model weekly one. */
+export interface PlanWindow {
+  /** `five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`, or `model:<name>` for a per-model weekly window. */
+  id: string;
+  /** For people: "5-hour", "Weekly", "Fable weekly". */
+  label: string;
+  /** Share of the window used, 0-100. */
+  percent: number;
+  /** When the window resets (epoch ms), if known. */
+  resetsAt: number | null;
+}
+
+/** How much of the Claude subscription's limits is used, as last read (epoch ms). */
+export interface PlanUsage {
+  windows: PlanWindow[];
+  fetchedAt: number;
+}
+
 export function estimateCost(u: Usage, p: PricingSnapshot): number | null {
   if (p.priceInPer1m == null && p.priceOutPer1m == null) return null;
   const uncachedIn = Math.max(0, u.tokensIn - u.tokensCached);

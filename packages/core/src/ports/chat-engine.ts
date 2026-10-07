@@ -1,6 +1,6 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
-import type { Usage } from '../types/usage.js';
+import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import type { ToolSpec } from './tool-provider.js';
 
@@ -93,6 +93,13 @@ export interface ChatEngine {
   stream(req: EngineRequest): AsyncIterable<EngineEvent>;
   listModels(conn: Connection, apiKey: string | null): Promise<DiscoveredModel[]>;
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult>;
+  /**
+   * How much of the subscription's usage limits `conn`'s login has used, or
+   * null when it has no plan limits (an API key or endpoint, or the engine
+   * can't tell). Only the Claude Code engine answers (Deck #825). Rejects
+   * when the reading fails.
+   */
+  planUsage?(conn: Connection): Promise<PlanUsage | null>;
   /** Stops anything the engine keeps running between turns (Claude Code's live processes). Called once, at shutdown. */
   dispose?(): void;
 }

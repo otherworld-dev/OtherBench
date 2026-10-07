@@ -19,6 +19,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
+import { claudeRoutes } from './routes/claude.js';
 import { mountStatic } from './static.js';
 
 export interface AppOptions {
@@ -102,6 +103,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', memoryRoutes(container));
   authed.route('/', searchRoutes(container));
   authed.route('/usage', usageRoutes(container));
+  authed.route('/claude', claudeRoutes(container));
   authed.route('/events', eventsRoutes(container));
   authed.route('/fs', fsRoutes());
   // toolsRoutes, like turnsRoutes, defines full paths under several

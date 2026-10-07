@@ -310,6 +310,23 @@ describe('ClaudeCodeChatEngine models and test', () => {
     expect(await e.listModels(conn(), null)).toEqual([{ modelId: 'sonnet', displayName: 'Sonnet', contextWindow: null, supportsVision: true, supportsTools: true }]);
     expect(await e.testConnection(conn(), null)).toMatchObject({ ok: true, message: 'Logged in as user@example.com (max).' });
   });
+  it("reads the Claude login's plan usage through the experimental /usage call, skipping the transcript scan", async () => {
+    const usage = vi.fn(async (_opts?: { skipBehaviors?: boolean }) => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 7, resets_at: null } } }));
+    const seen: Options[] = [];
+    const base = fakeQuery(async function* () {}).query;
+    const query: QueryFn = (p) => { seen.push(p.options); return Object.assign(base(p), { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage }); };
+    const result = await engine(query).planUsage(conn());
+    expect(result?.windows).toEqual([{ id: 'five_hour', label: '5-hour', percent: 7, resetsAt: null }]);
+    expect(usage).toHaveBeenCalledWith({ skipBehaviors: true });
+    expect(seen[0]).toMatchObject({ settingSources: [], persistSession: false });
+    expect(seen[0]!.abortController!.signal.aborted).toBe(true);
+  });
+  it('has no plan usage for an endpoint backend, or an SDK without the call', async () => {
+    const { query, calls } = fakeQuery(async function* () {});
+    expect(await engine(query).planUsage(conn('http://localhost:11434'))).toBeNull();
+    expect(calls).toEqual([]);
+    expect(await engine(query).planUsage(conn())).toBeNull();
+  });
   it('delegates endpoint model listing', async () => {
     const listEndpointModels = vi.fn(async () => [{ modelId: 'qwen3-coder:30b', displayName: 'qwen3-coder:30b', contextWindow: null, supportsVision: false, supportsTools: true }]);
     const e = new ClaudeCodeChatEngine({ query: fakeQuery(async function* () {}).query, approvals, listEndpointModels });

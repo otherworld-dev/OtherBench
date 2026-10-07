@@ -15,6 +15,7 @@ vi.mock('../state/api.js', () => ({
       setHead: vi.fn(),
     },
     chats: { patch: vi.fn() },
+    claude: { planUsage: vi.fn(async () => ({ usage: null })) },
     attachments: {
       upload: vi.fn(),
       list: vi.fn(),
@@ -779,5 +780,17 @@ describe('Composer auto mode toggle', () => {
       expect(effort()).toHaveValue('medium');
       expect(useGruntStore.getState().chats[0]!.effort).toBe('medium');
     });
+  });
+
+  it('shows the Claude plan usage beside Effort for a profile on the Claude login, and not on an endpoint or another engine', async () => {
+    vi.mocked(api.claude.planUsage).mockResolvedValue({ usage: { fetchedAt: 0, windows: [{ id: 'five_hour', label: '5-hour', percent: 7, resetsAt: null }, { id: 'seven_day', label: 'Weekly', percent: 80, resetsAt: null }] } });
+    renderWith({ profileId: 'sonnet' });
+    expect(await screen.findByTestId('plan-usage')).toHaveTextContent('5h 7% · week 80%');
+    for (const profileId of ['local-cc', 'qwen']) {
+      cleanup();
+      renderWith({ profileId });
+      await waitFor(() => expect(screen.queryByTestId('plan-usage')).not.toBeInTheDocument());
+    }
+    vi.mocked(api.claude.planUsage).mockResolvedValue({ usage: null });
   });
 });

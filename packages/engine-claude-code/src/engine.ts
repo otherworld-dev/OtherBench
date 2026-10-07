@@ -6,18 +6,22 @@ import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, En
 import type { ToolContext, ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate } from './approval.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type TurnBinding } from './live.js';
+import { toPlanUsage } from './plan-usage.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
   supportedModels(): Promise<{ value: string; displayName: string }[]>;
   accountInfo(): Promise<{ email?: string; subscriptionType?: string }>;
+  /** The data behind /usage. Experimental in the SDK and may go away, hence optional; its answer is checked, not trusted (plan-usage.ts). */
+  usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?(opts?: { skipBehaviors?: boolean }): Promise<unknown>;
 };
 
 export interface ClaudeCodeEngineDeps {
@@ -390,6 +394,19 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       const error = classifyClaudeCodeFailure(err instanceof Error ? err.message : String(err), { backend: backendOf(conn), modelId: '' });
       return { ok: false, message: error.message, latencyMs: Date.now() - start };
     }
+  }
+
+  /**
+   * The Claude login's plan usage (Deck #825), read through the SDK's
+   * experimental /usage call with the transcript scan skipped. Null for an
+   * endpoint backend (no plan) or an SDK without the call.
+   */
+  async planUsage(conn: Connection): Promise<PlanUsage | null> {
+    if (conn.baseUrl) return null;
+    const answer = await this.probe(conn, async (q) =>
+      typeof q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET === 'function' ? q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }) : null
+    );
+    return toPlanUsage(answer, Date.now());
   }
 
   /**

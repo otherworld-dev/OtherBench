@@ -29,3 +29,8 @@ Each `*.json` is the raw array of `SDKMessage` objects from one `query()` run (w
   - `permissionMode: 'default'`, hook `allow` for every call (haiku): all four reached the hook; `canUseTool` was not called; no `permission_denials`.
   - `permissionMode: 'auto'` (sonnet), hook `allow` for reads and no decision for Write (Grunt's hand-off for a call it would ask about): all four ran, the Write too; `canUseTool` not called; no denials. As in the auto-mode probe, this shows the call ran, not that the classifier itself decided.
 - Grunt therefore never passes extra folders as `additionalDirectories`; the gate and the system prompt note carry them.
+
+## Plan usage (probe-usage.mjs, SDK 0.3.287, 2026-10-07)
+
+- `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })` works on an idle process with no prompt sent (no tokens used): about 1 s on a fresh process; a second call on the same process answered at once with the same figures (cached in the process). `behaviors` was null, as asked.
+- A Claude Max login answered `subscription_type: 'max'`, `rate_limits_available: true`, and `rate_limits` with `five_hour` and `seven_day` (`utilization` 0-100, `resets_at` ISO with microseconds), `seven_day_opus`/`seven_day_sonnet`/`seven_day_oauth_apps` null, `model_scoped: [{ display_name: 'Fable', utilization, resets_at }]` and `extra_usage`. The windows also carried fields the d.ts doesn't list (`limit_dollars`, `used_dollars`, ...), and `rate_limits` many undocumented keys; Grunt reads only the documented ones (`src/plan-usage.ts`).

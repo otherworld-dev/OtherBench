@@ -4,7 +4,7 @@ import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import type { RecordedUsage } from '@grunt/core/types/usage.js';
+import type { PlanUsage, RecordedUsage } from '@grunt/core/types/usage.js';
 import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@grunt/core/types/workspace.js';
 import type { InferredMapping } from '@grunt/core/domain/workspace.js';
 import type { PublicPeer } from '@grunt/core/types/peer.js';
@@ -378,6 +378,11 @@ export const api = {
   usage: {
     /** Omit `chatId` for the global (every-chat) rollup the usage/pricing settings view shows. */
     get: (chatId?: string) => request<UsageRollup>(`/usage${chatId ? `?chatId=${encodeURIComponent(chatId)}` : ''}`),
+  },
+
+  claude: {
+    /** The Claude login's plan usage (Deck #825), null when there's no plan to show. `refresh` asks for a fresher reading, as after a reply. */
+    planUsage: (refresh = false) => request<{ usage: PlanUsage | null }>(`/claude/plan-usage${refresh ? '?refresh=1' : ''}`),
   },
 
   turns: {

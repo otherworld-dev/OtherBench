@@ -1,5 +1,6 @@
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { Connection } from '@grunt/core/types/config.js';
+import type { PlanUsage } from '@grunt/core/types/usage.js';
 
 /** Sends `claude_code` connections to the Claude Code engine and everything else to the AI SDK engine. */
 export class RoutingChatEngine implements ChatEngine {
@@ -19,6 +20,11 @@ export class RoutingChatEngine implements ChatEngine {
 
   testConnection(conn: Connection, apiKey: string | null): Promise<ConnectionTestResult> {
     return this.pick(conn.kind).testConnection(conn, apiKey);
+  }
+
+  async planUsage(conn: Connection): Promise<PlanUsage | null> {
+    const engine = this.pick(conn.kind);
+    return engine.planUsage ? engine.planUsage(conn) : null;
   }
 
   dispose(): void {
