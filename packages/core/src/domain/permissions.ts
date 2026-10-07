@@ -454,6 +454,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
     }
     case 'agent':
       return agentPolicyDenial(tool.name, policy);
+    case 'artifact':
+      return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;
