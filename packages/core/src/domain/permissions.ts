@@ -170,6 +170,13 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Artifacts (Deck #896) change nothing outside Grunt and keep every
+    // version, so they never need a card; the profile's switch (checked
+    // above) is how they're turned off.
+    if (tool.source === 'artifact' || (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'artifact')) {
+      return { kind: 'allow', grantedBy: 'policy' };
+    }
+
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
       // Name-based, not declared-risk-based: only Claude Code's known file-read tools.

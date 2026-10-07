@@ -211,6 +211,7 @@ export class FakeToolProvider implements ToolProvider {
     if (policy.fs === 'readwrite') raw.push(...this.tools.filter((t) => t.source === 'fs'));
     else if (policy.fs === 'read') raw.push(...this.tools.filter((t) => t.source === 'fs' && t.risk === 'read'));
     if (policy.shell) raw.push(...this.tools.filter((t) => t.source === 'shell'));
+    if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
     for (const id of policy.mcpServerIds) {
       const server = this.mcpServers.find((s) => s.id === id);
       if (!server) continue;

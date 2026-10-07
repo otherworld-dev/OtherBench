@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { artifactTool } from './artifact-tool.js';
 import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
 import type {
   ApprovalChoice,
@@ -192,6 +193,8 @@ export class GruntToolProvider implements ToolProvider {
     if (policy.fs === 'readwrite') raw.push(...BUILTIN_FS_TOOLS);
     else if (policy.fs === 'read') raw.push(...BUILTIN_FS_TOOLS.filter((t) => t.risk === 'read'));
     if (policy.shell) raw.push(...BUILTIN_SHELL_TOOLS);
+    // Artifacts (Deck #896): on unless the profile turns them off.
+    if (policy.artifacts !== false) raw.push(artifactTool(this.store));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));

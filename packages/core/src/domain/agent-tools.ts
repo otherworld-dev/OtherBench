@@ -1,3 +1,4 @@
+import { AGENT_ARTIFACT_TOOL } from './artifacts.js';
 import type { RiskClass } from '../ports/tool-provider.js';
 import type { ToolPolicy } from '../types/config.js';
 
@@ -7,7 +8,7 @@ import type { ToolPolicy } from '../types/config.js';
  * `source: 'agent'`). Anything unrecognised is `other`/`mutate` so a new
  * Claude Code tool fails closed into an approval card.
  */
-export type AgentToolCategory = 'file-read' | 'file-write' | 'shell' | 'web' | 'mcp' | 'internal' | 'other';
+export type AgentToolCategory = 'file-read' | 'file-write' | 'shell' | 'web' | 'mcp' | 'internal' | 'other' | 'artifact';
 
 const FILE_READ = ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead'];
 const FILE_WRITE = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
@@ -61,6 +62,8 @@ export function isProtectedAgentPath(relPath: string): boolean {
 }
 
 export function classifyAgentTool(name: string): { category: AgentToolCategory; risk: RiskClass } {
+  // Grunt's own artifact tool (Deck #896), not the user's MCP config.
+  if (name === AGENT_ARTIFACT_TOOL) return { category: 'artifact', risk: 'read' };
   if (FILE_READ.includes(name)) return { category: 'file-read', risk: 'read' };
   if (FILE_WRITE.includes(name)) return { category: 'file-write', risk: 'mutate' };
   if (SHELL.includes(name)) return { category: 'shell', risk: 'execute' };
@@ -83,6 +86,8 @@ export function agentPolicyDenial(name: string, policy: ToolPolicy): string | nu
       return policy.agentWeb === false ? 'Web tools are disabled by policy.' : null;
     case 'mcp':
       return policy.agentMcp === false ? 'MCP tools are disabled by policy.' : null;
+    case 'artifact':
+      return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     case 'internal':
     case 'other':
       return null;
@@ -103,5 +108,6 @@ export function agentDisallowedTools(policy: ToolPolicy): string[] {
   if (!policy.shell) out.push(...SHELL);
   if (policy.agentWeb === false) out.push(...WEB);
   if (policy.agentMcp === false) out.push(...MCP_RESOURCE);
+  if (policy.artifacts === false) out.push(AGENT_ARTIFACT_TOOL);
   return out;
 }

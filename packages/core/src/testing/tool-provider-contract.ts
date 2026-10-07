@@ -64,11 +64,14 @@ export function runToolProviderContract(
   factory: (setup: ToolProviderContractSetup) => ToolProvider | Promise<ToolProvider>,
   teardown?: (provider: ToolProvider) => void | Promise<void>
 ): void {
+  // Everything off means artifacts too (they're on by default, Deck #896);
+  // the artifact tool's own listing is pinned in tools/test/artifact-tool.test.ts.
   const policy = (over: Partial<ToolPolicy> = {}): ToolPolicy => ({
     fs: 'off',
     shell: false,
     mcpServerIds: [],
     approvalMode: 'ask_on_mutate',
+    artifacts: false,
     ...over,
   });
   let ws = '/workspace';

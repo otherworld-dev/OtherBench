@@ -102,6 +102,15 @@ describe('POST /api/profiles', () => {
     });
   });
 
+  it('keeps toolPolicy.artifacts, and refuses a non-boolean', async () => {
+    const post = (toolPolicy: unknown) =>
+      app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+    const created = await post({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false });
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { toolPolicy: { artifacts?: boolean } }).toolPolicy.artifacts).toBe(false);
+    expect((await post({ artifacts: 'yes' })).status).toBe(400);
+  });
+
   it('rejects a missing name with 400', async () => {
     const res = await app().request('/api/profiles', {
       method: 'POST',
