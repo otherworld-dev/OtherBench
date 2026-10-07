@@ -547,12 +547,18 @@ fixed name could be taken by a repo's `.mcp.json`, and its tool would get the
 same pass, so a server called `grunt` is just another MCP server with cards.
 Calls go through the broker and the audit but never get a card.
 `toolPolicy.artifacts: false` refuses them, and Claude Code then gets no
-server at all; the switch is part of the live process key. Titles and
-languages reach the system prompt, so a title is one line (the tool and your
-edits alike) and a language is a short token, and the prompt's list flattens
-and quotes both. Versions never change and follow the branch (the newest
-whose reply is on it); `message_id` isn't a foreign key, so a synced version
-can arrive before its reply. Web pages and Mermaid diagrams are served from
+server at all; the switch is part of the live process key. A model whose
+row says it can't use tools isn't sent the tool, since artifacts are on by
+default. The system prompt only carries the fixed guidance; the branch's
+artifacts are a note added to the user's message in the request (never
+stored), so the system prompt stays the same as artifacts change and Claude
+Code keeps its live process and every engine its prompt cache. Titles and
+languages reach the model that way, so a title is one line (the tool and
+your edits alike) and a language is a short token, and the note flattens and
+quotes both. Versions never change and follow the branch (the newest whose
+reply is on it); a reply on another branch that creates an existing id gets
+that branch's first version of the same artifact. `message_id` isn't a
+foreign key, so a synced version can arrive before its reply. Web pages and Mermaid diagrams are served from
 the database through `/view/` links in the sandbox (Mermaid is Grunt's own
 copy, bundled into `assets/`, in strict mode, with the source HTML-escaped);
 SVG only as an image; Markdown through React and code through highlight.js.
