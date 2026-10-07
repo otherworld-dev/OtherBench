@@ -120,3 +120,31 @@ export const autostart = {
     await (enabled ? plugin.enable() : plugin.disable());
   },
 };
+
+/** Opens a website from a chat: its own isolated window in the desktop app, a new tab with no link back to Grunt in a browser. */
+export async function openSite(url: string): Promise<void> {
+  if (!isDesktop()) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('open_site', { url });
+}
+
+/** Opens a website in the default browser (desktop), or a new tab in a browser. */
+export async function openInBrowser(url: string): Promise<void> {
+  if (!isDesktop()) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const { openUrl } = await import('@tauri-apps/plugin-opener');
+  await openUrl(url);
+}
+
+/** Shows a file selected in Explorer, never opening it. False in a browser, which can't. */
+export async function revealPath(path: string): Promise<boolean> {
+  if (!isDesktop()) return false;
+  const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+  await revealItemInDir(path);
+  return true;
+}
