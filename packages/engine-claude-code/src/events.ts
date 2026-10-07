@@ -34,6 +34,9 @@ export class SdkEventMapper {
   private readonly toolNames = new Map<string, string>();
   private sawDelta = false;
 
+  /** `renames`: tool names reported under another name (this process's artifact tool as `artifact`). */
+  constructor(private readonly renames: ReadonlyMap<string, string> = new Map()) {}
+
   map(msg: SDKMessage): MappedEvent[] {
     const m = msg as unknown as Record<string, unknown>;
     switch (m['type']) {
@@ -56,7 +59,8 @@ export class SdkEventMapper {
         for (const block of blocksOf(m['message'])) {
           if (block.type === 'tool_use') {
             const id = String(block['id']);
-            const name = String(block['name']);
+            const sdkName = String(block['name']);
+            const name = this.renames.get(sdkName) ?? sdkName;
             this.toolNames.set(id, name);
             out.push({ type: 'tool-call', id, name, args: block['input'] });
           } else if (block.type === 'text' && isMain && !this.sawDelta && typeof block['text'] === 'string') {

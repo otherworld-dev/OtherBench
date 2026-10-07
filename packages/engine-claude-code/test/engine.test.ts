@@ -608,4 +608,102 @@ describe('ClaudeCodeChatEngine live processes', () => {
     e2.dispose();
     expect(capped.starts[1]!.stopped()).toBe(true);
   });
+  it("a change to the artifacts switch starts a new process (its server is fixed when it starts), under a new server name", async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, mcpServer });
+    await collect(e.stream(req()));
+    await collect(e.stream(followUp({ profile: profile({ toolPolicy: { ...profile().toolPolicy, artifacts: false } }) })));
+    await collect(e.stream(followUp()));
+    expect(starts).toHaveLength(3);
+    expect(starts[1]!.options.mcpServers).toBeUndefined();
+    const names = [starts[0]!, starts[2]!].map((s) => Object.keys(s.options.mcpServers ?? {}));
+    expect(names[0]).toHaveLength(1);
+    expect(names[1]).toHaveLength(1);
+    expect(names[0]![0]).not.toBe(names[1]![0]);
+    e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine artifacts', () => {
+  const serverOf = (o: Options): string => {
+    const names = Object.keys(o.mcpServers ?? {});
+    expect(names).toHaveLength(1);
+    expect(names[0]).toMatch(/^grunt_[0-9a-f]{16}$/);
+    return names[0]!;
+  };
+  const sig = () => ({ signal: new AbortController().signal });
+
+  it("gives Claude Code Grunt's artifact server, under a name no project config can guess, whose tool acts for the reply that's running", async () => {
+    const artifactTool = vi.fn(async (_ctx: { chatId: string; messageId: string }, args: unknown) => ({ ok: true, args }));
+    let tools: { handler: (args: unknown, extra: unknown) => Promise<unknown> }[] = [];
+    const mcpServer = vi.fn((name: string, defs: typeof tools) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    let handled: unknown = null;
+    const { query, calls } = fakeQuery(async function* () {
+      yield init('sess-1');
+      handled = await tools[0]!.handler({ command: 'view', id: 'calc' }, {});
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool, mcpServer });
+    await collect(e.stream(req()));
+    const name = serverOf(calls[0]!.options);
+    expect(mcpServer).toHaveBeenCalledWith(name, expect.any(Array));
+    expect((calls[0]!.options.mcpServers as Record<string, unknown>)[name]).toMatchObject({ type: 'sdk', name });
+    expect(artifactTool).toHaveBeenCalledWith({ chatId: req().chatId, messageId: req().messageId }, { command: 'view', id: 'calc' });
+    expect(JSON.parse((handled as { content: { text: string }[] }).content[0]!.text)).toEqual({ ok: true, args: { command: 'view', id: 'calc' } });
+    e.dispose();
+  });
+
+  it("lets its own server's tool through as Grunt's artifact tool, but a look-alike from any other server is an MCP tool", async () => {
+    const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      const name = serverOf(options);
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${name}__artifact`, tool_input: { command: 'view', id: 'calc' }, tool_use_id: 't1' } as never, 't1', sig());
+      await pre({ hook_event_name: 'PreToolUse', tool_name: 'mcp__grunt__artifact', tool_input: { command: 'view', id: 'calc' }, tool_use_id: 't2' } as never, 't2', sig());
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, mcpServer });
+    await collect(e.stream(req()));
+    const specs = a.requestApproval.mock.calls.map((c) => c[0] as { name: string; source: string });
+    expect(specs.map(({ name, source }) => ({ name, source }))).toEqual([
+      { name: 'artifact', source: 'artifact' },
+      { name: 'mcp__grunt__artifact', source: 'agent' },
+    ]);
+    e.dispose();
+  });
+
+  it("reports its own tool's calls as `artifact`, the name the API engines use", async () => {
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query } = fakeQuery(async function* ({ options }) {
+      const name = serverOf(options);
+      yield init('sess-1');
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${name}__artifact`, input: { command: 'view', id: 'calc' } }] } } as unknown as SDKMessage;
+      yield { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: '{"ok":true}' }] } } as unknown as SDKMessage;
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, mcpServer });
+    const events = await collect(e.stream(req()));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'artifact' }));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', id: 't1', name: 'artifact' }));
+    e.dispose();
+  });
+
+  it('starts no server for a profile with artifacts off, or without the executor', async () => {
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, mcpServer });
+    await collect(e.stream(req({ profile: profile({ toolPolicy: { ...profile().toolPolicy, artifacts: false } }) })));
+    const bare = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer });
+    await collect(bare.stream(req()));
+    expect(calls.map((c) => c.options.mcpServers)).toEqual([undefined, undefined]);
+    expect(mcpServer).not.toHaveBeenCalled();
+    e.dispose();
+    bare.dispose();
+  });
 });

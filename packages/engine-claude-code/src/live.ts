@@ -40,6 +40,8 @@ export interface TurnBinding {
   gate: Gate;
   /** Audits auto-mode classifier blocks (only set when the process runs in auto mode). */
   permissionDenied?: HookCallback;
+  /** Runs an `artifact` call for this reply (Deck #896); absent when the profile turns artifacts off. */
+  artifact?: (args: unknown) => Promise<unknown>;
 }
 
 /**
@@ -53,6 +55,8 @@ export class LiveProcess {
   busy = true;
   lastUsed = Date.now();
   binding: TurnBinding | null = null;
+  /** Claude Code's name for this process's artifact tool (Deck #896), or null when it has no Grunt server. */
+  artifactTool: string | null = null;
   readonly stderr: string[] = [];
   readonly iterator: AsyncIterator<SDKMessage>;
   private closed = false;
@@ -92,10 +96,10 @@ export class LiveProcess {
  * environment (`CLAUDE_AGENT_SDK_VERSION`) each time it starts a process.
  * Hashed, so no second plaintext copy of a credential is kept.
  */
-export function liveKey(options: Options, connection: { backend: string; token: string | null }): string {
+export function liveKey(options: Options, connection: { backend: string; token: string | null }, artifacts: boolean): string {
   const { cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, artifacts, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 
