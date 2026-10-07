@@ -3,6 +3,7 @@ import { MarkdownBody } from '../components/MarkdownBody.js';
 import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened, type ViewText } from '../state/api.js';
 import { serverUrl } from '../state/transport.js';
+import { ArtifactView } from './ArtifactView.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
 
@@ -54,7 +55,7 @@ function TextBody({ chatId, opened, as }: { chatId: string; opened: ViewOpened; 
 
 /** What the viewer shows for an item: a file, or an artifact (Deck #896). */
 export function ItemView({ chatId, item }: { chatId: string; item: ViewItem }): JSX.Element {
-  return item.kind === 'artifact' ? <p className="p-3 text-sm text-[var(--text-faint)]">{item.title}</p> : <FileView chatId={chatId} path={item.path} />;
+  return item.kind === 'artifact' ? <ArtifactView chatId={chatId} item={item} /> : <FileView chatId={chatId} path={item.path} />;
 }
 
 /**
