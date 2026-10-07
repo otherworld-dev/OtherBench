@@ -556,3 +556,17 @@ describe('running replies from app-wide events (#824)', () => {
     ]);
   });
 });
+
+describe('the project page slot', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+
+  it('starts closed, opens for creating or for editing a project, and closes', () => {
+    expect(useGruntStore.getState().projectPage).toBeNull();
+    useGruntStore.getState().openProjectPage({ mode: 'create' });
+    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'create' });
+    useGruntStore.getState().openProjectPage({ mode: 'edit', projectId: 'p1' });
+    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p1' });
+    useGruntStore.getState().closeProjectPage();
+    expect(useGruntStore.getState().projectPage).toBeNull();
+  });
+});

@@ -151,6 +151,12 @@ export interface CreateProjectBody {
   name: string;
   workspaceRoot?: string | null;
   defaultProfileId?: string | null;
+  /** At most 500 characters (stored trimmed). */
+  description?: string;
+  /** At most 8,000 characters; added to every chat's system prompt in the project. */
+  instructions?: string;
+  /** Extra folders for every chat in the project, each new one by path. */
+  folders?: FolderEntry[];
 }
 
 export type PatchProjectBody = Partial<{
@@ -160,6 +166,8 @@ export type PatchProjectBody = Partial<{
   sortOrder: number;
   /** Extra folders for every chat in the project, the whole list. */
   folders: FolderEntry[];
+  description: string;
+  instructions: string;
 }>;
 
 /**
