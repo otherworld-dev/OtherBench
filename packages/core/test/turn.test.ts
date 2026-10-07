@@ -616,6 +616,24 @@ describe('TurnRunner names the tools a turn can use', () => {
     expect(system).toContain('The tools you can use right now: read_file, write_file.');
   });
 
+  it("adds the artifacts note when the turn can make artifacts, naming this branch's artifacts", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const artifact = { name: 'artifact', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [artifact] }) });
+
+    const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Calc', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
+    await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('off') }));
+    await turn(runner, store, first, makeResolvedProfile({ toolPolicy: { ...fs('off'), artifacts: false } }));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('This chat has no artifacts on this branch yet.');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('- calc: "Calc" (html, v1)');
+    expect(engine.requests[2]!.profile.systemPrompt ?? '').not.toContain('# Artifacts');
+  });
+
   it('says nothing for a turn with no tools, or for Claude Code, which runs its own', async () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });

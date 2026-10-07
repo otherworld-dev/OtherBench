@@ -13,6 +13,7 @@ import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
+import { artifactsOnBranch, artifactsPrompt, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
@@ -537,7 +538,7 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const tools = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      const requestProfile = this.withTools(this.withFolders(this.withProjectMemory(profile, chat), folders), tools);
+      const requestProfile = this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(profile, chat), folders), tools), tools, chatId, userMessageId);
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
       const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
@@ -769,6 +770,17 @@ export class TurnRunner {
   private withTools(profile: ResolvedProfile, tools: readonly ToolSpec[]): ResolvedProfile {
     if (tools.length === 0 || !namesItsTools(profile.connection.kind)) return profile;
     const block = availableToolsPrompt(tools.map((t) => t.name));
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
+  /**
+   * The artifacts note (Deck #896) for a turn that can make artifacts, for
+   * either engine: when to use them, and this branch's artifacts by id,
+   * title, kind and version. Contents stay out: the tool's `view` reads one.
+   */
+  private withArtifacts(profile: ResolvedProfile, tools: readonly ToolSpec[], chatId: string, userMessageId: string): ResolvedProfile {
+    if (!tools.some((t) => t.source === 'artifact')) return profile;
+    const block = artifactsPrompt(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
