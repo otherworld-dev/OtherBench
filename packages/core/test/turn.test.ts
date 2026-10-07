@@ -616,12 +616,16 @@ describe('TurnRunner names the tools a turn can use', () => {
     expect(system).toContain('The tools you can use right now: read_file, write_file.');
   });
 
-  it("adds the artifacts note when the turn can make artifacts, naming this branch's artifacts", async () => {
+  it("tells the model about artifacts in a system prompt that stays the same, and lists this branch's with the user's message", async () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
     const engine = new FakeChatEngine([finish]);
     const artifact = { name: 'artifact', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
     const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [artifact] }) });
+    const noteOf = (i: number): string => {
+      const last = engine.requests[i]!.messages.at(-1)!;
+      return last.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+    };
 
     const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
     const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
@@ -629,9 +633,33 @@ describe('TurnRunner names the tools a turn can use', () => {
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('off') }));
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: { ...fs('off'), artifacts: false } }));
 
-    expect(engine.requests[0]!.profile.systemPrompt).toContain('This chat has no artifacts on this branch yet.');
-    expect(engine.requests[1]!.profile.systemPrompt).toContain('- calc: "Calc" (html, v1)');
+    // The system prompt doesn't change with the artifacts, so Claude Code keeps its process and every engine its prompt cache.
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('# Artifacts');
+    expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('calc');
+    // The list rides on the user's message in the request only.
+    expect(noteOf(0)).toContain('This chat has no artifacts on this branch yet.');
+    expect(noteOf(1)).toContain('- calc: "Calc" (html, v1)');
+    const sent = engine.requests[1]!.messages.at(-1)!;
+    expect(sent.role).toBe('user');
+    expect(store.messages.get(sent.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
+    // Artifacts off: neither.
     expect(engine.requests[2]!.profile.systemPrompt ?? '').not.toContain('# Artifacts');
+    expect(noteOf(2)).not.toContain('Artifacts on this branch');
+  });
+
+  it("offers no artifact tool, and says nothing of artifacts, to a model that can't use tools", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const artifact = { name: 'artifact', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [artifact] }) });
+
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off'), model: makeModel({ supportsTools: false }) }));
+
+    expect(engine.requests[0]!.tools).toEqual([]);
+    expect(engine.requests[0]!.profile.systemPrompt ?? '').not.toContain('# Artifacts');
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
   });
 
   it('says nothing for a turn with no tools, or for Claude Code, which runs its own', async () => {

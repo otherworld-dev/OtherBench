@@ -13,7 +13,7 @@ import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
-import { artifactsOnBranch, artifactsPrompt, branchOf } from './artifacts.js';
+import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
@@ -537,11 +537,15 @@ export class TurnRunner {
       // implementations are expected to keep their own MCP-connection state
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
-      const tools = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      const requestProfile = this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(profile, chat), folders), tools), tools, chatId, userMessageId);
+      const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
+      // Artifacts are on by default, so a model that can't use tools (as its
+      // model row says) isn't sent the artifact tool it would refuse the
+      // whole request over.
+      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact') : listed;
+      const requestProfile = this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(profile, chat), folders), tools), tools);
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
+      const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -774,14 +778,25 @@ export class TurnRunner {
   }
 
   /**
-   * The artifacts note (Deck #896) for a turn that can make artifacts, for
-   * either engine: when to use them, and this branch's artifacts by id,
-   * title, kind and version. Contents stay out: the tool's `view` reads one.
+   * The artifacts guidance (Deck #896) in the system prompt of a turn that
+   * can make artifacts, for either engine. It never changes; the branch's
+   * artifacts go with the user's message (withArtifactsList).
    */
-  private withArtifacts(profile: ResolvedProfile, tools: readonly ToolSpec[], chatId: string, userMessageId: string): ResolvedProfile {
+  private withArtifacts(profile: ResolvedProfile, tools: readonly ToolSpec[]): ResolvedProfile {
     if (!tools.some((t) => t.source === 'artifact')) return profile;
-    const block = artifactsPrompt(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
-    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${ARTIFACTS_GUIDANCE}` : ARTIFACTS_GUIDANCE };
+  }
+
+  /**
+   * This branch's artifacts by id, title, kind and version, as a note at the
+   * end of the user's message in this request only (the stored message is
+   * untouched). Kept out of the system prompt so that prompt stays the same
+   * as artifacts change. Contents stay out: the tool's `view` reads one.
+   */
+  private withArtifactsList(messages: CanonMessage[], tools: readonly ToolSpec[], chatId: string, userMessageId: string): CanonMessage[] {
+    if (!tools.some((t) => t.source === 'artifact')) return messages;
+    const note = artifactsListNote(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
+    return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: note }] } : m));
   }
 
   /**
