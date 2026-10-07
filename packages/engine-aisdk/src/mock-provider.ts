@@ -221,23 +221,6 @@ export class MockChatEngine implements ChatEngine {
     yield finishEvent(tokensIn, estimateTokens(text));
   }
 
-  /**
-   * Routes `#tool` through a REAL `read_file` `ToolSpec` when the caller
-   * supplied one via `req.tools` (task 26: `GruntToolProvider`'s gated
-   * output, threaded here exactly as `engine-aisdk`'s `buildToolSet` would
-   * for a real model's tool call), rather than fabricating a result --
-   * this is what lets the mock provider exercise the genuine approval flow
-   * end to end in a real browser with no API key: `PermissionBroker.decide()`,
-   * an `approval-request` event, a suspended wait (this generator simply
-   * `await`s it, exactly mirroring how a real `streamText` step pauses on a
-   * tool call), and a real (redacted, audited) result or a real denial --
-   * not a scripted stand-in for any of that.
-   *
-   * Falls back to the original fabricated result when no matching tool was
-   * supplied (`tools: []`, the default in most tests, including this
-   * file's own `#tool` tests below) -- unchanged behaviour from before this
-   * routing existed.
-   */
   /** `#artifact` (Deck #896): one `artifact` create through the real tool when offered, so the e2e drives the whole path. */
   private async *streamArtifactTurn(req: EngineRequest, tokensIn: number): AsyncGenerator<EngineEvent> {
     const callId = `mock-artifact-${randomUUID()}`;
@@ -259,6 +242,23 @@ export class MockChatEngine implements ChatEngine {
     yield finishEvent(tokensIn, estimateTokens(answer));
   }
 
+  /**
+   * Routes `#tool` through a REAL `read_file` `ToolSpec` when the caller
+   * supplied one via `req.tools` (task 26: `GruntToolProvider`'s gated
+   * output, threaded here exactly as `engine-aisdk`'s `buildToolSet` would
+   * for a real model's tool call), rather than fabricating a result --
+   * this is what lets the mock provider exercise the genuine approval flow
+   * end to end in a real browser with no API key: `PermissionBroker.decide()`,
+   * an `approval-request` event, a suspended wait (this generator simply
+   * `await`s it, exactly mirroring how a real `streamText` step pauses on a
+   * tool call), and a real (redacted, audited) result or a real denial --
+   * not a scripted stand-in for any of that.
+   *
+   * Falls back to the original fabricated result when no matching tool was
+   * supplied (`tools: []`, the default in most tests, including this
+   * file's own `#tool` tests below) -- unchanged behaviour from before this
+   * routing existed.
+   */
   private async *streamToolTurn(req: EngineRequest, prompt: string, tokensIn: number): AsyncGenerator<EngineEvent> {
     const path = extractToolArgPath(prompt);
     const callId = `mock-tool-${randomUUID()}`;

@@ -53,6 +53,7 @@ import type {
   UsageRecord,
   UsageRepo,
   NewArtifactVersion,
+  ArtifactVersionInfo,
 } from '../ports/store.js';
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
@@ -949,6 +950,10 @@ class InMemoryArtifactRepo implements ArtifactRepo {
     const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number };
     this.versionsById.set(v.id, full);
     return { ...full };
+  }
+  versionInfos(artifactId: string): ArtifactVersionInfo[] {
+    // Not through versions(), so a test can tell which of the two a caller used.
+    return [...this.versionsById.values()].filter((v) => v.artifactId === artifactId).sort((x, y) => x.number - y.number).map(({ content: _content, ...info }) => info);
   }
   getVersion(id: string): ArtifactVersion | null {
     const v = this.versionsById.get(id);

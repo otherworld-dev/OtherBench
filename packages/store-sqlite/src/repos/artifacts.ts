@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, NewArtifactVersion } from '@grunt/core/ports/store.js';
+import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, ArtifactVersionInfo, NewArtifactVersion } from '@grunt/core/ports/store.js';
 import type { SyncClock } from './clock.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 
@@ -72,6 +72,16 @@ export class SqliteArtifactRepo implements ArtifactRepo {
 
   getVersion(id: string): ArtifactVersion | null {
     return this.versionRows.get(id);
+  }
+
+  versionInfos(artifactId: string): ArtifactVersionInfo[] {
+    const rows = this.db
+      .prepare("SELECT id, artifact_id, number, title, '' AS content, kind, language, made_by, message_id, parent_version_id, created_at FROM artifact_version WHERE artifact_id = ? ORDER BY number, created_at, id")
+      .all(artifactId) as Record<string, unknown>[];
+    return rows.map((row) => {
+      const { content: _content, ...info } = VERSION.fromRow(row);
+      return info;
+    });
   }
 
   versions(artifactId: string): ArtifactVersion[] {

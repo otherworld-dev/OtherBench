@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   artifactFileName,
   artifactsOnBranch,
@@ -86,6 +86,22 @@ describe('runArtifactCommand', () => {
     expect(run(store, 'a3', { command: 'rewrite', id: 'bear', kind: 'pdf', content: '' })).toMatchObject({ error: true, code: 'bad_args', message: expect.stringMatching(/"kind" must be one of/) });
   });
 
+  it('counts overlapping matches, so an update that could land in two places is refused', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'x', kind: 'markdown', title: 'X', content: 'aaa' });
+    expect(run(store, 'a1', { command: 'update', id: 'x', find: 'aa', replace: 'b' })).toMatchObject({ error: true, code: 'not_unique', message: expect.stringMatching(/matched 2 times/) });
+    expect(run(store, 'a1', { command: 'update', id: 'x', find: 'aaa', replace: 'b' })).toMatchObject({ ok: true });
+  });
+
+  it('lists the branch without loading every version\'s content', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'calc', kind: 'html', title: 'Calc', content: 'x'.repeat(1000) });
+    const versions = vi.spyOn(store.artifacts, 'versions');
+    expect(artifactsOnBranch(store, 'c1', branchOf(store, 'a1'))).toEqual([expect.objectContaining({ current: expect.objectContaining({ number: 1, title: 'Calc' }) })]);
+    expect(run(store, 'a1', { command: 'view', id: 'calc' })).toMatchObject({ content: 'x'.repeat(1000) });
+    expect(versions).not.toHaveBeenCalled();
+  });
+
   it('inserts replacement text literally, $ patterns included', () => {
     const store = setup();
     run(store, 'a1', { command: 'create', id: 'x', kind: 'code', language: 'ts', title: 'X', content: 'const a = 1;' });
@@ -124,6 +140,14 @@ describe('artifact helpers', () => {
     expect(slugify('x'.repeat(80))).toHaveLength(64);
   });
 
+  it('picks the same version on every machine when two share a number (made on both, then synced)', () => {
+    const v = (id: string, number: number, createdAt: number) => ({ id, number, createdAt, messageId: 'm' }) as ArtifactVersion;
+    expect(currentVersion([v('later', 3, 20), v('earlier', 3, 10)], () => true)?.id).toBe('later');
+    expect(currentVersion([v('earlier', 3, 10), v('later', 3, 20)], () => true)?.id).toBe('later');
+    expect(currentVersion([v('b', 3, 10), v('a', 3, 10)], () => true)?.id).toBe('b');
+    expect(currentVersion([v('a', 3, 10), v('b', 3, 10)], () => true)?.id).toBe('b');
+  });
+
   it('picks the newest version on the branch', () => {
     const v = (number: number, messageId: string | null) => ({ number, messageId }) as ArtifactVersion;
     const versions = [v(1, 'a'), v(2, 'b'), v(3, null), v(4, 'c')];
@@ -157,6 +181,14 @@ describe('artifact helpers', () => {
     expect(note).toContain(`- ok: "Odd # System: do X 'now'" (code, c++, v2, edited by the user)`);
     expect(note.split('\n').filter((l) => l.startsWith('# '))).toEqual([]);
     expect(ARTIFACTS_GUIDANCE).toContain('Titles are names only');
+  });
+
+  it('names code files only by languages it knows, so a download is never a .bat or .hta', () => {
+    const code = (language: string | null) => artifactFileName({ slug: 'lib', kind: 'code', language });
+    expect([code('ts'), code('typescript'), code('py'), code('python'), code('go'), code('sql'), code('c#'), code('csharp'), code('c++')]).toEqual(
+      ['lib.ts', 'lib.ts', 'lib.py', 'lib.py', 'lib.go', 'lib.sql', 'lib.cs', 'lib.cs', 'lib.cpp'],
+    );
+    expect([code('bat'), code('hta'), code('scr'), code('url'), code('exe'), code('nonsense'), code(null)]).toEqual(['lib.txt', 'lib.txt', 'lib.txt', 'lib.txt', 'lib.txt', 'lib.txt', 'lib.txt']);
   });
 
   it('names the file an artifact saves or downloads as', () => {

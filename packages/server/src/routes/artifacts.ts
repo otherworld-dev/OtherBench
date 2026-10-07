@@ -7,7 +7,7 @@ import { artifactFileName, artifactsOnBranch, artifactTitleOk, currentVersion, M
 import { containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
 import { activePath, extendToTip } from '@grunt/core/domain/tree.js';
 import type { Artifact, Chat, Store } from '@grunt/core/ports/store.js';
-import { openVerified } from '@grunt/tools/fs-tools.js';
+import { AlreadyExistsError, openVerified } from '@grunt/tools/fs-tools.js';
 import type { Container } from '../container.js';
 import { ambiguousOnWindows, chatRoots, OUTSIDE_MESSAGE, viewFailure } from '../view/roots.js';
 import { collectMessageTree } from './chats.js';
@@ -68,7 +68,7 @@ export function artifactsRoutes(container: Container): Hono {
   app.get('/chats/:id/artifacts/:artifactId', (c) => {
     const { chat, artifact } = artifactOrThrow(container, c.req.param('id'), c.req.param('artifactId'));
     const { onBranch } = chatBranch(store, chat);
-    const versions = store.artifacts.versions(artifact.id);
+    const versions = store.artifacts.versionInfos(artifact.id);
     const current = currentVersion(versions, onBranch);
     // Each version is its own kind (a note made into a page), so each has its own file name.
     return c.json({
@@ -100,7 +100,7 @@ export function artifactsRoutes(container: Container): Hono {
       throw new HTTPException(400, { message: `"title" must be one line of 1-${MAX_ARTIFACT_TITLE} characters.` });
     }
     const { onBranch, tip } = chatBranch(store, chat);
-    const versions = store.artifacts.versions(artifact.id);
+    const versions = store.artifacts.versionInfos(artifact.id);
     const from = (typeof body.fromVersionId === 'string' ? versions.find((v) => v.id === body.fromVersionId) : undefined) ?? currentVersion(versions, onBranch) ?? versions.at(-1) ?? null;
     const version = store.artifacts.addVersion({
       id: randomUUID(),
@@ -142,6 +142,8 @@ export function artifactsRoutes(container: Container): Hono {
     try {
       opened = await openVerified(located.root, absolute, fsConstants.O_WRONLY | fsConstants.O_CREAT, { createParents: true });
     } catch (err) {
+      // Another program made the file between the check and the open: ask, as for any file that's there.
+      if (err instanceof AlreadyExistsError) return c.json({ error: `${path} was just created by another program.`, exists: true }, 409);
       viewFailure(err, path);
     }
     try {

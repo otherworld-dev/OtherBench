@@ -555,19 +555,25 @@ stored), so the system prompt stays the same as artifacts change and Claude
 Code keeps its live process and every engine its prompt cache. Titles and
 languages reach the model that way, so a title is one line (the tool and
 your edits alike) and a language is a short token, and the note flattens and
-quotes both. Versions never change and follow the branch (the newest whose
+quotes both. Sync refuses artifact rows from another machine that Grunt
+couldn't have made (a bad id, kind, language or maker, a title over one line,
+a number below 1, content over 1 MB). Versions never change and follow the branch (the newest whose
 reply is on it); a reply on another branch that creates an existing id gets
 that branch's first version of the same artifact. Each version has its own
 kind and language (schema 17): a rewrite can make a note into a page, so how
 a version renders, what type it's served as and its file name all follow the
 version, never the artifact. `message_id` isn't a foreign key, so a synced
-version can arrive before its reply. Web pages and Mermaid diagrams are served from
+version can arrive before its reply; a tie in version numbers (made on both
+machines before they synced) goes to the later, then the larger id. Web pages and Mermaid diagrams are served from
 the database through `/view/` links in the sandbox (Mermaid is Grunt's own
 copy, bundled into `assets/`, in strict mode, with the source HTML-escaped);
 SVG only as an image; Markdown through React and code through highlight.js.
 Edit and Save to workspace are JSON-only. Saving goes through `containPathIn`
 and `openVerified`, refuses read-only folders, writes before it truncates,
-and replaces a file only when asked. The web must never import
+and replaces a file only when asked (a file another program makes between
+the check and the open gets the same question). A code artifact's file
+extension comes from a fixed list of languages, else `.txt`, so a download
+is never a `.bat` or `.hta`. The web must never import
 `@grunt/core/domain/artifacts.js`: it pulls in `node:crypto`. Schemas 16 and 17.
 
 **Shell grant defaults — the shipped UI follows the controller ruling.**
