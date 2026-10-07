@@ -524,7 +524,9 @@ drive (a hidden stream) or a segment ending in `.` or a space is refused,
 since Windows would open a different file from the one named. Text comes
 through the authed API (first 2 MB, binary refused). What the browser loads
 itself comes through `/view/<id>/<name>` links: 128 random bits, 10 minutes
-from last use (so an open page's late loads still work), server memory only, no token (the id is the capability), containment checked
+from last use (so an open page's late loads still work) but never past an
+hour from when it was made (a sandboxed page can reach the web and could
+hand its link on, so use can't keep one alive for good), server memory only, no token (the id is the capability), containment checked
 again on every request, and the link dies as soon as its folder stops being
 the chat's or the chat is deleted. Making a link needs a JSON request, so a
 cross-site form can't. The served type is from a fixed list with `nosniff`;
@@ -628,10 +630,12 @@ unless the browser marks it `Sec-Fetch-Site: same-origin` (which a page
 can't set; `npm run dev` through Vite's proxy passes this way), or its
 `Origin` is the server's own or one of the desktop webview's
 `--cors-origin`s, or it carries neither header (curl, scripts, tests). An
-opaque `null` origin is refused. So is any form submission
-(`Sec-Fetch-Mode: navigate`) and any write whose Referer is a `/view/` page,
-even from the server's own origin: Grunt's UI only writes with fetch, and
-PDFs are served from that origin unsandboxed. Reads aren't checked, since CORS already
+opaque `null` origin is refused. So is any write a browser marks as
+anything but fetch (`Sec-Fetch-Dest` other than `empty`, or
+`Sec-Fetch-Mode: navigate`: a form, a page load, a plugin such as a PDF
+viewer), even from the server's own origin: Grunt's UI only writes with
+fetch, and PDFs are served from that origin unsandboxed. Not the Referer:
+`/view/` pages send none. Reads aren't checked, since CORS already
 stops another site reading them. It runs in every mode, behind the Host
 check, so the desktop's token is no longer the only defence.
 

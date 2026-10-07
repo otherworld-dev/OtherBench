@@ -213,19 +213,23 @@ describe('cross-site writes to the API (Deck #897)', () => {
     }
   });
 
-  it("refuses a form sent from a page Grunt shows, even from its own origin: a PDF isn't sandboxed and could submit one", async () => {
+  it("refuses a write from a form, a page or a plugin, even from Grunt's own origin: a PDF isn't sandboxed and could submit one", async () => {
     const container = makeContainer();
     const app = createApp(container);
+    // /view/ pages send no Referer (Referrer-Policy: no-referrer), so these
+    // go by what the browser says the request is for: Grunt's UI only writes
+    // with fetch (Sec-Fetch-Dest: empty), never a form, a page or a plugin.
     for (const headers of [
-      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' },
-      { Origin: 'http://127.0.0.1:4747', Referer: 'http://127.0.0.1:4747/view/abc/doc.pdf' },
-      { Referer: 'http://127.0.0.1:4747/view/abc/doc.pdf' },
+      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' },
+      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'iframe' },
+      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'embed' },
+      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'object' },
     ]) {
       expect((await post(app, headers)).status, JSON.stringify(headers)).toBe(403);
     }
     expect(container.store.connections.list()).toEqual([]);
     // The UI's own fetches still go through.
-    expect((await post(app, { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', Referer: 'http://127.0.0.1:4747/' })).status).toBe(201);
+    expect((await post(app, { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' })).status).toBe(201);
   });
 
   it('leaves reads alone: CORS already keeps another site from reading the answer', async () => {
