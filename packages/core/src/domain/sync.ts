@@ -18,6 +18,8 @@ export const SYNC_TABLES = [
   'message',
   'attachment',
   'usage',
+  'artifact',
+  'artifact_version',
 ] as const;
 export type SyncTable = (typeof SYNC_TABLES)[number];
 

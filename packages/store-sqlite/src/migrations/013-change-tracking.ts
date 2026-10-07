@@ -22,7 +22,7 @@ const CHAT_FIELD_NAMES = Object.keys(CHAT_FIELDS);
 // connection also gets `availability` ('anywhere' or the node id it's bound
 // to) and `sync_secret` (0 keeps its API key on this machine), Task 51.
 
-interface Tracked {
+export interface Tracked {
   table: string;
   /** The row's key as text, for `change_log.row_id` and `tombstone.row_id`. */
   key: (row: 'NEW' | 'OLD') => string;
@@ -48,7 +48,8 @@ export const TRACKED_TABLES: Tracked[] = [
   { table: 'usage', key: byId },
 ];
 
-function triggers(t: Tracked): string {
+/** The change-log triggers for one synced table (also used by later migrations that add synced tables). */
+export function syncTriggers(t: Tracked): string {
   const insertWhen = t.when ? ` WHEN ${t.when}` : '';
   const updateWhen = ` WHEN NEW.hlc IS NOT OLD.hlc${t.when ? ` AND ${t.when}` : ''}`;
   return `
@@ -90,7 +91,7 @@ CREATE TABLE sync_state (
   value TEXT NOT NULL
 );
 INSERT INTO sync_state (key, value) VALUES ('delete_hlc', '');
-${TRACKED_TABLES.map(triggers).join('\n')}
+${TRACKED_TABLES.map(syncTriggers).join('\n')}
 `,
   run: (db: DatabaseSync) => {
     const self = (db.prepare('SELECT id FROM node_self LIMIT 1').get() as { id: string } | undefined)?.id ?? 'unknown';
