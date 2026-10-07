@@ -3,8 +3,9 @@ import type { Attachment } from '../src/ports/store.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
 import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config.js';
 import type { CanonMessage, Part } from '../src/types/messages.js';
-import { FakeChatEngine, InMemoryStore } from '../src/testing/fakes.js';
+import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -586,6 +587,45 @@ describe("TurnRunner and the chat's folder (v2 spec §6)", () => {
     expect(system).toContain('/home/adam/Nextcloud/refs (read-only)');
     expect(system).toContain('/home/adam/Nextcloud/notes (read and write)');
     expect(system).not.toContain('not-here');
+  });
+});
+
+describe('TurnRunner names the tools a turn can use', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const fs = (access: 'off' | 'read' | 'readwrite') => ({ fs: access, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const });
+
+  async function turn(runner: TurnRunner, store: InMemoryStore, parentId: string | null, profile: ResolvedProfile): Promise<string> {
+    const result = await runner.run({ chatId: 'chat-1', parentId, userParts: [{ type: 'text', text: 'write it' }], profiles: [profile] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    return id;
+  }
+
+  it('tells the model its current tools every turn, so a change mid-chat reaches it', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider() });
+
+    const first = await turn(runner, store, null, makeResolvedProfile({ systemPrompt: 'Be brief.', toolPolicy: fs('read') }));
+    await turn(runner, store, first, makeResolvedProfile({ systemPrompt: 'Be brief.', toolPolicy: fs('readwrite') }));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toBe(`Be brief.\n\n${availableToolsPrompt(['read_file'])}`);
+    expect(engine.requests[1]!.profile.systemPrompt).toBe(`Be brief.\n\n${availableToolsPrompt(['read_file', 'write_file'])}`);
+    const system = engine.requests[1]!.messages.find((m) => m.role === 'system')?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+    expect(system).toContain('The tools you can use right now: read_file, write_file.');
+  });
+
+  it('says nothing for a turn with no tools, or for Claude Code, which runs its own', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider() });
+
+    const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('readwrite'), connection: makeConnection({ kind: 'claude_code' }) }));
+
+    expect(engine.requests.map((r) => r.profile.systemPrompt)).toEqual([null, null]);
   });
 });
 

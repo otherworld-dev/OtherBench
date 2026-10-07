@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolProvider } from '../ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
@@ -12,6 +12,7 @@ import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { translateForNode } from './path-translate.js';
+import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
@@ -528,10 +529,6 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
-      const requestProfile = this.withFolders(this.withProjectMemory(profile, chat), folders);
-      // Other machines' folder paths in tool calls and results, as they are
-      // on this machine (spec §6); the stored messages are untouched.
-      const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -540,6 +537,10 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const tools = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
+      const requestProfile = this.withTools(this.withFolders(this.withProjectMemory(profile, chat), folders), tools);
+      // Other machines' folder paths in tool calls and results, as they are
+      // on this machine (spec §6); the stored messages are untouched.
+      const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -743,6 +744,15 @@ export class TurnRunner {
    * current note). Excluded chats still get it; exclusion only stops a chat
    * contributing.
    */
+  private withProjectMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
+    if (!chat?.projectId) return profile;
+    const project = this.store.projects.get(chat.projectId);
+    const memory = this.store.projectMemory.get(chat.projectId);
+    if (!project || !memory || !hasMemoryContent(memory.body)) return profile;
+    const block = projectMemoryPrompt(project.name, memory.body);
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
   /** The profile with a note naming the turn's extra folders appended to its system prompt (spec 2026-10-07-extra-folders). */
   private withFolders(profile: ResolvedProfile, folders: ResolvedFolder[]): ResolvedProfile {
     if (folders.length === 0) return profile;
@@ -750,12 +760,15 @@ export class TurnRunner {
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
-  private withProjectMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
-    if (!chat?.projectId) return profile;
-    const project = this.store.projects.get(chat.projectId);
-    const memory = this.store.projectMemory.get(chat.projectId);
-    if (!project || !memory || !hasMemoryContent(memory.body)) return profile;
-    const block = projectMemoryPrompt(project.name, memory.body);
+  /**
+   * The profile with a note naming the tools this turn offers appended to its
+   * system prompt, so a change to them mid-chat reaches the model even when
+   * its own earlier replies say otherwise. Claude Code runs its own tools and
+   * gets no note; neither does a turn with no tools.
+   */
+  private withTools(profile: ResolvedProfile, tools: readonly ToolSpec[]): ResolvedProfile {
+    if (tools.length === 0 || !namesItsTools(profile.connection.kind)) return profile;
+    const block = availableToolsPrompt(tools.map((t) => t.name));
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
