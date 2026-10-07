@@ -2,10 +2,13 @@ import { constants as fsConstants } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono, type Context } from 'hono';
+import { artifactFileName } from '@grunt/core/domain/artifacts.js';
 import { containPath } from '@grunt/core/domain/paths.js';
+import type { ArtifactRepo } from '@grunt/core/ports/store.js';
 import { openVerified } from '@grunt/tools/fs-tools.js';
 import { servedType } from '../view/kinds.js';
 import type { ViewLink, ViewLinks } from '../view/links.js';
+import { mermaidPage, mermaidScript } from '../view/mermaid.js';
 
 /** Sent with every /view response. */
 const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' };
@@ -81,7 +84,7 @@ export function parseRange(header: string | undefined, size: number): { start: n
  * its links at once. The type is always from view/kinds.ts. Not on the peer
  * listener.
  */
-export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => boolean = () => true): Hono {
+export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => boolean = () => true, artifacts?: Pick<ArtifactRepo, 'get' | 'getVersion'>): Hono {
   const app = new Hono();
 
   app.get('/:id/*', async (c) => {
@@ -91,6 +94,26 @@ export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => b
     const url = new URL(c.req.url);
     const rel = relativeOf(url.pathname, id);
     if (rel === null) return refuse(c, 404, 'Not found.');
+
+    // An artifact version (Deck #896): its own file name only, or a Mermaid
+    // diagram's page and Grunt's copy of Mermaid; all in the sandbox.
+    if (link.scope === 'artifact') {
+      const version = artifacts?.getVersion(link.versionId);
+      const artifact = version ? artifacts?.get(version.artifactId) : null;
+      if (!version || !artifact) return refuse(c, 404, 'Not found.');
+      const policy = sandboxPolicy(`${url.origin}/view/${id}/`);
+      const send = (body: string | Buffer, mime: string): Response =>
+        c.body(typeof body === 'string' ? body : new Uint8Array(body), 200, { ...ALWAYS, 'Content-Type': mime, 'Content-Disposition': 'inline', 'Content-Security-Policy': policy });
+      if (artifact.kind === 'mermaid') {
+        if (rel === 'diagram.html') return send(mermaidPage(version.content), 'text/html; charset=utf-8');
+        if (rel === 'mermaid.min.js') return send(await mermaidScript(), 'text/javascript; charset=utf-8');
+        return refuse(c, 404, 'Not found.');
+      }
+      if (rel !== artifactFileName(artifact)) return refuse(c, 404, 'Not found.');
+      if (artifact.kind === 'html') return send(version.content, 'text/html; charset=utf-8');
+      if (artifact.kind === 'svg') return send(version.content, 'image/svg+xml');
+      return refuse(c, 415, "Can't preview this.");
+    }
 
     let candidate: string;
     if (link.scope === 'file') {

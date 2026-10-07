@@ -133,7 +133,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
   // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
-  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link)));
+  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts));
 
   if (options.webDistDir) {
     mountStatic(app, { webDistDir: options.webDistDir });

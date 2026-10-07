@@ -1,6 +1,7 @@
 import { basename, join } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { artifactFileName } from '@grunt/core/domain/artifacts.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import { sniffBinary } from '@grunt/tools/fs-tools.js';
 import type { Container } from '../container.js';
@@ -37,8 +38,20 @@ export function viewRoutes(container: Container, links: ViewLinks): Hono {
     if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
       throw new HTTPException(415, { message: 'Send the request as JSON.' });
     }
-    const body = (await c.req.json().catch(() => ({}))) as { chatId?: unknown; path?: unknown };
+    const body = (await c.req.json().catch(() => ({}))) as { chatId?: unknown; path?: unknown; artifactVersionId?: unknown };
     const chat = chatOf(container, body.chatId);
+    // An artifact version (Deck #896): pages, SVGs and diagrams are served in
+    // the sandbox like a file; Markdown and code are shown from their text.
+    if (body.artifactVersionId !== undefined) {
+      const version = typeof body.artifactVersionId === 'string' ? container.store.artifacts.getVersion(body.artifactVersionId) : null;
+      const artifact = version ? container.store.artifacts.get(version.artifactId) : null;
+      if (!version || !artifact || artifact.chatId !== chat.id) throw new HTTPException(404, { message: 'Artifact version not found in this chat.' });
+      const linked = artifact.kind === 'html' || artifact.kind === 'svg' || artifact.kind === 'mermaid';
+      const name = artifact.kind === 'mermaid' ? 'diagram.html' : artifactFileName(artifact);
+      const kinds: Record<typeof artifact.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text' };
+      const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id })}/${encodeURIComponent(name)}` : null;
+      return c.json({ path: '', name, kind: kinds[artifact.kind], url, size: Buffer.byteLength(version.content, 'utf8') });
+    }
     const path = pathOf(body.path);
     const { root, target } = locateForView(chatRoots(container, chat), path);
     const { handle, resolved } = await openForView(root, target, path);
