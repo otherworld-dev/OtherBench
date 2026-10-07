@@ -122,7 +122,7 @@ function PricingRow({ model, onSaved }: PricingRowProps): JSX.Element {
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary px-2 py-1"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
@@ -178,14 +178,14 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
     <div data-testid="usage-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div className="flex items-center gap-4">
-          <h2 className="text-sm font-semibold">Usage &amp; pricing</h2>
+          <h2 className="label-caps text-base">Usage &amp; pricing</h2>
           <div role="tablist" className="flex gap-1">
             <button
               type="button"
               role="tab"
               aria-selected={tab === 'spend'}
               onClick={() => setTab('spend')}
-              className={`rounded px-2.5 py-1 text-xs font-medium ${tab === 'spend' ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'}`}
+              className={`label-caps rounded-sm px-2.5 py-1 ${tab === 'spend' ? 'text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
             >
               Spend
             </button>
@@ -194,7 +194,7 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
               role="tab"
               aria-selected={tab === 'pricing'}
               onClick={() => setTab('pricing')}
-              className={`rounded px-2.5 py-1 text-xs font-medium ${tab === 'pricing' ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'}`}
+              className={`label-caps rounded-sm px-2.5 py-1 ${tab === 'pricing' ? 'text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
             >
               Pricing
             </button>
@@ -214,7 +214,7 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
           ) : (
             <div className="mx-auto max-w-3xl space-y-6">
               <section>
-                <h3 className="mb-2 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">Total</h3>
+                <h3 className="label-caps mb-2 text-[var(--text-muted)]">Total</h3>
                 <p className="text-2xl font-semibold" data-testid="usage-total">
                   {formatCost(rollup.totalMeasuredCost)}
                 </p>
@@ -228,7 +228,7 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
               </section>
 
               <section>
-                <h3 className="mb-2 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">By profile</h3>
+                <h3 className="label-caps mb-2 text-[var(--text-muted)]">By profile</h3>
                 {rollup.profiles.length === 0 ? (
                   <p className="text-sm text-[var(--text-faint)]">No usage recorded yet.</p>
                 ) : (
@@ -258,7 +258,7 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
               </section>
 
               <section>
-                <h3 className="mb-2 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">By chat</h3>
+                <h3 className="label-caps mb-2 text-[var(--text-muted)]">By chat</h3>
                 {rollup.chats.length === 0 ? (
                   <p className="text-sm text-[var(--text-faint)]">No usage recorded yet.</p>
                 ) : (
@@ -276,7 +276,7 @@ export function UsageView({ onClose }: UsageViewProps): JSX.Element {
               </section>
 
               <section>
-                <h3 className="mb-2 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">By day</h3>
+                <h3 className="label-caps mb-2 text-[var(--text-muted)]">By day</h3>
                 {rollup.buckets.length === 0 ? (
                   <p className="text-sm text-[var(--text-faint)]">No usage recorded yet.</p>
                 ) : (

@@ -228,7 +228,7 @@ function ModelRow({ model, connectionName, onSaved }: ModelRowProps): JSX.Elemen
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary px-2.5 py-1"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>

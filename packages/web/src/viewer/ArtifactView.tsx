@@ -9,7 +9,7 @@ import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
 import { useArtifactsStamp } from './stamp.js';
 
-const BUTTON = 'rounded border border-[var(--border)] px-2 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50';
+const BUTTON = 'btn px-2 py-0.5';
 const SOURCE_LANGUAGE = { html: 'html', markdown: 'md', mermaid: 'plaintext', svg: 'xml' } as const;
 
 function failure(err: unknown): string {

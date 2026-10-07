@@ -9,7 +9,7 @@ import { useGruntStore } from '../state/store.js';
 /** How often the panel re-reads the note: the summariser changes it in the background. */
 export const MEMORY_POLL_MS = 15_000;
 
-const BUTTON = 'rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50';
+const BUTTON = 'btn px-2 py-1';
 
 function errorText(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
@@ -192,7 +192,7 @@ export function InspectorMemory({ chat, project }: { chat: Chat; project: Projec
               type="button"
               onClick={() => void save()}
               disabled={saving}
-              className="rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+              className="btn btn-primary px-2.5 py-1"
             >
               {saving ? 'Saving…' : 'Save'}
             </button>
@@ -202,7 +202,7 @@ export function InspectorMemory({ chat, project }: { chat: Chat; project: Projec
                 setEditing(false);
                 setEditError(null);
               }}
-              className="rounded border border-[var(--border)] px-2.5 py-1 text-xs"
+              className="btn px-2.5 py-1"
             >
               Cancel
             </button>

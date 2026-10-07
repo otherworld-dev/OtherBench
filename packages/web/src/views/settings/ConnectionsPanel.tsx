@@ -6,7 +6,7 @@ import { useGruntStore } from '../../state/store.js';
 const CONNECTION_KINDS: readonly ConnectionKind[] = ['anthropic', 'openai', 'openai_compatible', 'google', 'ollama', 'claude_code', 'mock'];
 
 const STATUS_COLOR: Record<Connection['status'], string> = {
-  ok: 'bg-[var(--success,#3fb950)]',
+  ok: 'bg-[var(--success)]',
   error: 'bg-[var(--danger)]',
   unknown: 'bg-[var(--text-faint)]',
 };
@@ -355,7 +355,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
           <button
             type="button"
             onClick={() => setHeaderRows((rows) => [...rows, { key: '', value: '' }])}
-            className="rounded border border-dashed border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+            className="btn border-dashed text-[var(--text-muted)] px-2 py-1"
           >
             + Add header
           </button>
@@ -369,11 +369,11 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary px-3 py-1.5"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button type="button" onClick={onCancel} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">
+        <button type="button" onClick={onCancel} className="btn px-3 py-1.5">
           Cancel
         </button>
         {connection && (
@@ -382,7 +382,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
               type="button"
               onClick={() => void handleTest()}
               disabled={testing}
-              className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
+              className="btn px-3 py-1.5"
             >
               {testing ? 'Testing…' : 'Test'}
             </button>
@@ -390,7 +390,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
               type="button"
               onClick={() => void handleDiscover()}
               disabled={discovering}
-              className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
+              className="btn px-3 py-1.5"
             >
               {discovering ? 'Discovering…' : 'Discover models'}
             </button>
@@ -398,7 +398,7 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
               type="button"
               onClick={() => void handleDelete()}
               disabled={deleting}
-              className="ml-auto rounded border border-[var(--danger)] px-3 py-1.5 text-sm text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+              className="btn btn-danger ml-auto px-3 py-1.5"
             >
               {deleting ? 'Deleting…' : 'Delete'}
             </button>
@@ -407,13 +407,13 @@ function ConnectionForm({ connection, onSaved, onDeleted, onCancel }: Connection
       </div>
 
       {testResult && (
-        <p data-testid="test-result" className={`text-sm ${testResult.ok ? 'text-[var(--success,#1c8a4c)]' : 'text-[var(--danger)]'}`}>
+        <p data-testid="test-result" className={`text-sm ${testResult.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
           {testResult.message}
           {testResult.ok && ` (${testResult.latencyMs}ms)`}
         </p>
       )}
       {discoverMessage && (
-        <p data-testid="discover-result" className={`text-sm ${discoverMessage.ok ? 'text-[var(--success,#1c8a4c)]' : 'text-[var(--danger)]'}`}>
+        <p data-testid="discover-result" className={`text-sm ${discoverMessage.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
           {discoverMessage.text}
         </p>
       )}
@@ -430,12 +430,12 @@ function ConnectionRow({ connection, active, onSelect }: { connection: Connectio
         onClick={onSelect}
         aria-current={active ? 'true' : undefined}
         className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm ${
-          active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'
+          active ? 'bg-[var(--bg-sunken)] shadow-[inset_2px_0_0_var(--accent)]' : 'hover:bg-[var(--bg-sunken)]'
         }`}
       >
         <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${STATUS_COLOR[connection.status]}`} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">{connection.name}</span>
-        <span className={`shrink-0 text-xs ${active ? '' : 'text-[var(--text-muted)]'}`}>{connection.kind}</span>
+        <span className="shrink-0 text-xs text-[var(--text-muted)]">{connection.kind}</span>
       </button>
     </li>
   );
@@ -473,7 +473,7 @@ export function ConnectionsPanel(): JSX.Element {
         <button
           type="button"
           onClick={() => setEditingId('new')}
-          className="mb-3 w-full rounded bg-[var(--accent)] px-2 py-1.5 text-sm font-medium text-[var(--accent-text)]"
+          className="btn btn-primary mb-3 w-full px-2 py-1.5"
         >
           + New connection
         </button>

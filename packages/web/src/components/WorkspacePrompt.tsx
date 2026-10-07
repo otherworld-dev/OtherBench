@@ -9,8 +9,8 @@ import { useGruntStore } from '../state/store.js';
 
 type Unresolved = Extract<WorkspaceStatus, { status: 'unresolved' }>;
 
-const BUTTON = 'rounded border border-[var(--border)] px-2.5 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50';
-const PRIMARY = 'rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50';
+const BUTTON = 'btn px-2.5 py-1';
+const PRIMARY = 'btn btn-primary px-2.5 py-1';
 
 function failure(err: unknown): string {
   return err instanceof ApiError ? err.message : 'That didn\'t work -- please try again.';

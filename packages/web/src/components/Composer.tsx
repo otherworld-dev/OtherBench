@@ -365,7 +365,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             onClick={() => setPickerOpen((o) => !o)}
             aria-haspopup="listbox"
             aria-expanded={pickerOpen}
-            className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs font-medium hover:bg-[var(--bg-sunken)]"
+            className="rounded-full border border-[var(--border-strong)] px-2.5 py-1 font-mono text-[0.6875rem] hover:bg-[var(--bg-sunken)]"
           >
             {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
           </button>
@@ -384,7 +384,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                     className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
                   >
                     {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
-                    <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'Grunt tools'}</span>
+                    <span className="label-caps ml-1 text-[0.6875rem] text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'Grunt tools'}</span>
                   </button>
                 </li>
               ))}
@@ -400,10 +400,10 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             disabled={autoUnavailable || autoSaving}
             title={autoUnavailable ? 'Auto mode needs the Claude login' : 'Let Claude Code decide routine tool calls (from the next turn)'}
             onClick={() => void toggleAutoMode()}
-            className={`rounded-full border px-2.5 py-1 text-xs font-medium disabled:opacity-50 ${
+            className={`rounded-full border px-2.5 py-1 font-mono text-[0.6875rem] disabled:opacity-50 ${
               autoActive
                 ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]'
-                : 'border-[var(--border)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
+                : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
             }`}
           >
             Auto
@@ -417,7 +417,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             disabled={effortSaving}
             title="How much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
             onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
-            className="rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-xs font-medium text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+            className="rounded-full border border-[var(--border-strong)] bg-[var(--bg-raised)] px-2 py-1 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
           >
             <option value="">Effort: default</option>
             {CLAUDE_EFFORTS.map((level) => (
@@ -432,7 +432,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
 
         {comparedProfiles.map((p) => (
-          <span key={p.id} className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)]">
+          <span key={p.id} className="rounded-full border border-[var(--border)] px-2.5 py-1 font-mono text-[0.6875rem] text-[var(--text-muted)]">
             + {p.name}
           </span>
         ))}
@@ -444,7 +444,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             aria-haspopup="listbox"
             aria-expanded={comparePickerOpen}
             title="Compare against other profiles"
-            className="rounded-full border border-dashed border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+            className="rounded-full border border-dashed border-[var(--border-strong)] px-2.5 py-1 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
           >
             + Compare
           </button>
@@ -543,7 +543,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           aria-label="Attach files"
           title="Attach files"
           onClick={() => fileInputRef.current?.click()}
-          className="rounded border border-[var(--border)] px-2.5 py-2 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+          className="rounded-sm border border-[var(--border-strong)] px-2.5 py-2 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
         >
           <span aria-hidden="true">📎</span>
         </button>
@@ -556,13 +556,13 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           aria-label="Message"
           placeholder="Message... (Enter to send, Shift+Enter for a newline) -- drag & drop or paste to attach a file"
           rows={2}
-          className="min-h-[2.5rem] flex-1 resize-y rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
+          className="min-h-[2.5rem] flex-1 resize-y rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
         />
         {isStreaming ? (
           <button
             type="button"
             onClick={() => void handleStop()}
-            className="rounded bg-[var(--danger)] px-4 py-2 text-sm font-medium text-white"
+            className="btn btn-danger bg-[var(--danger)] px-4 py-2 text-[var(--bg)]"
           >
             Stop
           </button>
@@ -571,7 +571,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             type="button"
             onClick={() => void handleSend()}
             disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved || elsewhereUnreachable}
-            className="rounded bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
+            className="btn btn-primary px-4 py-2"
           >
             Send
           </button>

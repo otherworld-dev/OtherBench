@@ -127,7 +127,7 @@ function MainApp(): JSX.Element {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="shrink-0 rounded border border-[var(--danger)] px-2 py-1 text-xs font-medium"
+            className="btn btn-danger shrink-0 px-2 py-1"
           >
             Retry
           </button>
@@ -136,23 +136,17 @@ function MainApp(): JSX.Element {
 
       <header className="col-span-2 row-start-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
         <div className="flex items-baseline gap-2">
-          <span className="text-sm font-semibold">Grunt</span>
+          <span className="font-label text-base leading-none font-bold tracking-[0.06em] uppercase">Grunt</span>
           {activeChat && <span className="text-sm text-[var(--text-muted)]">{activeChat.title}</span>}
         </div>
         <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
           {activeChat && <span data-testid="stream-status">{STREAM_STATUS_LABEL[streamStatus] ?? streamStatus}</span>}
-          <button type="button" onClick={() => setSettingsViewOpen(true)} className="rounded border border-[var(--border)] px-2 py-1">
-            Settings
-          </button>
-          <button type="button" onClick={() => setUsageViewOpen(true)} className="rounded border border-[var(--border)] px-2 py-1">
-            Usage
-          </button>
           {isNarrow && (
             <button
               type="button"
               onClick={() => setNarrowOverlayOpen((open) => !open)}
               aria-expanded={narrowOverlayOpen}
-              className="rounded border border-[var(--border)] px-2 py-1"
+              className="btn px-2 py-0.5"
             >
               Inspector
             </button>
@@ -161,7 +155,19 @@ function MainApp(): JSX.Element {
       </header>
 
       <div className="row-start-3 h-full min-h-0 min-w-0">
-        <ChatList />
+        {/* Settings and Usage are app-level overlays, so App owns them; they just render in the sidebar's footer. */}
+        <ChatList
+          footer={
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setSettingsViewOpen(true)} className="btn flex-1 px-2 py-1">
+                Settings
+              </button>
+              <button type="button" onClick={() => setUsageViewOpen(true)} className="btn flex-1 px-2 py-1">
+                Usage
+              </button>
+            </div>
+          }
+        />
       </div>
 
       <div className="relative row-start-3 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">

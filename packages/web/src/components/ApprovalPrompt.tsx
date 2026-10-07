@@ -111,7 +111,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
     <div
       role="alert"
       data-testid={`approval-prompt-${request.id}`}
-      className="my-1 space-y-2 rounded border border-[var(--warning,#b58900)] bg-[var(--bg-sunken)] px-3 py-2 text-sm"
+      className="my-1 space-y-2 rounded-sm border border-l-[3px] border-[var(--warn)] bg-[var(--bg-raised)] px-3 py-2 text-sm"
     >
       <div className="flex items-center gap-2">
         <span aria-hidden="true">🔒</span>
@@ -120,7 +120,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
         </span>
       </div>
-      <p className="text-xs text-[var(--text-muted)]">{request.summary}</p>
+      <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{request.summary}</p>
       {isShellCommand && (
         <div className="space-y-1">
           <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
@@ -133,7 +133,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
             Let &ldquo;Always allow&rdquo; permit this program with any arguments, instead of only this exact command
           </label>
           {allowAnyArgs && (
-            <p data-testid="approval-any-args-warning" className="text-xs text-[var(--warning,#b58900)]">
+            <p data-testid="approval-any-args-warning" className="text-xs text-[var(--warn)]">
               Warning: this permits <strong>{(request.args as Record<string, unknown>)['command'] as string}</strong> to run with
               any arguments, for every future chat, with no further approval. For most programs that is equivalent to letting it
               run arbitrary code (e.g. via flags like <code>--node-options</code>, <code>-c core.pager=...</code>, or <code>-v /:/host</code>).
@@ -147,7 +147,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           data-testid="approval-deny"
           disabled={pending}
           onClick={() => void choose({ choice: 'deny' })}
-          className="rounded border border-[var(--danger)] px-2 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+          className="btn btn-danger px-2 py-1"
         >
           Deny
         </button>
@@ -156,7 +156,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           data-testid="approval-once"
           disabled={pending}
           onClick={() => void choose({ choice: 'once' })}
-          className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-raised)] disabled:opacity-50"
+          className="btn btn-primary px-2 py-1"
         >
           Allow once
         </button>
@@ -165,7 +165,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           data-testid="approval-chat"
           disabled={pending}
           onClick={() => void choose({ choice: 'chat' })}
-          className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-raised)] disabled:opacity-50"
+          className="btn px-2 py-1"
         >
           Allow for this chat
         </button>
@@ -174,7 +174,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           data-testid="approval-always"
           disabled={pending}
           onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
-          className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-raised)] disabled:opacity-50"
+          className="btn px-2 py-1"
         >
           Always allow
         </button>

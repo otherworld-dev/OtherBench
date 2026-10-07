@@ -30,7 +30,7 @@ function CodeBlock(props: ComponentPropsWithoutRef<'pre'>): JSX.Element {
       <button
         type="button"
         onClick={() => void handleCopy()}
-        className="absolute top-1.5 right-1.5 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-1.5 py-0.5 text-xs text-[var(--text-muted)] opacity-0 transition-opacity group-hover:opacity-100 hover:text-[var(--text)]"
+        className="btn absolute top-1.5 right-1.5 bg-[var(--bg-raised)] px-1.5 py-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-[var(--bg-sunken)] focus-visible:opacity-100"
       >
         {copied ? 'Copied' : 'Copy'}
       </button>

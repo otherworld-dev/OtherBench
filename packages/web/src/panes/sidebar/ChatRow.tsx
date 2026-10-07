@@ -133,8 +133,10 @@ export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, r
             : undefined
         }
         aria-current={active ? 'true' : undefined}
-        className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-left text-sm ${
-          active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : `${muted ? 'text-[var(--text-muted)]' : 'text-[var(--text)]'} hover:bg-[var(--bg-sunken)]`
+        className={`min-w-0 flex-1 truncate px-2 py-1.5 text-left text-sm ${
+          active
+            ? 'rounded-r-sm bg-[var(--bg)] text-[var(--text)] shadow-[inset_2px_0_0_var(--accent)]'
+            : `rounded-sm ${muted ? 'text-[var(--text-muted)]' : 'text-[var(--text)]'} hover:bg-[var(--bg-sunken)]`
         }`}
       >
         {chat.pinned && (

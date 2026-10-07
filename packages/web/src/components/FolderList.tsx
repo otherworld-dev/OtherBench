@@ -90,7 +90,7 @@ export function FolderList({
                   aria-label={`Remove ${folderPath(view)}`}
                   disabled={saving}
                   onClick={() => void save(kept(views.filter((_, j) => j !== i)))}
-                  className="rounded border border-[var(--border)] px-1.5 py-0.5 hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+                  className="btn px-1.5 py-0.5"
                 >
                   Remove
                 </button>
@@ -123,7 +123,7 @@ export function FolderList({
           type="button"
           disabled={saving || draft.trim() === ''}
           onClick={() => void add(draft)}
-          className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+          className="btn px-2 py-1"
         >
           Add
         </button>
@@ -134,7 +134,7 @@ export function FolderList({
             onClick={() => {
               void pickFolder('Choose a folder').then((picked) => (picked ? add(picked) : undefined));
             }}
-            className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+            className="btn px-2 py-1"
           >
             Choose…
           </button>

@@ -22,7 +22,7 @@ function failure(err: unknown): string {
   return err instanceof ApiError ? err.message : "Couldn't open this. Please try again.";
 }
 
-const TOGGLE = 'rounded border border-[var(--border)] px-2 py-0.5 text-xs hover:bg-[var(--bg-sunken)]';
+const TOGGLE = 'btn px-2 py-0.5';
 
 /** The file's text, as Markdown, code or HTML source, with a note when it was cut off. */
 function TextBody({ chatId, opened, as }: { chatId: string; opened: ViewOpened; as: 'markdown' | 'code' }): JSX.Element {

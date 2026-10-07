@@ -316,7 +316,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           {switchError && (
             <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-4 py-2 text-sm text-[var(--danger)]">
               <span>{switchError}</span>
-              <button type="button" onClick={() => setSwitchError(null)} className="shrink-0 rounded border border-[var(--danger)] px-2 py-0.5 text-xs">
+              <button type="button" onClick={() => setSwitchError(null)} className="btn btn-danger shrink-0 px-2 py-0.5">
                 Dismiss
               </button>
             </div>
@@ -328,7 +328,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               aria-pressed={viewer.open}
               title={viewer.open ? 'Hide the viewer' : 'Show the viewer: files, images and pages from this chat'}
               onClick={() => setViewerOpen(chat.id, !viewer.open)}
-              className="absolute right-3 top-2 z-10 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-0.5 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+              className="btn absolute top-2 right-3 z-10 bg-[var(--bg-raised)] px-2 py-0.5 hover:bg-[var(--bg-sunken)]"
             >
               Viewer
             </button>
