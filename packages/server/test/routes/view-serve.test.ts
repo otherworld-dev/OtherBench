@@ -54,7 +54,7 @@ describe('GET /view/<id>/', () => {
     expect(page.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
     expect(page.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(page.headers.get('Content-Security-Policy')).toBe(
-      `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:4747/view/${id}/; connect-src https: wss:`
+      `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:4747/view/${id}/; connect-src https: wss:; form-action https:`
     );
 
     const css = await app.request(`/view/${id}/style.css`);

@@ -14,10 +14,12 @@ const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store
  * The sandbox for everything a link serves but a PDF (spec 2026-10-07-viewer):
  * scripts run, but in an opaque origin; loads from https, data:, blob: and the
  * link's own folder; network to https and wss only, which also keeps it off
- * Grunt's API and anything else on plain http.
+ * Grunt's API and anything else on plain http. Forms too: `form-action`
+ * doesn't fall back to `default-src`, and without it a page could post a
+ * form to Grunt's API, which takes a text/plain body as JSON.
  */
 export function sandboxPolicy(folderUrl: string): string {
-  return `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:`;
+  return `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
 }
 
 function refuse(c: Context, status: 404 | 415, text: string): Response {
