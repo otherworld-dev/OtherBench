@@ -172,3 +172,49 @@ describe('createApp desktop options', () => {
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 });
+
+describe('cross-site writes to the API (Deck #897)', () => {
+  // The classic attack: a form with enctype text/plain whose body reads as JSON.
+  const post = (app: Hono, headers: Record<string, string>) =>
+    app.request('/api/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Host: '127.0.0.1:4747', ...headers },
+      body: JSON.stringify({ name: 'Evil', kind: 'mock' }),
+    });
+
+  it("refuses a write sent from another site's page, so a hidden form can't create a connection in browser mode", async () => {
+    const container = makeContainer();
+    const app = createApp(container);
+    for (const headers of [
+      { Origin: 'https://evil.example' },
+      { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' },
+      { Origin: 'null' },
+      { 'Sec-Fetch-Site': 'cross-site' },
+      { 'Sec-Fetch-Site': 'same-site' },
+      { Origin: 'http://127.0.0.1:4748' },
+    ]) {
+      const res = await post(app, headers);
+      expect(res.status, JSON.stringify(headers)).toBe(403);
+      expect(await res.json(), JSON.stringify(headers)).toMatchObject({ error: expect.stringMatching(/another site/) });
+    }
+    expect(container.store.connections.list()).toEqual([]);
+  });
+
+  it('lets through the UI Grunt serves, the Vite dev proxy, the desktop webview, and clients that are no browser', async () => {
+    const app = createApp(makeContainer(), { corsOrigins: [APP_ORIGIN] });
+    for (const headers of [
+      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin' },
+      { Origin: 'http://127.0.0.1:4747' },
+      { Origin: 'http://localhost:5173', 'Sec-Fetch-Site': 'same-origin' },
+      { Origin: APP_ORIGIN, 'Sec-Fetch-Site': 'cross-site' },
+      {},
+    ]) {
+      expect((await post(app, headers)).status, JSON.stringify(headers)).toBe(201);
+    }
+  });
+
+  it('leaves reads alone: CORS already keeps another site from reading the answer', async () => {
+    const res = await createApp(makeContainer()).request('/api/chats', { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } });
+    expect(res.status).toBe(200);
+  });
+});
