@@ -40,10 +40,18 @@ function valid(v: unknown): v is ChatViewer {
   );
 }
 
-function load(): Record<string, ChatViewer> {
+/** The panel's share of the pane, kept between 20% and 80% (a NaN one is the default). */
+const clampShare = (share: number): number => (Number.isFinite(share) ? Math.min(0.8, Math.max(0.2, share)) : DEFAULT_VIEWER.share);
+
+/** The viewers saved on this device: malformed ones dropped, a width out of range brought back into it. */
+export function loadViewers(): Record<string, ChatViewer> {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(VIEWER_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(parsed).filter((e): e is [string, ChatViewer] => valid(e[1])));
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((e): e is [string, ChatViewer] => valid(e[1]))
+        .map(([id, v]) => [id, { ...v, share: clampShare(v.share) }])
+    );
   } catch {
     return {};
   }
@@ -86,11 +94,11 @@ export const useViewerStore = create<ViewerStore>()((set) => {
       return { viewers };
     });
   return {
-    viewers: load(),
+    viewers: loadViewers(),
     openItem: (chatId, item) => update(chatId, (v) => withItem(v, item)),
     setOpen: (chatId, open) => update(chatId, (v) => ({ ...v, open })),
     setMode: (chatId, mode) => update(chatId, (v) => ({ ...v, mode })),
     step: (chatId, delta) => update(chatId, (v) => stepped(v, delta)),
-    setShare: (chatId, share) => update(chatId, (v) => ({ ...v, share: Math.min(0.8, Math.max(0.2, share)) })),
+    setShare: (chatId, share) => update(chatId, (v) => ({ ...v, share: clampShare(share) })),
   };
 });

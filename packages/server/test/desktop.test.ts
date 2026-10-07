@@ -213,6 +213,21 @@ describe('cross-site writes to the API (Deck #897)', () => {
     }
   });
 
+  it("refuses a form sent from a page Grunt shows, even from its own origin: a PDF isn't sandboxed and could submit one", async () => {
+    const container = makeContainer();
+    const app = createApp(container);
+    for (const headers of [
+      { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' },
+      { Origin: 'http://127.0.0.1:4747', Referer: 'http://127.0.0.1:4747/view/abc/doc.pdf' },
+      { Referer: 'http://127.0.0.1:4747/view/abc/doc.pdf' },
+    ]) {
+      expect((await post(app, headers)).status, JSON.stringify(headers)).toBe(403);
+    }
+    expect(container.store.connections.list()).toEqual([]);
+    // The UI's own fetches still go through.
+    expect((await post(app, { Origin: 'http://127.0.0.1:4747', 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', Referer: 'http://127.0.0.1:4747/' })).status).toBe(201);
+  });
+
   it('leaves reads alone: CORS already keeps another site from reading the answer', async () => {
     const res = await createApp(makeContainer()).request('/api/chats', { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } });
     expect(res.status).toBe(200);

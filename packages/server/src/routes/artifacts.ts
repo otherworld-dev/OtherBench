@@ -127,7 +127,7 @@ export function artifactsRoutes(container: Container): Hono {
     const path = body.path.trim();
     const roots = chatRoots(container, chat);
     if (roots.workspaceRoot === null) throw new HTTPException(404, { message: 'This chat has no workspace folder on this machine.' });
-    if (process.platform === 'win32' && ambiguousOnWindows(path)) throw new HTTPException(400, { message: `Can't save to ${path}.` });
+    if (ambiguousOnWindows(path)) throw new HTTPException(400, { message: `Can't save to ${path}.` });
     const absolute = isAbsolute(path) ? path : resolve(roots.workspaceRoot, path);
     let located: { root: string; writable: boolean };
     try {

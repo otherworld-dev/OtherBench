@@ -94,6 +94,21 @@ describe('POST /api/view/links', () => {
   });
 });
 
+describe('POST /api/view/links, paths Windows reads as another file', () => {
+  it('refuses them on every platform, as serving does, so a link never opens to a 404', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'notes');
+    // On Windows this writes a hidden stream of notes.txt; elsewhere, a file with a colon in its name.
+    writeFileSync(join(ws, 'notes.txt:x.html'), '<p>hidden</p>');
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      expect((await open('notes.txt:x.html')).status).toBe(404);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+});
+
 describe('POST /api/view/links from another site', () => {
   it('needs a JSON body, so a cross-site form post makes no link', async () => {
     writeFileSync(join(ws, 'a.png'), Buffer.from([0x89]));
@@ -149,5 +164,12 @@ describe('GET /api/view/dirs', () => {
       { name: 'b.md', path: join(ws, 'b.md'), type: 'file' },
     ]);
     expect((await app().request(`/api/view/dirs?chatId=c1&path=${encodeURIComponent(outside)}`)).status).toBe(404);
+  });
+
+  it('says a file is not a folder when asked to list one', async () => {
+    writeFileSync(join(ws, 'a.md'), '');
+    const res = await app().request(`/api/view/dirs?chatId=c1&path=${encodeURIComponent(join(ws, 'a.md'))}`);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('is a file, not a folder');
   });
 });

@@ -523,8 +523,8 @@ Every path goes through `containPathIn` and fs-tools' `openVerified` /
 drive (a hidden stream) or a segment ending in `.` or a space is refused,
 since Windows would open a different file from the one named. Text comes
 through the authed API (first 2 MB, binary refused). What the browser loads
-itself comes through `/view/<id>/<name>` links: 128 random bits, 10 minutes,
-server memory only, no token (the id is the capability), containment checked
+itself comes through `/view/<id>/<name>` links: 128 random bits, 10 minutes
+from last use (so an open page's late loads still work), server memory only, no token (the id is the capability), containment checked
 again on every request, and the link dies as soon as its folder stops being
 the chat's or the chat is deleted. Making a link needs a JSON request, so a
 cross-site form can't. The served type is from a fixed list with `nosniff`;
@@ -535,8 +535,12 @@ it isn't sandboxed either. Websites open in a `site-<n>` window that no
 capability matches. Every app command needs an `allow-<command>` permission
 (`build.rs` declares the app manifest), granted only to the main and quick
 windows, so a site window can call none, even one showing a page Tauri counts
-as local (the dev server's). Show in folder reveals and never opens. None of
-it is on the peer listener.
+as local (the dev server's). Show in folder reveals and never opens. A
+viewed Markdown file's relative links and images resolve from its own
+folder; each image gets its own `/view/` link (`ViewerImage`), so it goes
+through the same containment. A path Windows would read as another file is
+refused on every platform, not only on Windows. None of it is on the peer
+listener.
 
 **Artifacts run through one executor and the viewer's sandbox** (Deck #896).
 The model makes them with the `artifact` tool. For API engines it's a Grunt
@@ -624,7 +628,10 @@ unless the browser marks it `Sec-Fetch-Site: same-origin` (which a page
 can't set; `npm run dev` through Vite's proxy passes this way), or its
 `Origin` is the server's own or one of the desktop webview's
 `--cors-origin`s, or it carries neither header (curl, scripts, tests). An
-opaque `null` origin is refused. Reads aren't checked, since CORS already
+opaque `null` origin is refused. So is any form submission
+(`Sec-Fetch-Mode: navigate`) and any write whose Referer is a `/view/` page,
+even from the server's own origin: Grunt's UI only writes with fetch, and
+PDFs are served from that origin unsandboxed. Reads aren't checked, since CORS already
 stops another site reading them. It runs in every mode, behind the Host
 check, so the desktop's token is no longer the only defence.
 

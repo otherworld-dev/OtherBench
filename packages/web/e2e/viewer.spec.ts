@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -21,6 +21,10 @@ test.beforeEach(() => {
     '<!doctype html><body><p id="out">waiting</p><script>let r; try { r = parent.document.title; r = "reached the app"; } catch (e) { r = "isolated"; } document.getElementById("out").textContent = r;</script></body>'
   );
   writeFileSync(join(ws, 'pic.png'), PNG);
+  // A README whose image and link are relative to its own folder (Deck #901).
+  mkdirSync(join(ws, 'docs', 'img'), { recursive: true });
+  writeFileSync(join(ws, 'docs', 'README.md'), '# Docs\n\n![Diagram](img/diagram.png)\n\n[Back to the notes](../notes.md)');
+  writeFileSync(join(ws, 'docs', 'img', 'diagram.png'), PNG);
 });
 
 test.afterEach(() => {
@@ -64,4 +68,13 @@ test('opens a file a tool read, a sandboxed page and an image in the viewer', as
   const img = viewer.getByRole('img', { name: 'pic.png' });
   await expect(img).toBeVisible();
   expect(await img.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBe(1);
+
+  // A README in a folder shows its own images, and its relative links open from its folder.
+  await address.fill('docs/README.md');
+  await address.press('Enter');
+  const diagram = viewer.getByRole('img', { name: 'Diagram' });
+  await expect(diagram).toBeVisible();
+  await expect.poll(() => diagram.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBe(1);
+  await viewer.getByRole('link', { name: 'Back to the notes' }).click();
+  await expect(viewer.getByRole('heading', { name: 'Viewer heading' })).toBeVisible();
 });

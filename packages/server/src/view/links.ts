@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-/** How long a viewer link works (spec 2026-10-07-viewer). */
+/** How long a viewer link works after it was made or last used (spec 2026-10-07-viewer; from last use, Deck #901). */
 export const VIEW_LINK_TTL_MS = 10 * 60_000;
 /** Links kept at once; the oldest go first. */
 export const MAX_VIEW_LINKS = 500;
@@ -47,13 +47,16 @@ export class ViewLinks {
     return id;
   }
 
+  /** The link, which then lives VIEW_LINK_TTL_MS from now: ten minutes from its last use, so a page's late loads still work. */
   get(id: string): ViewLink | null {
     const link = this.links.get(id);
     if (!link) return null;
-    if (this.now() >= link.expiresAt) {
+    const now = this.now();
+    if (now >= link.expiresAt) {
       this.links.delete(id);
       return null;
     }
+    link.expiresAt = now + VIEW_LINK_TTL_MS;
     return link;
   }
 }

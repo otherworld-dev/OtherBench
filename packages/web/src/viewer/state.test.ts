@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DEFAULT_VIEWER, MAX_VIEWER_HISTORY, VIEWER_STORAGE_KEY, useViewerStore, viewerFor } from './state.js';
+import { DEFAULT_VIEWER, MAX_VIEWER_HISTORY, VIEWER_STORAGE_KEY, loadViewers, useViewerStore, viewerFor } from './state.js';
 
 const file = (path: string) => ({ kind: 'file' as const, path });
 const v = (chatId = 'c1') => viewerFor(useViewerStore.getState().viewers, chatId);
@@ -10,6 +10,12 @@ beforeEach(() => {
 });
 
 describe('viewer state', () => {
+  it("brings a saved width that's out of range back into it, rather than drawing a negative panel", () => {
+    window.localStorage.setItem(VIEWER_STORAGE_KEY, JSON.stringify({ c1: { ...DEFAULT_VIEWER, share: -3 }, c2: { ...DEFAULT_VIEWER, share: 9 }, c3: { ...DEFAULT_VIEWER, share: 0.5 } }));
+    const loaded = loadViewers();
+    expect([loaded['c1']!.share, loaded['c2']!.share, loaded['c3']!.share]).toEqual([0.2, 0.8, 0.5]);
+  });
+
   it('keeps artifact items in history, telling versions apart', () => {
     const s = useViewerStore.getState();
     s.openItem('c1', { kind: 'artifact', artifactId: 'art', title: 'Calc' });
