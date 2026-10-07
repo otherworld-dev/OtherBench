@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
+import { PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Project, Store } from '@grunt/core/ports/store.js';
 import type { Container } from '../container.js';
 import { optionalNullableString } from '../validation.js';
@@ -15,6 +15,8 @@ interface ProjectBody {
   defaultProfileId?: unknown;
   sortOrder?: unknown;
   folders?: unknown;
+  description?: unknown;
+  instructions?: unknown;
 }
 
 /** Spec §2: trimmed, 1-80 characters. */
@@ -27,6 +29,15 @@ function requireProjectName(value: unknown): string {
     throw new HTTPException(400, { message: `"name" must be 1-${PROJECT_NAME_MAX} characters after trimming.` });
   }
   return trimmed;
+}
+
+/** Spec 2026-10-08-project-page-design §1: a string of at most `max` characters, or absent. */
+function optionalProjectText(value: unknown, field: 'description' | 'instructions', max: number): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new HTTPException(400, { message: `"${field}" must be a string.` });
+  const text = field === 'description' ? value.trim() : value;
+  if (text.length > max) throw new HTTPException(400, { message: `"${field}" must be at most ${max.toLocaleString('en-US')} characters.` });
+  return text;
 }
 
 /** Spec §2: a default profile must exist and not be archived. */
@@ -67,13 +78,17 @@ export function projectsRoutes(container: Container): Hono {
 
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ProjectBody;
+    // Every field is validated before anything is written.
     const name = requireProjectName(body.name);
     const workspace = parseWorkspaceBody(container, body) ?? null;
     const defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
+    const description = optionalProjectText(body.description, 'description', PROJECT_DESCRIPTION_MAX) ?? '';
+    const instructions = optionalProjectText(body.instructions, 'instructions', PROJECT_INSTRUCTIONS_MAX) ?? '';
+    const folders = parseFoldersBody(container, body.folders, [], workspace) ?? [];
     // New projects go to the bottom of the sidebar.
     const sortOrder = container.store.projects.list().reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1;
 
-    const created = container.store.projects.create({ id: randomUUID(), name, workspace, defaultProfileId, sortOrder });
+    const created = container.store.projects.create({ id: randomUUID(), name, description, instructions, workspace, folders, defaultProfileId, sortOrder });
     return c.json(projectView(container, created), 201);
   });
 
@@ -91,6 +106,10 @@ export function projectsRoutes(container: Container): Hono {
       patch.folders = parseFoldersBody(container, body.folders, current.folders ?? [], patch.workspace !== undefined ? patch.workspace : current.workspace);
     }
     if (body.defaultProfileId !== undefined) patch.defaultProfileId = optionalDefaultProfileId(container, body.defaultProfileId) ?? null;
+    const description = optionalProjectText(body.description, 'description', PROJECT_DESCRIPTION_MAX);
+    if (description !== undefined) patch.description = description;
+    const instructions = optionalProjectText(body.instructions, 'instructions', PROJECT_INSTRUCTIONS_MAX);
+    if (instructions !== undefined) patch.instructions = instructions;
     if (body.sortOrder !== undefined) {
       if (typeof body.sortOrder !== 'number' || !Number.isInteger(body.sortOrder)) {
         throw new HTTPException(400, { message: '"sortOrder" must be an integer.' });
