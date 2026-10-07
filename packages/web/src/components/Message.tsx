@@ -5,7 +5,7 @@ import { api } from '../state/api.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { MarkdownBody } from './MarkdownBody.js';
-import { toolPath } from '../viewer/paths.js';
+import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
 import { useViewer } from '../viewer/ViewerContext.js';
 
 function NoticeBlock({ text }: { text: string }): JSX.Element {
@@ -104,6 +104,26 @@ function renderPart(part: Part, key: number): JSX.Element | null {
 
 type ToolPart = Extract<Part, { type: 'tool-call' | 'tool-result' }>;
 
+const VERB = { create: 'Created', update: 'Updated to', rewrite: 'Rewrote as' } as const;
+
+/** An artifact call's card (Deck #896): what it made, opening that version in the chat's viewer. */
+function ArtifactCard({ result }: { result: unknown }): JSX.Element | null {
+  const viewer = useViewer();
+  const info = artifactOutcomeOf(result);
+  if (!info) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => viewer?.openArtifact({ artifactId: info.artifactId, title: info.title, versionId: info.versionId })}
+      className="my-1 flex w-full items-center gap-2 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2 text-left text-sm hover:bg-[var(--bg-sunken)]"
+    >
+      <span aria-hidden="true">◧</span>
+      <span className="min-w-0 flex-1 truncate font-medium">{info.title}</span>
+      <span className="text-xs text-[var(--text-muted)]">{`${info.kind} · ${VERB[info.command]} v${info.number}`}</span>
+    </button>
+  );
+}
+
 /** "Used 14 tools: Glob ×4, Read ×6, Bash" -- names in first-seen order, ×1 omitted. Counts calls; a (shouldn't-happen) run of results alone counts those instead. */
 function toolGroupSummary(run: ToolPart[]): string {
   const calls = run.filter((p) => p.type === 'tool-call');
@@ -125,7 +145,11 @@ function ToolGroup({ run }: { run: ToolPart[] }): JSX.Element {
   );
 }
 
-/** Renders a message's parts, folding each run of consecutive tool-call/tool-result parts into one `ToolGroup`. */
+/**
+ * Renders a message's parts, folding each run of consecutive tool-call/tool-result parts into one `ToolGroup`.
+ * An artifact call that made a version (Deck #896) is a card instead, outside the fold; one still running,
+ * failed or only viewing folds with the rest, so its error stays visible.
+ */
 function renderParts(parts: Part[]): JSX.Element[] {
   const out: JSX.Element[] = [];
   let run: ToolPart[] = [];
@@ -136,13 +160,20 @@ function renderParts(parts: Part[]): JSX.Element[] {
     if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} />);
     run = [];
   };
+  const carded = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isArtifactTool(p.name) && artifactOutcomeOf(p.result) ? [p.id] : [])));
   parts.forEach((p, i) => {
-    if (p.type === 'tool-call' || p.type === 'tool-result') {
+    if ((p.type === 'tool-call' || p.type === 'tool-result') && !carded.has(p.id)) {
       if (run.length === 0) runStart = i;
       run.push(p);
       return;
     }
     flush();
+    // A carded call shows as its result's card.
+    if (p.type === 'tool-call') return;
+    if (p.type === 'tool-result') {
+      out.push(<ArtifactCard key={i} result={p.result} />);
+      return;
+    }
     const el = renderPart(p, i);
     if (el) out.push(el);
   });

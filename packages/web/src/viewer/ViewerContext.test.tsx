@@ -16,6 +16,40 @@ beforeEach(() => useViewerStore.setState({ viewers: {} }));
 afterEach(cleanup);
 
 describe('opening things from a chat', () => {
+  it("shows an artifact call as a card outside the folded tools, which opens it in the chat's viewer", async () => {
+    const outcome = { ok: true, command: 'update', artifactId: 'art', slug: 'calc', title: 'Calc', kind: 'html', number: 4, versionId: 'v4' };
+    const message = {
+      id: 'm2', chatId: 'c1', parentId: 'u1', role: 'assistant' as const, status: 'complete' as const, error: null, producedBy: null, createdAt: 0,
+      parts: [
+        { type: 'tool-call' as const, id: 'a', name: 'artifact', args: { command: 'update', id: 'calc', find: '1', replace: '2' } },
+        { type: 'tool-result' as const, id: 'a', name: 'artifact', result: JSON.stringify(outcome), isError: false },
+        { type: 'tool-call' as const, id: 'b', name: 'read_file', args: { path: 'x.md' } },
+        { type: 'tool-result' as const, id: 'b', name: 'read_file', result: 'x', isError: false },
+      ],
+    };
+    render(
+      <ViewerContext.Provider value={viewerActionsFor('c1')}>
+        <Message message={message as never} />
+      </ViewerContext.Provider>
+    );
+    expect(screen.getByText(/Used 1 tool/)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: /Calc.*Updated to v4/ }));
+    expect(viewerFor(useViewerStore.getState().viewers, 'c1').history).toEqual([{ kind: 'artifact', artifactId: 'art', title: 'Calc', versionId: 'v4' }]);
+  });
+
+  it('folds a failed artifact call with the other tools, so its error still shows', () => {
+    const message = {
+      id: 'm3', chatId: 'c1', parentId: 'u1', role: 'assistant' as const, status: 'complete' as const, error: null, producedBy: null, createdAt: 0,
+      parts: [
+        { type: 'tool-call' as const, id: 'a', name: 'artifact', args: { command: 'view', id: 'nope' } },
+        { type: 'tool-result' as const, id: 'a', name: 'artifact', result: JSON.stringify({ error: true, code: 'unknown_id', message: 'No artifact "nope".' }), isError: true },
+      ],
+    };
+    render(<Message message={message as never} />);
+    expect(screen.getByText(/Used 1 tool: artifact/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /nope/ })).toBeNull();
+  });
+
   it("opens links as websites (Ctrl-click in the browser) and paths in that chat's own panel", async () => {
     const user = userEvent.setup();
     render(
@@ -47,8 +81,8 @@ describe('opening things from a chat', () => {
     const message = {
       id: 'm1', chatId: 'c1', parentId: 'u1', role: 'assistant' as const, status: 'complete' as const, error: null, producedBy: null, createdAt: 0,
       parts: [
-        { type: 'tool-call' as const, callId: 'a', name: 'read_file', args: { path: 'notes.md' } },
-        { type: 'tool-call' as const, callId: 'b', name: 'list_dir', args: { path: '.' } },
+        { type: 'tool-call' as const, id: 'a', name: 'read_file', args: { path: 'notes.md' } },
+        { type: 'tool-call' as const, id: 'b', name: 'list_dir', args: { path: '.' } },
       ],
     };
     const user = userEvent.setup();

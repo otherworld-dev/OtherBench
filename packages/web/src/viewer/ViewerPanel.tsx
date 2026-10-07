@@ -81,7 +81,7 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
         {showingItem ? (
           <ItemView key={itemKey(current)} chatId={chat.id} item={current} />
         ) : (
-          <FileTree chatId={chat.id} onOpen={(path) => openItem(chat.id, { kind: 'file', path })} />
+          <FileTree chatId={chat.id} onOpen={(path) => openItem(chat.id, { kind: 'file', path })} onOpenArtifact={(a) => openItem(chat.id, { kind: 'artifact', ...a })} />
         )}
       </div>
     </aside>

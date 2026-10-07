@@ -98,6 +98,25 @@ function reset(): void {
 }
 
 describe('ProfilesPanel', () => {
+  it("saves the Artifacts switch in the profile's tools, on by default", async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'No artifacts');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Artifacts' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ artifacts: false }) })));
+  });
+
   beforeEach(reset);
   afterEach(cleanup);
 
@@ -123,7 +142,7 @@ describe('ProfilesPanel', () => {
           name: 'Fast local',
           connectionId: 'conn-1',
           modelId: 'llama3.2',
-          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [] },
+          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true },
         })
       )
     );
@@ -366,7 +385,7 @@ describe('ProfilesPanel', () => {
       await user.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() =>
-        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'] } }))
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true } }))
       );
     });
 

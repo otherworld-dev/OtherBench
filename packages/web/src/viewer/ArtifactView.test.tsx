@@ -40,6 +40,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ArtifactView', () => {
+  it('picks up a change the shown reply makes: a new part on it reloads the artifact', async () => {
+    useGruntStore.setState({ chats: [{ id: 'c1', headMessageId: 'r1', workspaceStatus: { status: 'ok', root: 'C:\\ws' } } as never], messages: { r1: { id: 'r1', status: 'streaming', parts: [] } as never } });
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v1' });
+    act(() => useGruntStore.setState({ messages: { r1: { id: 'r1', status: 'streaming', parts: [{ type: 'tool-result', id: 'a', name: 'artifact', result: '{}', isError: false }] } as never } }));
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
+  });
+
   it("shows the branch's current version in the sandbox, and switches versions, other branches included", async () => {
     render(<ArtifactView chatId="c1" item={item} />);
     const frame = await screen.findByTitle('calc.html');

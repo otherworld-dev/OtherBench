@@ -7,6 +7,7 @@ import { useGruntStore } from '../state/store.js';
 import { serverUrl } from '../state/transport.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
+import { useArtifactsStamp } from './stamp.js';
 
 const BUTTON = 'rounded border border-[var(--border)] px-2 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50';
 const SOURCE_LANGUAGE = { html: 'html', markdown: 'md', mermaid: 'plaintext', svg: 'xml' } as const;
@@ -20,8 +21,9 @@ function failure(err: unknown): string {
  * version unless one is pinned or picked, rendered by kind (pages and Mermaid
  * in the sandbox, SVG as an image, Markdown by React, code highlighted), with
  * Source, Edit, Copy, Download and Save to workspace. It reloads when the
- * chat's head moves (a new reply, a branch switch), so an unpinned artifact
- * follows the branch in the panel and in a popped-out tab alike.
+ * reply the chat shows changes (a new reply, a branch switch, a part
+ * streaming in), so an unpinned artifact follows the branch in the panel
+ * and in a popped-out tab alike.
  */
 export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<ViewItem, { kind: 'artifact' }> }): JSX.Element {
   const [detail, setDetail] = useState<ArtifactDetail | null>(null);
@@ -34,7 +36,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const [saving, setSaving] = useState<{ path: string; exists: string | null; done: string | null } | null>(null);
   const [reload, setReload] = useState(0);
   const workspaceHere = useGruntStore((s) => s.chats.find((c) => c.id === chatId)?.workspaceStatus?.status === 'ok');
-  const head = useGruntStore((s) => s.chats.find((c) => c.id === chatId)?.headMessageId ?? null);
+  const stamp = useArtifactsStamp(chatId);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,7 +47,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     return () => {
       cancelled = true;
     };
-  }, [chatId, item.artifactId, head, reload]);
+  }, [chatId, item.artifactId, stamp, reload]);
 
   const versionId = picked ?? detail?.currentVersionId ?? detail?.versions.at(-1)?.id ?? null;
   const kind = detail?.artifact.kind;
