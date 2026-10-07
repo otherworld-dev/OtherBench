@@ -1,7 +1,7 @@
 import { constants as fsConstants, lstatSync, statSync, type Dirent } from 'node:fs';
 import { mkdir, open, readdir, unlink, type FileHandle } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'node:path';
-import { containPath, PathEscapeError } from '@grunt/core/domain/paths.js';
+import { containPath, containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +33,8 @@ class NotUniqueError extends Error {
   }
 }
 class FileTooLargeError extends Error {}
+/** A write into one of the chat's extra folders that is read-only. */
+class ReadOnlyFolderError extends Error {}
 
 /**
  * See openVerified()'s doc comment for what this guards against and why.
@@ -97,6 +99,7 @@ async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
     if (err instanceof BinaryFileError) return toolError('binary_file', err.message);
     if (err instanceof NotUniqueError) return toolError('not_unique', err.message);
     if (err instanceof FileTooLargeError) return toolError('file_too_large', err.message);
+    if (err instanceof ReadOnlyFolderError) return toolError('read_only_folder', err.message);
     const code = (err as NodeJS.ErrnoException)?.code;
     const message = err instanceof Error ? err.message : String(err);
     if (code === 'ENOENT') return toolError('not_found', message);
@@ -276,6 +279,40 @@ function identityOf(p: string): Identity | null {
 
 function sameIdentity(a: Identity | null, b: Identity | null): boolean {
   return a !== null && b !== null && a.dev === b.dev && a.ino === b.ino;
+}
+
+/** The folder a tool call's path is in, and the path to hand the existing helpers. */
+interface Located {
+  /** The workspace, or one of the chat's extra folders. */
+  root: string;
+  writable: boolean;
+  /** As given for the workspace; made absolute for an extra folder (a relative path means the workspace). */
+  candidate: string;
+}
+
+/**
+ * Which of the chat's folders `candidate` is in (spec 2026-10-07-extra-folders):
+ * the workspace, or an extra folder, the innermost winning (containPathIn).
+ * The callers then run their usual verified open against that one folder, so
+ * everything below -- identity bracketing, both containment verdicts, the
+ * hard-link refusal -- applies to extra folders exactly as to the workspace.
+ */
+function locate(ctx: ToolContext, candidate: string): Located {
+  const { root, writable } = containPathIn(ctx.workspaceRoot, ctx.folders ?? [], candidate);
+  if (root === ctx.workspaceRoot) return { root, writable, candidate };
+  return { root, writable, candidate: isAbsolute(candidate) ? candidate : resolvePath(ctx.workspaceRoot!, candidate) };
+}
+
+/** `locate`, refusing a folder the chat may only read. */
+function locateForWrite(ctx: ToolContext, candidate: string): Located {
+  const located = locate(ctx, candidate);
+  if (!located.writable) throw new ReadOnlyFolderError(`"${candidate}" is in a read-only folder (${located.root}); it can be read but not changed.`);
+  return located;
+}
+
+/** How a path is reported back: relative inside the workspace, as always; absolute in an extra folder. */
+function shown(ctx: ToolContext, root: string, resolved: string, fallback: string): string {
+  return root === ctx.workspaceRoot ? relative(root, resolved) || fallback : resolved;
 }
 
 /** The candidate as an absolute path, WITHOUT resolving links -- just enough to stat it before containPath runs. */
@@ -570,7 +607,7 @@ export const readFileTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the workspace root. Prefer relative paths: absolute ones differ between machines.' },
+      path: { type: 'string', description: 'Path to the file, relative to the workspace root, or absolute inside one of the other folders this chat can use. Prefer relative paths in the workspace: absolute ones differ between machines.' },
       startLine: { type: 'integer', minimum: 1, description: '1-indexed first line to include (optional).' },
       endLine: { type: 'integer', minimum: 1, description: '1-indexed last line to include, inclusive (optional).' },
     },
@@ -584,7 +621,8 @@ export const readFileTool: ToolSpec = {
       const startLine = optionalPositiveInt(args, 'startLine');
       const endLine = optionalPositiveInt(args, 'endLine');
 
-      const { handle, resolved } = await openVerified(ctx.workspaceRoot, path, fsConstants.O_RDONLY);
+      const at = locate(ctx, path);
+      const { handle, resolved } = await openVerified(at.root, at.candidate, fsConstants.O_RDONLY);
       try {
         const stat = await handle.stat();
         if (stat.isDirectory()) throw Object.assign(new Error(`"${path}" is a directory.`), { code: 'EISDIR' });
@@ -607,7 +645,7 @@ export const readFileTool: ToolSpec = {
         const selected = lines.slice(clampedFrom - 1, clampedTo).join('\n');
 
         return {
-          path: relative(ctx.workspaceRoot ?? '', resolved) || resolved,
+          path: shown(ctx, at.root, resolved, resolved),
           content: selected,
           startLine: clampedFrom,
           endLine: clampedTo,
@@ -634,7 +672,7 @@ export const listDirTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Directory path, relative to the workspace root (default: workspace root).' },
+      path: { type: 'string', description: 'Directory path, relative to the workspace root, or absolute inside one of the other folders this chat can use (default: workspace root).' },
     },
   },
   risk: 'read',
@@ -642,14 +680,15 @@ export const listDirTool: ToolSpec = {
   async execute(args: unknown, ctx: ToolContext): Promise<unknown> {
     return runTool(async () => {
       const path = optionalString(args, 'path') ?? '.';
-      const { resolved, dirents } = await readdirVerified(ctx.workspaceRoot, path);
+      const at = locate(ctx, path);
+      const { resolved, dirents } = await readdirVerified(at.root, at.candidate);
       const entries = dirents
         .map((d) => ({
           name: d.name,
           type: d.isDirectory() ? ('dir' as const) : d.isSymbolicLink() ? ('symlink' as const) : ('file' as const),
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
-      return { path: relative(ctx.workspaceRoot ?? '', resolved) || '.', entries };
+      return { path: shown(ctx, at.root, resolved, '.'), entries };
     });
   },
 };
@@ -722,7 +761,7 @@ export const searchFilesTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Directory to search under, relative to the workspace root (default: workspace root).' },
+      path: { type: 'string', description: 'Directory to search under, relative to the workspace root, or absolute inside one of the other folders this chat can use (default: workspace root).' },
       glob: { type: 'string', description: 'Filename glob pattern, e.g. "src/**/*.ts".' },
       query: { type: 'string', description: 'Plain-text substring to search for inside file contents.' },
       maxResults: { type: 'integer', minimum: 1, description: `Maximum matches to return (default ${DEFAULT_MAX_RESULTS}).` },
@@ -738,7 +777,8 @@ export const searchFilesTool: ToolSpec = {
       const maxResults = optionalPositiveInt(args, 'maxResults') ?? DEFAULT_MAX_RESULTS;
       if (!glob && !query) throw new ArgsError('Provide at least one of "glob" or "query".');
 
-      const root = containPath(ctx.workspaceRoot, path);
+      const at = locate(ctx, path);
+      const root = containPath(at.root, at.candidate);
       const globRegExp = glob ? globToRegExp(glob) : null;
       const matches: SearchMatch[] = [];
       const skipped: SkippedFile[] = [];
@@ -754,7 +794,7 @@ export const searchFilesTool: ToolSpec = {
           // a moment ago can be a junction out of the workspace by the time
           // we descend into it, and the walk would then enumerate whatever
           // it points at. Same bracketing (and same residual) as list_dir.
-          ({ dirents } = await readdirVerified(ctx.workspaceRoot, dir));
+          ({ dirents } = await readdirVerified(at.root, dir));
         } catch {
           return; // vanished mid-walk, swapped, or unreadable -- skip rather than fail the whole search
         }
@@ -785,7 +825,7 @@ export const searchFilesTool: ToolSpec = {
           if (!query) {
             matches.push({ path: relPath });
           } else {
-            const { matches: found, refusal } = await grepFile(ctx.workspaceRoot, full, query);
+            const { matches: found, refusal } = await grepFile(at.root, full, query);
             if (refusal) skipped.push({ path: relPath, code: refusal.code, message: refusal.message });
             for (const m of found) {
               matches.push({ path: relPath, line: m.line, preview: m.preview });
@@ -868,7 +908,7 @@ export const writeFileTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the workspace root. Prefer relative paths: absolute ones differ between machines.' },
+      path: { type: 'string', description: 'Path to the file, relative to the workspace root, or absolute inside one of the other folders this chat can use. Prefer relative paths in the workspace: absolute ones differ between machines.' },
       content: { type: 'string', description: 'The full text content to write.' },
     },
     required: ['path', 'content'],
@@ -888,9 +928,10 @@ export const writeFileTool: ToolSpec = {
       // the reproduction. A mitigation that destroys the thing it is
       // protecting is not a mitigation. Truncation happens below, through
       // the verified handle, once we know what we are holding.
+      const at = locateForWrite(ctx, path);
       const { handle, resolved } = await openVerified(
-        ctx.workspaceRoot,
-        path,
+        at.root,
+        at.candidate,
         fsConstants.O_WRONLY | fsConstants.O_CREAT,
         { createParents: true }
       );
@@ -900,7 +941,7 @@ export const writeFileTool: ToolSpec = {
         // Shrink last, so a crash mid-write leaves a longer file rather than
         // a moment where the file is empty.
         await handle.truncate(buf.length);
-        return { path: relative(ctx.workspaceRoot ?? '', resolved) || resolved, bytesWritten: buf.length };
+        return { path: shown(ctx, at.root, resolved, resolved), bytesWritten: buf.length };
       } finally {
         await handle.close();
       }
@@ -920,7 +961,7 @@ export const editFileTool: ToolSpec = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path to the file, relative to the workspace root. Prefer relative paths: absolute ones differ between machines.' },
+      path: { type: 'string', description: 'Path to the file, relative to the workspace root, or absolute inside one of the other folders this chat can use. Prefer relative paths in the workspace: absolute ones differ between machines.' },
       oldString: { type: 'string', description: 'Exact text to find; must occur exactly once in the file.' },
       newString: { type: 'string', description: 'Text to replace it with.' },
     },
@@ -940,7 +981,8 @@ export const editFileTool: ToolSpec = {
       // operation, rather than a separate resolve+open for the read and
       // another for the write (which would reopen a second TOCTOU window
       // between them).
-      const { handle, resolved } = await openVerified(ctx.workspaceRoot, path, fsConstants.O_RDWR);
+      const at = locateForWrite(ctx, path);
+      const { handle, resolved } = await openVerified(at.root, at.candidate, fsConstants.O_RDWR);
       try {
         const stat = await handle.stat();
         if (stat.isDirectory()) throw Object.assign(new Error(`"${path}" is a directory.`), { code: 'EISDIR' });
@@ -966,7 +1008,7 @@ export const editFileTool: ToolSpec = {
         await handle.truncate(updatedBuf.length);
         await handle.write(updatedBuf, 0, updatedBuf.length, 0);
 
-        return { path: relative(ctx.workspaceRoot ?? '', resolved) || resolved, replaced: true };
+        return { path: shown(ctx, at.root, resolved, resolved), replaced: true };
       } finally {
         await handle.close();
       }

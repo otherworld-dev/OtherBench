@@ -3,7 +3,7 @@ import type { Chat, ChatRepo, NewChat } from '@grunt/core/ports/store.js';
 import { toStoredWorkspace } from '@grunt/core/domain/workspace.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromBool, toBool } from './util.js';
-import { WORKSPACE_COLUMNS, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
+import { WORKSPACE_COLUMNS, foldersFromRow, foldersToRow, workspaceFromRow, workspaceToRow } from './workspace-columns.js';
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';
 import { CHAT_FIELDS } from '@grunt/core/domain/sync.js';
@@ -18,6 +18,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       'profile_id',
       'head_message_id',
       ...WORKSPACE_COLUMNS,
+      'folders',
       'runs_on',
       'pinned',
       'archived_at',
@@ -36,6 +37,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       c.profileId,
       c.headMessageId,
       ...workspaceToRow(c.workspace),
+      foldersToRow(c.folders),
       c.runsOn,
       toBool(c.pinned),
       c.archivedAt,
@@ -54,6 +56,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       profileId: row.profile_id as string,
       headMessageId: row.head_message_id as string | null,
       workspace: workspaceFromRow(row, selfId),
+      ...foldersFromRow(row),
       runsOn: (row.runs_on as string | null) ?? selfId(),
       pinned: fromBool(row.pinned as number),
       archivedAt: row.archived_at as number | null,

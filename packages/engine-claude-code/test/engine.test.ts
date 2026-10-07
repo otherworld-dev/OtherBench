@@ -502,6 +502,18 @@ describe('ClaudeCodeChatEngine live processes', () => {
     e.dispose();
   });
 
+  it("gives Claude Code the chat's extra folders as additional directories, and a change resumes the session in a new process", async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = live(query);
+    await collect(e.stream(req({ folders: [{ root: '/refs', access: 'read' }] })));
+    await collect(e.stream(followUp({ folders: [{ root: '/refs', access: 'read' }, { root: '/notes', access: 'readwrite' }] })));
+
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.options.additionalDirectories).toEqual(['/refs']);
+    expect(starts[1]!.options).toMatchObject({ additionalDirectories: ['/refs', '/notes'], resume: 'sess-1' });
+    e.dispose();
+  });
+
   it('stopping a reply stops its process, and the next message resumes the session in a new one', async () => {
     const { query, starts } = liveQuery(async function* ({ n, options }) {
       yield init('sess-1');

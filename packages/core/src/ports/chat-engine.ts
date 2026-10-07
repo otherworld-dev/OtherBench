@@ -1,6 +1,7 @@
 import type { CanonMessage, EngineMeta, SerializedError } from '../types/messages.js';
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { Usage } from '../types/usage.js';
+import type { ResolvedFolder } from '../types/workspace.js';
 import type { ToolSpec } from './tool-provider.js';
 
 export interface EngineRequest {
@@ -28,6 +29,8 @@ export interface EngineRequest {
    * cannot be derived from `messages`.
    */
   workspaceRoot: string | null;
+  /** The chat's extra folders on this machine, for `ToolContext.folders` (and Claude Code's additional directories). */
+  folders?: ResolvedFolder[];
   /**
    * Loads an attachment's raw bytes by id, for `toModelMessages`
    * (engine-aisdk/convert.ts) to embed real image/file content when the

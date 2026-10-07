@@ -5,14 +5,14 @@ import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ResolvedProfile } from '../types/config.js';
-import type { WorkspaceStatus } from '../types/workspace.js';
+import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { translateForNode } from './path-translate.js';
-import { resolveWorkspace } from './workspace.js';
+import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -521,9 +521,14 @@ export class TurnRunner {
         throw new WorkspaceUnresolvedError(workspace);
       }
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
+      // Extra folders: the project's and the chat's, each resolved here; one
+      // not on this machine is left out, and none apply without a workspace
+      // (spec 2026-10-07-extra-folders).
+      const project = chat?.projectId ? this.store.projects.get(chat.projectId) : null;
+      const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
-      const requestProfile = this.withProjectMemory(profile, chat);
+      const requestProfile = this.withFolders(this.withProjectMemory(profile, chat), folders);
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
       const history = translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths);
@@ -571,6 +576,7 @@ export class TurnRunner {
         chatId,
         messageId,
         workspaceRoot,
+        ...(folders.length > 0 ? { folders } : {}),
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
         autoMode,
@@ -737,6 +743,13 @@ export class TurnRunner {
    * current note). Excluded chats still get it; exclusion only stops a chat
    * contributing.
    */
+  /** The profile with a note naming the turn's extra folders appended to its system prompt (spec 2026-10-07-extra-folders). */
+  private withFolders(profile: ResolvedProfile, folders: ResolvedFolder[]): ResolvedProfile {
+    if (folders.length === 0) return profile;
+    const block = extraFoldersPrompt(folders);
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
   private withProjectMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
     if (!chat?.projectId) return profile;
     const project = this.store.projects.get(chat.projectId);

@@ -341,6 +341,28 @@ describe('PermissionBroker', () => {
       expect(relativeInside.kind).toBe('allow');
     });
 
+    it("refuses a write into a read-only extra folder before asking, and matches a pathPrefix grant inside an extra folder", () => {
+      const refs = join(realBase, 'refs');
+      const notes = join(realBase, 'notes');
+      mkdirSync(refs, { recursive: true });
+      mkdirSync(notes, { recursive: true });
+      const ctxFolders = makeCtx({ workspaceRoot: realWs, folders: [{ root: refs, access: 'read' }, { root: notes, access: 'readwrite' }] });
+
+      const readOnly = broker.decide(WRITE_FILE(), { path: join(refs, 'paper.md'), content: 'x' }, makePolicy(), ctxFolders);
+      expect(readOnly).toMatchObject({ kind: 'deny', reason: expect.stringContaining('read-only folder') });
+      // Reading it is fine: this policy reads without asking.
+      expect(broker.decide(READ_FILE(), { path: join(refs, 'paper.md') }, makePolicy(), ctxFolders).kind).toBe('allow');
+      expect(broker.decide(WRITE_FILE(), { path: join(notes, 'n.md'), content: 'x' }, makePolicy(), ctxFolders).kind).toBe('ask');
+
+      store.grants.create({
+        id: 'g-notes', chatId: null, profileId: null, toolName: 'write_file', source: 'fs', scope: 'always',
+        constraint: { pathPrefix: notes }, expiresAt: null,
+      });
+      expect(broker.decide(WRITE_FILE(), { path: join(notes, 'n.md'), content: 'x' }, makePolicy(), ctxFolders)).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: 'g-notes' });
+      // Without the folder on the chat, the same grant matches nothing.
+      expect(broker.decide(WRITE_FILE(), { path: join(notes, 'n.md'), content: 'x' }, makePolicy(), makeCtx({ workspaceRoot: realWs })).kind).toBe('ask');
+    });
+
     it('a grant made for one tool source never authorises a same-named tool from another source', () => {
       // Demonstrated exploit: grants were keyed on tool NAME alone, and an
       // MCP server picks its own tool names. A server-supplied tool called

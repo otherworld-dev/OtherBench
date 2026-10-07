@@ -12,6 +12,31 @@ export type Workspace =
   /** An absolute path that only means something on `nodeId`. */
   | { kind: 'machine'; nodeId: string; root: string };
 
+/** What the model may do in an extra folder, always within the profile's own file policy. */
+export type FolderAccess = 'read' | 'readwrite';
+
+/**
+ * A folder a chat may use besides its workspace (spec 2026-10-07-extra-folders),
+ * stored and synced portably like the workspace itself.
+ */
+export interface ExtraFolder {
+  workspace: Workspace;
+  access: FolderAccess;
+}
+
+/** An extra folder resolved on the machine running a turn: what its tools may reach. */
+export interface ResolvedFolder {
+  root: string;
+  access: FolderAccess;
+}
+
+/** API only: an extra folder as it is on the machine that runs the chat. */
+export interface FolderView extends ExtraFolder {
+  /** Its path there, or where it's expected (null when unknown). */
+  root: string | null;
+  status: WorkspaceStatus;
+}
+
 /** A named place, e.g. "Nextcloud", that each machine keeps at its own path. */
 export interface Location {
   id: string;

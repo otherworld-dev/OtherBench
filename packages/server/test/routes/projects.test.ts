@@ -151,6 +151,23 @@ describe('PATCH /api/projects/:id', () => {
     expect((await send('PATCH', '/api/projects/nope', { name: 'x' })).status).toBe(404);
   });
 
+  it("sets the folders every chat in it can use, shown resolved, and refuses the project's own folder", async () => {
+    newProject('p1', { workspaceRoot: NATIVE_ABSOLUTE });
+    const self = container.store.nodes.self().id;
+
+    const res = await send('PATCH', '/api/projects/p1', { folders: [{ path: dataDir, access: 'readwrite' }] });
+    expect(res.status).toBe(200);
+    const folder = { workspace: { kind: 'machine', nodeId: self, root: dataDir }, access: 'readwrite' };
+    expect(await res.json()).toMatchObject({ folders: [folder], folderViews: [{ ...folder, root: dataDir, status: { status: 'ok', root: dataDir } }] });
+
+    const same = await send('PATCH', '/api/projects/p1', { folders: [{ path: NATIVE_ABSOLUTE, access: 'read' }] });
+    expect(same.status).toBe(400);
+    expect(container.store.projects.get('p1')!.folders).toEqual([folder]);
+
+    const cleared = await send('PATCH', '/api/projects/p1', { folders: [] });
+    expect(((await cleared.json()) as { folders?: unknown }).folders ?? []).toEqual([]);
+  });
+
   it.each([
     ['an empty name', { name: '' }],
     ['a fractional sortOrder', { sortOrder: 1.5 }],

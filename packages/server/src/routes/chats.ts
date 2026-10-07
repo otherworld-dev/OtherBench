@@ -13,7 +13,7 @@ import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { optionalBoolean, requireNonEmptyString } from '../validation.js';
-import { chatView, chatViews, parseWorkspaceBody } from '../workspace-view.js';
+import { chatView, chatViews, parseFoldersBody, parseWorkspaceBody } from '../workspace-view.js';
 
 interface ChatBody {
   title?: unknown;
@@ -25,6 +25,7 @@ interface ChatBody {
   archivedAt?: unknown;
   autoMode?: unknown;
   effort?: unknown;
+  folders?: unknown;
   projectId?: unknown;
   memoryExcluded?: unknown;
   sortOrder?: unknown;
@@ -32,7 +33,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'projectId', 'memoryExcluded', 'sortOrder']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'memoryExcluded', 'sortOrder']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -163,6 +164,10 @@ export function chatsRoutes(container: Container): Hono {
     // A folder is a path on the machine the chat runs on (after this patch).
     const workspace = parseWorkspaceBody(container, body, patch.runsOn ?? getChatOrThrow(container, id).runsOn);
     if (workspace !== undefined) patch.workspace = workspace;
+    if (body.folders !== undefined) {
+      const current = getChatOrThrow(container, id);
+      patch.folders = parseFoldersBody(container, body.folders, current.folders ?? [], patch.workspace !== undefined ? patch.workspace : current.workspace, patch.runsOn ?? current.runsOn);
+    }
     if (body.pinned !== undefined) patch.pinned = optionalBoolean(body.pinned, 'pinned', false);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);

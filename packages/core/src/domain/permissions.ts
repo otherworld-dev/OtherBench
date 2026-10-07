@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
-import { containPath } from './paths.js';
+import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
 import type { ToolPolicy } from '../types/config.js';
@@ -151,6 +151,16 @@ export class PermissionBroker {
         kind: 'deny',
         reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.`,
       };
+    }
+
+    // A write into one of the chat's read-only extra folders is refused here,
+    // before any card (spec 2026-10-07-extra-folders). A path in no folder at
+    // all is left to the tool, which refuses it as it always has.
+    if (tool.source === 'fs' && tool.risk === 'mutate') {
+      const path = stringField(args, 'path');
+      if (path !== null && inReadOnlyFolder(ctx, path)) {
+        return { kind: 'deny', reason: `"${tool.name}" can't change ${path}: it's in a read-only folder.` };
+      }
     }
 
     // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, ExitPlanMode)
@@ -462,8 +472,8 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
     // A resolution failure (escapes the workspace, no workspace configured,
     // unreadable ancestor) means "cannot confirm this is inside the grant"
     // and therefore no match -- fail closed, ask the human.
-    const candidate = resolveForGrantMatch(ctx.workspaceRoot, path);
-    const prefix = resolveForGrantMatch(ctx.workspaceRoot, constraint.pathPrefix);
+    const candidate = resolveForGrantMatch(ctx, path);
+    const prefix = resolveForGrantMatch(ctx, constraint.pathPrefix);
     return candidate !== null && prefix !== null && pathPrefixMatches(prefix, candidate);
   }
   if (constraint.commandExact !== undefined) {
@@ -492,11 +502,23 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
  * Resolving here removes the disagreement: the string the grant is compared
  * against and the file the tool opens are the same thing.
  */
-function resolveForGrantMatch(workspaceRoot: string | null, candidate: string): string | null {
+function resolveForGrantMatch(ctx: ToolContext, candidate: string): string | null {
   try {
-    return containPath(workspaceRoot, candidate);
+    // containPathIn, as the fs tools now resolve: the workspace or one of the
+    // chat's extra folders (spec 2026-10-07-extra-folders).
+    return containPathIn(ctx.workspaceRoot, ctx.folders ?? [], candidate).path;
   } catch {
     return null;
+  }
+}
+
+/** Whether `path` resolves into one of the chat's read-only extra folders. False when it resolves nowhere. */
+function inReadOnlyFolder(ctx: ToolContext, path: string): boolean {
+  if (!ctx.folders || ctx.folders.length === 0) return false;
+  try {
+    return !containPathIn(ctx.workspaceRoot, ctx.folders, path).writable;
+  } catch {
+    return false;
   }
 }
 

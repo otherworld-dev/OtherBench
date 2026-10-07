@@ -1,3 +1,4 @@
+import { mkdirSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -330,6 +331,56 @@ describe('chats CRUD', () => {
       expect((await json(res))['error']).toBe('"autoMode" must be a boolean.');
     }
     expect(container.store.chats.get(id)!.autoMode).toBe(false);
+  });
+
+  it('sets extra folders by path (stored against a location when inside one), keeps ones it has, and refuses the rest', async () => {
+    const id = (await createChat())['id'] as string;
+    const before = container.store.chats.get(id)!.updatedAt;
+    const self = container.store.nodes.self().id;
+    const nc = join(dataDir, 'Nextcloud');
+    const scratch = join(dataDir, 'scratch');
+    mkdirSync(join(nc, 'refs'), { recursive: true });
+    mkdirSync(scratch, { recursive: true });
+    container.store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    container.store.locations.setPath({ locationId: 'nc', nodeId: self, path: nc });
+    const patch = (body: unknown) =>
+      app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const refs = { kind: 'location', locationId: 'nc', subpath: 'refs' };
+
+    const set = await json(await patch({ folders: [{ path: join(nc, 'refs'), access: 'read' }, { path: scratch, access: 'readwrite' }] }));
+    expect(set['folders']).toEqual([
+      { workspace: refs, access: 'read' },
+      { workspace: { kind: 'machine', nodeId: self, root: scratch }, access: 'readwrite' },
+    ]);
+    expect(set['folderViews']).toEqual([
+      { workspace: refs, access: 'read', root: join(nc, 'refs'), status: { status: 'ok', root: join(nc, 'refs') } },
+      { workspace: { kind: 'machine', nodeId: self, root: scratch }, access: 'readwrite', root: scratch, status: { status: 'ok', root: scratch } },
+    ]);
+    // Setting folders is configuration, not chat activity.
+    expect(set['updatedAt']).toBe(before);
+
+    // One it already has can be kept by its stored form (here with new access); the other is dropped.
+    const kept = await json(await patch({ folders: [{ workspace: refs, access: 'readwrite' }] }));
+    expect(kept['folders']).toEqual([{ workspace: refs, access: 'readwrite' }]);
+
+    const refused: [unknown, string][] = [
+      [{ folders: [{ workspace: { kind: 'machine', nodeId: 'elsewhere', root: scratch }, access: 'read' }] }, 'name one of the folders it already has'],
+      [{ folders: [{ path: scratch, access: 'admin' }] }, '"read" or "readwrite"'],
+      [{ folders: 'refs' }, 'must be a list'],
+      [{ folders: Array.from({ length: 11 }, () => ({ path: scratch, access: 'read' })) }, 'at most 10'],
+    ];
+    for (const [body, message] of refused) {
+      const res = await patch(body);
+      expect(res.status).toBe(400);
+      expect(String((await json(res))['error'])).toContain(message);
+    }
+    expect(container.store.chats.get(id)!.folders).toEqual([{ workspace: refs, access: 'readwrite' }]);
+
+    // The workspace itself isn't an extra folder.
+    await patch({ workspacePath: scratch });
+    const same = await patch({ folders: [{ path: scratch, access: 'read' }] });
+    expect(same.status).toBe(400);
+    expect(String((await json(same))['error'])).toContain('workspace folder itself');
   });
 
   it('sets and clears the effort via PATCH effort, without moving the chat in the list, and refuses an unknown level', async () => {

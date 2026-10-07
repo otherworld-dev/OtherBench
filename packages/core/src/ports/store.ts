@@ -1,7 +1,7 @@
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ClaudeEffort, Connection, ModelInfo, Profile, ToolSource } from '../types/config.js';
 import type { PricingSnapshot } from '../types/usage.js';
-import type { Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
+import type { ExtraFolder, FolderView, Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
 import type { Peer } from '../types/peer.js';
 import type { ChangeBatch, ChangeRow } from '../domain/sync.js';
 
@@ -55,6 +55,13 @@ export interface Chat {
    */
   workspaceRoot?: string | null;
   workspaceStatus?: WorkspaceStatus;
+  /**
+   * Folders the chat may use besides its workspace (spec 2026-10-07-extra-folders),
+   * on top of its project's; absent means none. `folderViews` is API only:
+   * each of them resolved on the machine that runs the chat.
+   */
+  folders?: ExtraFolder[];
+  folderViews?: FolderView[];
   pinned: boolean;
   archivedAt: number | null;
   /**
@@ -147,6 +154,9 @@ export interface Project {
   /** API only, as on `Chat`: `workspace` resolved on this machine, filled by the server. */
   workspaceRoot?: string | null;
   workspaceStatus?: WorkspaceStatus;
+  /** Extra folders every chat in the project may use, as on `Chat`; `folderViews` is API only, resolved on this machine. */
+  folders?: ExtraFolder[];
+  folderViews?: FolderView[];
   /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
   defaultProfileId: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareProjects`. */

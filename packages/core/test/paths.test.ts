@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep, parse } from 'node:path';
-import { containPath, PathEscapeError } from '../src/domain/paths.js';
+import { containPath, containPathIn, PathEscapeError } from '../src/domain/paths.js';
 
 let root: string, outside: string, base: string;
 
@@ -141,5 +141,52 @@ describe('containPath', () => {
     const driveRoot = parse(root).root;
     const uniqueName = `grunt-root-probe-${Date.now()}.txt`;
     expect(containPath(driveRoot, uniqueName)).toBe(join(driveRoot, uniqueName));
+  });
+});
+
+describe('containPathIn (extra folders)', () => {
+  let ws: string, refs: string, notes: string, vendor: string, elsewhere: string;
+  beforeAll(() => {
+    const b = mkdtempSync(join(tmpdir(), 'grunt-folders-'));
+    ws = join(b, 'project'); refs = join(b, 'refs'); notes = join(b, 'notes'); elsewhere = join(b, 'elsewhere');
+    vendor = join(ws, 'vendor');
+    for (const d of [ws, refs, notes, elsewhere, vendor]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(refs, 'paper.md'), 'p');
+    writeFileSync(join(elsewhere, 'secret.txt'), 's');
+  });
+  const folders = () => [
+    { root: refs, access: 'read' as const },
+    { root: notes, access: 'readwrite' as const },
+    { root: vendor, access: 'read' as const },
+  ];
+
+  it('keeps relative paths in the workspace, which is writable', () => {
+    expect(containPathIn(ws, folders(), 'src/a.ts')).toEqual({ path: join(ws, 'src', 'a.ts'), root: ws, writable: true });
+  });
+
+  it('finds an absolute path in an extra folder, with that folder\'s access', () => {
+    expect(containPathIn(ws, folders(), join(refs, 'paper.md'))).toEqual({ path: join(refs, 'paper.md'), root: refs, writable: false });
+    expect(containPathIn(ws, folders(), join(notes, 'n.md'))).toEqual({ path: join(notes, 'n.md'), root: notes, writable: true });
+  });
+
+  it('gives a folder nested in the workspace its own access, however the path is written', () => {
+    expect(containPathIn(ws, folders(), join(vendor, 'lib.js')).writable).toBe(false);
+    expect(containPathIn(ws, folders(), 'vendor/lib.js')).toEqual({ path: join(vendor, 'lib.js'), root: vendor, writable: false });
+  });
+
+  it('refuses a path in none of the folders, and traversal out of an extra folder', () => {
+    expect(() => containPathIn(ws, folders(), join(elsewhere, 'secret.txt'))).toThrow(PathEscapeError);
+    expect(() => containPathIn(ws, folders(), join(refs, '..', 'elsewhere', 'secret.txt'))).toThrow(PathEscapeError);
+    expect(() => containPathIn(ws, folders(), '../elsewhere/secret.txt')).toThrow(PathEscapeError);
+  });
+
+  it('refuses a link inside an extra folder that points outside every folder', () => {
+    const link = join(notes, 'escape');
+    try { symlinkSync(elsewhere, link, 'junction'); } catch { return; } // needs privilege on Windows
+    expect(() => containPathIn(ws, folders(), join(link, 'secret.txt'))).toThrow(PathEscapeError);
+  });
+
+  it('refuses everything without a workspace, extra folders or not', () => {
+    expect(() => containPathIn(null, folders(), join(refs, 'paper.md'))).toThrow(PathEscapeError);
   });
 });

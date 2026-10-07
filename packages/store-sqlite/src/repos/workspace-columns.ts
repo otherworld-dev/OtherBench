@@ -1,4 +1,5 @@
-import type { Workspace } from '@grunt/core/types/workspace.js';
+import { parseFolders } from '@grunt/core/domain/workspace.js';
+import type { ExtraFolder, Workspace } from '@grunt/core/types/workspace.js';
 import type { SqlBindValue } from './crud.js';
 
 /**
@@ -22,4 +23,24 @@ export function workspaceFromRow(row: Record<string, unknown>, selfId: () => str
   const root = row.workspace_root as string | null;
   if (root) return { kind: 'machine', nodeId: (row.workspace_node as string | null) ?? selfId(), root };
   return null;
+}
+
+/** A chat's or project's extra folders as their `folders` column (migration 015): a JSON list. */
+export function foldersToRow(folders: ExtraFolder[] | undefined): string {
+  return JSON.stringify(folders ?? []);
+}
+
+/**
+ * The `folders` column back as a list, anything malformed dropped (it arrives
+ * through sync too); omitted when empty, so a chat with none reads as before.
+ */
+export function foldersFromRow(row: Record<string, unknown>): { folders?: ExtraFolder[] } {
+  let raw: unknown = [];
+  try {
+    raw = JSON.parse((row.folders as string | null) || '[]');
+  } catch {
+    raw = [];
+  }
+  const folders = parseFolders(raw);
+  return folders.length > 0 ? { folders } : {};
 }

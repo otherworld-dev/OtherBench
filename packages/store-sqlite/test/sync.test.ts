@@ -229,6 +229,30 @@ describe('sync (Task 50)', () => {
     expect(b.store.chats.get('c')!.effort).toBeUndefined();
   });
 
+  it("a chat's extra folders are a field of their own, and a project's travel with it", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    a.store.projects.create({ id: 'p', name: 'PhD', workspaceRoot: null, defaultProfileId: null });
+    s.both();
+
+    const refs = { workspace: { kind: 'location' as const, locationId: 'nc', subpath: 'refs' }, access: 'read' as const };
+    a.store.chats.update('c', { folders: [refs] });
+    b.store.chats.update('c', { title: 'renamed' });
+    b.store.projects.update('p', { folders: [{ ...refs, access: 'readwrite' }] });
+    s.both();
+
+    for (const n of [a, b]) {
+      expect(n.store.chats.get('c')).toMatchObject({ title: 'renamed', folders: [refs] });
+      expect(n.store.projects.get('p')!.folders).toEqual([{ ...refs, access: 'readwrite' }]);
+    }
+    a.store.chats.update('c', { folders: [] });
+    s.both();
+    expect(b.store.chats.get('c')!.folders).toBeUndefined();
+  });
+
   it('the same field edited on both: the later change wins on both machines', () => {
     const a = node('a');
     const b = node('b');

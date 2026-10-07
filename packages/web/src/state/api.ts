@@ -5,7 +5,7 @@ import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
-import type { Location, LocationPath, NodeInfo } from '@grunt/core/types/workspace.js';
+import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@grunt/core/types/workspace.js';
 import type { InferredMapping } from '@grunt/core/domain/workspace.js';
 import type { PublicPeer } from '@grunt/core/types/peer.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
@@ -117,6 +117,8 @@ export type ChatPatchBody = Partial<{
   autoMode: boolean;
   /** Claude Code's effort from the next message; null follows the user's Claude Code settings. */
   effort: ClaudeEffort | null;
+  /** The chat's extra folders, the whole list (spec 2026-10-07-extra-folders). */
+  folders: FolderEntry[];
   /** Moves the chat between projects (null = No project); never changes its folder or profile. */
   projectId: string | null;
   /** "Don't add to project memory": the summariser skips this chat. Never changes its place in the list. */
@@ -136,7 +138,16 @@ export type PatchProjectBody = Partial<{
   workspaceRoot: string | null;
   defaultProfileId: string | null;
   sortOrder: number;
+  /** Extra folders for every chat in the project, the whole list. */
+  folders: FolderEntry[];
 }>;
+
+/**
+ * One extra folder in a `folders` patch (spec 2026-10-07-extra-folders): a new
+ * one by its path on the machine that runs the chat, or one it already has by
+ * its stored form (which keeps a folder this machine can't see).
+ */
+export type FolderEntry = { path: string; access: FolderAccess } | { workspace: Workspace; access: FolderAccess };
 
 /** A location with every machine's path for it (`GET /api/locations`). */
 export interface LocationView extends Location {

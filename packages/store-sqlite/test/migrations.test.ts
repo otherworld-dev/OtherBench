@@ -128,6 +128,24 @@ describe('runMigrations', () => {
     }
   });
 
+  it('extra-folders gives every existing chat and project an empty folder list', () => {
+    const folders = MIGRATIONS.find((m) => m.name.endsWith('extra-folders'));
+    expect(folders).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < folders!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'CC', 'claude_code')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Opus', 'c1', 'opus')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+      db.exec(`INSERT INTO project (id, name, created_at, updated_at) VALUES ('proj', 'Old project', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT folders FROM chat WHERE id = 'legacy'`).get()).toEqual({ folders: '[]' });
+      expect(db.prepare(`SELECT folders FROM project WHERE id = 'proj'`).get()).toEqual({ folders: '[]' });
+    } finally {
+      db.close();
+    }
+  });
+
   it('chat-sort-order gives every existing chat its last activity as its place, keeping the old activity order', () => {
     const sortOrder = MIGRATIONS.find((m) => m.name.endsWith('chat-sort-order'));
     expect(sortOrder).toBeDefined();

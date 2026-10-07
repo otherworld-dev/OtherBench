@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
 import { HTTPException } from 'hono/http-exception';
-import { classifyPath, resolveWorkspace } from '@grunt/core/domain/workspace.js';
+import { classifyPath, MAX_EXTRA_FOLDERS, mergeFolders, parseFolders, resolveWorkspace, sameWorkspace } from '@grunt/core/domain/workspace.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { AppEvent } from '@grunt/core/types/events.js';
-import type { Workspace, WorkspaceStatus } from '@grunt/core/types/workspace.js';
+import type { ExtraFolder, FolderView, Workspace, WorkspaceStatus } from '@grunt/core/types/workspace.js';
 import type { Container } from './container.js';
 import { optionalWorkspaceRoot } from './validation.js';
 
@@ -41,10 +41,21 @@ function viewRoot(status: WorkspaceStatus): string | null {
   return null;
 }
 
-/** A chat as the API shows it: its folder resolved on the machine it runs on. */
+/** Extra folders as the API shows them: each resolved on the machine `on` (spec 2026-10-07-extra-folders). */
+function folderViews(folders: ExtraFolder[] | undefined, resolve: (ws: Workspace | null, on?: string) => WorkspaceStatus, on?: string): { folderViews?: FolderView[] } {
+  if (!folders || folders.length === 0) return {};
+  return {
+    folderViews: folders.map((folder) => {
+      const status = resolve(folder.workspace, on);
+      return { ...folder, root: viewRoot(status), status };
+    }),
+  };
+}
+
+/** A chat as the API shows it: its folder (and extra folders) resolved on the machine it runs on. */
 export function chatView(container: Container, chat: Chat, resolve = workspaceResolver(container)): Chat {
   const status = resolve(chat.workspace, chat.runsOn);
-  return { ...chat, workspaceRoot: viewRoot(status), workspaceStatus: status };
+  return { ...chat, workspaceRoot: viewRoot(status), workspaceStatus: status, ...folderViews(chat.folders, resolve, chat.runsOn) };
 }
 
 export function chatViews(container: Container, chats: Chat[]): Chat[] {
@@ -54,7 +65,7 @@ export function chatViews(container: Container, chats: Chat[]): Chat[] {
 
 export function projectView(container: Container, project: Project, resolve = workspaceResolver(container)): Project {
   const status = resolve(project.workspace);
-  return { ...project, workspaceRoot: viewRoot(status), workspaceStatus: status };
+  return { ...project, workspaceRoot: viewRoot(status), workspaceStatus: status, ...folderViews(project.folders, resolve) };
 }
 
 export function projectViews(container: Container, projects: Project[]): Project[] {
@@ -95,4 +106,50 @@ export function parseWorkspaceBody(container: Container, body: WorkspaceBody, on
   if (path === null) return null;
   const node = on ?? container.store.nodes.self().id;
   return classifyPath(path, node, container.store.locations.pathsForNode(node));
+}
+
+/**
+ * The extra folders a chat or project body sets (spec 2026-10-07-extra-folders),
+ * or undefined when it sets none. Each entry is `{ path, access }` -- an
+ * absolute path on the machine `on`, stored location-relative when it's
+ * inside one of that machine's locations -- or `{ workspace, access }` naming
+ * one of the folders it already has (`current`), which keeps a folder this
+ * machine can't see. As with the workspace, a client never sets an arbitrary
+ * stored folder. Duplicates merge, the stricter access winning; the workspace
+ * itself, and more than MAX_EXTRA_FOLDERS, are refused.
+ */
+export function parseFoldersBody(
+  container: Container,
+  raw: unknown,
+  current: readonly ExtraFolder[],
+  workspace: Workspace | null,
+  on?: string
+): ExtraFolder[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) throw new HTTPException(400, { message: '"folders" must be a list.' });
+  if (raw.length > MAX_EXTRA_FOLDERS) throw new HTTPException(400, { message: `A chat or project can have at most ${MAX_EXTRA_FOLDERS} other folders.` });
+  const node = on ?? container.store.nodes.self().id;
+  const folders: ExtraFolder[] = raw.map((entry: unknown, i) => {
+    const where = `folders[${i}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new HTTPException(400, { message: `"${where}" must be an object.` });
+    const { path, workspace: stored, access } = entry as { path?: unknown; workspace?: unknown; access?: unknown };
+    if (access !== 'read' && access !== 'readwrite') throw new HTTPException(400, { message: `"${where}.access" must be "read" or "readwrite".` });
+    let folder: Workspace;
+    if (path !== undefined) {
+      const abs = optionalWorkspaceRoot(path, `${where}.path`);
+      if (!abs) throw new HTTPException(400, { message: `"${where}.path" must be a folder's absolute path.` });
+      folder = classifyPath(abs, node, container.store.locations.pathsForNode(node));
+    } else {
+      const kept = parseFolders([{ workspace: stored, access }])[0];
+      if (!kept || !current.some((c) => sameWorkspace(c.workspace, kept.workspace))) {
+        throw new HTTPException(400, { message: `"${where}" must give a "path", or name one of the folders it already has.` });
+      }
+      folder = kept.workspace;
+    }
+    if (workspace !== null && sameWorkspace(folder, workspace)) {
+      throw new HTTPException(400, { message: `"${where}" is the workspace folder itself; it's already available.` });
+    }
+    return { workspace: folder, access };
+  });
+  return mergeFolders(folders);
 }

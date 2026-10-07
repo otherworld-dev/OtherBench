@@ -120,8 +120,9 @@ beforeEach(() => {
   resetSidebarGroupsForTests();
   mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'linux' });
   // Like the server: PATCH returns the stored row with the body applied.
-  mockedPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().chats.find((c) => c.id === id)!, ...body }));
-  mockedProjectPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().projects.find((p) => p.id === id)!, ...body }));
+  // (These tests never patch folders, whose entries a server would store in another shape.)
+  mockedPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().chats.find((c) => c.id === id)!, ...body }) as Chat);
+  mockedProjectPatch.mockImplementation(async (id, body) => ({ ...useGruntStore.getState().projects.find((p) => p.id === id)!, ...body }) as Project);
   mockedProjectList.mockImplementation(async () => useGruntStore.getState().projects);
 });
 

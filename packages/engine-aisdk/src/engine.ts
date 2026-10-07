@@ -9,6 +9,7 @@ import type {
   EngineRequest,
 } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
@@ -125,7 +126,7 @@ export class AiSdkChatEngine implements ChatEngine {
         tools: req.profile.model?.supportsTools ?? true,
       };
       const messages = await toModelMessages(req.messages, caps, req.loadAttachment ?? loadAttachmentUnavailable);
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot);
+      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -431,7 +432,8 @@ function buildToolSet(
   chatId: string,
   messageId: string,
   profileId: string,
-  workspaceRoot: string | null
+  workspaceRoot: string | null,
+  folders: ResolvedFolder[] | undefined
 ): ToolSet {
   const toolSet: ToolSet = {};
   for (const spec of specs) {
@@ -447,6 +449,7 @@ function buildToolSet(
           // carry it -- see ToolContext.profileId.
           profileId,
           workspaceRoot,
+          ...(folders && folders.length > 0 ? { folders } : {}),
           signal: opts.abortSignal ?? signal,
         };
         return spec.execute(input, ctx);

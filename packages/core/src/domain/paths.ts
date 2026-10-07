@@ -1,5 +1,6 @@
 import { realpathSync, lstatSync } from 'node:fs';
 import { isAbsolute, resolve, relative, dirname, basename, join, sep } from 'node:path';
+import type { ResolvedFolder } from '../types/workspace.js';
 
 export class PathEscapeError extends Error {
   constructor(public readonly candidate: string, options?: ErrorOptions) {
@@ -136,4 +137,50 @@ export function containPath(workspaceRoot: string | null, candidate: string): st
     if (err instanceof PathEscapeError) throw err;
     throw new PathEscapeError(candidate, { cause: err });
   }
+}
+
+/** Where containPathIn found a path: the resolved path, the folder it's in, and whether that folder may be written. */
+export interface ContainedIn {
+  path: string;
+  root: string;
+  writable: boolean;
+}
+
+/**
+ * containPath over a chat's folders (spec 2026-10-07-extra-folders): the
+ * workspace, which is writable as far as the profile allows, and each extra
+ * folder with its own access. A relative candidate means the workspace, as
+ * it always has. The candidate is checked with containPath against each
+ * folder, unchanged, and the innermost folder that contains it wins, so a
+ * read-only folder nested inside the workspace stays read-only however the
+ * path is written. Throws PathEscapeError when no folder contains it.
+ *
+ * Like containPath, this is a verdict about a path at a moment: callers
+ * still do their own verified open against the returned `root`.
+ */
+export function containPathIn(workspaceRoot: string | null, folders: readonly ResolvedFolder[], candidate: string): ContainedIn {
+  if (!workspaceRoot) throw new PathEscapeError(candidate);
+  // The workspace sees the candidate as given (so a relative path resolves
+  // exactly as before); every extra folder sees it made absolute against
+  // the workspace, so a relative path into a nested folder is caught too.
+  const absolute = isAbsolute(candidate) ? candidate : resolve(workspaceRoot, candidate);
+  const checks = [
+    { root: workspaceRoot, writable: true, path: candidate },
+    ...folders.map((f) => ({ root: f.root, writable: f.access === 'readwrite', path: absolute })),
+  ];
+  let best: (ContainedIn & { depth: number }) | null = null;
+  for (const check of checks) {
+    let path: string;
+    let depth: number;
+    try {
+      path = containPath(check.root, check.path);
+      depth = realpathNearest(check.root).length;
+    } catch {
+      // Not in this folder (or its root no longer resolves): never contained.
+      continue;
+    }
+    if (!best || depth > best.depth) best = { path, root: check.root, writable: check.writable, depth };
+  }
+  if (!best) throw new PathEscapeError(candidate);
+  return { path: best.path, root: best.root, writable: best.writable };
 }

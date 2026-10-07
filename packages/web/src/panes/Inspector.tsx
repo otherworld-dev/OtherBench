@@ -12,6 +12,7 @@ import { useGruntStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
+import { FolderList } from '../components/FolderList.js';
 
 export interface InspectorProps {
   chat: Chat | null;
@@ -116,6 +117,47 @@ function RunsOnSection({ chat }: { chat: Chat }): JSX.Element | null {
         </p>
       )}
     </Section>
+  );
+}
+
+/**
+ * Folders the model may use besides the workspace (spec 2026-10-07-extra-folders):
+ * the project's, which every chat in it gets, then this chat's own. Each is
+ * read-only or read & write, within the profile's own file policy.
+ */
+function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
+  const upsertChat = useGruntStore((s) => s.upsertChat);
+  const upsertProject = useGruntStore((s) => s.upsertProject);
+  const project = useGruntStore((s) => (chat.projectId === null ? null : (s.projects.find((p) => p.id === chat.projectId) ?? null)));
+  const machines = useGruntStore((s) => s.machines);
+  // The native picker chooses a folder on this machine: only offered when that's where the chat runs.
+  const runsHere = !machines || chat.runsOn === machines.self.id;
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-[var(--text-muted)]">
+        Folders the model can also work in, by absolute path. {chat.workspace ? '' : 'They apply once the chat has a workspace folder.'}
+      </p>
+      {project && (
+        <div className="space-y-1">
+          <h4 className="text-xs font-medium">Every chat in {project.name}</h4>
+          <FolderList
+            label="the project"
+            views={project.folderViews ?? []}
+            canPick={isDesktop()}
+            onSave={async (folders) => upsertProject(await api.projects.patch(project.id, { folders }))}
+          />
+        </div>
+      )}
+      <div className="space-y-1">
+        {project && <h4 className="text-xs font-medium">This chat</h4>}
+        <FolderList
+          label="this chat"
+          views={chat.folderViews ?? []}
+          canPick={isDesktop() && runsHere}
+          onSave={async (folders) => upsertChat(await api.chats.patch(chat.id, { folders }))}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -704,6 +746,12 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
       <Section title="Workspace">
         {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
+
+      {chat && (
+        <Section title="Other folders">
+          <OtherFoldersSection chat={chat} />
+        </Section>
+      )}
 
       <Section title="Profile parameters">
         {!chat ? (
