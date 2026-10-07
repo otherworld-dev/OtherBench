@@ -11,9 +11,9 @@ const CREDENTIAL_VARS = /^ANTHROPIC_(API_KEY|AUTH_TOKEN|BASE_URL)$/i;
  */
 const PARENT_SESSION_VARS = /^(CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SSE_PORT)$/i;
 /**
- * Makes Claude Code read CLAUDE.md from each `additionalDirectories` entry, a
- * chat's extra folders. Those are folders to work in, not configuration, and
- * may be read-only, so they never get to add instructions.
+ * Makes Claude Code read CLAUDE.md from each `additionalDirectories` entry.
+ * Grunt passes none (a chat's extra folders are folders to work in, never
+ * configuration), and this keeps it so if one is ever passed.
  */
 const ADDED_DIR_CONFIG_VARS = /^CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD$/i;
 

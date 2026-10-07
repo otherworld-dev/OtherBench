@@ -508,8 +508,12 @@ can name up to 10 other folders, each read-only or read & write
 `containPath` and lets the innermost root decide, so a read-only folder
 inside a writable one stays read-only. A write into a read-only folder is
 refused before any card (PermissionBroker for the API tools, the PreToolUse
-gate for Claude Code, and again in fs-tools). Claude Code gets the folders as
-`additionalDirectories`. Shell commands are not path-contained, so read-only
+gate for Claude Code, and again in fs-tools). Claude Code is deliberately not
+given the folders as `additionalDirectories`, which would load the skills and
+commands under each one's `.claude`; only the workspace's config loads. It
+reaches them anyway once the gate allows a call, in default and auto mode
+(live probe, `packages/engine-claude-code/test/fixtures/README.md`), and the
+system prompt names them. Shell commands are not path-contained, so read-only
 binds file tools only; shell approval is still the control. A folder missing
 on the machine running the reply is left out of that turn.
 
@@ -638,16 +642,8 @@ Known gaps:
   and `settings.local.json` (hooks, permissions), `.claude/skills`, commands
   and agents, `.mcp.json`, CLAUDE.md -- applies with no trust prompt, as
   `settingSources` includes `project` and `local`. Hooks run commands without
-  a Grunt card. Only open folders you trust as workspaces.
-- A chat's extra folders reach Claude Code as `additionalDirectories`, and
-  Claude Code loads the skills and commands under each one's `.claude`, even
-  for a read-only folder. Their inline shell is disabled, and outside auto
-  mode every tool call still goes through the gate. In auto mode, though, a
-  loaded skill's `allowed-tools` can approve calls the classifier would
-  otherwise judge. Their CLAUDE.md never loads: the child env drops
-  `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`. Not passing the folders at
-  all would close this, if Claude Code still reaches them when the gate
-  allows; that needs a live check first.
+  a Grunt card. Only open folders you trust as workspaces. (A chat's extra
+  folders load none of theirs; see "Extra folders" above.)
 
 - Relative paths are resolved against the workspace root for grants and card
   summaries, but Claude Code resolves them against its own current directory,

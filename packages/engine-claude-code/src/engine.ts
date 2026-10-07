@@ -261,8 +261,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
       // The chat's effort (chosen in the chat window) over the user's Claude Code settings; unset leaves those to decide.
       ...(req.effort ? { effort: req.effort } : {}),
-      // The chat's extra folders, which Claude Code may work in beside cwd; Grunt's gate still checks every path.
-      ...(req.folders && req.folders.length > 0 ? { additionalDirectories: req.folders.map((f) => f.root) } : {}),
+      // The chat's extra folders are deliberately NOT additionalDirectories:
+      // Claude Code would load the skills and commands under each one's
+      // .claude. It reaches them anyway when the gate allows a call (live
+      // probe, test/fixtures/README.md), and the system prompt names them.
     };
   }
 
