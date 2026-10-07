@@ -1,0 +1,27 @@
+/**
+ * Bare file names worth offering to open: a known extension, no folder. No
+ * one-letter extensions (`.c`, `.h`): bare, `a.b.c` is far likelier code
+ * than a file; with a folder (`src/main.c`) it still counts.
+ */
+const BARE_FILE = /^[\w@.-]+\.(?:md|markdown|txt|html?|json|ya?ml|toml|csv|tsx?|jsx?|mjs|cjs|py|rs|go|java|cs|cpp|css|scss|sh|ps1|sql|xml|svg|png|jpe?g|gif|webp|bmp|avif|pdf|mp4|webm|ogv)$/i;
+
+/** Whether inline code looks like a file path worth a click (the server decides whether it opens). */
+export function looksLikePath(text: string): boolean {
+  if (text.length === 0 || text.length > 400 || /[\n<>"|?*]/.test(text) || /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return false;
+  if (/^(?:[A-Za-z]:[\\/]|\\\\|\/|~[\\/]|\.{1,2}[\\/])/.test(text)) return true;
+  if (/\s/.test(text)) return false;
+  return /[\\/]/.test(text) ? /[\\/][^\\/]+$/.test(text) && !/[()]/.test(text) : BARE_FILE.test(text);
+}
+
+/** Tools whose path argument is a folder, not a file to view. */
+const FOLDER_TOOLS = new Set(['list_dir', 'search_files', 'LS', 'Glob', 'Grep']);
+
+/** The file a tool call read or wrote, to offer opening it in the viewer; null for folder tools or no path. */
+export function toolPath(name: string, args: unknown): string | null {
+  if (FOLDER_TOOLS.has(name) || typeof args !== 'object' || args === null) return null;
+  for (const key of ['path', 'file_path', 'notebook_path']) {
+    const value = (args as Record<string, unknown>)[key];
+    if (typeof value === 'string' && value.trim() !== '') return value;
+  }
+  return null;
+}
