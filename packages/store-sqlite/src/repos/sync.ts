@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@grunt/core/domain/artifacts.js';
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
@@ -48,6 +49,27 @@ function rowKey(tbl: SyncTable, row: SyncRow): string | null {
  * their incoming stamp, so they'd forward to a third machine, and coming
  * back to the machine they came from they change nothing.
  */
+
+/** A code artifact's language, or none. */
+const languageOk = (language: unknown): boolean => language === null || language === undefined || isArtifactLanguage(language);
+
+/** An artifact row as Grunt makes one (Deck #900): a short id, a known kind, a short language. */
+function artifactRowOk(row: SyncRow): boolean {
+  return isArtifactSlug(row['slug']) && isArtifactKind(row['kind']) && languageOk(row['language']);
+}
+
+/** A version row as Grunt makes one: a one-line title, a whole number from 1, a known kind and maker, at most 1 MB. */
+function artifactVersionRowOk(row: SyncRow): boolean {
+  const { title, number, content } = row;
+  return (
+    typeof title === 'string' && artifactTitleOk(title) &&
+    typeof number === 'number' && Number.isInteger(number) && number >= 1 &&
+    isArtifactKind(row['kind']) && languageOk(row['language']) &&
+    (row['made_by'] === 'model' || row['made_by'] === 'user') &&
+    typeof content === 'string' && Buffer.byteLength(content, 'utf8') <= MAX_ARTIFACT_BYTES
+  );
+}
+
 export class SqliteSyncRepo implements SyncRepo {
   private readonly columnCache = new Map<string, string[]>();
 
@@ -251,6 +273,9 @@ export class SqliteSyncRepo implements SyncRepo {
     }
     // A file's hash names its blob on disk: anything but a SHA-256 is refused.
     if (u.tbl === 'attachment' && !isSha256(row['sha256'])) return false;
+    // Artifact rows reach the model's prompt and the viewer: only what Grunt itself could have made.
+    if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
+    if (u.tbl === 'artifact_version' && !artifactVersionRowOk(row)) return false;
     // A machine's own folder for a location is its to set; another machine
     // may only fill it in where there's none yet (adopting a location).
     if (u.tbl === 'location_path' && row['node_id'] === this.selfId() && local) return false;

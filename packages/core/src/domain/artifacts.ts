@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Artifact, ArtifactKind, ArtifactVersion, Store } from '../ports/store.js';
+import type { Artifact, ArtifactKind, ArtifactVersion, Store, ArtifactVersionInfo } from '../ports/store.js';
 
 /** Artifacts (spec 2026-10-07-artifacts, Deck #896): the one executor both engines' `artifact` tool calls run through. */
 
@@ -77,25 +77,31 @@ export function slugify(title: string): string {
   return slug || 'artifact';
 }
 
-/** The newest version whose message is on the branch, or null when none is. */
-export function currentVersion(versions: readonly ArtifactVersion[], onBranch: (messageId: string) => boolean): ArtifactVersion | null {
-  let best: ArtifactVersion | null = null;
+/**
+ * The newest version whose message is on the branch, or null when none is.
+ * Two machines can each number a version the same before they sync, so a
+ * tie goes to the later one, then the larger id: every machine picks the same.
+ */
+export function currentVersion<V extends Pick<ArtifactVersion, 'id' | 'number' | 'createdAt' | 'messageId'>>(versions: readonly V[], onBranch: (messageId: string) => boolean): V | null {
+  let best: V | null = null;
   for (const v of versions) {
-    if (v.messageId !== null && onBranch(v.messageId) && (best === null || v.number > best.number)) best = v;
+    if (v.messageId === null || !onBranch(v.messageId)) continue;
+    if (best === null || v.number > best.number || (v.number === best.number && (v.createdAt > best.createdAt || (v.createdAt === best.createdAt && v.id > best.id)))) best = v;
   }
   return best;
 }
 
 export interface ArtifactOnBranch {
   artifact: Artifact;
-  current: ArtifactVersion;
+  /** Without its content: read one with `getVersion`. */
+  current: ArtifactVersionInfo;
 }
 
 /** The chat's artifacts that have a version on the branch, oldest first, each with its current version. */
 export function artifactsOnBranch(store: Store, chatId: string, onBranch: (messageId: string) => boolean): ArtifactOnBranch[] {
   const out: ArtifactOnBranch[] = [];
   for (const artifact of store.artifacts.listByChat(chatId)) {
-    const current = currentVersion(store.artifacts.versions(artifact.id), onBranch);
+    const current = currentVersion(store.artifacts.versionInfos(artifact.id), onBranch);
     if (current) out.push({ artifact, current });
   }
   return out;
@@ -110,6 +116,21 @@ export function branchOf(store: Store, messageId: string): (id: string) => boole
     ids = new Set();
   }
   return (id) => ids.has(id);
+}
+
+/** Whether `slug` is an artifact id: 1-64 lower-case letters, digits or hyphens. */
+export function isArtifactSlug(slug: unknown): slug is string {
+  return typeof slug === 'string' && SLUG.test(slug);
+}
+
+/** Whether `kind` is one of ARTIFACT_KINDS. */
+export function isArtifactKind(kind: unknown): kind is ArtifactKind {
+  return typeof kind === 'string' && (ARTIFACT_KINDS as readonly string[]).includes(kind);
+}
+
+/** Whether `language` is a code artifact's language: a short token (ts, py, c++), never free text. */
+export function isArtifactLanguage(language: unknown): language is string {
+  return typeof language === 'string' && LANGUAGE.test(language);
 }
 
 /** Whether `title` may name an artifact version: one line, not blank, at most MAX_ARTIFACT_TITLE characters. */
@@ -137,7 +158,8 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
   const onThisBranch = (slug: string): { artifact: Artifact; current: ArtifactVersion } | null => {
     for (const artifact of store.artifacts.listByChat(ctx.chatId)) {
       if (artifact.slug !== slug) continue;
-      const current = currentVersion(store.artifacts.versions(artifact.id), onBranch);
+      const info = currentVersion(store.artifacts.versionInfos(artifact.id), onBranch);
+      const current = info ? store.artifacts.getVersion(info.id) : null;
       if (current) return { artifact, current };
     }
     return null;
@@ -195,7 +217,7 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
       const replace = str('replace');
       if (!search) return fail('bad_args', '"find" is required and must not be empty.');
       if (replace === undefined) return fail('bad_args', '"replace" is required (it may be empty).');
-      const count = f.current.content.split(search).length - 1;
+      const count = occurrences(f.current.content, search);
       if (count !== 1) {
         return fail(count === 0 ? 'not_found' : 'not_unique', `"find" must match exactly once in "${f.artifact.slug}" v${f.current.number}; it matched ${count} times. Use "view" to read the current text.`);
       }
@@ -241,6 +263,13 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
   }
 }
 
+/** How many times `search` occurs in `text`, overlapping ones included ("aa" is in "aaa" twice). */
+function occurrences(text: string, search: string): number {
+  let count = 0;
+  for (let at = text.indexOf(search); at !== -1; at = text.indexOf(search, at + 1)) count += 1;
+  return count;
+}
+
 /** A title or language as one plain line for the system prompt: control characters and line breaks become spaces, double quotes single ones. */
 function oneLine(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').replace(/"/g, "'").trim().slice(0, MAX_ARTIFACT_TITLE);
@@ -277,9 +306,19 @@ export function artifactsListNote(list: readonly ArtifactOnBranch[]): string {
 }
 
 const KIND_EXT: Record<Exclude<ArtifactKind, 'code'>, string> = { html: 'html', markdown: 'md', mermaid: 'mmd', svg: 'svg' };
+/**
+ * The extension a code artifact saves and downloads with, by its language.
+ * Only these: a language the model names is free text, and an extension
+ * such as .bat or .hta would run when opened. Anything else is .txt.
+ */
 const LANGUAGE_EXT: Record<string, string> = {
-  typescript: 'ts', javascript: 'js', python: 'py', rust: 'rs', golang: 'go', csharp: 'cs', 'c++': 'cpp',
-  shell: 'sh', bash: 'sh', powershell: 'ps1', yaml: 'yml', markdown: 'md', kotlin: 'kt', ruby: 'rb',
+  ts: 'ts', typescript: 'ts', tsx: 'tsx', js: 'js', javascript: 'js', jsx: 'jsx', mjs: 'mjs', cjs: 'cjs',
+  py: 'py', python: 'py', rs: 'rs', rust: 'rs', go: 'go', golang: 'go', java: 'java', kt: 'kt', kotlin: 'kt',
+  rb: 'rb', ruby: 'rb', php: 'php', cs: 'cs', csharp: 'cs', 'c#': 'cs', cpp: 'cpp', 'c++': 'cpp', c: 'c',
+  h: 'h', hpp: 'hpp', swift: 'swift', scala: 'scala', dart: 'dart', lua: 'lua', r: 'r',
+  sh: 'sh', shell: 'sh', bash: 'sh', zsh: 'sh', ps1: 'ps1', powershell: 'ps1', sql: 'sql',
+  json: 'json', yaml: 'yml', yml: 'yml', toml: 'toml', ini: 'ini', xml: 'xml', csv: 'csv',
+  css: 'css', scss: 'scss', html: 'html', md: 'md', markdown: 'md', txt: 'txt', text: 'txt',
 };
 
 /** The file a version saves or downloads as: `<artifact id>.<ext>`, by the version's kind and language. */
@@ -291,6 +330,6 @@ export function versionFileName(artifact: Pick<Artifact, 'slug'>, version: Pick<
 export function artifactFileName(artifact: Pick<Artifact, 'slug' | 'kind' | 'language'>): string {
   if (artifact.kind !== 'code') return `${artifact.slug}.${KIND_EXT[artifact.kind]}`;
   const language = artifact.language ?? '';
-  const ext = Object.hasOwn(LANGUAGE_EXT, language) ? LANGUAGE_EXT[language]! : /^[a-z0-9]{1,10}$/.test(language) ? language : 'txt';
+  const ext = Object.hasOwn(LANGUAGE_EXT, language) ? LANGUAGE_EXT[language]! : 'txt';
   return `${artifact.slug}.${ext}`;
 }

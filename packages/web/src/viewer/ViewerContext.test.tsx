@@ -37,6 +37,23 @@ describe('opening things from a chat', () => {
     expect(viewerFor(useViewerStore.getState().viewers, 'c1').history).toEqual([{ kind: 'artifact', artifactId: 'art', title: 'Calc', versionId: 'v4' }]);
   });
 
+  it('keeps parallel tool calls in one group when an artifact card sits among them', () => {
+    const outcome = { ok: true, command: 'create', artifactId: 'art', slug: 'calc', title: 'Calc', kind: 'html', number: 1, versionId: 'v1' };
+    const message = {
+      id: 'm4', chatId: 'c1', parentId: 'u1', role: 'assistant' as const, status: 'complete' as const, error: null, producedBy: null, createdAt: 0,
+      parts: [
+        { type: 'tool-call' as const, id: 'a', name: 'artifact', args: { command: 'create' } },
+        { type: 'tool-call' as const, id: 'b', name: 'read_file', args: { path: 'x.md' } },
+        { type: 'tool-result' as const, id: 'a', name: 'artifact', result: JSON.stringify(outcome), isError: false },
+        { type: 'tool-result' as const, id: 'b', name: 'read_file', result: 'x', isError: false },
+      ],
+    };
+    render(<Message message={message as never} />);
+    expect(screen.getAllByText(/Used \d+ tools?/)).toHaveLength(1);
+    expect(screen.getByText(/Used 1 tool: read_file/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Calc.*Created v1/ })).toBeInTheDocument();
+  });
+
   it('folds a failed artifact call with the other tools, so its error still shows', () => {
     const message = {
       id: 'm3', chatId: 'c1', parentId: 'u1', role: 'assistant' as const, status: 'complete' as const, error: null, producedBy: null, createdAt: 0,

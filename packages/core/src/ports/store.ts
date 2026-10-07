@@ -562,6 +562,9 @@ export interface ArtifactVersion {
   createdAt: number;
 }
 
+/** A version without its content: what lists and the branch's current version need. */
+export type ArtifactVersionInfo = Omit<ArtifactVersion, 'content'>;
+
 /** A version to add: everything but its number, with kind and language defaulting to the artifact's. */
 export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language'> & { kind?: ArtifactKind; language?: string | null };
 
@@ -574,6 +577,8 @@ export interface ArtifactRepo {
   /** Adds a version numbered after the artifact's highest. */
   /** Numbers the version next; its kind and language are the artifact's unless given. */
   addVersion(v: NewArtifactVersion): ArtifactVersion;
+  /** Every version without its content (up to 1 MB each), oldest number first: for lists and finding the current one. */
+  versionInfos(artifactId: string): ArtifactVersionInfo[];
   getVersion(id: string): ArtifactVersion | null;
   /** Oldest (lowest number) first. */
   versions(artifactId: string): ArtifactVersion[];

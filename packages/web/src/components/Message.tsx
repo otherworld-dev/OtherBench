@@ -156,24 +156,27 @@ function renderParts(parts: Part[]): JSX.Element[] {
   let runStart = 0;
   // Keyed by the run's FIRST part so the key (and the user's open/closed
   // state on the <details>) stays stable while more tool parts stream in.
+  // Cards made while a run of tools is open wait for it, so parallel calls stay in one group.
+  let cards: JSX.Element[] = [];
   const flush = (): void => {
     if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} />);
     run = [];
+    out.push(...cards);
+    cards = [];
   };
   const carded = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isArtifactTool(p.name) && artifactOutcomeOf(p.result) ? [p.id] : [])));
   parts.forEach((p, i) => {
-    if ((p.type === 'tool-call' || p.type === 'tool-result') && !carded.has(p.id)) {
+    if (p.type === 'tool-call' || p.type === 'tool-result') {
+      if (carded.has(p.id)) {
+        // A carded call shows as its result's card.
+        if (p.type === 'tool-result') (run.length > 0 ? cards : out).push(<ArtifactCard key={i} result={p.result} />);
+        return;
+      }
       if (run.length === 0) runStart = i;
       run.push(p);
       return;
     }
     flush();
-    // A carded call shows as its result's card.
-    if (p.type === 'tool-call') return;
-    if (p.type === 'tool-result') {
-      out.push(<ArtifactCard key={i} result={p.result} />);
-      return;
-    }
     const el = renderPart(p, i);
     if (el) out.push(el);
   });
