@@ -6,6 +6,7 @@ import { serverUrl } from '../state/transport.js';
 import { ArtifactView } from './ArtifactView.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
+import { dirOf } from './paths.js';
 
 /** A link this old may have expired (they last 10 minutes); an error on it asks for a fresh one. */
 const STALE_LINK_MS = 9 * 60_000;
@@ -44,7 +45,7 @@ function TextBody({ chatId, opened, as }: { chatId: string; opened: ViewOpened; 
       {text.truncated && <p className="border-b border-[var(--border)] px-3 py-1 text-xs text-[var(--warn)]">This file is large: only the first 2 MB is shown.</p>}
       {as === 'markdown' ? (
         <div className="p-4">
-          <MarkdownBody text={text.content} />
+          <MarkdownBody text={text.content} files={{ chatId, base: dirOf(opened.path) }} />
         </div>
       ) : (
         <CodeView text={text.content} language={opened.kind === 'html' ? 'html' : languageOf(opened.name)} />
@@ -92,9 +93,13 @@ function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Eleme
 
   const src = opened.url ? serverUrl(opened.url) : '';
   const canToggle = opened.kind === 'markdown' || opened.kind === 'html';
+  // Markdown formatted, or its source; text always as code; anything else
+  // asked for as source (only HTML can be) falls to its own branch below.
+  const asMarkdown = opened.kind === 'markdown' && !source;
+  const asCode = (opened.kind === 'markdown' && source) || opened.kind === 'text';
   let body: JSX.Element;
-  if ((opened.kind === 'markdown' && !source) || ((opened.kind === 'text' || source) && opened.kind !== 'html')) {
-    body = <TextBody chatId={chatId} opened={opened} as={opened.kind === 'markdown' && !source ? 'markdown' : 'code'} />;
+  if (asMarkdown || asCode) {
+    body = <TextBody chatId={chatId} opened={opened} as={asMarkdown ? 'markdown' : 'code'} />;
   } else if (opened.kind === 'html') {
     body = source ? (
       <TextBody chatId={chatId} opened={opened} as="code" />

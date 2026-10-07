@@ -60,3 +60,29 @@ export function artifactOutcomeOf(result: unknown): ArtifactCardInfo | null {
   if (typeof o['number'] !== 'number') return null;
   return o as unknown as ArtifactCardInfo;
 }
+
+/** The folder `path` is in: everything before its last separator. */
+export function dirOf(path: string): string {
+  return path.replace(/[\\/][^\\/]*$/, '');
+}
+
+/** Whether `href` is a path relative to a file (not a URL, an absolute path or an in-page anchor). */
+export function isRelativePath(href: string): boolean {
+  return href !== '' && !href.startsWith('#') && !/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^[\\/]/.test(href);
+}
+
+/** `rel` from the folder `base`, `.` and `..` resolved, with `base`'s own separator; never above `base`'s root. */
+export function joinPath(base: string, rel: string): string {
+  const sep = base.includes('\\') ? '\\' : '/';
+  const parts = base.split(/[\\/]/);
+  const rootLength = parts[0] === '' || /^[A-Za-z]:$/.test(parts[0] ?? '') ? 1 : 0;
+  for (const segment of rel.split(/[\\/]/)) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      if (parts.length > rootLength) parts.pop();
+    } else {
+      parts.push(segment);
+    }
+  }
+  return parts.join(sep);
+}

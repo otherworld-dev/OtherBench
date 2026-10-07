@@ -6,7 +6,7 @@ function failure(err: unknown): string {
   return err instanceof ApiError ? err.message : "Couldn't list this folder.";
 }
 
-function Folder({ chatId, path, label, onOpen, startOpen }: { chatId: string; path: string; label: string; onOpen: (path: string) => void; startOpen: boolean }): JSX.Element {
+function Folder({ chatId, path, label, readOnly = false, onOpen, startOpen }: { chatId: string; path: string; label: string; readOnly?: boolean; onOpen: (path: string) => void; startOpen: boolean }): JSX.Element {
   const [open, setOpen] = useState(startOpen);
   const [entries, setEntries] = useState<ViewEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,10 +22,10 @@ function Folder({ chatId, path, label, onOpen, startOpen }: { chatId: string; pa
     };
   }, [open, entries, chatId, path]);
   return (
-    <li role="treeitem" aria-expanded={open} aria-label={label}>
+    <li role="treeitem" aria-expanded={open} aria-label={readOnly ? `${label} (read-only)` : label}>
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1 rounded px-1 text-left hover:bg-[var(--bg-sunken)]">
         <span aria-hidden="true">{open ? '▾' : '▸'}</span>
-        <span className="truncate">{label.replace(/ \(read-only\)$/, '')}</span>
+        <span className="truncate">{label}</span>
       </button>
       {open && (
         <ul role="group" className="ml-3">
@@ -100,7 +100,7 @@ export function FileTree({ chatId, onOpen, onOpenArtifact }: { chatId: string; o
       ) : (
         <ul role="tree" aria-label="Files" className="space-y-0.5 p-2 text-xs">
           {roots.map((r) => (
-            <Folder key={r.path} chatId={chatId} path={r.path} label={r.access === 'read' ? `${r.label} (read-only)` : r.label} onOpen={onOpen} startOpen={r.workspace} />
+            <Folder key={r.path} chatId={chatId} path={r.path} label={r.label} readOnly={r.access === 'read'} onOpen={onOpen} startOpen={r.workspace} />
           ))}
         </ul>
       )}

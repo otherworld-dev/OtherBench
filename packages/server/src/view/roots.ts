@@ -57,7 +57,8 @@ export function linkStillAllowed(container: Container, link: ViewLink): boolean 
 
 /** Which of the chat's folders `path` is in, and the file resolved; a relative path means the workspace. Throws the panel's message. */
 export function locateForView(roots: ChatRoots, path: string): { root: string; target: string } {
-  if (process.platform === 'win32' && ambiguousOnWindows(path)) throw new HTTPException(404, { message: `File not found: ${path}` });
+  // On every platform: serving refuses these everywhere, so a link to one would only 404.
+  if (ambiguousOnWindows(path)) throw new HTTPException(404, { message: `File not found: ${path}` });
   if (roots.workspaceRoot === null) {
     throw new HTTPException(404, { message: roots.elsewhere ? `This file is on ${roots.elsewhere}.` : 'This chat has no workspace folder on this machine.' });
   }
@@ -95,6 +96,7 @@ export async function listForView(root: string, target: string, shownAs: string)
   try {
     return await readdirVerified(root, target);
   } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code === 'ENOTDIR') throw new HTTPException(400, { message: `${shownAs} is a file, not a folder.` });
     viewFailure(err, shownAs);
   }
 }

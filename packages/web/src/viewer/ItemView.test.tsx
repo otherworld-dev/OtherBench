@@ -11,6 +11,7 @@ vi.mock('../state/api.js', async (importOriginal) => ({
 import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened } from '../state/api.js';
 import { ItemView, languageOf } from './ItemView.js';
+import { ViewerContext } from './ViewerContext.js';
 
 const opened = (over: Partial<ViewOpened>): ViewOpened => ({ path: 'C:\\ws\\a', name: 'a', kind: 'text', url: null, size: 1, ...over });
 const item = (path: string) => ({ kind: 'file' as const, path });
@@ -96,5 +97,32 @@ describe('ItemView', () => {
     expect(languageOf('a/b.ts')).toBe('ts');
     expect(languageOf('C:\\x\\Y.PY')).toBe('py');
     expect(languageOf('Makefile')).toBe('');
+  });
+});
+
+describe('ItemView, Markdown files', () => {
+  it("shows a README's images and opens its links from the README's own folder", async () => {
+    vi.mocked(api.view.open).mockImplementation(async (_chat, path) => {
+      if (path === 'docs/README.md') return opened({ path: 'C:\\ws\\docs\\README.md', kind: 'markdown', name: 'README.md' });
+      if (path === 'C:\\ws\\docs\\img\\gone.png') throw new ApiError(404, 'File not found');
+      return opened({ path, kind: 'image', name: 'arch.png', url: '/view/i/arch.png' });
+    });
+    vi.mocked(api.view.text).mockResolvedValue({ path: 'C:\\ws\\docs\\README.md', content: '![Architecture](img/arch.png) ![Gone](img/gone.png)\n\n[Next](./sub/next.md) [Up](../top.md) [Site](https://example.com)', truncated: false, size: 1 });
+    const actions = { openPath: vi.fn(), openArtifact: vi.fn(), openLink: vi.fn() };
+    render(
+      <ViewerContext.Provider value={actions}>
+        <ItemView chatId="c1" item={item('docs/README.md')} />
+      </ViewerContext.Provider>
+    );
+    expect(await screen.findByRole('img', { name: 'Architecture' })).toHaveAttribute('src', expect.stringContaining('/view/i/arch.png'));
+    expect(api.view.open).toHaveBeenCalledWith('c1', 'C:\\ws\\docs\\img\\arch.png');
+    expect(await screen.findByText('[Gone]')).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('link', { name: 'Next' }));
+    expect(actions.openPath).toHaveBeenLastCalledWith('C:\\ws\\docs\\sub\\next.md');
+    await user.click(screen.getByRole('link', { name: 'Up' }));
+    expect(actions.openPath).toHaveBeenLastCalledWith('C:\\ws\\top.md');
+    await user.click(screen.getByRole('link', { name: 'Site' }));
+    expect(actions.openLink).toHaveBeenCalledWith('https://example.com', { external: false });
   });
 });
