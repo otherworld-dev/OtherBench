@@ -230,3 +230,33 @@ fn main() {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    /// The commands `generate_handler!` registers, read from this file.
+    fn registered() -> Vec<String> {
+        let src = include_str!("main.rs");
+        let start = src.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + src[start..].find(']').unwrap();
+        src[start..end].split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect()
+    }
+
+    /// Tauri lets any page it counts as local call an app command unless the
+    /// app declares an ACL manifest. With one, a command needs its
+    /// `allow-<command>` permission, which only the main and quick windows
+    /// get, so a website window (site.rs) can call none, even one showing a
+    /// page Tauri counts as local (the dev server's).
+    #[test]
+    fn every_app_command_needs_a_permission_only_the_app_windows_have() {
+        let build = include_str!("../build.rs");
+        let caps: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let granted = caps["permissions"].to_string();
+        let commands = registered();
+        assert!(commands.len() >= 8, "{commands:?}");
+        for command in commands {
+            assert!(build.contains(&format!("\"{command}\"")), "{command} is missing from the app manifest in build.rs");
+            let permission = format!("allow-{}", command.replace('_', "-"));
+            assert!(granted.contains(&format!("\"{permission}\"")), "{permission} is not granted to the app windows");
+        }
+    }
+}
