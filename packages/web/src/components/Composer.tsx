@@ -6,6 +6,7 @@ import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { AttachmentChip } from './AttachmentChip.js';
+import { PlanUsageMeter } from './PlanUsageMeter.js';
 import { remoteUnreachable } from '../state/machines.js';
 
 /**
@@ -426,6 +427,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             ))}
           </select>
         )}
+
+        {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
+        {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
 
         {comparedProfiles.map((p) => (
           <span key={p.id} className="rounded-full border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-muted)]">
