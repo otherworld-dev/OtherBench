@@ -3,17 +3,15 @@ import { exportFilename } from '@grunt/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
-import { InlineNameInput } from '../components/InlineNameInput.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
 import { saveFile } from '../lib/saveFile.js';
-import { ApiError, api, type ChatPatchBody, type CreateChatBody, type PatchProjectBody } from '../state/api.js';
+import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { chatMenuItems, projectMenuItems } from './sidebar/menus.js';
 import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './sidebar/model.js';
-import { ProjectFolderEditor, ProjectProfileEditor } from './sidebar/ProjectEditors.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
 
 /** A sidebar error line: the server's own message when there is one. */
@@ -82,6 +80,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
   const upsertChat = useGruntStore((s) => s.upsertChat);
   const upsertProject = useGruntStore((s) => s.upsertProject);
+  const openProjectPage = useGruntStore((s) => s.openProjectPage);
   const removeChat = useGruntStore((s) => s.removeChat);
   const removeProject = useGruntStore((s) => s.removeProject);
   const setProjects = useGruntStore((s) => s.setProjects);
@@ -93,7 +92,6 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const [searchChatIds, setSearchChatIds] = useState<ReadonlySet<string> | null>(null);
   const searchSeq = useRef(0);
   const [creating, setCreating] = useState(false);
-  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -102,10 +100,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const [deletingChatId, setDeletingChatId] = useState<string | null>(null);
   const [projectMenu, setProjectMenu] = useState<{ projectId: string; position: { x: number; y: number } } | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
-  const [editingProject, setEditingProject] = useState<{ projectId: string; field: 'folder' | 'profile' } | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(loadShowArchived);
-  const newProjectButton = useRef<HTMLButtonElement>(null);
 
   const searching = searchChatIds !== null;
   const sidebar = useMemo(() => buildSidebar(chats, projects, searchChatIds), [chats, projects, searchChatIds]);
@@ -273,27 +269,6 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     }
   }
 
-  async function createProject(name: string): Promise<void> {
-    setError(null);
-    try {
-      upsertProject(await api.projects.create({ name }));
-    } catch (err) {
-      console.error('[grunt-web] failed to create project:', err);
-      setError(errorText(err, "Couldn't create the project"));
-    } finally {
-      closeNewProject();
-    }
-  }
-
-  /** Closes the name field and puts focus back on its button -- unless the user already moved it somewhere on purpose. */
-  function closeNewProject(): void {
-    setNewProjectOpen(false);
-    setTimeout(() => {
-      const active = document.activeElement;
-      if (active === null || active === document.body) newProjectButton.current?.focus();
-    }, 0);
-  }
-
   /** The row to focus once `chatId`'s row is gone: the next one in the list, else the previous one. */
   function neighbourSelector(chatId: string): string {
     const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="chat-row-"]'));
@@ -384,18 +359,6 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     focusLater(headingSelector(projectId), LIST_SELECTOR);
   }
 
-  /** For the folder / default-profile forms: rejects into the form, which shows the message and stays open. */
-  async function saveProjectEdit(projectId: string, body: PatchProjectBody): Promise<void> {
-    upsertProject(await api.projects.patch(projectId, body));
-    setEditingProject(null);
-    focusLater(headingSelector(projectId), LIST_SELECTOR);
-  }
-
-  function closeProjectEditor(projectId: string): void {
-    setEditingProject(null);
-    focusLater(headingSelector(projectId), LIST_SELECTOR);
-  }
-
   async function moveProject(projectId: string, dir: -1 | 1): Promise<void> {
     setError(null);
     try {
@@ -440,7 +403,6 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
 
   /** The project-only props of a group heading. */
   function projectGroupProps(project: Project): Partial<ProjectGroupProps> {
-    const editing = editingProject?.projectId === project.id ? editingProject.field : null;
     return {
       onNewChat: () => void createChat(project.id),
       newChatDisabled: creating || profiles.length === 0,
@@ -452,17 +414,6 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         setRenamingProjectId(null);
         focusLater(headingSelector(project.id), LIST_SELECTOR);
       },
-      editor:
-        editing === 'folder' ? (
-          <ProjectFolderEditor project={project} onSave={(root) => saveProjectEdit(project.id, { workspaceRoot: root })} onCancel={() => closeProjectEditor(project.id)} />
-        ) : editing === 'profile' ? (
-          <ProjectProfileEditor
-            project={project}
-            profiles={profiles}
-            onSave={(defaultProfileId) => saveProjectEdit(project.id, { defaultProfileId })}
-            onCancel={() => closeProjectEditor(project.id)}
-          />
-        ) : undefined,
     };
   }
 
@@ -600,15 +551,6 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
       </div>
 
       <div className="space-y-2 border-t border-[var(--border)] p-2">
-        {newProjectOpen && (
-          <InlineNameInput
-            initial=""
-            label="Project name"
-            maxLength={PROJECT_NAME_MAX}
-            onCommit={(name) => void createProject(name)}
-            onCancel={closeNewProject}
-          />
-        )}
         <div className="flex gap-2">
           <button
             type="button"
@@ -620,15 +562,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
           >
             + New chat
           </button>
-          <button
-            ref={newProjectButton}
-            type="button"
-            onClick={() => {
-              if (!newProjectOpen) setNewProjectOpen(true);
-            }}
-            aria-disabled={newProjectOpen || undefined}
-            className="btn px-2 py-1.5"
-          >
+          <button type="button" onClick={() => openProjectPage({ mode: 'create' })} className="btn px-2 py-1.5">
             + New project
           </button>
         </div>
@@ -689,8 +623,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
             orderedProjects.length,
             {
               rename: () => setRenamingProjectId(menuProject.id),
-              setFolder: () => setEditingProject({ projectId: menuProject.id, field: 'folder' }),
-              setDefaultProfile: () => setEditingProject({ projectId: menuProject.id, field: 'profile' }),
+              settings: () => openProjectPage({ mode: 'edit', projectId: menuProject.id }),
               move: (dir) => void moveProject(menuProject.id, dir),
               requestDelete: () => setDeletingProjectId(menuProject.id),
             }

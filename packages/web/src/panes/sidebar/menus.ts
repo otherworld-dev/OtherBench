@@ -86,8 +86,8 @@ export function chatMenuItems(
 
 export interface ProjectMenuHandlers {
   rename(): void;
-  setFolder(): void;
-  setDefaultProfile(): void;
+  /** Opens the project page for this project. */
+  settings(): void;
   move(dir: -1 | 1): void;
   requestDelete(): void;
 }
@@ -96,8 +96,7 @@ export interface ProjectMenuHandlers {
 export function projectMenuItems(index: number, count: number, h: ProjectMenuHandlers): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
-    { id: 'folder', label: 'Set folder…', onSelect: h.setFolder },
-    { id: 'profile', label: 'Default profile…', onSelect: h.setDefaultProfile },
+    { id: 'settings', label: 'Project settings…', onSelect: h.settings },
     { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
     { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },

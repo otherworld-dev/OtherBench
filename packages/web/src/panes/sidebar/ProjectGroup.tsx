@@ -27,8 +27,6 @@ export interface ProjectGroupProps {
   onOpenMenu?: (position: { x: number; y: number }, source: MenuSource) => void;
   onRename?: (name: string) => void;
   onRenameCancel?: () => void;
-  /** An inline form (folder / default profile) shown under the heading. */
-  editor?: ReactNode;
 }
 
 function carriesChat(e: DragEvent): boolean {
@@ -38,7 +36,7 @@ function carriesChat(e: DragEvent): boolean {
 /** A collapsible sidebar group (a project, or No project) whose heading is also a drop target for chat rows. */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
-  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, editor } = props;
+  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -135,7 +133,6 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           </button>
         )}
       </div>
-      {editor}
       {!collapsed &&
         (empty ? (
           <p className="px-2 py-1 text-sm text-[var(--text-faint)]">No chats yet</p>

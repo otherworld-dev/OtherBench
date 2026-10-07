@@ -14,6 +14,7 @@ import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
 import { QuickChat } from './views/QuickChat.js';
+import { ProjectView } from './views/ProjectView.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
 
@@ -39,6 +40,8 @@ function MainApp(): JSX.Element {
   const inspectorCollapsed = useGruntStore((s) => s.inspectorCollapsed);
   const setInspectorCollapsed = useGruntStore((s) => s.setInspectorCollapsed);
   const streamStatus = useGruntStore((s) => s.streamStatus);
+  const projectPage = useGruntStore((s) => s.projectPage);
+  const closeProjectPage = useGruntStore((s) => s.closeProjectPage);
 
   const setConnections = useGruntStore((s) => s.setConnections);
   const setModels = useGruntStore((s) => s.setModels);
@@ -209,6 +212,9 @@ function MainApp(): JSX.Element {
 
       {usageViewOpen && <UsageView onClose={() => setUsageViewOpen(false)} />}
       {settingsViewOpen && <SettingsView onClose={() => setSettingsViewOpen(false)} />}
+      {projectPage && (
+        <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
+      )}
     </div>
   );
 }

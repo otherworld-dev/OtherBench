@@ -575,6 +575,17 @@ describe('Inspector project', () => {
     target.remove();
   });
 
+  it("shows the project's description and opens its settings", async () => {
+    useGruntStore.setState({
+      projects: [{ id: 'p-w', name: 'Website', description: 'The marketing site', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+    });
+    render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    expect(screen.getByTestId('inspector-project-description')).toHaveTextContent('The marketing site');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Project settings…' }));
+    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p-w' });
+  });
+
   it("moves focus to the project's group heading button after revealing it", async () => {
     useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     const target = document.createElement('div');
