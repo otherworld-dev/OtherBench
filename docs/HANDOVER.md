@@ -639,6 +639,15 @@ Known gaps:
   and agents, `.mcp.json`, CLAUDE.md -- applies with no trust prompt, as
   `settingSources` includes `project` and `local`. Hooks run commands without
   a Grunt card. Only open folders you trust as workspaces.
+- A chat's extra folders reach Claude Code as `additionalDirectories`, and
+  Claude Code loads the skills and commands under each one's `.claude`, even
+  for a read-only folder. Their inline shell is disabled, and outside auto
+  mode every tool call still goes through the gate. In auto mode, though, a
+  loaded skill's `allowed-tools` can approve calls the classifier would
+  otherwise judge. Their CLAUDE.md never loads: the child env drops
+  `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`. Not passing the folders at
+  all would close this, if Claude Code still reaches them when the gate
+  allows; that needs a live check first.
 
 - Relative paths are resolved against the workspace root for grants and card
   summaries, but Claude Code resolves them against its own current directory,

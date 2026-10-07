@@ -18,6 +18,10 @@ describe('env', () => {
     for (const k of Object.keys(env)) expect(k).not.toMatch(/^(claudecode|claude_code_entrypoint|claude_code_sse_port)$/i);
     expect(env).toMatchObject({ PATH: '/bin', CLAUDE_CONFIG_DIR: '/cfg' });
   });
+  it("never lets an extra folder's CLAUDE.md load, whatever Grunt's own environment says", () => {
+    const env = buildChildEnv({ PATH: '/bin', claude_code_additional_directories_claude_md: '1' }, conn(null), null, 'sonnet');
+    expect(env).toEqual({ PATH: '/bin' });
+  });
   it('points Claude Code at an endpoint with a token and the chosen model for background calls', () => {
     const env = buildChildEnv({ PATH: '/bin', ANTHROPIC_API_KEY: 'k' }, conn('http://localhost:11434/'), null, 'qwen3-coder:30b');
     expect(env).toMatchObject({ PATH: '/bin', ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'grunt-local', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'qwen3-coder:30b', ANTHROPIC_SMALL_FAST_MODEL: 'qwen3-coder:30b' });
