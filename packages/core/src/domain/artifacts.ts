@@ -110,6 +110,11 @@ export function branchOf(store: Store, messageId: string): (id: string) => boole
   return (id) => ids.has(id);
 }
 
+/** Whether `title` may name an artifact version: one line, not blank, at most MAX_ARTIFACT_TITLE characters. */
+export function artifactTitleOk(title: string): boolean {
+  return title.trim() !== '' && title.length <= MAX_ARTIFACT_TITLE && !CONTROL.test(title);
+}
+
 /**
  * Runs one `artifact` tool call for the reply `messageId` in `chatId`
  * (spec 2026-10-07-artifacts). It works on that reply's branch: `update`,
@@ -122,7 +127,6 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
   const str = (key: string): string | undefined => (typeof a[key] === 'string' ? (a[key] as string) : undefined);
   const onBranch = branchOf(store, ctx.messageId);
   const tooBig = (content: string): boolean => Buffer.byteLength(content, 'utf8') > MAX_ARTIFACT_BYTES;
-  const titleOk = (title: string): boolean => title.trim() !== '' && title.length <= MAX_ARTIFACT_TITLE && !CONTROL.test(title);
   const TOO_BIG = `The content is over ${MAX_ARTIFACT_BYTES} bytes (1 MB): trim it or split it into more than one artifact.`;
   const BAD_TITLE = `"title" is required: one line, at most ${MAX_ARTIFACT_TITLE} characters.`;
 
@@ -149,7 +153,7 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
       const title = str('title');
       const content = str('content');
       if (!kind || !(ARTIFACT_KINDS as readonly string[]).includes(kind)) return fail('bad_args', `"kind" must be one of: ${ARTIFACT_KINDS.join(', ')}.`);
-      if (title === undefined || !titleOk(title)) return fail('bad_args', BAD_TITLE);
+      if (title === undefined || !artifactTitleOk(title)) return fail('bad_args', BAD_TITLE);
       if (content === undefined) return fail('bad_args', '"content" is required.');
       if (tooBig(content)) return fail('too_large', TOO_BIG);
       const slug = str('id') ?? slugify(title);
@@ -184,7 +188,7 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
       const title = str('title');
       if (content === undefined) return fail('bad_args', '"content" is required.');
       if (tooBig(content)) return fail('too_large', TOO_BIG);
-      if (title !== undefined && !titleOk(title)) return fail('bad_args', BAD_TITLE);
+      if (title !== undefined && !artifactTitleOk(title)) return fail('bad_args', BAD_TITLE);
       return add(f.artifact, f.current, title?.trim() ?? f.current.title, content, 'rewrite');
     }
     case 'view': {

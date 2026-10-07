@@ -194,6 +194,8 @@ describe('who may call the peer listener', () => {
       ['POST', '/api/chats/c/attachments/from-path'],
       ['GET', '/api/fs/dirs?path=C%3A%5C'],
       ['GET', '/api/chats'],
+      ['GET', '/api/chats/c/artifacts'],
+      ['POST', '/api/chats/c/artifacts/a/save'],
     ] as const) {
       expect((await laptop.service.client.request(target, { method, path, token })).status).toBe(404);
     }

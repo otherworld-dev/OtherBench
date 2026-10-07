@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { runArtifactCommand } from '@grunt/core/domain/artifacts.js';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
@@ -257,7 +258,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const toolProvider = new GruntToolProvider(store, broker, mcpManager);
   const engine = new RoutingChatEngine(
     aisdkEngine,
-    new ClaudeCodeChatEngine({ query: query as unknown as QueryFn, approvals: toolProvider, listEndpointModels: endpointModelLister(aisdkEngine) })
+    new ClaudeCodeChatEngine({
+      query: query as unknown as QueryFn,
+      approvals: toolProvider,
+      listEndpointModels: endpointModelLister(aisdkEngine),
+      // Artifacts (Deck #896): the same executor as the API engines' tool.
+      artifactTool: async (ctx, args) => runArtifactCommand(store, ctx, args),
+    })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
   // against whatever `mcp_server` rows already exist as soon as the
