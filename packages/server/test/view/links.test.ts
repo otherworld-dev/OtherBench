@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_VIEW_LINKS, VIEW_LINK_TTL_MS, ViewLinks } from '../../src/view/links.js';
+import { MAX_VIEW_LINKS, VIEW_LINK_MAX_MS, VIEW_LINK_TTL_MS, ViewLinks } from '../../src/view/links.js';
 
 const link = { chatId: 'c1', root: '/ws', target: '/ws/a.png', scope: 'file' as const };
 
@@ -26,6 +26,19 @@ describe('ViewLinks', () => {
     }
     now += VIEW_LINK_TTL_MS;
     expect(links.get(a)).toBeNull();
+  });
+
+  it('dies an hour after it was made however often it is used, so a leaked link can never be kept alive', () => {
+    let now = 0;
+    const links = new ViewLinks(() => now);
+    const a = links.create(link);
+    while (now + VIEW_LINK_TTL_MS - 1 < VIEW_LINK_MAX_MS) {
+      now += VIEW_LINK_TTL_MS - 1;
+      expect(links.get(a), `at ${now}`).not.toBeNull();
+    }
+    now = VIEW_LINK_MAX_MS;
+    expect(links.get(a)).toBeNull();
+    expect(VIEW_LINK_MAX_MS).toBe(60 * 60_000);
   });
 
   it('keeps at most MAX_VIEW_LINKS, dropping the oldest', () => {
