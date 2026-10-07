@@ -10,8 +10,9 @@ describe('the Mermaid page', () => {
     expect(page).toContain("securityLevel: 'strict'");
   });
 
+  // A 5 MB file: its first read can take seconds while the whole suite runs (and the OS scans it).
   it("finds Grunt's copy of mermaid.min.js", async () => {
     const script = await mermaidScript();
     expect(script.length).toBeGreaterThan(100_000);
-  });
+  }, 20_000);
 });

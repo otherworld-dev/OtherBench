@@ -153,6 +153,7 @@ describe('GET /view/<id>/', () => {
     rmSync(dist, { recursive: true, force: true });
   });
 
+  // Reads Grunt's 5 MB mermaid.min.js, which can take seconds the first time while the whole suite runs.
   it('serves artifact versions: a page and an SVG in the sandbox, a Mermaid diagram with its script, nothing else', async () => {
     const store = container.store;
     store.messages.create({ id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
@@ -192,7 +193,7 @@ describe('GET /view/<id>/', () => {
     // The link dies with its chat.
     store.chats.delete('c1');
     expect((await app.request(page.url!)).status).toBe(404);
-  });
+  }, 20_000);
 });
 
 describe('relativeOf and parseRange', () => {
