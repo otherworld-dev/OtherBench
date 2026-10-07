@@ -12,10 +12,12 @@ const LANGUAGE = /^[a-z0-9+#.-]{1,20}$/;
 /** Control characters (line breaks among them): a title is one line, so it can't open a new section of the system prompt. */
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
-/** The tool's name for API engines. */
+/**
+ * The tool's name. Claude Code sees it under a per-process MCP server name
+ * that a project's config can't guess; the engine reports those calls under
+ * this name.
+ */
 export const ARTIFACT_TOOL = 'artifact';
-/** Claude Code's name for it, from Grunt's in-process MCP server `grunt`. */
-export const AGENT_ARTIFACT_TOOL = 'mcp__grunt__artifact';
 
 export const ARTIFACT_TOOL_DESCRIPTION =
   'Creates and updates artifacts: standalone content shown beside the chat, with every version kept. ' +

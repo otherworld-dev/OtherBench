@@ -172,8 +172,10 @@ export class PermissionBroker {
 
     // Artifacts (Deck #896) change nothing outside Grunt and keep every
     // version, so they never need a card; the profile's switch (checked
-    // above) is how they're turned off.
-    if (tool.source === 'artifact' || (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'artifact')) {
+    // above) is how they're turned off. Only the source says a call is
+    // Grunt's: never a Claude Code tool's name, which any MCP server can take
+    // (the Claude Code engine marks its own server's call itself).
+    if (tool.source === 'artifact') {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 

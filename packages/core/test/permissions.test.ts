@@ -7,7 +7,6 @@ import type { Decision } from '../src/domain/permissions.js';
 import type { RiskClass, ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
-import { agentDisallowedTools } from '../src/domain/agent-tools.js';
 
 function makeTool(overrides: Partial<ToolSpec> = {}): ToolSpec {
   return {
@@ -82,18 +81,19 @@ describe('PermissionBroker', () => {
     const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: '/ws', signal: new AbortController().signal };
     const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
     const artifact = { name: 'artifact', description: '', parameters: {}, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
-    const agentArtifact = { ...artifact, name: 'mcp__grunt__artifact', source: 'agent' as const };
     expect(broker.decide(artifact, {}, always, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
-    expect(broker.decide(agentArtifact, {}, { ...always, agentMcp: false }, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    // Artifacts are Grunt's, not the user's MCP config: the MCP switch doesn't touch them.
+    expect(broker.decide(artifact, {}, { ...always, agentMcp: false }, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
     expect(broker.decide(artifact, {}, { ...always, artifacts: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
-    expect(broker.decide(agentArtifact, {}, { ...always, artifacts: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
-    // Other MCP tools are still the user's config, still off with agentMcp false.
-    expect(broker.decide({ ...agentArtifact, name: 'mcp__other__tool' }, {}, { ...always, agentMcp: false }, ctx)).toMatchObject({ kind: 'deny' });
   });
 
-  it("hides Grunt's artifact tool from Claude Code when the profile turns artifacts off", () => {
-    expect(agentDisallowedTools({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false })).toContain('mcp__grunt__artifact');
-    expect(agentDisallowedTools({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' })).not.toContain('mcp__grunt__artifact');
+  it("gives no Claude Code tool the artifact tool's pass by its name: any MCP server can take a name", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: '/ws', signal: new AbortController().signal };
+    const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+    const lookalike = { name: 'mcp__grunt__artifact', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => null };
+    expect(broker.decide(lookalike, {}, always, ctx)).toMatchObject({ kind: 'ask' });
+    expect(broker.decide(lookalike, {}, { ...always, agentMcp: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'MCP tools are disabled by policy.' });
   });
 
   describe('policy gate', () => {
