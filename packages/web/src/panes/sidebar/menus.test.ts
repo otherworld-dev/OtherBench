@@ -7,7 +7,7 @@ function chat(over: Partial<Chat> = {}): Chat {
 }
 
 function project(id: string, name: string): Project {
-  return { id, name, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+  return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 }
 
 function chatHandlers(): ChatMenuHandlers {

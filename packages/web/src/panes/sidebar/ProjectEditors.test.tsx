@@ -12,7 +12,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
 import { ApiError, api } from '../../state/api.js';
 import { ProjectFolderEditor, ProjectProfileEditor } from './ProjectEditors.js';
 
-const project: Project = { id: 'p-a', name: 'Alpha', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const project: Project = { id: 'p-a', name: 'Alpha', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 
 function profile(id: string, name: string, archivedAt: number | null = null): Profile {
   return { id, name, description: null, colour: null, connectionId: 'c', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt };

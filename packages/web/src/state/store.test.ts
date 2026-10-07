@@ -57,7 +57,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 }
 
 function makeProject(overrides: Partial<Project> = {}): Project {
-  return { id: 'proj-1', name: 'Alpha', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { id: 'proj-1', name: 'Alpha', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {

@@ -9,11 +9,13 @@ import { clockOf, type SyncClock } from './clock.js';
 function projectMapping(selfId: () => string): CrudMapping<Project> {
   return {
     table: 'project',
-    columns: ['id', 'name', ...WORKSPACE_COLUMNS, 'folders', 'default_profile_id', 'sort_order', 'created_at', 'updated_at'],
-    toRow: (p) => [p.id, p.name, ...workspaceToRow(p.workspace), foldersToRow(p.folders), p.defaultProfileId, p.sortOrder, p.createdAt, p.updatedAt],
+    columns: ['id', 'name', 'description', 'instructions', ...WORKSPACE_COLUMNS, 'folders', 'default_profile_id', 'sort_order', 'created_at', 'updated_at'],
+    toRow: (p) => [p.id, p.name, p.description, p.instructions, ...workspaceToRow(p.workspace), foldersToRow(p.folders), p.defaultProfileId, p.sortOrder, p.createdAt, p.updatedAt],
     fromRow: (row) => ({
       id: row.id as string,
       name: row.name as string,
+      description: row.description as string,
+      instructions: row.instructions as string,
       workspace: workspaceFromRow(row, selfId),
       ...foldersFromRow(row),
       defaultProfileId: row.default_profile_id as string | null,
@@ -43,6 +45,8 @@ export class SqliteProjectRepo implements ProjectRepo {
     return this.crud.create({
       ...fields,
       workspace: fields.workspace ?? null,
+      description: p.description ?? '',
+      instructions: p.instructions ?? '',
       sortOrder: p.sortOrder ?? 0,
       createdAt: p.createdAt ?? now,
       updatedAt: p.updatedAt ?? now,

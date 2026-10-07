@@ -8,7 +8,7 @@ function chat(id: string, over: Partial<Chat> = {}): Chat {
 }
 
 function project(id: string, name: string, sortOrder = 0): Project {
-  return { id, name, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
+  return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder, createdAt: 1, updatedAt: 1 };
 }
 
 const ids = (chats: Chat[]): string[] => chats.map((c) => c.id);

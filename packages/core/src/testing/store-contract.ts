@@ -347,6 +347,17 @@ export function runStoreContract(
         expect(() => store.projects.delete('proj-a')).not.toThrow();
       });
 
+      it('description and instructions default to empty and round-trip through create and update', () => {
+        expect(store.projects.create(makeProjectInput({ id: 'proj-a' }))).toMatchObject({ description: '', instructions: '' });
+
+        store.projects.create(makeProjectInput({ id: 'proj-b', description: 'A workbench', instructions: 'British English.\nBe brief.' }));
+        expect(store.projects.get('proj-b')).toMatchObject({ description: 'A workbench', instructions: 'British English.\nBe brief.' });
+
+        store.projects.update('proj-b', { instructions: 'Be terse.' });
+        expect(store.projects.get('proj-b')).toMatchObject({ description: 'A workbench', instructions: 'Be terse.' });
+        expect(store.projects.list().find((p) => p.id === 'proj-b')).toMatchObject({ instructions: 'Be terse.' });
+      });
+
       it('chats: projectId defaults to null and round-trips through create, update and list', () => {
         const { profileId } = seedProfile(store, 'profile-a');
         store.projects.create(makeProjectInput({ id: 'proj-a' }));

@@ -87,7 +87,7 @@ function makeChat(overrides: Partial<Chat> & { id: string }): Chat {
 }
 
 function makeProject(overrides: Partial<Project> & { id: string }): Project {
-  return { name: overrides.id, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { name: overrides.id, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 /** The chat ids shown in one sidebar group, top to bottom. */
