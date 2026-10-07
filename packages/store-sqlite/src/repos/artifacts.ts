@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion } from '@grunt/core/ports/store.js';
+import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, NewArtifactVersion } from '@grunt/core/ports/store.js';
 import type { SyncClock } from './clock.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 
@@ -19,14 +19,16 @@ const ARTIFACT: CrudMapping<Artifact> = {
 
 const VERSION: CrudMapping<ArtifactVersion> = {
   table: 'artifact_version',
-  columns: ['id', 'artifact_id', 'number', 'title', 'content', 'made_by', 'message_id', 'parent_version_id', 'created_at'],
-  toRow: (v) => [v.id, v.artifactId, v.number, v.title, v.content, v.madeBy, v.messageId, v.parentVersionId, v.createdAt],
+  columns: ['id', 'artifact_id', 'number', 'title', 'content', 'kind', 'language', 'made_by', 'message_id', 'parent_version_id', 'created_at'],
+  toRow: (v) => [v.id, v.artifactId, v.number, v.title, v.content, v.kind, v.language, v.madeBy, v.messageId, v.parentVersionId, v.createdAt],
   fromRow: (row) => ({
     id: row.id as string,
     artifactId: row.artifact_id as string,
     number: row.number as number,
     title: row.title as string,
     content: row.content as string,
+    kind: row.kind as ArtifactKind,
+    language: (row.language as string | null) ?? null,
     madeBy: row.made_by as 'model' | 'user',
     messageId: (row.message_id as string | null) ?? null,
     parentVersionId: (row.parent_version_id as string | null) ?? null,
@@ -34,7 +36,7 @@ const VERSION: CrudMapping<ArtifactVersion> = {
   }),
 };
 
-/** Artifacts and their versions (migration 016); both synced, so every write is stamped. */
+/** Artifacts and their versions (migrations 016, 017); both synced, so every write is stamped. */
 export class SqliteArtifactRepo implements ArtifactRepo {
   private readonly artifacts: SqliteCrudRepo<Artifact>;
   private readonly versionRows: SqliteCrudRepo<ArtifactVersion>;
@@ -61,9 +63,11 @@ export class SqliteArtifactRepo implements ArtifactRepo {
     return (this.db.prepare('SELECT * FROM artifact WHERE chat_id = ? ORDER BY created_at, id').all(chatId) as Record<string, unknown>[]).map(ARTIFACT.fromRow);
   }
 
-  addVersion(v: Omit<ArtifactVersion, 'number'>): ArtifactVersion {
+  addVersion(v: NewArtifactVersion): ArtifactVersion {
+    const artifact = this.get(v.artifactId);
+    if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
     const { n } = this.db.prepare('SELECT COALESCE(MAX(number), 0) AS n FROM artifact_version WHERE artifact_id = ?').get(v.artifactId) as { n: number };
-    return this.versionRows.create({ ...v, number: n + 1 });
+    return this.versionRows.create({ ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number: n + 1 });
   }
 
   getVersion(id: string): ArtifactVersion | null {

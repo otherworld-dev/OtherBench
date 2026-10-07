@@ -30,6 +30,19 @@ describe('runMigrations', () => {
     expect(triggers.sort()).toEqual(['sync_artifact_ad', 'sync_artifact_ai', 'sync_artifact_au', 'sync_artifact_version_ad', 'sync_artifact_version_ai', 'sync_artifact_version_au']);
   });
 
+  it("017 gives each artifact version its own kind and language, filled from its artifact, without logging a sync change", () => {
+    const db = openDatabase(':memory:');
+    runMigrations(db, MIGRATIONS.filter((m) => m.version <= 16));
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.prepare("INSERT INTO artifact (id, chat_id, slug, kind, language, created_at) VALUES ('a1', 'c1', 'lib', 'code', 'py', 1)").run();
+    db.prepare("INSERT INTO artifact_version (id, artifact_id, number, title, content, made_by, message_id, parent_version_id, created_at) VALUES ('v1', 'a1', 1, 'Lib', 'x', 'model', NULL, NULL, 2)").run();
+    const logged = (): number => (db.prepare("SELECT COUNT(*) AS n FROM change_log WHERE tbl = 'artifact_version'").get() as { n: number }).n;
+    const before = logged();
+    runMigrations(db);
+    expect(db.prepare("SELECT kind, language FROM artifact_version WHERE id = 'v1'").get()).toEqual({ kind: 'code', language: 'py' });
+    expect(logged()).toBe(before);
+  });
+
   it('brings a fresh database to the latest migration version', () => {
     const db = freshDb();
     try {

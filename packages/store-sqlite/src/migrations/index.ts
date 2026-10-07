@@ -15,6 +15,7 @@ import { MIGRATION_013_CHANGE_TRACKING } from './013-change-tracking.js';
 import { MIGRATION_014_CHAT_EFFORT } from './014-chat-effort.js';
 import { MIGRATION_015_EXTRA_FOLDERS } from './015-extra-folders.js';
 import { MIGRATION_016_ARTIFACTS } from './016-artifacts.js';
+import { MIGRATION_017_ARTIFACT_VERSION_KIND } from './017-artifact-version-kind.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -36,6 +37,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 14, name: '014-chat-effort', sql: MIGRATION_014_CHAT_EFFORT },
   { version: 15, name: '015-extra-folders', sql: MIGRATION_015_EXTRA_FOLDERS },
   MIGRATION_016_ARTIFACTS,
+  MIGRATION_017_ARTIFACT_VERSION_KIND,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

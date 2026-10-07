@@ -52,6 +52,7 @@ import type {
   Store,
   UsageRecord,
   UsageRepo,
+  NewArtifactVersion,
 } from '../ports/store.js';
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
@@ -941,10 +942,11 @@ class InMemoryArtifactRepo implements ArtifactRepo {
   listByChat(chatId: string): Artifact[] {
     return [...this.artifacts.values()].filter((a) => a.chatId === chatId).sort((x, y) => x.createdAt - y.createdAt || x.id.localeCompare(y.id)).map((a) => ({ ...a }));
   }
-  addVersion(v: Omit<ArtifactVersion, 'number'>): ArtifactVersion {
-    if (!this.artifacts.has(v.artifactId)) throw new Error(`Artifact "${v.artifactId}" not found.`);
+  addVersion(v: NewArtifactVersion): ArtifactVersion {
+    const artifact = this.artifacts.get(v.artifactId);
+    if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
     const number = Math.max(0, ...this.versions(v.artifactId).map((x) => x.number)) + 1;
-    const full = { ...v, number };
+    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number };
     this.versionsById.set(v.id, full);
     return { ...full };
   }

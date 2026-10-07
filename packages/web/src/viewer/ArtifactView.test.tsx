@@ -15,19 +15,23 @@ import { ApiError, api, type ArtifactDetail } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ArtifactView } from './ArtifactView.js';
 
-const version = (id: string, number: number, content: string, madeBy: 'model' | 'user' = 'model'): ArtifactVersion => ({
-  id, artifactId: 'art', number, title: 'Calc', content, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
+const version = (id: string, number: number, content: string, madeBy: 'model' | 'user' = 'model', kind: ArtifactVersion['kind'] = 'html'): ArtifactVersion => ({
+  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
 });
-const detail = (kind: 'html' | 'markdown' | 'code' = 'html'): ArtifactDetail => ({
-  artifact: { id: 'art', chatId: 'c1', slug: 'calc', kind, language: kind === 'code' ? 'ts' : null, createdAt: 1 },
-  fileName: kind === 'html' ? 'calc.html' : kind === 'markdown' ? 'calc.md' : 'calc.ts',
-  currentVersionId: 'v2',
-  versions: [
-    { id: 'v1', number: 1, title: 'Calc', madeBy: 'model', createdAt: 1, onBranch: true },
-    { id: 'v2', number: 2, title: 'Calc', madeBy: 'model', createdAt: 2, onBranch: true },
-    { id: 'v9', number: 3, title: 'Calc', madeBy: 'model', createdAt: 3, onBranch: false },
-  ],
-});
+const detail = (kind: 'html' | 'markdown' | 'code' = 'html'): ArtifactDetail => {
+  const fileName = kind === 'html' ? 'calc.html' : kind === 'markdown' ? 'calc.md' : 'calc.ts';
+  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName };
+  return {
+    artifact: { id: 'art', chatId: 'c1', slug: 'calc', kind, language: kind === 'code' ? 'ts' : null, createdAt: 1 },
+    fileName,
+    currentVersionId: 'v2',
+    versions: [
+      { ...each, id: 'v1', number: 1, createdAt: 1, onBranch: true },
+      { ...each, id: 'v2', number: 2, createdAt: 2, onBranch: true },
+      { ...each, id: 'v9', number: 3, createdAt: 3, onBranch: false },
+    ],
+  };
+};
 const item = { kind: 'artifact' as const, artifactId: 'art', title: 'Calc' };
 
 beforeEach(() => {
@@ -81,6 +85,26 @@ describe('ArtifactView', () => {
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
   });
 
+  it('shows each version as its own kind, and downloads it under its own name: v1 a note, v2 a page made from it', async () => {
+    const both = detail('markdown');
+    vi.mocked(api.artifacts.get).mockResolvedValue({
+      ...both,
+      fileName: 'calc.html',
+      versions: [
+        { ...both.versions[0]!, kind: 'markdown', fileName: 'calc.md' },
+        { ...both.versions[1]!, kind: 'html', fileName: 'calc.html' },
+      ],
+    });
+    vi.mocked(api.artifacts.version).mockImplementation(async (_c, _a, id) => (id === 'v1' ? version('v1', 1, '# Note', 'model', 'markdown') : version('v2', 2, '<p>page</p>')));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByTitle('calc.html')).toHaveAttribute('src', '/view/x-v2/calc.html');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Version' }), 'v1');
+    expect(await screen.findByRole('heading', { name: 'Note' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(saveFile).toHaveBeenLastCalledWith(expect.any(Blob), 'calc.md');
+  });
+
   it('shows Markdown formatted and code highlighted, each with its source', async () => {
     vi.mocked(api.artifacts.get).mockResolvedValue(detail('markdown'));
     vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, '# Heading'));
@@ -100,7 +124,7 @@ describe('ArtifactView', () => {
     await waitFor(() => expect(box).toHaveValue('<p>v2</p>'));
     await user.clear(box);
     await user.type(box, '<p>mine</p>');
-    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true }] });
+    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html' }] });
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(api.artifacts.edit).toHaveBeenCalledWith('c1', 'art', { content: '<p>mine</p>', fromVersionId: 'v2' });
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v4/calc.html'));

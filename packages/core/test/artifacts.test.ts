@@ -60,10 +60,30 @@ describe('runArtifactCommand', () => {
     expect('artifactId' in again && 'artifactId' in first && again.artifactId).toBe('artifactId' in first && first.artifactId);
     expect(run(store, 'a2', { command: 'view', id: 'page' })).toMatchObject({ content: '<p>a2</p>' });
     expect(run(store, 'a1', { command: 'view', id: 'page' })).toMatchObject({ content: '<p>a1</p>' });
-    // On its own branch it is taken; another kind under that id is refused.
+    // On its own branch it is taken.
     expect(run(store, 'a2', { command: 'create', id: 'page', kind: 'html', title: 'P', content: '' })).toMatchObject({ error: true, code: 'id_taken', message: expect.stringMatching(/on this branch/) });
+    // Each version has its own kind, so another branch's first version may be another kind.
     store.messages.create({ id: 'a5', chatId: 'c1', parentId: 'u1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
-    expect(run(store, 'a5', { command: 'create', id: 'page', kind: 'markdown', title: 'P', content: '' })).toMatchObject({ error: true, code: 'id_taken', message: expect.stringMatching(/html/) });
+    expect(run(store, 'a5', { command: 'create', id: 'page', kind: 'markdown', title: 'P', content: '# P' })).toMatchObject({ ok: true, kind: 'markdown', number: 3 });
+    expect(run(store, 'a2', { command: 'view', id: 'page' })).toMatchObject({ kind: 'html' });
+  });
+
+  it('lets a rewrite change the kind: "make it interactive" is the next version of the same artifact', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'bear', kind: 'markdown', title: 'Bear', content: '# Bear' });
+    expect(run(store, 'a3', { command: 'rewrite', id: 'bear', kind: 'html', content: '<button>Bear</button>' })).toMatchObject({ ok: true, command: 'rewrite', kind: 'html', number: 2 });
+    expect(run(store, 'a3', { command: 'view', id: 'bear' })).toMatchObject({ kind: 'html', content: '<button>Bear</button>' });
+    // The branch that only has v1 still has Markdown.
+    expect(run(store, 'a1', { command: 'view', id: 'bear' })).toMatchObject({ kind: 'markdown', content: '# Bear' });
+    // A code version carries its language; a rewrite that keeps the kind keeps it.
+    expect(run(store, 'a3', { command: 'rewrite', id: 'bear', kind: 'code', language: 'py', content: 'print(1)' })).toMatchObject({ ok: true, kind: 'code' });
+    run(store, 'a3', { command: 'rewrite', id: 'bear', content: 'print(2)' });
+    expect(run(store, 'a3', { command: 'view', id: 'bear' })).toMatchObject({ kind: 'code', language: 'py', content: 'print(2)' });
+    expect(artifactsListNote(artifactsOnBranch(store, 'c1', branchOf(store, 'a3')))).toContain('- bear: "Bear" (code, py, v4)');
+    // Leaving code drops the language.
+    run(store, 'a3', { command: 'rewrite', id: 'bear', kind: 'svg', content: '<svg/>' });
+    expect(run(store, 'a3', { command: 'view', id: 'bear' })).toMatchObject({ kind: 'svg', language: null });
+    expect(run(store, 'a3', { command: 'rewrite', id: 'bear', kind: 'pdf', content: '' })).toMatchObject({ error: true, code: 'bad_args', message: expect.stringMatching(/"kind" must be one of/) });
   });
 
   it('inserts replacement text literally, $ patterns included', () => {

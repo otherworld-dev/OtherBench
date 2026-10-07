@@ -153,6 +153,23 @@ describe('GET /view/<id>/', () => {
     rmSync(dist, { recursive: true, force: true });
   });
 
+  it('serves each artifact version as its own kind: a note made into a page', async () => {
+    const store = container.store;
+    store.messages.create({ id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    store.artifacts.create({ id: 'bear', chatId: 'c1', slug: 'bear', kind: 'markdown', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'b1', artifactId: 'bear', title: 'Bear', content: '# Bear', madeBy: 'model', messageId: 'u1', parentVersionId: null, createdAt: 2 });
+    store.artifacts.addVersion({ id: 'b2', artifactId: 'bear', title: 'Bear', content: '<p>bear</p>', kind: 'html', language: null, madeBy: 'model', messageId: 'u1', parentVersionId: 'b1', createdAt: 3 });
+    const app = createApp(container);
+    const open = async (artifactVersionId: string) =>
+      (await (await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c1', artifactVersionId }) })).json()) as { name: string; kind: string; url: string | null };
+    expect(await open('b1')).toMatchObject({ name: 'bear.md', kind: 'markdown', url: null });
+    const page = await open('b2');
+    expect(page).toMatchObject({ name: 'bear.html', kind: 'html' });
+    const served = await app.request(page.url!);
+    expect(served.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+    expect(await served.text()).toBe('<p>bear</p>');
+  });
+
   // Reads Grunt's 5 MB mermaid.min.js, which can take seconds the first time while the whole suite runs.
   it('serves artifact versions: a page and an SVG in the sandbox, a Mermaid diagram with its script, nothing else', async () => {
     const store = container.store;

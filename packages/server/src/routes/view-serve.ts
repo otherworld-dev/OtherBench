@@ -2,7 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono, type Context } from 'hono';
-import { artifactFileName } from '@grunt/core/domain/artifacts.js';
+import { versionFileName } from '@grunt/core/domain/artifacts.js';
 import { containPath } from '@grunt/core/domain/paths.js';
 import type { ArtifactRepo } from '@grunt/core/ports/store.js';
 import { openVerified } from '@grunt/tools/fs-tools.js';
@@ -104,14 +104,14 @@ export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => b
       const policy = sandboxPolicy(`${url.origin}/view/${id}/`);
       const send = (body: string | Buffer, mime: string): Response =>
         c.body(typeof body === 'string' ? body : new Uint8Array(body), 200, { ...ALWAYS, 'Content-Type': mime, 'Content-Disposition': 'inline', 'Content-Security-Policy': policy });
-      if (artifact.kind === 'mermaid') {
+      if (version.kind === 'mermaid') {
         if (rel === 'diagram.html') return send(mermaidPage(version.content), 'text/html; charset=utf-8');
         if (rel === 'mermaid.min.js') return send(await mermaidScript(), 'text/javascript; charset=utf-8');
         return refuse(c, 404, 'Not found.');
       }
-      if (rel !== artifactFileName(artifact)) return refuse(c, 404, 'Not found.');
-      if (artifact.kind === 'html') return send(version.content, 'text/html; charset=utf-8');
-      if (artifact.kind === 'svg') return send(version.content, 'image/svg+xml');
+      if (rel !== versionFileName(artifact, version)) return refuse(c, 404, 'Not found.');
+      if (version.kind === 'html') return send(version.content, 'text/html; charset=utf-8');
+      if (version.kind === 'svg') return send(version.content, 'image/svg+xml');
       return refuse(c, 415, "Can't preview this.");
     }
 

@@ -80,7 +80,8 @@ export interface ArtifactDetail {
   artifact: Artifact;
   fileName: string;
   currentVersionId: string | null;
-  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean }[];
+  /** Each version is its own kind (a note made into a page), with its own file name. */
+  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean; kind: ArtifactKind; language: string | null; fileName: string }[];
 }
 export interface ViewText { path: string; content: string; truncated: boolean; size: number }
 export interface ViewRoot { path: string; label: string; access: FolderAccess; workspace: boolean }

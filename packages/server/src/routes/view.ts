@@ -1,7 +1,7 @@
 import { basename, join } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { artifactFileName } from '@grunt/core/domain/artifacts.js';
+import { versionFileName } from '@grunt/core/domain/artifacts.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import { sniffBinary } from '@grunt/tools/fs-tools.js';
 import type { Container } from '../container.js';
@@ -46,11 +46,12 @@ export function viewRoutes(container: Container, links: ViewLinks): Hono {
       const version = typeof body.artifactVersionId === 'string' ? container.store.artifacts.getVersion(body.artifactVersionId) : null;
       const artifact = version ? container.store.artifacts.get(version.artifactId) : null;
       if (!version || !artifact || artifact.chatId !== chat.id) throw new HTTPException(404, { message: 'Artifact version not found in this chat.' });
-      const linked = artifact.kind === 'html' || artifact.kind === 'svg' || artifact.kind === 'mermaid';
-      const name = artifact.kind === 'mermaid' ? 'diagram.html' : artifactFileName(artifact);
-      const kinds: Record<typeof artifact.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text' };
+      // Each version is its own kind (a note made into a page).
+      const linked = version.kind === 'html' || version.kind === 'svg' || version.kind === 'mermaid';
+      const name = version.kind === 'mermaid' ? 'diagram.html' : versionFileName(artifact, version);
+      const kinds: Record<typeof version.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text' };
       const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id })}/${encodeURIComponent(name)}` : null;
-      return c.json({ path: '', name, kind: kinds[artifact.kind], url, size: Buffer.byteLength(version.content, 'utf8') });
+      return c.json({ path: '', name, kind: kinds[version.kind], url, size: Buffer.byteLength(version.content, 'utf8') });
     }
     const path = pathOf(body.path);
     const { root, target } = locateForView(chatRoots(container, chat), path);
