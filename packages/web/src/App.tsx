@@ -140,7 +140,7 @@ function MainApp(): JSX.Element {
           {activeChat && <span className="text-sm text-[var(--text-muted)]">{activeChat.title}</span>}
         </div>
         <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
-          {activeChatId && <span data-testid="stream-status">{STREAM_STATUS_LABEL[streamStatus] ?? streamStatus}</span>}
+          {activeChat && <span data-testid="stream-status">{STREAM_STATUS_LABEL[streamStatus] ?? streamStatus}</span>}
           <button type="button" onClick={() => setSettingsViewOpen(true)} className="rounded border border-[var(--border)] px-2 py-1">
             Settings
           </button>

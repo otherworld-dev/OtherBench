@@ -6,6 +6,7 @@ import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { TAB_DRAG_MIME, TabBar } from './TabBar.js';
+import { viewTabId } from '../viewer/items.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return {
@@ -109,5 +110,12 @@ describe('TabBar (#824)', () => {
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Chat b' })).toHaveFocus());
     await user.keyboard('{Delete}');
     expect(useGruntStore.getState().paneState.tabs).toEqual(['a', 'c']);
+  });
+
+  it("shows a viewer tab by its file's name", () => {
+    const view = viewTabId('chat-1', { kind: 'file', path: 'C:\\ws\\notes.md' });
+    useGruntStore.setState({ paneState: { ...useGruntStore.getState().paneState, tabs: [view] } });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByRole('tab', { name: 'notes.md' })).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
+import { itemName, parseViewTab } from '../viewer/items.js';
 
 /** `dataTransfer` type a dragged tab carries; its value is the chat id. */
 export const TAB_DRAG_MIME = 'application/x-grunt-tab';
@@ -52,7 +53,16 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
 
-  const tabs = useMemo(() => paneState.tabs.map((id) => chats.find((c) => c.id === id)).filter((c): c is NonNullable<typeof c> => !!c), [paneState.tabs, chats]);
+  const tabs = useMemo(
+    () =>
+      paneState.tabs.flatMap((id) => {
+        const view = parseViewTab(id);
+        if (view) return [{ id, title: itemName(view.item) }];
+        const chat = chats.find((c) => c.id === id);
+        return chat ? [{ id: chat.id, title: chat.title }] : [];
+      }),
+    [paneState.tabs, chats]
+  );
   const waiting = useMemo(() => new Set(Object.values(pending).map((p) => p.chatId)), [pending]);
   const working = useMemo(() => new Set(Object.values(running)), [running]);
   const multi = !narrow && paneState.panes.length > 1;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { viewTabId } from '../viewer/items.js';
 import {
   closeTab,
   DEFAULT_PANE_STATE,
@@ -112,5 +113,12 @@ describe('pane state (#824)', () => {
       window.localStorage.setItem(PANE_STATE_STORAGE_KEY, '{not json');
       expect(loadPaneState()).toEqual(DEFAULT_PANE_STATE);
     });
+  });
+
+  it("forgets a deleted chat's viewer tabs along with the chat", () => {
+    const view = viewTabId('c1', { kind: 'file', path: 'a.md' });
+    const other = viewTabId('c2', { kind: 'file', path: 'b.md' });
+    const state = { ...DEFAULT_PANE_STATE, tabs: ['c1', view, other], panes: [view] };
+    expect(forgetChat(state, 'c1')).toMatchObject({ tabs: [other], panes: [null] });
   });
 });

@@ -6,6 +6,8 @@ import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { Splitter } from './Splitter.js';
 import { TAB_DRAG_MIME } from './TabBar.js';
 import { Thread } from './Thread.js';
+import { isViewTab, itemName, parseViewTab } from '../viewer/items.js';
+import { ViewerTab } from '../viewer/ViewerTab.js';
 
 interface PaneProps {
   index: number;
@@ -18,12 +20,14 @@ interface PaneProps {
 
 /** One pane: its own live connection to its chat, and a full thread with its own message box. */
 function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Element {
-  const chat = useGruntStore((s) => (chatId ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
+  // A viewer item popped out into its own tab (Deck #826) holds the pane instead of a chat.
+  const view = isViewTab(chatId) ? parseViewTab(chatId) : null;
+  const chat = useGruntStore((s) => (chatId && !isViewTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useGruntStore((s) => s.focusPane);
   const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
   const toggleMaximised = useGruntStore((s) => s.toggleMaximised);
   const [dropActive, setDropActive] = useState(false);
-  useChatSync(chatId, focused);
+  useChatSync(isViewTab(chatId) ? null : chatId, focused);
 
   const carriesChat = (e: DragEvent): boolean => {
     const types = Array.from(e.dataTransfer.types);
@@ -65,7 +69,7 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
           className={`flex items-center gap-1.5 border-b border-[var(--border)] px-3 py-1 text-xs ${focused ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
         >
           <span className="tabular-nums text-[var(--text-faint)]">{index + 1}</span>
-          <span className="min-w-0 flex-1 truncate">{chat?.title ?? 'Empty -- pick a chat or drag one here'}</span>
+          <span className="min-w-0 flex-1 truncate">{view ? itemName(view.item) : (chat?.title ?? 'Empty -- pick a chat or drag one here')}</span>
           <button
             type="button"
             aria-label={maximised ? 'Restore pane' : 'Maximise pane'}
@@ -81,7 +85,7 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
           </button>
         </div>
       )}
-      <Thread chat={chat} />
+      {isViewTab(chatId) ? <ViewerTab tabId={chatId} /> : <Thread chat={chat} />}
     </div>
   );
 }
