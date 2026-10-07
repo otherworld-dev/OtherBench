@@ -115,6 +115,21 @@ describe('GET /view/<id>/', () => {
     expect(await res.text()).not.toContain('theirs');
   });
 
+  it("stops serving a link once its folder is no longer the chat's, or the chat is gone", async () => {
+    writeFileSync(join(outside, 'ref.png'), Buffer.from([0x89]));
+    writeFileSync(join(ws, 'a.png'), Buffer.from([0x89]));
+    container.store.chats.update('c1', { folders: [{ workspace: { kind: 'machine', nodeId: 'node-self', root: outside }, access: 'read' }] });
+    const app = createApp(container);
+    const ref = await linkFor(app, join(outside, 'ref.png'));
+    const own = await linkFor(app, 'a.png');
+    expect((await app.request(ref)).status).toBe(200);
+    container.store.chats.update('c1', { folders: [] });
+    expect((await app.request(ref)).status).toBe(404);
+    expect((await app.request(own)).status).toBe(200);
+    container.store.chats.delete('c1');
+    expect((await app.request(own)).status).toBe(404);
+  });
+
   it('says a link has expired after 10 minutes', async () => {
     writeFileSync(join(ws, 'a.png'), Buffer.from([0x89]));
     let now = 0;
@@ -142,7 +157,8 @@ describe('GET /view/<id>/', () => {
 describe('relativeOf and parseRange', () => {
   it('decodes segment by segment, refusing encoded separators, dot segments and NUL', () => {
     expect(relativeOf('/view/abc/a%20b/c.png', 'abc')).toBe('a b/c.png');
-    for (const bad of ['/view/abc/', '/view/abc/..', '/view/abc/a%2Fb', '/view/abc/a%5Cb', '/view/abc/a%00', '/view/abc/%E0%A4%A', '/view/xyz/a']) {
+    // Windows reads `a.txt:x.js` as a hidden stream of a.txt and drops a trailing dot or space: a different file from the name's.
+    for (const bad of ['/view/abc/', '/view/abc/..', '/view/abc/a%2Fb', '/view/abc/a%5Cb', '/view/abc/a%00', '/view/abc/%E0%A4%A', '/view/xyz/a', '/view/abc/a.txt:x.js', '/view/abc/a.html.', '/view/abc/a.html%20', '/view/abc/sub./a.png']) {
       expect(relativeOf(bad, 'abc')).toBeNull();
     }
   });

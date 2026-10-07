@@ -94,6 +94,25 @@ describe('POST /api/view/links', () => {
   });
 });
 
+describe('POST /api/view/links from another site', () => {
+  it('needs a JSON body, so a cross-site form post makes no link', async () => {
+    writeFileSync(join(ws, 'a.png'), Buffer.from([0x89]));
+    const res = await app().request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ chatId: 'c1', path: 'a.png' }) });
+    expect(res.status).toBe(415);
+  });
+
+  it.runIf(process.platform === 'win32')('refuses Windows paths that name a different file from what they say', async () => {
+    writeFileSync(join(ws, 'notes.txt'), 'hi');
+    mkdirSync(join(ws, 'sub'));
+    writeFileSync(join(ws, 'sub', 'notes.txt'), 'hi');
+    // A trailing space at the very end is trimmed as input, so it names the real file; inside the path it doesn't.
+    for (const path of ['notes.txt:evil.html', 'notes.txt.', join(ws, 'sub ', 'notes.txt'), join(ws, 'sub.', 'notes.txt'), join(ws, 'notes.txt::$DATA')]) {
+      const res = await open(path);
+      expect(res.status, path).toBe(404);
+    }
+  });
+});
+
 describe('GET /api/view/text', () => {
   const text = (path: string) => app().request(`/api/view/text?chatId=c1&path=${encodeURIComponent(path)}`);
 

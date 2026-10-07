@@ -31,8 +31,27 @@ export function chatRoots(container: Container, chat: Chat): ChatRoots {
   return { workspaceRoot, folders, elsewhere };
 }
 
+/**
+ * Whether Windows would open a different file from the one `path` names: a
+ * `:` after the drive (a hidden stream, `notes.txt:x.html`) or a segment
+ * ending in `.` or a space, which Windows drops (`notes.txt.`).
+ */
+export function ambiguousOnWindows(path: string): boolean {
+  const rest = /^[A-Za-z]:/.test(path) ? path.slice(2) : path;
+  return rest.includes(':') || rest.split(/[\\/]/).some((s) => s !== '.' && s !== '..' && /[. ]$/.test(s));
+}
+
+/** Whether a viewer link's folder is still one of its chat's folders here: removing the folder, or deleting the chat, ends its links. */
+export function linkStillAllowed(container: Container, link: { chatId: string; root: string }): boolean {
+  const chat = container.store.chats.get(link.chatId);
+  if (!chat) return false;
+  const roots = chatRoots(container, chat);
+  return roots.workspaceRoot !== null && [roots.workspaceRoot, ...roots.folders.map((f) => f.root)].includes(link.root);
+}
+
 /** Which of the chat's folders `path` is in, and the file resolved; a relative path means the workspace. Throws the panel's message. */
 export function locateForView(roots: ChatRoots, path: string): { root: string; target: string } {
+  if (process.platform === 'win32' && ambiguousOnWindows(path)) throw new HTTPException(404, { message: `File not found: ${path}` });
   if (roots.workspaceRoot === null) {
     throw new HTTPException(404, { message: roots.elsewhere ? `This file is on ${roots.elsewhere}.` : 'This chat has no workspace folder on this machine.' });
   }

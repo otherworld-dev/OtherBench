@@ -33,6 +33,10 @@ export function viewRoutes(container: Container, links: ViewLinks): Hono {
   const app = new Hono();
 
   app.post('/links', async (c) => {
+    // JSON only: a cross-site form can post text/plain without asking first, but not this.
+    if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
+      throw new HTTPException(415, { message: 'Send the request as JSON.' });
+    }
     const body = (await c.req.json().catch(() => ({}))) as { chatId?: unknown; path?: unknown };
     const chat = chatOf(container, body.chatId);
     const path = pathOf(body.path);

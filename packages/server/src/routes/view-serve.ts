@@ -5,7 +5,7 @@ import { Hono, type Context } from 'hono';
 import { containPath } from '@grunt/core/domain/paths.js';
 import { openVerified } from '@grunt/tools/fs-tools.js';
 import { servedType } from '../view/kinds.js';
-import type { ViewLinks } from '../view/links.js';
+import type { ViewLink, ViewLinks } from '../view/links.js';
 
 /** Sent with every /view response. */
 const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' };
@@ -26,7 +26,9 @@ function refuse(c: Context, status: 404 | 415, text: string): Response {
 
 /**
  * The path after `/<id>/` (wherever the routes are mounted), decoded segment
- * by segment; null for none, an encoded separator, a dot segment or NUL.
+ * by segment; null for none, an encoded separator, a dot segment or NUL, and
+ * for a segment Windows would read as a different file from its name: one
+ * with `:` (a hidden stream) or ending in `.` or a space (dropped).
  */
 export function relativeOf(pathname: string, id: string): string | null {
   const marker = `/${id}/`;
@@ -40,7 +42,7 @@ export function relativeOf(pathname: string, id: string): string | null {
     } catch {
       return null;
     }
-    if (segment === '' || segment === '.' || segment === '..' || /[\\/\0]/.test(segment)) return null;
+    if (segment === '' || /[\\/\0:]/.test(segment) || /[. ]$/.test(segment)) return null;
     out.push(segment);
   }
   return out.length > 0 ? out.join('/') : null;
@@ -72,15 +74,18 @@ export function parseRange(header: string | undefined, size: number): { start: n
  * `GET /view/<id>/…` (Deck #826): what a viewer link serves, with no token --
  * the id is the capability. Each request checks containment again and opens
  * the file the way fs-tools does, so a file swapped after the link was made
- * is refused. The type is always from view/kinds.ts. Not on the peer listener.
+ * is refused, and `allowed` is asked whether the link still applies (its
+ * folder still the chat's), so removing a folder or deleting the chat ends
+ * its links at once. The type is always from view/kinds.ts. Not on the peer
+ * listener.
  */
-export function viewServeRoutes(links: ViewLinks): Hono {
+export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => boolean = () => true): Hono {
   const app = new Hono();
 
   app.get('/:id/*', async (c) => {
     const id = c.req.param('id');
     const link = links.get(id);
-    if (!link) return refuse(c, 404, 'This link has expired. Open the file again.');
+    if (!link || !allowed(link)) return refuse(c, 404, 'This link has expired. Open the file again.');
     const url = new URL(c.req.url);
     const rel = relativeOf(url.pathname, id);
     if (rel === null) return refuse(c, 404, 'Not found.');
