@@ -517,6 +517,27 @@ system prompt names them. Shell commands are not path-contained, so read-only
 binds file tools only; shell approval is still the control. A folder missing
 on the machine running the reply is left out of that turn.
 
+**The viewer reads chat folders the same way the file tools do** (Deck #826).
+Every path goes through `containPathIn` and fs-tools' `openVerified` /
+`readdirVerified`, on this machine only; on Windows a path with `:` after the
+drive (a hidden stream) or a segment ending in `.` or a space is refused,
+since Windows would open a different file from the one named. Text comes
+through the authed API (first 2 MB, binary refused). What the browser loads
+itself comes through `/view/<id>/<name>` links: 128 random bits, 10 minutes,
+server memory only, no token (the id is the capability), containment checked
+again on every request, and the link dies as soon as its folder stops being
+the chat's or the chat is deleted. Making a link needs a JSON request, so a
+cross-site form can't. The served type is from a fixed list with `nosniff`;
+everything but PDF gets the sandbox CSP (opaque origin, network https/wss
+only), and HTML iframes are `sandbox="allow-scripts allow-forms"`. PDF is the
+exception (Chromium won't show one sandboxed): it can't script the page, but
+it isn't sandboxed either. Websites open in a `site-<n>` window that no
+capability matches. Every app command needs an `allow-<command>` permission
+(`build.rs` declares the app manifest), granted only to the main and quick
+windows, so a site window can call none, even one showing a page Tauri counts
+as local (the dev server's). Show in folder reveals and never opens. None of
+it is on the peer listener.
+
 **Shell grant defaults — the shipped UI follows the controller ruling.**
 An `always`-scope shell grant using `commandPrefix` (matching a command *and
 any arguments after it*) is, for most real programs, equivalent to an

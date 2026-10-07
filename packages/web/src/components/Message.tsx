@@ -5,6 +5,8 @@ import { api } from '../state/api.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { MarkdownBody } from './MarkdownBody.js';
+import { toolPath } from '../viewer/paths.js';
+import { useViewer } from '../viewer/ViewerContext.js';
 
 function NoticeBlock({ text }: { text: string }): JSX.Element {
   return (
@@ -52,9 +54,16 @@ function ReasoningBlock({ text }: { text: string }): JSX.Element {
 }
 
 function ToolCallBlock({ name, args }: { name: string; args: unknown }): JSX.Element {
+  const viewer = useViewer();
+  const path = viewer ? toolPath(name, args) : null;
   return (
     <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <span className="font-medium">🔧 {name}</span>
+      {path && viewer && (
+        <button type="button" aria-label={`Open ${path}`} title="Open in the viewer" onClick={() => viewer.openPath(path)} className="ml-2 underline decoration-dotted">
+          Open
+        </button>
+      )}
       <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">{JSON.stringify(args, null, 2)}</pre>
     </div>
   );

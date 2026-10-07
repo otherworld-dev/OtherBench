@@ -12,6 +12,9 @@ const isFocused = vi.fn();
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ isFocused }) }));
 const openDialog = vi.fn();
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: openDialog }));
+const openUrl = vi.fn();
+const revealItemInDir = vi.fn();
+vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl, revealItemInDir }));
 
 import {
   autostart,
@@ -23,7 +26,10 @@ import {
   launchArgs,
   onDesktopEvent,
   openChatInMain,
+  openInBrowser,
+  openSite,
   pickFolder,
+  revealPath,
   setHotkey,
   setTrayStatus,
   showNotification,
@@ -165,5 +171,24 @@ describe('desktop bridge', () => {
 
     expect(disable).toHaveBeenCalledTimes(1);
     expect(enable).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens websites in an isolated window in the desktop app and a no-opener tab in a browser, and reveals but never opens files', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    await openSite('https://example.com');
+    await openInBrowser('https://example.com/b');
+    expect(open).toHaveBeenNthCalledWith(1, 'https://example.com', '_blank', 'noopener,noreferrer');
+    expect(open).toHaveBeenNthCalledWith(2, 'https://example.com/b', '_blank', 'noopener,noreferrer');
+    await expect(revealPath('C:\\a.md')).resolves.toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+
+    enterDesktop();
+    await openSite('https://example.com');
+    expect(invoke).toHaveBeenCalledWith('open_site', { url: 'https://example.com' });
+    await openInBrowser('https://example.com/b');
+    expect(openUrl).toHaveBeenCalledWith('https://example.com/b');
+    await expect(revealPath('C:\\a.md')).resolves.toBe(true);
+    expect(revealItemInDir).toHaveBeenCalledWith('C:\\a.md');
+    open.mockRestore();
   });
 });

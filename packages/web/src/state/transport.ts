@@ -27,6 +27,11 @@ export function apiUrl(path: string): string {
   return `${config.baseUrl}/api${path}`;
 }
 
+/** A URL on the Grunt server outside `/api` (the viewer's `/view/` links, Deck #826). */
+export function serverUrl(path: string): string {
+  return `${config.baseUrl}${path}`;
+}
+
 export function hasToken(): boolean {
   return config.token !== null;
 }

@@ -8,6 +8,8 @@
  * device.
  */
 
+import { parseViewTab } from '../viewer/items.js';
+
 export type Layout = 'single' | 'columns-2' | 'rows-2' | 'columns-3' | 'main-right-2' | 'grid-4';
 
 export const LAYOUTS: readonly { id: Layout; label: string; panes: number }[] = [
@@ -148,16 +150,25 @@ export function openTab(state: PaneState, chatId: string): PaneState {
   return showChat({ ...state, tabs }, chatId);
 }
 
-/** Removes the tab. Any pane showing the chat keeps showing it. */
+/**
+ * Removes the tab. Any pane showing a chat keeps showing it. A viewer tab
+ * (Deck #826) has nowhere else to live, so its pane goes back to the file's
+ * chat, or empty when another pane already shows that chat.
+ */
 export function closeTab(state: PaneState, chatId: string): PaneState {
   if (!state.tabs.includes(chatId)) return state;
-  return { ...state, tabs: state.tabs.filter((id) => id !== chatId) };
+  const tabs = state.tabs.filter((id) => id !== chatId);
+  const view = parseViewTab(chatId);
+  if (!view || !state.panes.includes(chatId)) return { ...state, tabs };
+  const instead = state.panes.includes(view.chatId) ? null : view.chatId;
+  return { ...state, tabs, panes: state.panes.map((id) => (id === chatId ? instead : id)) };
 }
 
-/** A deleted chat leaves the tabs and every pane. */
+/** A deleted chat leaves the tabs and every pane, with its viewer tabs. */
 export function forgetChat(state: PaneState, chatId: string): PaneState {
-  if (!state.tabs.includes(chatId) && !state.panes.includes(chatId)) return state;
-  return { ...state, tabs: state.tabs.filter((id) => id !== chatId), panes: state.panes.map((id) => (id === chatId ? null : id)) };
+  const gone = (id: string | null): boolean => id === chatId || (id !== null && parseViewTab(id)?.chatId === chatId);
+  if (!state.tabs.some(gone) && !state.panes.some(gone)) return state;
+  return { ...state, tabs: state.tabs.filter((id) => !gone(id)), panes: state.panes.map((id) => (gone(id) ? null : id)) };
 }
 
 /** Moves the tab `chatId` so it sits before `beforeId` (null = the end). */

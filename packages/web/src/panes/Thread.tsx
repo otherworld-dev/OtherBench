@@ -11,7 +11,11 @@ import { VariantTabs } from '../components/VariantTabs.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
+import { DEFAULT_VIEWER, useViewerStore, viewerFor } from '../viewer/state.js';
+import { ViewerContext, viewerActionsFor } from '../viewer/ViewerContext.js';
+import { ViewerPanel } from '../viewer/ViewerPanel.js';
 import { ConversationStrip } from './ConversationStrip.js';
+import { Splitter } from './Splitter.js';
 
 /** How close (px) to the bottom still counts as "following" the thread. */
 const NEAR_BOTTOM_PX = 80;
@@ -50,6 +54,11 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
   const registerMessage = useGruntStore((s) => s.registerMessage);
   const profiles = useGruntStore((s) => s.profiles);
   const resetMessageForRetry = useGruntStore((s) => s.resetMessageForRetry);
+  const viewer = useViewerStore((s) => viewerFor(s.viewers, chat?.id ?? ''));
+  const setViewerOpen = useViewerStore((s) => s.setOpen);
+  const setViewerShare = useViewerStore((s) => s.setShare);
+  const [draftShare, setDraftShare] = useState<number | null>(null);
+  const viewerActions = useMemo(() => (chat ? viewerActionsFor(chat.id) : null), [chat?.id]);
   const [switchError, setSwitchError] = useState<string | null>(null);
   // Which turn's tab strip has been manually reopened from its "⤺ N other
   // variants" chip, identified by the shared `parentId` of its sibling set
@@ -298,127 +307,162 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     }
   }
 
+  const share = draftShare ?? viewer.share;
   return (
-    // A section, not <main>: the pane grid around it is the page's one main region, and may hold several threads.
-    <section aria-label={chat.title} className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
-      {switchError && (
-        <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-4 py-2 text-sm text-[var(--danger)]">
-          <span>{switchError}</span>
-          <button type="button" onClick={() => setSwitchError(null)} className="shrink-0 rounded border border-[var(--danger)] px-2 py-0.5 text-xs">
-            Dismiss
-          </button>
-        </div>
-      )}
-      <ConversationStrip chat={chat} />
-      <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
-          <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
-            {displayPath.length === 0 ? (
-              <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
-            ) : (
-              displayPath.map((m) => {
-                let siblings = [m];
-                try {
-                  siblings = siblingsOf(chatMessages, m.id);
-                } catch {
-                  // m not found in chatMessages (shouldn't happen -- it came from the same set) -- fall back to "no siblings".
-                }
-                const compare = isCompareSet(siblings);
-                const isReopened = compare && siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
-                if (isReopened) {
-                  return (
-                    <VariantTabs
-                      key={`turn-${m.parentId}`}
-                      variants={siblings}
-                      extras={extras}
-                      models={models}
-                      keptId={m.id}
-                      onKeep={(id) => void keepVariant(id)}
-                      onRetry={(v) => void retryVariant(v)}
-                      retryingIds={retryingIds}
-                      onClose={() => setReopenedParentId(null)}
-                      onResolveApproval={resolveApproval}
-                    />
-                  );
-                }
-                return (
-                  <Message
-                    key={m.id}
-                    message={m}
-                    otherVariantsCount={compare ? siblings.length - 1 : 0}
-                    onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
-                    pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
-                    onResolveApproval={resolveApproval}
-                    branch={
-                      !compare && siblings.length > 1
-                        ? {
-                            index: siblings.findIndex((x) => x.id === m.id),
-                            total: siblings.length,
-                            onSelect: (delta) => {
-                              const target = siblings[siblings.findIndex((x) => x.id === m.id) + delta];
-                              if (target) selectBranch(target, siblings);
-                            },
-                            disabled: chatStreaming || editBusy,
-                          }
-                        : undefined
+    <ViewerContext.Provider value={viewerActions}>
+      <div className="flex h-full min-h-0 w-full min-w-0 flex-1">
+        {/* A section, not <main>: the pane grid around it is the page's one main region, and may hold several threads. */}
+        <section aria-label={chat.title} style={{ flex: viewer.open ? `${1 - share} 1 0` : '1 1 0' }} className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+          {switchError && (
+            <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--danger)] bg-[var(--bg-raised)] px-4 py-2 text-sm text-[var(--danger)]">
+              <span>{switchError}</span>
+              <button type="button" onClick={() => setSwitchError(null)} className="shrink-0 rounded border border-[var(--danger)] px-2 py-0.5 text-xs">
+                Dismiss
+              </button>
+            </div>
+          )}
+          <ConversationStrip chat={chat} />
+          <div className="relative min-h-0 flex-1">
+            <button
+              type="button"
+              aria-pressed={viewer.open}
+              title={viewer.open ? 'Hide the viewer' : 'Show the viewer: files, images and pages from this chat'}
+              onClick={() => setViewerOpen(chat.id, !viewer.open)}
+              className="absolute right-3 top-2 z-10 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-0.5 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+            >
+              Viewer
+            </button>
+            <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
+              <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
+                {displayPath.length === 0 ? (
+                  <p className="text-sm text-[var(--text-faint)]">No messages yet -- say something below.</p>
+                ) : (
+                  displayPath.map((m) => {
+                    let siblings = [m];
+                    try {
+                      siblings = siblingsOf(chatMessages, m.id);
+                    } catch {
+                      // m not found in chatMessages (shouldn't happen -- it came from the same set) -- fall back to "no siblings".
                     }
-                    actionsDisabled={chatStreaming || editBusy}
-                    onRegenerate={m.role === 'assistant' && m.parentId !== null && !compare ? () => void regenerate(m) : undefined}
-                    onEdit={m.role === 'user' ? () => setEditingId(m.id) : undefined}
-                    editing={
-                      editingId === m.id
-                        ? {
-                            onSave: (parts) => void saveEdit(m, parts),
-                            onCancel: () => setEditingId(null),
-                            busy: editBusy || chatStreaming,
-                            profileName: editProfile(m)?.name,
-                            compareNote: isCompareSet(childrenOf(chatMessages, m.id)),
-                          }
-                        : undefined
+                    const compare = isCompareSet(siblings);
+                    const isReopened = compare && siblings.length > 1 && m.parentId !== null && m.parentId === reopenedParentId;
+                    if (isReopened) {
+                      return (
+                        <VariantTabs
+                          key={`turn-${m.parentId}`}
+                          variants={siblings}
+                          extras={extras}
+                          models={models}
+                          keptId={m.id}
+                          onKeep={(id) => void keepVariant(id)}
+                          onRetry={(v) => void retryVariant(v)}
+                          retryingIds={retryingIds}
+                          onClose={() => setReopenedParentId(null)}
+                          onResolveApproval={resolveApproval}
+                        />
+                      );
                     }
-                  />
-                );
-              })
-            )}
+                    return (
+                      <Message
+                        key={m.id}
+                        message={m}
+                        otherVariantsCount={compare ? siblings.length - 1 : 0}
+                        onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
+                        pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
+                        onResolveApproval={resolveApproval}
+                        branch={
+                          !compare && siblings.length > 1
+                            ? {
+                                index: siblings.findIndex((x) => x.id === m.id),
+                                total: siblings.length,
+                                onSelect: (delta) => {
+                                  const target = siblings[siblings.findIndex((x) => x.id === m.id) + delta];
+                                  if (target) selectBranch(target, siblings);
+                                },
+                                disabled: chatStreaming || editBusy,
+                              }
+                            : undefined
+                        }
+                        actionsDisabled={chatStreaming || editBusy}
+                        onRegenerate={m.role === 'assistant' && m.parentId !== null && !compare ? () => void regenerate(m) : undefined}
+                        onEdit={m.role === 'user' ? () => setEditingId(m.id) : undefined}
+                        editing={
+                          editingId === m.id
+                            ? {
+                                onSave: (parts) => void saveEdit(m, parts),
+                                onCancel: () => setEditingId(null),
+                                busy: editBusy || chatStreaming,
+                                profileName: editProfile(m)?.name,
+                                compareNote: isCompareSet(childrenOf(chatMessages, m.id)),
+                              }
+                            : undefined
+                        }
+                      />
+                    );
+                  })
+                )}
 
-            {openCompare && (
-              <VariantTabs
-                key={`turn-open-${tailId}`}
-                variants={openVariants}
-                extras={extras}
-                models={models}
-                keptId={null}
-                onKeep={(id) => void keepVariant(id)}
-                onRetry={(v) => void retryVariant(v)}
-                retryingIds={retryingIds}
-                onResolveApproval={resolveApproval}
-                onActiveChange={setShownVariantId}
-              />
+                {openCompare && (
+                  <VariantTabs
+                    key={`turn-open-${tailId}`}
+                    variants={openVariants}
+                    extras={extras}
+                    models={models}
+                    keptId={null}
+                    onKeep={(id) => void keepVariant(id)}
+                    onRetry={(v) => void retryVariant(v)}
+                    retryingIds={retryingIds}
+                    onResolveApproval={resolveApproval}
+                    onActiveChange={setShownVariantId}
+                  />
+                )}
+              </div>
+            </div>
+            {showJump && (
+              <button
+                type="button"
+                onClick={jumpToLatest}
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
+              >
+                <span aria-hidden="true">↓</span> Jump to latest
+              </button>
             )}
           </div>
-        </div>
-        {showJump && (
-          <button
-            type="button"
-            onClick={jumpToLatest}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-1 text-xs text-[var(--text-muted)] shadow hover:text-[var(--text)]"
-          >
-            <span aria-hidden="true">↓</span> Jump to latest
-          </button>
+          <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
+            {announcement}
+          </div>
+          <UnreachableBanner chat={chat} />
+          <WorkspacePrompt chat={chat} />
+          <Composer
+            key={chat.id}
+            chat={chat}
+            parentId={sendUnder?.id ?? tailId}
+            continuesFrom={sendUnder ? (sendUnder.producedBy?.profileName ?? 'the reply shown') : null}
+            onPrimaryProfileChange={setComposerProfileId}
+          />
+        </section>
+        {viewer.open && (
+          <>
+            <Splitter
+              direction="row"
+              sizes={[1 - share, share]}
+              index={0}
+              onResize={(sizes) => setDraftShare(sizes[1]! / (sizes[0]! + sizes[1]!))}
+              onCommit={(sizes) => {
+                setDraftShare(null);
+                setViewerShare(chat.id, sizes[1]! / (sizes[0]! + sizes[1]!));
+              }}
+              onReset={() => {
+                setDraftShare(null);
+                setViewerShare(chat.id, DEFAULT_VIEWER.share);
+              }}
+            />
+            <div style={{ flex: `${share} 1 0` }} className="min-h-0 min-w-0">
+              <ViewerPanel chat={chat} />
+            </div>
+          </>
         )}
       </div>
-      <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </div>
-      <UnreachableBanner chat={chat} />
-      <WorkspacePrompt chat={chat} />
-      <Composer
-        key={chat.id}
-        chat={chat}
-        parentId={sendUnder?.id ?? tailId}
-        continuesFrom={sendUnder ? (sendUnder.producedBy?.profileName ?? 'the reply shown') : null}
-        onPrimaryProfileChange={setComposerProfileId}
-      />
-    </section>
+    </ViewerContext.Provider>
   );
 }

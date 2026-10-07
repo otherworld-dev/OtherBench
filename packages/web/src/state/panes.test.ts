@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { viewTabId } from '../viewer/items.js';
+import { useGruntStore } from './store.js';
 import {
   closeTab,
   DEFAULT_PANE_STATE,
@@ -112,5 +114,31 @@ describe('pane state (#824)', () => {
       window.localStorage.setItem(PANE_STATE_STORAGE_KEY, '{not json');
       expect(loadPaneState()).toEqual(DEFAULT_PANE_STATE);
     });
+  });
+
+  it("forgets a deleted chat's viewer tabs along with the chat", () => {
+    const view = viewTabId('c1', { kind: 'file', path: 'a.md' });
+    const other = viewTabId('c2', { kind: 'file', path: 'b.md' });
+    const state = { ...DEFAULT_PANE_STATE, tabs: ['c1', view, other], panes: [view] };
+    expect(forgetChat(state, 'c1')).toMatchObject({ tabs: [other], panes: [null] });
+  });
+
+  it("closing a viewer tab takes it out of its pane too: back to the file's chat, or empty when another pane shows that chat", () => {
+    const view = viewTabId('c1', { kind: 'file', path: 'doc.pdf' });
+    const single = { ...DEFAULT_PANE_STATE, tabs: ['c1', view], panes: [view] };
+    expect(closeTab(single, view)).toMatchObject({ tabs: ['c1'], panes: ['c1'] });
+    const split = { ...DEFAULT_PANE_STATE, layout: 'columns-2' as const, tabs: ['c1', view], panes: ['c1', view], focusedPane: 1 };
+    expect(closeTab(split, view)).toMatchObject({ tabs: ['c1'], panes: ['c1', null] });
+  });
+
+  it('closing a viewer tab in the store shows its chat again', () => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    const view = viewTabId('c1', { kind: 'file', path: 'doc.pdf' });
+    const store = useGruntStore.getState();
+    store.openTab('c1');
+    store.openTab(view);
+    expect(useGruntStore.getState().activeChatId).toBe(view);
+    useGruntStore.getState().closeTab(view);
+    expect(useGruntStore.getState()).toMatchObject({ activeChatId: 'c1', paneState: { tabs: ['c1'], panes: ['c1'] } });
   });
 });

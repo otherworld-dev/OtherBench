@@ -20,7 +20,11 @@ import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
 import { claudeRoutes } from './routes/claude.js';
+import { viewRoutes } from './routes/view.js';
+import { viewServeRoutes } from './routes/view-serve.js';
 import { mountStatic } from './static.js';
+import { ViewLinks } from './view/links.js';
+import { linkStillAllowed } from './view/roots.js';
 
 export interface AppOptions {
   /**
@@ -65,6 +69,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
 
   app.route('/api', healthRoutes());
 
+  // One store of viewer links per server (Deck #826): the authed route makes them, the open /view route serves them.
+  const viewLinks = new ViewLinks();
+
   const authed = new Hono();
   if (options.token) {
     const token = options.token;
@@ -104,6 +111,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', searchRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
+  authed.route('/view', viewRoutes(container, viewLinks));
   authed.route('/events', eventsRoutes(container));
   authed.route('/fs', fsRoutes());
   // toolsRoutes, like turnsRoutes, defines full paths under several
@@ -120,6 +128,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // of those own /chats/:id/attachments or /attachments/*.
   authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
+  // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
+  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link)));
 
   if (options.webDistDir) {
     mountStatic(app, { webDistDir: options.webDistDir });

@@ -5,9 +5,13 @@ import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { useGruntStore } from '../state/store.js';
 import { Thread } from './Thread.js';
+import { useViewerStore, viewerFor } from '../viewer/state.js';
+
+vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: () => <aside aria-label="Viewer" /> }));
 
 vi.mock('../state/api.js', () => ({
   api: {
+    claude: { planUsage: vi.fn(async () => ({ usage: null })) },
     turns: {
       setHead: vi.fn(),
       retry: vi.fn(),
@@ -103,6 +107,19 @@ function ThreadForChat({ chatId }: { chatId: string }): ReturnType<typeof Thread
 describe('Thread', () => {
   beforeEach(reset);
   afterEach(cleanup);
+
+  it('shows and hides the viewer beside the chat, remembered per chat', async () => {
+    useViewerStore.setState({ viewers: {} });
+    useGruntStore.setState({ chats: [makeChat()] });
+    render(<ThreadForChat chatId="chat-1" />);
+    const user = userEvent.setup();
+    expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Viewer' }));
+    expect(screen.getByRole('complementary', { name: 'Viewer' })).toBeInTheDocument();
+    expect(viewerFor(useViewerStore.getState().viewers, 'chat-1').open).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Viewer' }));
+    expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+  });
 
   // CRITICAL reproduction (task 19/20 brief): Thread must scope tree
   // computation to the active chat. Before the fix, Thread fed

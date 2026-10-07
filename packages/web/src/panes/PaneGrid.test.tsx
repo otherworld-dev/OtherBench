@@ -13,7 +13,10 @@ vi.mock('./Thread.js', () => ({
   Thread: ({ chat }: { chat: Chat | null }) => <div data-testid="thread">{chat?.title ?? 'no chat'}</div>,
 }));
 
+vi.mock('../viewer/ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
+
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { viewTabId } from '../viewer/items.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { PaneGrid } from './PaneGrid.js';
@@ -138,5 +141,13 @@ describe('PaneGrid (#824)', () => {
     useGruntStore.getState().removeChat('a');
     expect(useGruntStore.getState().paneState.panes).toEqual([null, 'b']);
     expect(useGruntStore.getState().activeChatId).toBeNull();
+  });
+
+  it('shows a viewer tab in its pane, without connecting to a chat', () => {
+    const view = viewTabId('chat-1', { kind: 'file', path: 'a.md' });
+    useGruntStore.setState({ activeChatId: view, paneState: { ...useGruntStore.getState().paneState, tabs: [view], panes: [view], focusedPane: 0 } });
+    render(<PaneGrid narrow={false} />);
+    expect(screen.getByTestId('item-view')).toHaveTextContent('a.md');
+    expect(synced.some((s) => s.chatId === view)).toBe(false);
   });
 });

@@ -4,6 +4,7 @@
 mod hotkey;
 mod notify;
 mod sidecar;
+mod site;
 mod tray;
 
 use std::path::PathBuf;
@@ -86,6 +87,12 @@ fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id
     notify::show(&app, &title, &body, chat_id)
 }
 
+/// Opens a website from a chat in its own window, with no access to Grunt (site.rs).
+#[tauri::command]
+fn open_site(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    site::open(&app, &url)
+}
+
 /// Quick chat's Expand: the main window opens the chat and the quick window goes away.
 #[tauri::command]
 fn open_chat(app: tauri::AppHandle, chat_id: String) {
@@ -165,9 +172,10 @@ fn main() {
         ))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
@@ -221,4 +229,34 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    /// The commands `generate_handler!` registers, read from this file.
+    fn registered() -> Vec<String> {
+        let src = include_str!("main.rs");
+        let start = src.find("generate_handler![").unwrap() + "generate_handler![".len();
+        let end = start + src[start..].find(']').unwrap();
+        src[start..end].split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect()
+    }
+
+    /// Tauri lets any page it counts as local call an app command unless the
+    /// app declares an ACL manifest. With one, a command needs its
+    /// `allow-<command>` permission, which only the main and quick windows
+    /// get, so a website window (site.rs) can call none, even one showing a
+    /// page Tauri counts as local (the dev server's).
+    #[test]
+    fn every_app_command_needs_a_permission_only_the_app_windows_have() {
+        let build = include_str!("../build.rs");
+        let caps: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let granted = caps["permissions"].to_string();
+        let commands = registered();
+        assert!(commands.len() >= 8, "{commands:?}");
+        for command in commands {
+            assert!(build.contains(&format!("\"{command}\"")), "{command} is missing from the app manifest in build.rs");
+            let permission = format!("allow-{}", command.replace('_', "-"));
+            assert!(granted.contains(&format!("\"{permission}\"")), "{permission} is not granted to the app windows");
+        }
+    }
 }
