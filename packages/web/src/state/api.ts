@@ -1,4 +1,4 @@
-import type { AppSettings, AuditEntry, Chat, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
@@ -71,6 +71,17 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
 export type ViewKind = 'image' | 'video' | 'pdf' | 'html' | 'markdown' | 'text' | 'other';
 /** A file opened for the viewer: `url` is a short-lived `/view/` link for what the browser loads itself, else null. */
 export interface ViewOpened { path: string; name: string; kind: ViewKind; url: string | null; size: number }
+
+/** One artifact in a chat's list (Deck #896): its current version on the branch the chat shows. */
+export interface ArtifactSummary { id: string; slug: string; kind: ArtifactKind; language: string | null; title: string; versionId: string; number: number; madeBy: 'model' | 'user' }
+
+/** One artifact with every version, each marked on or off the chat's branch. */
+export interface ArtifactDetail {
+  artifact: Artifact;
+  fileName: string;
+  currentVersionId: string | null;
+  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean }[];
+}
 export interface ViewText { path: string; content: string; truncated: boolean; size: number }
 export interface ViewRoot { path: string; label: string; access: FolderAccess; workspace: boolean }
 export interface ViewEntry { name: string; path: string; type: 'dir' | 'file' }
@@ -393,8 +404,16 @@ export const api = {
     planUsage: (refresh = false) => request<{ usage: PlanUsage | null }>(`/claude/plan-usage${refresh ? '?refresh=1' : ''}`),
   },
 
+  artifacts: {
+    list: (chatId: string) => request<{ artifacts: ArtifactSummary[] }>(`/chats/${chatId}/artifacts`),
+    get: (chatId: string, artifactId: string) => request<ArtifactDetail>(`/chats/${chatId}/artifacts/${artifactId}`),
+    version: (chatId: string, artifactId: string, versionId: string) => request<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}`),
+    edit: (chatId: string, artifactId: string, body: { content: string; title?: string; fromVersionId?: string }) => put<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}`, body),
+    save: (chatId: string, artifactId: string, body: { versionId: string; path: string; replace?: boolean }) => post<{ path: string }>(`/chats/${chatId}/artifacts/${artifactId}/save`, body),
+  },
   view: {
     open: (chatId: string, path: string) => post<ViewOpened>('/view/links', { chatId, path }),
+    openArtifact: (chatId: string, artifactVersionId: string) => post<ViewOpened>('/view/links', { chatId, artifactVersionId }),
     text: (chatId: string, path: string) => request<ViewText>(`/view/text?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),
     roots: (chatId: string) => request<{ roots: ViewRoot[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}`),
     dir: (chatId: string, path: string) => request<{ path: string; entries: ViewEntry[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),

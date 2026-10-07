@@ -21,6 +21,15 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('runMigrations', () => {
+  it('016 adds the artifact tables, tracked for sync', () => {
+    const db = openDatabase(':memory:');
+    runMigrations(db);
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((t) => t.name);
+    expect(tables).toEqual(expect.arrayContaining(['artifact', 'artifact_version']));
+    const triggers = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_artifact%'").all() as { name: string }[]).map((t) => t.name);
+    expect(triggers.sort()).toEqual(['sync_artifact_ad', 'sync_artifact_ai', 'sync_artifact_au', 'sync_artifact_version_ad', 'sync_artifact_version_ai', 'sync_artifact_version_au']);
+  });
+
   it('brings a fresh database to the latest migration version', () => {
     const db = freshDb();
     try {

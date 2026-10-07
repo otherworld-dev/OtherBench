@@ -1,5 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
-import { ApiError, api, type ViewEntry, type ViewRoot } from '../state/api.js';
+import { ApiError, api, type ArtifactSummary, type ViewEntry, type ViewRoot } from '../state/api.js';
+import { useArtifactsStamp } from './stamp.js';
 
 function failure(err: unknown): string {
   return err instanceof ApiError ? err.message : "Couldn't list this folder.";
@@ -48,10 +49,23 @@ function Folder({ chatId, path, label, onOpen, startOpen }: { chatId: string; pa
   );
 }
 
-/** The chat's workspace and extra folders as a lazily loaded tree (Deck #826); a file click opens it. */
-export function FileTree({ chatId, onOpen }: { chatId: string; onOpen: (path: string) => void }): JSX.Element {
+/** The chat's artifacts on its branch (Deck #896), then its workspace and extra folders as a lazily loaded tree (Deck #826); a click opens one. */
+export function FileTree({ chatId, onOpen, onOpenArtifact }: { chatId: string; onOpen: (path: string) => void; onOpenArtifact: (item: { artifactId: string; title: string }) => void }): JSX.Element {
   const [roots, setRoots] = useState<ViewRoot[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const stamp = useArtifactsStamp(chatId);
+  // Loaded on its own: a failure here leaves the list out, never the folders.
+  useEffect(() => {
+    let cancelled = false;
+    api.artifacts.list(chatId).then(
+      (r) => !cancelled && setArtifacts(r.artifacts),
+      () => !cancelled && setArtifacts([])
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [chatId, stamp]);
   useEffect(() => {
     let cancelled = false;
     setRoots(null);
@@ -64,13 +78,32 @@ export function FileTree({ chatId, onOpen }: { chatId: string; onOpen: (path: st
       cancelled = true;
     };
   }, [chatId]);
-  if (error) return <p role="alert" className="p-3 text-sm text-[var(--danger)]">{error}</p>;
-  if (!roots) return <p className="p-3 text-sm text-[var(--text-faint)]">Loading…</p>;
   return (
-    <ul role="tree" aria-label="Files" className="space-y-0.5 p-2 text-xs">
-      {roots.map((r) => (
-        <Folder key={r.path} chatId={chatId} path={r.path} label={r.access === 'read' ? `${r.label} (read-only)` : r.label} onOpen={onOpen} startOpen={r.workspace} />
-      ))}
-    </ul>
+    <>
+      {artifacts.length > 0 && (
+        <ul aria-label="Artifacts" className="space-y-0.5 border-b border-[var(--border)] p-2 text-xs">
+          {artifacts.map((a) => (
+            <li key={a.id}>
+              <button type="button" onClick={() => onOpenArtifact({ artifactId: a.id, title: a.title })} className="flex w-full items-center gap-2 rounded px-1 text-left hover:bg-[var(--bg-sunken)]">
+                <span aria-hidden="true">◧</span>
+                <span className="min-w-0 flex-1 truncate">{a.title}</span>
+                <span className="text-[var(--text-faint)]">{`${a.kind} v${a.number}`}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error ? (
+        <p role="alert" className="p-3 text-sm text-[var(--danger)]">{error}</p>
+      ) : !roots ? (
+        <p className="p-3 text-sm text-[var(--text-faint)]">Loading…</p>
+      ) : (
+        <ul role="tree" aria-label="Files" className="space-y-0.5 p-2 text-xs">
+          {roots.map((r) => (
+            <Folder key={r.path} chatId={chatId} path={r.path} label={r.access === 'read' ? `${r.label} (read-only)` : r.label} onOpen={onOpen} startOpen={r.workspace} />
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

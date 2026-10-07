@@ -50,7 +50,7 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
  * Grunt only gates, never performs.
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -69,6 +69,8 @@ export interface ToolPolicy {
   agentWeb?: boolean;
   /** Claude Code profiles only: MCP tools from the user's Claude config allowed. Absent = allowed. */
   agentMcp?: boolean;
+  /** Artifacts (Deck #896): the `artifact` tool, for both engines. Absent = on. */
+  artifacts?: boolean;
 }
 
 export interface ModelParams {

@@ -19,6 +19,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
+import { artifactsRoutes } from './routes/artifacts.js';
 import { claudeRoutes } from './routes/claude.js';
 import { viewRoutes } from './routes/view.js';
 import { viewServeRoutes } from './routes/view-serve.js';
@@ -109,6 +110,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // projectsRoutes owns /projects and /projects/:id only.
   authed.route('/', memoryRoutes(container));
   authed.route('/', searchRoutes(container));
+  // Artifacts (Deck #896): full paths under /chats/:id/artifacts; chatsRoutes
+  // owns /chats/:id itself and nothing under /artifacts.
+  authed.route('/', artifactsRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/view', viewRoutes(container, viewLinks));
@@ -129,7 +133,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
   // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
-  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link)));
+  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts));
 
   if (options.webDistDir) {
     mountStatic(app, { webDistDir: options.webDistDir });

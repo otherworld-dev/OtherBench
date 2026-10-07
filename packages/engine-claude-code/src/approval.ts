@@ -1,6 +1,7 @@
 import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
+import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
@@ -13,7 +14,12 @@ export type GateDecision = { allow: true } | { allow: false; reason: string } | 
  * the PreToolUse hook: in auto mode a call the broker would ask about may then
  * go to Claude Code's classifier instead of a card.
  */
-export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean }) => Promise<GateDecision>;
+/**
+ * `opts.artifact`: the call is to this process's own Grunt artifact tool --
+ * the engine matched the exact per-process name (artifact-server.ts), never
+ * a name alone.
+ */
+export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean; artifact?: boolean }) => Promise<GateDecision>;
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
 
@@ -116,7 +122,10 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
       if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
-      const normalised = normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
+      // Grunt's own artifact tool has no path arguments; it's checked as
+      // Grunt's (the profile's switch, no card), never as an MCP tool.
+      const own = opts?.artifact === true;
+      const normalised = own ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
       }
@@ -127,11 +136,11 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         return { allow: false, reason: `"${toolName}" was blocked: it has an unusable path argument (${normalised.unusable}).` };
       }
       const spec: ToolSpec = {
-        name: toolName,
-        description: 'Claude Code tool',
+        name: own ? ARTIFACT_TOOL : toolName,
+        description: own ? 'Grunt artifact tool' : 'Claude Code tool',
         parameters: {},
-        risk: classifyAgentTool(toolName).risk,
-        source: 'agent',
+        risk: own ? 'read' : classifyAgentTool(toolName).risk,
+        source: own ? 'artifact' : 'agent',
         execute: async () => undefined, // never called: Claude Code executes its own tools
       };
       // Only the PreToolUse hook, and only in auto mode, may hand a call to

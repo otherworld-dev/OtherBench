@@ -25,3 +25,38 @@ export function toolPath(name: string, args: unknown): string | null {
   }
   return null;
 }
+
+/** Whether a tool call is the artifact tool (Deck #896): both engines report Grunt's under this name. */
+export function isArtifactTool(name: string): boolean {
+  return name === 'artifact';
+}
+
+export interface ArtifactCardInfo {
+  command: 'create' | 'update' | 'rewrite';
+  artifactId: string;
+  slug: string;
+  title: string;
+  kind: string;
+  number: number;
+  versionId: string;
+}
+
+/** What an artifact call made, from its result: a JSON string (API engines), an MCP content list (Claude Code) or an object; null for errors and `view`. */
+export function artifactOutcomeOf(result: unknown): ArtifactCardInfo | null {
+  let value: unknown = result;
+  if (Array.isArray(value)) value = (value.find((b) => (b as { type?: unknown } | null)?.type === 'text') as { text?: unknown } | undefined)?.text;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value !== 'object' || value === null) return null;
+  const o = value as Record<string, unknown>;
+  if (o['ok'] !== true) return null;
+  if (o['command'] !== 'create' && o['command'] !== 'update' && o['command'] !== 'rewrite') return null;
+  for (const key of ['artifactId', 'slug', 'title', 'kind', 'versionId']) if (typeof o[key] !== 'string') return null;
+  if (typeof o['number'] !== 'number') return null;
+  return o as unknown as ArtifactCardInfo;
+}

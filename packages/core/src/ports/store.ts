@@ -528,6 +528,49 @@ export interface SyncRepo {
   observe(hlc: string): void;
 }
 
+/** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, or a code file. */
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code';
+
+/** Standalone content the model made in a chat (spec 2026-10-07-artifacts); its content lives in its versions. */
+export interface Artifact {
+  id: string;
+  chatId: string;
+  /** The short id the model and the UI use; unique within the chat. */
+  slug: string;
+  kind: ArtifactKind;
+  /** For `code`: its language, e.g. `ts`, `py`. */
+  language: string | null;
+  createdAt: number;
+}
+
+/** One version of an artifact; never changed once written. */
+export interface ArtifactVersion {
+  id: string;
+  artifactId: string;
+  /** 1, 2, … in the order made, across every branch. */
+  number: number;
+  title: string;
+  content: string;
+  madeBy: 'model' | 'user';
+  /** The reply that made it (your edit: the newest message on the branch you were on). Not a foreign key: it may arrive by sync before its message. */
+  messageId: string | null;
+  parentVersionId: string | null;
+  createdAt: number;
+}
+
+export interface ArtifactRepo {
+  create(a: Artifact): Artifact;
+  get(id: string): Artifact | null;
+  bySlug(chatId: string, slug: string): Artifact | null;
+  /** Oldest first. */
+  listByChat(chatId: string): Artifact[];
+  /** Adds a version numbered after the artifact's highest. */
+  addVersion(v: Omit<ArtifactVersion, 'number'>): ArtifactVersion;
+  getVersion(id: string): ArtifactVersion | null;
+  /** Oldest (lowest number) first. */
+  versions(artifactId: string): ArtifactVersion[];
+}
+
 export interface Store {
   nodes: NodeRepo;
   locations: LocationRepo;
@@ -542,6 +585,7 @@ export interface Store {
   projectMemory: ProjectMemoryRepo;
   settings: SettingsRepo;
   messages: MessageRepo;
+  artifacts: ArtifactRepo;
   attachments: AttachmentRepo;
   usage: UsageRepo;
   mcpServers: McpServerRepo;

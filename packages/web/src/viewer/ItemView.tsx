@@ -3,6 +3,7 @@ import { MarkdownBody } from '../components/MarkdownBody.js';
 import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened, type ViewText } from '../state/api.js';
 import { serverUrl } from '../state/transport.js';
+import { ArtifactView } from './ArtifactView.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
 
@@ -52,13 +53,18 @@ function TextBody({ chatId, opened, as }: { chatId: string; opened: ViewOpened; 
   );
 }
 
+/** What the viewer shows for an item: a file, or an artifact (Deck #896). */
+export function ItemView({ chatId, item }: { chatId: string; item: ViewItem }): JSX.Element {
+  return item.kind === 'artifact' ? <ArtifactView chatId={chatId} item={item} /> : <FileView chatId={chatId} path={item.path} />;
+}
+
 /**
  * One file from a chat's folders (spec 2026-10-07-viewer): images, video and
  * PDF from their `/view/` links, HTML run only in the sandbox (an iframe with
  * scripts but no same-origin), Markdown formatted, code and text highlighted,
  * and anything else named with Show in folder. Every failure says why.
  */
-export function ItemView({ chatId, item }: { chatId: string; item: ViewItem }): JSX.Element {
+function FileView({ chatId, path }: { chatId: string; path: string }): JSX.Element {
   const [opened, setOpened] = useState<ViewOpened | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState(false);
@@ -68,7 +74,7 @@ export function ItemView({ chatId, item }: { chatId: string; item: ViewItem }): 
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    api.view.open(chatId, item.path).then(
+    api.view.open(chatId, path).then(
       (o) => {
         if (cancelled) return;
         openedAt.current = Date.now();
@@ -79,7 +85,7 @@ export function ItemView({ chatId, item }: { chatId: string; item: ViewItem }): 
     return () => {
       cancelled = true;
     };
-  }, [chatId, item.path, attempt]);
+  }, [chatId, path, attempt]);
 
   if (error) return <p role="alert" className="p-3 text-sm text-[var(--danger)]">{error}</p>;
   if (!opened) return <p className="p-3 text-sm text-[var(--text-faint)]">Opening…</p>;

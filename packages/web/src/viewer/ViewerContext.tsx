@@ -2,9 +2,11 @@ import { createContext, useContext } from 'react';
 import { openInBrowser, openSite } from '../desktop/bridge.js';
 import { useViewerStore } from './state.js';
 
-/** What a chat's messages can open (Deck #826): a path in that chat's viewer panel, or a website. */
+/** What a chat's messages can open (Deck #826): a path or an artifact (Deck #896) in that chat's viewer panel, or a website. */
 export interface ViewerActions {
   openPath(path: string): void;
+  /** An artifact: its current version on the chat's branch, or the pinned `versionId`. */
+  openArtifact(item: { artifactId: string; title: string; versionId?: string }): void;
   /** A website: its own isolated window, or the default browser when `external` (Ctrl-click). */
   openLink(url: string, opts?: { external?: boolean }): void;
 }
@@ -19,6 +21,7 @@ export function useViewer(): ViewerActions | null {
 export function viewerActionsFor(chatId: string): ViewerActions {
   return {
     openPath: (path) => useViewerStore.getState().openItem(chatId, { kind: 'file', path }),
+    openArtifact: (item) => useViewerStore.getState().openItem(chatId, { kind: 'artifact', ...item }),
     openLink: (url, opts) => void (opts?.external ? openInBrowser(url) : openSite(url)),
   };
 }

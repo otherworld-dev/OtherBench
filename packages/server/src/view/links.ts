@@ -5,16 +5,24 @@ export const VIEW_LINK_TTL_MS = 10 * 60_000;
 /** Links kept at once; the oldest go first. */
 export const MAX_VIEW_LINKS = 500;
 
-/** What one `/view/<id>/` link may serve: one file, or (for an HTML page) its folder. */
-export interface ViewLink {
-  chatId: string;
-  /** The chat folder (workspace or extra folder) the target was contained in; serving checks it again. */
-  root: string;
-  /** The file, resolved. A folder link serves files under its folder. */
-  target: string;
-  scope: 'file' | 'folder';
-  expiresAt: number;
-}
+/**
+ * What one `/view/<id>/` link may serve: one file, (for an HTML page) its
+ * folder, or an artifact version (Deck #896).
+ */
+export type ViewLink =
+  | {
+      chatId: string;
+      scope: 'file' | 'folder';
+      /** The chat folder (workspace or extra folder) the target was contained in; serving checks it again. */
+      root: string;
+      /** The file, resolved. A folder link serves files under its folder. */
+      target: string;
+      expiresAt: number;
+    }
+  | { chatId: string; scope: 'artifact'; versionId: string; expiresAt: number };
+
+/** A link to make: everything but its expiry. */
+export type NewViewLink = ViewLink extends infer L ? (L extends ViewLink ? Omit<L, 'expiresAt'> : never) : never;
 
 /**
  * Capability links for what the browser loads itself (Deck #826): the id is
@@ -26,7 +34,7 @@ export class ViewLinks {
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  create(link: Omit<ViewLink, 'expiresAt'>): string {
+  create(link: NewViewLink): string {
     const now = this.now();
     for (const [id, l] of this.links) if (now >= l.expiresAt) this.links.delete(id);
     while (this.links.size >= MAX_VIEW_LINKS) {
@@ -35,7 +43,7 @@ export class ViewLinks {
       this.links.delete(oldest);
     }
     const id = randomBytes(16).toString('base64url');
-    this.links.set(id, { ...link, expiresAt: now + VIEW_LINK_TTL_MS });
+    this.links.set(id, { ...link, expiresAt: now + VIEW_LINK_TTL_MS } as ViewLink);
     return id;
   }
 

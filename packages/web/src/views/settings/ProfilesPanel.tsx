@@ -69,6 +69,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [paramsDraft, setParamsDraft] = useState(() => paramsToDraft(profile?.params ?? {}));
   const [fs, setFs] = useState<FsMode>(profile?.toolPolicy.fs ?? 'off');
   const [shell, setShell] = useState(profile?.toolPolicy.shell ?? false);
+  // Artifacts (Deck #896): on unless the profile turned them off.
+  const [artifacts, setArtifacts] = useState(profile?.toolPolicy.artifacts ?? true);
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
@@ -132,7 +134,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       modelId,
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
-      toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp } : { fs, shell, approvalMode, mcpServerIds },
+      toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts } : { fs, shell, approvalMode, mcpServerIds, artifacts },
       isDefault,
     };
 
@@ -373,6 +375,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
             <input type="checkbox" aria-label={isClaudeCode ? 'Bash' : 'Shell access'} checked={shell} onChange={(e) => setShell(e.target.checked)} />
             {isClaudeCode ? 'Bash' : 'Shell access'}
+          </label>
+          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
+            <input type="checkbox" aria-label="Artifacts" checked={artifacts} onChange={(e) => setArtifacts(e.target.checked)} />
+            Artifacts
           </label>
           {isClaudeCode && (
             <>

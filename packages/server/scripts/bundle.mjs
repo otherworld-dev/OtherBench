@@ -10,6 +10,7 @@
 import { build } from 'esbuild';
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,6 +64,11 @@ for (const pkg of copies) {
   }
   await cp(from, join(out, 'node_modules', ...pkg.split('/')), { recursive: true });
 }
+
+// Grunt's copy of Mermaid for artifact diagrams (Deck #896): served from assets/ beside cli.js.
+const require_ = createRequire(join(serverDir, 'package.json'));
+await mkdir(join(out, 'assets'), { recursive: true });
+await cp(require_.resolve('mermaid/dist/mermaid.min.js'), join(out, 'assets', 'mermaid.min.js'));
 
 const { version } = JSON.parse(await readFile(join(serverDir, 'package.json'), 'utf8'));
 console.log(`[bundle] grunt-server ${version} -> ${out} (${copies.join(', ')} alongside)`);

@@ -7,6 +7,7 @@ import type { Chat } from '@grunt/core/ports/store.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 import { HardLinkError, openVerified, readdirVerified, ToctouGuardError } from '@grunt/tools/fs-tools.js';
 import type { Container } from '../container.js';
+import type { ViewLink } from './links.js';
 
 export const OUTSIDE_MESSAGE = "This isn't in this chat's workspace or folders.";
 
@@ -42,9 +43,14 @@ export function ambiguousOnWindows(path: string): boolean {
 }
 
 /** Whether a viewer link's folder is still one of its chat's folders here: removing the folder, or deleting the chat, ends its links. */
-export function linkStillAllowed(container: Container, link: { chatId: string; root: string }): boolean {
+export function linkStillAllowed(container: Container, link: ViewLink): boolean {
   const chat = container.store.chats.get(link.chatId);
   if (!chat) return false;
+  if (link.scope === 'artifact') {
+    const version = container.store.artifacts.getVersion(link.versionId);
+    const artifact = version ? container.store.artifacts.get(version.artifactId) : null;
+    return artifact?.chatId === link.chatId;
+  }
   const roots = chatRoots(container, chat);
   return roots.workspaceRoot !== null && [roots.workspaceRoot, ...roots.folders.map((f) => f.root)].includes(link.root);
 }

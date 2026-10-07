@@ -253,6 +253,20 @@ describe('sync (Task 50)', () => {
     expect(b.store.chats.get('c')!.folders).toBeUndefined();
   });
 
+  it("artifacts and their versions travel, and a version can arrive before the reply it's tied to", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+    a.store.artifacts.create({ id: 'art', chatId: 'c', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
+    a.store.artifacts.addVersion({ id: 'v1', artifactId: 'art', title: 'Calc', content: '<p>1</p>', madeBy: 'model', messageId: 'reply-not-synced-yet', parentVersionId: null, createdAt: 2 });
+    s.aToB();
+    expect(b.store.artifacts.bySlug('c', 'calc')).toMatchObject({ id: 'art', kind: 'html' });
+    expect(b.store.artifacts.versions('art')).toEqual([expect.objectContaining({ id: 'v1', number: 1, content: '<p>1</p>', messageId: 'reply-not-synced-yet' })]);
+  });
+
   it('the same field edited on both: the later change wins on both machines', () => {
     const a = node('a');
     const b = node('b');

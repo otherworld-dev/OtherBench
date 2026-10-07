@@ -19,36 +19,39 @@ import type {
 } from '../ports/tool-provider.js';
 import type { ToolPolicy } from '../types/config.js';
 import type {
+  AppSettings,
+  Artifact,
+  ArtifactRepo,
+  ArtifactVersion,
+  Attachment,
   AttachmentRepo,
+  AuditEntry,
   AuditRepo,
+  Chat,
   ChatRepo,
   ConnectionRepo,
+  Grant,
   GrantRepo,
+  LocationRepo,
+  McpServer,
   McpServerRepo,
+  MemoryAuthor,
   MessageRepo,
   ModelRepo,
-  ProfileRepo,
-  Store,
-  UsageRepo,
-  Chat,
   NewChat,
   NewProject,
+  NodeRepo,
+  PeerRepo,
+  ProfileRepo,
   Project,
-  ProjectRepo,
-  Attachment,
-  UsageRecord,
-  McpServer,
-  Grant,
-  AuditEntry,
-  AppSettings,
-  MemoryAuthor,
   ProjectMemory,
   ProjectMemoryRepo,
   ProjectMemoryVersion,
+  ProjectRepo,
   SettingsRepo,
-  NodeRepo,
-  LocationRepo,
-  PeerRepo,
+  Store,
+  UsageRecord,
+  UsageRepo,
 } from '../ports/store.js';
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
@@ -208,6 +211,7 @@ export class FakeToolProvider implements ToolProvider {
     if (policy.fs === 'readwrite') raw.push(...this.tools.filter((t) => t.source === 'fs'));
     else if (policy.fs === 'read') raw.push(...this.tools.filter((t) => t.source === 'fs' && t.risk === 'read'));
     if (policy.shell) raw.push(...this.tools.filter((t) => t.source === 'shell'));
+    if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
     for (const id of policy.mcpServerIds) {
       const server = this.mcpServers.find((s) => s.id === id);
       if (!server) continue;
@@ -917,6 +921,42 @@ class InMemoryMessageRepo implements MessageRepo {
   }
 }
 
+class InMemoryArtifactRepo implements ArtifactRepo {
+  private readonly artifacts = new Map<string, Artifact>();
+  private readonly versionsById = new Map<string, ArtifactVersion>();
+
+  create(a: Artifact): Artifact {
+    if (this.artifacts.has(a.id)) throw new Error(`Artifact "${a.id}" already exists.`);
+    this.artifacts.set(a.id, { ...a });
+    return { ...a };
+  }
+  get(id: string): Artifact | null {
+    const a = this.artifacts.get(id);
+    return a ? { ...a } : null;
+  }
+  bySlug(chatId: string, slug: string): Artifact | null {
+    for (const a of this.artifacts.values()) if (a.chatId === chatId && a.slug === slug) return { ...a };
+    return null;
+  }
+  listByChat(chatId: string): Artifact[] {
+    return [...this.artifacts.values()].filter((a) => a.chatId === chatId).sort((x, y) => x.createdAt - y.createdAt || x.id.localeCompare(y.id)).map((a) => ({ ...a }));
+  }
+  addVersion(v: Omit<ArtifactVersion, 'number'>): ArtifactVersion {
+    if (!this.artifacts.has(v.artifactId)) throw new Error(`Artifact "${v.artifactId}" not found.`);
+    const number = Math.max(0, ...this.versions(v.artifactId).map((x) => x.number)) + 1;
+    const full = { ...v, number };
+    this.versionsById.set(v.id, full);
+    return { ...full };
+  }
+  getVersion(id: string): ArtifactVersion | null {
+    const v = this.versionsById.get(id);
+    return v ? { ...v } : null;
+  }
+  versions(artifactId: string): ArtifactVersion[] {
+    return [...this.versionsById.values()].filter((v) => v.artifactId === artifactId).sort((x, y) => x.number - y.number).map((v) => ({ ...v }));
+  }
+}
+
 /** A `Store` test double backed entirely by in-memory `Map`s. No SQL, no I/O. */
 export class InMemoryStore implements Store {
   readonly nodes: NodeRepo;
@@ -934,6 +974,7 @@ export class InMemoryStore implements Store {
   readonly usage: UsageRepo = new InMemoryUsageRepo();
   readonly mcpServers: McpServerRepo = new InMemoryMcpServerRepo();
   readonly grants: GrantRepo = new InMemoryGrantRepo();
+  readonly artifacts: ArtifactRepo = new InMemoryArtifactRepo();
   readonly audit: AuditRepo;
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */

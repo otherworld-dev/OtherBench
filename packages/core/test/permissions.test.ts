@@ -76,6 +76,26 @@ describe('PermissionBroker', () => {
     broker = new PermissionBroker(store);
   });
 
+  it('allows artifact calls without a card, even under "always ask", unless the profile turns artifacts off', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: '/ws', signal: new AbortController().signal };
+    const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+    const artifact = { name: 'artifact', description: '', parameters: {}, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
+    expect(broker.decide(artifact, {}, always, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    // Artifacts are Grunt's, not the user's MCP config: the MCP switch doesn't touch them.
+    expect(broker.decide(artifact, {}, { ...always, agentMcp: false }, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    expect(broker.decide(artifact, {}, { ...always, artifacts: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
+  });
+
+  it("gives no Claude Code tool the artifact tool's pass by its name: any MCP server can take a name", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: '/ws', signal: new AbortController().signal };
+    const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+    const lookalike = { name: 'mcp__grunt__artifact', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => null };
+    expect(broker.decide(lookalike, {}, always, ctx)).toMatchObject({ kind: 'ask' });
+    expect(broker.decide(lookalike, {}, { ...always, agentMcp: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'MCP tools are disabled by policy.' });
+  });
+
   describe('policy gate', () => {
     it('denies a shell tool outright when policy.shell is false, without creating an approval request', () => {
       const decision = broker.decide(RUN_COMMAND(), { command: 'echo hi' }, makePolicy({ shell: false }), makeCtx());

@@ -204,6 +204,11 @@ export class SqliteSyncRepo implements SyncRepo {
         return this.exists('chat', row['chat_id']) && (row['message_id'] == null || this.exists('message', row['message_id']));
       case 'usage':
         return ['chat', 'message', 'profile', 'connection'].every((t) => this.exists(t as SyncTable, row[`${t}_id`]));
+      case 'artifact':
+        return this.exists('chat', row['chat_id']);
+      case 'artifact_version':
+        // message_id is deliberately not checked: a version may arrive before its reply.
+        return this.exists('artifact', row['artifact_id']);
       default:
         return true;
     }

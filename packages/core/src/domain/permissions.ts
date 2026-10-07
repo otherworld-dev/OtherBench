@@ -170,6 +170,15 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Artifacts (Deck #896) change nothing outside Grunt and keep every
+    // version, so they never need a card; the profile's switch (checked
+    // above) is how they're turned off. Only the source says a call is
+    // Grunt's: never a Claude Code tool's name, which any MCP server can take
+    // (the Claude Code engine marks its own server's call itself).
+    if (tool.source === 'artifact') {
+      return { kind: 'allow', grantedBy: 'policy' };
+    }
+
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
       // Name-based, not declared-risk-based: only Claude Code's known file-read tools.
@@ -454,6 +463,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
     }
     case 'agent':
       return agentPolicyDenial(tool.name, policy);
+    case 'artifact':
+      return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

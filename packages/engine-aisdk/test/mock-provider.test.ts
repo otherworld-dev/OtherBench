@@ -216,6 +216,19 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#artifact trigger', () => {
+    it('#artifact calls the real artifact tool when it is offered, then answers', async () => {
+      const execute = vi.fn(async () => ({ ok: true, command: 'create', slug: 'page', number: 1 }));
+      const artifact: ToolSpec = { name: 'artifact', description: '', parameters: {}, risk: 'read', source: 'artifact', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#artifact', { tools: [artifact] })));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'artifact', args: expect.objectContaining({ command: 'create', id: 'page', kind: 'html' }) }));
+      expect(execute).toHaveBeenCalledOnce();
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'artifact', isError: false }));
+      expect(events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('')).toContain('I made the artifact.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+  });
+
   describe('#slow trigger', () => {
     it('streams exactly 20 chunks at 400ms each', async () => {
       const sleep = fakeSleep();

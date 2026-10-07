@@ -152,6 +152,48 @@ describe('GET /view/<id>/', () => {
     expect(res.headers.get('Content-Type')).toBe('image/png');
     rmSync(dist, { recursive: true, force: true });
   });
+
+  // Reads Grunt's 5 MB mermaid.min.js, which can take seconds the first time while the whole suite runs.
+  it('serves artifact versions: a page and an SVG in the sandbox, a Mermaid diagram with its script, nothing else', async () => {
+    const store = container.store;
+    store.messages.create({ id: 'u1', chatId: 'c1', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    const make = (id: string, slug: string, kind: 'html' | 'svg' | 'mermaid' | 'markdown', content: string) => {
+      store.artifacts.create({ id, chatId: 'c1', slug, kind, language: null, createdAt: 1 });
+      return store.artifacts.addVersion({ id: `${id}-v1`, artifactId: id, title: slug, content, madeBy: 'model', messageId: 'u1', parentVersionId: null, createdAt: 2 }).id;
+    };
+    const app = createApp(container);
+    const open = async (artifactVersionId: string) =>
+      (await (await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c1', artifactVersionId }) })).json()) as { name: string; kind: string; url: string | null };
+
+    const page = await open(make('p', 'calc', 'html', '<p>calc</p>'));
+    expect(page).toMatchObject({ name: 'calc.html', kind: 'html' });
+    const served = await app.request(page.url!);
+    expect(await served.text()).toBe('<p>calc</p>');
+    expect(served.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+    expect(served.headers.get('Content-Security-Policy')).toMatch(/^sandbox allow-scripts allow-forms;.*form-action https:$/);
+
+    const svg = await open(make('s', 'logo', 'svg', '<svg xmlns="http://www.w3.org/2000/svg"/>'));
+    expect(svg).toMatchObject({ name: 'logo.svg', kind: 'image' });
+    expect((await app.request(svg.url!)).headers.get('Content-Type')).toBe('image/svg+xml');
+
+    const diagram = await open(make('m', 'flow', 'mermaid', 'graph TD; A-->B'));
+    expect(diagram).toMatchObject({ name: 'diagram.html', kind: 'html' });
+    expect(await (await app.request(diagram.url!)).text()).toContain('graph TD; A--&gt;B');
+    const id = diagram.url!.split('/')[2]!;
+    const script = await app.request(`/view/${id}/mermaid.min.js`);
+    expect(script.status).toBe(200);
+    expect(script.headers.get('Content-Type')).toBe('text/javascript; charset=utf-8');
+    expect((await app.request(`/view/${id}/other.js`)).status).toBe(404);
+
+    expect(await open(make('d', 'notes', 'markdown', '# n'))).toMatchObject({ name: 'notes.md', kind: 'markdown', url: null });
+    // A version from another chat isn't this chat's to open.
+    store.chats.create({ id: 'c2', title: 'C2', profileId: 'p', headMessageId: null, workspace: null, pinned: false, archivedAt: null } as never);
+    const other = await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c2', artifactVersionId: 'p-v1' }) });
+    expect(other.status).toBe(404);
+    // The link dies with its chat.
+    store.chats.delete('c1');
+    expect((await app.request(page.url!)).status).toBe(404);
+  }, 20_000);
 });
 
 describe('relativeOf and parseRange', () => {

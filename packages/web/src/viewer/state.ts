@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ViewItem } from './items.js';
+import { itemKey, parseViewTab, viewTabId, type ViewItem } from './items.js';
 
 /** One chat's viewer panel (spec 2026-10-07-viewer), remembered on this device. */
 export interface ChatViewer {
@@ -17,7 +17,7 @@ export const VIEWER_STORAGE_KEY = 'grunt.viewers';
 export const MAX_VIEWER_HISTORY = 30;
 export const MAX_VIEWER_CHATS = 50;
 
-const same = (a: ViewItem, b: ViewItem): boolean => a.kind === b.kind && a.path === b.path;
+const same = (a: ViewItem, b: ViewItem): boolean => itemKey(a) === itemKey(b);
 
 function withItem(v: ChatViewer, item: ViewItem): ChatViewer {
   const current = v.history[v.index];
@@ -35,7 +35,7 @@ function valid(v: unknown): v is ChatViewer {
   const x = v as ChatViewer;
   return (
     typeof x === 'object' && x !== null && typeof x.open === 'boolean' && (x.mode === 'files' || x.mode === 'item') &&
-    Array.isArray(x.history) && x.history.every((i) => i?.kind === 'file' && typeof i.path === 'string') &&
+    Array.isArray(x.history) && x.history.every((i) => parseViewTab(viewTabId('x', i)) !== null) &&
     Number.isInteger(x.index) && x.index >= -1 && x.index < x.history.length && typeof x.share === 'number'
   );
 }
