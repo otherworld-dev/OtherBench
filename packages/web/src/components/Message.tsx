@@ -283,14 +283,14 @@ function MessageEditor({
           type="button"
           onClick={save}
           disabled={!canSave}
-          className="rounded bg-[var(--accent)] px-3 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary px-3 py-1"
         >
           Save and send
         </button>
         <button
           type="button"
           onClick={editing.onCancel}
-          className="rounded border border-[var(--border)] px-3 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+          className="btn px-3 py-1"
         >
           Cancel
         </button>
@@ -373,8 +373,8 @@ export function Message({
   return (
     <article id={`msg-${message.id}`} data-role={message.role} data-status={message.status} className="group space-y-1">
       <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-        <span className="font-medium text-[var(--text)]">{label}</span>
-        {!isUser && message.producedBy && <span>{message.producedBy.modelId}</span>}
+        <span className={`label-caps ${isUser ? 'text-[var(--text-muted)]' : 'text-[var(--accent)]'}`}>{label}</span>
+        {!isUser && message.producedBy && <span className="font-mono text-[var(--text-faint)]">{message.producedBy.modelId}</span>}
         {message.status === 'error' && <span className="text-[var(--danger)]">error</span>}
         {message.status === 'cancelled' && <span>stopped</span>}
         {branch && branch.total > 1 && <BranchSwitcher branch={branch} />}
@@ -420,13 +420,13 @@ export function Message({
       )}
 
       {!editing && (onRegenerate || onEdit) && (
-        <div className="flex gap-3 text-xs text-[var(--text-muted)]">
+        <div className="flex gap-3 text-[var(--text-muted)]">
           {onRegenerate && (
             <button
               type="button"
               onClick={onRegenerate}
               disabled={actionsDisabled}
-              className="hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
+              className="label-caps hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
             >
               Regenerate
             </button>
@@ -436,7 +436,7 @@ export function Message({
               type="button"
               onClick={onEdit}
               disabled={actionsDisabled}
-              className="hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
+              className="label-caps hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
             >
               Edit
             </button>

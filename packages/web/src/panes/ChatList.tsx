@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react';
 import { exportFilename } from '@grunt/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
@@ -70,8 +70,11 @@ function headingSelector(projectId: string): string {
  * bottom. Search hits `GET /api/search` (FTS over message text) and filters
  * every group to the matching chats; groups with no match hide, and
  * collapsed groups show expanded, while a search is active.
+ *
+ * `footer` renders under the New chat / New project row, still inside the
+ * sidebar, for app-level controls the caller owns (Settings, Usage).
  */
-export function ChatList(): JSX.Element {
+export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
   const projects = useGruntStore((s) => s.projects);
   const profiles = useGruntStore((s) => s.profiles);
@@ -538,14 +541,14 @@ export function ChatList(): JSX.Element {
           onChange={(e) => void runSearch(e.target.value)}
           placeholder="Search chats..."
           aria-label="Search chats"
-          className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--bg-raised)]"
+          className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
         />
       </div>
 
       <div className="flex-1 overflow-y-auto p-2" data-testid="chat-list-scroll">
         {sidebar.pinned.length > 0 && (
           <div className="mb-3" data-testid="group-pinned">
-            <h2 className="px-2 pb-1 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">Pinned</h2>
+            <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
             <ul className="space-y-0.5">{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
           </div>
         )}
@@ -581,7 +584,7 @@ export function ChatList(): JSX.Element {
               type="button"
               aria-expanded={showArchived}
               onClick={toggleArchived}
-              className="w-full rounded px-2 py-1 text-left text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase hover:bg-[var(--bg-sunken)]"
+              className="label-caps w-full rounded-sm px-2 py-1 text-left text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
             >
               {showArchived ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}
             </button>
@@ -613,7 +616,7 @@ export function ChatList(): JSX.Element {
             // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
             aria-disabled={creating || profiles.length === 0 || undefined}
             title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
-            className="flex-1 rounded bg-[var(--accent)] px-2 py-1.5 text-sm font-medium text-[var(--accent-text)] aria-disabled:opacity-50"
+            className="btn btn-primary flex-1 px-2 py-1.5"
           >
             + New chat
           </button>
@@ -624,11 +627,12 @@ export function ChatList(): JSX.Element {
               if (!newProjectOpen) setNewProjectOpen(true);
             }}
             aria-disabled={newProjectOpen || undefined}
-            className="rounded border border-[var(--border)] px-2 py-1.5 text-sm hover:bg-[var(--bg-sunken)] aria-disabled:opacity-50"
+            className="btn px-2 py-1.5"
           >
             + New project
           </button>
         </div>
+        {footer}
       </div>
 
       {chatMenu && menuChat && (

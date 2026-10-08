@@ -108,7 +108,7 @@ export function QuickChat(): JSX.Element {
     <div className="flex h-screen flex-col gap-2 border border-[var(--border)] bg-[var(--bg-raised)] p-3" data-testid="quick-chat">
       <div className="flex items-center justify-between text-xs text-[var(--text-muted)]" data-tauri-drag-region="">
         <span data-tauri-drag-region="">Quick chat{profile ? ` · ${profile.name}` : ''}</span>
-        <button type="button" onClick={expand} disabled={!chat} className="rounded border border-[var(--border)] px-2 py-0.5 disabled:opacity-40">
+        <button type="button" onClick={expand} disabled={!chat} className="btn px-2 py-0.5">
           Expand
         </button>
       </div>

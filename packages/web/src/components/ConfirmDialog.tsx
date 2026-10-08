@@ -76,7 +76,7 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
           </p>
         )}
         <div className="mt-4 flex justify-end gap-2">
-          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy} className="rounded border border-[var(--border)] px-2.5 py-1 text-xs">
+          <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy} className="btn px-2.5 py-1">
             Cancel
           </button>
           <button
@@ -84,7 +84,7 @@ export function ConfirmDialog({ title, message, confirmLabel, onConfirm, onCance
             type="button"
             onClick={() => void confirm()}
             disabled={busy}
-            className="rounded border border-[var(--danger)] bg-[var(--danger)] px-2.5 py-1 text-xs text-white disabled:opacity-50"
+            className="btn btn-danger bg-[var(--danger)] text-[var(--bg)] px-2.5 py-1"
           >
             {confirmLabel}
           </button>

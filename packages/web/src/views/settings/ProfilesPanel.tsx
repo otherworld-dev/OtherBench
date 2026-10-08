@@ -436,11 +436,11 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary px-3 py-1.5"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button type="button" onClick={onCancel} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">
+        <button type="button" onClick={onCancel} className="btn px-3 py-1.5">
           Cancel
         </button>
         {profile && (
@@ -448,7 +448,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             type="button"
             onClick={() => void handleDelete()}
             disabled={deleting}
-            className="ml-auto rounded border border-[var(--danger)] px-3 py-1.5 text-sm text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+            className="btn btn-danger ml-auto px-3 py-1.5"
           >
             {deleting ? 'Deleting…' : 'Delete'}
           </button>
@@ -480,7 +480,7 @@ function ProfileRow({
         onClick={onSelect}
         aria-current={active ? 'true' : undefined}
         className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm ${
-          active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'
+          active ? 'bg-[var(--bg-sunken)] shadow-[inset_2px_0_0_var(--accent)]' : 'hover:bg-[var(--bg-sunken)]'
         }`}
       >
         {profile.colour && HEX_COLOUR_RE.test(profile.colour) ? (
@@ -489,9 +489,9 @@ function ProfileRow({
           <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-[var(--text-faint)]" />
         )}
         <span className="min-w-0 flex-1 truncate">{profile.name}</span>
-        {profile.isDefault && <span className={`shrink-0 text-xs ${active ? '' : 'text-[var(--text-muted)]'}`}>default</span>}
+        {profile.isDefault && <span className="shrink-0 text-xs text-[var(--text-muted)]">default</span>}
       </button>
-      <p className={`px-2 pb-1 truncate text-xs ${active ? 'text-[var(--accent-text)]' : 'text-[var(--text-muted)]'}`}>
+      <p className="truncate px-2 pb-1 text-xs text-[var(--text-muted)]">
         {connectionName} · {profile.modelId}
         {onlyOn && <span data-testid="profile-only-on"> · Runs on {onlyOn} only</span>}
       </p>
@@ -576,7 +576,7 @@ export function ProfilesPanel(): JSX.Element {
           onClick={() => setEditingId('new')}
           disabled={connections.length === 0}
           title={connections.length === 0 ? 'Create a connection first.' : undefined}
-          className="mb-3 w-full rounded bg-[var(--accent)] px-2 py-1.5 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary mb-3 w-full px-2 py-1.5"
         >
           + New profile
         </button>

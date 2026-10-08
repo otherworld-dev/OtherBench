@@ -24,7 +24,7 @@ export interface InspectorProps {
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
   return (
     <section className="border-b border-[var(--border)] px-4 py-3 last:border-b-0">
-      <h3 className="mb-2 text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase">{title}</h3>
+      <h3 className="label-caps mb-2 text-[var(--text-muted)]">{title}</h3>
       {children}
     </section>
   );
@@ -252,7 +252,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
                 })
                 .catch((err: unknown) => setError(`Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`));
             }}
-            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs"
+            className="btn px-2.5 py-1"
           >
             Choose folder…
           </button>
@@ -268,7 +268,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
             type="button"
             onClick={() => void handleSave()}
             disabled={saving}
-            className="rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50"
+            className="btn btn-primary px-2.5 py-1"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -279,7 +279,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
               setDraft(displayedWorkspaceRoot ?? '');
               setError(null);
             }}
-            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs"
+            className="btn px-2.5 py-1"
           >
             Cancel
           </button>
@@ -303,14 +303,14 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
           {where}
         </p>
         <div className="flex gap-2">
-          <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">
+          <button type="button" onClick={openEdit} className="btn px-2 py-1">
             Choose folder…
           </button>
           <button
             type="button"
             onClick={() => void commit(null)}
             disabled={saving}
-            className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+            className="btn px-2 py-1"
           >
             No folder
           </button>
@@ -328,7 +328,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
     return (
       <div className="space-y-2" data-testid="workspace-section">
         <p className="text-sm text-[var(--text-faint)]">No workspace folder is set. Filesystem and shell tools are unavailable in this chat until one is.</p>
-        <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">
+        <button type="button" onClick={openEdit} className="btn px-2 py-1">
           Set workspace…
         </button>
       </div>
@@ -352,14 +352,14 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
       ))}
       <p className="text-xs text-[var(--text-muted)]">{workspaceConsequence(profile)}</p>
       <div className="flex gap-2">
-        <button type="button" onClick={openEdit} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)]">
+        <button type="button" onClick={openEdit} className="btn px-2 py-1">
           Change…
         </button>
         <button
           type="button"
           onClick={() => void commit(null)}
           disabled={saving}
-          className="rounded border border-[var(--danger)] px-2 py-1 text-xs text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+          className="btn btn-danger px-2 py-1"
         >
           Clear
         </button>
@@ -374,7 +374,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
 }
 
 const MCP_STATUS_COLOR: Record<McpServerHealth['status'], string> = {
-  ok: 'bg-[var(--success,#3fb950)]',
+  ok: 'bg-[var(--success)]',
   connecting: 'bg-[var(--accent)] animate-pulse',
   error: 'bg-[var(--danger)]',
   unknown: 'bg-[var(--text-faint)]',
@@ -420,7 +420,7 @@ function McpHealthSection(): JSX.Element {
             aria-label={`Refresh ${s.name}`}
             disabled={refreshingIds.has(s.id)}
             onClick={() => void refresh(s.id)}
-            className="rounded border border-[var(--border)] px-1.5 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+            className="rounded-sm border border-[var(--border-strong)] px-1.5 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
           >
             ↻
           </button>
@@ -492,7 +492,7 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
             aria-label={`Revoke grant for ${g.toolName}`}
             disabled={revoking.has(g.id)}
             onClick={() => void revoke(g.id)}
-            className="rounded border border-[var(--danger)] px-1.5 py-0.5 text-xs text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+            className="btn btn-danger px-1.5 py-0.5"
           >
             Revoke
           </button>
@@ -719,7 +719,7 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
       className="flex h-full w-full flex-col overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-raised)]"
     >
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
-        <h2 className="text-sm font-semibold">Inspector</h2>
+        <h2 className="label-caps text-base">Inspector</h2>
         <button
           type="button"
           onClick={onToggleCollapsed}

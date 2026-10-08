@@ -6,8 +6,8 @@ import { ApiError, api, type PairingView, type PeerView, type PeersOverview } fr
 export const FIREWALL_NOTE =
   'The first time Grunt listens for other machines, Windows asks whether to allow it: allow it on Private networks only.';
 
-const BUTTON = 'rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50';
-const PRIMARY = 'rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50';
+const BUTTON = 'btn px-2 py-1';
+const PRIMARY = 'btn btn-primary px-2.5 py-1';
 const INPUT = 'rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-xs';
 const REFRESH_MS = 3000;
 
@@ -129,7 +129,7 @@ function PeerRow({ peer, onChanged, onRemove }: { peer: PeerView; onChanged: () 
             >
               Edit
             </button>
-            <button type="button" className={`${BUTTON} text-[var(--danger)]`} onClick={onRemove}>
+            <button type="button" className={`${BUTTON} btn-danger`} onClick={onRemove}>
               Remove
             </button>
           </span>

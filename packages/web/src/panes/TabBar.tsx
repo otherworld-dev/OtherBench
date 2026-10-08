@@ -160,7 +160,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                     data-status={status}
                     role="img"
                     aria-label={status === 'waiting' ? 'waiting for approval' : 'replying'}
-                    className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${status === 'waiting' ? 'bg-[var(--warning,#d29922)]' : 'animate-pulse bg-[var(--accent)]'}`}
+                    className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${status === 'waiting' ? 'bg-[var(--warn)]' : 'animate-pulse bg-[var(--accent)]'}`}
                   />
                 )}
                 <span className="truncate">{t.title}</span>

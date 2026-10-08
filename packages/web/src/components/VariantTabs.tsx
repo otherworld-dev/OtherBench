@@ -101,7 +101,7 @@ function StatusDot({ status }: { status: CanonMessage['status'] }): JSX.Element 
     status === 'streaming'
       ? 'bg-[var(--accent)] animate-pulse'
       : status === 'complete'
-        ? 'bg-[var(--success,#3fb950)]'
+        ? 'bg-[var(--success)]'
         : status === 'error'
           ? 'bg-[var(--danger)]'
           : 'bg-[var(--text-faint)]'; // cancelled
@@ -168,7 +168,7 @@ export function VariantCard({
             onClick={onRetry}
             disabled={retrying}
             aria-label={`Retry ${variant.producedBy?.profileName ?? 'variant'}`}
-            className="rounded border border-[var(--danger)] px-2 py-1 text-xs font-medium text-[var(--danger)] disabled:opacity-50"
+            className="btn btn-danger px-2 py-1"
           >
             {retrying ? 'Retrying…' : 'Retry'}
           </button>
@@ -176,12 +176,12 @@ export function VariantCard({
           <span />
         )}
         {isKept ? (
-          <span className="text-xs font-medium text-[var(--text-muted)]">✓ Kept</span>
+          <span className="label-caps text-[var(--text-muted)]">✓ Kept</span>
         ) : (
           <button
             type="button"
             onClick={onKeep}
-            className="rounded bg-[var(--accent)] px-2 py-1 text-xs font-medium text-[var(--accent-text)]"
+            className="btn btn-primary px-2 py-1"
           >
             Keep this one
           </button>
@@ -301,7 +301,7 @@ export function VariantTabs({
             aria-pressed={split}
             aria-label="Split view"
             onClick={() => setSplit((s) => !s)}
-            className={`rounded border border-[var(--border)] px-2 py-1 text-xs ${split ? 'bg-[var(--bg-sunken)]' : ''}`}
+            className={`btn px-2 py-1 ${split ? 'bg-[var(--bg-sunken)]' : ''}`}
           >
             ⇹ Split
           </button>

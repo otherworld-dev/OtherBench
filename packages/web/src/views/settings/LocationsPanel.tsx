@@ -9,8 +9,8 @@ import { useGruntStore } from '../../state/store.js';
 export const LOCATIONS_HELP =
   'A location is a folder you keep on more than one machine -- Nextcloud, say -- wherever each machine has it. A chat folder inside a location works on every machine that knows where the location is; each machine sets only its own path.';
 
-const BUTTON = 'rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50';
-const PRIMARY = 'rounded bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-[var(--accent-text)] disabled:opacity-50';
+const BUTTON = 'btn px-2 py-1';
+const PRIMARY = 'btn btn-primary px-2.5 py-1';
 const INPUT = 'rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-xs';
 
 function failure(err: unknown): string {
@@ -131,7 +131,7 @@ function LocationRow({
               Rename
             </button>
           )}
-          <button type="button" className={`${BUTTON} text-[var(--danger)]`} onClick={onDelete}>
+          <button type="button" className={`${BUTTON} btn-danger`} onClick={onDelete}>
             Delete
           </button>
         </span>

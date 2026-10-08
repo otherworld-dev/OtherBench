@@ -47,7 +47,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
     <div data-testid="settings-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
       <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
         <div className="flex items-center gap-4">
-          <h2 className="text-sm font-semibold">Settings</h2>
+          <h2 className="label-caps text-base">Settings</h2>
           <div role="tablist" className="flex gap-1">
             {tabs.map((t) => (
               <button
@@ -56,7 +56,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
                 role="tab"
                 aria-selected={tab === t}
                 onClick={() => setTab(t)}
-                className={`rounded px-2.5 py-1 text-xs font-medium ${tab === t ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'}`}
+                className={`label-caps rounded-sm px-2.5 py-1 ${tab === t ? 'text-[var(--text)] shadow-[inset_0_-2px_0_var(--accent)]' : 'text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'}`}
               >
                 {TAB_LABEL[t]}
               </button>

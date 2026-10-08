@@ -1,42 +1,55 @@
 @import "tailwindcss";
+@import "./fonts.css";
 
 /*
- * Quiet, dense, long-session tool -- not a landing page. Two tokens
- * (surface layering + one accent) instead of a big palette, redefined for
- * dark under `prefers-color-scheme` so the OS preference is honoured
- * without a manual toggle (out of scope for this task).
+ * Quiet, dense, long-session tool -- not a landing page. The identity is
+ * "workhorse": warm charcoal and bone with one hi-vis orange accent, condensed
+ * caps for labels and buttons, mono for anything that's data. Dark is the
+ * signature scheme; light ("concrete") is its twin with the orange deepened
+ * for contrast. Redefined under `prefers-color-scheme` so the OS preference
+ * is honoured without a manual toggle.
  */
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  /* No ligatures: `===` should read as three characters in code, not one glyph. */
+  --font-mono--font-feature-settings: "calt" 0, "liga" 0;
+  --font-label: "Barlow Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
+}
+
 :root {
   color-scheme: light;
-  --bg: #f7f7f8;
-  --bg-raised: #ffffff;
-  --bg-sunken: #eef0f2;
-  --border: #dfe2e6;
-  --text: #1a1d21;
-  --text-muted: #62676e;
-  --text-faint: #9096a0;
-  --accent: #2f6fed;
+  --bg: #f4f1ec;
+  --bg-raised: #fbfaf7;
+  --bg-sunken: #e9e5dd;
+  --border: #d9d3c8;
+  --border-strong: #bfb7a9;
+  --text: #1d1b18;
+  --text-muted: #5c564c;
+  --text-faint: #8d8578;
+  --accent: #c2410c;
   --accent-text: #ffffff;
-  --danger: #c4392a;
-  --success: #1c8a4c;
-  --warn: #b8860b;
+  --danger: #b42318;
+  --success: #4d7c0f;
+  --warn: #a16207;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #17181b;
-    --bg-raised: #1f2125;
-    --bg-sunken: #101113;
-    --border: #2c2f34;
-    --text: #e7e8ea;
-    --text-muted: #9aa0a8;
-    --text-faint: #62676e;
-    --accent: #5b8ef7;
-    --accent-text: #0b1220;
-    --danger: #ef6a5a;
-    --success: #4bc17f;
-    --warn: #e0ab34;
+    --bg: #1a1815;
+    --bg-raised: #23201c;
+    --bg-sunken: #131210;
+    --border: #34302a;
+    --border-strong: #4a443b;
+    --text: #ece5d8;
+    --text-muted: #a39b8c;
+    --text-faint: #6e675b;
+    --accent: #ff6b1a;
+    --accent-text: #1a1006;
+    --danger: #e5484d;
+    --success: #8fbf4a;
+    --warn: #f5c518;
   }
 }
 
@@ -49,6 +62,80 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
+}
+
+@layer base {
+  :root {
+    accent-color: var(--accent);
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  html {
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  * {
+    scrollbar-width: thin;
+  }
+}
+
+/*
+ * Shared label and button styles. Plain classes in the components layer
+ * rather than @utility, so `btn-primary` reliably beats `btn` (source order)
+ * and call-site utilities (padding, layout) still beat both. Call sites drop
+ * their own border/rounded/text-size/hover classes when they take these on.
+ * The condensed face reads small, so both sit a step above text-xs.
+ */
+@layer components {
+  .label-caps {
+    font-family: var(--font-label);
+    font-weight: 600;
+    font-size: 0.8125rem;
+    line-height: 1.2;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .btn {
+    font-family: var(--font-label);
+    font-weight: 600;
+    font-size: 0.8125rem;
+    line-height: 1.25;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: 3px;
+  }
+  .btn:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--bg-sunken);
+  }
+  .btn:disabled,
+  .btn[aria-disabled="true"] {
+    opacity: 0.5;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+  }
+  .btn-primary:hover:not(:disabled, [aria-disabled="true"]) {
+    background: color-mix(in srgb, var(--accent) 85%, var(--text));
+  }
+
+  .btn-danger {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+  .btn-danger:hover:not(:disabled, [aria-disabled="true"]) {
+    background: var(--danger);
+    color: var(--bg);
+  }
 }
 
 /* Minimal hljs token palette that tracks the theme tokens above rather than
@@ -121,7 +208,7 @@ body {
   margin: 0.15em 0;
 }
 .markdown-body blockquote {
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   margin: 0.5em 0;
   padding-left: 0.8em;
   color: var(--text-muted);
@@ -133,13 +220,14 @@ body {
 }
 .markdown-body code:not(pre code) {
   background: var(--bg-sunken);
-  border-radius: 3px;
+  border-radius: 2px;
   padding: 0.1em 0.35em;
   font-size: 0.9em;
 }
 .markdown-body pre {
   background: var(--bg-sunken);
-  border-radius: 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
   padding: 0.75em 1em;
   overflow-x: auto;
   margin: 0.6em 0;
@@ -178,7 +266,7 @@ body {
   width: 0.5em;
   height: 1em;
   vertical-align: text-bottom;
-  background: var(--text-muted);
+  background: var(--accent);
   margin-left: 1px;
   animation: grunt-caret-blink 1s step-start infinite;
 }

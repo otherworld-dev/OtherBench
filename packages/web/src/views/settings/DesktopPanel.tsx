@@ -107,7 +107,7 @@ export function DesktopPanel(): JSX.Element {
             type="button"
             onClick={() => void saveHotkeyDraft()}
             disabled={hotkeySaving}
-            className="rounded border border-[var(--border)] px-2.5 py-1 text-xs disabled:opacity-50"
+            className="btn px-2.5 py-1"
           >
             Save
           </button>

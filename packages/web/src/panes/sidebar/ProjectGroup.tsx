@@ -93,7 +93,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
                   }
                 : undefined
             }
-            className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1 text-left text-xs font-semibold tracking-wide text-[var(--text-muted)] uppercase"
+            className="label-caps flex min-w-0 flex-1 items-center gap-1 px-2 py-1 text-left text-[var(--text-muted)]"
           >
             <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
             <span className="truncate">{name}</span>{' '}

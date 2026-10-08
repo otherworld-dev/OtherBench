@@ -5,7 +5,7 @@ import { usePolled } from '../../lib/usePolled.js';
 import { ApiError, api, type CreateMcpServerBody } from '../../state/api.js';
 
 const STATUS_COLOR: Record<McpServerHealth['status'], string> = {
-  ok: 'bg-[var(--success,#3fb950)]',
+  ok: 'bg-[var(--success)]',
   connecting: 'bg-[var(--accent)] animate-pulse',
   error: 'bg-[var(--danger)]',
   unknown: 'bg-[var(--text-faint)]',
@@ -185,7 +185,7 @@ function KvRowsEditor({
       <button
         type="button"
         onClick={() => onChange([...rows, { key: '', value: '', originalKey: null }])}
-        className="rounded border border-dashed border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+        className="btn border-dashed text-[var(--text-muted)] px-2 py-1"
       >
         + Add {keyLabel.toLowerCase()}
       </button>
@@ -435,7 +435,7 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
               <button
                 type="button"
                 onClick={() => setArgRows((rows) => [...rows, ''])}
-                className="rounded border border-dashed border-[var(--border)] px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+                className="btn border-dashed text-[var(--text-muted)] px-2 py-1"
               >
                 + Add argument
               </button>
@@ -459,7 +459,7 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
                 <KvRowsEditor rows={envRows} onChange={setEnvRows} keyPlaceholder="API_KEY" valuePlaceholder="value" keyLabel="Env var name" valueLabel="Env var value" />
               </>
             ) : (
-              <button type="button" onClick={startEnvEdit} disabled={envClear} className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50">
+              <button type="button" onClick={startEnvEdit} disabled={envClear} className="btn px-2 py-1">
                 Edit environment variables…
               </button>
             )}
@@ -525,7 +525,7 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
                 type="button"
                 onClick={startHeaderEdit}
                 disabled={headerClear}
-                className="rounded border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+                className="btn px-2 py-1"
               >
                 Edit headers…
               </button>
@@ -580,11 +580,11 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
           type="button"
           onClick={() => void handleSave()}
           disabled={saving}
-          className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-text)] disabled:opacity-50"
+          className="btn btn-primary px-3 py-1.5"
         >
           {saving ? 'Saving…' : 'Save'}
         </button>
-        <button type="button" onClick={onCancel} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">
+        <button type="button" onClick={onCancel} className="btn px-3 py-1.5">
           Cancel
         </button>
         {server && (
@@ -593,7 +593,7 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
               type="button"
               onClick={() => void handleRefresh()}
               disabled={refreshing}
-              className="rounded border border-[var(--border)] px-3 py-1.5 text-sm disabled:opacity-50"
+              className="btn px-3 py-1.5"
             >
               {refreshing ? 'Refreshing…' : 'Refresh'}
             </button>
@@ -601,7 +601,7 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
               type="button"
               onClick={() => void handleDelete()}
               disabled={deleting}
-              className="ml-auto rounded border border-[var(--danger)] px-3 py-1.5 text-sm text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white disabled:opacity-50"
+              className="btn btn-danger ml-auto px-3 py-1.5"
             >
               {deleting ? 'Deleting…' : 'Delete'}
             </button>
@@ -635,7 +635,7 @@ function McpServerRow({
 }): JSX.Element {
   return (
     <li>
-      <div className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${active ? 'bg-[var(--accent)] text-[var(--accent-text)]' : 'hover:bg-[var(--bg-sunken)]'}`}>
+      <div className={`flex items-center gap-2 rounded px-2 py-1.5 text-sm ${active ? 'bg-[var(--bg-sunken)] shadow-[inset_2px_0_0_var(--accent)]' : 'hover:bg-[var(--bg-sunken)]'}`}>
         <button
           type="button"
           data-testid={`mcp-row-${health.id}`}
@@ -645,7 +645,7 @@ function McpServerRow({
         >
           <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${STATUS_COLOR[health.status]}`} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate">{health.name}</span>
-          <span className={`shrink-0 text-xs ${active ? '' : 'text-[var(--text-muted)]'}`}>
+          <span className="shrink-0 text-xs text-[var(--text-muted)]">
             {health.transport} · {health.enabled ? `${health.toolCount} tool${health.toolCount === 1 ? '' : 's'}` : 'disabled'}
           </span>
         </button>
@@ -654,9 +654,7 @@ function McpServerRow({
           aria-label={health.enabled ? `Disable ${health.name}` : `Enable ${health.name}`}
           disabled={busy}
           onClick={onToggleEnabled}
-          className={`shrink-0 rounded border px-1.5 py-0.5 text-xs disabled:opacity-50 ${
-            active ? 'border-[var(--accent-text)]' : 'border-[var(--border)] hover:bg-[var(--bg-sunken)]'
-          }`}
+          className="btn shrink-0 px-1.5 py-0.5"
         >
           {health.enabled ? 'On' : 'Off'}
         </button>
@@ -665,15 +663,13 @@ function McpServerRow({
           aria-label={`Refresh ${health.name}`}
           disabled={busy}
           onClick={onRefresh}
-          className={`shrink-0 rounded border px-1.5 py-0.5 text-xs disabled:opacity-50 ${
-            active ? 'border-[var(--accent-text)]' : 'border-[var(--border)] hover:bg-[var(--bg-sunken)]'
-          }`}
+          className="shrink-0 rounded-sm border border-[var(--border-strong)] px-1.5 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
         >
           ↻
         </button>
       </div>
       {health.status === 'error' && health.lastError && (
-        <p className={`px-2 pb-1 truncate text-xs ${active ? 'text-[var(--accent-text)]' : 'text-[var(--danger)]'}`} title={health.lastError}>
+        <p className="truncate px-2 pb-1 text-xs text-[var(--danger)]" title={health.lastError}>
           {health.lastError}
         </p>
       )}
@@ -807,7 +803,7 @@ export function McpServersPanel(): JSX.Element {
         <button
           type="button"
           onClick={() => setEditingId('new')}
-          className="mb-3 w-full rounded bg-[var(--accent)] px-2 py-1.5 text-sm font-medium text-[var(--accent-text)]"
+          className="btn btn-primary mb-3 w-full px-2 py-1.5"
         >
           + New MCP server
         </button>

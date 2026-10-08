@@ -109,7 +109,7 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
           </dd>
         </div>
       )}
-      <button type="button" onClick={() => void copy()} aria-label="Copy resume command" className="mt-1 rounded border border-[var(--border)] px-2 py-0.5 hover:bg-[var(--bg-sunken)]">
+      <button type="button" onClick={() => void copy()} aria-label="Copy resume command" className="btn mt-1 px-2 py-0.5">
         {copied ? 'Copied' : 'Copy terminal resume command'}
       </button>
     </dl>
