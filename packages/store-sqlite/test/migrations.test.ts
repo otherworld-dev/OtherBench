@@ -168,6 +168,20 @@ describe('runMigrations', () => {
     }
   });
 
+  it('project-details gives every existing project an empty description and instructions', () => {
+    const details = MIGRATIONS.find((m) => m.name.endsWith('project-details'));
+    expect(details).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < details!.version));
+      db.exec(`INSERT INTO project (id, name, created_at, updated_at) VALUES ('proj', 'Old project', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT description, instructions FROM project WHERE id = 'proj'`).get()).toEqual({ description: '', instructions: '' });
+    } finally {
+      db.close();
+    }
+  });
+
   it('chat-sort-order gives every existing chat its last activity as its place, keeping the old activity order', () => {
     const sortOrder = MIGRATIONS.find((m) => m.name.endsWith('chat-sort-order'));
     expect(sortOrder).toBeDefined();

@@ -7,7 +7,7 @@ function chat(over: Partial<Chat> = {}): Chat {
 }
 
 function project(id: string, name: string): Project {
-  return { id, name, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+  return { id, name, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 }
 
 function chatHandlers(): ChatMenuHandlers {
@@ -114,11 +114,11 @@ describe('chatMenuItems', () => {
 });
 
 describe('projectMenuItems', () => {
-  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), setFolder: vi.fn(), setDefaultProfile: vi.fn(), move: vi.fn(), requestDelete: vi.fn() });
+  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), move: vi.fn(), requestDelete: vi.fn() });
 
   it('offers the project actions, with Move up disabled first and Move down disabled last', () => {
     const first = projectMenuItems(0, 3, h());
-    expect(first.map((i) => i.label)).toEqual(['Rename', 'Set folder…', 'Default profile…', 'Move up', 'Move down', 'Delete…']);
+    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'Move up', 'Move down', 'Delete…']);
     expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
     expect(projectMenuItems(2, 3, h()).find((i) => i.id === 'down')!.disabled).toBe(true);

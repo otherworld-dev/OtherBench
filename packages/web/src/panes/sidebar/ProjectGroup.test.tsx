@@ -94,9 +94,8 @@ describe('ProjectGroup', () => {
     expect(screen.getByTestId('group-heading-p-a')).toHaveAttribute('data-drop-active', 'true');
   });
 
-  it('shows the rename field and the editor slot', () => {
-    renderGroup({ renaming: true, onRename: vi.fn(), onRenameCancel: vi.fn(), editor: <p>editor here</p> });
+  it('shows the rename field', () => {
+    renderGroup({ renaming: true, onRename: vi.fn(), onRenameCancel: vi.fn() });
     expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Alpha');
-    expect(screen.getByText('editor here')).toBeInTheDocument();
   });
 });

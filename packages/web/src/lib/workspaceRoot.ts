@@ -3,8 +3,8 @@ import { api } from '../state/api.js';
 
 /**
  * Client-side validation of a workspace folder (a chat's, or a project's),
- * shared by the Inspector's Workspace section and the sidebar's project
- * "Set folder..." form so both say the same thing. The server's
+ * shared by the Inspector's Workspace section and the project page's folder
+ * fields so both say the same thing. The server's
  * `optionalWorkspaceRoot` (packages/server/src/validation.ts) is the hard gate;
  * this is the early, friendlier check.
  */

@@ -594,7 +594,15 @@ class InMemoryProjectRepo implements ProjectRepo {
   create(p: NewProject): Project {
     const now = Date.now();
     const fields = toStoredWorkspace(p, this.selfNodeId);
-    return this.repo.create({ ...fields, workspace: fields.workspace ?? null, sortOrder: p.sortOrder ?? 0, createdAt: p.createdAt ?? now, updatedAt: p.updatedAt ?? now });
+    return this.repo.create({
+      ...fields,
+      workspace: fields.workspace ?? null,
+      description: p.description ?? '',
+      instructions: p.instructions ?? '',
+      sortOrder: p.sortOrder ?? 0,
+      createdAt: p.createdAt ?? now,
+      updatedAt: p.updatedAt ?? now,
+    });
   }
   /** A deleted location takes its projects' folders with it, as for chats. */
   clearLocation(locationId: string): void {

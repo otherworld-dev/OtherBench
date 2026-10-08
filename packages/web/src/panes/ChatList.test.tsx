@@ -87,7 +87,7 @@ function makeChat(overrides: Partial<Chat> & { id: string }): Chat {
 }
 
 function makeProject(overrides: Partial<Project> & { id: string }): Project {
-  return { name: overrides.id, workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { name: overrides.id, description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 /** The chat ids shown in one sidebar group, top to bottom. */
@@ -274,40 +274,15 @@ describe('ChatList groups', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['c1', 'c2']);
   });
 
-  it('"+ New project" opens a name field: Enter creates it once (trimmed), Esc cancels, empty is refused', async () => {
+  it('"+ New project" opens the project page for a new project', async () => {
     const user = userEvent.setup();
-    mockedProjectCreate.mockResolvedValue(makeProject({ id: 'p-new', name: 'Gamma' }));
     render(<ChatList />);
-
     await user.click(screen.getByRole('button', { name: '+ New project' }));
-    const input = screen.getByRole('textbox', { name: 'Project name' });
-    expect(input).toHaveAttribute('maxLength', '80');
-    await user.keyboard('{Enter}');
-    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'create' });
+    expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull();
     expect(mockedProjectCreate).not.toHaveBeenCalled();
-
-    await user.type(input, '  Gamma  {Enter}');
-    await waitFor(() => expect(screen.getByTestId('group-p-new')).toBeInTheDocument());
-    expect(mockedProjectCreate).toHaveBeenCalledTimes(1);
-    expect(mockedProjectCreate).toHaveBeenCalledWith({ name: 'Gamma' });
-    expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: '+ New project' }));
-    await user.type(screen.getByRole('textbox', { name: 'Project name' }), 'Nope{Escape}');
-    expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull();
-    expect(mockedProjectCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the server's message when creating a project fails", async () => {
-    const user = userEvent.setup();
-    mockedProjectCreate.mockRejectedValue(new ApiError(400, '"name" must be 1-80 characters after trimming.'));
-    render(<ChatList />);
-
-    await user.click(screen.getByRole('button', { name: '+ New project' }));
-    await user.type(screen.getByRole('textbox', { name: 'Project name' }), 'Bad{Enter}');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('"name" must be 1-80 characters after trimming.');
-  });
 });
 
 describe('ChatList drag and drop', () => {
@@ -644,21 +619,6 @@ describe('ChatList chat menu focus and unarchive (R4)', () => {
 });
 
 describe('ChatList + New project focus (Task 9 carry-over)', () => {
-  it('returns focus to + New project after a commit and after a cancel', async () => {
-    const user = userEvent.setup();
-    mockedProjectCreate.mockResolvedValue(makeProject({ id: 'p-new', name: 'Gamma' }));
-    render(<ChatList />);
-    const button = () => screen.getByRole('button', { name: '+ New project' });
-
-    await user.click(button());
-    await user.type(screen.getByRole('textbox', { name: 'Project name' }), 'Gamma{Enter}');
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull());
-    await waitFor(() => expect(button()).toHaveFocus());
-
-    await user.click(button());
-    await user.type(screen.getByRole('textbox', { name: 'Project name' }), 'x{Escape}');
-    await waitFor(() => expect(button()).toHaveFocus());
-  });
 
   it('keeps keyboard focus on a + button while a chat is being created (aria-disabled, not disabled)', async () => {
     const user = userEvent.setup();
@@ -695,7 +655,8 @@ describe('ChatList project menu', () => {
     const user = setup();
     await user.click(actions('p-a'));
     expect(screen.getByRole('menu', { name: 'Project actions' })).toBeInTheDocument();
-    for (const name of ['Rename', 'Set folder…', 'Default profile…', 'Delete…']) expect(screen.getByRole('menuitem', { name })).toBeEnabled();
+    for (const name of ['Rename', 'Project settings…', 'Delete…']) expect(screen.getByRole('menuitem', { name })).toBeEnabled();
+    expect(screen.queryByRole('menuitem', { name: 'Set folder…' })).toBeNull();
     expect(screen.getByRole('menuitem', { name: 'Move up' })).toBeDisabled();
     expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeEnabled();
 
@@ -735,37 +696,15 @@ describe('ChatList project menu', () => {
     await waitFor(() => expect(heading('Renamed')).toBeInTheDocument());
   });
 
-  it('Set folder… saves a valid folder onto the project', async () => {
+  it('Project settings… opens the project page for that project', async () => {
     const user = setup();
     await user.click(actions('p-a'));
-    await user.click(screen.getByRole('menuitem', { name: 'Set folder…' }));
-    const input = within(screen.getByTestId('group-p-a')).getByRole('textbox', { name: 'Project folder' });
-    await user.type(input, 'relative');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect(screen.getByTestId('project-folder-error')).toBeInTheDocument();
-    expect(mockedProjectPatch).not.toHaveBeenCalled();
-
-    await user.clear(input);
-    await user.type(input, '/home/me/alpha{Enter}');
-
-    expect(mockedProjectPatch).toHaveBeenCalledWith('p-a', { workspaceRoot: '/home/me/alpha' });
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Project folder' })).toBeNull());
-    expect(useGruntStore.getState().projects.find((p) => p.id === 'p-a')!.workspaceRoot).toBe('/home/me/alpha');
-    expect(useGruntStore.getState().chats.find((c) => c.id === 'c1')!.workspaceRoot).toBeNull(); // existing chats untouched
-  });
-
-  it('Default profile… saves the chosen profile', async () => {
-    const user = setup();
-    await user.click(actions('p-a'));
-    await user.click(screen.getByRole('menuitem', { name: 'Default profile…' }));
-    const select = screen.getByRole('combobox', { name: 'Default profile' });
-    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['App default', 'Everyday', 'Coder']);
-
-    await user.selectOptions(select, 'profile-2');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-
-    expect(mockedProjectPatch).toHaveBeenCalledWith('p-a', { defaultProfileId: 'profile-2' });
-    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Default profile' })).toBeNull());
+    await user.click(screen.getByRole('menuitem', { name: 'Project settings…' }));
+    expect(useGruntStore.getState().projectPage).toEqual({
+      mode: 'edit',
+      projectId: 'p-a',
+      returnFocus: '[data-testid="group-heading-p-a"] [data-heading-main]',
+    });
   });
 
   it('Move down swaps the project with the next one', async () => {

@@ -149,6 +149,10 @@ export interface ChatRepo {
 export interface Project {
   id: string;
   name: string;
+  /** A line for the user about the project, shown in the Inspector; never sent to a model (spec 2026-10-08-project-page-design). */
+  description: string;
+  /** Added to the system prompt of every chat in the project, as the user's instructions (spec 2026-10-08-project-page-design §2). */
+  instructions: string;
   /** The default folder for new chats, portable across machines like `Chat.workspace`. */
   workspace: Workspace | null;
   /** API only, as on `Chat`: `workspace` resolved on this machine, filled by the server. */
@@ -166,12 +170,16 @@ export interface Project {
 }
 
 /** What `ProjectRepo.create` takes: timestamps default to now, `sortOrder` to 0; `workspace` and a bare `workspaceRoot` as on `NewChat`. */
-export type NewProject = Omit<Project, 'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus'> & {
+export type NewProject = Omit<Project, 'createdAt' | 'updatedAt' | 'sortOrder' | 'workspace' | 'workspaceRoot' | 'workspaceStatus' | 'description' | 'instructions'> & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
   sortOrder?: number;
   createdAt?: number;
   updatedAt?: number;
+  /** Default ''. */
+  description?: string;
+  /** Default ''. */
+  instructions?: string;
 };
 
 export interface ProjectRepo {

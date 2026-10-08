@@ -1436,6 +1436,81 @@ describe('project memory in the system prompt', () => {
   });
 });
 
+describe('project instructions in the system prompt', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+  const HEAD = '# Project instructions: Alpha\nInstructions from the user for every chat in this project. Follow them unless the user says otherwise in this chat.';
+  const NOTE = '## Pinned\n- Use SQLite\n\n## Goals\n\n## Decisions\n\n## Current focus\n\n## Open questions';
+
+  function setup(instructions: string, projectId: string | null = 'proj') {
+    const store = new InMemoryStore();
+    store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null, instructions });
+    store.chats.create({
+      id: 'chat-1',
+      title: 't',
+      profileId: 'profile-1',
+      headMessageId: null,
+      workspaceRoot: null,
+      pinned: false,
+      archivedAt: null,
+      projectId,
+      memoryExcluded: false,
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    return { store, engine, runner: new TurnRunner(store, engine) };
+  }
+
+  function turn(runner: TurnRunner, systemPrompt: string | null, parentId: string | null = null) {
+    return runner.run({ chatId: 'chat-1', parentId, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile({ systemPrompt })] });
+  }
+
+  it("comes after the profile's prompt and before the project's memory", async () => {
+    const { store, engine, runner } = setup('British English.\nBe brief.');
+    store.projectMemory.save('proj', NOTE, 'user', null);
+
+    await turn(runner, 'You are helpful.');
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+
+    expect(engine.requests[0]!.profile.systemPrompt!.startsWith(`You are helpful.\n\n${HEAD}\n\nBritish English.\nBe brief.\n\n# Project memory: Alpha`)).toBe(true);
+  });
+
+  it('is the whole system prompt when the profile has none and the project has no memory', async () => {
+    const { engine, runner } = setup('Be brief.');
+    await turn(runner, null);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.profile.systemPrompt).toBe(`${HEAD}\n\nBe brief.`);
+  });
+
+  it('adds nothing for blank or whitespace-only instructions, or for a chat outside any project', async () => {
+    for (const [instructions, projectId] of [['', 'proj'], [' \r\n\t ', 'proj'], ['Be brief.', null]] as const) {
+      const { engine, runner } = setup(instructions, projectId);
+      await turn(runner, 'Base.');
+      await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+      expect(engine.requests[0]!.profile.systemPrompt).toBe('Base.');
+    }
+  });
+
+  it('turns CRLF into LF and trims the instructions', async () => {
+    const { engine, runner } = setup('\r\n  British English.\r\nBe brief.  \r\n');
+    await turn(runner, null);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.profile.systemPrompt).toBe(`${HEAD}\n\nBritish English.\nBe brief.`);
+  });
+
+  it('reads the instructions fresh for every turn, so an edit reaches an existing chat', async () => {
+    const { store, engine, runner } = setup('Be brief.');
+    const first = await turn(runner, null);
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    store.projects.update('proj', { instructions: 'Be thorough.' });
+    await turn(runner, null, firstId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('Be brief.');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('Be thorough.');
+  });
+});
+
 describe('TurnRunner variant teardown (approval cleanup)', () => {
   const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
 

@@ -223,3 +223,66 @@ describe("a project's default profile", () => {
     expect(container.store.projects.get('p1')!.defaultProfileId).toBeNull();
   });
 });
+
+describe('the project page fields', () => {
+  it('POST creates a project with description, instructions and other folders in one request', async () => {
+    const res = await send('POST', '/api/projects', {
+      name: 'Grunt',
+      description: '  Local workbench  ',
+      instructions: 'British English.\nBe brief.',
+      workspaceRoot: NATIVE_ABSOLUTE,
+      folders: [{ path: dataDir, access: 'read' }],
+    });
+    expect(res.status).toBe(201);
+    const self = container.store.nodes.self().id;
+    expect(await res.json()).toMatchObject({
+      name: 'Grunt',
+      description: 'Local workbench',
+      instructions: 'British English.\nBe brief.',
+      workspaceRoot: NATIVE_ABSOLUTE,
+      folders: [{ workspace: { kind: 'machine', nodeId: self, root: dataDir }, access: 'read' }],
+    });
+  });
+
+  it('POST defaults description and instructions to empty, and accepts the longest of each', async () => {
+    expect(await (await send('POST', '/api/projects', { name: 'Plain' })).json()).toMatchObject({ description: '', instructions: '' });
+    const longest = await send('POST', '/api/projects', { name: 'Full', description: 'd'.repeat(500), instructions: 'i'.repeat(8_000) });
+    expect(longest.status).toBe(201);
+  });
+
+  it.each([
+    ['a 501-character description', { name: 'A', description: 'x'.repeat(501) }],
+    ['8,001 characters of instructions', { name: 'A', instructions: 'x'.repeat(8_001) }],
+    ['a non-string description', { name: 'A', description: 5 }],
+    ['non-string instructions', { name: 'A', instructions: ['x'] }],
+    ['a relative other folder', { name: 'A', folders: [{ path: 'relative', access: 'read' }] }],
+    ['an other folder without access', { name: 'A', folders: [{ path: NATIVE_ABSOLUTE }] }],
+    ["the project's own folder as an other folder", { name: 'A', workspaceRoot: NATIVE_ABSOLUTE, folders: [{ path: NATIVE_ABSOLUTE, access: 'read' }] }],
+  ])('POST rejects %s with 400 and creates nothing', async (_label, body) => {
+    const res = await send('POST', '/api/projects', body);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error.length).toBeGreaterThan(0);
+    expect(container.store.projects.list()).toEqual([]);
+  });
+
+  it('PATCH updates description and instructions and leaves the rest alone', async () => {
+    newProject('p1', { name: 'Keep', workspaceRoot: NATIVE_ABSOLUTE });
+
+    const res = await send('PATCH', '/api/projects/p1', { description: 'Now described', instructions: 'Be terse.' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ name: 'Keep', workspaceRoot: NATIVE_ABSOLUTE, description: 'Now described', instructions: 'Be terse.' });
+
+    const cleared = await send('PATCH', '/api/projects/p1', { instructions: '' });
+    expect(await cleared.json()).toMatchObject({ description: 'Now described', instructions: '' });
+  });
+
+  it.each([
+    ['8,001 characters of instructions', { instructions: 'x'.repeat(8_001) }],
+    ['a null description', { description: null }],
+  ])('PATCH rejects %s with 400 and changes nothing', async (_label, body) => {
+    const before = newProject('p1', { name: 'Keep' });
+    const res = await send('PATCH', '/api/projects/p1', { name: 'Should not apply', ...body });
+    expect(res.status).toBe(400);
+    expect(container.store.projects.get('p1')).toEqual(before);
+  });
+});

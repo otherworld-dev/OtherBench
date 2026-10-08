@@ -32,6 +32,13 @@ export interface HelloBuffer {
 
 export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnecting';
 
+/**
+ * What the project page shows (spec 2026-10-08-project-page-design §3).
+ * `returnFocus` is a selector to focus on close when whatever opened the page
+ * is gone by then (a menu item).
+ */
+export type ProjectPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
+
 export interface GruntState {
   // --- reference data (connections/models/profiles CRUD) -------------------
   connections: Connection[];
@@ -196,6 +203,10 @@ export interface GruntState {
   // --- UI ---------------------------------------------------------------------
   inspectorCollapsed: boolean;
   setInspectorCollapsed(collapsed: boolean): void;
+  /** The open project page, or null. Opened from the sidebar, a project's menu or the Inspector; App renders it. */
+  projectPage: ProjectPageState | null;
+  openProjectPage(page: ProjectPageState): void;
+  closeProjectPage(): void;
 }
 
 /**
@@ -542,6 +553,9 @@ export const useGruntStore = create<GruntState>()((set) => ({
 
   inspectorCollapsed: false,
   setInspectorCollapsed: (collapsed) => set({ inspectorCollapsed: collapsed }),
+  projectPage: null,
+  openProjectPage: (page) => set({ projectPage: page }),
+  closeProjectPage: () => set({ projectPage: null }),
 }));
 
 /** How many tool calls are waiting for approval across the whole app. */

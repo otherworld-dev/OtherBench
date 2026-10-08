@@ -57,7 +57,7 @@ function makeProfile(overrides: Partial<Profile> = {}): Profile {
 }
 
 function makeProject(overrides: Partial<Project> = {}): Project {
-  return { id: 'proj-1', name: 'Alpha', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
+  return { id: 'proj-1', name: 'Alpha', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...overrides };
 }
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
@@ -554,5 +554,19 @@ describe('running replies from app-wide events (#824)', () => {
       { type: 'notice', text: '1 image attachment was left out' },
       { type: 'text', text: 'Hello there' },
     ]);
+  });
+});
+
+describe('the project page slot', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+
+  it('starts closed, opens for creating or for editing a project, and closes', () => {
+    expect(useGruntStore.getState().projectPage).toBeNull();
+    useGruntStore.getState().openProjectPage({ mode: 'create' });
+    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'create' });
+    useGruntStore.getState().openProjectPage({ mode: 'edit', projectId: 'p1' });
+    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p1' });
+    useGruntStore.getState().closeProjectPage();
+    expect(useGruntStore.getState().projectPage).toBeNull();
   });
 });
