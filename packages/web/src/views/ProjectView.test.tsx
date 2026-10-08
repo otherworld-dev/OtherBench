@@ -149,6 +149,59 @@ describe('ProjectView, closing', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 
+  it('after the discard question is dismissed, focus is back in the page and Esc asks again', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<ProjectView page={{ mode: 'create' }} onClose={onClose} />);
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Draft');
+    await user.keyboard('{Escape}');
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Name' })).toHaveFocus());
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('alertdialog', { name: 'Discard changes?' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps keyboard focus on Create while saving (aria-disabled, not disabled), and after the server refuses', async () => {
+    const user = userEvent.setup();
+    let reject!: (err: unknown) => void;
+    vi.mocked(api.projects.create).mockImplementation(() => new Promise((_resolve, rej) => (reject = rej)));
+    render(<ProjectView page={{ mode: 'create' }} onClose={vi.fn()} />);
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Grunt');
+    const create = screen.getByRole('button', { name: 'Create project' });
+    create.focus();
+    await user.keyboard('{Enter}');
+
+    expect(create).toHaveFocus();
+    expect(create).not.toBeDisabled();
+    expect(create).toHaveAttribute('aria-disabled', 'true');
+    await user.keyboard('{Enter}');
+    expect(api.projects.create).toHaveBeenCalledTimes(1);
+
+    reject(new ApiError(400, 'refused'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('refused');
+    expect(create).toHaveFocus();
+  });
+
+  it('falls back to its return-focus target when what opened it is gone (a menu item)', async () => {
+    const user = userEvent.setup();
+    useGruntStore.setState({ projects: [project({ id: 'p1', name: 'Alpha' })] });
+    const heading = document.createElement('button');
+    heading.id = 'heading-p1';
+    document.body.append(heading);
+    const menuItem = document.createElement('button');
+    document.body.append(menuItem);
+    menuItem.focus();
+
+    render(<ProjectView page={{ mode: 'edit', projectId: 'p1', returnFocus: '#heading-p1' }} onClose={vi.fn()} />);
+    menuItem.remove();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(heading).toHaveFocus());
+    heading.remove();
+  });
+
   it('gives focus back to what opened it', async () => {
     const user = userEvent.setup();
     const opener = document.createElement('button');

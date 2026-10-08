@@ -32,8 +32,12 @@ export interface HelloBuffer {
 
 export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnecting';
 
-/** What the project page shows (spec 2026-10-08-project-page-design §3). */
-export type ProjectPageState = { mode: 'create' } | { mode: 'edit'; projectId: string };
+/**
+ * What the project page shows (spec 2026-10-08-project-page-design §3).
+ * `returnFocus` is a selector to focus on close when whatever opened the page
+ * is gone by then (a menu item).
+ */
+export type ProjectPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
 
 export interface GruntState {
   // --- reference data (connections/models/profiles CRUD) -------------------

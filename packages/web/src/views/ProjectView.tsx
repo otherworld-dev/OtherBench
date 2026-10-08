@@ -27,7 +27,7 @@ export interface ProjectViewProps {
 export function ProjectView({ page, onClose }: ProjectViewProps): JSX.Element {
   const project = useGruntStore((s) => (page.mode === 'edit' ? (s.projects.find((p) => p.id === page.projectId) ?? null) : null));
   if (page.mode === 'edit' && !project) return <MissingProject onClose={onClose} />;
-  return <ProjectForm project={project} onClose={onClose} />;
+  return <ProjectForm project={project} returnFocus={page.returnFocus} onClose={onClose} />;
 }
 
 function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
@@ -45,8 +45,12 @@ function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
   );
 }
 
-/** `project` null: creating one. The form starts from the project as the page opened on it. */
-function ProjectForm({ project, onClose }: { project: Project | null; onClose: () => void }): JSX.Element {
+/**
+ * `project` null: creating one. The form starts from the project as the page
+ * opened on it. `returnFocus` is where focus goes on close when the element
+ * that opened the page is gone.
+ */
+function ProjectForm({ project, returnFocus, onClose }: { project: Project | null; returnFocus?: string; onClose: () => void }): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
   const upsertProject = useGruntStore((s) => s.upsertProject);
   const serverPlatform = useServerPlatform();
@@ -55,8 +59,12 @@ function ProjectForm({ project, onClose }: { project: Project | null; onClose: (
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  // Focus goes back to whatever opened the page: the + New project button, a project heading.
+  // Focus goes back to whatever opened the page (the + New project button, the
+  // Inspector's Project settings…), else to `returnFocus` (a menu item is gone by then).
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+  // Where focus was when the discard question opened, to put it back if the question is dismissed.
+  const beforeQuestion = useRef<HTMLElement | null>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
 
   const creating = project === null;
   const canPick = isDesktop();
@@ -71,13 +79,25 @@ function ProjectForm({ project, onClose }: { project: Project | null; onClose: (
     const el = opener.current;
     onClose();
     setTimeout(() => {
-      if (el?.isConnected) el.focus();
+      const target = el?.isConnected ? el : returnFocus ? document.querySelector<HTMLElement>(returnFocus) : null;
+      target?.focus();
     }, 0);
   }
 
   function requestClose(): void {
-    if (isDirty(initial, draft)) setConfirmDiscard(true);
-    else close();
+    if (isDirty(initial, draft)) {
+      beforeQuestion.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setConfirmDiscard(true);
+    } else {
+      close();
+    }
+  }
+
+  /** The question was dismissed: keep editing, with focus back where it was so Esc and Tab still work here. */
+  function keepEditing(): void {
+    setConfirmDiscard(false);
+    const el = beforeQuestion.current;
+    setTimeout(() => (el?.isConnected ? el : nameInput.current)?.focus(), 0);
   }
 
   async function submit(): Promise<void> {
@@ -118,7 +138,14 @@ function ProjectForm({ project, onClose }: { project: Project | null; onClose: (
         <button type="button" onClick={requestClose} className="btn px-2.5 py-1">
           Cancel
         </button>
-        <button type="button" onClick={() => void submit()} disabled={saving || instructionsOver} className="btn btn-primary px-2.5 py-1">
+        {/* aria-disabled while saving, not disabled: a disabled button drops keyboard focus, and a refusal leaves the user here. */}
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={instructionsOver}
+          aria-disabled={saving || undefined}
+          className="btn btn-primary px-2.5 py-1"
+        >
           {saving ? 'Saving…' : creating ? 'Create project' : 'Save'}
         </button>
       </div>
@@ -135,7 +162,7 @@ function ProjectForm({ project, onClose }: { project: Project | null; onClose: (
               <label htmlFor="project-name" className={LABEL}>
                 Name
               </label>
-              <input id="project-name" autoFocus value={draft.name} maxLength={PROJECT_NAME_MAX} onChange={(e) => set('name', e.target.value)} className={FIELD} />
+              <input ref={nameInput} id="project-name" autoFocus value={draft.name} maxLength={PROJECT_NAME_MAX} onChange={(e) => set('name', e.target.value)} className={FIELD} />
             </div>
             <div>
               <label htmlFor="project-description" className={LABEL}>
@@ -245,7 +272,7 @@ function ProjectForm({ project, onClose }: { project: Project | null; onClose: (
           message={creating ? "The project won't be created." : 'Your changes to this project will be lost.'}
           confirmLabel="Discard"
           onConfirm={async () => close()}
-          onCancel={() => setConfirmDiscard(false)}
+          onCancel={keepEditing}
         />
       )}
     </div>

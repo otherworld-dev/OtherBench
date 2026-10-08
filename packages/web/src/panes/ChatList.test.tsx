@@ -700,7 +700,11 @@ describe('ChatList project menu', () => {
     const user = setup();
     await user.click(actions('p-a'));
     await user.click(screen.getByRole('menuitem', { name: 'Project settings…' }));
-    expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p-a' });
+    expect(useGruntStore.getState().projectPage).toEqual({
+      mode: 'edit',
+      projectId: 'p-a',
+      returnFocus: '[data-testid="group-heading-p-a"] [data-heading-main]',
+    });
   });
 
   it('Move down swaps the project with the next one', async () => {

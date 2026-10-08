@@ -623,7 +623,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
             orderedProjects.length,
             {
               rename: () => setRenamingProjectId(menuProject.id),
-              settings: () => openProjectPage({ mode: 'edit', projectId: menuProject.id }),
+              settings: () => openProjectPage({ mode: 'edit', projectId: menuProject.id, returnFocus: headingSelector(menuProject.id) }),
               move: (dir) => void moveProject(menuProject.id, dir),
               requestDelete: () => setDeletingProjectId(menuProject.id),
             }
