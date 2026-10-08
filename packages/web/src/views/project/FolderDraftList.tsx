@@ -43,6 +43,7 @@ export function FolderDraftList({ folders, onChange, canPick }: { folders: Draft
           {folders.map((f, i) => (
             <li key={`${f.display}:${i}`} data-testid="draft-folder" className="flex items-center gap-2 text-xs">
               <span className="min-w-0 flex-1 break-all font-mono">{f.display}</span>
+              {f.away && <span className="shrink-0 text-[var(--warn)]">not on this machine</span>}
               <select
                 aria-label={`Access to ${f.display}`}
                 value={f.entry.access}

@@ -29,9 +29,20 @@ describe('draftFromProject', () => {
       description: 'A workbench',
       instructions: 'Be brief.',
       folder: '/srv/alpha',
-      folders: [{ entry: { workspace: machine('/srv/notes'), access: 'readwrite' }, display: '/srv/notes' }],
+      folders: [{ entry: { workspace: machine('/srv/notes'), access: 'readwrite' }, display: '/srv/notes', away: false }],
       defaultProfileId: 'profile-1',
     });
+  });
+
+  it('marks an other folder that is not on this machine as away', () => {
+    const elsewhere = { ...machine('D:/notes'), nodeId: 'other' };
+    const d = draftFromProject(
+      project({
+        folders: [{ workspace: elsewhere, access: 'read' }],
+        folderViews: [{ workspace: elsewhere, access: 'read', root: null, status: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'other', path: 'D:/notes' } } }],
+      })
+    );
+    expect(d.folders).toEqual([{ entry: { workspace: elsewhere, access: 'read' }, display: 'D:/notes', away: true }]);
   });
 
   it('reads no folder, no other folders and App default as empty', () => {

@@ -10,10 +10,11 @@ import type { CreateProjectBody, FolderEntry, PatchProjectBody } from '../../sta
  * Create/Save send anything.
  */
 
-/** One other folder on the page: what the API is sent back, and the path shown. */
+/** One other folder on the page: what the API is sent back, the path shown, and whether it isn't on this machine. */
 export interface DraftFolder {
   entry: FolderEntry;
   display: string;
+  away?: boolean;
 }
 
 export interface ProjectDraft {
@@ -37,7 +38,7 @@ export function draftFromProject(project: Project): ProjectDraft {
     description: project.description,
     instructions: project.instructions,
     folder: project.workspaceRoot ?? '',
-    folders: (project.folderViews ?? []).map((v) => ({ entry: { workspace: v.workspace, access: v.access }, display: folderPath(v) })),
+    folders: (project.folderViews ?? []).map((v) => ({ entry: { workspace: v.workspace, access: v.access }, display: folderPath(v), away: v.status.status !== 'ok' })),
     defaultProfileId: project.defaultProfileId ?? '',
   };
 }

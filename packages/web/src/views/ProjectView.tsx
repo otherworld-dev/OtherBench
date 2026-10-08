@@ -30,6 +30,18 @@ export function ProjectView({ page, onClose }: ProjectViewProps): JSX.Element {
   return <ProjectForm project={project} returnFocus={page.returnFocus} onClose={onClose} />;
 }
 
+/**
+ * For a project whose main folder isn't on this machine (another machine's
+ * path, or a location not set up here): where it is, so the empty field
+ * doesn't read as "no folder", and what typing one would do.
+ */
+function awayFolderNote(project: Project | null): string | null {
+  if (!project?.workspace || project.workspaceRoot) return null;
+  const status = project.workspaceStatus;
+  const where = status?.status === 'unresolved' && status.hint ? `Set on another machine: ${status.hint.path}.` : "Set to a location that isn't set up on this machine.";
+  return `${where} A path typed here replaces it for every machine.`;
+}
+
 function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
   return (
     <div data-testid="project-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
@@ -70,6 +82,7 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
   const canPick = isDesktop();
   const live = profiles.filter((p) => p.archivedAt === null);
   const instructionsOver = draft.instructions.length > PROJECT_INSTRUCTIONS_MAX;
+  const awayNote = awayFolderNote(project);
 
   function set<K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]): void {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -232,6 +245,11 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
                     </button>
                   )}
                 </div>
+                {awayNote && (
+                  <p data-testid="project-folder-away" className="mt-1 text-xs text-[var(--warn)]">
+                    {awayNote}
+                  </p>
+                )}
                 <p className={HINT}>New chats in this project start here. Existing chats keep theirs.</p>
               </div>
               <div>

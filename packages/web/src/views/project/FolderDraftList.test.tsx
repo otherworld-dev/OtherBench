@@ -44,6 +44,13 @@ describe('FolderDraftList', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('says when a listed folder is not on this machine', () => {
+    render(<FolderDraftList folders={[notes, { entry: { path: 'D:/far', access: 'read' }, display: 'D:/far', away: true }]} onChange={vi.fn()} canPick={false} />);
+    const rows = screen.getAllByTestId('draft-folder');
+    expect(rows[0]).not.toHaveTextContent('not on this machine');
+    expect(rows[1]).toHaveTextContent('not on this machine');
+  });
+
   it("changes a folder's access and removes a folder", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

@@ -239,6 +239,26 @@ describe('ProjectView, editing', () => {
     expect(useGruntStore.getState().projects[0]!.instructions).toBe('Be thorough.');
   });
 
+  it("says where the main folder is when it's on another machine, instead of showing it as unset", () => {
+    useGruntStore.setState({
+      projects: [
+        project({
+          id: 'p1',
+          name: 'Alpha',
+          workspace: { kind: 'machine', nodeId: 'other', root: 'D:/alpha' },
+          workspaceRoot: null,
+          workspaceStatus: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'other', path: 'D:/alpha' } },
+        }),
+      ],
+    });
+    render(<ProjectView page={{ mode: 'edit', projectId: 'p1' }} onClose={vi.fn()} />);
+    expect(screen.getByRole('textbox', { name: 'Main folder' })).toHaveValue('');
+    expect(screen.getByTestId('project-folder-away')).toHaveTextContent('D:/alpha');
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Main folder' }), { target: { value: '/home/me/alpha' } });
+    expect(screen.getByTestId('project-folder-away')).toHaveTextContent('replaces it for every machine');
+  });
+
   it('Save with nothing changed sends nothing and closes', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
