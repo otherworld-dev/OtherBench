@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool } from './artifact-tool.js';
+import { recallTool } from './recall-tool.js';
 import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
 import type {
   ApprovalChoice,
@@ -195,6 +196,8 @@ export class GruntToolProvider implements ToolProvider {
     if (policy.shell) raw.push(...BUILTIN_SHELL_TOOLS);
     // Artifacts (Deck #896): on unless the profile turns them off.
     if (policy.artifacts !== false) raw.push(artifactTool(this.store));
+    // Recall (spec 2026-10-09-recall-design): on unless the profile turns it off.
+    if (policy.recall !== false) raw.push(recallTool(this.store));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
