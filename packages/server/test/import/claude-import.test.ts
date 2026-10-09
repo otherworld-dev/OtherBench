@@ -298,6 +298,14 @@ describe('ClaudeImportService: memory', () => {
     expect(store.globalMemory.get()).toMatchObject({ about: 'Written by me.', note: '' });
   });
 
+  it("doesn't save a condensed note with nothing in it", async () => {
+    const EMPTY_PROJECT_NOTE = '## Pinned\n\n## Goals\n\n## Decisions\n\n## Current focus\n\n## Open questions';
+    respond = (req) => (promptOf(req).includes('shared memory note for the project') ? reply(EMPTY_PROJECT_NOTE) : goodModel(req));
+    const status = await runImport(makeService(), { memory: true });
+    expect(status.report!.memory!.projects).toEqual([{ name: 'Garden', outcome: { status: 'skipped', reason: "claude.ai's notes had nothing worth keeping." } }]);
+    expect(store.projectMemory.get('p1')).toBeNull();
+  });
+
   it('skips memory when no model can run it', async () => {
     const service = makeService({ resolveProfile: async () => Promise.reject(new Error('no API key')) });
     expect((await service.preview(root, 'claude')).memoryModel).toBeNull();

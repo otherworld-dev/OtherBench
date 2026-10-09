@@ -3,8 +3,8 @@ import { dirname } from 'node:path';
 import { setImmediate as breathe } from 'node:timers/promises';
 import { planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@grunt/core/domain/claude-import.js';
 import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, importProjectNotePrompt } from '@grunt/core/domain/claude-import-memory.js';
-import { emptyGlobalMemoryBody, finaliseGlobalSummary } from '@grunt/core/domain/global-memory.js';
-import { emptyMemoryBody, finaliseSummary } from '@grunt/core/domain/memory.js';
+import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@grunt/core/domain/global-memory.js';
+import { emptyMemoryBody, finaliseSummary, hasMemoryContent, MEMORY_HEADINGS } from '@grunt/core/domain/memory.js';
 import { containPath } from '@grunt/core/domain/paths.js';
 import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@grunt/core/domain/workspace.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
@@ -60,6 +60,8 @@ export interface ClaudeImportDeps {
 
 /** The chat id memory calls are made under: the import has no chat of its own. */
 const IMPORT_CHAT_ID = 'claude-import';
+/** A condensed note with nothing in it isn't saved: claude.ai's notes sometimes only say there's nothing to note yet. */
+const NOTHING_TO_KEEP = "claude.ai's notes had nothing worth keeping.";
 /** Chats written between yields to the event loop, so status polls and streams keep moving. */
 const CHATS_PER_BREATH = 20;
 
@@ -425,6 +427,7 @@ export class ClaudeImportService {
       const checked = answer.ok ? finaliseGlobalSummary(current, answer.text) : null;
       if (!answer.ok) note = failed(answer.error);
       else if (!checked!.ok) note = failed(checked!.reason);
+      else if (!hasMemoryContent(checked!.body, GLOBAL_MEMORY_HEADINGS)) note = skipped(NOTHING_TO_KEEP);
       else if (store.globalMemory.get().note !== before) note = skipped('The learned note changed while the import ran, so it was left as it is.');
       else {
         store.globalMemory.saveNote(checked!.body, 'summariser', null, this.now());
@@ -443,6 +446,7 @@ export class ClaudeImportService {
       let outcome: MemoryOutcome;
       if (!answer.ok) outcome = failed(answer.error);
       else if (!checked!.ok) outcome = failed(checked!.reason);
+      else if (!hasMemoryContent(checked!.body, MEMORY_HEADINGS)) outcome = skipped(NOTHING_TO_KEEP);
       else if ((store.projectMemory.get(project.id)?.body ?? null) !== before) outcome = skipped("The project's note changed while the import ran, so it was left as it is.");
       else {
         store.projectMemory.save(project.id, checked!.body, 'summariser', null, this.now());
