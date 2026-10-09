@@ -23,7 +23,10 @@ import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
+import { GlobalMemoryService } from './memory/global.js';
+import { MemoryServices } from './memory/index.js';
 import { ProjectMemoryService } from './memory/service.js';
+import { MemoryQueue } from './memory/shared.js';
 import { createPeerApp } from './peer/app.js';
 import { DEFAULT_PEER_PORT } from './peer/client.js';
 import { IdentityStore } from './peer/identity.js';
@@ -53,12 +56,13 @@ export interface Container {
   /** Content-addressed blob storage for attachments (task 21) -- `routes/attachments.ts` writes to it on upload; `TurnRunner`'s `loadAttachment` (wired below) reads from it to embed real bytes for a vision-capable model. */
   blobStore: BlobStore;
   /**
-   * Project memory's summariser (spec 2026-10-03-project-memory-design §2):
-   * quiet timers, the per-project update queue and each project's last
-   * failure. Always set by `createContainer`; optional only so route tests
-   * that never touch memory can build a Container without one.
+   * The memory summarisers, project (spec 2026-10-03-project-memory-design §2)
+   * and global (spec 2026-10-08-global-memory-design §2): quiet timers, the
+   * one update queue they share and their last failures. Always set by
+   * `createContainer`; optional only so route tests that never touch memory
+   * can build a Container without one.
    */
-  memory?: ProjectMemoryService;
+  memory?: MemoryServices;
   /**
    * App-wide events behind `GET /api/events` (v2 plan, Task 34). Always set by
    * `createContainer`, whose store announces chat changes on it; optional
@@ -307,7 +311,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   events.attach(turnRunner, store);
-  const memory = new ProjectMemoryService({ store, engine, resolveProfile: (id) => resolveProfile({ store, secrets }, id) });
+  const memoryQueue = new MemoryQueue();
+  const memoryDeps = { store, engine, resolveProfile: (id: string) => resolveProfile({ store, secrets }, id), queue: memoryQueue };
+  const memory = new MemoryServices(new ProjectMemoryService(memoryDeps), new GlobalMemoryService(memoryDeps));
   memory.attach(turnRunner);
 
   // This machine's certificate lives beside the secrets file; an in-memory

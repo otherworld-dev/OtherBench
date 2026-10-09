@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   MEMORY_QUIET_MS,
   NO_MEMORY_MODEL_MESSAGE,
@@ -12,16 +11,16 @@ import {
   type MemoryUpdateOutcome,
 } from '@grunt/core/domain/memory.js';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ChatEngine, EngineEvent } from '@grunt/core/ports/chat-engine.js';
+import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { Chat, Project, ProjectMemory, Store } from '@grunt/core/ports/store.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
 import { collectMessageTree } from '../routes/chats.js';
 import { realScheduler, type Scheduler } from './scheduler.js';
+import { MEMORY_UPDATE_TIMEOUT_MS, MemoryQueue, askMemoryModel, errorMessage, pickMemoryProfile } from './shared.js';
 
-/** How long one summariser call may take before it is abandoned. */
-export const MEMORY_UPDATE_TIMEOUT_MS = 120_000;
+export { MEMORY_UPDATE_TIMEOUT_MS } from './shared.js';
 
 export interface ProjectMemoryServiceDeps {
   store: Store;
@@ -32,16 +31,11 @@ export interface ProjectMemoryServiceDeps {
   scheduler?: Scheduler;
   quietMs?: number;
   timeoutMs?: number;
+  /** The update queue it shares with global memory; its own when not given. */
+  queue?: MemoryQueue;
 }
-
-/** Finish reasons (AI SDK and Anthropic spellings) that mean the answer is incomplete or withheld. */
-const TRUNCATING_FINISH_REASONS: ReadonlySet<string> = new Set(['length', 'max_tokens', 'model_context_window_exceeded', 'content-filter', 'refusal', 'error']);
 
 const discarded = (reason: string): MemoryUpdateOutcome => ({ status: 'discarded', reason });
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /** True when nobody saved the note between `before` and `after`. */
 function sameNote(before: ProjectMemory | null, after: ProjectMemory | null): boolean {
@@ -73,10 +67,8 @@ export class ProjectMemoryService {
   private readonly timeoutMs: number;
   /** chatId -> pending quiet timer. */
   private readonly timers = new Map<string, unknown>();
-  /** The tail of the one update queue: at most one summariser call runs at a time across all projects, so a project's updates stay in order. */
-  private tail: Promise<void> = Promise.resolve();
-  /** Updates queued or running. */
-  private outstanding = 0;
+  /** The one update queue: at most one summariser call runs at a time across all projects (and global memory), so a project's updates stay in order. */
+  private readonly queue: MemoryQueue;
   /** projectId -> its last failed update, until the next success. */
   private readonly failures = new Map<string, MemoryFailure>();
   /** projectId + chatId -> an update that is queued but hasn't started; a repeat request joins it. */
@@ -93,6 +85,7 @@ export class ProjectMemoryService {
     this.scheduler = deps.scheduler ?? realScheduler;
     this.quietMs = deps.quietMs ?? MEMORY_QUIET_MS;
     this.timeoutMs = deps.timeoutMs ?? MEMORY_UPDATE_TIMEOUT_MS;
+    this.queue = deps.queue ?? new MemoryQueue();
   }
 
   /** Starts the quiet timer whenever an assistant reply completes. Call once per runner. */
@@ -162,11 +155,8 @@ export class ProjectMemoryService {
   }
 
   /** Resolves once every queued update has finished. */
-  async idle(): Promise<void> {
-    while (this.outstanding > 0) {
-      await this.tail;
-      await Promise.resolve();
-    }
+  idle(): Promise<void> {
+    return this.queue.idle();
   }
 
   /** Drops every pending timer, aborts calls in flight and refuses new work. */
@@ -211,15 +201,11 @@ export class ProjectMemoryService {
     const key = `${projectId}\u0000${chatId}`;
     const waiting = this.waiting.get(key);
     if (waiting) return waiting;
-    this.outstanding += 1;
-    const run = this.tail.then(() => {
+    const run = this.queue.add(() => {
       this.waiting.delete(key);
       return this.runUpdate(projectId, chatId);
     });
     this.waiting.set(key, run);
-    this.tail = run.then(() => {
-      this.outstanding -= 1;
-    });
     return run;
   }
 
@@ -277,110 +263,13 @@ export class ProjectMemoryService {
   }
 
   /** Spec §2: the Memory model setting, then the project's default, then the app default -- the first that exists, isn't archived and resolves. */
-  private async pickProfile(project: Project): Promise<ResolvedProfile | null> {
+  private pickProfile(project: Project): Promise<ResolvedProfile | null> {
     const chosen = this.store.settings.get().memoryProfileId;
-    const candidates = [chosen, project.defaultProfileId, appDefaultProfileId(this.store)];
-    for (const id of new Set(candidates)) {
-      if (id === null) continue;
-      const row = this.store.profiles.get(id);
-      if (!row || row.archivedAt !== null) continue;
-      try {
-        const profile = await this.resolveProfile(id);
-        // The mock engine answers everything with the same canned reply, so
-        // it can never write a note: only use it when it's the chosen model.
-        if (profile.connection.kind === 'mock' && id !== chosen) continue;
-        return profile;
-      } catch {
-        continue;
-      }
-    }
-    return null;
+    return pickMemoryProfile(this.store, this.resolveProfile, [chosen, project.defaultProfileId, appDefaultProfileId(this.store)], chosen);
   }
 
-  /**
-   * One tool-less utility call, abandoned after `timeoutMs`. The whole
-   * instruction is one user message: Claude Code's utility path reads only
-   * that. Every wait on the stream races the timeout, so an engine that
-   * ignores the abort can't hold the project's queue.
-   */
-  private async ask(profile: ResolvedProfile, chatId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
-    const controller = new AbortController();
-    let timedOut = false;
-    let stopped = false;
-    let wake!: () => void;
-    const interrupted = new Promise<'interrupted'>((resolve) => (wake = () => resolve('interrupted')));
-    const stop = (): void => {
-      stopped = true;
-      controller.abort();
-      wake();
-    };
-    this.running.add(stop);
-    const timer = this.scheduler.setTimeout(() => {
-      timedOut = true;
-      stop();
-    }, this.timeoutMs);
-    const timeoutFailure = { ok: false as const, error: `The model didn't answer within ${Math.round(this.timeoutMs / 1000)} s.` };
-    let text = '';
-    let finished = false;
-    let iterator: AsyncIterator<EngineEvent> | undefined;
-    try {
-      iterator = this.engine
-        .stream({
-          profile,
-          messages: [
-            {
-              id: `memory-prompt:${randomUUID()}`,
-              chatId,
-              parentId: null,
-              role: 'user',
-              parts: [{ type: 'text', text: prompt }],
-              status: 'complete',
-              error: null,
-              producedBy: null,
-              createdAt: this.now(),
-            },
-          ],
-          tools: [],
-          signal: controller.signal,
-          chatId,
-          messageId: `memory-update:${randomUUID()}`,
-          workspaceRoot: null,
-          purpose: 'utility',
-        })
-        [Symbol.asyncIterator]();
-      for (;;) {
-        const step = await Promise.race([iterator.next(), interrupted]);
-        if (step === 'interrupted' || step.done) break;
-        const event = step.value;
-        if (event.type === 'text-delta') text += event.text;
-        else if (event.type === 'error') return timedOut ? timeoutFailure : { ok: false, error: event.error.message };
-        else if (event.type === 'finish') {
-          // A cut-off note must never be saved: it can parse as a valid, shorter note.
-          if (TRUNCATING_FINISH_REASONS.has(event.finishReason)) {
-            return { ok: false, error: `The model's answer was cut off (finish reason "${event.finishReason}").` };
-          }
-          // The note is complete; a Claude Code stream can stay open after this.
-          finished = true;
-          break;
-        }
-      }
-    } catch (err) {
-      return timedOut ? timeoutFailure : { ok: false, error: errorMessage(err) };
-    } finally {
-      this.scheduler.clearTimeout(timer);
-      this.running.delete(stop);
-      // Tear the call down (a Claude Code child, say) whether or not it finished.
-      controller.abort();
-      try {
-        void Promise.resolve(iterator?.return?.()).catch(() => undefined);
-      } catch {
-        /* the engine's own problem */
-      }
-    }
-    if (finished) return { ok: true, text };
-    if (timedOut) return timeoutFailure;
-    if (stopped) return { ok: false, error: 'The memory service was shut down.' };
-    return { ok: true, text };
+  private ask(profile: ResolvedProfile, chatId: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+    return askMemoryModel({ engine: this.engine, scheduler: this.scheduler, now: this.now, timeoutMs: this.timeoutMs, running: this.running }, profile, chatId, prompt);
   }
 
   private fail(projectId: string, chatId: string, message: string): MemoryUpdateOutcome {
