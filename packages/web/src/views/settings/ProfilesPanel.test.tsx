@@ -117,6 +117,25 @@ describe('ProfilesPanel', () => {
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ artifacts: false }) })));
   });
 
+  it("saves the Search past chats switch in the profile's tools, on by default", async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'No recall');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Search past chats' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ recall: false }) })));
+  });
+
   beforeEach(reset);
   afterEach(cleanup);
 
@@ -165,7 +184,7 @@ describe('ProfilesPanel', () => {
           name: 'Fast local',
           connectionId: 'conn-1',
           modelId: 'llama3.2',
-          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true },
+          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true },
         })
       )
     );
@@ -408,7 +427,7 @@ describe('ProfilesPanel', () => {
       await user.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() =>
-        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true } }))
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true } }))
       );
     });
 
