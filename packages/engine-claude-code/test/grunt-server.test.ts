@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { gruntArtifactTool, gruntRecallTool, gruntServerName } from '../src/artifact-server.js';
+import { gruntArtifactTool, gruntRecallTool, gruntServerName } from '../src/grunt-server.js';
 
-describe("Grunt's artifact tool for Claude Code", () => {
+describe("Grunt's own tools for Claude Code", () => {
   it('passes the call to the running reply and returns its outcome as JSON, flagging errors', async () => {
     const run = vi.fn(async (args: unknown) => ({ ok: true, echoed: args }));
     const def = gruntArtifactTool(() => run);

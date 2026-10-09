@@ -47,7 +47,7 @@ export interface TurnBinding {
 }
 
 /** Which of Grunt's own tools a process's server carries; fixed when it starts. */
-export interface GruntTools {
+export interface GruntServerSwitches {
   artifacts: boolean;
   recall: boolean;
 }
@@ -106,7 +106,7 @@ export class LiveProcess {
  * environment (`CLAUDE_AGENT_SDK_VERSION`) each time it starts a process.
  * Hashed, so no second plaintext copy of a credential is kept.
  */
-export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntTools): string {
+export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntServerSwitches): string {
   const { cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
     .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))

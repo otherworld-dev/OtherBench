@@ -34,7 +34,7 @@ export class SdkEventMapper {
   private readonly toolNames = new Map<string, string>();
   private sawDelta = false;
 
-  /** `renames`: tool names reported under another name (this process's artifact tool as `artifact`). */
+  /** `renames`: tool names reported under another name (this process's own Grunt tools as `artifact` and `recall`). */
   constructor(private readonly renames: ReadonlyMap<string, string> = new Map()) {}
 
   map(msg: SDKMessage): MappedEvent[] {

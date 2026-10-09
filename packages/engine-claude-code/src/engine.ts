@@ -10,12 +10,12 @@ import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
-import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName } from './artifact-server.js';
+import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName } from './grunt-server.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
-import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntTools, type TurnBinding } from './live.js';
+import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 
@@ -181,7 +181,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // process's Grunt server has each tool or not from its start, so the
     // switches are part of the process key.
     const { artifactTool, recallTool } = this.deps;
-    const own: GruntTools = {
+    const own: GruntServerSwitches = {
       artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
       recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
     };
@@ -302,7 +302,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * reply is running decides its tool calls, and with none running every
    * call is refused.
    */
-  private startProcess(options: Options, key: string, plan: SessionPlan, own: GruntTools): LiveProcess {
+  private startProcess(options: Options, key: string, plan: SessionPlan, own: GruntServerSwitches): LiveProcess {
     this.pool.makeRoom();
     const input = new PromptQueue();
     const abortController = new AbortController();

@@ -18,7 +18,7 @@ export type GateDecision = { allow: true } | { allow: false; reason: string } | 
 /**
  * `opts.own`: the call is to one of this process's own Grunt tools (artifact
  * or recall) -- the engine matched the exact per-process name
- * (artifact-server.ts), never a name alone.
+ * (grunt-server.ts), never a name alone.
  */
 export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean; own?: GruntTool }) => Promise<GateDecision>;
 
