@@ -1,5 +1,6 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import type { AboutOutcome, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
+import type { Project } from '@grunt/core/ports/store.js';
 import type { Connection, Profile } from '@grunt/core/types/config.js';
 import { isDesktop, pickFolder } from '../../desktop/bridge.js';
 import { ApiError, api } from '../../state/api.js';
@@ -13,9 +14,10 @@ export const IMPORT_POLL_MS = 1000;
 
 const PHASE_LABEL: Record<ImportPhase, string> = {
   reading: 'Reading the export',
+  projects: 'Importing projects',
   chats: 'Importing chats',
   artifacts: 'Importing published artifacts',
-  projects: 'Importing projects',
+  cowork: 'Importing Cowork sessions',
   memory: 'Condensing memory',
 };
 
@@ -39,6 +41,17 @@ function hasMemory(preview: ImportPreview): boolean {
   return preview.memory.about || preview.memory.note || preview.memory.projectNotes > 0;
 }
 
+/** The server doesn't announce projects as it makes them, so the sidebar's are fetched again once an import ends; chats come too. */
+function refreshAfterImport(): void {
+  const { setProjects, setChats } = useGruntStore.getState();
+  Promise.all([api.projects.list(), api.chats.list()])
+    .then(([projects, chats]) => {
+      setProjects(projects);
+      setChats(chats);
+    })
+    .catch((err: unknown) => console.error('[grunt-web] failed to reload after the import:', err));
+}
+
 /**
  * Settings > Import (spec 2026-10-09-claude-import-design §6): choose the
  * folder a claude.ai export was downloaded to, check what importing it would
@@ -48,11 +61,15 @@ function hasMemory(preview: ImportPreview): boolean {
 export function ImportPanel(): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
   const connections = useGruntStore((s) => s.connections);
+  const projects = useGruntStore((s) => s.projects);
   const [folder, setFolder] = useState('');
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [checking, setChecking] = useState(false);
   const [profileId, setProfileId] = useState('');
   const [memory, setMemory] = useState(true);
+  const [cowork, setCowork] = useState(false);
+  /** Each Cowork space's project, '' for No project. */
+  const [spaces, setSpaces] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<ImportStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +103,14 @@ export function ImportPanel(): JSX.Element {
     return () => clearInterval(timer);
   }, [running]);
 
+  // Once an import this panel watched ends, the sidebar gets the projects it made.
+  const previousState = useRef<ImportStatus['state'] | null>(null);
+  useEffect(() => {
+    const state = status?.state ?? null;
+    if (previousState.current === 'running' && state !== 'running') refreshAfterImport();
+    previousState.current = state;
+  }, [status?.state]);
+
   async function check(): Promise<void> {
     setChecking(true);
     setError(null);
@@ -94,6 +119,8 @@ export function ImportPanel(): JSX.Element {
       const next = await api.claudeImport.preview(folder.trim(), profileId || null);
       setPreview(next);
       setMemory(next.memoryModel !== null && hasMemory(next));
+      setCowork(false);
+      setSpaces({});
     } catch (err) {
       setError(errorText(err, "Couldn't read that folder -- please try again."));
     } finally {
@@ -105,7 +132,8 @@ export function ImportPanel(): JSX.Element {
     setStarting(true);
     setError(null);
     try {
-      setStatus(await api.claudeImport.start({ folder: from.folder, profileId, memory }));
+      const chosen = Object.fromEntries(Object.entries(spaces).map(([space, project]) => [space, project || null]));
+      setStatus(await api.claudeImport.start({ folder: from.folder, profileId, memory, cowork, spaces: chosen }));
       setPreview(null);
     } catch (err) {
       setError(errorText(err, "The import didn't start -- please try again."));
@@ -127,7 +155,8 @@ export function ImportPanel(): JSX.Element {
       <div className="space-y-2">
         <h3 className={HEADING}>Import from claude.ai</h3>
         <p className={HINT}>
-          Brings your claude.ai chats, projects, published artifacts and memory into Grunt. On claude.ai, open Settings &rarr; Privacy and choose Export data. When
+          Brings your claude.ai chats, projects, published artifacts and memory into Grunt, and if you like the Cowork sessions Claude Desktop keeps on this
+          machine. On claude.ai, open Settings &rarr; Privacy and choose Export data. When
           the email arrives, download every file into one folder (the ZIPs, or what&rsquo;s in them) and choose that folder here. Importing the same export again
           skips what&rsquo;s already here.
         </p>
@@ -175,6 +204,11 @@ export function ImportPanel(): JSX.Element {
           onProfile={setProfileId}
           memory={memory}
           onMemory={setMemory}
+          cowork={cowork}
+          onCowork={setCowork}
+          projects={projects}
+          spaces={spaces}
+          onSpace={(space, project) => setSpaces((current) => ({ ...current, [space]: project }))}
           starting={starting}
           onImport={() => void start(preview)}
         />
@@ -192,13 +226,18 @@ interface PreviewProps {
   onProfile: (id: string) => void;
   memory: boolean;
   onMemory: (on: boolean) => void;
+  cowork: boolean;
+  onCowork: (on: boolean) => void;
+  projects: Project[];
+  spaces: Record<string, string>;
+  onSpace: (space: string, project: string) => void;
   starting: boolean;
   onImport: () => void;
 }
 
-function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory, starting, onImport }: PreviewProps): JSX.Element {
+function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory, cowork, onCowork, projects, spaces, onSpace, starting, onImport }: PreviewProps): JSX.Element {
   const { chats, memory: notes } = preview;
-  const fresh = chats.total - chats.existing;
+  const fresh = chats.total - chats.existing + (cowork && preview.cowork ? preview.cowork.sessions - preview.cowork.existing : 0);
   return (
     <div data-testid="import-preview" className="space-y-4 rounded border border-[var(--border)] p-3">
       <ul className="list-disc space-y-1 pl-5">
@@ -214,6 +253,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
         )}
         {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
         {preview.artifacts.length > 0 && <li>{count(preview.artifacts.length, 'published artifact')}, each in a chat of its own</li>}
+        {preview.chatList.found && <li>{count(chats.filed, 'chat')} filed into {chats.filed === 1 ? 'its project' : 'their projects'}, from claude.ai&rsquo;s chat list</li>}
         {preview.projects.map((p) => (
           <li key={p.id}>
             Project &ldquo;{p.name}&rdquo;: {p.action === 'create' ? 'new' : p.action === 'merge' ? `merges into your project “${p.mergeInto ?? p.name}”` : 'already imported'}
@@ -226,6 +266,50 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
           <li>{count(preview.filesNotIncluded, 'image or file', 'images and files')} aren&rsquo;t in the export; each shows as a note in its chat</li>
         )}
       </ul>
+
+      {!preview.chatList.found && (
+        <p data-testid="chat-list-hint" className={HINT}>
+          Chats go into No project: the export doesn&rsquo;t say which project each was in.{' '}
+          {preview.chatList.url ? (
+            <>
+              To file them, open <span className="font-mono">{preview.chatList.url}</span> in a browser where you&rsquo;re logged into claude.ai, save the page as{' '}
+              <span className="font-mono">chat_conversations.json</span> in this folder, and check the folder again.
+            </>
+          ) : (
+            <>To file them, save claude.ai&rsquo;s chat list into this folder as <span className="font-mono">chat_conversations.json</span> and check the folder again.</>
+          )}
+        </p>
+      )}
+
+      {preview.cowork && (
+        <div className="space-y-2">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" aria-label="Import Cowork sessions" checked={cowork} onChange={(e) => onCowork(e.target.checked)} />
+            Also import the {count(preview.cowork.sessions, 'Cowork session')} on this machine
+            {preview.cowork.existing > 0 ? ` (${preview.cowork.existing.toLocaleString('en-US')} already imported)` : ''}
+          </label>
+          <p className={HINT}>
+            {count(preview.cowork.messages, 'message')} and {count(preview.cowork.images, 'image')}, from <span className="font-mono">{preview.cowork.root}</span>.
+          </p>
+          {cowork &&
+            preview.cowork.spaces.map((space) => (
+              <label key={space.id} className="flex flex-wrap items-center gap-2">
+                <span>
+                  The space with {space.titles.map((t) => `“${t}”`).join(', ')}
+                  {space.sessions > space.titles.length ? ` and ${space.sessions - space.titles.length} more` : ''} goes into
+                </span>
+                <select aria-label={`Project for the Cowork space with ${space.titles[0] ?? space.id}`} value={spaces[space.id] ?? ''} onChange={(e) => onSpace(space.id, e.target.value)} className={INPUT}>
+                  <option value="">No project</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+        </div>
+      )}
 
       <label className="flex items-center gap-2">
         Imported chats use
@@ -351,7 +435,7 @@ function outcomeText(outcome: MemoryOutcome | AboutOutcome): string {
 }
 
 function ReportView({ report }: { report: ImportReport }): JSX.Element {
-  const failures = [...report.chats.failed, ...report.artifacts.failed, ...report.projects.failed, ...report.fileErrors];
+  const failures = [...report.chats.failed, ...report.artifacts.failed, ...(report.cowork?.failed ?? []), ...report.projects.failed, ...report.fileErrors];
   const { projects, memory } = report;
   return (
     <div className="space-y-2">
@@ -361,7 +445,15 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
           {report.chats.existing > 0 ? `; ${report.chats.existing.toLocaleString('en-US')} were already here` : ''}
           {report.chats.newer > 0 ? `, ${report.chats.newer.toLocaleString('en-US')} of them with newer messages on claude.ai that weren't added` : ''}
         </li>
+        {report.chats.filed > 0 && <li>Filed {count(report.chats.filed, 'chat')} into {report.chats.filed === 1 ? 'its project' : 'their projects'}</li>}
         {report.artifacts.imported + report.artifacts.existing > 0 && <li>Imported {count(report.artifacts.imported, 'published artifact')}</li>}
+        {report.cowork && (
+          <li>
+            Imported {count(report.cowork.imported, 'Cowork session')} ({count(report.cowork.messages, 'message')}, {count(report.cowork.images, 'image')})
+            {report.cowork.existing > 0 ? `; ${report.cowork.existing.toLocaleString('en-US')} were already here` : ''}
+            {report.cowork.filed > 0 ? `; ${report.cowork.filed.toLocaleString('en-US')} filed into projects` : ''}
+          </li>
+        )}
         {projects.created.length > 0 && <li>New projects: {projects.created.join(', ')}</li>}
         {projects.merged.length > 0 && <li>Merged into your projects: {projects.merged.join(', ')}</li>}
         {report.docs.folders.map((f) => (
