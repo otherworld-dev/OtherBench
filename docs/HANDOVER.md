@@ -168,6 +168,28 @@ of work landed after that plan closed out:
   conversations, 6,532 messages) imported 442 chats in about 15 seconds,
   plus about 30 seconds for seven memory calls; the other 44 conversations
   came through blank and are left out.
+  The export doesn't say which project a chat was in or which branch it
+  showed. claude.ai's own chat list does (`chatListUrl`, the page its
+  sidebar loads), so when the user saves it into the folder as
+  `chat_conversations.json` the import files each chat under its project
+  and opens it on that branch; a re-run files chats already imported that
+  are still in No project, never moving one the user filed. The preview
+  gives the list's URL, with the organisation read off the export's
+  manifest. Projects are written before chats, so a chat is filed as it's
+  written, and the panel fetches the projects and chats again when an
+  import ends, since the server doesn't announce projects as it makes them.
+- **Import from Cowork** (same panel). Cowork sessions aren't in the
+  claude.ai export: Claude Desktop keeps them on the machine, under
+  `%APPDATA%\Claude\local-agent-mode-sessions` on Windows, as a metadata
+  file and a Claude Code transcript each. With the box ticked, each session
+  becomes a chat (`packages/core/src/domain/cowork-import.ts`): a prompt is a
+  user message and the rest of the turn one reply, labelled with the model
+  that made it, following the branch the session ended on. Pasted images go
+  into the blob store as real attachments, pinned until their rows exist as
+  an upload's are. Only claude.ai knows the spaces' names, so the panel
+  names each space by a few of its sessions' titles and the user picks its
+  project. `GRUNT_COWORK_ROOT` points the server at another folder, or
+  nowhere when empty; the e2e server gets a fixture folder that way.
 - **App-wide events** (#771, v2 plan Task 34). `GET /api/events` is an SSE
   stream of `AppEvent`s (`packages/core/src/types/events.ts`): chat
   created/updated/deleted, turn started/finished, approval
@@ -715,7 +737,11 @@ copied in). The learned note and project notes are checked the same way as
 a summariser update before they are saved, and both reach chats fenced as
 untrusted background. About you can't be fenced (it is the user's own
 words, which the model follows), so the import only drafts it: the user
-reads it in the report and saves it, or doesn't.
+reads it in the report and saves it, or doesn't. Cowork is read only from
+the folder Claude Desktop keeps on this machine (or `GRUNT_COWORK_ROOT`),
+never a path the client names; session and transcript ids that could make a
+path are refused, every path goes through `containPath`, and transcripts are
+capped at 512 MiB each and 2 GiB in all.
 
 ### Claude Code engine
 
@@ -921,9 +947,12 @@ this on startup.
 - **Project memory is summarised only by the machine a chat runs on**, so
   two machines don't redo and overwrite each other's notes. Its version
   history stays on the machine that wrote it.
-- **Chats imported from claude.ai aren't filed under projects.** The export
-  doesn't record which project a conversation was in, so every imported
-  chat lands in No project and has to be moved by hand.
+- **Chats are only filed under projects with claude.ai's chat list.** The
+  export doesn't record which project a conversation was in; without the
+  saved list every imported chat lands in No project.
+- **Cowork's own outputs aren't imported.** A session's `outputs/` folder
+  (files it wrote) stays where it is, and images inside tool results become
+  notes.
 - **Importing again with memory ticked folds claude.ai's notes in again.**
   The learned note and the project notes take whatever the model makes of
   the notes a second time. Untick the box for a re-run.
