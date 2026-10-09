@@ -115,6 +115,9 @@ export class GlobalMemoryService {
     for (const chat of this.store.chats.list()) {
       try {
         if (!this.contributes(chat)) continue;
+        // Up to date (the usual case, and every chat right after migration 019): skip it without reading its messages.
+        const cursor = chat.globalMemoryCursor ?? null;
+        if (cursor !== null && cursor === this.store.messages.latestId(chat.id)) continue;
         const replies = this.pending(chat).filter((m) => m.role === 'assistant');
         if (replies.length === 0) continue;
         const wait = this.quietMs - (now - Math.max(...replies.map((m) => m.createdAt)));

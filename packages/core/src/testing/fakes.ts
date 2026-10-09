@@ -946,6 +946,13 @@ class InMemoryMessageRepo implements MessageRepo {
     return matches[0] ? structuredClone(matches[0]) : null;
   }
 
+  latestId(chatId: string): string | null {
+    const newest = [...this.byId.values()]
+      .filter((m) => m.chatId === chatId)
+      .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))[0];
+    return newest?.id ?? null;
+  }
+
   searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];

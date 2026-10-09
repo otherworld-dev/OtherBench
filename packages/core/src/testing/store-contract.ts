@@ -487,6 +487,16 @@ export function runStoreContract(
         expect(store.projects.get('proj-a')!.workspace).toBeNull();
       });
 
+      it('latestId is the newest message in a chat, by time then id, or null when it has none', () => {
+        const chatId = seedChat(store, 'chat-a').chat.id;
+        expect(store.messages.latestId(chatId)).toBeNull();
+        store.messages.create(makeMessageInput({ id: 'm1', chatId, createdAt: 10 }));
+        store.messages.create(makeMessageInput({ id: 'm3', chatId, parentId: 'm1', createdAt: 20 }));
+        store.messages.create(makeMessageInput({ id: 'm2', chatId, parentId: 'm1', createdAt: 20 }));
+        expect(store.messages.latestId(chatId)).toBe('m3');
+        expect(store.messages.latestId('no-such-chat')).toBeNull();
+      });
+
       it('a message records the machine that wrote it, defaulting to this one', () => {
         const chatId = seedChat(store, 'chat-a').chat.id;
         const self = store.nodes.self().id;

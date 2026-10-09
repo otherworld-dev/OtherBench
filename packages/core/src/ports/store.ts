@@ -159,7 +159,10 @@ export interface ChatRepo {
 export interface Project {
   id: string;
   name: string;
-  /** A line for the user about the project, shown in the Inspector; never sent to a model (spec 2026-10-08-project-page-design). */
+  /**
+   * A line about the project, shown in the Inspector and, cut to 120 characters, in the project index
+   * every chat with global memory gets (spec 2026-10-08-global-memory-design §1).
+   */
   description: string;
   /** Added to the system prompt of every chat in the project, as the user's instructions (spec 2026-10-08-project-page-design §2). */
   instructions: string;
@@ -324,6 +327,8 @@ export interface MessageRepo {
   updateEngineMeta(id: string, meta: EngineMeta): void;
   /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */
   latestBySession(chatId: string, sessionId: string): CanonMessage | null;
+  /** The id of the newest message in `chatId` (by createdAt, then id), or null: lets the memory sweeps skip an up-to-date chat without reading it. */
+  latestId(chatId: string): string | null;
   /** Records that the user kept this compare variant at `at` (see `CanonMessage.keptAt`). Throws when the id does not exist. */
   markKept(id: string, at: number): void;
 }

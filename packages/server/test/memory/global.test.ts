@@ -275,6 +275,15 @@ describe('global memory: startup sweep', () => {
     expect(requests.map((r) => r.chatId)).toEqual(['old']);
     expect(clock.pending()).toHaveLength(1);
   });
+
+  it("skips a chat whose cursor is already its newest message without reading its messages", () => {
+    addChat('done');
+    const { replyId } = exchange('done', 'a', 'b', clock.time - MEMORY_QUIET_MS - 10);
+    store.chats.update('done', { globalMemoryCursor: replyId });
+    const roots = vi.spyOn(store.messages, 'roots');
+    makeService().sweep();
+    expect(roots).not.toHaveBeenCalledWith('done');
+  });
 });
 
 describe('memory services together', () => {

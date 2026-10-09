@@ -188,7 +188,7 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
                 onChange={(e) => set('description', e.target.value)}
                 className={FIELD}
               />
-              <p className={HINT}>For you, shown in the Inspector. Not sent to the model.</p>
+              <p className={HINT}>Shown in the Inspector, and in the list of your projects that every chat gets (unless its profile has global memory off).</p>
             </div>
             <div>
               <label htmlFor="project-instructions" className={LABEL}>

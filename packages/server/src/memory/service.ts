@@ -137,6 +137,8 @@ export class ProjectMemoryService {
     for (const chat of this.store.chats.list()) {
       try {
         if (!this.contributes(chat) || chat.projectId === null) continue;
+        // Up to date (the usual case): skip it without reading its messages.
+        if (chat.memoryCursor !== null && chat.memoryCursor === this.store.messages.latestId(chat.id)) continue;
         const replies = this.pending(chat).filter((m) => m.role === 'assistant');
         if (replies.length === 0) continue;
         const newest = Math.max(...replies.map((m) => m.createdAt));
