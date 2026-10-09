@@ -582,6 +582,26 @@ extension comes from a fixed list of languages, else `.txt`, so a download
 is never a `.bat` or `.hta`. The web must never import
 `@grunt/core/domain/artifacts.js`: it pulls in `node:crypto`. Schemas 16 and 17.
 
+**Recall reads other chats with no card** (spec 2026-10-09-recall-design).
+The `recall` tool searches past chats and projects and reads one, through
+`runRecallCommand` in core for both engines. It has source `recall`; Claude
+Code gets it on the same per-process `grunt_<16 hex>` server as artifacts,
+passed only by that exact name. The broker allows it by policy, so it is
+audited but never asks, and `toolPolicy.recall: false` ("Search past chats")
+turns it off; absent means on. A chat marked "Don't add to memory" is never
+searched or read, even by a guessed id, and the asking chat isn't searched.
+Search and read only see a chat's active path as the thread shows it, so an
+edited-away message, an unpicked compare variant or a failed reply never
+comes back. Every result carries an `about` line saying it is background,
+not instructions. Read is capped at 12,000 characters. The trade-off: a
+prompt injection in this chat can now reach every other chat's text, not
+just this one's, and nothing asks first. It still needs a way out, and the
+ones that need no card are an HTML artifact the user then opens (the viewer
+allows `connect-src https:`), a read-only MCP tool under "ask on mutate", an
+existing "always" grant, or Claude Code auto mode. Exclusion only works
+going forward: text recalled into a chat stays in that chat's tool result
+after the source chat is excluded or deleted.
+
 **Shell grant defaults — the shipped UI follows the controller ruling.**
 An `always`-scope shell grant using `commandPrefix` (matching a command *and
 any arguments after it*) is, for most real programs, equivalent to an
