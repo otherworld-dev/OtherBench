@@ -87,6 +87,15 @@ describe('PermissionBroker', () => {
     expect(broker.decide(artifact, {}, { ...always, artifacts: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
   });
 
+  it('allows recall calls without a card, even under "always ask", unless the profile turns Search past chats off', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
+    const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+    const recall = { name: 'recall', description: '', parameters: {}, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    expect(broker.decide(recall, { command: 'search', query: 'x' }, always, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    expect(broker.decide(recall, {}, { ...always, recall: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Searching past chats is turned off for this profile.' });
+  });
+
   it("gives no Claude Code tool the artifact tool's pass by its name: any MCP server can take a name", () => {
     const broker = new PermissionBroker(new InMemoryStore());
     const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: '/ws', signal: new AbortController().signal };

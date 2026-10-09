@@ -179,6 +179,14 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Recall (spec 2026-10-09-recall-design) only reads the user's own chats
+    // and project notes, never one marked "Don't add to memory", so like
+    // artifacts it never needs a card; the profile's "Search past chats"
+    // switch (checked above) is how it's turned off.
+    if (tool.source === 'recall') {
+      return { kind: 'allow', grantedBy: 'policy' };
+    }
+
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
       // Name-based, not declared-risk-based: only Claude Code's known file-read tools.
@@ -465,6 +473,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return agentPolicyDenial(tool.name, policy);
     case 'artifact':
       return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
+    case 'recall':
+      return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

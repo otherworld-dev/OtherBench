@@ -662,6 +662,37 @@ describe('TurnRunner names the tools a turn can use', () => {
     expect(engine.requests[0]!.messages.at(-1)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
   });
 
+  it('tells the model how to use recall, and points the project index at it, when the turn offers the tool', async () => {
+    const store = new InMemoryStore();
+    store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null });
+    store.projects.create({ id: 'site', name: 'Website', workspaceRoot: null, defaultProfileId: null });
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, projectId: 'proj' });
+    const engine = new FakeChatEngine([finish]);
+    const recall = { name: 'recall', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const withTool = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [recall] }) });
+    await turn(withTool, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    const offered = engine.requests[0]!.profile.systemPrompt!;
+    expect(offered).toContain('# Looking things up');
+    expect(offered).toContain('look it up with the recall tool');
+
+    const without = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider() });
+    await turn(without, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    const notOffered = engine.requests[1]!.profile.systemPrompt!;
+    expect(notOffered).not.toContain('# Looking things up');
+    expect(notOffered).toContain('If you need more than this, ask.');
+  });
+
+  it("offers no recall tool to a model that can't use tools", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const recall = { name: 'recall', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [recall] }) });
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off'), model: makeModel({ supportsTools: false }) }));
+    expect(engine.requests[0]!.tools).toEqual([]);
+    expect(engine.requests[0]!.profile.systemPrompt ?? '').not.toContain('# Looking things up');
+  });
+
   it('says nothing for a turn with no tools, or for Claude Code, which runs its own', async () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
