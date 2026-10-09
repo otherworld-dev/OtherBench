@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { toModelMessages, type ModelCapabilities } from '../src/convert.js';
+import { replayToolName, toModelMessages, type ModelCapabilities } from '../src/convert.js';
 
 let counter = 0;
 function makeMessage(role: CanonMessage['role'], parts: Part[]): CanonMessage {
@@ -141,6 +141,22 @@ describe('toModelMessages', () => {
         ],
       },
     ]);
+  });
+
+  it('replays a tool name no provider would take (as imported from claude.ai) in a form they do', async () => {
+    const messages: CanonMessage[] = [
+      makeMessage('assistant', [
+        { type: 'tool-call', id: 'toolu_1', name: 'Home Assistant:ha_get_state', args: {} },
+        { type: 'tool-result', id: 'toolu_1', name: 'Home Assistant:ha_get_state', result: 'on', isError: false },
+      ]),
+    ];
+
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, noAttachments);
+
+    expect(result.map((m) => (m.content as { toolName?: string }[])[0]!.toolName)).toEqual(['Home_Assistant_ha_get_state', 'Home_Assistant_ha_get_state']);
+    expect(replayToolName('read_file')).toBe('read_file');
+    expect(replayToolName('x'.repeat(70))).toHaveLength(64);
+    expect(replayToolName(':::')).toBe('_');
   });
 
   it('marks a failed tool result as an error output', async () => {
