@@ -33,14 +33,28 @@ export interface ClaudeExportRead {
   files: ClaudeExportFiles;
   /** Where each part was found, relative to the folder: for the preview. */
   sources: string[];
+  /** The claude.ai organisation the export is from, read off its manifest's download links, or null. */
+  organizationId: string | null;
 }
 
-type Part = { kind: 'conversations' } | { kind: 'project' } | { kind: 'memory' } | { kind: 'artifact-meta'; artifact: string } | { kind: 'artifact-html'; artifact: string; version: string };
+type Part =
+  | { kind: 'conversations' }
+  | { kind: 'conversation-list' }
+  | { kind: 'manifest' }
+  | { kind: 'project' }
+  | { kind: 'memory' }
+  | { kind: 'artifact-meta'; artifact: string }
+  | { kind: 'artifact-html'; artifact: string; version: string };
 
 /** What an entry is, from its path inside the export (any leading folders ignored), or null for what the import doesn't use. */
 export function classifyExportPath(path: string): Part | null {
   const p = path.replace(/\\/g, '/');
-  if (basename(p) === 'conversations.json') return { kind: 'conversations' };
+  const name = basename(p);
+  if (name === 'conversations.json') return { kind: 'conversations' };
+  // claude.ai's chat list, saved by the user from its own API (chatListUrl); a browser may add " (1)".
+  if (/^chat_conversations[^/]*\.json$/i.test(name)) return { kind: 'conversation-list' };
+  // The export email's manifest, which names the organisation in its download links.
+  if (/^manifest-[^/]*\.json$/i.test(name)) return { kind: 'manifest' };
   if (/(^|\/)projects\/[^/]+\.json$/.test(p)) return { kind: 'project' };
   if (/(^|\/)memories\/[^/]+\.json$/.test(p)) return { kind: 'memory' };
   const meta = /(^|\/)artifacts\/([^/]+)\/artifact\.json$/.exec(p);
@@ -54,6 +68,8 @@ class Collector {
   readonly conversations: unknown[] = [];
   readonly projects: unknown[] = [];
   readonly memories: unknown[] = [];
+  readonly conversationList: unknown[] = [];
+  organizationId: string | null = null;
   readonly artifactMeta = new Map<string, unknown>();
   readonly artifactHtml = new Map<string, Record<string, string>>();
   readonly sources: string[] = [];
@@ -91,6 +107,12 @@ class Collector {
     } else if (part.kind === 'memory') {
       this.memories.push(value);
       this.sources.push(source);
+    } else if (part.kind === 'conversation-list') {
+      this.conversationList.push(value);
+      this.sources.push(source);
+    } else if (part.kind === 'manifest') {
+      const link = JSON.stringify(value).match(/\/export\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/download\//i);
+      this.organizationId ??= link?.[1] ?? null;
     } else {
       this.artifactMeta.set(part.artifact, value);
     }
@@ -98,7 +120,11 @@ class Collector {
 
   result(): ClaudeExportRead {
     const artifacts = [...this.artifactMeta].map(([id, meta]) => ({ meta, html: this.artifactHtml.get(id) ?? {} }));
-    return { files: { conversations: this.conversations, projects: this.projects, memories: this.memories, artifacts }, sources: this.sources };
+    return {
+      files: { conversations: this.conversations, projects: this.projects, memories: this.memories, artifacts, conversationList: this.conversationList },
+      sources: this.sources,
+      organizationId: this.organizationId,
+    };
   }
 }
 

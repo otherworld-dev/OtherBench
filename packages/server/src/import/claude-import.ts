@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setImmediate as breathe } from 'node:timers/promises';
-import { planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@grunt/core/domain/claude-import.js';
+import { chatListUrl, planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@grunt/core/domain/claude-import.js';
+import { emptyCoworkStats, planCoworkSession, type CoworkChat, type CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
 import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, importProjectNotePrompt } from '@grunt/core/domain/claude-import-memory.js';
 import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@grunt/core/domain/global-memory.js';
 import { emptyMemoryBody, finaliseSummary, hasMemoryContent, MEMORY_HEADINGS } from '@grunt/core/domain/memory.js';
@@ -9,13 +10,16 @@ import { containPath } from '@grunt/core/domain/paths.js';
 import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@grunt/core/domain/workspace.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { Project, Store } from '@grunt/core/ports/store.js';
-import type { AboutOutcome, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
+import type { AboutOutcome, CoworkPreview, ImportPhase, ImportPreview, ImportReport, ImportStart, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
 import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
+import { withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
+import { sha256Of, type BlobStore, type StoredBlob } from '@grunt/store-sqlite/blob-store.js';
 import { askMemoryModel, errorMessage, MEMORY_UPDATE_TIMEOUT_MS, pickMemoryProfile, type MemoryQueue } from '../memory/shared.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
 import { appDefaultProfileId } from '../profile-resolution.js';
 import type { AppEventBus } from '../stream/events.js';
 import { readClaudeExport, type ClaudeExportRead } from './claude-reader.js';
+import { readCoworkSessions } from './cowork-reader.js';
 
 /**
  * Import from claude.ai (spec 2026-10-09-claude-import-design): previews an
@@ -53,6 +57,11 @@ export interface ClaudeImportDeps {
   /** Where docs and claude.ai's memory files go; made when first needed. */
   importRoot: string;
   read?: (folder: string) => Promise<ClaudeExportRead>;
+  /** Where pasted Cowork images are stored, as uploads are. Without it they become notes. */
+  blobStore?: BlobStore;
+  /** Where Claude Desktop keeps Cowork sessions on this machine; null or unset when there's nowhere to look. */
+  coworkRoot?: string | null;
+  readCowork?: (root: string) => Promise<CoworkSessionFiles[]>;
   scheduler?: Scheduler;
   now?: () => number;
   timeoutMs?: number;
@@ -81,6 +90,19 @@ function failed(reason: string): MemoryOutcome & AboutOutcome {
   return { status: 'failed', reason };
 }
 
+/** What happened to one chat: new, or already here (with messages it lacks or not), and whether it was put in a project. */
+interface ChatOutcome {
+  imported: boolean;
+  newer: boolean;
+  filed: boolean;
+}
+
+/** Pins every sha against blob GC until `fn` has finished (`withPinnedSha`, one inside another). */
+function withPinnedShas<T>(shas: string[], fn: () => Promise<T>): Promise<T> {
+  const [first, ...rest] = shas;
+  return first === undefined ? fn() : withPinnedSha(first, () => withPinnedShas(rest, fn));
+}
+
 /** Whether an imported chat has messages in the export that it doesn't have here: added on claude.ai since the first import. */
 function hasNewer(store: Store, chat: ImportedChat): boolean {
   return chat.messages.some((m) => store.messages.get(m.id) === null);
@@ -94,12 +116,14 @@ export class ClaudeImportService {
   private disposed = false;
   private readonly running = new Set<() => void>();
   private readonly read: (folder: string) => Promise<ClaudeExportRead>;
+  private readonly readCowork: (root: string) => Promise<CoworkSessionFiles[]>;
   private readonly scheduler: Scheduler;
   private readonly now: () => number;
   private readonly timeoutMs: number;
 
   constructor(private readonly deps: ClaudeImportDeps) {
     this.read = deps.read ?? readClaudeExport;
+    this.readCowork = deps.readCowork ?? readCoworkSessions;
     this.scheduler = deps.scheduler ?? realScheduler;
     this.now = deps.now ?? Date.now;
     this.timeoutMs = deps.timeoutMs ?? MEMORY_UPDATE_TIMEOUT_MS;
@@ -124,6 +148,7 @@ export class ClaudeImportService {
     const about = store.globalMemory.get().about;
     const model = await this.memoryProfile(profileId);
     const existing = plan.chats.filter((c) => store.chats.get(c.id) !== null);
+    const planned = new Set(plan.projects.map((p) => p.id));
     return {
       folder,
       sources: read.sources,
@@ -131,9 +156,12 @@ export class ClaudeImportService {
         total: plan.chats.length,
         existing: existing.length,
         newer: existing.filter((c) => hasNewer(store, c)).length,
+        filed: plan.chats.filter((c) => c.projectId && (planned.has(c.projectId) || store.projects.get(c.projectId) !== null)).length,
         messages: plan.stats.messages,
         branched: plan.stats.branchedChats,
       },
+      chatList: { found: plan.chatList, url: read.organizationId ? chatListUrl(read.organizationId) : null },
+      cowork: await this.coworkPreview(profileId),
       emptyChats: plan.stats.emptyConversations + plan.stats.malformedConversations,
       artifacts: plan.artifactChats.map((c) => ({ title: c.title, versions: c.artifact?.versions.length ?? 0, existing: store.chats.get(c.id) !== null })),
       projects: plan.projects.map((p) => {
@@ -164,20 +192,50 @@ export class ClaudeImportService {
     };
   }
 
+  /** The Cowork sessions on this machine, planned, or [] when there's nowhere to look or nothing there. */
+  private async coworkChats(profile: { id: string; connectionId: string }): Promise<CoworkChat[]> {
+    const root = this.deps.coworkRoot;
+    if (!root) return [];
+    const stats = emptyCoworkStats();
+    return (await this.readCowork(root)).map((files) => planCoworkSession(files, profile, stats)).filter((c): c is CoworkChat => c !== null);
+  }
+
+  private async coworkPreview(profileId: string | null): Promise<CoworkPreview | null> {
+    const chats = await this.coworkChats({ id: profileId ?? 'preview', connectionId: 'preview' });
+    if (chats.length === 0 || !this.deps.coworkRoot) return null;
+    const spaces = new Map<string, CoworkChat[]>();
+    for (const chat of chats) if (chat.spaceId) spaces.set(chat.spaceId, [...(spaces.get(chat.spaceId) ?? []), chat]);
+    return {
+      root: this.deps.coworkRoot,
+      sessions: chats.length,
+      existing: chats.filter((c) => this.deps.store.chats.get(c.id) !== null).length,
+      messages: chats.reduce((n, c) => n + c.messages.length, 0),
+      images: chats.reduce((n, c) => n + c.images.length, 0),
+      spaces: [...spaces].map(([id, inSpace]) => ({ id, sessions: inSpace.length, titles: inSpace.slice(0, 5).map((c) => c.title) })),
+    };
+  }
+
   /**
-   * Reads the export and starts the import in the background, returning its
-   * first status. Throws `ImportBusyError`, `ImportInputError`, or the
-   * reader's `ClaudeExportError` before anything is written.
+   * Reads the export (and, when asked, the Cowork sessions) and starts the
+   * import in the background, returning its first status. Throws
+   * `ImportBusyError`, `ImportInputError`, or the reader's
+   * `ClaudeExportError` before anything is written.
    */
-  async start(input: { folder: string; profileId: string; memory: boolean }): Promise<ImportStatus> {
+  async start(input: ImportStart): Promise<ImportStatus> {
     if (this.busy) throw new ImportBusyError();
     this.busy = true;
     let plan: ImportPlan;
     let profile: Profile;
+    let cowork: CoworkChat[] | null = null;
+    const spaces = input.spaces ?? {};
     try {
       profile = this.checkProfile(input.profileId);
+      for (const projectId of Object.values(spaces)) {
+        if (projectId !== null && !this.deps.store.projects.get(projectId)) throw new ImportInputError(`Project "${projectId}" not found.`);
+      }
       const read = await this.read(input.folder);
       plan = planClaudeImport(read.files, { id: profile.id, connectionId: profile.connectionId });
+      if (input.cowork) cowork = await this.coworkChats(profile);
     } catch (err) {
       this.busy = false;
       throw err;
@@ -185,15 +243,15 @@ export class ClaudeImportService {
     const memorySteps = input.memory ? 2 + plan.projects.filter((p) => p.memory.length > 0).length : 0;
     this.current = {
       state: 'running',
-      phase: 'chats',
+      phase: 'projects',
       done: 0,
-      total: plan.chats.length + plan.artifactChats.length + plan.projects.length + memorySteps,
+      total: plan.projects.length + plan.chats.length + plan.artifactChats.length + (cowork?.length ?? 0) + memorySteps,
       startedAt: this.now(),
       finishedAt: null,
       report: null,
       error: null,
     };
-    this.job = this.run(plan, profile.id, input.memory).finally(() => {
+    this.job = this.run(plan, profile.id, input.memory, cowork, spaces).finally(() => {
       this.busy = false;
     });
     return this.status();
@@ -238,9 +296,10 @@ export class ClaudeImportService {
     this.current.done = Math.min(this.current.total, this.current.done + 1);
   }
 
-  private async run(plan: ImportPlan, profileId: string, memory: boolean): Promise<void> {
+  private async run(plan: ImportPlan, profileId: string, memory: boolean, cowork: CoworkChat[] | null, spaces: Record<string, string | null>): Promise<void> {
     const report: ImportReport = {
-      chats: { imported: 0, existing: 0, newer: 0, messages: 0, failed: [] },
+      chats: { imported: 0, existing: 0, newer: 0, filed: 0, messages: 0, failed: [] },
+      cowork: cowork ? { imported: 0, existing: 0, filed: 0, messages: 0, images: 0, failed: [] } : null,
       emptyChats: plan.stats.emptyConversations + plan.stats.malformedConversations,
       artifacts: { imported: 0, existing: 0, failed: [] },
       projects: { created: [], merged: [], existing: [], failed: [], skipped: plan.stats.projectsSkipped },
@@ -255,30 +314,8 @@ export class ClaudeImportService {
     try {
       // The job starts on the next tick, so `start` always answers with it running.
       await breathe();
-      let written = 0;
-      for (const [phase, chats, into] of [
-        ['chats', plan.chats, report.chats],
-        ['artifacts', plan.artifactChats, report.artifacts],
-      ] as const) {
-        for (const chat of chats) {
-          this.step(phase);
-          try {
-            const outcome = this.writeChat(chat, profileId);
-            if (outcome === 'imported') {
-              into.imported++;
-              if (into === report.chats) report.chats.messages += chat.messages.length;
-            } else {
-              into.existing++;
-              if (outcome === 'newer' && into === report.chats) report.chats.newer++;
-            }
-          } catch (err) {
-            into.failed.push({ title: chat.title, error: errorMessage(err) });
-          }
-          this.tick();
-          if (++written % CHATS_PER_BREATH === 0) await breathe();
-        }
-      }
 
+      // Projects first, so a chat can be filed under its project as it's written.
       const targets: { planned: ImportedProject; project: Project }[] = [];
       const others = this.otherProjects(plan);
       for (const planned of plan.projects) {
@@ -289,6 +326,56 @@ export class ClaudeImportService {
           report.projects.failed.push({ title: planned.name, error: errorMessage(err) });
         }
         this.tick();
+      }
+      // claude.ai's project ids to Grunt's: an imported project keeps its id, a merged one is the project it merged into.
+      const projectFor = new Map(targets.map((t) => [t.planned.id, t.project.id]));
+      const groundedProject = (claudeId: string | null | undefined): string | null =>
+        claudeId ? (projectFor.get(claudeId) ?? (this.deps.store.projects.get(claudeId) ? claudeId : null)) : null;
+
+      let written = 0;
+      for (const [phase, chats, into] of [
+        ['chats', plan.chats, report.chats],
+        ['artifacts', plan.artifactChats, report.artifacts],
+      ] as const) {
+        for (const chat of chats) {
+          this.step(phase);
+          try {
+            const outcome = this.writeChat(chat, profileId, groundedProject(chat.projectId));
+            if (outcome.imported) {
+              into.imported++;
+              if (into === report.chats) report.chats.messages += chat.messages.length;
+            } else {
+              into.existing++;
+              if (outcome.newer && into === report.chats) report.chats.newer++;
+            }
+            if (outcome.filed && into === report.chats) report.chats.filed++;
+          } catch (err) {
+            into.failed.push({ title: chat.title, error: errorMessage(err) });
+          }
+          this.tick();
+          if (++written % CHATS_PER_BREATH === 0) await breathe();
+        }
+      }
+
+      for (const chat of cowork ?? []) {
+        this.step('cowork');
+        const into = report.cowork!;
+        try {
+          const target = chat.spaceId ? (spaces[chat.spaceId] ?? null) : null;
+          const outcome = await this.writeCoworkChat(chat, profileId, target && this.deps.store.projects.get(target) ? target : null);
+          if (outcome.imported) {
+            into.imported++;
+            into.messages += chat.messages.length;
+            into.images += chat.images.length;
+          } else {
+            into.existing++;
+          }
+          if (outcome.filed) into.filed++;
+        } catch (err) {
+          into.failed.push({ title: chat.title, error: errorMessage(err) });
+        }
+        this.tick();
+        if (++written % CHATS_PER_BREATH === 0) await breathe();
       }
 
       if (plan.memory.files.length > 0) report.memoryFiles = await this.writeMemoryFiles(plan.memory.files, report);
@@ -304,13 +391,24 @@ export class ClaudeImportService {
   }
 
   /**
-   * Writes one chat (and its artifact) in one transaction, or reports it's
-   * already there: `newer` when the export has messages it lacks (a re-run
-   * doesn't add them, so a chat carried on in Grunt keeps its own branch).
+   * Writes one chat (and its artifact, and the attachment rows for images
+   * already in the blob store) in one transaction, filed under `projectId`.
+   * A chat already here is left as it is, except that one still in No
+   * project is filed (the user's own filing is never undone); `newer` says
+   * the export has messages it lacks, which a re-run doesn't add, so a chat
+   * carried on in Grunt keeps its own branch.
    */
-  private writeChat(chat: ImportedChat, profileId: string): 'imported' | 'existing' | 'newer' {
+  private writeChat(chat: ImportedChat, profileId: string, projectId: string | null, images: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = []): ChatOutcome {
     const { store } = this.deps;
-    if (store.chats.get(chat.id)) return hasNewer(store, chat) ? 'newer' : 'existing';
+    const existing = store.chats.get(chat.id);
+    if (existing) {
+      const newer = hasNewer(store, chat);
+      if (existing.projectId !== null || projectId === null) return { imported: false, newer, filed: false };
+      // Moving a chat into a project restarts its project memory; it starts after the imported messages, as a new import does.
+      store.chats.update(chat.id, { projectId });
+      store.chats.update(chat.id, { memoryCursor: store.messages.latestId(chat.id) });
+      return { imported: false, newer, filed: true };
+    }
     let announced = false;
     try {
       store.transaction(() => {
@@ -321,6 +419,7 @@ export class ClaudeImportService {
           headMessageId: null,
           pinned: false,
           archivedAt: null,
+          projectId,
           createdAt: chat.createdAt,
           updatedAt: chat.updatedAt,
           // The memory sweeps start after the imported messages: the memory step condenses claude.ai's own notes instead.
@@ -329,6 +428,9 @@ export class ClaudeImportService {
         });
         announced = true;
         for (const m of chat.messages) store.messages.create(m);
+        for (const { image, blob } of images) {
+          store.attachments.create({ id: image.attachmentId, chatId: chat.id, messageId: image.messageId, filename: image.filename, mime: image.mime, size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+        }
         const artifact = chat.artifact;
         if (artifact) {
           store.artifacts.create({ id: artifact.id, chatId: chat.id, slug: artifact.slug, kind: 'html', language: null, createdAt: chat.createdAt });
@@ -345,7 +447,28 @@ export class ClaudeImportService {
       if (announced) this.deps.events?.emit({ type: 'chat-deleted', chatId: chat.id });
       throw err;
     }
-    return 'imported';
+    return { imported: true, newer: false, filed: projectId !== null };
+  }
+
+  /**
+   * A Cowork session's chat: its pasted images go into the blob store first,
+   * pinned against blob GC until the rows naming them are written, as an
+   * upload's are. Without a blob store they become notes.
+   */
+  private async writeCoworkChat(chat: CoworkChat, profileId: string, projectId: string | null): Promise<ChatOutcome> {
+    const blobs = this.deps.blobStore;
+    if (this.deps.store.chats.get(chat.id) || chat.images.length === 0) return this.writeChat(chat, profileId, projectId);
+    if (!blobs) {
+      const ids = new Set(chat.images.map((i) => i.attachmentId));
+      const messages = chat.messages.map((m) => ({ ...m, parts: m.parts.map((p) => (p.type === 'image' && ids.has(p.attachmentId) ? { type: 'text' as const, text: '[An image, not imported]' } : p)) }));
+      return this.writeChat({ ...chat, messages }, profileId, projectId);
+    }
+    const data = chat.images.map((image) => ({ image, bytes: Buffer.from(image.data, 'base64') }));
+    return withPinnedShas([...new Set(data.map((d) => sha256Of(d.bytes)))], async () => {
+      const stored: { image: CoworkChat['images'][number]; blob: StoredBlob }[] = [];
+      for (const d of data) stored.push({ image: d.image, blob: await blobs.put(d.bytes) });
+      return this.writeChat(chat, profileId, projectId, stored);
+    });
   }
 
   private async importRoot(): Promise<string> {

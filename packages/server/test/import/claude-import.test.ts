@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CLAUDE_ROOT_PARENT, type ClaudeExportFiles } from '@grunt/core/domain/claude-import.js';
+import type { CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { AppEvent } from '@grunt/core/types/events.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
+import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
@@ -78,7 +80,7 @@ function makeService(over: Partial<ConstructorParameters<typeof ClaudeImportServ
     queue: new MemoryQueue(),
     events: bus,
     importRoot: join(root, 'imported', 'claude'),
-    read: async () => ({ files: exportFiles, sources: ['conversations.json'] }),
+    read: async () => ({ files: exportFiles, sources: ['conversations.json'], organizationId: 'org-1' }),
     ...over,
   });
 }
@@ -136,7 +138,7 @@ describe('ClaudeImportService: chats', () => {
   it('imports every conversation with its messages, branches, times and memory cursors', async () => {
     const status = await runImport(makeService());
     expect(status).toMatchObject({ state: 'done', done: 2, total: 2, error: null });
-    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, newer: 0, messages: 5, failed: [] });
+    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, newer: 0, filed: 0, messages: 5, failed: [] });
     expect(status.report!.emptyChats).toBe(1);
 
     const chat = store.chats.get('c1')!;
@@ -152,7 +154,7 @@ describe('ClaudeImportService: chats', () => {
   it('skips chats already imported on a second run', async () => {
     await runImport(makeService());
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 0, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 0, filed: 0, messages: 0, failed: [] });
     expect(store.chats.list()).toHaveLength(2);
   });
 
@@ -161,7 +163,7 @@ describe('ClaudeImportService: chats', () => {
     (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5), message('u4', 'human', 'a3', 6)];
     expect((await makeService().preview(root)).chats).toMatchObject({ total: 2, existing: 2, newer: 1 });
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 1, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 1, filed: 0, messages: 0, failed: [] });
     expect(store.messages.get('u4')).toBeNull();
   });
 
@@ -384,5 +386,138 @@ describe('ClaudeImportService: memory', () => {
       memoryModel: 'Claude Opus',
       importFolder: join(root, 'imported', 'claude'),
     });
+  });
+});
+
+describe("ClaudeImportService: filing chats by claude.ai's chat list", () => {
+  beforeEach(() => {
+    exportFiles.projects = [
+      { uuid: 'p-home', name: 'Home Stuff', docs: [] },
+      { uuid: 'p-phd', name: 'PhD', docs: [] },
+    ];
+    store.projects.create({ id: 'grunt-phd', name: 'PhD', workspace: null, defaultProfileId: null });
+    exportFiles.conversations = [
+      conversation('c1', 'Shed', [message('u1', 'human', CLAUDE_ROOT_PARENT, 1)]),
+      conversation('c2', 'Thesis', [message('u2', 'human', CLAUDE_ROOT_PARENT, 2)]),
+      conversation('c3', 'Loose', [message('u3', 'human', CLAUDE_ROOT_PARENT, 3)]),
+    ];
+    exportFiles.conversationList = [
+      [
+        { uuid: 'c1', project_uuid: 'p-home' },
+        { uuid: 'c2', project_uuid: 'p-phd' },
+        { uuid: 'c3', project_uuid: null },
+      ],
+    ];
+  });
+
+  it("files new chats under their projects, a merged project's under the one it merged into", async () => {
+    const preview = await makeService().preview(root);
+    expect(preview.chats.filed).toBe(2);
+    expect(preview.chatList).toEqual({ found: true, url: 'https://claude.ai/api/organizations/org-1/chat_conversations' });
+    const status = await runImport(makeService());
+    expect(status.report!.chats.filed).toBe(2);
+    expect(store.chats.get('c1')!.projectId).toBe('p-home');
+    expect(store.chats.get('c2')!.projectId).toBe('grunt-phd');
+    expect(store.chats.get('c3')!.projectId).toBeNull();
+  });
+
+  it('on a re-run files chats left in No project, never moving one the user filed', async () => {
+    const saved = exportFiles.conversationList;
+    exportFiles.conversationList = undefined;
+    await runImport(makeService());
+    store.projects.create({ id: 'mine', name: 'Mine', workspace: null, defaultProfileId: null });
+    store.chats.update('c2', { projectId: 'mine' });
+    exportFiles.conversationList = saved;
+    const status = await runImport(makeService());
+    expect(status.report!.chats).toMatchObject({ imported: 0, existing: 3, filed: 1 });
+    expect(store.chats.get('c1')).toMatchObject({ projectId: 'p-home', memoryCursor: 'u1' });
+    expect(store.chats.get('c2')!.projectId).toBe('mine');
+  });
+
+  it('says where to get the list when the folder has none', async () => {
+    exportFiles.conversationList = undefined;
+    expect((await makeService().preview(root)).chatList).toEqual({ found: false, url: 'https://claude.ai/api/organizations/org-1/chat_conversations' });
+    expect((await makeService({ read: async () => ({ files: exportFiles, sources: [], organizationId: null }) }).preview(root)).chatList.url).toBeNull();
+  });
+});
+
+describe('ClaudeImportService: Cowork sessions', () => {
+  const png = Buffer.from('a png, near enough');
+
+  function line(o: Record<string, unknown>): string {
+    return JSON.stringify({ timestamp: at(1), isSidechain: false, ...o });
+  }
+
+  function session(id: string, title: string, spaceId: string | null, withImage = false): CoworkSessionFiles {
+    const prompt = withImage ? [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } }, { type: 'text', text: `${title} prompt` }] : `${title} prompt`;
+    return {
+      meta: { sessionId: id, title, createdAt: Date.parse(at(0)), lastActivityAt: Date.parse(at(9)), model: 'claude-opus-4-7' },
+      transcript: [
+        line({ type: 'user', uuid: `${id}-u`, parentUuid: null, message: { role: 'user', content: prompt } }),
+        line({ type: 'assistant', uuid: `${id}-a`, parentUuid: `${id}-u`, message: { role: 'assistant', model: 'claude-opus-4-7', content: [{ type: 'text', text: `${title} reply` }] } }),
+      ].join('\n'),
+      spaceId,
+    };
+  }
+
+  let sessions: CoworkSessionFiles[];
+  const ROOT = 'C:/Users/me/AppData/Roaming/Claude/local-agent-mode-sessions';
+  const coworkService = (over: Partial<ConstructorParameters<typeof ClaudeImportService>[0]> = {}) =>
+    makeService({ coworkRoot: ROOT, readCowork: async () => sessions, blobStore: createBlobStore(join(root, 'blobs')), ...over });
+
+  async function runCowork(service: ClaudeImportService, spaces: Record<string, string | null> = { 'space-1': 'grunt-phd' }) {
+    await service.start({ folder: root, profileId: 'claude', memory: false, cowork: true, spaces });
+    await service.idle();
+    return service.status();
+  }
+
+  beforeEach(() => {
+    exportFiles.conversations = [];
+    sessions = [session('local_s1', 'Finance Dept', 'space-1', true), session('local_s2', 'Fence install', null)];
+    store.projects.create({ id: 'grunt-phd', name: 'PhD', workspace: null, defaultProfileId: null });
+  });
+
+  it("previews the sessions and their spaces, so the user can choose each space's project", async () => {
+    expect((await coworkService().preview(root)).cowork).toEqual({
+      root: ROOT,
+      sessions: 2,
+      existing: 0,
+      messages: 4,
+      images: 1,
+      spaces: [{ id: 'space-1', sessions: 1, titles: ['Finance Dept'] }],
+    });
+    expect((await makeService().preview(root)).cowork).toBeNull();
+  });
+
+  it("imports them when asked, filing each space's sessions where the user chose and storing pasted images as attachments", async () => {
+    const status = await runCowork(coworkService());
+    expect(status.report!.cowork).toEqual({ imported: 2, existing: 0, filed: 1, messages: 4, images: 1, failed: [] });
+    expect(store.chats.get('local_s1')).toMatchObject({ title: 'Finance Dept', projectId: 'grunt-phd', headMessageId: 'local_s1-a' });
+    expect(store.chats.get('local_s2')!.projectId).toBeNull();
+    const [attachment] = store.attachments.list('local_s1');
+    expect(attachment).toMatchObject({ id: 'local_s1-u:image:1', messageId: 'local_s1-u', mime: 'image/png', size: png.length });
+    expect(await readFile(attachment!.storagePath)).toEqual(png);
+    expect(store.messages.get('local_s1-u')!.parts[0]).toEqual({ type: 'image', attachmentId: 'local_s1-u:image:1', mime: 'image/png' });
+    expect(store.messages.get('local_s1-a')!.producedBy).toMatchObject({ profileName: 'Claude', modelId: 'claude-opus-4-7' });
+  });
+
+  it('skips them on a second run, filing one the first run left in No project', async () => {
+    await runCowork(coworkService(), {});
+    expect(store.chats.get('local_s1')!.projectId).toBeNull();
+    const again = await runCowork(coworkService());
+    expect(again.report!.cowork).toMatchObject({ imported: 0, existing: 2, filed: 1 });
+    expect(store.chats.get('local_s1')!.projectId).toBe('grunt-phd');
+  });
+
+  it("leaves Cowork alone unless asked, and refuses a space mapped to a project that isn't there", async () => {
+    expect((await runImport(coworkService())).report!.cowork).toBeNull();
+    expect(store.chats.get('local_s1')).toBeNull();
+    await expect(coworkService().start({ folder: root, profileId: 'claude', memory: false, cowork: true, spaces: { 'space-1': 'nope' } })).rejects.toThrow(ImportInputError);
+  });
+
+  it('notes the images instead when there is no blob store', async () => {
+    await runCowork(coworkService({ blobStore: undefined }));
+    expect(store.messages.get('local_s1-u')!.parts[0]).toEqual({ type: 'text', text: '[An image, not imported]' });
+    expect(store.attachments.list('local_s1')).toEqual([]);
   });
 });

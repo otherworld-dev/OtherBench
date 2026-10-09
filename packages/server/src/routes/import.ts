@@ -9,6 +9,20 @@ interface ImportBody {
   folder?: unknown;
   profileId?: unknown;
   memory?: unknown;
+  cowork?: unknown;
+  spaces?: unknown;
+}
+
+/** `spaces`: each Cowork space id to a project id, or null for No project. */
+function spacesOf(value: unknown): Record<string, string | null> {
+  if (value === undefined) return {};
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HTTPException(400, { message: '"spaces" must be an object of space ids to project ids.' });
+  const spaces: Record<string, string | null> = {};
+  for (const [space, project] of Object.entries(value)) {
+    if (project !== null && typeof project !== 'string') throw new HTTPException(400, { message: `"spaces.${space}" must be a project id or null.` });
+    spaces[space] = project;
+  }
+  return spaces;
 }
 
 /** The import's own refusals as 400s and 409s; anything else is a real failure. */
@@ -22,8 +36,8 @@ function asHttp(err: unknown): never {
  * Import from claude.ai (spec 2026-10-09-claude-import-design §5):
  * `POST /api/import/claude/preview { folder, profileId? }` says what importing
  * the export in `folder` would do, `POST /api/import/claude { folder,
- * profileId, memory? }` starts it (202) and `GET /api/import/claude` is the
- * running or last import's status.
+ * profileId, memory?, cowork?, spaces? }` starts it (202) and
+ * `GET /api/import/claude` is the running or last import's status.
  */
 export function importRoutes(container: Container): Hono {
   const app = new Hono();
@@ -51,8 +65,10 @@ export function importRoutes(container: Container): Hono {
     const folder = requireNonEmptyString(body.folder, 'folder');
     const profileId = requireNonEmptyString(body.profileId, 'profileId');
     const memory = optionalBoolean(body.memory, 'memory', true);
+    const cowork = optionalBoolean(body.cowork, 'cowork', false);
+    const spaces = spacesOf(body.spaces);
     try {
-      return c.json(await service().start({ folder, profileId, memory }), 202);
+      return c.json(await service().start({ folder, profileId, memory, cowork, spaces }), 202);
     } catch (err) {
       asHttp(err);
     }

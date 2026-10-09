@@ -113,6 +113,9 @@ describe('/api/import/claude', () => {
       ['/api/import/claude', { folder: exportDir }, '"profileId"'],
       ['/api/import/claude', { folder: exportDir, profileId: 'old' }, 'archived'],
       ['/api/import/claude', { folder: join(dataDir, 'empty'), profileId: 'claude' }, "There's no conversations.json"],
+      ['/api/import/claude', { folder: exportDir, profileId: 'claude', spaces: ['space-1'] }, '"spaces" must be an object'],
+      ['/api/import/claude', { folder: exportDir, profileId: 'claude', spaces: { 'space-1': 7 } }, '"spaces.space-1" must be a project id or null'],
+      ['/api/import/claude', { folder: exportDir, profileId: 'claude', spaces: { 'space-1': 'no-such-project' } }, 'Project "no-such-project" not found'],
     ] as const) {
       const res = await send('POST', path, body);
       expect(res.status, JSON.stringify(body)).toBe(400);

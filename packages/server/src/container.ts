@@ -26,6 +26,7 @@ import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ClaudeImportService } from './import/claude-import.js';
+import { defaultCoworkRoot } from './import/cowork-reader.js';
 import { GlobalMemoryService } from './memory/global.js';
 import { MemoryServices } from './memory/index.js';
 import { ProjectMemoryService } from './memory/service.js';
@@ -327,7 +328,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   memory.attach(turnRunner);
   // Imported project docs and claude.ai's memory files sit beside this database, like its attachments.
   const importRoot = options.dbPath === ':memory:' ? join(tmpdir(), `grunt-import-${process.pid}-${randomBytes(4).toString('hex')}`) : `${options.dbPath}.imported`;
-  const claudeImport = new ClaudeImportService({ ...memoryDeps, events, importRoot: join(importRoot, 'claude') });
+  // Cowork sessions are read where Claude Desktop keeps them on this machine. GRUNT_COWORK_ROOT points
+  // elsewhere (the e2e run's fixture) or, empty, nowhere; a :memory: database (tests) has none.
+  const coworkOverride = process.env['GRUNT_COWORK_ROOT'];
+  const coworkRoot = options.dbPath === ':memory:' ? null : coworkOverride !== undefined ? coworkOverride || null : defaultCoworkRoot();
+  const claudeImport = new ClaudeImportService({ ...memoryDeps, events, blobStore, importRoot: join(importRoot, 'claude'), coworkRoot });
 
   // This machine's certificate lives beside the secrets file; an in-memory
   // database gets one that lasts only as long as the process.
