@@ -144,6 +144,8 @@ export interface ImportPlan {
   artifactChats: ImportedChat[];
   projects: ImportedProject[];
   memory: ImportedMemory;
+  /** claude.ai's memory notes as one chat recall can search, or null when the export has none. */
+  memoryChat: ImportedChat | null;
   /** Whether claude.ai's chat list came with the export, so chats know their projects. */
   chatList: boolean;
   stats: ImportStats;
@@ -534,8 +536,10 @@ function uniqueName(name: string, taken: Set<string>): string {
 }
 
 interface MemorySource {
+  /** The claude.ai account the memory is from, or null. */
+  account: string | null;
   conversations: string;
-  files: { path: string; content: string }[];
+  files: { path: string; content: string; updatedAt?: number }[];
   byProject: Map<string, string>;
 }
 
@@ -563,16 +567,17 @@ const updatedAtOf = (v: unknown): number => (isObj(v) ? time(v['updated_at'], 0)
 const uuidOf = (v: unknown): string | null => (isObj(v) ? str(v['uuid']) : null);
 
 function readMemories(raws: unknown[]): MemorySource {
-  const source: MemorySource = { conversations: '', files: [], byProject: new Map() };
+  const source: MemorySource = { account: null, conversations: '', files: [], byProject: new Map() };
   for (const raw of firstOfEach(raws, (v) => (isObj(v) ? str(v['account_uuid']) : null))) {
     if (!isObj(raw)) continue;
+    source.account ??= str(raw['account_uuid']);
     const conversations = str(raw['conversations_memory'])?.trim();
     if (conversations) source.conversations = source.conversations ? `${source.conversations}\n\n${conversations}` : conversations;
     for (const f of list(raw['memory_files'])) {
       if (!isObj(f)) continue;
       const path = str(f['path']);
       const content = str(f['content']);
-      if (path && content && content.trim()) source.files.push({ path: path.startsWith('/') ? path : `/${path}`, content });
+      if (path && content && content.trim()) source.files.push({ path: path.startsWith('/') ? path : `/${path}`, content, updatedAt: time(f['updated_at'], 0) });
     }
     const projects = raw['project_memories'];
     if (isObj(projects)) {
@@ -717,6 +722,67 @@ function aboutFiles(files: MemorySource['files']): MemorySource['files'] {
     .sort((a, b) => rank(a.path) - rank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
+/** The title of the chat claude.ai's memory notes are imported into. */
+export const MEMORY_CHAT_TITLE = 'What claude.ai remembered';
+
+/**
+ * claude.ai's memory notes as one chat, a note a message: recall's chat
+ * search finds them (its full-text index covers every chat), they sync like
+ * any chat, and the user can read them in the sidebar. About you and the
+ * learned note hold 4,000 characters each; claude.ai kept far more, and this
+ * keeps all of it within reach without putting it in every prompt. The
+ * summary comes first, then the user, then areas and projects.
+ */
+function planMemoryChat(memory: MemorySource, projects: ImportedProject[], profile: ImportProfile): ImportedChat | null {
+  const nameOf = (id: string): string => projects.find((p) => p.id === id)?.name ?? id.slice(0, 8);
+  const bare = (s: string): string => s.replace(/\.md$/i, '');
+  const label = (path: string): string => {
+    const project = /^\/projects\/([^/]+)\/(.+)$/.exec(path);
+    if (project) return `Project ${nameOf(project[1]!)}: ${bare(project[2]!)}`;
+    const memoryOf = /^\/project-memories\/([^/]+)\.md$/.exec(path);
+    if (memoryOf) return `Project memory: ${nameOf(memoryOf[1]!)}`;
+    const [group, ...rest] = path.slice(1).split('/');
+    if (rest.length === 0) return bare(group!).replace(/^./, (c) => c.toUpperCase());
+    return `${group!.replace(/^./, (c) => c.toUpperCase())}: ${bare(rest.join('/'))}`;
+  };
+  const rank = (path: string): number =>
+    path === '/profile.md' ? 0 : path === '/preferences.md' ? 1 : path.startsWith('/people/') ? 2 : path.startsWith('/topics/') ? 3 : path.startsWith('/areas/') ? 4 : path.startsWith('/projects/') || path.startsWith('/project-memories/') ? 5 : 6;
+  const notes = [
+    ...(memory.conversations ? [{ path: '/conversations-memory.md', label: 'Summary of conversations', content: memory.conversations, updatedAt: 0 }] : []),
+    ...[...memory.files, ...[...memory.byProject].map(([id, body]) => ({ path: `/project-memories/${id}.md`, content: body, updatedAt: 0 }))]
+      .sort((a, b) => rank(a.path) - rank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      .map((f) => ({ ...f, label: label(f.path), updatedAt: f.updatedAt ?? 0 })),
+  ];
+  if (notes.length === 0) return null;
+
+  const chatId = `claude-memory-${memory.account ?? 'export'}`;
+  const newest = Math.max(...notes.map((n) => n.updatedAt));
+  const producedBy: ProducedBy = { profileId: profile.id, profileName: CLAUDE_REPLY_NAME, connectionId: profile.connectionId, modelId: CLAUDE_REPLY_MODEL };
+  const messages: CanonMessage[] = notes.map((n, i) => ({
+    id: `${chatId}:${n.path}`,
+    chatId,
+    parentId: null,
+    role: 'assistant',
+    parts: [{ type: 'text', text: `**${n.label}**\n\n${n.content.trim()}` }],
+    status: 'complete',
+    error: null,
+    producedBy,
+    // Notes without a date sit at the newest one's, in order: the order is the chain's, not the clock's.
+    createdAt: (n.updatedAt || newest) + i,
+  }));
+  messages.forEach((m, i) => (m.parentId = i === 0 ? null : messages[i - 1]!.id));
+  const last = messages.at(-1)!;
+  return {
+    id: chatId,
+    title: MEMORY_CHAT_TITLE,
+    createdAt: newest,
+    updatedAt: newest,
+    messages,
+    headMessageId: last.id,
+    latestMessageId: [...messages].sort(byTime).at(-1)!.id,
+  };
+}
+
 function planMemory(memory: MemorySource): ImportedMemory {
   const conversations = memory.conversations ? [section('What claude.ai remembered from conversations', memory.conversations)] : [];
   const pick = (path: string) => memory.files.filter((f) => f.path === path).map((f) => section(f.path, f.content));
@@ -747,5 +813,5 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
   const artifactChats = firstOfEach(files.artifacts, (a) => (isObj(a.meta) ? str(a.meta['id']) : null), (a) => updatedAtOf(a.meta))
     .map((a) => planArtifact(a, profile, stats))
     .filter((c): c is ImportedChat => c !== null);
-  return { chats, artifactChats, projects, memory: planMemory(memory), chatList: listing !== null, stats };
+  return { chats, artifactChats, projects, memory: planMemory(memory), memoryChat: planMemoryChat(memory, projects, profile), chatList: listing !== null, stats };
 }

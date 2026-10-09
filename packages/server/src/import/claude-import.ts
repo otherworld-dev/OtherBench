@@ -185,6 +185,7 @@ export class ClaudeImportService {
         projectNotes: plan.projects.filter((p) => p.memory.length > 0).length,
         files: plan.memory.files.length,
       },
+      memoryChat: plan.memoryChat ? { title: plan.memoryChat.title, notes: plan.memoryChat.messages.length, existing: store.chats.get(plan.memoryChat.id) !== null } : null,
       memoryModel: model?.name ?? null,
       filesNotIncluded: plan.stats.filesNotIncluded,
       dropped: plan.stats.dropped,
@@ -245,7 +246,7 @@ export class ClaudeImportService {
       state: 'running',
       phase: 'projects',
       done: 0,
-      total: plan.projects.length + plan.chats.length + plan.artifactChats.length + (cowork?.length ?? 0) + memorySteps,
+      total: plan.projects.length + plan.chats.length + plan.artifactChats.length + (plan.memoryChat ? 1 : 0) + (cowork?.length ?? 0) + memorySteps,
       startedAt: this.now(),
       finishedAt: null,
       report: null,
@@ -307,6 +308,7 @@ export class ClaudeImportService {
       fileErrors: [],
       memory: null,
       memoryFiles: null,
+      memoryChat: null,
       filesNotIncluded: plan.stats.filesNotIncluded,
       dropped: plan.stats.dropped,
       importFolder: this.deps.importRoot,
@@ -355,6 +357,19 @@ export class ClaudeImportService {
           this.tick();
           if (++written % CHATS_PER_BREATH === 0) await breathe();
         }
+      }
+
+      // claude.ai's memory notes, a chat of their own that recall searches.
+      if (plan.memoryChat) {
+        this.step('chats');
+        const chat = plan.memoryChat;
+        try {
+          const outcome = this.writeChat(chat, profileId, null);
+          report.memoryChat = { title: chat.title, notes: chat.messages.length, imported: outcome.imported };
+        } catch (err) {
+          report.chats.failed.push({ title: chat.title, error: errorMessage(err) });
+        }
+        this.tick();
       }
 
       for (const chat of cowork ?? []) {

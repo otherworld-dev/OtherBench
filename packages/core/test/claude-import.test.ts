@@ -3,6 +3,7 @@ import {
   chatListUrl,
   CLAUDE_ROOT_PARENT,
   ClaudeExportError,
+  MEMORY_CHAT_TITLE,
   planClaudeImport,
   safeFileName,
   UNTITLED_CHAT,
@@ -10,6 +11,8 @@ import {
   type ClaudeExportFiles,
   type ImportedChat,
 } from '../src/domain/claude-import.js';
+import { runRecallCommand } from '../src/domain/recall.js';
+import { InMemoryStore } from '../src/testing/fakes.js';
 import type { CanonMessage, Part } from '../src/types/messages.js';
 
 // Fixtures shaped like a real claude.ai export (2026-10), with made-up content.
@@ -462,6 +465,55 @@ describe('planClaudeImport: memory', () => {
 
   it('is empty without a memories file', () => {
     expect(planClaudeImport(files(), PROFILE).memory).toEqual({ about: '', note: '', files: [] });
+    expect(planClaudeImport(files(), PROFILE).memoryChat).toBeNull();
+  });
+
+  it("makes claude.ai's notes a chat of their own, a note a message, summary first and labelled", () => {
+    const plan = planClaudeImport(
+      files({
+        projects: [{ uuid: 'p1', name: 'Garden', docs: [] }],
+        memories: [
+          {
+            account_uuid: 'acc',
+            conversations_memory: 'Runs a small company.',
+            memory_files: [
+              { path: '/areas/garden-office.md', content: 'Building a shed.', updated_at: at(5) },
+              { path: '/people/wife.md', content: 'Married.', updated_at: at(3) },
+              { path: '/profile.md', content: 'Lives in Wales.', updated_at: at(4) },
+              { path: '/projects/p1/overview.md', content: 'Beds are 1.2 m wide.', updated_at: at(6) },
+            ],
+            project_memories: { p1: 'Raised beds.' },
+          },
+        ],
+      }),
+      PROFILE
+    );
+    const chat = plan.memoryChat!;
+    expect(chat).toMatchObject({ id: 'claude-memory-acc', title: MEMORY_CHAT_TITLE, createdAt: ms(6), updatedAt: ms(6) });
+    expect(chat.messages.map((m) => (m.parts[0] as { text: string }).text.split('\n')[0])).toEqual([
+      '**Summary of conversations**',
+      '**Profile**',
+      '**People: wife**',
+      '**Areas: garden-office**',
+      '**Project memory: Garden**',
+      '**Project Garden: overview**',
+    ]);
+    expect(chat.messages.map((m) => m.parentId)).toEqual([null, ...chat.messages.slice(0, -1).map((m) => m.id)]);
+    expect(chat.messages.every((m) => m.role === 'assistant' && m.producedBy?.modelId === 'claude.ai')).toBe(true);
+    expect(chat.headMessageId).toBe(chat.messages.at(-1)!.id);
+    expect(chat.latestMessageId).toBe([...chat.messages].sort((a, b) => a.createdAt - b.createdAt).at(-1)!.id);
+  });
+
+  it("puts the notes where recall's search finds them", () => {
+    const store = new InMemoryStore();
+    store.connections.create({ id: 'conn-1', name: 'C', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    store.profiles.create({ id: 'profile-1', name: 'P', description: null, colour: null, connectionId: 'conn-1', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null });
+    const chat = planClaudeImport(files({ memories: [{ account_uuid: 'acc', memory_files: [{ path: '/topics/pets-and-aquariums.md', content: 'Keeps a border collie and shrimp tanks.' }] }] }), PROFILE).memoryChat!;
+    store.chats.create({ id: chat.id, title: chat.title, profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null });
+    for (const m of chat.messages) store.messages.create(m);
+    store.chats.update(chat.id, { headMessageId: chat.headMessageId });
+    const found = runRecallCommand(store, { chatId: 'asking' }, { command: 'search', query: 'border collie' }) as { chats: { chatId: string; title: string }[] };
+    expect(found.chats).toEqual([expect.objectContaining({ chatId: 'claude-memory-acc', title: MEMORY_CHAT_TITLE })]);
   });
 });
 

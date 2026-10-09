@@ -253,6 +253,12 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
         )}
         {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
         {preview.artifacts.length > 0 && <li>{count(preview.artifacts.length, 'published artifact')}, each in a chat of its own</li>}
+        {preview.memoryChat && (
+          <li>
+            claude.ai&rsquo;s {count(preview.memoryChat.notes, 'memory note')}{' '}
+            {preview.memoryChat.existing ? `are already in the chat “${preview.memoryChat.title}”` : `go into a chat of their own, “${preview.memoryChat.title}”, which recall can search`}
+          </li>
+        )}
         {preview.chatList.found && <li>{count(chats.filed, 'chat')} filed into {chats.filed === 1 ? 'its project' : 'their projects'}, from claude.ai&rsquo;s chat list</li>}
         {preview.projects.map((p) => (
           <li key={p.id}>
@@ -470,6 +476,12 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
           <li>
             Memory{memory.model ? ` (with ${memory.model})` : ''}: About you {outcomeText(memory.about)}; learned note {outcomeText(memory.note)}
             {memory.projects.map((p) => `; ${p.name} ${outcomeText(p.outcome)}`).join('')}
+          </li>
+        )}
+        {report.memoryChat && (
+          <li>
+            claude.ai&rsquo;s {count(report.memoryChat.notes, 'memory note')} {report.memoryChat.imported ? 'are' : 'were already'} in the chat &ldquo;{report.memoryChat.title}&rdquo;, which
+            recall searches
           </li>
         )}
         {report.memoryFiles && (

@@ -298,6 +298,19 @@ describe('ClaudeImportService: projects and files', () => {
     expect(await readFile(join(base, 'part-1', 'escape.md'), 'utf8')).toBe('stays inside');
     expect(requests).toHaveLength(0);
   });
+
+  it("imports claude.ai's notes as a chat recall can search, once, with its cursors at the end", async () => {
+    exportFiles.memories = [{ account_uuid: 'acc', conversations_memory: 'Lives in Wales.', memory_files: [{ path: '/people/wife.md', content: 'Married.' }] }];
+    expect((await makeService().preview(root)).memoryChat).toEqual({ title: 'What claude.ai remembered', notes: 2, existing: false });
+    const status = await runImport(makeService());
+    expect(status.report!.memoryChat).toEqual({ title: 'What claude.ai remembered', notes: 2, imported: true });
+    const chat = store.chats.get('claude-memory-acc')!;
+    expect(chat).toMatchObject({ title: 'What claude.ai remembered', projectId: null });
+    expect(chat.memoryCursor).toBe(store.messages.latestId(chat.id));
+    expect(chat.globalMemoryCursor).toBe(store.messages.latestId(chat.id));
+    expect(store.messages.searchText('Married', 5).map((h) => h.chatId)).toEqual(['claude-memory-acc']);
+    expect((await runImport(makeService())).report!.memoryChat).toEqual({ title: 'What claude.ai remembered', notes: 2, imported: false });
+  });
 });
 
 describe('ClaudeImportService: memory', () => {
@@ -320,7 +333,7 @@ describe('ClaudeImportService: memory', () => {
     expect(store.projectMemory.get('p1')!.body).toBe(PROJECT_NOTE);
     expect(requests.map((r) => r.purpose)).toEqual(['utility', 'utility', 'utility']);
     expect(promptOf(requests[2]!)).toContain('Raised beds.');
-    expect(status).toMatchObject({ done: 4, total: 4 });
+    expect(status).toMatchObject({ done: 5, total: 5 });
   });
 
   it('drafts About you even when it has text, leaving it as it is, and records a rejected note without stopping', async () => {

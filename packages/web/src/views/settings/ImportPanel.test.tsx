@@ -63,6 +63,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     projectsSkipped: 5,
     memory: { about: true, aboutTaken: false, note: true, projectNotes: 2, files: 49 },
     memoryModel: 'Claude Opus',
+    memoryChat: { title: 'What claude.ai remembered', notes: 49, existing: false },
     filesNotIncluded: 672,
     dropped: {},
     importFolder: '/data/grunt.db.imported/claude',
@@ -81,6 +82,7 @@ function report(over: Partial<ImportReport> = {}): ImportReport {
     fileErrors: [{ title: '/people/x.md', error: 'EACCES' }],
     memory: { model: 'Claude Opus', about: { status: 'drafted', text: 'I run a small company.' }, note: { status: 'failed', reason: 'cut off' }, projects: [] },
     memoryFiles: '/data/grunt.db.imported/claude/memory',
+    memoryChat: { title: 'What claude.ai remembered', notes: 49, imported: true },
     filesNotIncluded: 672,
     dropped: {},
     importFolder: '/data/grunt.db.imported/claude',
@@ -132,6 +134,7 @@ describe('ImportPanel', () => {
     expect(panel).toHaveTextContent('Project “Home Stuff”: new, 2 docs, instructions, memory');
     expect(panel).toHaveTextContent('Project “PhD”: merges into your project “PhD”, memory');
     expect(panel).toHaveTextContent("672 images and files aren’t in the export");
+    expect(panel).toHaveTextContent('claude.ai’s 49 memory notes go into a chat of their own, “What claude.ai remembered”, which recall can search');
     expect(screen.getByLabelText('Profile for imported chats')).toHaveValue('opus');
     expect(screen.queryByRole('option', { name: 'Old' })).toBeNull();
     expect(screen.getByLabelText('Condense memory')).toBeChecked();
@@ -183,6 +186,7 @@ describe('ImportPanel', () => {
     expect(reportView).toHaveTextContent('Import finished');
     expect(reportView).toHaveTextContent('Imported 439 chats (6,200 messages); 2 were already here');
     expect(reportView).toHaveTextContent('New projects: Home Stuff');
+    expect(reportView).toHaveTextContent('claude.ai’s 49 memory notes are in the chat “What claude.ai remembered”, which recall searches');
     expect(reportView).toHaveTextContent('Merged into your projects: PhD');
     expect(reportView).toHaveTextContent('Home Stuff’s docs are in /data/grunt.db.imported/claude/Home Stuff-019f3c80, attached to the project read-only; its chats see them once the project or chat has a workspace folder');
     expect(reportView).toHaveTextContent('Memory (with Claude Opus): About you drafted, below; learned note failed: cut off');

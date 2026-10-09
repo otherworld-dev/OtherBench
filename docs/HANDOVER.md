@@ -158,7 +158,12 @@ of work landed after that plan closed out:
   memory cursors at their newest message, which keeps the memory sweeps
   from summarising hundreds of old chats. Project docs and every claude.ai
   memory file are written under `<db>.imported/claude/`, and a project's
-  docs folder is attached to it read-only. The export has no image or file
+  docs folder is attached to it read-only. claude.ai's memory notes (49 of
+  them, about 64,000 characters, on the export tried) are also imported as
+  one chat, "What claude.ai remembered", a note a message: About you and the
+  learned note hold 4,000 characters each, and this keeps the rest within
+  recall's reach (its chat search covers every chat) without adding it to
+  every prompt. The export has no image or file
   bytes, so those show as a note in their message: bracketed text on the
   user's side, so an API replay doesn't drop an image-only turn, and a
   notice on a reply. Tool calls claude.ai left without an id get ones every

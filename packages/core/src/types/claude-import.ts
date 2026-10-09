@@ -34,6 +34,8 @@ export interface ImportPreview {
   projects: { id: string; name: string; action: 'create' | 'merge' | 'existing'; mergeInto: string | null; docs: number; hasInstructions: boolean; hasMemory: boolean }[];
   projectsSkipped: number;
   memory: { about: boolean; aboutTaken: boolean; note: boolean; projectNotes: number; files: number };
+  /** claude.ai's memory notes, which go into a chat of their own that recall can search; null when there are none. */
+  memoryChat: { title: string; notes: number; existing: boolean } | null;
   /** The profile that would condense memory, or null when none can. */
   memoryModel: string | null;
   filesNotIncluded: number;
@@ -69,6 +71,8 @@ export interface ImportReport {
   memory: { model: string | null; about: AboutOutcome; note: MemoryOutcome; projects: { name: string; outcome: MemoryOutcome }[] } | null;
   /** Where claude.ai's memory files were kept, or null when there were none. */
   memoryFiles: string | null;
+  /** The chat claude.ai's memory notes went into (or were already in), or null when there were none. */
+  memoryChat: { title: string; notes: number; imported: boolean } | null;
   filesNotIncluded: number;
   dropped: Record<string, number>;
   importFolder: string;
