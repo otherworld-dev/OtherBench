@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { runArtifactCommand } from '@grunt/core/domain/artifacts.js';
 import { runRecallCommand } from '@grunt/core/domain/recall.js';
@@ -24,6 +25,7 @@ import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
+import { ClaudeImportService } from './import/claude-import.js';
 import { GlobalMemoryService } from './memory/global.js';
 import { MemoryServices } from './memory/index.js';
 import { ProjectMemoryService } from './memory/service.js';
@@ -64,6 +66,12 @@ export interface Container {
    * can build a Container without one.
    */
   memory?: MemoryServices;
+  /**
+   * Import from claude.ai (spec 2026-10-09-claude-import-design). Always set
+   * by `createContainer`; optional so route tests can build a Container
+   * without one.
+   */
+  claudeImport?: ClaudeImportService;
   /**
    * App-wide events behind `GET /api/events` (v2 plan, Task 34). Always set by
    * `createContainer`, whose store announces chat changes on it; optional
@@ -317,6 +325,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const memoryDeps = { store, engine, resolveProfile: (id: string) => resolveProfile({ store, secrets }, id), queue: memoryQueue };
   const memory = new MemoryServices(new ProjectMemoryService(memoryDeps), new GlobalMemoryService(memoryDeps));
   memory.attach(turnRunner);
+  // Imported project docs and claude.ai's memory files sit beside this database, like its attachments.
+  const importRoot = options.dbPath === ':memory:' ? join(tmpdir(), `grunt-import-${process.pid}-${randomBytes(4).toString('hex')}`) : `${options.dbPath}.imported`;
+  const claudeImport = new ClaudeImportService({ ...memoryDeps, events, importRoot: join(importRoot, 'claude') });
 
   // This machine's certificate lives beside the secrets file; an in-memory
   // database gets one that lasts only as long as the process.
@@ -362,11 +373,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     mcpManager,
     blobStore,
     memory,
+    claudeImport,
     close: () => {
       syncer.stop();
       // Not awaited (close is synchronous): stops accepting peers' calls.
       void peers.close().catch((err: unknown) => console.error('[grunt-server] error stopping the peer listener:', err));
-      // First: aborts in-flight summariser calls and stops new ones before the store goes away.
+      // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
+      claudeImport.dispose();
       memory.dispose();
       // Claude Code processes kept alive between replies.
       engine.dispose();
@@ -391,6 +404,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         void rm(roots.writeRoot, { recursive: true, force: true }).catch((err: unknown) => {
           console.error(`[grunt-server] failed to remove temporary attachments directory "${roots.writeRoot}":`, err);
         });
+        // Likewise the temporary import folder, if an import ever made it.
+        void rm(importRoot, { recursive: true, force: true }).catch(() => undefined);
       }
     },
   };
