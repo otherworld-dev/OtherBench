@@ -1652,6 +1652,29 @@ describe('global memory in the system prompt', () => {
     expect(engine.requests[2]!.profile.systemPrompt).toContain('American English');
   });
 
+  it("keeps a block per kind of turn, so a compare between a profile with recall and one without rebuilds neither", async () => {
+    const { store, engine } = setup();
+    const recall = { name: 'recall', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { now: () => 1_000_000, toolProvider: new FakeToolProvider({ tools: [recall] }) });
+    const withRecall = { toolPolicy: { ...makeResolvedProfile().toolPolicy, fs: 'off' as const } };
+    const without = { toolPolicy: { ...withRecall.toolPolicy, recall: false } };
+    const first = await turn(runner, withRecall);
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    // The summariser gives another project a focus while this chat is active.
+    store.projectMemory.save('site', '## Pinned\n\n## Goals\n\n## Decisions\n\n## Current focus\n- Launch week\n\n## Open questions', 'summariser', null);
+    const second = await turn(runner, without, firstId);
+    const secondId = second.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(secondId)!.status).toBe('complete'));
+    await turn(runner, withRecall, secondId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('look it up with the recall tool');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('If you need more than this, ask.');
+    expect(engine.requests[2]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
+  });
+
   it("applies the user's own save of About you or the note at once, even while the chat is active", async () => {
     const { store, engine } = setup('proj', 'one');
     const runner = new TurnRunner(store, engine, { now: () => 1_000_000 });

@@ -777,9 +777,11 @@ export class TurnRunner {
    */
   private globalMemoryBlock(chat: Chat | null, canRecall: boolean): string | null {
     const memory = this.store.globalMemory.get();
-    // Whether the turn offers recall changes the index's last line, so it's part of the stamp.
-    const userStamp = `${memory.aboutUpdatedAt}:${memory.noteUpdatedBy === 'user' ? memory.noteUpdatedAt : 0}:${canRecall}`;
-    const key = chat?.id ?? '';
+    const userStamp = `${memory.aboutUpdatedAt}:${memory.noteUpdatedBy === 'user' ? memory.noteUpdatedAt : 0}`;
+    // Whether the turn offers recall changes the index's last line, so each
+    // kind of turn keeps its own block: a compare between a profile with
+    // recall and one without mustn't keep rebuilding both.
+    const key = `${chat?.id ?? ''}:${canRecall}`;
     const now = this.now();
     const kept = this.globalBlocks.get(key);
     if (kept && kept.userStamp === userStamp && now - kept.at < GLOBAL_BLOCK_STEADY_MS) {

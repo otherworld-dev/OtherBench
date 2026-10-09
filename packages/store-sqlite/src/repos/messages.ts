@@ -273,7 +273,7 @@ export class SqliteMessageRepo implements MessageRepo {
     return row ? fromRow(row) : null;
   }
 
-  searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
+  searchText(query: string, limit: number, offset = 0): { messageId: string; chatId: string; snippet: string }[] {
     const match = toFtsMatchExpression(query);
     if (match === null) return [];
 
@@ -286,10 +286,10 @@ export class SqliteMessageRepo implements MessageRepo {
              FROM message_fts f
              JOIN message m ON m.rowid = f.rowid
             WHERE message_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?`
+            ORDER BY rank, m.rowid
+            LIMIT ? OFFSET ?`
         )
-        .all(match, limit) as Record<string, unknown>[];
+        .all(match, limit, offset) as Record<string, unknown>[];
     } catch (err) {
       // Secondary guard, not the primary defence (that's the quoting above):
       // an FTS5 edge case we haven't enumerated should degrade to "no

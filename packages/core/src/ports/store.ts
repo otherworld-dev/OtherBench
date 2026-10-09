@@ -314,7 +314,8 @@ export interface MessageRepo {
   pathToRoot(messageId: string): CanonMessage[];   // ordered root -> leaf
   updateParts(id: string, parts: Part[]): void;
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void;
-  searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[];
+  /** Messages with every word of `query` in their text, best match first; `offset` skips that many, to page through. */
+  searchText(query: string, limit: number, offset?: number): { messageId: string; chatId: string; snippet: string }[];
   /**
    * Every message across every chat currently at `status`, in no particular
    * order. Exists for startup reconciliation (see
