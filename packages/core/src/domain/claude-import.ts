@@ -1,5 +1,5 @@
 import type { CanonMessage, Part, ProducedBy } from '../types/messages.js';
-import { MAX_ARTIFACT_BYTES } from './artifacts.js';
+import { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_TITLE, slugify } from './artifacts.js';
 import { fenced } from './export.js';
 
 /**
@@ -189,8 +189,35 @@ function notice(text: string): Part {
   return { type: 'notice', text };
 }
 
-function notIncluded(name: string | null): Part {
-  return notice(`Not included in the claude.ai export: ${name && name.trim() ? name.trim() : 'a file'}`);
+/**
+ * A note about something the export lacks. On a reply it's a notice, shown
+ * and never sent to a model. On the user's side it's bracketed text: a
+ * provider replaying the chat drops notices from user turns, and a turn left
+ * with nothing (an image-only message) would vanish from the history.
+ */
+function missing(role: 'user' | 'assistant', text: string): Part {
+  return role === 'user' ? { type: 'text', text: `[${text}]` } : notice(text);
+}
+
+const NOT_INCLUDED = 'Not included in the claude.ai export';
+const EMPTY_MESSAGE = 'Empty in the claude.ai export.';
+
+function notIncluded(role: 'user' | 'assistant', name: string | null): Part {
+  return missing(role, `${NOT_INCLUDED}: ${name && name.trim() ? name.trim() : 'a file'}`);
+}
+
+/** Whether a user-side text part is one of the import's own notes, not something the user wrote. */
+function isMissingNote(text: string): boolean {
+  return text.startsWith(`[${NOT_INCLUDED}`) || text === `[${EMPTY_MESSAGE}]`;
+}
+
+/**
+ * A tool call id for a call claude.ai left without one, that every provider
+ * accepts on replay: letters, digits and `_`, at most 40 long (Anthropic
+ * refuses a colon, OpenAI anything longer).
+ */
+function toolId(kind: 'call' | 'result' | 'card', of: string, n = 0): string {
+  return `${kind}_${of.replace(/[^A-Za-z0-9]/g, '').slice(0, 28)}_${n}`;
 }
 
 /** A tool result's content as text: what was said, what was found, what was made. Page text from searches is left out. */
@@ -239,11 +266,13 @@ interface PendingCall {
  * id; about one call in sixteen has no id, so a result without one takes the
  * oldest unanswered call of the same name (or any name when it has none). A
  * call left unanswered gets an error result, so a provider replaying the chat
- * never sees a call without one.
+ * never sees a call without one. `content` says whether the message had
+ * anything in it beyond notes about what the export lacks.
  */
-function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, stats: ImportStats): Part[] {
+function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, stats: ImportStats): { parts: Part[]; content: boolean } {
   const parts: Part[] = [];
   const calls: PendingCall[] = [];
+  let content = false;
   const fileNames = new Map<string, string | null>();
   for (const f of list(raw['files'])) {
     if (!isObj(f)) continue;
@@ -253,20 +282,35 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
   const named = new Set<string>();
   let generated = 0;
 
-  for (const block of list(raw['content'])) {
+  const blocks = list(raw['content']);
+  // An older export may keep a message's text only in its top-level `text` (current ones repeat it there with placeholders added).
+  const plain = str(raw['text']);
+  if (blocks.length === 0 && plain && plain.trim()) {
+    parts.push({ type: 'text', text: plain });
+    content = true;
+  }
+
+  for (const block of blocks) {
     if (!isObj(block)) continue;
     const type = str(block['type']) ?? 'unknown';
     if (type === 'text') {
       const text = str(block['text']);
-      if (text && text.trim()) parts.push({ type: 'text', text });
+      if (text && text.trim()) {
+        parts.push({ type: 'text', text });
+        content = true;
+      }
     } else if (type === 'thinking') {
       const text = str(block['thinking']);
-      if (text && text.trim()) parts.push({ type: 'reasoning', text });
+      if (text && text.trim()) {
+        parts.push({ type: 'reasoning', text });
+        content = true;
+      }
     } else if (type === 'tool_use' && role === 'assistant') {
-      const id = str(block['id']) ?? `${messageId}:call:${++generated}`;
+      const id = str(block['id']) ?? toolId('call', messageId, ++generated);
       const name = str(block['name']) || 'tool';
       parts.push({ type: 'tool-call', id, name, args: block['input'] ?? {} });
       calls.push({ id, name, index: parts.length - 1, answered: false });
+      content = true;
     } else if (type === 'tool_result' && role === 'assistant') {
       const wanted = str(block['tool_use_id']);
       const name = str(block['name']);
@@ -276,15 +320,16 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
       if (call) call.answered = true;
       parts.push({
         type: 'tool-result',
-        id: call?.id ?? wanted ?? `${messageId}:result:${++generated}`,
+        id: call?.id ?? wanted ?? toolId('result', messageId, ++generated),
         name: name || call?.name || 'tool',
         result: resultText(block),
         isError: block['is_error'] === true,
       });
+      content = true;
     } else if (type === 'image' || type === 'document') {
       const uuid = str(block['file_uuid']);
       if (uuid) named.add(uuid);
-      parts.push(notIncluded((uuid ? fileNames.get(uuid) : null) ?? str(block['title'])));
+      parts.push(notIncluded(role, (uuid ? fileNames.get(uuid) : null) ?? str(block['title'])));
       stats.filesNotIncluded++;
     } else {
       drop(stats, role === 'user' && (type === 'tool_result' || type === 'tool_use') ? `user ${type}` : type);
@@ -299,24 +344,25 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
 
   for (const a of list(raw['attachments'])) {
     if (!isObj(a)) continue;
-    const content = str(a['extracted_content']);
+    const extracted = str(a['extracted_content']);
     const name = str(a['file_name'])?.trim() || 'pasted text';
-    if (content && content.trim()) {
-      parts.push({ type: 'text', text: `**Attached: ${name}**\n\n${fenced(content)}` });
+    if (extracted && extracted.trim()) {
+      parts.push({ type: 'text', text: `**Attached: ${name}**\n\n${fenced(extracted)}` });
+      content = true;
     } else {
-      parts.push(notIncluded(name));
+      parts.push(notIncluded(role, name));
       stats.filesNotIncluded++;
     }
   }
 
   for (const [uuid, name] of fileNames) {
     if (named.has(uuid)) continue;
-    parts.push(notIncluded(name));
+    parts.push(notIncluded(role, name));
     stats.filesNotIncluded++;
   }
 
-  if (parts.length === 0) parts.push(notice('Empty in the claude.ai export.'));
-  return parts;
+  if (parts.length === 0) parts.push(missing(role, EMPTY_MESSAGE));
+  return { parts, content };
 }
 
 /** Builds one conversation's chat, or null when it has no messages (counted). */
@@ -331,6 +377,8 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
   const producedBy: ProducedBy = { profileId: profile.id, profileName: CLAUDE_REPLY_NAME, connectionId: profile.connectionId, modelId: CLAUDE_REPLY_MODEL };
 
   // Read every message first, then link them: claude.ai lists parents first, but nothing promises it.
+  // An export without parent links at all (an older format) is one line, in the order listed.
+  const linked = (raw['chat_messages'] as unknown[]).some((m) => isObj(m) && 'parent_message_uuid' in m);
   const found: { raw: Obj; id: string; role: 'user' | 'assistant'; parent: string | null; createdAt: number }[] = [];
   for (const m of raw['chat_messages'] as unknown[]) {
     const id = isObj(m) ? str(m['uuid']) : null;
@@ -339,7 +387,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
       stats.malformedMessages++;
       continue;
     }
-    const parent = str(m['parent_message_uuid']);
+    const parent = linked ? str(m['parent_message_uuid']) : (found.at(-1)?.id ?? null);
     found.push({ raw: m, id, role: sender === 'human' ? 'user' : 'assistant', parent: parent && parent !== CLAUDE_ROOT_PARENT ? parent : null, createdAt: time(m['created_at'], chatCreated) });
   }
   if (found.length === 0) {
@@ -365,6 +413,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
   const messages: CanonMessage[] = [];
   const queue = [...(children.get(null) ?? [])].sort(byTime);
   let branched = false;
+  let content = false;
   while (queue.length > 0) {
     const m = queue.shift()!;
     const kids = [...(children.get(m.id) ?? [])].sort(byTime);
@@ -372,20 +421,22 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
     queue.push(...kids);
     const siblings = (children.get(m.parent) ?? []).filter((s) => s.role === 'assistant').sort(byTime);
     const regenerated = m.role === 'assistant' && siblings.length > 1 && siblings[0]!.id !== m.id;
+    const made = messageParts(m.raw, m.role, m.id, stats);
+    content ||= made.content;
     messages.push({
       id: m.id,
       chatId,
       parentId: m.parent,
       role: m.role,
-      parts: messageParts(m.raw, m.role, m.id, stats),
+      parts: made.parts,
       status: 'complete',
       error: null,
       producedBy: m.role === 'assistant' ? (regenerated ? { ...producedBy, regenerated: true } : producedBy) : null,
       createdAt: m.createdAt,
     });
   }
-  // Some conversations come through with every message blank: nothing to import.
-  if (messages.every((m) => m.parts.every((p) => p.type === 'notice'))) {
+  // Some conversations come through with every message blank, or holding only files the export lacks: nothing to import.
+  if (!content) {
     stats.emptyConversations++;
     return null;
   }
@@ -398,7 +449,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
   const leaves = messages.filter((m) => !parentIds.has(m.id)).sort(byTime);
   const newest = [...messages].sort(byTime).at(-1) ?? null;
   // The first thing the user said, or (when that message came through empty) the first thing said at all.
-  const textOf = (m: CanonMessage): string => m.parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
+  const textOf = (m: CanonMessage): string => m.parts.flatMap((p) => (p.type === 'text' && !isMissingNote(p.text) ? [p.text] : [])).join('\n');
   const firstText = textOf(messages.find((m) => m.role === 'user') ?? messages[0]!) || (messages.map(textOf).find((t) => t.trim()) ?? '');
   const name = str(raw['name'])?.trim() ?? '';
   return {
@@ -412,7 +463,10 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
   };
 }
 
-/** A name safe as a file name on every OS: no path, no reserved characters, never empty. */
+/** Windows device names, which can't be used as a file name with or without an extension. */
+const RESERVED_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i;
+
+/** A name safe as a file name on every OS: no path, no reserved characters or device names, never empty. */
 export function safeFileName(raw: string, fallback: string, max = DOC_NAME_MAX): string {
   const base = raw.split(/[\\/]/).at(-1) ?? '';
   const cleaned = base
@@ -421,7 +475,8 @@ export function safeFileName(raw: string, fallback: string, max = DOC_NAME_MAX):
     .trim()
     .slice(0, max)
     .replace(/[. ]+$/, '');
-  return cleaned && !/^\.+$/.test(cleaned) ? cleaned : fallback;
+  if (!cleaned || /^\.+$/.test(cleaned)) return fallback;
+  return RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
 }
 
 /** `name` made unique against `taken` (ASCII case-insensitive) with -2, -3 before the extension. */
@@ -441,20 +496,25 @@ interface MemorySource {
 }
 
 /**
- * The first of each id: a folder can hold the same export twice (the ZIPs and
- * what was extracted from them). Items without an id are kept, to be counted
- * as malformed.
+ * One of each id: a folder can hold the same export twice (the ZIPs and what
+ * was extracted from them), or two exports. The newest by `timeOf` wins, the
+ * first on a tie. Items without an id are kept, to be counted as malformed.
  */
-function firstOfEach<T>(items: T[], idOf: (item: T) => string | null): T[] {
-  const seen = new Set<string>();
-  return items.filter((item) => {
+function firstOfEach<T>(items: T[], idOf: (item: T) => string | null, timeOf: (item: T) => number = () => 0): T[] {
+  const best = new Map<string, number>();
+  items.forEach((item, i) => {
     const id = idOf(item);
-    if (id === null) return true;
-    if (seen.has(id)) return false;
-    seen.add(id);
-    return true;
+    if (id === null) return;
+    const held = best.get(id);
+    if (held === undefined || timeOf(item) > timeOf(items[held]!)) best.set(id, i);
+  });
+  return items.filter((item, i) => {
+    const id = idOf(item);
+    return id === null || best.get(id) === i;
   });
 }
+
+const updatedAtOf = (v: unknown): number => (isObj(v) ? time(v['updated_at'], 0) : 0);
 
 const uuidOf = (v: unknown): string | null => (isObj(v) ? str(v['uuid']) : null);
 
@@ -520,7 +580,8 @@ function planProject(raw: unknown, memory: MemorySource, stats: ImportStats): Im
   const created = time(raw['created_at'], 0);
   return {
     id,
-    name: name.slice(0, TITLE_MAX) || UNTITLED_PROJECT,
+    // Nameless projects get their id's start too, so two of them never look like one project.
+    name: name.slice(0, TITLE_MAX) || `${UNTITLED_PROJECT} (${id.slice(0, 8)})`,
     description: str(raw['description'])?.trim() || (index ? frontMatterDescription(index.content) : null) || '',
     instructions,
     createdAt: created,
@@ -530,16 +591,10 @@ function planProject(raw: unknown, memory: MemorySource, stats: ImportStats): Im
   };
 }
 
-/** A slug for the artifact tool: lower-case letters, digits and dashes, 1-64 long. */
-function slugOf(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64)
-    .replace(/-+$/, '');
-  return slug || 'artifact';
+/** A version title as the artifact tool and sync accept one (`artifactTitleOk`): one line, at most MAX_ARTIFACT_TITLE characters. */
+function artifactTitle(raw: unknown): string {
+  const title = (str(raw) ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_ARTIFACT_TITLE).trim();
+  return title || 'Untitled artifact';
 }
 
 function planArtifact(raw: { meta: unknown; html: Record<string, string> }, profile: ImportProfile, stats: ImportStats): ImportedChat | null {
@@ -552,26 +607,30 @@ function planArtifact(raw: { meta: unknown; html: Record<string, string> }, prof
   const versions: (ImportedArtifact['versions'][number] & { sourceId: string })[] = [];
   for (const v of list(meta['versions'])) {
     const versionId = isObj(v) ? str(v['id']) : null;
-    const content = versionId !== null ? raw.html[versionId] : undefined;
-    if (!isObj(v) || versionId === null || content === undefined || Buffer.byteLength(content, 'utf8') > MAX_ARTIFACT_BYTES) {
+    // Own keys only: a version id such as "constructor" must not find Object's.
+    const content = versionId !== null && Object.hasOwn(raw.html, versionId) ? raw.html[versionId] : undefined;
+    if (!isObj(v) || versionId === null || typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_ARTIFACT_BYTES) {
       stats.artifactVersionsSkipped++;
       continue;
     }
-    versions.push({ id: `${id}:${versionId}`, sourceId: versionId, title: str(v['title'])?.trim() || 'Untitled artifact', content, createdAt: time(v['created_at'], 0) });
+    versions.push({ id: `${id}:${versionId}`, sourceId: versionId, title: artifactTitle(v['title']), content, createdAt: time(v['created_at'], 0) });
   }
   if (versions.length === 0) {
     stats.artifactsSkipped++;
     return null;
   }
   versions.sort(byTime);
+  // Grunt's current version is the last one made, so the one claude.ai showed goes last.
   const activeId = str(meta['active_version']);
-  const activeIndex = Math.max(0, versions.findIndex((v) => v.sourceId === activeId));
-  const active = versions[activeIndex]!;
-  const newest = versions.at(-1)!;
-  const slug = slugOf(active.title);
+  const activeAt = versions.findIndex((v) => v.sourceId === activeId);
+  if (activeAt !== -1 && activeAt !== versions.length - 1) versions.push(...versions.splice(activeAt, 1));
+  const active = versions.at(-1)!;
+  const activeIndex = versions.length - 1;
+  const newest = [...versions].sort(byTime).at(-1)!;
+  const slug = slugify(active.title);
   const artifactId = `${id}:artifact`;
   const messageId = `${id}:message`;
-  const callId = `${id}:card`;
+  const callId = toolId('card', id);
   const n = versions.length;
   const message: CanonMessage = {
     id: messageId,
@@ -596,8 +655,8 @@ function planArtifact(raw: { meta: unknown; html: Record<string, string> }, prof
   };
   return {
     id,
-    title: active.title.slice(0, TITLE_MAX),
-    createdAt: versions[0]!.createdAt,
+    title: active.title,
+    createdAt: Math.min(...versions.map((v) => v.createdAt)),
     updatedAt: time(meta['updated_at'], newest.createdAt),
     messages: [message],
     headMessageId: messageId,
@@ -633,14 +692,14 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
     throw new ClaudeExportError("This doesn't look like a claude.ai export: conversations.json isn't a list of conversations.");
   }
   const stats = emptyStats();
-  const chats = firstOfEach(files.conversations, uuidOf)
+  const chats = firstOfEach(files.conversations, uuidOf, updatedAtOf)
     .map((c) => planConversation(c, profile, stats))
     .filter((c): c is ImportedChat => c !== null);
   const memory = readMemories(files.memories);
-  const projects = firstOfEach(files.projects, uuidOf)
+  const projects = firstOfEach(files.projects, uuidOf, updatedAtOf)
     .map((p) => planProject(p, memory, stats))
     .filter((p): p is ImportedProject => p !== null);
-  const artifactChats = firstOfEach(files.artifacts, (a) => (isObj(a.meta) ? str(a.meta['id']) : null))
+  const artifactChats = firstOfEach(files.artifacts, (a) => (isObj(a.meta) ? str(a.meta['id']) : null), (a) => updatedAtOf(a.meta))
     .map((a) => planArtifact(a, profile, stats))
     .filter((c): c is ImportedChat => c !== null);
   return { chats, artifactChats, projects, memory: planMemory(memory), stats };

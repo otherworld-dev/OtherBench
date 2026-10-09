@@ -201,13 +201,19 @@ describe('planClaudeImport: content blocks', () => {
     ]);
     const parts = partsOf(chat, 'a1');
     const [ha, view] = parts.filter((p) => p.type === 'tool-call') as Extract<Part, { type: 'tool-call' }>[];
-    expect(ha!.id).toBe('a1:call:1');
+    expect(ha!.id).toBe('call_a1_1');
     expect(ha!.name).toBe('Home Assistant:ha_get_state');
-    expect(view!.id).toBe('a1:call:2');
+    expect(view!.id).toBe('call_a1_2');
     expect(parts.filter((p) => p.type === 'tool-result')).toEqual([
-      { type: 'tool-result', id: 'a1:call:2', name: 'view', result: 'file body', isError: false },
-      { type: 'tool-result', id: 'a1:call:1', name: 'Home Assistant:ha_get_state', result: 'File: plan.md (/mnt/plan.md)', isError: true },
+      { type: 'tool-result', id: 'call_a1_2', name: 'view', result: 'file body', isError: false },
+      { type: 'tool-result', id: 'call_a1_1', name: 'Home Assistant:ha_get_state', result: 'File: plan.md (/mnt/plan.md)', isError: true },
     ]);
+  });
+
+  it('makes ids for calls without one that every provider accepts, from a uuid message id', () => {
+    const chat = planOne([message({ uuid: '5bc51d94-ddfd-4e87-921a-4f741e2baced', sender: 'assistant', content: [{ type: 'tool_use', id: null, name: 'bash_tool', input: {} }] })]);
+    const call = chat.messages[0]!.parts[0] as Extract<Part, { type: 'tool-call' }>;
+    expect(call.id).toMatch(/^[A-Za-z0-9_-]{1,40}$/);
   });
 
   it('gives a call with no result an error result straight after it', () => {
@@ -298,14 +304,41 @@ describe('planClaudeImport: content blocks', () => {
       }),
       PROFILE
     );
+    // Text on the user's side, so a provider replaying the chat still sees the turn; a notice on a reply.
     expect(plan.chats[0]!.messages[0]!.parts).toEqual([
-      { type: 'notice', text: 'Not included in the claude.ai export: screenshot.png' },
+      { type: 'text', text: '[Not included in the claude.ai export: screenshot.png]' },
       { type: 'text', text: 'what is this?' },
-      { type: 'notice', text: 'Not included in the claude.ai export: spec.pdf' },
-      { type: 'notice', text: 'Not included in the claude.ai export: photo.jpg' },
-      { type: 'notice', text: 'Not included in the claude.ai export: a file' },
+      { type: 'text', text: '[Not included in the claude.ai export: spec.pdf]' },
+      { type: 'text', text: '[Not included in the claude.ai export: photo.jpg]' },
+      { type: 'text', text: '[Not included in the claude.ai export: a file]' },
     ]);
     expect(plan.stats.filesNotIncluded).toBe(4);
+  });
+
+  it('notes a file on a reply with a notice, and titles a chat from the user rather than the note', () => {
+    const chat = planOne(
+      [
+        message({ uuid: 'u1', content: [{ type: 'image', file_uuid: 'f1' }], files: [{ file_uuid: 'f1', file_name: 'shed.jpg' }] }),
+        message({ uuid: 'a1', sender: 'assistant', parent_message_uuid: 'u1', content: [{ type: 'text', text: 'A shed.' }], files: [{ file_uuid: 'f2', file_name: 'plan.png' }] }),
+      ],
+      { name: '' }
+    );
+    expect(partsOf(chat, 'a1')).toEqual([{ type: 'text', text: 'A shed.' }, { type: 'notice', text: 'Not included in the claude.ai export: plan.png' }]);
+    expect(chat.title).toBe('A shed.');
+  });
+
+  it('reads an older export: text only in the top-level field, and no parent links', () => {
+    const chat = planOne([
+      { uuid: 'u1', sender: 'human', created_at: at(1), text: 'Old question', content: [] },
+      { uuid: 'a1', sender: 'assistant', created_at: at(2), text: 'Old answer' },
+      { uuid: 'u2', sender: 'human', created_at: at(3), text: 'Follow-up' },
+    ]);
+    expect(chat.messages.map((m) => [m.id, m.parentId, m.parts])).toEqual([
+      ['u1', null, [{ type: 'text', text: 'Old question' }]],
+      ['a1', 'u1', [{ type: 'text', text: 'Old answer' }]],
+      ['u2', 'a1', [{ type: 'text', text: 'Follow-up' }]],
+    ]);
+    expect(chat.headMessageId).toBe('u2');
   });
 
   it('keeps a message that ends up with nothing in it, with a notice', () => {
@@ -333,7 +366,7 @@ describe('planClaudeImport: projects', () => {
     );
     expect(plan.projects.map((p) => [p.id, p.name, p.description, p.instructions])).toEqual([
       ['p1', 'Home Stuff', 'House things', 'Be brief.'],
-      ['p3', UNTITLED_PROJECT, '', 'Use metric.'],
+      ['p3', `${UNTITLED_PROJECT} (p3)`, '', 'Use metric.'],
     ]);
     expect(plan.projects[0]).toMatchObject({ createdAt: ms(0), updatedAt: ms(5) });
     expect(plan.stats.projectsSkipped).toBe(2);
@@ -440,18 +473,37 @@ describe('planClaudeImport: published artifacts', () => {
   }
 
   it('makes a chat holding the artifact with every version, oldest first, and a card for the active one', () => {
-    const plan = planClaudeImport(files({ artifacts: [frame([{ id: 'v2', title: 'Flank Wear', minute: 20 }, { id: 'v1', title: 'Flank wear draft', minute: 10 }, { id: 'v3', title: 'Flank Wear 3', minute: 30 }], 'v2')] }), PROFILE);
+    const plan = planClaudeImport(files({ artifacts: [frame([{ id: 'v2', title: 'Flank wear 2', minute: 20 }, { id: 'v1', title: 'Flank wear draft', minute: 10 }, { id: 'v3', title: 'Flank Wear', minute: 30 }], 'v3')] }), PROFILE);
     const chat = plan.artifactChats[0]!;
     expect(chat).toMatchObject({ id: 'art1', title: 'Flank Wear', createdAt: ms(10), updatedAt: ms(40), headMessageId: 'art1:message', latestMessageId: 'art1:message' });
     expect(chat.artifact!.versions.map((v) => [v.id, v.title, v.content])).toEqual([
       ['art1:v1', 'Flank wear draft', '<p>v1</p>'],
-      ['art1:v2', 'Flank Wear', '<p>v2</p>'],
-      ['art1:v3', 'Flank Wear 3', '<p>v3</p>'],
+      ['art1:v2', 'Flank wear 2', '<p>v2</p>'],
+      ['art1:v3', 'Flank Wear', '<p>v3</p>'],
     ]);
     expect(chat.artifact!.slug).toBe('flank-wear');
-    const result = chat.messages[0]!.parts.find((p) => p.type === 'tool-result') as Extract<Part, { type: 'tool-result' }>;
-    expect(JSON.parse(result.result as string)).toEqual({ ok: true, command: 'create', artifactId: 'art1:artifact', slug: 'flank-wear', kind: 'html', title: 'Flank Wear', versionId: 'art1:v2', number: 2 });
-    expect(chat.messages[0]!.parts[0]).toEqual({ type: 'text', text: 'Published artifact imported from claude.ai, with 3 versions.' });
+    const parts = chat.messages[0]!.parts;
+    const result = parts.find((p) => p.type === 'tool-result') as Extract<Part, { type: 'tool-result' }>;
+    expect(result.id).toMatch(/^[A-Za-z0-9_-]{1,40}$/);
+    expect(JSON.parse(result.result as string)).toEqual({ ok: true, command: 'create', artifactId: 'art1:artifact', slug: 'flank-wear', kind: 'html', title: 'Flank Wear', versionId: 'art1:v3', number: 3 });
+    expect(parts[0]).toEqual({ type: 'text', text: 'Published artifact imported from claude.ai, with 3 versions.' });
+  });
+
+  it('adds the version claude.ai showed last when it is not the newest, so it is the one Grunt shows', () => {
+    const chat = planClaudeImport(files({ artifacts: [frame([{ id: 'v1', title: 'Old', minute: 10 }, { id: 'v2', title: 'Newer', minute: 20 }], 'v1')] }), PROFILE).artifactChats[0]!;
+    expect(chat.artifact!.versions.map((v) => v.id)).toEqual(['art1:v2', 'art1:v1']);
+    expect(chat.title).toBe('Old');
+    expect(chat.messages[0]!.createdAt).toBe(ms(20));
+  });
+
+  it('makes titles one line within the limit, and ignores version ids that are names on every object', () => {
+    const odd = frame([{ id: 'v1', title: `Line one\nline two ${'x'.repeat(200)}`, minute: 1 }], 'v1');
+    (odd.meta as { versions: unknown[] }).versions.push({ id: 'constructor', title: 'Proto', created_at: at(2) }, { id: '__proto__', title: 'Proto', created_at: at(3) });
+    const plan = planClaudeImport(files({ artifacts: [odd] }), PROFILE);
+    const [version] = plan.artifactChats[0]!.artifact!.versions;
+    expect(version!.title.startsWith('Line one line two x')).toBe(true);
+    expect(version!.title.length).toBeLessThanOrEqual(120);
+    expect(plan.stats.artifactVersionsSkipped).toBe(2);
   });
 
   it('skips versions without HTML or over 1 MB, and artifacts left with none', () => {
@@ -482,6 +534,13 @@ describe('planClaudeImport: the same export twice', () => {
     expect(plan.memory.about.match(/Once\./g)).toHaveLength(1);
     expect(plan.stats.conversations).toBe(1);
   });
+
+  it('keeps the newer copy of a conversation when two exports hold it', () => {
+    const older = conversation({ uuid: 'c1', updated_at: at(10), chat_messages: [message({ uuid: 'm1' })] });
+    const newer = conversation({ uuid: 'c1', updated_at: at(20), chat_messages: [message({ uuid: 'm1' }), message({ uuid: 'm2', sender: 'assistant', parent_message_uuid: 'm1' })] });
+    expect(planClaudeImport(files({ conversations: [newer, older] }), PROFILE).chats[0]!.messages).toHaveLength(2);
+    expect(planClaudeImport(files({ conversations: [older, newer] }), PROFILE).chats[0]!.messages).toHaveLength(2);
+  });
 });
 
 describe('planClaudeImport: errors and helpers', () => {
@@ -494,5 +553,10 @@ describe('planClaudeImport: errors and helpers', () => {
     expect(safeFileName('  name.  ', 'x')).toBe('name');
     expect(safeFileName('..', 'x')).toBe('x');
     expect(safeFileName('', 'fallback.md')).toBe('fallback.md');
+  });
+
+  it('safeFileName steers clear of Windows device names', () => {
+    for (const name of ['nul.md', 'CON', 'com1.txt', 'Lpt9.json', 'aux']) expect(safeFileName(name, 'x')).toBe(`_${name}`);
+    for (const name of ['null.md', 'console.txt', 'auxiliary']) expect(safeFileName(name, 'x')).toBe(name);
   });
 });
