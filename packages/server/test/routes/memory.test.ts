@@ -9,6 +9,7 @@ import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
+import { MemoryServices } from '../../src/memory/index.js';
 import { ProjectMemoryService } from '../../src/memory/service.js';
 import { resolveProfile } from '../../src/profile-resolution.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -57,7 +58,7 @@ beforeEach(async () => {
   };
   const memory = new ProjectMemoryService({ store, engine, resolveProfile: (id) => resolveProfile(container, id), now: clock.now, scheduler: clock });
   memory.attach(turnRunner);
-  container.memory = memory;
+  container.memory = new MemoryServices(memory);
 
   // Any real kind: the scripted engine answers, never the connection.
   store.connections.create({ id: 'conn-1', name: 'Conn', kind: 'ollama', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });

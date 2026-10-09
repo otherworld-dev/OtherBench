@@ -254,6 +254,29 @@ describe('sync (Task 50)', () => {
     expect(b.store.chats.get('c')!.folders).toBeUndefined();
   });
 
+  it('global memory travels: About you set on one machine and the note on the other both stand, and note history stays home', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+
+    a.store.globalMemory.saveAbout('British English.');
+    b.store.globalMemory.saveNote('## Pinned\n- x', 'summariser', 'c');
+    a.store.chats.update('c', { globalMemoryCursor: 'm9' });
+    b.store.profiles.update('p1', { useGlobalMemory: false });
+    s.both();
+
+    for (const n of [a, b]) {
+      expect(n.store.globalMemory.get()).toMatchObject({ about: 'British English.', note: '## Pinned\n- x', noteUpdatedBy: 'summariser', noteSourceChatId: 'c' });
+      expect(n.store.chats.get('c')!.globalMemoryCursor).toBe('m9');
+      expect(n.store.profiles.get('p1')!.useGlobalMemory).toBe(false);
+    }
+    expect(a.store.globalMemory.versions()).toEqual([]);
+    expect(b.store.globalMemory.versions()).toHaveLength(1);
+  });
+
   it("artifacts and their versions travel, and a version can arrive before the reply it's tied to", () => {
     const a = node('a');
     const b = node('b');

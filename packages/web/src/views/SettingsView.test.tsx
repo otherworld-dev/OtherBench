@@ -6,7 +6,7 @@ vi.mock('../desktop/bridge.js', () => ({ isDesktop: () => desktop }));
 vi.mock('./settings/ConnectionsPanel.js', () => ({ ConnectionsPanel: () => <div>connections</div> }));
 vi.mock('./settings/ModelsPanel.js', () => ({ ModelsPanel: () => <div>models</div> }));
 vi.mock('./settings/ProfilesPanel.js', () => ({ ProfilesPanel: () => <div>profiles</div> }));
-vi.mock('./settings/ProjectsPanel.js', () => ({ ProjectsPanel: () => <div>projects panel</div> }));
+vi.mock('./settings/MemoryPanel.js', () => ({ MemoryPanel: () => <div>memory panel</div> }));
 vi.mock('./settings/McpServersPanel.js', () => ({ McpServersPanel: () => <div>mcp</div> }));
 vi.mock('./settings/DesktopPanel.js', () => ({ DesktopPanel: () => <div>desktop panel</div> }));
 
@@ -18,13 +18,14 @@ afterEach(() => {
 });
 
 describe('SettingsView', () => {
-  it('has a Projects tab after Profiles that shows the projects settings', () => {
+  it('has a Memory tab after Profiles that shows the memory settings, and no Projects tab', () => {
     render(<SettingsView onClose={vi.fn()} />);
     const names = screen.getAllByRole('tab').map((t) => t.textContent);
-    expect(names.indexOf('Projects')).toBe(names.indexOf('Profiles') + 1);
+    expect(names.indexOf('Memory')).toBe(names.indexOf('Profiles') + 1);
+    expect(names).not.toContain('Projects');
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Projects' }));
-    expect(screen.getByText('projects panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Memory' }));
+    expect(screen.getByText('memory panel')).toBeInTheDocument();
   });
 
   it('has no Desktop tab in a browser', () => {

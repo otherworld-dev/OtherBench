@@ -20,6 +20,7 @@ interface ProfileBody {
   params?: unknown;
   toolPolicy?: unknown;
   isDefault?: unknown;
+  useGlobalMemory?: unknown;
   archivedAt?: unknown;
 }
 
@@ -99,6 +100,7 @@ export function profilesRoutes(container: Container): Hono {
       params: parseParams(body.params),
       toolPolicy: parseToolPolicy(body.toolPolicy),
       isDefault: optionalBoolean(body.isDefault, 'isDefault', false),
+      useGlobalMemory: optionalBoolean(body.useGlobalMemory, 'useGlobalMemory', true),
       archivedAt: null,
     });
     return c.json(created, 201);
@@ -121,6 +123,7 @@ export function profilesRoutes(container: Container): Hono {
     if (body.params !== undefined) patch.params = parseParams(body.params);
     if (body.toolPolicy !== undefined) patch.toolPolicy = parseToolPolicy(body.toolPolicy, existing.toolPolicy);
     if (body.isDefault !== undefined) patch.isDefault = optionalBoolean(body.isDefault, 'isDefault', false);
+    if (body.useGlobalMemory !== undefined) patch.useGlobalMemory = optionalBoolean(body.useGlobalMemory, 'useGlobalMemory', true);
     if (body.archivedAt !== undefined) {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }

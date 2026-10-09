@@ -256,6 +256,11 @@ export class SqliteMessageRepo implements MessageRepo {
     }
   }
 
+  latestId(chatId: string): string | null {
+    const row = this.db.prepare('SELECT id FROM message WHERE chat_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(chatId) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
   latestBySession(chatId: string, sessionId: string): CanonMessage | null {
     const row = this.db
       .prepare(

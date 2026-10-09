@@ -76,6 +76,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
   const [agentMcp, setAgentMcp] = useState(profile?.toolPolicy.agentMcp ?? true);
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
+  const [useGlobalMemory, setUseGlobalMemory] = useState(profile?.useGlobalMemory !== false);
 
   function toggleMcpServer(id: string): void {
     setMcpServerIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
@@ -136,6 +137,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       params,
       toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts } : { fs, shell, approvalMode, mcpServerIds, artifacts },
       isDefault,
+      useGlobalMemory,
     };
 
     setSaving(true);
@@ -423,6 +425,17 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
           )}
         </div>
       )}
+
+      <div>
+        <label className="flex items-center gap-1.5 text-sm">
+          <input type="checkbox" aria-label="Use global memory" checked={useGlobalMemory} onChange={(e) => setUseGlobalMemory(e.target.checked)} />
+          Use global memory
+        </label>
+        <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+          About you, what Grunt has learned about you, and the list of your projects (Settings &gt; Memory). Turn off for a clean-room profile, or a
+          model you don&rsquo;t want to send that to.
+        </p>
+      </div>
 
       <label className="flex items-center gap-1.5 text-sm">
         <input type="checkbox" aria-label="Default profile" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} />

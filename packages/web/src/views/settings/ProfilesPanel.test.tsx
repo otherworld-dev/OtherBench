@@ -120,6 +120,29 @@ describe('ProfilesPanel', () => {
   beforeEach(reset);
   afterEach(cleanup);
 
+  it('saves the Use global memory switch, on by default, and shows it off for a profile that has it off', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ useGlobalMemory: false })]);
+    mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByRole('checkbox', { name: 'Use global memory' })).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Clean room');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Use global memory' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ useGlobalMemory: false })));
+  });
+
   it('creates a new profile with connection, model and tool policy', async () => {
     useGruntStore.getState().setConnections([makeConnection()]);
     useGruntStore.getState().setModels([makeModel()]);

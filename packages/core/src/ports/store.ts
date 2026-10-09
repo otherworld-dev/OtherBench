@@ -90,8 +90,18 @@ export interface Chat {
    * has been. `ChatRepo.update` resets it whenever `projectId` changes.
    */
   memoryCursor: string | null;
-  /** "Don't add to project memory": the summariser skips this chat. It still receives the note. */
+  /**
+   * "Don't add to memory": the summariser folds this chat into neither its
+   * project's note nor the global note (spec 2026-10-08-global-memory-design).
+   * It still receives both.
+   */
   memoryExcluded: boolean;
+  /**
+   * Global memory: the id of the last message already folded into the global
+   * note, or null (also when absent) when none has been. Unlike `memoryCursor`
+   * it survives a move between projects.
+   */
+  globalMemoryCursor?: string | null;
   /**
    * The chat's place in its sidebar section, higher first (#823). Set by
    * dragging or Move up/down; chat activity never changes it. Defaults to
@@ -149,7 +159,10 @@ export interface ChatRepo {
 export interface Project {
   id: string;
   name: string;
-  /** A line for the user about the project, shown in the Inspector; never sent to a model (spec 2026-10-08-project-page-design). */
+  /**
+   * A line about the project, shown in the Inspector and, cut to 120 characters, in the project index
+   * every chat with global memory gets (spec 2026-10-08-global-memory-design §1).
+   */
   description: string;
   /** Added to the system prompt of every chat in the project, as the user's instructions (spec 2026-10-08-project-page-design §2). */
   instructions: string;
@@ -241,11 +254,47 @@ export interface ProjectMemoryRepo {
   version(id: string): ProjectMemoryVersion | null;
 }
 
+// --- global memory -----------------------------------------------------------------
+
+/**
+ * The user's global memory (spec 2026-10-08-global-memory-design): About you,
+ * which the user writes, and the learned note the summariser keeps, each with
+ * its last save. Never saved reads as '' with `*UpdatedAt: 0`.
+ */
+export interface GlobalMemory {
+  about: string;
+  aboutUpdatedAt: number;
+  note: string;
+  noteUpdatedAt: number;
+  noteUpdatedBy: MemoryAuthor;
+  noteSourceChatId: string | null;
+}
+
+/** One saved version of the learned note; every note save adds one. */
+export interface GlobalMemoryVersion {
+  id: string;
+  body: string;
+  createdAt: number;
+  createdBy: MemoryAuthor;
+  sourceChatId: string | null;
+}
+
+export interface GlobalMemoryRepo {
+  get(): GlobalMemory;
+  /** Replaces About you. `at` defaults to now. */
+  saveAbout(about: string, at?: number): GlobalMemory;
+  /** Replaces the learned note and records a version, keeping the newest `MEMORY_VERSIONS_KEPT`. `at` defaults to now. */
+  saveNote(body: string, by: MemoryAuthor, sourceChatId: string | null, at?: number): GlobalMemory;
+  /** The note's versions, newest first. */
+  versions(): GlobalMemoryVersion[];
+  version(id: string): GlobalMemoryVersion | null;
+}
+
 // --- app settings ----------------------------------------------------------------
 
 /** App-wide settings (one set per database). Defaults: `DEFAULT_APP_SETTINGS`. */
 export interface AppSettings {
-  /** The profile the project-memory summariser runs on; null = each project's default profile, then the app default. */
+  /** The profile both memory summarisers run on; null = the project's default profile (project notes), then the app default. */
   memoryProfileId: string | null;
 }
 
@@ -278,6 +327,8 @@ export interface MessageRepo {
   updateEngineMeta(id: string, meta: EngineMeta): void;
   /** The newest message in `chatId` whose `engineMeta.sessionId` is `sessionId` (by createdAt, then id), or null. */
   latestBySession(chatId: string, sessionId: string): CanonMessage | null;
+  /** The id of the newest message in `chatId` (by createdAt, then id), or null: lets the memory sweeps skip an up-to-date chat without reading it. */
+  latestId(chatId: string): string | null;
   /** Records that the user kept this compare variant at `at` (see `CanonMessage.keptAt`). Throws when the id does not exist. */
   markKept(id: string, at: number): void;
 }
@@ -604,6 +655,7 @@ export interface Store {
   chats: ChatRepo;
   projects: ProjectRepo;
   projectMemory: ProjectMemoryRepo;
+  globalMemory: GlobalMemoryRepo;
   settings: SettingsRepo;
   messages: MessageRepo;
   artifacts: ArtifactRepo;

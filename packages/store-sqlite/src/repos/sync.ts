@@ -24,6 +24,7 @@ const STAMP_COLUMNS = ['hlc', 'field_hlc'];
 const KEYS: Partial<Record<SyncTable, string[]>> = {
   location_path: ['location_id', 'node_id'],
   project_memory: ['project_id'],
+  global_memory: ['key'],
 };
 function keyColumns(tbl: SyncTable): string[] {
   return KEYS[tbl] ?? ['id'];
@@ -220,6 +221,9 @@ export class SqliteSyncRepo implements SyncRepo {
         return true;
       case 'project_memory':
         return this.exists('project', row['project_id']);
+      case 'global_memory':
+        // Only the two rows Grunt writes; anything else would fail the table's CHECK.
+        return row['key'] === 'about' || row['key'] === 'note';
       case 'message':
         return this.exists('chat', row['chat_id']) && (row['parent_id'] == null || this.exists('message', row['parent_id']));
       case 'attachment':

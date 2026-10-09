@@ -417,6 +417,15 @@ describe('startup sweep', () => {
     expect(requests).toHaveLength(2);
     expect(promptOf(requests[1])).toContain('Recent work');
   });
+
+  it("skips a chat whose cursor is already its newest message without reading its messages", () => {
+    const { replyId } = exchange('chat', 'Done', 'ok', { at: clock.time - 60 * 60_000 });
+    store.chats.update('chat', { memoryCursor: replyId });
+    const roots = vi.spyOn(store.messages, 'roots');
+    service.sweep();
+    expect(roots).not.toHaveBeenCalledWith('chat');
+    expect(clock.pending()).toEqual([]);
+  });
 });
 
 describe('changes while an update runs', () => {

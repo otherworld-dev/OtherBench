@@ -92,6 +92,8 @@ export interface Profile {
   toolPolicy: ToolPolicy;
   isDefault: boolean;
   archivedAt: number | null;
+  /** Whether chats on this profile get global memory (spec 2026-10-08-global-memory-design). Absent means on. */
+  useGlobalMemory?: boolean;
 }
 
 export interface ResolvedProfile extends Profile {

@@ -48,6 +48,7 @@ describe('SqliteProfileRepo', () => {
       toolPolicy: { fs: 'readwrite', shell: true, mcpServerIds: ['mcp-1'], approvalMode: 'ask_on_mutate' },
       isDefault: true,
       archivedAt: null,
+      useGlobalMemory: true,
     });
     db.close();
   });
