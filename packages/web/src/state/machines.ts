@@ -1,6 +1,6 @@
 import type { Chat } from '@grunt/core/ports/store.js';
 import { api, type PeersOverview } from './api.js';
-import { useGruntStore } from './store.js';
+import { useGruntStore, type StreamConnectionStatus } from './store.js';
 
 /**
  * This machine and its paired machines, as the UI needs them to show where
@@ -26,6 +26,24 @@ export function remoteUnreachable(machines: PeersOverview | null, chat: Pick<Cha
   if (!machines || chat.runsOn === machines.self.id) return false;
   const peer = machines.peers.find((p) => p.nodeId === chat.runsOn);
   return !peer || peer.status === 'unreachable';
+}
+
+const STREAM_STATUS_LABEL: Record<StreamConnectionStatus, string> = {
+  idle: '',
+  connecting: 'Connecting…',
+  open: '',
+  reconnecting: 'Reconnecting…',
+};
+
+/**
+ * The header's line for the open chat's live stream. A chat that runs on a
+ * machine that can't be reached never connects (its stream is forwarded
+ * there), so it says so rather than flipping between connecting and
+ * reconnecting; the stream keeps retrying and picks up when the machine is back.
+ */
+export function streamStatusText(status: StreamConnectionStatus, chat: Pick<Chat, 'runsOn'>, machines: PeersOverview | null): string {
+  if (remoteUnreachable(machines, chat)) return `${machineName(machines, chat.runsOn)} isn't reachable`;
+  return STREAM_STATUS_LABEL[status];
 }
 
 /**

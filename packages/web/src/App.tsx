@@ -6,6 +6,7 @@ import { Inspector } from './panes/Inspector.js';
 import { PaneGrid } from './panes/PaneGrid.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
+import { streamStatusText } from './state/machines.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
@@ -21,13 +22,6 @@ import { UsageView } from './views/UsageView.js';
 /** Below this width the inspector can no longer sit as a third docked column -- it collapses (task 19 brief). */
 const NARROW_BREAKPOINT = '(max-width: 1099.98px)';
 
-const STREAM_STATUS_LABEL: Record<string, string> = {
-  idle: '',
-  connecting: 'Connecting…',
-  open: '',
-  reconnecting: 'Reconnecting…',
-};
-
 /** The quick-chat window gets its own small view (`?view=quick`); everything else is the main app. */
 export function App(): JSX.Element {
   return isQuickView() ? <QuickChat /> : <MainApp />;
@@ -40,6 +34,7 @@ function MainApp(): JSX.Element {
   const inspectorCollapsed = useGruntStore((s) => s.inspectorCollapsed);
   const setInspectorCollapsed = useGruntStore((s) => s.setInspectorCollapsed);
   const streamStatus = useGruntStore((s) => s.streamStatus);
+  const machines = useGruntStore((s) => s.machines);
   const projectPage = useGruntStore((s) => s.projectPage);
   const closeProjectPage = useGruntStore((s) => s.closeProjectPage);
 
@@ -143,7 +138,7 @@ function MainApp(): JSX.Element {
           {activeChat && <span className="text-sm text-[var(--text-muted)]">{activeChat.title}</span>}
         </div>
         <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
-          {activeChat && <span data-testid="stream-status">{STREAM_STATUS_LABEL[streamStatus] ?? streamStatus}</span>}
+          {activeChat && <span data-testid="stream-status">{streamStatusText(streamStatus, activeChat, machines)}</span>}
           {isNarrow && (
             <button
               type="button"
