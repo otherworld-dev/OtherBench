@@ -6,7 +6,7 @@ import type { Connection, Profile } from '@grunt/core/types/config.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../state/api.js')>();
-  return { ...actual, api: { claudeImport: { status: vi.fn(), preview: vi.fn(), start: vi.fn() } } };
+  return { ...actual, api: { claudeImport: { status: vi.fn(), preview: vi.fn(), start: vi.fn() }, memory: { global: { saveAbout: vi.fn() } } } };
 });
 
 import { ApiError, api } from '../../state/api.js';
@@ -42,12 +42,12 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
   return {
     folder: '/exports/claude',
     sources: ['conversations-000.zip: conversations.json'],
-    chats: { total: 442, existing: 2, messages: 6267, branched: 24 },
+    chats: { total: 442, existing: 2, newer: 1, messages: 6267, branched: 24 },
     emptyChats: 44,
     artifacts: [{ title: 'Flank Wear', versions: 2, existing: false }],
     projects: [
-      { name: 'Home Stuff', action: 'create', mergeInto: null, docs: 2, hasInstructions: true, hasMemory: true },
-      { name: 'PhD', action: 'merge', mergeInto: 'PhD', docs: 0, hasInstructions: false, hasMemory: true },
+      { id: 'p1', name: 'Home Stuff', action: 'create', mergeInto: null, docs: 2, hasInstructions: true, hasMemory: true },
+      { id: 'p2', name: 'PhD', action: 'merge', mergeInto: 'PhD', docs: 0, hasInstructions: false, hasMemory: true },
     ],
     projectsSkipped: 5,
     memory: { about: true, aboutTaken: false, note: true, projectNotes: 2, files: 49 },
@@ -61,12 +61,13 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
 
 function report(over: Partial<ImportReport> = {}): ImportReport {
   return {
-    chats: { imported: 440, existing: 2, messages: 6200, failed: [] },
+    chats: { imported: 440, existing: 2, newer: 0, messages: 6200, failed: [] },
     emptyChats: 44,
     artifacts: { imported: 1, existing: 0, failed: [] },
     projects: { created: ['Home Stuff'], merged: ['PhD'], existing: [], failed: [], skipped: 5 },
-    docs: { written: 2, folders: [{ project: 'Home Stuff', path: '/data/grunt.db.imported/claude/Home Stuff-019f3c80', attached: true }] },
-    memory: { model: 'Claude Opus', about: { status: 'saved' }, note: { status: 'failed', reason: 'cut off' }, projects: [] },
+    docs: { written: 2, folders: [{ project: 'Home Stuff', path: '/data/grunt.db.imported/claude/Home Stuff-019f3c80', attached: true, workspace: false }] },
+    fileErrors: [{ title: '/people/x.md', error: 'EACCES' }],
+    memory: { model: 'Claude Opus', about: { status: 'drafted', text: 'I run a small company.' }, note: { status: 'failed', reason: 'cut off' }, projects: [] },
     memoryFiles: '/data/grunt.db.imported/claude/memory',
     filesNotIncluded: 672,
     dropped: {},
@@ -112,6 +113,8 @@ describe('ImportPanel', () => {
     expect(claudeImport.preview).toHaveBeenCalledWith('/exports/claude', 'opus');
     const panel = await screen.findByTestId('import-preview');
     expect(panel).toHaveTextContent('442 chats (6,267 messages, 24 with more than one branch); 2 already imported, which will be skipped');
+    expect(panel).toHaveTextContent('1 imported chat has newer messages on claude.ai, which a second import doesn’t add');
+    expect(panel).toHaveTextContent("About you is drafted from claude.ai's notes for you to read and accept.");
     expect(panel).toHaveTextContent('44 empty conversations left out');
     expect(panel).toHaveTextContent('1 published artifact, each in a chat of its own');
     expect(panel).toHaveTextContent('Project “Home Stuff”: new, 2 docs, instructions, memory');
@@ -163,15 +166,24 @@ describe('ImportPanel', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Importing chats… 10 of 451');
     expect(screen.queryByLabelText('Export folder')).toBeNull();
 
-    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
+    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, newer: 0, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
     const reportView = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
     expect(reportView).toHaveTextContent('Import finished');
     expect(reportView).toHaveTextContent('Imported 439 chats (6,200 messages); 2 were already here');
     expect(reportView).toHaveTextContent('New projects: Home Stuff');
     expect(reportView).toHaveTextContent('Merged into your projects: PhD');
-    expect(reportView).toHaveTextContent('Home Stuff’s docs are in /data/grunt.db.imported/claude/Home Stuff-019f3c80, attached to the project read-only');
-    expect(reportView).toHaveTextContent('Memory (with Claude Opus): About you saved; learned note failed: cut off');
+    expect(reportView).toHaveTextContent('Home Stuff’s docs are in /data/grunt.db.imported/claude/Home Stuff-019f3c80, attached to the project read-only; its chats see them once the project or chat has a workspace folder');
+    expect(reportView).toHaveTextContent('Memory (with Claude Opus): About you drafted, below; learned note failed: cut off');
     expect(screen.getByRole('alert')).toHaveTextContent('Clash: UNIQUE constraint failed');
+    expect(screen.getByRole('alert')).toHaveTextContent('/people/x.md: EACCES');
+
+    // The drafted About you is saved only when the user chooses to.
+    expect(api.memory.global.saveAbout).not.toHaveBeenCalled();
+    expect(screen.getByTestId('about-draft')).toHaveTextContent('I run a small company.');
+    vi.mocked(api.memory.global.saveAbout).mockResolvedValue({} as never);
+    await user.click(screen.getByRole('button', { name: 'Save as About you' }));
+    expect(api.memory.global.saveAbout).toHaveBeenCalledWith('I run a small company.');
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
   });
 
   it('shows a running import it finds when opened', async () => {

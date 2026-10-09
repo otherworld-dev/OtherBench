@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
+import type { AboutOutcome, ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
 import type { Connection, Profile } from '@grunt/core/types/config.js';
 import { isDesktop, pickFolder } from '../../desktop/bridge.js';
 import { ApiError, api } from '../../state/api.js';
@@ -207,10 +207,15 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
           {chats.branched > 0 ? `, ${chats.branched.toLocaleString('en-US')} with more than one branch` : ''})
           {chats.existing > 0 ? `; ${chats.existing.toLocaleString('en-US')} already imported, which will be skipped` : ''}
         </li>
+        {chats.newer > 0 && (
+          <li>
+            {count(chats.newer, 'imported chat has', 'imported chats have')} newer messages on claude.ai, which a second import doesn&rsquo;t add
+          </li>
+        )}
         {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
         {preview.artifacts.length > 0 && <li>{count(preview.artifacts.length, 'published artifact')}, each in a chat of its own</li>}
         {preview.projects.map((p) => (
-          <li key={p.name}>
+          <li key={p.id}>
             Project &ldquo;{p.name}&rdquo;: {p.action === 'create' ? 'new' : p.action === 'merge' ? `merges into your project “${p.mergeInto ?? p.name}”` : 'already imported'}
             {p.docs > 0 ? `, ${count(p.docs, 'doc')}` : ''}
             {p.hasInstructions ? ', instructions' : ''}
@@ -244,7 +249,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
             {preview.memoryModel === null
               ? 'No model can do this. Choose a Memory model under Settings → Memory first.'
               : [
-                  notes.about ? (notes.aboutTaken ? 'About you already has text, so it stays as it is.' : "About you is written from claude.ai's notes.") : null,
+                  notes.about ? "About you is drafted from claude.ai's notes for you to read and accept." : null,
                   notes.note ? 'The learned note is folded in.' : null,
                   notes.projectNotes > 0 ? `${count(notes.projectNotes, 'project note')} folded in.` : null,
                 ]
@@ -291,12 +296,62 @@ function StatusView({ status }: { status: ImportStatus }): JSX.Element {
   );
 }
 
-function outcomeText(outcome: MemoryOutcome): string {
-  return outcome.status === 'saved' ? 'saved' : `${outcome.status}: ${outcome.reason}`;
+/**
+ * The About you the memory model drafted from claude.ai's notes. It goes into
+ * every chat as the user's own words, so nothing is saved until they read it
+ * and choose to.
+ */
+function AboutDraft({ text }: { text: string }): JSX.Element {
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(): Promise<void> {
+    setSaving(true);
+    setError(null);
+    try {
+      await api.memory.global.saveAbout(text);
+      setSaved(true);
+    } catch (err) {
+      setError(errorText(err, 'Save failed -- please try again.'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div data-testid="about-draft" className="space-y-2 rounded border border-[var(--border)] p-3">
+      <h4 className="text-sm font-semibold">About you, drafted from claude.ai&rsquo;s notes</h4>
+      <p className={HINT}>
+        Grunt adds About you to every chat as your own words, so read it first. Saving it replaces what Settings &rarr; Memory &rarr; About you holds now; you can
+        edit it there afterwards.
+      </p>
+      <pre className="whitespace-pre-wrap rounded bg-[var(--bg-sunken)] p-2 text-xs">{text}</pre>
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={() => void save()} disabled={saving || saved} className="btn btn-primary px-2.5 py-1">
+          {saving ? 'Saving…' : 'Save as About you'}
+        </button>
+        {saved && (
+          <span role="status" className={HINT}>
+            Saved.
+          </span>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="text-xs text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function outcomeText(outcome: MemoryOutcome | AboutOutcome): string {
+  return outcome.status === 'saved' ? 'saved' : outcome.status === 'drafted' ? 'drafted, below' : `${outcome.status}: ${outcome.reason}`;
 }
 
 function ReportView({ report }: { report: ImportReport }): JSX.Element {
-  const failures = [...report.chats.failed, ...report.artifacts.failed, ...report.projects.failed];
+  const failures = [...report.chats.failed, ...report.artifacts.failed, ...report.projects.failed, ...report.fileErrors];
   const { projects, memory } = report;
   return (
     <div className="space-y-2">
@@ -304,6 +359,7 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
         <li>
           Imported {count(report.chats.imported, 'chat')} ({count(report.chats.messages, 'message')})
           {report.chats.existing > 0 ? `; ${report.chats.existing.toLocaleString('en-US')} were already here` : ''}
+          {report.chats.newer > 0 ? `, ${report.chats.newer.toLocaleString('en-US')} of them with newer messages on claude.ai that weren't added` : ''}
         </li>
         {report.artifacts.imported + report.artifacts.existing > 0 && <li>Imported {count(report.artifacts.imported, 'published artifact')}</li>}
         {projects.created.length > 0 && <li>New projects: {projects.created.join(', ')}</li>}
@@ -311,7 +367,11 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
         {report.docs.folders.map((f) => (
           <li key={f.path}>
             {f.project}&rsquo;s docs are in <span className="font-mono">{f.path}</span>
-            {f.attached ? ', attached to the project read-only' : ", not attached: the project has no room for another folder"}
+            {!f.attached
+              ? ', not attached: the project has no room for another folder'
+              : f.workspace
+                ? ', attached to the project read-only'
+                : ", attached to the project read-only; its chats see them once the project or chat has a workspace folder"}
           </li>
         ))}
         {memory && (
@@ -327,6 +387,7 @@ function ReportView({ report }: { report: ImportReport }): JSX.Element {
         )}
         {report.filesNotIncluded > 0 && <li>{count(report.filesNotIncluded, 'image or file', 'images and files')} weren&rsquo;t in the export</li>}
       </ul>
+      {memory?.about.status === 'drafted' && <AboutDraft text={memory.about.text} />}
       {failures.length > 0 && (
         <div role="alert" className="space-y-1 text-xs text-[var(--danger)]">
           <p>These couldn&rsquo;t be imported:</p>
