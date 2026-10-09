@@ -75,6 +75,19 @@ export class SqliteStore implements Store {
     this.audit = new SqliteAuditRepo(db, selfId);
   }
 
+  transaction<T>(fn: () => T): T {
+    if (this.db.isTransaction) return fn();
+    this.db.exec('BEGIN');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   close(): void {
     this.db.close();
   }

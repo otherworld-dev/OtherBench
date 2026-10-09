@@ -111,5 +111,5 @@ class EventedChatRepo implements ChatRepo {
 
 /** `store` with its chat repo announcing changes on `events`; every other repo is the same object. */
 export function withChatEvents(store: Store, events: AppEventBus): Store {
-  return { ...store, chats: new EventedChatRepo(store.chats, events), close: () => store.close() };
+  return { ...store, chats: new EventedChatRepo(store.chats, events), transaction: (fn) => store.transaction(fn), close: () => store.close() };
 }

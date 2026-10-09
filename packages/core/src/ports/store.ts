@@ -665,5 +665,13 @@ export interface Store {
   mcpServers: McpServerRepo;
   grants: GrantRepo;
   audit: AuditRepo;
+  /**
+   * Runs `fn` as one unit: SQLite commits everything it writes together, or
+   * rolls it all back when it throws (the error is rethrown). Inside an open
+   * transaction it just runs `fn`. `fn` must be synchronous, and must not
+   * save memory notes or apply sync batches, which open their own.
+   * `InMemoryStore` runs `fn` with no rollback.
+   */
+  transaction<T>(fn: () => T): T;
   close(): void;
 }
