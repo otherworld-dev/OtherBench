@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chatListUrl,
   CLAUDE_ROOT_PARENT,
   ClaudeExportError,
   planClaudeImport,
@@ -540,6 +541,45 @@ describe('planClaudeImport: the same export twice', () => {
     const newer = conversation({ uuid: 'c1', updated_at: at(20), chat_messages: [message({ uuid: 'm1' }), message({ uuid: 'm2', sender: 'assistant', parent_message_uuid: 'm1' })] });
     expect(planClaudeImport(files({ conversations: [newer, older] }), PROFILE).chats[0]!.messages).toHaveLength(2);
     expect(planClaudeImport(files({ conversations: [older, newer] }), PROFILE).chats[0]!.messages).toHaveLength(2);
+  });
+});
+
+describe("planClaudeImport: claude.ai's chat list", () => {
+  const branched = [
+    message({ uuid: 'u1', created_at: at(1) }),
+    message({ uuid: 'a1', sender: 'assistant', parent_message_uuid: 'u1', created_at: at(2) }),
+    message({ uuid: 'a2', sender: 'assistant', parent_message_uuid: 'u1', created_at: at(3) }),
+  ];
+
+  it("files each chat under its project and opens it on the branch claude.ai showed", () => {
+    const plan = planClaudeImport(
+      files({
+        conversations: [conversation({ uuid: 'c1', chat_messages: branched }), conversation({ uuid: 'c2', chat_messages: [message({ uuid: 'u9' })] })],
+        conversationList: [[{ uuid: 'c1', project_uuid: 'p1', current_leaf_message_uuid: 'a1' }, { uuid: 'c2', project_uuid: null, current_leaf_message_uuid: 'not-here' }]],
+      }),
+      PROFILE
+    );
+    expect(plan.chatList).toBe(true);
+    expect(plan.chats.map((c) => [c.id, c.projectId, c.headMessageId])).toEqual([
+      ['c1', 'p1', 'a1'],
+      ['c2', null, 'u9'],
+    ]);
+  });
+
+  it('reads a list wrapped in an object, and a project given as an object', () => {
+    const plan = planClaudeImport(files({ conversations: [conversation({ uuid: 'c1', chat_messages: branched })], conversationList: [{ data: [{ uuid: 'c1', project: { uuid: 'p2', name: 'Garden' } }] }] }), PROFILE);
+    expect(plan.chats[0]!.projectId).toBe('p2');
+    expect(plan.chats[0]!.headMessageId).toBe('a2');
+  });
+
+  it('without a list, leaves chats out of projects and on their newest branch', () => {
+    const plan = planClaudeImport(files({ conversations: [conversation({ uuid: 'c1', chat_messages: branched })] }), PROFILE);
+    expect(plan.chatList).toBe(false);
+    expect(plan.chats[0]).toMatchObject({ projectId: null, headMessageId: 'a2' });
+  });
+
+  it('chatListUrl names the organisation', () => {
+    expect(chatListUrl('org-1')).toBe('https://claude.ai/api/organizations/org-1/chat_conversations');
   });
 });
 

@@ -43,6 +43,17 @@ export interface ClaudeExportFiles {
   memories: unknown[];
   /** Each published artifact ("frame"): its `artifact.json` and its versions' HTML by version id. */
   artifacts: { meta: unknown; html: Record<string, string> }[];
+  /**
+   * claude.ai's own chat list (`chat_conversations*.json`, saved from the
+   * page its sidebar loads), when the user added it: the export doesn't say
+   * which project a chat was in, or which branch it showed, and this does.
+   */
+  conversationList?: unknown[];
+}
+
+/** The URL of claude.ai's chat list for an organisation: what the user saves as `chat_conversations.json`. */
+export function chatListUrl(organizationId: string): string {
+  return `https://claude.ai/api/organizations/${organizationId}/chat_conversations`;
 }
 
 /** The profile imported chats belong to; assistant replies name it in `producedBy`. */
@@ -70,6 +81,8 @@ export interface ImportedChat {
   headMessageId: string | null;
   /** The newest message by time, then id (as `MessageRepo.latestId` picks it): both memory cursors start here. */
   latestMessageId: string | null;
+  /** The claude.ai project the chat was in, from the chat list; null when it wasn't in one or there is no list. */
+  projectId?: string | null;
   /** Only on a published artifact's chat. */
   artifact?: ImportedArtifact;
 }
@@ -131,7 +144,35 @@ export interface ImportPlan {
   artifactChats: ImportedChat[];
   projects: ImportedProject[];
   memory: ImportedMemory;
+  /** Whether claude.ai's chat list came with the export, so chats know their projects. */
+  chatList: boolean;
   stats: ImportStats;
+}
+
+/** What claude.ai's chat list says about one chat. */
+interface Listed {
+  projectId: string | null;
+  leaf: string | null;
+}
+
+/**
+ * claude.ai's chat list by chat id. The saved page is a list of chats (or an
+ * object holding one); each names its project as `project_uuid` (or
+ * `project.uuid`) and its branch as `current_leaf_message_uuid`.
+ */
+function readChatList(raws: unknown[] | undefined): Map<string, Listed> | null {
+  if (!raws || raws.length === 0) return null;
+  const listed = new Map<string, Listed>();
+  for (const raw of raws) {
+    const items = Array.isArray(raw) ? raw : isObj(raw) ? (list(raw['data']).length > 0 ? list(raw['data']) : list(raw['conversations'])) : [];
+    for (const item of items) {
+      const id = isObj(item) ? str(item['uuid']) : null;
+      if (!isObj(item) || !id) continue;
+      const project = isObj(item['project']) ? str(item['project']['uuid']) : null;
+      listed.set(id, { projectId: str(item['project_uuid']) ?? project, leaf: str(item['current_leaf_message_uuid']) });
+    }
+  }
+  return listed;
 }
 
 type Obj = Record<string, unknown>;
@@ -365,8 +406,8 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
   return { parts, content };
 }
 
-/** Builds one conversation's chat, or null when it has no messages (counted). */
-function planConversation(raw: unknown, profile: ImportProfile, stats: ImportStats): ImportedChat | null {
+/** Builds one conversation's chat, or null when it has no messages (counted). `listed` is what claude.ai's chat list says about it, if anything. */
+function planConversation(raw: unknown, profile: ImportProfile, stats: ImportStats, listing: Map<string, Listed> | null): ImportedChat | null {
   stats.conversations++;
   if (!isObj(raw) || !str(raw['uuid']) || !Array.isArray(raw['chat_messages'])) {
     stats.malformedConversations++;
@@ -445,6 +486,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
   stats.messages += messages.length;
   if (branched) stats.branchedChats++;
 
+  const listed = listing?.get(chatId);
   const parentIds = new Set(messages.map((m) => m.parentId));
   const leaves = messages.filter((m) => !parentIds.has(m.id)).sort(byTime);
   const newest = [...messages].sort(byTime).at(-1) ?? null;
@@ -458,7 +500,9 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
     createdAt: chatCreated || (messages[0]?.createdAt ?? 0),
     updatedAt: time(raw['updated_at'], newest?.createdAt ?? chatCreated),
     messages,
-    headMessageId: leaves.at(-1)?.id ?? null,
+    // The branch claude.ai showed, when its chat list says; else the newest.
+    headMessageId: (listed?.leaf && messages.some((m) => m.id === listed.leaf) ? listed.leaf : null) ?? leaves.at(-1)?.id ?? null,
+    projectId: listed?.projectId ?? null,
     latestMessageId: newest?.id ?? null,
   };
 }
@@ -692,8 +736,9 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
     throw new ClaudeExportError("This doesn't look like a claude.ai export: conversations.json isn't a list of conversations.");
   }
   const stats = emptyStats();
+  const listing = readChatList(files.conversationList);
   const chats = firstOfEach(files.conversations, uuidOf, updatedAtOf)
-    .map((c) => planConversation(c, profile, stats))
+    .map((c) => planConversation(c, profile, stats, listing))
     .filter((c): c is ImportedChat => c !== null);
   const memory = readMemories(files.memories);
   const projects = firstOfEach(files.projects, uuidOf, updatedAtOf)
@@ -702,5 +747,5 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
   const artifactChats = firstOfEach(files.artifacts, (a) => (isObj(a.meta) ? str(a.meta['id']) : null), (a) => updatedAtOf(a.meta))
     .map((a) => planArtifact(a, profile, stats))
     .filter((c): c is ImportedChat => c !== null);
-  return { chats, artifactChats, projects, memory: planMemory(memory), stats };
+  return { chats, artifactChats, projects, memory: planMemory(memory), chatList: listing !== null, stats };
 }
