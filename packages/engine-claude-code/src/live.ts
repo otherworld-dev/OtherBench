@@ -42,6 +42,14 @@ export interface TurnBinding {
   permissionDenied?: HookCallback;
   /** Runs an `artifact` call for this reply (Deck #896); absent when the profile turns artifacts off. */
   artifact?: (args: unknown) => Promise<unknown>;
+  /** Runs a `recall` call for this reply (spec 2026-10-09-recall-design); absent when the profile turns recall off. */
+  recall?: (args: unknown) => Promise<unknown>;
+}
+
+/** Which of Grunt's own tools a process's server carries; fixed when it starts. */
+export interface GruntTools {
+  artifacts: boolean;
+  recall: boolean;
 }
 
 /**
@@ -55,8 +63,10 @@ export class LiveProcess {
   busy = true;
   lastUsed = Date.now();
   binding: TurnBinding | null = null;
-  /** Claude Code's name for this process's artifact tool (Deck #896), or null when it has no Grunt server. */
+  /** Claude Code's name for this process's artifact tool (Deck #896), or null when its Grunt server has none. */
   artifactTool: string | null = null;
+  /** Claude Code's name for this process's recall tool, or null when its Grunt server has none. */
+  recallTool: string | null = null;
   readonly stderr: string[] = [];
   readonly iterator: AsyncIterator<SDKMessage>;
   private closed = false;
@@ -96,10 +106,10 @@ export class LiveProcess {
  * environment (`CLAUDE_AGENT_SDK_VERSION`) each time it starts a process.
  * Hashed, so no second plaintext copy of a credential is kept.
  */
-export function liveKey(options: Options, connection: { backend: string; token: string | null }, artifacts: boolean): string {
+export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntTools): string {
   const { cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, artifacts, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 

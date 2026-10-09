@@ -3,18 +3,19 @@ import { tmpdir } from 'node:os';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage, SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolProvider } from '@grunt/core/ports/tool-provider.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
-import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate } from './approval.js';
-import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntServerName } from './artifact-server.js';
+import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
+import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName } from './artifact-server.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
-import { LivePool, LiveProcess, liveKey, PromptQueue, type TurnBinding } from './live.js';
+import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntTools, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 
@@ -39,8 +40,10 @@ export interface ClaudeCodeEngineDeps {
   liveIdleMs?: number;
   /** How many idle Claude Code processes are kept. Defaults to 3. */
   maxLive?: number;
-  /** Runs an `artifact` tool call for a reply (Deck #896): the server's executor. Without it, Claude Code gets no artifact server. */
+  /** Runs an `artifact` tool call for a reply (Deck #896): the server's executor. Without it, Claude Code gets no artifact tool. */
   artifactTool?: (ctx: { chatId: string; messageId: string }, args: unknown) => Promise<unknown>;
+  /** Runs a `recall` tool call for a reply (spec 2026-10-09-recall-design): the server's executor. Without it, Claude Code gets no recall tool. */
+  recallTool?: (ctx: { chatId: string }, args: unknown) => Promise<unknown>;
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: SdkMcpToolDefinition<any>[]) => McpServerConfig;
 }
@@ -174,20 +177,25 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
       signal: req.signal,
     };
-    // Artifacts (Deck #896): a process has Grunt's server or not from its
-    // start, so the switch is part of the process key.
-    const artifactTool = this.deps.artifactTool;
-    const artifacts = artifactTool !== undefined && profile.toolPolicy.artifacts !== false;
+    // Artifacts (Deck #896) and recall (spec 2026-10-09-recall-design): a
+    // process's Grunt server has each tool or not from its start, so the
+    // switches are part of the process key.
+    const { artifactTool, recallTool } = this.deps;
+    const own: GruntTools = {
+      artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
+      recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
+    };
     const binding: TurnBinding = {
       gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
-      ...(artifactTool && artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
+      ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
+      ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
     };
     const options = this.processOptions(req, cwd, autoMode);
-    const key = liveKey(options, { backend, token: profile.apiKey }, artifacts);
+    const key = liveKey(options, { backend, token: profile.apiKey }, own);
     const taken = plan.mode === 'continue' ? this.pool.take(plan.sessionId, key) : null;
     const reused = taken !== null;
-    const live = taken ?? this.startProcess(options, key, plan, artifacts);
+    const live = taken ?? this.startProcess(options, key, plan, own);
     live.binding = binding;
 
     // Stopping a reply stops its process: the next message resumes the
@@ -198,8 +206,11 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     if (req.signal.aborted) live.close();
     live.input.push(userMessage(content));
 
-    // This process's artifact tool is reported under the API engines' name.
-    const mapper = new SdkEventMapper(live.artifactTool ? new Map([[live.artifactTool, ARTIFACT_TOOL]]) : undefined);
+    // This process's own tools are reported under the API engines' names.
+    const renames = new Map<string, string>();
+    if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
+    if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
+    const mapper = new SdkEventMapper(renames.size > 0 ? renames : undefined);
     let sawInit = false;
     let finished = false;
     let rateLimitResetsAt: number | null = null;
@@ -272,7 +283,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       disallowedTools: agentDisallowedTools(profile.toolPolicy),
       systemPrompt: profile.systemPrompt ? { type: 'preset', preset: 'claude_code', append: profile.systemPrompt } : { type: 'preset', preset: 'claude_code' },
       // MCP off: load no MCP config but the servers passed here (only Grunt's
-      // own, for artifacts), so the model isn't offered the user's MCP tools
+      // own, for artifacts and recall), so the model isn't offered the user's MCP tools
       // and none of their servers start. The gate still denies MCP calls.
       ...(profile.toolPolicy.agentMcp === false ? { strictMcpConfig: true } : {}),
       ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
@@ -291,26 +302,36 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * reply is running decides its tool calls, and with none running every
    * call is refused.
    */
-  private startProcess(options: Options, key: string, plan: SessionPlan, artifacts: boolean): LiveProcess {
+  private startProcess(options: Options, key: string, plan: SessionPlan, own: GruntTools): LiveProcess {
     this.pool.makeRoom();
     const input = new PromptQueue();
     const abortController = new AbortController();
     let live: LiveProcess | null = null;
     // Grunt's own MCP server (Deck #896), under a name made for this process.
-    // The gate passes its artifact tool without a card, matching that exact
-    // name, so no project MCP config can name a server to get the same pass.
-    const server = artifacts ? gruntServerName() : null;
-    const ownArtifactTool = server ? gruntArtifactToolName(server) : null;
-    const gate: Gate = (toolName, toolInput, signal, opts) =>
-      live?.binding
-        ? live.binding.gate(toolName, toolInput, signal, { ...opts, artifact: toolName === ownArtifactTool })
+    // The gate passes its artifact and recall tools without a card, matching
+    // those exact names, so no project MCP config can name a server to get
+    // the same pass.
+    const server = own.artifacts || own.recall ? gruntServerName() : null;
+    const ownArtifactTool = server && own.artifacts ? gruntArtifactToolName(server) : null;
+    const ownRecallTool = server && own.recall ? gruntRecallToolName(server) : null;
+    const ownTool = (toolName: string): GruntTool | undefined =>
+      toolName === ownArtifactTool ? 'artifact' : toolName === ownRecallTool ? 'recall' : undefined;
+    const tools: SdkMcpToolDefinition<any>[] = [
+      ...(own.artifacts ? [gruntArtifactTool(() => live?.binding?.artifact)] : []),
+      ...(own.recall ? [gruntRecallTool(() => live?.binding?.recall)] : []),
+    ];
+    const gate: Gate = (toolName, toolInput, signal, opts) => {
+      const which = ownTool(toolName);
+      return live?.binding
+        ? live.binding.gate(toolName, toolInput, signal, { ...opts, ...(which ? { own: which } : {}) })
         : Promise.resolve({ allow: false, reason: 'No Grunt reply is waiting on this tool call.' });
+    };
     const permissionDenied: HookCallback = async (hookInput, toolUseId, hookOptions) =>
       live?.binding?.permissionDenied ? live.binding.permissionDenied(hookInput, toolUseId, hookOptions) : {};
     const full: Options = {
       ...options,
       // Its tool acts for whichever reply is running, like the hooks.
-      ...(server ? { mcpServers: { ...(options.mcpServers ?? {}), [server]: (this.deps.mcpServer ?? gruntMcpServer)(server, [gruntArtifactTool(() => live?.binding?.artifact)]) } } : {}),
+      ...(server ? { mcpServers: { ...(options.mcpServers ?? {}), [server]: (this.deps.mcpServer ?? gruntMcpServer)(server, tools) } } : {}),
       abortController,
       stderr: (data: string) => {
         if (!live) return;
@@ -329,6 +350,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     };
     const process = new LiveProcess(key, input, abortController, this.deps.query({ prompt: input, options: full }));
     process.artifactTool = ownArtifactTool;
+    process.recallTool = ownRecallTool;
     live = process;
     for (const p of this.processes) if (p.isClosed) this.processes.delete(p);
     this.processes.add(process);

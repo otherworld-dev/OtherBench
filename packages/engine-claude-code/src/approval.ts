@@ -2,6 +2,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
@@ -15,11 +16,19 @@ export type GateDecision = { allow: true } | { allow: false; reason: string } | 
  * go to Claude Code's classifier instead of a card.
  */
 /**
- * `opts.artifact`: the call is to this process's own Grunt artifact tool --
- * the engine matched the exact per-process name (artifact-server.ts), never
- * a name alone.
+ * `opts.own`: the call is to one of this process's own Grunt tools (artifact
+ * or recall) -- the engine matched the exact per-process name
+ * (artifact-server.ts), never a name alone.
  */
-export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean; artifact?: boolean }) => Promise<GateDecision>;
+export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean; own?: GruntTool }) => Promise<GateDecision>;
+
+/** Grunt's own tools on its per-process server, as the broker knows them. */
+export type GruntTool = 'artifact' | 'recall';
+
+const OWN_TOOLS: Record<GruntTool, { name: string; description: string }> = {
+  artifact: { name: ARTIFACT_TOOL, description: 'Grunt artifact tool' },
+  recall: { name: RECALL_TOOL, description: 'Grunt recall tool' },
+};
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
 
@@ -122,9 +131,9 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
       if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
-      // Grunt's own artifact tool has no path arguments; it's checked as
+      // Grunt's own tools have no path arguments; each is checked as
       // Grunt's (the profile's switch, no card), never as an MCP tool.
-      const own = opts?.artifact === true;
+      const own = opts?.own;
       const normalised = own ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
@@ -136,11 +145,11 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         return { allow: false, reason: `"${toolName}" was blocked: it has an unusable path argument (${normalised.unusable}).` };
       }
       const spec: ToolSpec = {
-        name: own ? ARTIFACT_TOOL : toolName,
-        description: own ? 'Grunt artifact tool' : 'Claude Code tool',
+        name: own ? OWN_TOOLS[own].name : toolName,
+        description: own ? OWN_TOOLS[own].description : 'Claude Code tool',
         parameters: {},
         risk: own ? 'read' : classifyAgentTool(toolName).risk,
-        source: own ? 'artifact' : 'agent',
+        source: own ?? 'agent',
         execute: async () => undefined, // never called: Claude Code executes its own tools
       };
       // Only the PreToolUse hook, and only in auto mode, may hand a call to
