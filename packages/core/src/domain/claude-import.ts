@@ -440,9 +440,27 @@ interface MemorySource {
   byProject: Map<string, string>;
 }
 
+/**
+ * The first of each id: a folder can hold the same export twice (the ZIPs and
+ * what was extracted from them). Items without an id are kept, to be counted
+ * as malformed.
+ */
+function firstOfEach<T>(items: T[], idOf: (item: T) => string | null): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const id = idOf(item);
+    if (id === null) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+const uuidOf = (v: unknown): string | null => (isObj(v) ? str(v['uuid']) : null);
+
 function readMemories(raws: unknown[]): MemorySource {
   const source: MemorySource = { conversations: '', files: [], byProject: new Map() };
-  for (const raw of raws) {
+  for (const raw of firstOfEach(raws, (v) => (isObj(v) ? str(v['account_uuid']) : null))) {
     if (!isObj(raw)) continue;
     const conversations = str(raw['conversations_memory'])?.trim();
     if (conversations) source.conversations = source.conversations ? `${source.conversations}\n\n${conversations}` : conversations;
@@ -615,9 +633,15 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
     throw new ClaudeExportError("This doesn't look like a claude.ai export: conversations.json isn't a list of conversations.");
   }
   const stats = emptyStats();
-  const chats = files.conversations.map((c) => planConversation(c, profile, stats)).filter((c): c is ImportedChat => c !== null);
+  const chats = firstOfEach(files.conversations, uuidOf)
+    .map((c) => planConversation(c, profile, stats))
+    .filter((c): c is ImportedChat => c !== null);
   const memory = readMemories(files.memories);
-  const projects = files.projects.map((p) => planProject(p, memory, stats)).filter((p): p is ImportedProject => p !== null);
-  const artifactChats = files.artifacts.map((a) => planArtifact(a, profile, stats)).filter((c): c is ImportedChat => c !== null);
+  const projects = firstOfEach(files.projects, uuidOf)
+    .map((p) => planProject(p, memory, stats))
+    .filter((p): p is ImportedProject => p !== null);
+  const artifactChats = firstOfEach(files.artifacts, (a) => (isObj(a.meta) ? str(a.meta['id']) : null))
+    .map((a) => planArtifact(a, profile, stats))
+    .filter((c): c is ImportedChat => c !== null);
   return { chats, artifactChats, projects, memory: planMemory(memory), stats };
 }

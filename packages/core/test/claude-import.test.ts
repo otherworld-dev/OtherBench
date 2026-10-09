@@ -469,6 +469,21 @@ describe('planClaudeImport: published artifacts', () => {
   });
 });
 
+describe('planClaudeImport: the same export twice', () => {
+  it('keeps the first of each conversation, project, artifact and account memory', () => {
+    const c = conversation({ uuid: 'c1', chat_messages: [message({ uuid: 'm1' })] });
+    const p = { uuid: 'p1', name: 'P', docs: [] };
+    const a = { meta: { id: 'a1', active_version: 'v1', versions: [{ id: 'v1', title: 'T', created_at: at(0) }] }, html: { v1: '<p></p>' } };
+    const m = { account_uuid: 'acc', conversations_memory: 'Once.', memory_files: [] };
+    const plan = planClaudeImport(files({ conversations: [c, c], projects: [p, p], artifacts: [a, a], memories: [m, m] }), PROFILE);
+    expect(plan.chats).toHaveLength(1);
+    expect(plan.projects).toHaveLength(1);
+    expect(plan.artifactChats).toHaveLength(1);
+    expect(plan.memory.about.match(/Once\./g)).toHaveLength(1);
+    expect(plan.stats.conversations).toBe(1);
+  });
+});
+
 describe('planClaudeImport: errors and helpers', () => {
   it('refuses conversations that are not a list', () => {
     expect(() => planClaudeImport(files({ conversations: { not: 'a list' } }), PROFILE)).toThrow(ClaudeExportError);
