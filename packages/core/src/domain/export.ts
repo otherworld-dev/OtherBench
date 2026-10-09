@@ -53,7 +53,7 @@ export function shownPath(messages: CanonMessage[], headMessageId: string | null
 }
 
 /** A fenced code block whose fence is longer than any run of backticks inside it, so content can't close it early. */
-function fenced(content: string, lang = ''): string {
+export function fenced(content: string, lang = ''): string {
   const longest = Math.max(2, ...[...content.matchAll(/`+/g)].map((m) => m[0].length));
   const fence = '`'.repeat(longest + 1);
   return `${fence}${lang}\n${content}\n${fence}`;

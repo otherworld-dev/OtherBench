@@ -1059,6 +1059,11 @@ export class InMemoryStore implements Store {
     this.profiles = new InMemoryProfileRepo(this.projects);
   }
 
+  /** Just runs `fn`: there is nothing to roll back to. */
+  transaction<T>(fn: () => T): T {
+    return fn();
+  }
+
   close(): void {
     // Nothing to release -- no file handle, no connection pool.
   }

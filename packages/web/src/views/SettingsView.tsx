@@ -9,8 +9,9 @@ import { McpServersPanel } from './settings/McpServersPanel.js';
 import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 import { MemoryPanel } from './settings/MemoryPanel.js';
+import { ImportPanel } from './settings/ImportPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'appearance' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'import' | 'appearance' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -20,6 +21,7 @@ const TAB_LABEL: Record<Tab, string> = {
   locations: 'Locations',
   machines: 'Machines',
   mcpServers: 'MCP Servers',
+  import: 'Import',
   appearance: 'Appearance',
   desktop: 'Desktop',
 };
@@ -76,6 +78,7 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'locations' && <LocationsPanel />}
         {tab === 'machines' && <MachinesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
+        {tab === 'import' && <ImportPanel />}
         {tab === 'appearance' && <AppearancePanel />}
         {tab === 'desktop' && <DesktopPanel />}
       </div>

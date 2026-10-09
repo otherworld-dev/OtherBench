@@ -42,6 +42,17 @@ function toolOutput(result: unknown, isError: boolean): ToolResultPart['output']
 }
 
 /**
+ * A tool name as providers accept one in a replayed history (letters, digits,
+ * `_` and `-`, at most 64). Grunt's own tools already are; a chat imported
+ * from claude.ai holds names such as "Home Assistant:ha_get_state", which are
+ * kept as they are in Grunt and only changed on the way to the model.
+ */
+export function replayToolName(name: string): string {
+  if (/^[A-Za-z0-9_-]{1,64}$/.test(name)) return name;
+  return name.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 64) || 'tool';
+}
+
+/**
  * Converts a canonical (provider-agnostic) message list into the `ai`
  * package's `ModelMessage[]` shape for a specific model's capabilities.
  *
@@ -195,7 +206,7 @@ async function assistantContentFromParts(
         break;
       case 'tool-call':
         if (!caps.tools) break;
-        assistantContent.push({ type: 'tool-call', toolCallId: part.id, toolName: part.name, input: part.args });
+        assistantContent.push({ type: 'tool-call', toolCallId: part.id, toolName: replayToolName(part.name), input: part.args });
         seenToolCallIds.add(part.id);
         break;
       case 'tool-result':
@@ -204,7 +215,7 @@ async function assistantContentFromParts(
         toolResults.push({
           type: 'tool-result',
           toolCallId: part.id,
-          toolName: part.name,
+          toolName: replayToolName(part.name),
           output: toolOutput(part.result, part.isError),
         });
         break;

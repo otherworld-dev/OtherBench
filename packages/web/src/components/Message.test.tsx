@@ -81,6 +81,20 @@ describe('Message', () => {
     expect(screen.queryByText('world')).not.toBeInTheDocument();
   });
 
+  it("shows a user message's notices, as for an imported message whose image the export didn't have", () => {
+    const message = base({
+      role: 'user',
+      producedBy: null,
+      parts: [
+        { type: 'notice', text: 'Not included in the claude.ai export: screenshot.png' },
+        { type: 'text', text: 'What is this?' },
+      ],
+    });
+    render(<Message message={message} />);
+    expect(screen.getByRole('note')).toHaveTextContent('Not included in the claude.ai export: screenshot.png');
+    expect(screen.getByText('What is this?')).toBeInTheDocument();
+  });
+
   // --- capability-fallback disclosure + attachment chips (task 21) ---------
 
   it('renders a notice part as a visible, honest banner -- not silence -- on the degraded message', () => {

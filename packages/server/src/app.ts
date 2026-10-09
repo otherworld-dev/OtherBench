@@ -9,6 +9,7 @@ import { eventsRoutes } from './routes/events.js';
 import { fsRoutes } from './routes/fs.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { healthRoutes } from './routes/health.js';
+import { importRoutes } from './routes/import.js';
 import { locationsRoutes, nodeRoutes } from './routes/locations.js';
 import { forwardingRoutes } from './peer/forward.js';
 import { peersRoutes } from './routes/peers.js';
@@ -118,6 +119,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', artifactsRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
+  authed.route('/import', importRoutes(container));
   authed.route('/view', viewRoutes(container, viewLinks));
   authed.route('/events', eventsRoutes(container));
   authed.route('/fs', fsRoutes());

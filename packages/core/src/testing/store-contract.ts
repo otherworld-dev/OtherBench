@@ -304,6 +304,16 @@ export function runStoreContract(
       expect(store.chats.get('chat-b')!.autoMode).toBe(true);
     });
 
+    it('transaction: returns what fn returns and keeps its writes; a nested one just runs', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      const result = store.transaction(() => {
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId }));
+        return store.transaction(() => 'inner');
+      });
+      expect(result).toBe('inner');
+      expect(store.chats.get('chat-a')).not.toBeNull();
+    });
+
     describe('projects', () => {
       function makeProjectInput(over: { id: string } & Partial<Project>) {
         return { name: 'Test Project', workspace: null, defaultProfileId: null, ...over };
