@@ -108,8 +108,10 @@ describe('/api/import/claude', () => {
 
   it('preview and start answer 400 with a message for a bad folder or profile', async () => {
     for (const [path, body, message] of [
-      ['/api/import/claude/preview', {}, '"folder"'],
+      ['/api/import/claude/preview', { folder: 7 }, '"folder"'],
+      ['/api/import/claude/preview', {}, 'This machine has no Cowork sessions'],
       ['/api/import/claude/preview', { folder: join(dataDir, 'missing') }, "There's no folder"],
+      ['/api/import/claude/preview', { folder: join(dataDir, 'empty') }, "There's no claude.ai export or Cowork session in"],
       ['/api/import/claude', { folder: exportDir }, '"profileId"'],
       ['/api/import/claude', { folder: exportDir, profileId: 'old' }, 'archived'],
       ['/api/import/claude', { folder: join(dataDir, 'empty'), profileId: 'claude' }, "There's no conversations.json"],

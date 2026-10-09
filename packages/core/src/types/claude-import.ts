@@ -16,7 +16,10 @@ export interface ImportFailure {
 }
 
 export interface ImportPreview {
+  /** The folder checked; '' for none (just this machine's Cowork sessions). */
   folder: string;
+  /** Whether the folder held a claude.ai export; without one only Cowork sessions are imported. */
+  export: boolean;
   /** The files the conversations and memory were read from. */
   sources: string[];
   /**
@@ -45,8 +48,8 @@ export interface ImportPreview {
 }
 
 export interface CoworkPreview {
-  /** Where Claude Desktop keeps them. */
-  root: string;
+  /** Where they were found, and how many in each: this machine's Cowork folder, and a copy of another machine's in the chosen folder. */
+  sources: { path: string; sessions: number }[];
   sessions: number;
   existing: number;
   messages: number;
@@ -91,6 +94,7 @@ export interface ImportStatus {
 
 /** What `POST /api/import/claude` takes. */
 export interface ImportStart {
+  /** The folder to import from; '' for none (just this machine's Cowork sessions). */
   folder: string;
   profileId: string;
   memory: boolean;

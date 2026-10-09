@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setImmediate as breathe } from 'node:timers/promises';
-import { chatListUrl, planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@grunt/core/domain/claude-import.js';
+import { chatListUrl, ClaudeExportError, planClaudeImport, safeFileName, type ImportedChat, type ImportedProject, type ImportPlan } from '@grunt/core/domain/claude-import.js';
 import { emptyCoworkStats, planCoworkSession, type CoworkChat, type CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
 import { finaliseImportedAbout, importAboutPrompt, importGlobalNotePrompt, importProjectNotePrompt } from '@grunt/core/domain/claude-import-memory.js';
 import { emptyGlobalMemoryBody, finaliseGlobalSummary, GLOBAL_MEMORY_HEADINGS } from '@grunt/core/domain/global-memory.js';
@@ -56,7 +56,7 @@ export interface ClaudeImportDeps {
   events?: AppEventBus;
   /** Where docs and claude.ai's memory files go; made when first needed. */
   importRoot: string;
-  read?: (folder: string) => Promise<ClaudeExportRead>;
+  read?: (folder: string, options?: { optional?: boolean }) => Promise<ClaudeExportRead>;
   /** Where pasted Cowork images are stored, as uploads are. Without it they become notes. */
   blobStore?: BlobStore;
   /** Where Claude Desktop keeps Cowork sessions on this machine; null or unset when there's nowhere to look. */
@@ -97,6 +97,15 @@ interface ChatOutcome {
   filed: boolean;
 }
 
+/** What an empty folder holds: no export. */
+const NO_EXPORT: ClaudeExportRead = { files: { conversations: [], projects: [], memories: [], artifacts: [] }, sources: [], organizationId: null, hasExport: false };
+
+/** Somewhere Cowork sessions were found: this machine's Cowork folder, or the folder the user chose. */
+interface CoworkSource {
+  path: string;
+  sessions: CoworkSessionFiles[];
+}
+
 /** Pins every sha against blob GC until `fn` has finished (`withPinnedSha`, one inside another). */
 function withPinnedShas<T>(shas: string[], fn: () => Promise<T>): Promise<T> {
   const [first, ...rest] = shas;
@@ -115,7 +124,7 @@ export class ClaudeImportService {
   private job: Promise<void> = Promise.resolve();
   private disposed = false;
   private readonly running = new Set<() => void>();
-  private readonly read: (folder: string) => Promise<ClaudeExportRead>;
+  private readonly read: (folder: string, options?: { optional?: boolean }) => Promise<ClaudeExportRead>;
   private readonly readCowork: (root: string) => Promise<CoworkSessionFiles[]>;
   private readonly scheduler: Scheduler;
   private readonly now: () => number;
@@ -138,9 +147,13 @@ export class ClaudeImportService {
     return this.job;
   }
 
-  /** What importing `folder` would do. `profileId`, when given, is the import's profile, which memory falls back to. */
+  /**
+   * What importing `folder` would do: a claude.ai export, a copy of a Cowork
+   * folder, both, or ('') just this machine's Cowork sessions. `profileId`,
+   * when given, is the import's profile, which memory falls back to.
+   */
   async preview(folder: string, profileId: string | null = null): Promise<ImportPreview> {
-    const read = await this.read(folder);
+    const { read, cowork } = await this.gather(folder, true);
     const plan = planClaudeImport(read.files, { id: profileId ?? 'preview', connectionId: 'preview' });
     const { store } = this.deps;
     const projects = store.projects.list();
@@ -151,6 +164,7 @@ export class ClaudeImportService {
     const planned = new Set(plan.projects.map((p) => p.id));
     return {
       folder,
+      export: read.hasExport,
       sources: read.sources,
       chats: {
         total: plan.chats.length,
@@ -161,7 +175,7 @@ export class ClaudeImportService {
         branched: plan.stats.branchedChats,
       },
       chatList: { found: plan.chatList, url: read.organizationId ? chatListUrl(read.organizationId) : null },
-      cowork: await this.coworkPreview(profileId),
+      cowork: this.coworkPreview(this.planCowork(cowork, { id: profileId ?? 'preview', connectionId: 'preview' })),
       emptyChats: plan.stats.emptyConversations + plan.stats.malformedConversations,
       artifacts: plan.artifactChats.map((c) => ({ title: c.title, versions: c.artifact?.versions.length ?? 0, existing: store.chats.get(c.id) !== null })),
       projects: plan.projects.map((p) => {
@@ -193,21 +207,63 @@ export class ClaudeImportService {
     };
   }
 
-  /** The Cowork sessions on this machine, planned, or [] when there's nowhere to look or nothing there. */
-  private async coworkChats(profile: { id: string; connectionId: string }): Promise<CoworkChat[]> {
-    const root = this.deps.coworkRoot;
-    if (!root) return [];
-    const stats = emptyCoworkStats();
-    return (await this.readCowork(root)).map((files) => planCoworkSession(files, profile, stats)).filter((c): c is CoworkChat => c !== null);
+  /**
+   * What `folder` holds (a claude.ai export, a copy of another machine's
+   * Cowork folder, both, or, when it's '', nothing) and, with `withCowork`, the
+   * Cowork sessions on this machine. Throws `ClaudeExportError` for a folder
+   * that holds nothing to import, and `ImportInputError` when there's no
+   * folder and nothing on this machine.
+   */
+  private async gather(folder: string, withCowork: boolean): Promise<{ read: ClaudeExportRead; cowork: CoworkSource[] }> {
+    const named = folder.trim();
+    if (!withCowork) {
+      if (!named) throw new ImportInputError('Choose the folder the claude.ai export is in.');
+      return { read: await this.read(named), cowork: [] };
+    }
+    const read = named ? await this.read(named, { optional: true }) : NO_EXPORT;
+    const cowork: CoworkSource[] = [];
+    if (this.deps.coworkRoot) cowork.push({ path: this.deps.coworkRoot, sessions: await this.readCowork(this.deps.coworkRoot) });
+    if (named) {
+      const copied = await this.readCowork(named);
+      if (copied.length > 0) cowork.push({ path: named, sessions: copied });
+      if (!read.hasExport && copied.length === 0) {
+        throw new ClaudeExportError(
+          `There's no claude.ai export or Cowork session in ${named}. Choose the folder with the export email's files (the ZIPs, or what's in them), or a copy of a Cowork folder (local-agent-mode-sessions, in Claude's app data).`
+        );
+      }
+    } else if (cowork.every((c) => c.sessions.length === 0)) {
+      throw new ImportInputError("This machine has no Cowork sessions, so choose a folder: a claude.ai export, or a copy of another machine's Cowork folder.");
+    }
+    return { read, cowork };
   }
 
-  private async coworkPreview(profileId: string | null): Promise<CoworkPreview | null> {
-    const chats = await this.coworkChats({ id: profileId ?? 'preview', connectionId: 'preview' });
-    if (chats.length === 0 || !this.deps.coworkRoot) return null;
+  /** The Cowork sessions found, planned: a session found in two places (this machine, and a copy of its folder) is planned once. */
+  private planCowork(sources: CoworkSource[], profile: { id: string; connectionId: string }): { chats: CoworkChat[]; sources: { path: string; sessions: number }[] } {
+    const stats = emptyCoworkStats();
+    const seen = new Set<string>();
+    const chats: CoworkChat[] = [];
+    const counts: { path: string; sessions: number }[] = [];
+    for (const source of sources) {
+      let n = 0;
+      for (const files of source.sessions) {
+        const chat = planCoworkSession(files, profile, stats);
+        if (!chat || seen.has(chat.id)) continue;
+        seen.add(chat.id);
+        chats.push(chat);
+        n++;
+      }
+      if (n > 0) counts.push({ path: source.path, sessions: n });
+    }
+    return { chats, sources: counts };
+  }
+
+  private coworkPreview(planned: { chats: CoworkChat[]; sources: { path: string; sessions: number }[] }): CoworkPreview | null {
+    const { chats } = planned;
+    if (chats.length === 0) return null;
     const spaces = new Map<string, CoworkChat[]>();
     for (const chat of chats) if (chat.spaceId) spaces.set(chat.spaceId, [...(spaces.get(chat.spaceId) ?? []), chat]);
     return {
-      root: this.deps.coworkRoot,
+      sources: planned.sources,
       sessions: chats.length,
       existing: chats.filter((c) => this.deps.store.chats.get(c.id) !== null).length,
       messages: chats.reduce((n, c) => n + c.messages.length, 0),
@@ -234,9 +290,9 @@ export class ClaudeImportService {
       for (const projectId of Object.values(spaces)) {
         if (projectId !== null && !this.deps.store.projects.get(projectId)) throw new ImportInputError(`Project "${projectId}" not found.`);
       }
-      const read = await this.read(input.folder);
-      plan = planClaudeImport(read.files, { id: profile.id, connectionId: profile.connectionId });
-      if (input.cowork) cowork = await this.coworkChats(profile);
+      const gathered = await this.gather(input.folder, input.cowork === true);
+      plan = planClaudeImport(gathered.read.files, { id: profile.id, connectionId: profile.connectionId });
+      if (input.cowork) cowork = this.planCowork(gathered.cowork, profile).chats;
     } catch (err) {
       this.busy = false;
       throw err;

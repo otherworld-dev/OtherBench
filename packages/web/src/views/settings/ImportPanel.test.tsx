@@ -50,6 +50,7 @@ const IDLE: ImportStatus = { state: 'idle', phase: null, done: 0, total: 0, star
 function preview(over: Partial<ImportPreview> = {}): ImportPreview {
   return {
     folder: '/exports/claude',
+    export: true,
     sources: ['conversations-000.zip: conversations.json'],
     chats: { total: 442, existing: 2, newer: 1, filed: 0, messages: 6267, branched: 24 },
     chatList: { found: false, url: 'https://claude.ai/api/organizations/org-1/chat_conversations' },
@@ -120,7 +121,7 @@ describe('ImportPanel', () => {
   it('checks a folder and shows what the import would do', async () => {
     const user = userEvent.setup();
     render(<ImportPanel />);
-    expect(screen.getByRole('button', { name: 'Check folder' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Check Cowork sessions' })).toBeEnabled();
     await user.type(screen.getByLabelText('Export folder'), '/exports/claude');
     await user.click(screen.getByRole('button', { name: 'Check folder' }));
 
@@ -246,7 +247,7 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     const user = await checkFolder({
       chats: { total: 2, existing: 0, newer: 0, filed: 0, messages: 4, branched: 0 },
       cowork: {
-        root: 'C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions',
+        sources: [{ path: 'C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions', sessions: 29 }],
         sessions: 29,
         existing: 0,
         messages: 728,
@@ -259,7 +260,8 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     });
     const box = screen.getByLabelText('Import Cowork sessions');
     expect(box).not.toBeChecked();
-    expect(screen.getByTestId('import-preview')).toHaveTextContent('Also import the 29 Cowork sessions on this machine');
+    expect(screen.getByTestId('import-preview')).toHaveTextContent('Also import the 29 Cowork sessions');
+    expect(screen.getByTestId('import-preview')).toHaveTextContent('728 messages and 73 images, from C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions (29).');
     expect(screen.queryByLabelText('Project for the Cowork space with Finance Dept')).toBeNull();
     await user.click(box);
     expect(screen.getByTestId('import-preview')).toHaveTextContent('The space with “Finance Dept”, “Company Advisor” and 5 more goes into');
@@ -267,6 +269,39 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     await user.selectOptions(screen.getByLabelText('Project for the Cowork space with Chapter 1'), 'proj-phd');
     await user.click(screen.getByRole('button', { name: 'Import 31 chats' }));
     expect(claudeImport.start).toHaveBeenCalledWith({ folder: '/exports/claude', profileId: 'opus', memory: true, cowork: true, spaces: { 'space-biz': 'proj-personal', 'space-phd': 'proj-phd' } });
+  });
+
+  it('checks just the Cowork sessions when the folder is left empty, ticked as they are all there is', async () => {
+    const cowork = {
+      sources: [
+        { path: 'C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions', sessions: 29 },
+        { path: 'D:/laptop/local-agent-mode-sessions', sessions: 11 },
+      ],
+      sessions: 40,
+      existing: 29,
+      messages: 900,
+      images: 80,
+      spaces: [],
+    };
+    claudeImport.preview.mockResolvedValue(preview({ folder: '', export: false, chats: { total: 0, existing: 0, newer: 0, filed: 0, messages: 0, branched: 0 }, cowork, artifacts: [], projects: [], memoryChat: null, memory: { about: false, aboutTaken: false, note: false, projectNotes: 0, files: 0 } }));
+    claudeImport.start.mockResolvedValue({ ...IDLE, state: 'running', phase: 'cowork', total: 40 });
+    const user = userEvent.setup();
+    render(<ImportPanel />);
+    await user.click(screen.getByRole('button', { name: 'Check Cowork sessions' }));
+
+    expect(claudeImport.preview).toHaveBeenCalledWith('', 'opus');
+    const panel = await screen.findByTestId('import-preview');
+    expect(panel).not.toHaveTextContent('0 chats');
+    expect(screen.queryByTestId('chat-list-hint')).toBeNull();
+    expect(panel).toHaveTextContent('Import the 40 Cowork sessions (29 already imported)');
+    expect(panel).toHaveTextContent('from C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions (29) and D:/laptop/local-agent-mode-sessions (11).');
+    const box = screen.getByLabelText('Import Cowork sessions');
+    expect(box).toBeChecked();
+    await user.click(box);
+    expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: 'Import 11 chats' }));
+    expect(claudeImport.start).toHaveBeenCalledWith({ folder: '', profileId: 'opus', memory: false, cowork: true, spaces: {} });
   });
 
   it('reloads the projects and chats once an import it watched ends, and reports the Cowork sessions', async () => {

@@ -51,7 +51,8 @@ export function importRoutes(container: Container): Hono {
 
   app.post('/claude/preview', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ImportBody;
-    const folder = requireNonEmptyString(body.folder, 'folder');
+    // No folder means just this machine's Cowork sessions.
+    const folder = optionalNullableString(body.folder, 'folder') ?? '';
     const profileId = optionalNullableString(body.profileId, 'profileId') ?? null;
     try {
       return c.json(await service().preview(folder, profileId));
@@ -62,7 +63,7 @@ export function importRoutes(container: Container): Hono {
 
   app.post('/claude', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ImportBody;
-    const folder = requireNonEmptyString(body.folder, 'folder');
+    const folder = optionalNullableString(body.folder, 'folder') ?? '';
     const profileId = requireNonEmptyString(body.profileId, 'profileId');
     const memory = optionalBoolean(body.memory, 'memory', true);
     const cowork = optionalBoolean(body.cowork, 'cowork', false);

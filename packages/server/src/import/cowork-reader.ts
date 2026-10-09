@@ -5,13 +5,13 @@ import type { CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
 import { containPath } from '@grunt/core/domain/paths.js';
 
 /**
- * Finds the Cowork sessions Claude Desktop keeps on this machine (spec
- * 2026-10-09-claude-import-design, Cowork addendum):
- * `<root>/<account>/<organisation>/local_<id>.json` beside a `local_<id>/`
- * folder whose `.claude/projects/<folder>/<cliSessionId>.jsonl` is the
- * session's transcript, and `remote-session-spaces.json` saying which space
- * each session is in. Every path is checked with `containPath`; a session
- * whose files can't be read is passed over.
+ * Finds Cowork sessions (spec 2026-10-09-claude-import-design, Cowork
+ * addendum) in Claude Desktop's folder on this machine or in a copy of another
+ * machine's: `<account>/<organisation>/local_<id>.json` beside a
+ * `local_<id>/` folder whose `.claude/projects/<folder>/<cliSessionId>.jsonl`
+ * is the session's transcript, and `remote-session-spaces.json` saying which
+ * space each session is in. Every path is checked with `containPath`; a
+ * session whose files can't be read is passed over.
  */
 
 /** The largest transcript read, and the most all of them may add up to. */
@@ -69,34 +69,65 @@ async function transcriptOf(org: string, meta: { sessionId: string; cliSessionId
   return null;
 }
 
-/** Every Cowork session under `root` with its transcript, oldest folders first; [] when there are none. */
+/** How deep under a chosen folder to look for Cowork's session folders, and how many folders to look in at most. */
+const MAX_DEPTH = 5;
+const MAX_FOLDERS = 2_000;
+
+/**
+ * The folders under `root` that hold Cowork session metadata
+ * (`local_<id>.json`): `<account>/<organisation>` in Claude Desktop's own
+ * folder, or wherever they sit in a copy of it. A session's own folder
+ * (`local_<id>/`, which holds its workspace files) is never searched.
+ */
+export async function findCoworkFolders(root: string): Promise<string[]> {
+  const found: string[] = [];
+  let looked = 0;
+  const walk = async (rel: string, depth: number): Promise<void> => {
+    if (looked++ >= MAX_FOLDERS) return;
+    let entries;
+    try {
+      entries = await readdir(rel ? containPath(root, rel) : root, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    if (entries.some((e) => e.isFile() && /^local_[\w-]+\.json$/.test(e.name))) {
+      found.push(rel ? containPath(root, rel) : root);
+      return;
+    }
+    if (depth >= MAX_DEPTH) return;
+    for (const e of entries) {
+      if (e.isDirectory() && !e.name.startsWith('local_') && !e.name.startsWith('.')) await walk(rel ? `${rel}/${e.name}` : e.name, depth + 1);
+    }
+  };
+  await walk('', 0);
+  return found.sort();
+}
+
+/** Every Cowork session under `root` with its transcript; [] when there are none. */
 export async function readCoworkSessions(root: string): Promise<CoworkSessionFiles[]> {
   const sessions: CoworkSessionFiles[] = [];
   let total = 0;
-  for (const account of await dirs(root)) {
-    for (const orgName of await dirs(containPath(root, account))) {
-      const org = containPath(root, `${account}/${orgName}`);
-      const spaces = await spacesIn(org);
-      let names: string[];
+  for (const org of await findCoworkFolders(root)) {
+    const spaces = await spacesIn(org);
+    let names: string[];
+    try {
+      names = (await readdir(org)).filter((n) => /^local_[\w-]+\.json$/.test(n)).sort();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
       try {
-        names = (await readdir(org)).filter((n) => /^local_[^/\\]+\.json$/.test(n)).sort();
+        const meta = await readJson(containPath(org, name));
+        const { sessionId, cliSessionId } = (meta ?? {}) as { sessionId?: unknown; cliSessionId?: unknown };
+        if (typeof sessionId !== 'string' || typeof cliSessionId !== 'string' || !/^[\w-]+$/.test(sessionId) || !/^[\w-]+$/.test(cliSessionId)) continue;
+        const path = await transcriptOf(org, { sessionId, cliSessionId });
+        if (!path) continue;
+        const size = (await stat(path)).size;
+        if (size > MAX_TRANSCRIPT_BYTES || total + size > MAX_TOTAL_BYTES) continue;
+        total += size;
+        sessions.push({ meta, transcript: await readFile(path, 'utf8'), spaceId: spaces.get(sessionId) ?? null });
       } catch {
         continue;
-      }
-      for (const name of names) {
-        try {
-          const meta = await readJson(containPath(org, name));
-          const { sessionId, cliSessionId } = (meta ?? {}) as { sessionId?: unknown; cliSessionId?: unknown };
-          if (typeof sessionId !== 'string' || typeof cliSessionId !== 'string' || !/^[\w-]+$/.test(sessionId) || !/^[\w-]+$/.test(cliSessionId)) continue;
-          const path = await transcriptOf(org, { sessionId, cliSessionId });
-          if (!path) continue;
-          const size = (await stat(path)).size;
-          if (size > MAX_TRANSCRIPT_BYTES || total + size > MAX_TOTAL_BYTES) continue;
-          total += size;
-          sessions.push({ meta, transcript: await readFile(path, 'utf8'), spaceId: spaces.get(sessionId) ?? null });
-        } catch {
-          continue;
-        }
       }
     }
   }

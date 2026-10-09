@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CLAUDE_ROOT_PARENT, type ClaudeExportFiles } from '@grunt/core/domain/claude-import.js';
+import { CLAUDE_ROOT_PARENT, ClaudeExportError, type ClaudeExportFiles } from '@grunt/core/domain/claude-import.js';
 import type { CoworkSessionFiles } from '@grunt/core/domain/cowork-import.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { Store } from '@grunt/core/ports/store.js';
@@ -80,7 +80,7 @@ function makeService(over: Partial<ConstructorParameters<typeof ClaudeImportServ
     queue: new MemoryQueue(),
     events: bus,
     importRoot: join(root, 'imported', 'claude'),
-    read: async () => ({ files: exportFiles, sources: ['conversations.json'], organizationId: 'org-1' }),
+    read: async () => ({ files: exportFiles, sources: ['conversations.json'], organizationId: 'org-1', hasExport: true }),
     ...over,
   });
 }
@@ -450,7 +450,7 @@ describe("ClaudeImportService: filing chats by claude.ai's chat list", () => {
   it('says where to get the list when the folder has none', async () => {
     exportFiles.conversationList = undefined;
     expect((await makeService().preview(root)).chatList).toEqual({ found: false, url: 'https://claude.ai/api/organizations/org-1/chat_conversations' });
-    expect((await makeService({ read: async () => ({ files: exportFiles, sources: [], organizationId: null }) }).preview(root)).chatList.url).toBeNull();
+    expect((await makeService({ read: async () => ({ files: exportFiles, sources: [], organizationId: null, hasExport: true }) }).preview(root)).chatList.url).toBeNull();
   });
 });
 
@@ -492,7 +492,7 @@ describe('ClaudeImportService: Cowork sessions', () => {
 
   it("previews the sessions and their spaces, so the user can choose each space's project", async () => {
     expect((await coworkService().preview(root)).cowork).toEqual({
-      root: ROOT,
+      sources: [{ path: ROOT, sessions: 2 }],
       sessions: 2,
       existing: 0,
       messages: 4,
@@ -532,5 +532,59 @@ describe('ClaudeImportService: Cowork sessions', () => {
     await runCowork(coworkService({ blobStore: undefined }));
     expect(store.messages.get('local_s1-u')!.parts[0]).toEqual({ type: 'text', text: '[An image, not imported]' });
     expect(store.attachments.list('local_s1')).toEqual([]);
+  });
+
+  const NO_EXPORT = { files: { conversations: [], projects: [], memories: [], artifacts: [] }, sources: [], organizationId: null, hasExport: false };
+
+  it("imports just this machine's sessions when no folder is given, without reading an export", async () => {
+    const service = coworkService({
+      read: async () => {
+        throw new Error('no export should be read');
+      },
+    });
+    const preview = await service.preview('', 'claude');
+    expect(preview).toMatchObject({ folder: '', export: false, chats: { total: 0 }, cowork: { sources: [{ path: ROOT, sessions: 2 }], sessions: 2 } });
+    await service.start({ folder: '', profileId: 'claude', memory: false, cowork: true, spaces: {} });
+    await service.idle();
+    expect(service.status().report!.cowork).toMatchObject({ imported: 2 });
+    expect(service.status().report!.chats.imported).toBe(0);
+  });
+
+  it("reads another machine's sessions from a copy of its Cowork folder, a session in both imported once", async () => {
+    const laptop = [sessions[1]!, session('local_s3', 'Laptop only', null)];
+    const read: string[] = [];
+    const service = coworkService({
+      read: async () => NO_EXPORT,
+      readCowork: async (path) => {
+        read.push(path);
+        return path === ROOT ? sessions : laptop;
+      },
+    });
+    expect((await service.preview(root)).cowork).toMatchObject({ sources: [{ path: ROOT, sessions: 2 }, { path: root, sessions: 1 }], sessions: 3 });
+    expect(read).toEqual([ROOT, root]);
+    const status = await runCowork(service, {});
+    expect(status.report!.cowork).toMatchObject({ imported: 3, existing: 0 });
+    expect(store.chats.get('local_s3')!.title).toBe('Laptop only');
+  });
+
+  it('refuses a folder with neither an export nor Cowork sessions, and no folder when this machine has no sessions', async () => {
+    const empty = makeService({ read: async () => NO_EXPORT, readCowork: async () => [] });
+    await expect(empty.preview(root)).rejects.toThrow(ClaudeExportError);
+    await expect(empty.preview(root)).rejects.toThrow(/There's no claude.ai export or Cowork session in/);
+    await expect(makeService({ coworkRoot: ROOT, readCowork: async () => [] }).preview('')).rejects.toThrow(ImportInputError);
+    await expect(makeService().preview('')).rejects.toThrow(/This machine has no Cowork sessions/);
+  });
+
+  it("doesn't read the Cowork folders unless they're being imported, and needs an export then", async () => {
+    let reads = 0;
+    const service = coworkService({
+      readCowork: async () => {
+        reads++;
+        return sessions;
+      },
+    });
+    await runImport(service);
+    expect(reads).toBe(0);
+    await expect(service.start({ folder: '', profileId: 'claude', memory: false })).rejects.toThrow(ImportInputError);
   });
 });

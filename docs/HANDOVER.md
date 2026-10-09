@@ -195,6 +195,17 @@ of work landed after that plan closed out:
   names each space by a few of its sessions' titles and the user picks its
   project. `GRUNT_COWORK_ROOT` points the server at another folder, or
   nowhere when empty; the e2e server gets a fixture folder that way.
+  Sessions are only kept on the machine they ran on, so the folder chosen
+  in the panel is searched for Cowork sessions as well as an export: a copy
+  of another machine's `local-agent-mode-sessions` folder, on its own or
+  inside the export's folder, brings that machine's sessions in
+  (`findCoworkFolders` looks up to five folders down for the
+  `local_<id>.json` files, never inside a session's own folder). The export
+  is optional, and with no folder at all the panel checks just this
+  machine's sessions. A session found in both places is imported once, and
+  the preview lists each place with how many sessions came from it. The
+  export reader skips `local_*` folders too, so a file a session wrote can't
+  pass for part of the export.
 - **App-wide events** (#771, v2 plan Task 34). `GET /api/events` is an SSE
   stream of `AppEvent`s (`packages/core/src/types/events.ts`): chat
   created/updated/deleted, turn started/finished, approval
@@ -742,11 +753,13 @@ copied in). The learned note and project notes are checked the same way as
 a summariser update before they are saved, and both reach chats fenced as
 untrusted background. About you can't be fenced (it is the user's own
 words, which the model follows), so the import only drafts it: the user
-reads it in the report and saves it, or doesn't. Cowork is read only from
-the folder Claude Desktop keeps on this machine (or `GRUNT_COWORK_ROOT`),
-never a path the client names; session and transcript ids that could make a
-path are refused, every path goes through `containPath`, and transcripts are
-capped at 512 MiB each and 2 GiB in all.
+reads it in the report and saves it, or doesn't. Cowork is read from the
+folder Claude Desktop keeps on this machine (or `GRUNT_COWORK_ROOT`) and
+from the folder chosen for the import, the same one the export is read
+from; the search under it is capped at five folders deep and 2,000 folders,
+session and transcript ids that could make a path are refused, every path
+goes through `containPath`, and transcripts are capped at 512 MiB each and
+2 GiB for each folder read.
 
 ### Claude Code engine
 

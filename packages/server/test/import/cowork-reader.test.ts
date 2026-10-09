@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { defaultCoworkRoot, readCoworkSessions } from '../../src/import/cowork-reader.js';
+import { defaultCoworkRoot, findCoworkFolders, readCoworkSessions } from '../../src/import/cowork-reader.js';
 
 let root: string;
 
@@ -49,6 +49,28 @@ describe('readCoworkSessions', () => {
 
   it('is empty when the folder is not there', async () => {
     expect(await readCoworkSessions(join(root, 'missing'))).toEqual([]);
+  });
+
+  it('reads a copy of the folder from wherever it was put, and an organisation folder on its own', async () => {
+    await session('laptop/local-agent-mode-sessions/acc/org', 's1', 'cli-1', 'from the laptop');
+    expect((await readCoworkSessions(root)).map((s) => s.transcript)).toEqual(['from the laptop']);
+    expect((await readCoworkSessions(join(root, 'laptop/local-agent-mode-sessions/acc/org'))).map((s) => s.transcript)).toEqual(['from the laptop']);
+  });
+});
+
+describe('findCoworkFolders', () => {
+  it('finds every folder holding session metadata, never looking inside a session or hidden folder', async () => {
+    await session('acc/org-a', 's1', 'cli-1', 'x');
+    await session('acc/org-b', 's2', 'cli-2', 'y');
+    await put('acc/org-a/local_s1/nested/local_planted.json', '{}');
+    await put('.hidden/local_s9.json', '{}');
+    expect(await findCoworkFolders(root)).toEqual([join(root, 'acc/org-a'), join(root, 'acc/org-b')]);
+  });
+
+  it('looks five folders down at most', async () => {
+    await put('1/2/3/4/5/local_s1.json', '{}');
+    await put('a/b/c/d/e/f/local_s2.json', '{}');
+    expect(await findCoworkFolders(root)).toEqual([join(root, '1/2/3/4/5')]);
   });
 });
 

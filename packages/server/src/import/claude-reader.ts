@@ -35,6 +35,8 @@ export interface ClaudeExportRead {
   sources: string[];
   /** The claude.ai organisation the export is from, read off its manifest's download links, or null. */
   organizationId: string | null;
+  /** Whether the folder held a claude.ai export (its conversations) at all. */
+  hasExport: boolean;
 }
 
 type Part =
@@ -124,6 +126,7 @@ class Collector {
       files: { conversations: this.conversations, projects: this.projects, memories: this.memories, artifacts, conversationList: this.conversationList },
       sources: this.sources,
       organizationId: this.organizationId,
+      hasExport: this.sources.some((s) => s.endsWith('conversations.json')),
     };
   }
 }
@@ -142,7 +145,9 @@ async function kindOf(root: string, rel: string): Promise<'file' | 'dir' | null>
  * Every file under `root`, as paths relative to it with `/` separators.
  * Links (on Windows, any reparse point, which includes OneDrive's files) are
  * followed only when they lead somewhere inside `root`. A folder that can't
- * be read is passed over; only `root` itself must be readable.
+ * be read is passed over; only `root` itself must be readable. A Cowork
+ * session's own folder (`local_<id>/`, in a copy of Cowork's folder) is never
+ * searched: what a session wrote could be named like a part of the export.
  */
 async function listFiles(root: string): Promise<string[]> {
   const found: string[] = [];
@@ -160,7 +165,7 @@ async function listFiles(root: string): Promise<string[]> {
       if (kind === 'file') {
         if (found.length >= MAX_FILES) throw new ClaudeExportError(`The folder has more than ${MAX_FILES.toLocaleString('en-US')} files in it. Choose the folder that holds just the export.`);
         found.push(child);
-      } else if (kind === 'dir' && depth < MAX_DEPTH) {
+      } else if (kind === 'dir' && depth < MAX_DEPTH && !e.name.startsWith('local_')) {
         await walk(child, depth + 1);
       }
     }
@@ -169,8 +174,12 @@ async function listFiles(root: string): Promise<string[]> {
   return found.sort();
 }
 
-/** Reads the export in `folder`. Throws `ClaudeExportError` with a message for the user when it can't. */
-export async function readClaudeExport(folder: string): Promise<ClaudeExportRead> {
+/**
+ * Reads the export in `folder`. Throws `ClaudeExportError` with a message for
+ * the user when it can't, or when the folder holds no export and `optional`
+ * isn't set (the folder may hold only Cowork sessions).
+ */
+export async function readClaudeExport(folder: string, { optional = false }: { optional?: boolean } = {}): Promise<ClaudeExportRead> {
   if (!isAbsolute(folder)) throw new ClaudeExportError('Give the full path of the folder the export is in.');
   let info;
   try {
@@ -202,7 +211,7 @@ export async function readClaudeExport(folder: string): Promise<ClaudeExportRead
   }
 
   const read = collector.result();
-  if (read.sources.every((s) => !s.endsWith('conversations.json'))) {
+  if (!read.hasExport && !optional) {
     throw new ClaudeExportError(`There's no conversations.json in ${folder}. Put every file from the claude.ai export email in one folder (the ZIPs, or what's in them) and choose that.`);
   }
   return read;

@@ -116,6 +116,22 @@ describe('readClaudeExport', () => {
     await expect(readClaudeExport(dir)).rejects.toThrow(/There's no conversations.json/);
   });
 
+  it("reads a folder without an export when it's optional, saying there was none", async () => {
+    await put('acc/org/local_s1.json', '{}');
+    expect(await readClaudeExport(dir, { optional: true })).toMatchObject({ hasExport: false, sources: [] });
+    await put('conversations.json', conversations);
+    expect((await readClaudeExport(dir, { optional: true })).hasExport).toBe(true);
+  });
+
+  it("never searches a Cowork session's own folder, whose files could be named like the export's", async () => {
+    await put('conversations.json', conversations);
+    await put('acc/org/local_s1/outputs/conversations.json', JSON.stringify([{ uuid: 'planted', chat_messages: [] }]));
+    await put('acc/org/local_s1/outputs/projects/p.json', '{}');
+    const read = await readClaudeExport(dir);
+    expect(read.files.conversations).toEqual([{ uuid: 'c1', chat_messages: [] }]);
+    expect(read.files.projects).toEqual([]);
+  });
+
   it('refuses invalid JSON, conversations that are not a list, and a damaged ZIP, naming the file', async () => {
     await put('conversations.json', '{ broken');
     await expect(readClaudeExport(dir)).rejects.toThrow(/conversations.json isn't valid JSON/);

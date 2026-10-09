@@ -119,7 +119,8 @@ export function ImportPanel(): JSX.Element {
       const next = await api.claudeImport.preview(folder.trim(), profileId || null);
       setPreview(next);
       setMemory(next.memoryModel !== null && hasMemory(next));
-      setCowork(false);
+      // Without an export the Cowork sessions are all there is to import.
+      setCowork(!next.export);
       setSpaces({});
     } catch (err) {
       setError(errorText(err, "Couldn't read that folder -- please try again."));
@@ -143,7 +144,7 @@ export function ImportPanel(): JSX.Element {
   }
 
   async function browse(): Promise<void> {
-    const picked = await pickFolder('Choose the folder with the claude.ai export');
+    const picked = await pickFolder('Choose the folder with the claude.ai export, or a copy of a Cowork folder');
     if (picked) {
       setFolder(picked);
       setPreview(null);
@@ -160,6 +161,12 @@ export function ImportPanel(): JSX.Element {
           the email arrives, download every file into one folder (the ZIPs, or what&rsquo;s in them) and choose that folder here. Importing the same export again
           skips what&rsquo;s already here.
         </p>
+        <p className={HINT}>
+          Cowork sessions are only kept on the machine they ran on. To bring in another machine&rsquo;s, copy its Cowork folder (
+          <span className="font-mono">%APPDATA%\Claude\local-agent-mode-sessions</span> on Windows,{' '}
+          <span className="font-mono">~/Library/Application Support/Claude/local-agent-mode-sessions</span> on a Mac) to this one and choose the copy, on its own
+          or inside the export&rsquo;s folder. Leave the folder empty to check just this machine&rsquo;s.
+        </p>
       </div>
 
       {!running && (
@@ -170,7 +177,7 @@ export function ImportPanel(): JSX.Element {
               <input
                 aria-label="Export folder"
                 value={folder}
-                placeholder="The full path of the folder"
+                placeholder="The full path of the folder, or empty for this machine's Cowork sessions"
                 onChange={(e) => {
                   setFolder(e.target.value);
                   setPreview(null);
@@ -182,8 +189,8 @@ export function ImportPanel(): JSX.Element {
                   Choose folder&hellip;
                 </button>
               )}
-              <button type="button" onClick={() => void check()} disabled={!folder.trim() || checking} className="btn px-2.5 py-1">
-                {checking ? 'Checking…' : 'Check folder'}
+              <button type="button" onClick={() => void check()} disabled={checking} className="btn px-2.5 py-1">
+                {checking ? 'Checking…' : folder.trim() ? 'Check folder' : 'Check Cowork sessions'}
               </button>
             </span>
           </label>
@@ -238,42 +245,46 @@ interface PreviewProps {
 function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory, cowork, onCowork, projects, spaces, onSpace, starting, onImport }: PreviewProps): JSX.Element {
   const { chats, memory: notes } = preview;
   const fresh = chats.total - chats.existing + (cowork && preview.cowork ? preview.cowork.sessions - preview.cowork.existing : 0);
+  // Without an export (a folder of Cowork sessions, or none) there's only Cowork to import.
+  const nothing = !preview.export && !cowork;
   return (
     <div data-testid="import-preview" className="space-y-4 rounded border border-[var(--border)] p-3">
-      <ul className="list-disc space-y-1 pl-5">
-        <li>
-          {count(chats.total, 'chat')} ({count(chats.messages, 'message')}
-          {chats.branched > 0 ? `, ${chats.branched.toLocaleString('en-US')} with more than one branch` : ''})
-          {chats.existing > 0 ? `; ${chats.existing.toLocaleString('en-US')} already imported, which will be skipped` : ''}
-        </li>
-        {chats.newer > 0 && (
+      {preview.export && (
+        <ul className="list-disc space-y-1 pl-5">
           <li>
-            {count(chats.newer, 'imported chat has', 'imported chats have')} newer messages on claude.ai, which a second import doesn&rsquo;t add
+            {count(chats.total, 'chat')} ({count(chats.messages, 'message')}
+            {chats.branched > 0 ? `, ${chats.branched.toLocaleString('en-US')} with more than one branch` : ''})
+            {chats.existing > 0 ? `; ${chats.existing.toLocaleString('en-US')} already imported, which will be skipped` : ''}
           </li>
-        )}
-        {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
-        {preview.artifacts.length > 0 && <li>{count(preview.artifacts.length, 'published artifact')}, each in a chat of its own</li>}
-        {preview.memoryChat && (
-          <li>
-            claude.ai&rsquo;s {count(preview.memoryChat.notes, 'memory note')}{' '}
-            {preview.memoryChat.existing ? `are already in the chat “${preview.memoryChat.title}”` : `go into a chat of their own, “${preview.memoryChat.title}”, which recall can search`}
-          </li>
-        )}
-        {preview.chatList.found && <li>{count(chats.filed, 'chat')} filed into {chats.filed === 1 ? 'its project' : 'their projects'}, from claude.ai&rsquo;s chat list</li>}
-        {preview.projects.map((p) => (
-          <li key={p.id}>
-            Project &ldquo;{p.name}&rdquo;: {p.action === 'create' ? 'new' : p.action === 'merge' ? `merges into your project “${p.mergeInto ?? p.name}”` : 'already imported'}
-            {p.docs > 0 ? `, ${count(p.docs, 'doc')}` : ''}
-            {p.hasInstructions ? ', instructions' : ''}
-            {p.hasMemory ? ', memory' : ''}
-          </li>
-        ))}
-        {preview.filesNotIncluded > 0 && (
-          <li>{count(preview.filesNotIncluded, 'image or file', 'images and files')} aren&rsquo;t in the export; each shows as a note in its chat</li>
-        )}
-      </ul>
+          {chats.newer > 0 && (
+            <li>
+              {count(chats.newer, 'imported chat has', 'imported chats have')} newer messages on claude.ai, which a second import doesn&rsquo;t add
+            </li>
+          )}
+          {preview.emptyChats > 0 && <li>{count(preview.emptyChats, 'empty conversation')} left out</li>}
+          {preview.artifacts.length > 0 && <li>{count(preview.artifacts.length, 'published artifact')}, each in a chat of its own</li>}
+          {preview.memoryChat && (
+            <li>
+              claude.ai&rsquo;s {count(preview.memoryChat.notes, 'memory note')}{' '}
+              {preview.memoryChat.existing ? `are already in the chat “${preview.memoryChat.title}”` : `go into a chat of their own, “${preview.memoryChat.title}”, which recall can search`}
+            </li>
+          )}
+          {preview.chatList.found && <li>{count(chats.filed, 'chat')} filed into {chats.filed === 1 ? 'its project' : 'their projects'}, from claude.ai&rsquo;s chat list</li>}
+          {preview.projects.map((p) => (
+            <li key={p.id}>
+              Project &ldquo;{p.name}&rdquo;: {p.action === 'create' ? 'new' : p.action === 'merge' ? `merges into your project “${p.mergeInto ?? p.name}”` : 'already imported'}
+              {p.docs > 0 ? `, ${count(p.docs, 'doc')}` : ''}
+              {p.hasInstructions ? ', instructions' : ''}
+              {p.hasMemory ? ', memory' : ''}
+            </li>
+          ))}
+          {preview.filesNotIncluded > 0 && (
+            <li>{count(preview.filesNotIncluded, 'image or file', 'images and files')} aren&rsquo;t in the export; each shows as a note in its chat</li>
+          )}
+        </ul>
+      )}
 
-      {!preview.chatList.found && (
+      {preview.export && !preview.chatList.found && (
         <p data-testid="chat-list-hint" className={HINT}>
           Chats go into No project: the export doesn&rsquo;t say which project each was in.{' '}
           {preview.chatList.url ? (
@@ -291,11 +302,18 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
         <div className="space-y-2">
           <label className="flex items-center gap-2">
             <input type="checkbox" aria-label="Import Cowork sessions" checked={cowork} onChange={(e) => onCowork(e.target.checked)} />
-            Also import the {count(preview.cowork.sessions, 'Cowork session')} on this machine
+            {preview.export ? 'Also import' : 'Import'} the {count(preview.cowork.sessions, 'Cowork session')}
             {preview.cowork.existing > 0 ? ` (${preview.cowork.existing.toLocaleString('en-US')} already imported)` : ''}
           </label>
           <p className={HINT}>
-            {count(preview.cowork.messages, 'message')} and {count(preview.cowork.images, 'image')}, from <span className="font-mono">{preview.cowork.root}</span>.
+            {count(preview.cowork.messages, 'message')} and {count(preview.cowork.images, 'image')}, from{' '}
+            {preview.cowork.sources.map((source, i) => (
+              <span key={source.path}>
+                {i > 0 ? ' and ' : ''}
+                <span className="font-mono">{source.path}</span> ({source.sessions.toLocaleString('en-US')})
+              </span>
+            ))}
+            .
           </p>
           {cowork &&
             preview.cowork.spaces.map((space) => (
@@ -354,7 +372,7 @@ function PreviewView({ preview, profiles, profileId, onProfile, memory, onMemory
         </p>
       )}
 
-      <button type="button" onClick={onImport} disabled={!profileId || starting} className="btn btn-primary px-2.5 py-1">
+      <button type="button" onClick={onImport} disabled={!profileId || starting || nothing} className="btn btn-primary px-2.5 py-1">
         {starting ? 'Starting…' : fresh > 0 ? `Import ${count(fresh, 'chat')}` : 'Import'}
       </button>
     </div>
