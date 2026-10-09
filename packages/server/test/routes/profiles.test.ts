@@ -111,6 +111,15 @@ describe('POST /api/profiles', () => {
     expect((await post({ artifacts: 'yes' })).status).toBe(400);
   });
 
+  it('keeps toolPolicy.recall, and refuses a non-boolean', async () => {
+    const post = (toolPolicy: unknown) =>
+      app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+    const created = await post({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', recall: false });
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { toolPolicy: { recall?: boolean } }).toolPolicy.recall).toBe(false);
+    expect((await post({ recall: 'yes' })).status).toBe(400);
+  });
+
   it('rejects a missing name with 400', async () => {
     const res = await app().request('/api/profiles', {
       method: 'POST',
