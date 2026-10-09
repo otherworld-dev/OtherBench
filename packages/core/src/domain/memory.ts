@@ -18,8 +18,16 @@ export const MEMORY_VERSIONS_KEPT = 50;
 export const MEMORY_QUIET_MS = 5 * 60_000;
 /** `lastError` when no profile can run the summariser. */
 export const NO_MEMORY_MODEL_MESSAGE = 'No model available for project memory';
-/** Why a note without the fixed headings is refused. */
-export const MEMORY_FORMAT_ERROR = `The note must have exactly these headings, in this order: ${MEMORY_HEADINGS.map((h) => `## ${h}`).join(', ')}.`;
+/** A note's fixed level-2 headings, in order; the first is always Pinned. Project notes use MEMORY_HEADINGS, the global note its own. */
+export type NoteHeadings = readonly string[];
+
+/** Why a note without the fixed `headings` is refused. */
+export function noteFormatError(headings: NoteHeadings): string {
+  return `The note must have exactly these headings, in this order: ${headings.map((h) => `## ${h}`).join(', ')}.`;
+}
+
+/** Why a project note without the fixed headings is refused. */
+export const MEMORY_FORMAT_ERROR = noteFormatError(MEMORY_HEADINGS);
 
 const LIMIT_TEXT = MEMORY_MAX_CHARS.toLocaleString('en-US');
 
@@ -64,14 +72,14 @@ const LEVEL2 = /^##[ \t]+(.+?)[ \t]*$/;
  * trailing spaces), and the whole note trimmed. Everything else is kept as
  * typed.
  */
-export function normaliseMemoryBody(body: string): string {
+export function normaliseMemoryBody(body: string, headings: NoteHeadings = MEMORY_HEADINGS): string {
   return body
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((line) => {
       const match = LEVEL2.exec(line);
       if (!match) return line;
-      const canonical = MEMORY_HEADINGS.find((h) => h.toLowerCase() === (match[1] ?? '').toLowerCase());
+      const canonical = headings.find((h) => h.toLowerCase() === (match[1] ?? '').toLowerCase());
       return canonical ? `## ${canonical}` : line;
     })
     .join('\n')
@@ -93,15 +101,15 @@ interface MemorySection {
   content: string;
 }
 
-/** The five sections in order, or null when the headings aren't exactly the fixed five. */
-function parseSections(body: string): MemorySection[] | null {
+/** The sections in order, or null when the headings aren't exactly the fixed `headings`. */
+function parseSections(body: string, headings: NoteHeadings = MEMORY_HEADINGS): MemorySection[] | null {
   const sections: MemorySection[] = [];
   let heading: string | null = null;
   let lines: string[] = [];
   const close = (): void => {
     if (heading !== null) sections.push({ heading, content: lines.join('\n').trim() });
   };
-  for (const line of normaliseMemoryBody(body).split('\n')) {
+  for (const line of normaliseMemoryBody(body, headings).split('\n')) {
     const match = LEVEL2.exec(line);
     if (match) {
       close();
@@ -114,46 +122,51 @@ function parseSections(body: string): MemorySection[] | null {
     }
   }
   close();
-  if (sections.length !== MEMORY_HEADINGS.length) return null;
-  return sections.every((s, i) => s.heading === MEMORY_HEADINGS[i]) ? sections : null;
+  if (sections.length !== headings.length) return null;
+  return sections.every((s, i) => s.heading === headings[i]) ? sections : null;
 }
 
 function renderSections(sections: MemorySection[]): string {
   return sections.map((s) => (s.content ? `## ${s.heading}\n${s.content}` : `## ${s.heading}`)).join('\n\n');
 }
 
-/** MEMORY_FORMAT_ERROR, naming the first level-2 line that isn't one of the fixed headings, if any. */
-function formatError(text: string): string {
-  for (const line of normaliseMemoryBody(text).split('\n')) {
+/** The format error for `headings`, naming the first level-2 line that isn't one of them, if any. */
+function formatError(text: string, headings: NoteHeadings = MEMORY_HEADINGS): string {
+  for (const line of normaliseMemoryBody(text, headings).split('\n')) {
     const match = LEVEL2.exec(line);
-    if (match && !(MEMORY_HEADINGS as readonly string[]).includes(match[1] ?? '')) {
+    if (match && !headings.includes(match[1] ?? '')) {
       const shown = line.length > 80 ? `${line.slice(0, 77)}...` : line;
-      return `${MEMORY_FORMAT_ERROR} Unexpected heading: "${shown}".`;
+      return `${noteFormatError(headings)} Unexpected heading: "${shown}".`;
     }
   }
-  return MEMORY_FORMAT_ERROR;
+  return noteFormatError(headings);
 }
 
 /** Why `body` can't be saved, or null when it can. Checks the normalised note. */
-export function validateMemoryBody(body: string): string | null {
-  const text = normaliseMemoryBody(body);
+export function validateMemoryBody(body: string, headings: NoteHeadings = MEMORY_HEADINGS): string | null {
+  const text = normaliseMemoryBody(body, headings);
   if (text.length === 0) return 'The note is empty.';
-  if (!parseSections(text)) return formatError(text);
+  if (!parseSections(text, headings)) return formatError(text, headings);
   if (text.length > MEMORY_MAX_CHARS) return `The note is ${text.length.toLocaleString('en-US')} characters; the limit is ${LIMIT_TEXT}.`;
   return null;
 }
 
 /** The trimmed text under `## Pinned`, or null when `body` isn't a valid note. */
-export function pinnedSection(body: string): string | null {
-  return parseSections(body)?.[0]?.content ?? null;
+export function pinnedSection(body: string, headings: NoteHeadings = MEMORY_HEADINGS): string | null {
+  return parseSections(body, headings)?.[0]?.content ?? null;
+}
+
+/** The trimmed text under `## heading`, or null when `body` isn't a valid note. */
+export function sectionContent(body: string, heading: string, headings: NoteHeadings = MEMORY_HEADINGS): string | null {
+  return parseSections(body, headings)?.find((s) => s.heading === heading)?.content ?? null;
 }
 
 /** True when any line is something other than a blank line or one of the fixed headings. */
-export function hasMemoryContent(body: string): boolean {
-  const headings = new Set(MEMORY_HEADINGS.map((h) => `## ${h}`));
-  return normaliseMemoryBody(body)
+export function hasMemoryContent(body: string, headings: NoteHeadings = MEMORY_HEADINGS): boolean {
+  const lines = new Set(headings.map((h) => `## ${h}`));
+  return normaliseMemoryBody(body, headings)
     .split('\n')
-    .some((line) => line.trim() !== '' && !headings.has(line.trim()));
+    .some((line) => line.trim() !== '' && !lines.has(line.trim()));
 }
 
 /**
@@ -180,7 +193,7 @@ function stripClosingFence(text: string): string {
  * the instruction), requires the five headings, puts `currentBody`'s Pinned
  * back if the model changed it, then checks the cap.
  */
-export function finaliseSummary(currentBody: string, output: string): SummaryCheck {
+export function finaliseSummary(currentBody: string, output: string, headings: NoteHeadings = MEMORY_HEADINGS): SummaryCheck {
   let text = output.replace(/\r\n?/g, '\n').trim();
   const start = text.search(/^##[ \t]+pinned[ \t]*$/im);
   if (start > 0) {
@@ -188,15 +201,15 @@ export function finaliseSummary(currentBody: string, output: string): SummaryChe
     text = text.slice(start);
     if (wrapped) text = stripClosingFence(text);
   }
-  text = normaliseMemoryBody(text);
+  text = normaliseMemoryBody(text, headings);
   if (text.length === 0) return { ok: false, reason: 'The model returned an empty note.' };
-  const sections = parseSections(text);
-  if (!sections) return { ok: false, reason: formatError(text) };
+  const sections = parseSections(text, headings);
+  if (!sections) return { ok: false, reason: formatError(text, headings) };
   // A model that wipes every section but Pinned has lost the note, not updated it.
-  if (sections.slice(1).every((x) => x.content === '') && (parseSections(currentBody)?.slice(1).some((x) => x.content !== '') ?? false)) {
+  if (sections.slice(1).every((x) => x.content === '') && (parseSections(currentBody, headings)?.slice(1).some((x) => x.content !== '') ?? false)) {
     return { ok: false, reason: 'The memory model returned an empty note.' };
   }
-  const pinned = pinnedSection(currentBody) ?? '';
+  const pinned = pinnedSection(currentBody, headings) ?? '';
   if (sections[0]?.content !== pinned) {
     sections[0] = { heading: 'Pinned', content: pinned };
     text = renderSections(sections);

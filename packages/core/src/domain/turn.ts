@@ -12,6 +12,7 @@ import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { projectInstructionsPrompt } from './projects.js';
+import { aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
@@ -543,7 +544,7 @@ export class TurnRunner {
       // model row says) isn't sent the artifact tool it would refuse the
       // whole request over.
       const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact') : listed;
-      const requestProfile = this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(profile, chat), chat), folders), tools), tools);
+      const requestProfile = this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat), chat), chat), folders), tools), tools);
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
       const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
@@ -738,6 +739,30 @@ export class TurnRunner {
       createdAt: 0,
     };
     return [systemMessage, ...history];
+  }
+
+  /**
+   * The profile with global memory appended to its system prompt (spec
+   * 2026-10-08-global-memory-design §1): About you, then the learned note,
+   * then the index of the user's projects, all straight after the profile's
+   * own prompt so a project's own text comes later. Nothing for a profile
+   * with global memory off. Read fresh each turn.
+   */
+  private withGlobalMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
+    if (profile.useGlobalMemory === false) return profile;
+    const memory = this.store.globalMemory.get();
+    const index = projectIndexPrompt(
+      this.store.projects.list().map((p) => ({
+        name: p.name,
+        description: p.description,
+        currentFocus: currentFocusLine(this.store.projectMemory.get(p.id)?.body ?? ''),
+        current: p.id === chat?.projectId,
+      }))
+    );
+    const blocks = [aboutUserPrompt(memory.about), globalMemoryPrompt(memory.note), index].filter((b): b is string => b !== null);
+    if (blocks.length === 0) return profile;
+    const block = blocks.join('\n\n');
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
   /**

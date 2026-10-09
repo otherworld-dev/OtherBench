@@ -1400,8 +1400,9 @@ describe('project memory in the system prompt', () => {
     outside.store.projectMemory.save('proj', NOTE, 'user', null);
     await turn(outside.runner, null);
     await vi.waitFor(() => expect(outside.engine.requests).toHaveLength(1));
-    expect(outside.engine.requests[0]!.profile.systemPrompt).toBeNull();
-    expect(systemText(outside.engine.requests[0])).toBeNull();
+    // It still gets the project index (global memory), just no project's note.
+    expect(outside.engine.requests[0]!.profile.systemPrompt ?? '').not.toContain('# Project memory');
+    expect(systemText(outside.engine.requests[0]) ?? '').not.toContain('# Project memory');
 
     const empty = setup();
     empty.store.projectMemory.save('proj', '## Pinned\n\n## Goals\n\n## Decisions\n\n## Current focus\n\n## Open questions', 'user', null);
@@ -1485,7 +1486,9 @@ describe('project instructions in the system prompt', () => {
       const { engine, runner } = setup(instructions, projectId);
       await turn(runner, 'Base.');
       await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
-      expect(engine.requests[0]!.profile.systemPrompt).toBe('Base.');
+      // A chat outside any project still gets the project index (global memory), never the instructions.
+      expect(engine.requests[0]!.profile.systemPrompt!.startsWith('Base.')).toBe(true);
+      expect(engine.requests[0]!.profile.systemPrompt).not.toContain('# Project instructions');
     }
   });
 
@@ -1508,6 +1511,105 @@ describe('project instructions in the system prompt', () => {
 
     expect(engine.requests[0]!.profile.systemPrompt).toContain('Be brief.');
     expect(engine.requests[1]!.profile.systemPrompt).toContain('Be thorough.');
+  });
+});
+
+describe('global memory in the system prompt', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+  const NOTE = '## Pinned\n- Windows 11\n\n## Preferences\n- British English\n\n## Setup and tools\n\n## Working style';
+  const PROJECT_NOTE = '## Pinned\n- Use SQLite\n\n## Goals\n\n## Decisions\n\n## Current focus\n- Pricing page\n\n## Open questions';
+  const ABOUT_HEAD = '# About the user';
+  const NOTE_HEAD = '# What you know about the user';
+  const INDEX_HEAD = "# The user's projects";
+
+  function setup(projectId: string | null = 'proj', projects: 'two' | 'one' = 'two') {
+    const store = new InMemoryStore();
+    store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null, instructions: projects === 'two' ? 'Use tabs.' : '' });
+    if (projects === 'two') store.projects.create({ id: 'site', name: 'Website', workspaceRoot: null, defaultProfileId: null, description: 'The marketing site' });
+    store.chats.create({
+      id: 'chat-1',
+      title: 't',
+      profileId: 'profile-1',
+      headMessageId: null,
+      workspaceRoot: null,
+      pinned: false,
+      archivedAt: null,
+      projectId,
+      memoryExcluded: false,
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    return { store, engine, runner: new TurnRunner(store, engine) };
+  }
+
+  function turn(runner: TurnRunner, profile: Partial<ResolvedProfile>, parentId: string | null = null) {
+    return runner.run({ chatId: 'chat-1', parentId, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile({ systemPrompt: 'Base.', ...profile })] });
+  }
+
+  it("puts About you, the learned note and the project index after the profile's prompt and before the project's own", async () => {
+    const { store, engine, runner } = setup();
+    store.globalMemory.saveAbout('I am Adam.');
+    store.globalMemory.saveNote(NOTE, 'summariser', null);
+    store.projectMemory.save('site', PROJECT_NOTE, 'user', null);
+    store.projectMemory.save('proj', PROJECT_NOTE, 'user', null);
+
+    await turn(runner, {});
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+
+    const prompt = engine.requests[0]!.profile.systemPrompt!;
+    const positions = ['Base.', ABOUT_HEAD, NOTE_HEAD, INDEX_HEAD, '# Project instructions: Alpha', '# Project memory: Alpha'].map((h) => prompt.indexOf(h));
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions);
+    expect(prompt).toContain('I am Adam.');
+    expect(prompt).toContain('- British English');
+    expect(prompt).toContain("- Alpha (this chat's project): Current focus: Pricing page");
+    expect(prompt).toContain('- Website: The marketing site. Current focus: Pricing page');
+  });
+
+  it("leaves all of it out for a profile with global memory off, keeping the project's own", async () => {
+    const { store, engine, runner } = setup();
+    store.globalMemory.saveAbout('I am Adam.');
+    store.globalMemory.saveNote(NOTE, 'summariser', null);
+
+    await turn(runner, { useGlobalMemory: false });
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+
+    const prompt = engine.requests[0]!.profile.systemPrompt!;
+    for (const head of [ABOUT_HEAD, NOTE_HEAD, INDEX_HEAD]) expect(prompt).not.toContain(head);
+    expect(prompt).toContain('# Project instructions: Alpha');
+  });
+
+  it('a chat outside any project gets the index of every project, none marked as its own', async () => {
+    const { engine, runner } = setup(null);
+    await turn(runner, {});
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+
+    const prompt = engine.requests[0]!.profile.systemPrompt!;
+    expect(prompt).toContain('- Alpha\n- Website: The marketing site');
+    expect(prompt).not.toContain("(this chat's project)");
+    expect(prompt).not.toContain('# Project instructions');
+  });
+
+  it('adds nothing when About you is blank, the note is empty and there is no other project', async () => {
+    const { store, engine, runner } = setup('proj', 'one');
+    store.globalMemory.saveAbout('  ');
+    await turn(runner, {});
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.profile.systemPrompt).toBe('Base.');
+  });
+
+  it('reads About you and the note fresh for every turn', async () => {
+    const { store, engine, runner } = setup('proj', 'one');
+    store.globalMemory.saveAbout('First.');
+    const first = await turn(runner, {});
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    store.globalMemory.saveAbout('Second.');
+    await turn(runner, {}, firstId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('First.');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('Second.');
   });
 });
 
