@@ -234,7 +234,8 @@ describe('ClaudeImportService: projects and files', () => {
     expect(status.report!.projects).toMatchObject({ created: ['Home Stuff'], merged: ['PhD'], existing: [], failed: [] });
     expect(store.projects.get('019f3c80-aaaa')).toMatchObject({ name: 'Home Stuff', description: 'House things', instructions: 'Be brief.' });
     expect(store.projects.get('grunt-phd')).toMatchObject({ description: 'Robots', instructions: 'Mine.' });
-    expect(store.projects.list()).toHaveLength(2);
+    expect(store.projects.list().map((p) => p.name)).toEqual(['PhD', 'Home Stuff']);
+    expect(store.projects.get('019f3c80-aaaa')!.sortOrder).toBeGreaterThan(store.projects.get('grunt-phd')!.sortOrder);
 
     const folder = join(root, 'imported', 'claude', 'Home Stuff-019f3c80');
     expect(await readFile(join(folder, 'shed-plan.md'), 'utf8')).toBe('# Shed');

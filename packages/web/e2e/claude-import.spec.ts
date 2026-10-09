@@ -12,13 +12,18 @@ import { BASE_URL } from '../playwright.config.js';
  */
 const ROOT = '00000000-0000-4000-8000-000000000000';
 let dir: string;
+const chatId = randomUUID();
+const projectId = randomUUID();
 
 test.beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'grunt-e2e-claude-export-'));
 });
 
-test.afterEach(() => {
+// The sidebar is shared by the specs after this one, and some of them need its rows to fit on screen.
+test.afterEach(async ({ request }) => {
   rmSync(dir, { recursive: true, force: true });
+  await request.delete(`${BASE_URL}/api/chats/${chatId}`);
+  await request.delete(`${BASE_URL}/api/projects/${projectId}`);
 });
 
 test('imports a claude.ai export from Settings > Import', async ({ page, request }) => {
@@ -36,7 +41,7 @@ test('imports a claude.ai export from Settings > Import', async ({ page, request
     join(dir, 'conversations', 'conversations.json'),
     JSON.stringify([
       {
-        uuid: randomUUID(),
+        uuid: chatId,
         name: `Imported ${tag}`,
         created_at: at(0),
         updated_at: at(2),
@@ -48,7 +53,7 @@ test('imports a claude.ai export from Settings > Import', async ({ page, request
     ])
   );
   mkdirSync(join(dir, 'projects'));
-  writeFileSync(join(dir, 'projects', 'p.json'), JSON.stringify({ uuid: randomUUID(), name: `Garden ${tag}`, description: '', prompt_template: 'Be brief.', docs: [] }));
+  writeFileSync(join(dir, 'projects', 'p.json'), JSON.stringify({ uuid: projectId, name: `Garden ${tag}`, description: '', prompt_template: 'Be brief.', docs: [] }));
 
   await page.goto('/');
   await page.getByRole('button', { name: 'Settings' }).click();

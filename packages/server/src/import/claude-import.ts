@@ -338,6 +338,8 @@ export class ClaudeImportService {
         instructions: planned.instructions,
         workspace: null,
         defaultProfileId: null,
+        // After every project there is, as a project made in the sidebar goes.
+        sortOrder: store.projects.list().reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1,
         createdAt: planned.createdAt,
         updatedAt: planned.updatedAt,
       });
