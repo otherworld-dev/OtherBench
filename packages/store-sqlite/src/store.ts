@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { SqliteArtifactRepo } from './repos/artifacts.js';
-import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, ProjectRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo } from '@grunt/core/ports/store.js';
+import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo } from '@grunt/core/ports/store.js';
 import { SqliteAttachmentRepo } from './repos/attachments.js';
 import { SqliteAuditRepo } from './repos/audit.js';
 import { SqliteChatRepo } from './repos/chats.js';
@@ -16,6 +16,7 @@ import { clockOf } from './repos/clock.js';
 import { SqliteSyncRepo } from './repos/sync.js';
 import { SqliteProfileRepo } from './repos/profiles.js';
 import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
+import { SqliteGlobalMemoryRepo } from './repos/global-memory.js';
 import { SqliteProjectRepo } from './repos/projects.js';
 import { SqliteSettingsRepo } from './repos/settings.js';
 import { SqliteUsageRepo } from './repos/usage.js';
@@ -39,6 +40,7 @@ export class SqliteStore implements Store {
   readonly chats: ChatRepo;
   readonly projects: ProjectRepo;
   readonly projectMemory: ProjectMemoryRepo;
+  readonly globalMemory: GlobalMemoryRepo;
   readonly settings: SettingsRepo;
   readonly messages: MessageRepo;
   readonly artifacts: ArtifactRepo;
@@ -62,6 +64,7 @@ export class SqliteStore implements Store {
     this.chats = new SqliteChatRepo(db, selfId, clock);
     this.projects = new SqliteProjectRepo(db, selfId, clock);
     this.projectMemory = new SqliteProjectMemoryRepo(db, clock);
+    this.globalMemory = new SqliteGlobalMemoryRepo(db, clock);
     this.settings = new SqliteSettingsRepo(db);
     this.messages = new SqliteMessageRepo(db, selfId, clock);
     this.artifacts = new SqliteArtifactRepo(db, clock);

@@ -235,6 +235,35 @@ describe('runMigrations', () => {
     }
   });
 
+  it('global-memory adds its tables, starts each chat at its newest message (no backfill) and leaves every profile on', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-global-memory'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('busy', 'Busy', 'p1', 1, 1)`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('empty', 'Empty', 'p1', 1, 1)`);
+      const insert = (id: string, parent: string | null, role: string, at: number): void =>
+        db.exec(`INSERT INTO message (id, chat_id, parent_id, role, parts, status, created_at) VALUES ('${id}', 'busy', ${parent ? `'${parent}'` : 'NULL'}, '${role}', '[]', 'complete', ${at})`);
+      insert('m1', null, 'user', 10);
+      insert('m2', 'm1', 'assistant', 11);
+
+      runMigrations(db);
+
+      expect(tableNames(db)).toEqual(expect.arrayContaining(['global_memory', 'global_memory_version']));
+      const cursor = (id: string): string | null =>
+        (db.prepare(`SELECT global_memory_cursor FROM chat WHERE id = ?`).get(id) as { global_memory_cursor: string | null }).global_memory_cursor;
+      expect(cursor('busy')).toBe('m2');
+      expect(cursor('empty')).toBeNull();
+      expect(db.prepare(`SELECT use_global_memory FROM profile WHERE id = 'p1'`).get()).toEqual({ use_global_memory: 1 });
+      expect(() => db.exec(`INSERT INTO global_memory (key, body, updated_at, updated_by) VALUES ('other', 'x', 1, 'user')`)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
   it('project-memory seeds each existing chat cursor to its newest message (no backfill on upgrade)', () => {
     const migration = MIGRATIONS.find((m) => m.name.endsWith('-project-memory'));
     const db = freshDb();

@@ -23,6 +23,7 @@ const mapping: CrudMapping<Profile> = {
     'tool_policy',
     'is_default',
     'archived_at',
+    'use_global_memory',
   ],
   toRow: (p) => [
     p.id,
@@ -36,6 +37,7 @@ const mapping: CrudMapping<Profile> = {
     toJson(p.toolPolicy),
     toBool(p.isDefault),
     p.archivedAt,
+    toBool(p.useGlobalMemory !== false),
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -49,6 +51,7 @@ const mapping: CrudMapping<Profile> = {
     toolPolicy: fromJson<ToolPolicy>(row.tool_policy as string),
     isDefault: fromBool(row.is_default as number),
     archivedAt: row.archived_at as number | null,
+    useGlobalMemory: fromBool(row.use_global_memory as number),
   }),
 };
 

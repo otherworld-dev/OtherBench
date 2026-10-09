@@ -616,6 +616,62 @@ export function runStoreContract(
       });
     });
 
+    describe('global memory', () => {
+      it('starts empty: no About you and no note, neither ever saved', () => {
+        expect(store.globalMemory.get()).toEqual({ about: '', aboutUpdatedAt: 0, note: '', noteUpdatedAt: 0, noteUpdatedBy: 'user', noteSourceChatId: null });
+        expect(store.globalMemory.versions()).toEqual([]);
+      });
+
+      it('About you and the note save independently; only the note keeps versions', () => {
+        store.globalMemory.saveAbout('British English.', 1000);
+        store.globalMemory.saveNote('## Pinned\n- x', 'summariser', 'chat-1', 2000);
+        expect(store.globalMemory.get()).toEqual({
+          about: 'British English.',
+          aboutUpdatedAt: 1000,
+          note: '## Pinned\n- x',
+          noteUpdatedAt: 2000,
+          noteUpdatedBy: 'summariser',
+          noteSourceChatId: 'chat-1',
+        });
+
+        store.globalMemory.saveAbout('Be brief.', 3000);
+        expect(store.globalMemory.get()).toMatchObject({ about: 'Be brief.', aboutUpdatedAt: 3000, note: '## Pinned\n- x', noteUpdatedAt: 2000 });
+
+        const versions = store.globalMemory.versions();
+        expect(versions.map((v) => [v.body, v.createdBy, v.sourceChatId])).toEqual([['## Pinned\n- x', 'summariser', 'chat-1']]);
+        expect(store.globalMemory.version(versions[0]!.id)).toEqual(versions[0]);
+        expect(store.globalMemory.version('does-not-exist')).toBeNull();
+      });
+
+      it('keeps the newest 50 note versions, newest first', () => {
+        for (let i = 0; i < 52; i++) store.globalMemory.saveNote(`note ${i}`, 'user', null, 1000 + i);
+        const versions = store.globalMemory.versions();
+        expect(versions).toHaveLength(50);
+        expect(versions[0]!.body).toBe('note 51');
+        expect(versions[49]!.body).toBe('note 2');
+      });
+
+      it("a chat's global memory cursor defaults to null, round-trips, and survives a move between projects", () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        store.projects.create({ id: 'proj-a', name: 'A', workspaceRoot: null, defaultProfileId: null });
+        expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).globalMemoryCursor).toBeNull();
+
+        store.chats.update('chat-a', { globalMemoryCursor: 'msg-3', memoryCursor: 'msg-3' });
+        store.chats.update('chat-a', { projectId: 'proj-a' });
+
+        expect(store.chats.get('chat-a')).toMatchObject({ globalMemoryCursor: 'msg-3', memoryCursor: null });
+        expect(store.chats.list().find((c) => c.id === 'chat-a')!.globalMemoryCursor).toBe('msg-3');
+      });
+
+      it('a profile uses global memory unless it is switched off', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        expect(store.profiles.get(profileId)!.useGlobalMemory).toBe(true);
+        store.profiles.update(profileId, { useGlobalMemory: false });
+        expect(store.profiles.get(profileId)!.useGlobalMemory).toBe(false);
+        expect(store.profiles.list().find((p) => p.id === profileId)!.useGlobalMemory).toBe(false);
+      });
+    });
+
     describe('settings', () => {
       it('starts with no memory model, stores one, ignores an empty patch, and clears it with null', () => {
         expect(store.settings.get()).toEqual({ memoryProfileId: null });

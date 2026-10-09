@@ -47,6 +47,9 @@ import type {
   ProjectMemory,
   ProjectMemoryRepo,
   ProjectMemoryVersion,
+  GlobalMemory,
+  GlobalMemoryRepo,
+  GlobalMemoryVersion,
   ProjectRepo,
   SettingsRepo,
   Store,
@@ -435,7 +438,7 @@ class InMemoryProfileRepo implements ProfileRepo {
   private readonly repo = new InMemoryCrudRepo<Profile>();
   constructor(private readonly projects: ProjectRepo) {}
   create(p: Profile): Profile {
-    return this.repo.create(p);
+    return this.repo.create({ ...p, useGlobalMemory: p.useGlobalMemory ?? true });
   }
   get(id: string): Profile | null {
     return this.repo.get(id);
@@ -560,6 +563,7 @@ class InMemoryChatRepo implements ChatRepo {
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
+      globalMemoryCursor: c.globalMemoryCursor ?? null,
       sortOrder: c.sortOrder ?? c.createdAt ?? now,
       createdAt: c.createdAt ?? now,
       updatedAt: c.updatedAt ?? now,
@@ -632,7 +636,7 @@ class InMemoryProjectRepo implements ProjectRepo {
 }
 
 /** Versions newest first; ties on `createdAt` break by save order (SQLite: rowid). */
-function newestFirst(versions: ProjectMemoryVersion[]): ProjectMemoryVersion[] {
+function newestFirst<T extends { createdAt: number }>(versions: T[]): T[] {
   return versions
     .map((v, order) => ({ v, order }))
     .sort((a, b) => b.v.createdAt - a.v.createdAt || b.order - a.order)
@@ -675,6 +679,39 @@ class InMemoryProjectMemoryRepo implements ProjectMemoryRepo {
   removeProject(projectId: string): void {
     this.notes.delete(projectId);
     this.all = this.all.filter((v) => v.projectId !== projectId);
+  }
+}
+
+/** Mirrors SqliteGlobalMemoryRepo: About you and the note are kept apart; only the note has versions. */
+class InMemoryGlobalMemoryRepo implements GlobalMemoryRepo {
+  private value: GlobalMemory = { about: '', aboutUpdatedAt: 0, note: '', noteUpdatedAt: 0, noteUpdatedBy: 'user', noteSourceChatId: null };
+  /** Oldest save first. */
+  private all: GlobalMemoryVersion[] = [];
+
+  get(): GlobalMemory {
+    return structuredClone(this.value);
+  }
+
+  saveAbout(about: string, at: number = Date.now()): GlobalMemory {
+    this.value = { ...this.value, about, aboutUpdatedAt: at };
+    return this.get();
+  }
+
+  saveNote(body: string, by: MemoryAuthor, sourceChatId: string | null, at: number = Date.now()): GlobalMemory {
+    this.value = { ...this.value, note: body, noteUpdatedAt: at, noteUpdatedBy: by, noteSourceChatId: sourceChatId };
+    this.all.push({ id: randomUUID(), body, createdAt: at, createdBy: by, sourceChatId });
+    const keep = new Set(newestFirst(this.all).slice(0, MEMORY_VERSIONS_KEPT).map((v) => v.id));
+    this.all = this.all.filter((v) => keep.has(v.id));
+    return this.get();
+  }
+
+  versions(): GlobalMemoryVersion[] {
+    return newestFirst(this.all).map((v) => structuredClone(v));
+  }
+
+  version(id: string): GlobalMemoryVersion | null {
+    const found = this.all.find((v) => v.id === id);
+    return found ? structuredClone(found) : null;
   }
 }
 
@@ -981,6 +1018,7 @@ export class InMemoryStore implements Store {
   readonly models: ModelRepo = new InMemoryModelRepo();
   readonly chats: ChatRepo;
   readonly projectMemory: ProjectMemoryRepo;
+  readonly globalMemory: GlobalMemoryRepo = new InMemoryGlobalMemoryRepo();
   readonly projects: ProjectRepo;
   readonly profiles: ProfileRepo;
   readonly settings: SettingsRepo = new InMemorySettingsRepo();

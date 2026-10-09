@@ -14,6 +14,7 @@ export const SYNC_TABLES = [
   'profile',
   'project',
   'project_memory',
+  'global_memory',
   'chat',
   'message',
   'attachment',
@@ -103,6 +104,7 @@ export const CHAT_FIELDS: Record<string, string[]> = {
   folders: ['folders'],
   projectId: ['project_id'],
   memoryCursor: ['memory_cursor'],
+  globalMemoryCursor: ['global_memory_cursor'],
   memoryExcluded: ['memory_excluded'],
   sortOrder: ['sort_order'],
 };
