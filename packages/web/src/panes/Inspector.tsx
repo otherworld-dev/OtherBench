@@ -777,6 +777,10 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: Inspe
               <span className="text-[var(--text-muted)]">Shell</span>
               <span>{profile.toolPolicy.shell ? 'on' : 'off'}</span>
             </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-[var(--text-muted)]">Global memory</span>
+              <span data-testid="profile-global-memory">{profile.useGlobalMemory === false ? 'off' : 'on'}</span>
+            </div>
           </div>
         )}
       </Section>

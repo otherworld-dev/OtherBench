@@ -575,6 +575,14 @@ describe('Inspector project', () => {
     target.remove();
   });
 
+  it("shows whether the chat's profile gets global memory", () => {
+    render(<Inspector chat={makeChat({ projectId: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.getByTestId('profile-global-memory')).toHaveTextContent('on');
+    cleanup();
+    render(<Inspector chat={makeChat({ projectId: null })} profile={makeProfile({ useGlobalMemory: false })} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(screen.getByTestId('profile-global-memory')).toHaveTextContent('off');
+  });
+
   it("shows the project's description and opens its settings", async () => {
     useGruntStore.setState({
       projects: [{ id: 'p-w', name: 'Website', description: 'The marketing site', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],

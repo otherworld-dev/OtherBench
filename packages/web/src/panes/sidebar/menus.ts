@@ -39,16 +39,15 @@ export function chatMenuItems(
 ): MenuItem[] {
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
   const archived = chat.archivedAt !== null;
-  // Project memory (spec 2026-10-03-project-memory-design §5): only a chat in a project contributes.
-  const memory: MenuItem[] = inListedProject
-    ? [
-        {
-          id: 'memory',
-          label: chat.memoryExcluded ? 'Add to project memory' : "Don't add to project memory",
-          onSelect: () => h.setMemoryExcluded(!chat.memoryExcluded),
-        },
-      ]
-    : [];
+  // Memory: every chat feeds the global note, and a chat in a project its project's note too
+  // (spec 2026-10-08-global-memory-design); one switch covers both.
+  const memory: MenuItem[] = [
+    {
+      id: 'memory',
+      label: chat.memoryExcluded ? 'Add to memory' : "Don't add to memory",
+      onSelect: () => h.setMemoryExcluded(!chat.memoryExcluded),
+    },
+  ];
   return [
     { id: 'tab', label: isTab ? 'Go to tab' : 'Open in new tab', onSelect: h.openInTab },
     { id: 'rename', label: 'Rename', onSelect: h.rename },

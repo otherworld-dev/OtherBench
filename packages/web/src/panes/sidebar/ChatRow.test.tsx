@@ -19,14 +19,15 @@ function renderRow(props: Partial<ChatRowProps> = {}) {
 }
 
 describe('ChatRow', () => {
-  it('marks a project chat that is not added to project memory, without changing the row name', () => {
+  it('marks a chat that is not added to memory, in a project or not, without changing the row name', () => {
     render(
       <ul>
         <ChatRow chat={{ ...chat, projectId: 'p-a', memoryExcluded: true }} active={false} onSelect={vi.fn()} onDragEnd={vi.fn()} />
+        <ChatRow chat={{ ...chat, id: 'loose', projectId: null, memoryExcluded: true }} active={false} onSelect={vi.fn()} onDragEnd={vi.fn()} />
       </ul>
     );
-    expect(screen.getByRole('img', { name: 'Not added to project memory' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    expect(screen.getAllByRole('img', { name: 'Not added to memory' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Notes' })).toHaveLength(2);
     cleanup();
 
     renderRow();

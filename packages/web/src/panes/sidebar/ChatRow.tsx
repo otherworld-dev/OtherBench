@@ -146,12 +146,12 @@ export function ChatRow({ chat, active, onSelect, onDragEnd, menuOpen = false, r
         )}
         {chat.title}
       </button>
-      {chat.memoryExcluded && chat.projectId !== null && (
+      {chat.memoryExcluded && (
         <span
           data-testid="memory-excluded-marker"
           role="img"
-          aria-label="Not added to project memory"
-          title="Not added to project memory"
+          aria-label="Not added to memory"
+          title="Not added to memory"
           className="shrink-0 px-0.5 text-xs text-[var(--text-faint)]"
         >
           ⊘

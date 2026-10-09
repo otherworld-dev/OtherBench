@@ -1,5 +1,5 @@
-import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
-import type { MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
+import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
@@ -109,6 +109,14 @@ export interface CreateProfileBody {
   params?: ModelParams;
   toolPolicy?: ToolPolicy;
   isDefault?: boolean;
+  /** Absent means on. */
+  useGlobalMemory?: boolean;
+}
+
+/** What `GET /api/memory/global` and its writes return (spec 2026-10-08-global-memory-design §3). */
+export interface GlobalMemoryView {
+  memory: GlobalMemory;
+  lastError: MemoryFailure | null;
 }
 
 export interface CreateChatBody {
@@ -361,6 +369,19 @@ export const api = {
     restore: (projectId: string, versionId: string) => post<ProjectMemoryView>(`/projects/${projectId}/memory/versions/${versionId}/restore`),
     /** Folds this chat's new turns in now. Resolves when the update has finished; 409 when the chat isn't in a project or is excluded. */
     updateNow: (chatId: string) => post<MemoryUpdateOutcome>(`/chats/${chatId}/memory/update`),
+    /** About you and the learned global note (spec 2026-10-08-global-memory-design §3). */
+    global: {
+      get: () => request<GlobalMemoryView>('/memory/global'),
+      /** At most 4,000 characters. */
+      saveAbout: (about: string) => put<GlobalMemoryView>('/memory/global/about', { about }),
+      /** Saves the note as the user. The server checks the headings and the 4,000-character cap; Pinned may change. */
+      saveNote: (body: string) => put<GlobalMemoryView>('/memory/global', { body }),
+      /** Newest first. */
+      versions: () => request<MemoryVersionSummary[]>('/memory/global/versions'),
+      version: (versionId: string) => request<GlobalMemoryVersion>(`/memory/global/versions/${versionId}`),
+      /** Saves that version's body as a new user version. */
+      restore: (versionId: string) => post<GlobalMemoryView>(`/memory/global/versions/${versionId}/restore`),
+    },
   },
 
   /** Named places each machine keeps at its own path (v2 spec §6). */

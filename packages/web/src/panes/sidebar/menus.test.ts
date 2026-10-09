@@ -17,34 +17,34 @@ function chatHandlers(): ChatMenuHandlers {
 describe('chatMenuItems', () => {
   it('offers Open in new tab (Go to tab once open), Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {
     expect(chatMenuItems(chat(), [], chatHandlers(), null, true)[0]!.label).toBe('Go to tab');
-    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
+    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
     expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers()).find((i) => i.id === 'pin')!.label).toBe('Unpin');
   });
 
-  it("offers Don't add to project memory after Move to project… for a chat in a project, and Add to project memory once it's excluded", () => {
+  it("offers Don't add to memory after Move to project… for a chat in a project, and Add to memory once it's excluded", () => {
     const projects = [project('a', 'Alpha')];
     const h = chatHandlers();
 
     const items = chatMenuItems(chat({ projectId: 'a' }), projects, h);
-    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to project memory", 'Export…', 'Archive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
     items.find((i) => i.id === 'memory')!.onSelect!();
     expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(true);
 
     const excluded = chatMenuItems(chat({ projectId: 'a', memoryExcluded: true }), projects, h).find((i) => i.id === 'memory')!;
-    expect(excluded.label).toBe('Add to project memory');
+    expect(excluded.label).toBe('Add to memory');
     excluded.onSelect!();
     expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(false);
   });
 
-  it('has no memory item for a chat outside any project, or whose project is gone', () => {
-    expect(chatMenuItems(chat(), [project('a', 'Alpha')], chatHandlers()).some((i) => i.id === 'memory')).toBe(false);
-    expect(chatMenuItems(chat({ projectId: 'gone' }), [project('a', 'Alpha')], chatHandlers()).some((i) => i.id === 'memory')).toBe(false);
+  it('offers the memory item on a chat outside any project too, since it feeds the global note', () => {
+    expect(chatMenuItems(chat(), [project('a', 'Alpha')], chatHandlers()).find((i) => i.id === 'memory')!.label).toBe("Don't add to memory");
+    expect(chatMenuItems(chat({ projectId: 'gone' }), [project('a', 'Alpha')], chatHandlers()).some((i) => i.id === 'memory')).toBe(true);
   });
 
   it('offers Unarchive instead of Archive for an archived chat, and it calls unarchive, not archive (controller ruling R2)', () => {
     const h = chatHandlers();
     const items = chatMenuItems(chat({ archivedAt: 5 }), [], h);
-    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Move to project…', 'Export…', 'Unarchive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Move to project…', "Don't add to memory", 'Export…', 'Unarchive', 'Delete…']);
     items.find((i) => i.label === 'Unarchive')!.onSelect!();
     expect(h.unarchive).toHaveBeenCalled();
     expect(h.archive).not.toHaveBeenCalled();
@@ -53,7 +53,7 @@ describe('chatMenuItems', () => {
   it('offers Move up and Move down after Pin when given the chat\'s place, disabled at the ends', () => {
     const h = chatHandlers();
     const middle = chatMenuItems(chat(), [], h, { index: 1, count: 3 });
-    expect(middle.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', 'Export…', 'Archive', 'Delete…']);
+    expect(middle.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
     middle.find((i) => i.id === 'up')!.onSelect!();
     expect(h.reorder).toHaveBeenLastCalledWith(-1);
     middle.find((i) => i.id === 'down')!.onSelect!();
