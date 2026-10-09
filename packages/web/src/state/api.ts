@@ -3,6 +3,7 @@ import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectM
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import type { ImportPreview, ImportStatus } from '@grunt/core/types/claude-import.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { PlanUsage, RecordedUsage } from '@grunt/core/types/usage.js';
 import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@grunt/core/types/workspace.js';
@@ -419,6 +420,13 @@ export const api = {
   settings: {
     get: () => request<AppSettings>('/settings'),
     patch: (body: Partial<AppSettings>) => patch<AppSettings>('/settings', body),
+  },
+
+  /** Import from claude.ai (spec 2026-10-09-claude-import-design §5): the running or last import, a preview, and a start (202). */
+  claudeImport: {
+    status: () => request<ImportStatus>('/import/claude'),
+    preview: (folder: string, profileId: string | null) => post<ImportPreview>('/import/claude/preview', { folder, profileId }),
+    start: (body: { folder: string; profileId: string; memory: boolean }) => post<ImportStatus>('/import/claude', body),
   },
 
   search: (q: string, limit?: number) =>

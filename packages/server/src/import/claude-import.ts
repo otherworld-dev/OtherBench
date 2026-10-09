@@ -9,6 +9,7 @@ import { containPath } from '@grunt/core/domain/paths.js';
 import { classifyPath, MAX_EXTRA_FOLDERS, sameWorkspace } from '@grunt/core/domain/workspace.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { Project, Store } from '@grunt/core/ports/store.js';
+import type { ImportPhase, ImportPreview, ImportReport, ImportStatus, MemoryOutcome } from '@grunt/core/types/claude-import.js';
 import type { Profile, ResolvedProfile } from '@grunt/core/types/config.js';
 import { askMemoryModel, errorMessage, MEMORY_UPDATE_TIMEOUT_MS, pickMemoryProfile, type MemoryQueue } from '../memory/shared.js';
 import { realScheduler, type Scheduler } from '../memory/scheduler.js';
@@ -24,60 +25,6 @@ import { readClaudeExport, type ClaudeExportRead } from './claude-reader.js';
  * `importRoot`; memory is condensed by the memory model on the summariser's
  * queue, so it never runs alongside a summariser update.
  */
-
-export type ImportPhase = 'reading' | 'chats' | 'artifacts' | 'projects' | 'memory';
-
-export type MemoryOutcome = { status: 'saved' } | { status: 'skipped' | 'failed'; reason: string };
-
-export interface ImportFailure {
-  title: string;
-  error: string;
-}
-
-export interface ImportPreview {
-  folder: string;
-  /** The files the conversations and memory were read from. */
-  sources: string[];
-  chats: { total: number; existing: number; messages: number; branched: number };
-  /** Conversations with nothing in them, left out. */
-  emptyChats: number;
-  artifacts: { title: string; versions: number; existing: boolean }[];
-  projects: { name: string; action: 'create' | 'merge' | 'existing'; mergeInto: string | null; docs: number; hasInstructions: boolean; hasMemory: boolean }[];
-  projectsSkipped: number;
-  memory: { about: boolean; aboutTaken: boolean; note: boolean; projectNotes: number; files: number };
-  /** The profile that would condense memory, or null when none can. */
-  memoryModel: string | null;
-  filesNotIncluded: number;
-  dropped: Record<string, number>;
-  /** Where docs and claude.ai's memory files are written. */
-  importFolder: string;
-}
-
-export interface ImportReport {
-  chats: { imported: number; existing: number; messages: number; failed: ImportFailure[] };
-  emptyChats: number;
-  artifacts: { imported: number; existing: number; failed: ImportFailure[] };
-  projects: { created: string[]; merged: string[]; existing: string[]; failed: ImportFailure[]; skipped: number };
-  docs: { written: number; folders: { project: string; path: string; attached: boolean }[] };
-  /** Null when memory was switched off. */
-  memory: { model: string | null; about: MemoryOutcome; note: MemoryOutcome; projects: { name: string; outcome: MemoryOutcome }[] } | null;
-  /** Where claude.ai's memory files were kept, or null when there were none. */
-  memoryFiles: string | null;
-  filesNotIncluded: number;
-  dropped: Record<string, number>;
-  importFolder: string;
-}
-
-export interface ImportStatus {
-  state: 'idle' | 'running' | 'done' | 'failed';
-  phase: ImportPhase | null;
-  done: number;
-  total: number;
-  startedAt: number | null;
-  finishedAt: number | null;
-  report: ImportReport | null;
-  error: string | null;
-}
 
 /** A request the import can't act on (a 400): a bad profile, say. */
 export class ImportInputError extends Error {
