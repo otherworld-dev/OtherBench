@@ -496,7 +496,10 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         />
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2" data-testid="chat-list-scroll">
+      {/* relative: the group headings' screen-reader text is absolutely positioned, and without a positioned
+          ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
+          window scroll once a group sat below the fold. */}
+      <div className="relative flex-1 overflow-y-auto p-2" data-testid="chat-list-scroll">
         {sidebar.pinned.length > 0 && (
           <div className="mb-3" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
