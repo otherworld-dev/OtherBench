@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chatListUrl,
   CLAUDE_ROOT_PARENT,
   ClaudeExportError,
+  MEMORY_CHAT_TITLE,
   planClaudeImport,
   safeFileName,
   UNTITLED_CHAT,
@@ -9,6 +11,8 @@ import {
   type ClaudeExportFiles,
   type ImportedChat,
 } from '../src/domain/claude-import.js';
+import { runRecallCommand } from '../src/domain/recall.js';
+import { InMemoryStore } from '../src/testing/fakes.js';
 import type { CanonMessage, Part } from '../src/types/messages.js';
 
 // Fixtures shaped like a real claude.ai export (2026-10), with made-up content.
@@ -461,6 +465,55 @@ describe('planClaudeImport: memory', () => {
 
   it('is empty without a memories file', () => {
     expect(planClaudeImport(files(), PROFILE).memory).toEqual({ about: '', note: '', files: [] });
+    expect(planClaudeImport(files(), PROFILE).memoryChat).toBeNull();
+  });
+
+  it("makes claude.ai's notes a chat of their own, a note a message, summary first and labelled", () => {
+    const plan = planClaudeImport(
+      files({
+        projects: [{ uuid: 'p1', name: 'Garden', docs: [] }],
+        memories: [
+          {
+            account_uuid: 'acc',
+            conversations_memory: 'Runs a small company.',
+            memory_files: [
+              { path: '/areas/garden-office.md', content: 'Building a shed.', updated_at: at(5) },
+              { path: '/people/wife.md', content: 'Married.', updated_at: at(3) },
+              { path: '/profile.md', content: 'Lives in Wales.', updated_at: at(4) },
+              { path: '/projects/p1/overview.md', content: 'Beds are 1.2 m wide.', updated_at: at(6) },
+            ],
+            project_memories: { p1: 'Raised beds.' },
+          },
+        ],
+      }),
+      PROFILE
+    );
+    const chat = plan.memoryChat!;
+    expect(chat).toMatchObject({ id: 'claude-memory-acc', title: MEMORY_CHAT_TITLE, createdAt: ms(6), updatedAt: ms(6) });
+    expect(chat.messages.map((m) => (m.parts[0] as { text: string }).text.split('\n')[0])).toEqual([
+      '**Summary of conversations**',
+      '**Profile**',
+      '**People: wife**',
+      '**Areas: garden-office**',
+      '**Project memory: Garden**',
+      '**Project Garden: overview**',
+    ]);
+    expect(chat.messages.map((m) => m.parentId)).toEqual([null, ...chat.messages.slice(0, -1).map((m) => m.id)]);
+    expect(chat.messages.every((m) => m.role === 'assistant' && m.producedBy?.modelId === 'claude.ai')).toBe(true);
+    expect(chat.headMessageId).toBe(chat.messages.at(-1)!.id);
+    expect(chat.latestMessageId).toBe([...chat.messages].sort((a, b) => a.createdAt - b.createdAt).at(-1)!.id);
+  });
+
+  it("puts the notes where recall's search finds them", () => {
+    const store = new InMemoryStore();
+    store.connections.create({ id: 'conn-1', name: 'C', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    store.profiles.create({ id: 'profile-1', name: 'P', description: null, colour: null, connectionId: 'conn-1', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: false, archivedAt: null });
+    const chat = planClaudeImport(files({ memories: [{ account_uuid: 'acc', memory_files: [{ path: '/topics/pets-and-aquariums.md', content: 'Keeps a border collie and shrimp tanks.' }] }] }), PROFILE).memoryChat!;
+    store.chats.create({ id: chat.id, title: chat.title, profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null });
+    for (const m of chat.messages) store.messages.create(m);
+    store.chats.update(chat.id, { headMessageId: chat.headMessageId });
+    const found = runRecallCommand(store, { chatId: 'asking' }, { command: 'search', query: 'border collie' }) as { chats: { chatId: string; title: string }[] };
+    expect(found.chats).toEqual([expect.objectContaining({ chatId: 'claude-memory-acc', title: MEMORY_CHAT_TITLE })]);
   });
 });
 
@@ -540,6 +593,45 @@ describe('planClaudeImport: the same export twice', () => {
     const newer = conversation({ uuid: 'c1', updated_at: at(20), chat_messages: [message({ uuid: 'm1' }), message({ uuid: 'm2', sender: 'assistant', parent_message_uuid: 'm1' })] });
     expect(planClaudeImport(files({ conversations: [newer, older] }), PROFILE).chats[0]!.messages).toHaveLength(2);
     expect(planClaudeImport(files({ conversations: [older, newer] }), PROFILE).chats[0]!.messages).toHaveLength(2);
+  });
+});
+
+describe("planClaudeImport: claude.ai's chat list", () => {
+  const branched = [
+    message({ uuid: 'u1', created_at: at(1) }),
+    message({ uuid: 'a1', sender: 'assistant', parent_message_uuid: 'u1', created_at: at(2) }),
+    message({ uuid: 'a2', sender: 'assistant', parent_message_uuid: 'u1', created_at: at(3) }),
+  ];
+
+  it("files each chat under its project and opens it on the branch claude.ai showed", () => {
+    const plan = planClaudeImport(
+      files({
+        conversations: [conversation({ uuid: 'c1', chat_messages: branched }), conversation({ uuid: 'c2', chat_messages: [message({ uuid: 'u9' })] })],
+        conversationList: [[{ uuid: 'c1', project_uuid: 'p1', current_leaf_message_uuid: 'a1' }, { uuid: 'c2', project_uuid: null, current_leaf_message_uuid: 'not-here' }]],
+      }),
+      PROFILE
+    );
+    expect(plan.chatList).toBe(true);
+    expect(plan.chats.map((c) => [c.id, c.projectId, c.headMessageId])).toEqual([
+      ['c1', 'p1', 'a1'],
+      ['c2', null, 'u9'],
+    ]);
+  });
+
+  it('reads a list wrapped in an object, and a project given as an object', () => {
+    const plan = planClaudeImport(files({ conversations: [conversation({ uuid: 'c1', chat_messages: branched })], conversationList: [{ data: [{ uuid: 'c1', project: { uuid: 'p2', name: 'Garden' } }] }] }), PROFILE);
+    expect(plan.chats[0]!.projectId).toBe('p2');
+    expect(plan.chats[0]!.headMessageId).toBe('a2');
+  });
+
+  it('without a list, leaves chats out of projects and on their newest branch', () => {
+    const plan = planClaudeImport(files({ conversations: [conversation({ uuid: 'c1', chat_messages: branched })] }), PROFILE);
+    expect(plan.chatList).toBe(false);
+    expect(plan.chats[0]).toMatchObject({ projectId: null, headMessageId: 'a2' });
+  });
+
+  it('chatListUrl names the organisation', () => {
+    expect(chatListUrl('org-1')).toBe('https://claude.ai/api/organizations/org-1/chat_conversations');
   });
 });
 

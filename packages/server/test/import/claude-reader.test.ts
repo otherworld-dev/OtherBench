@@ -72,6 +72,16 @@ describe('readClaudeExport', () => {
     expect(read.files.artifacts).toEqual([{ meta: { id: 'a1' }, html: { v1: '<p>one</p>' } }]);
   });
 
+  it("reads claude.ai's chat list when it's saved into the folder, and the organisation from the manifest", async () => {
+    await put('conversations.json', conversations);
+    await put('chat_conversations (1).json', JSON.stringify([{ uuid: 'c1', project_uuid: 'p1' }]));
+    await put('zips/manifest-cb5dc9c1-1791-2026.json', JSON.stringify({ data_files: [{ export_url: 'https://claude.ai/export/cb5dc9c1-cce3-443e-992e-7663a0cd0690/download/abc', filename: 'conversations-000.zip' }] }));
+    const read = await readClaudeExport(dir);
+    expect(read.files.conversationList).toEqual([[{ uuid: 'c1', project_uuid: 'p1' }]]);
+    expect(read.organizationId).toBe('cb5dc9c1-cce3-443e-992e-7663a0cd0690');
+    expect(read.sources).toContain('chat_conversations (1).json');
+  });
+
   it("leaves alone ZIPs that aren't the export's, even unreadable ones", async () => {
     await put('conversations.json', conversations);
     await put('holiday-photos.zip', Buffer.from('not a zip'));

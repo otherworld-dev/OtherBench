@@ -43,6 +43,17 @@ export interface ClaudeExportFiles {
   memories: unknown[];
   /** Each published artifact ("frame"): its `artifact.json` and its versions' HTML by version id. */
   artifacts: { meta: unknown; html: Record<string, string> }[];
+  /**
+   * claude.ai's own chat list (`chat_conversations*.json`, saved from the
+   * page its sidebar loads), when the user added it: the export doesn't say
+   * which project a chat was in, or which branch it showed, and this does.
+   */
+  conversationList?: unknown[];
+}
+
+/** The URL of claude.ai's chat list for an organisation: what the user saves as `chat_conversations.json`. */
+export function chatListUrl(organizationId: string): string {
+  return `https://claude.ai/api/organizations/${organizationId}/chat_conversations`;
 }
 
 /** The profile imported chats belong to; assistant replies name it in `producedBy`. */
@@ -70,6 +81,8 @@ export interface ImportedChat {
   headMessageId: string | null;
   /** The newest message by time, then id (as `MessageRepo.latestId` picks it): both memory cursors start here. */
   latestMessageId: string | null;
+  /** The claude.ai project the chat was in, from the chat list; null when it wasn't in one or there is no list. */
+  projectId?: string | null;
   /** Only on a published artifact's chat. */
   artifact?: ImportedArtifact;
 }
@@ -131,7 +144,37 @@ export interface ImportPlan {
   artifactChats: ImportedChat[];
   projects: ImportedProject[];
   memory: ImportedMemory;
+  /** claude.ai's memory notes as one chat recall can search, or null when the export has none. */
+  memoryChat: ImportedChat | null;
+  /** Whether claude.ai's chat list came with the export, so chats know their projects. */
+  chatList: boolean;
   stats: ImportStats;
+}
+
+/** What claude.ai's chat list says about one chat. */
+interface Listed {
+  projectId: string | null;
+  leaf: string | null;
+}
+
+/**
+ * claude.ai's chat list by chat id. The saved page is a list of chats (or an
+ * object holding one); each names its project as `project_uuid` (or
+ * `project.uuid`) and its branch as `current_leaf_message_uuid`.
+ */
+function readChatList(raws: unknown[] | undefined): Map<string, Listed> | null {
+  if (!raws || raws.length === 0) return null;
+  const listed = new Map<string, Listed>();
+  for (const raw of raws) {
+    const items = Array.isArray(raw) ? raw : isObj(raw) ? (list(raw['data']).length > 0 ? list(raw['data']) : list(raw['conversations'])) : [];
+    for (const item of items) {
+      const id = isObj(item) ? str(item['uuid']) : null;
+      if (!isObj(item) || !id) continue;
+      const project = isObj(item['project']) ? str(item['project']['uuid']) : null;
+      listed.set(id, { projectId: str(item['project_uuid']) ?? project, leaf: str(item['current_leaf_message_uuid']) });
+    }
+  }
+  return listed;
 }
 
 type Obj = Record<string, unknown>;
@@ -365,8 +408,8 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
   return { parts, content };
 }
 
-/** Builds one conversation's chat, or null when it has no messages (counted). */
-function planConversation(raw: unknown, profile: ImportProfile, stats: ImportStats): ImportedChat | null {
+/** Builds one conversation's chat, or null when it has no messages (counted). `listed` is what claude.ai's chat list says about it, if anything. */
+function planConversation(raw: unknown, profile: ImportProfile, stats: ImportStats, listing: Map<string, Listed> | null): ImportedChat | null {
   stats.conversations++;
   if (!isObj(raw) || !str(raw['uuid']) || !Array.isArray(raw['chat_messages'])) {
     stats.malformedConversations++;
@@ -445,6 +488,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
   stats.messages += messages.length;
   if (branched) stats.branchedChats++;
 
+  const listed = listing?.get(chatId);
   const parentIds = new Set(messages.map((m) => m.parentId));
   const leaves = messages.filter((m) => !parentIds.has(m.id)).sort(byTime);
   const newest = [...messages].sort(byTime).at(-1) ?? null;
@@ -458,7 +502,9 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
     createdAt: chatCreated || (messages[0]?.createdAt ?? 0),
     updatedAt: time(raw['updated_at'], newest?.createdAt ?? chatCreated),
     messages,
-    headMessageId: leaves.at(-1)?.id ?? null,
+    // The branch claude.ai showed, when its chat list says; else the newest.
+    headMessageId: (listed?.leaf && messages.some((m) => m.id === listed.leaf) ? listed.leaf : null) ?? leaves.at(-1)?.id ?? null,
+    projectId: listed?.projectId ?? null,
     latestMessageId: newest?.id ?? null,
   };
 }
@@ -490,8 +536,10 @@ function uniqueName(name: string, taken: Set<string>): string {
 }
 
 interface MemorySource {
+  /** The claude.ai account the memory is from, or null. */
+  account: string | null;
   conversations: string;
-  files: { path: string; content: string }[];
+  files: { path: string; content: string; updatedAt?: number }[];
   byProject: Map<string, string>;
 }
 
@@ -519,16 +567,17 @@ const updatedAtOf = (v: unknown): number => (isObj(v) ? time(v['updated_at'], 0)
 const uuidOf = (v: unknown): string | null => (isObj(v) ? str(v['uuid']) : null);
 
 function readMemories(raws: unknown[]): MemorySource {
-  const source: MemorySource = { conversations: '', files: [], byProject: new Map() };
+  const source: MemorySource = { account: null, conversations: '', files: [], byProject: new Map() };
   for (const raw of firstOfEach(raws, (v) => (isObj(v) ? str(v['account_uuid']) : null))) {
     if (!isObj(raw)) continue;
+    source.account ??= str(raw['account_uuid']);
     const conversations = str(raw['conversations_memory'])?.trim();
     if (conversations) source.conversations = source.conversations ? `${source.conversations}\n\n${conversations}` : conversations;
     for (const f of list(raw['memory_files'])) {
       if (!isObj(f)) continue;
       const path = str(f['path']);
       const content = str(f['content']);
-      if (path && content && content.trim()) source.files.push({ path: path.startsWith('/') ? path : `/${path}`, content });
+      if (path && content && content.trim()) source.files.push({ path: path.startsWith('/') ? path : `/${path}`, content, updatedAt: time(f['updated_at'], 0) });
     }
     const projects = raw['project_memories'];
     if (isObj(projects)) {
@@ -673,6 +722,67 @@ function aboutFiles(files: MemorySource['files']): MemorySource['files'] {
     .sort((a, b) => rank(a.path) - rank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
+/** The title of the chat claude.ai's memory notes are imported into. */
+export const MEMORY_CHAT_TITLE = 'What claude.ai remembered';
+
+/**
+ * claude.ai's memory notes as one chat, a note a message: recall's chat
+ * search finds them (its full-text index covers every chat), they sync like
+ * any chat, and the user can read them in the sidebar. About you and the
+ * learned note hold 4,000 characters each; claude.ai kept far more, and this
+ * keeps all of it within reach without putting it in every prompt. The
+ * summary comes first, then the user, then areas and projects.
+ */
+function planMemoryChat(memory: MemorySource, projects: ImportedProject[], profile: ImportProfile): ImportedChat | null {
+  const nameOf = (id: string): string => projects.find((p) => p.id === id)?.name ?? id.slice(0, 8);
+  const bare = (s: string): string => s.replace(/\.md$/i, '');
+  const label = (path: string): string => {
+    const project = /^\/projects\/([^/]+)\/(.+)$/.exec(path);
+    if (project) return `Project ${nameOf(project[1]!)}: ${bare(project[2]!)}`;
+    const memoryOf = /^\/project-memories\/([^/]+)\.md$/.exec(path);
+    if (memoryOf) return `Project memory: ${nameOf(memoryOf[1]!)}`;
+    const [group, ...rest] = path.slice(1).split('/');
+    if (rest.length === 0) return bare(group!).replace(/^./, (c) => c.toUpperCase());
+    return `${group!.replace(/^./, (c) => c.toUpperCase())}: ${bare(rest.join('/'))}`;
+  };
+  const rank = (path: string): number =>
+    path === '/profile.md' ? 0 : path === '/preferences.md' ? 1 : path.startsWith('/people/') ? 2 : path.startsWith('/topics/') ? 3 : path.startsWith('/areas/') ? 4 : path.startsWith('/projects/') || path.startsWith('/project-memories/') ? 5 : 6;
+  const notes = [
+    ...(memory.conversations ? [{ path: '/conversations-memory.md', label: 'Summary of conversations', content: memory.conversations, updatedAt: 0 }] : []),
+    ...[...memory.files, ...[...memory.byProject].map(([id, body]) => ({ path: `/project-memories/${id}.md`, content: body, updatedAt: 0 }))]
+      .sort((a, b) => rank(a.path) - rank(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+      .map((f) => ({ ...f, label: label(f.path), updatedAt: f.updatedAt ?? 0 })),
+  ];
+  if (notes.length === 0) return null;
+
+  const chatId = `claude-memory-${memory.account ?? 'export'}`;
+  const newest = Math.max(...notes.map((n) => n.updatedAt));
+  const producedBy: ProducedBy = { profileId: profile.id, profileName: CLAUDE_REPLY_NAME, connectionId: profile.connectionId, modelId: CLAUDE_REPLY_MODEL };
+  const messages: CanonMessage[] = notes.map((n, i) => ({
+    id: `${chatId}:${n.path}`,
+    chatId,
+    parentId: null,
+    role: 'assistant',
+    parts: [{ type: 'text', text: `**${n.label}**\n\n${n.content.trim()}` }],
+    status: 'complete',
+    error: null,
+    producedBy,
+    // Notes without a date sit at the newest one's, in order: the order is the chain's, not the clock's.
+    createdAt: (n.updatedAt || newest) + i,
+  }));
+  messages.forEach((m, i) => (m.parentId = i === 0 ? null : messages[i - 1]!.id));
+  const last = messages.at(-1)!;
+  return {
+    id: chatId,
+    title: MEMORY_CHAT_TITLE,
+    createdAt: newest,
+    updatedAt: newest,
+    messages,
+    headMessageId: last.id,
+    latestMessageId: [...messages].sort(byTime).at(-1)!.id,
+  };
+}
+
 function planMemory(memory: MemorySource): ImportedMemory {
   const conversations = memory.conversations ? [section('What claude.ai remembered from conversations', memory.conversations)] : [];
   const pick = (path: string) => memory.files.filter((f) => f.path === path).map((f) => section(f.path, f.content));
@@ -692,8 +802,9 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
     throw new ClaudeExportError("This doesn't look like a claude.ai export: conversations.json isn't a list of conversations.");
   }
   const stats = emptyStats();
+  const listing = readChatList(files.conversationList);
   const chats = firstOfEach(files.conversations, uuidOf, updatedAtOf)
-    .map((c) => planConversation(c, profile, stats))
+    .map((c) => planConversation(c, profile, stats, listing))
     .filter((c): c is ImportedChat => c !== null);
   const memory = readMemories(files.memories);
   const projects = firstOfEach(files.projects, uuidOf, updatedAtOf)
@@ -702,5 +813,5 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
   const artifactChats = firstOfEach(files.artifacts, (a) => (isObj(a.meta) ? str(a.meta['id']) : null), (a) => updatedAtOf(a.meta))
     .map((a) => planArtifact(a, profile, stats))
     .filter((c): c is ImportedChat => c !== null);
-  return { chats, artifactChats, projects, memory: planMemory(memory), stats };
+  return { chats, artifactChats, projects, memory: planMemory(memory), memoryChat: planMemoryChat(memory, projects, profile), chatList: listing !== null, stats };
 }

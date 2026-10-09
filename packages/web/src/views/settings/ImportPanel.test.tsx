@@ -2,11 +2,20 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImportPreview, ImportReport, ImportStatus } from '@grunt/core/types/claude-import.js';
+import type { Project } from '@grunt/core/ports/store.js';
 import type { Connection, Profile } from '@grunt/core/types/config.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../state/api.js')>();
-  return { ...actual, api: { claudeImport: { status: vi.fn(), preview: vi.fn(), start: vi.fn() }, memory: { global: { saveAbout: vi.fn() } } } };
+  return {
+    ...actual,
+    api: {
+      claudeImport: { status: vi.fn(), preview: vi.fn(), start: vi.fn() },
+      memory: { global: { saveAbout: vi.fn() } },
+      projects: { list: vi.fn(async () => []) },
+      chats: { list: vi.fn(async () => []) },
+    },
+  };
 });
 
 import { ApiError, api } from '../../state/api.js';
@@ -42,7 +51,9 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
   return {
     folder: '/exports/claude',
     sources: ['conversations-000.zip: conversations.json'],
-    chats: { total: 442, existing: 2, newer: 1, messages: 6267, branched: 24 },
+    chats: { total: 442, existing: 2, newer: 1, filed: 0, messages: 6267, branched: 24 },
+    chatList: { found: false, url: 'https://claude.ai/api/organizations/org-1/chat_conversations' },
+    cowork: null,
     emptyChats: 44,
     artifacts: [{ title: 'Flank Wear', versions: 2, existing: false }],
     projects: [
@@ -52,6 +63,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     projectsSkipped: 5,
     memory: { about: true, aboutTaken: false, note: true, projectNotes: 2, files: 49 },
     memoryModel: 'Claude Opus',
+    memoryChat: { title: 'What claude.ai remembered', notes: 49, existing: false },
     filesNotIncluded: 672,
     dropped: {},
     importFolder: '/data/grunt.db.imported/claude',
@@ -61,7 +73,8 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
 
 function report(over: Partial<ImportReport> = {}): ImportReport {
   return {
-    chats: { imported: 440, existing: 2, newer: 0, messages: 6200, failed: [] },
+    chats: { imported: 440, existing: 2, newer: 0, filed: 0, messages: 6200, failed: [] },
+    cowork: null,
     emptyChats: 44,
     artifacts: { imported: 1, existing: 0, failed: [] },
     projects: { created: ['Home Stuff'], merged: ['PhD'], existing: [], failed: [], skipped: 5 },
@@ -69,6 +82,7 @@ function report(over: Partial<ImportReport> = {}): ImportReport {
     fileErrors: [{ title: '/people/x.md', error: 'EACCES' }],
     memory: { model: 'Claude Opus', about: { status: 'drafted', text: 'I run a small company.' }, note: { status: 'failed', reason: 'cut off' }, projects: [] },
     memoryFiles: '/data/grunt.db.imported/claude/memory',
+    memoryChat: { title: 'What claude.ai remembered', notes: 49, imported: true },
     filesNotIncluded: 672,
     dropped: {},
     importFolder: '/data/grunt.db.imported/claude',
@@ -120,6 +134,7 @@ describe('ImportPanel', () => {
     expect(panel).toHaveTextContent('Project “Home Stuff”: new, 2 docs, instructions, memory');
     expect(panel).toHaveTextContent('Project “PhD”: merges into your project “PhD”, memory');
     expect(panel).toHaveTextContent("672 images and files aren’t in the export");
+    expect(panel).toHaveTextContent('claude.ai’s 49 memory notes go into a chat of their own, “What claude.ai remembered”, which recall can search');
     expect(screen.getByLabelText('Profile for imported chats')).toHaveValue('opus');
     expect(screen.queryByRole('option', { name: 'Old' })).toBeNull();
     expect(screen.getByLabelText('Condense memory')).toBeChecked();
@@ -162,15 +177,16 @@ describe('ImportPanel', () => {
     await user.click(screen.getByLabelText('Condense memory'));
     await user.click(screen.getByRole('button', { name: 'Import 440 chats' }));
 
-    expect(claudeImport.start).toHaveBeenCalledWith({ folder: '/exports/claude', profileId: 'qwen', memory: false });
+    expect(claudeImport.start).toHaveBeenCalledWith({ folder: '/exports/claude', profileId: 'qwen', memory: false, cowork: false, spaces: {} });
     expect(await screen.findByRole('status')).toHaveTextContent('Importing chats… 10 of 451');
     expect(screen.queryByLabelText('Export folder')).toBeNull();
 
-    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, newer: 0, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
+    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, newer: 0, filed: 0, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
     const reportView = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
     expect(reportView).toHaveTextContent('Import finished');
     expect(reportView).toHaveTextContent('Imported 439 chats (6,200 messages); 2 were already here');
     expect(reportView).toHaveTextContent('New projects: Home Stuff');
+    expect(reportView).toHaveTextContent('claude.ai’s 49 memory notes are in the chat “What claude.ai remembered”, which recall searches');
     expect(reportView).toHaveTextContent('Merged into your projects: PhD');
     expect(reportView).toHaveTextContent('Home Stuff’s docs are in /data/grunt.db.imported/claude/Home Stuff-019f3c80, attached to the project read-only; its chats see them once the project or chat has a workspace folder');
     expect(reportView).toHaveTextContent('Memory (with Claude Opus): About you drafted, below; learned note failed: cut off');
@@ -201,5 +217,71 @@ describe('ImportPanel', () => {
     expect(view).toHaveTextContent('The import stopped');
     expect(view).toHaveTextContent('Grunt was shut down during the import.');
     await waitFor(() => expect(screen.getByLabelText('Export folder')).toBeInTheDocument());
+  });
+});
+
+describe("ImportPanel: claude.ai's chat list and Cowork", () => {
+  async function checkFolder(over: Partial<ImportPreview>) {
+    claudeImport.preview.mockResolvedValue(preview(over));
+    const user = userEvent.setup();
+    render(<ImportPanel />);
+    await user.type(screen.getByLabelText('Export folder'), '/exports/claude');
+    await user.click(screen.getByRole('button', { name: 'Check folder' }));
+    await screen.findByTestId('import-preview');
+    return user;
+  }
+
+  it('says how to get the chat list when the folder has none, and how many chats it files when it has', async () => {
+    await checkFolder({});
+    expect(screen.getByTestId('chat-list-hint')).toHaveTextContent('open https://claude.ai/api/organizations/org-1/chat_conversations in a browser');
+    cleanup();
+    await checkFolder({ chatList: { found: true, url: null }, chats: { total: 442, existing: 0, newer: 0, filed: 300, messages: 6267, branched: 24 } });
+    expect(screen.queryByTestId('chat-list-hint')).toBeNull();
+    expect(screen.getByTestId('import-preview')).toHaveTextContent('300 chats filed into their projects, from claude.ai’s chat list');
+  });
+
+  it("imports the Cowork sessions when ticked, with each space's chosen project", async () => {
+    useGruntStore.setState({ projects: [{ id: 'proj-phd', name: 'PhD' } as Project, { id: 'proj-personal', name: 'Personal' } as Project] });
+    claudeImport.start.mockResolvedValue({ ...IDLE, state: 'running', phase: 'projects', total: 10 });
+    const user = await checkFolder({
+      chats: { total: 2, existing: 0, newer: 0, filed: 0, messages: 4, branched: 0 },
+      cowork: {
+        root: 'C:/Users/a/AppData/Roaming/Claude/local-agent-mode-sessions',
+        sessions: 29,
+        existing: 0,
+        messages: 728,
+        images: 73,
+        spaces: [
+          { id: 'space-biz', sessions: 7, titles: ['Finance Dept', 'Company Advisor'] },
+          { id: 'space-phd', sessions: 5, titles: ['Chapter 1'] },
+        ],
+      },
+    });
+    const box = screen.getByLabelText('Import Cowork sessions');
+    expect(box).not.toBeChecked();
+    expect(screen.getByTestId('import-preview')).toHaveTextContent('Also import the 29 Cowork sessions on this machine');
+    expect(screen.queryByLabelText('Project for the Cowork space with Finance Dept')).toBeNull();
+    await user.click(box);
+    expect(screen.getByTestId('import-preview')).toHaveTextContent('The space with “Finance Dept”, “Company Advisor” and 5 more goes into');
+    await user.selectOptions(screen.getByLabelText('Project for the Cowork space with Finance Dept'), 'proj-personal');
+    await user.selectOptions(screen.getByLabelText('Project for the Cowork space with Chapter 1'), 'proj-phd');
+    await user.click(screen.getByRole('button', { name: 'Import 31 chats' }));
+    expect(claudeImport.start).toHaveBeenCalledWith({ folder: '/exports/claude', profileId: 'opus', memory: true, cowork: true, spaces: { 'space-biz': 'proj-personal', 'space-phd': 'proj-phd' } });
+  });
+
+  it('reloads the projects and chats once an import it watched ends, and reports the Cowork sessions', async () => {
+    vi.mocked(api.projects.list).mockClear();
+    vi.mocked(api.chats.list).mockClear();
+    let status: ImportStatus = { ...IDLE, state: 'running', phase: 'cowork', done: 5, total: 10, startedAt: 1 };
+    claudeImport.status.mockImplementation(async () => status);
+    render(<ImportPanel />);
+    await screen.findByRole('status');
+    expect(api.projects.list).not.toHaveBeenCalled();
+    status = { ...status, state: 'done', phase: null, done: 10, report: report({ chats: { imported: 2, existing: 0, newer: 0, filed: 1, messages: 4, failed: [] }, cowork: { imported: 29, existing: 0, filed: 12, messages: 728, images: 73, failed: [] } }) };
+    const view = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
+    expect(view).toHaveTextContent('Filed 1 chat into its project');
+    expect(view).toHaveTextContent('Imported 29 Cowork sessions (728 messages, 73 images); 12 filed into projects');
+    await waitFor(() => expect(api.projects.list).toHaveBeenCalled());
+    expect(api.chats.list).toHaveBeenCalled();
   });
 });
