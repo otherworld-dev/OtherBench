@@ -144,8 +144,10 @@ of work landed after that plan closed out:
   downloaded or what is in them, and brings in every conversation with all
   of its branches, the named projects with their instructions and docs, the
   published artifacts (a chat each) and, if the box is ticked, claude.ai's
-  memory condensed by the memory model into About you (only when it is
-  blank), the learned note and each project's note.
+  memory condensed by the memory model into the learned note and each
+  project's note, with an About you drafted for the user to read and save
+  from the report (it goes into every chat as their own words, so the
+  import never saves it).
   `POST /api/import/claude/preview` says what an import would do,
   `POST /api/import/claude` starts it (202) and `GET /api/import/claude`
   reports on it. The mapping is `packages/core/src/domain/claude-import.ts`
@@ -157,7 +159,12 @@ of work landed after that plan closed out:
   from summarising hundreds of old chats. Project docs and every claude.ai
   memory file are written under `<db>.imported/claude/`, and a project's
   docs folder is attached to it read-only. The export has no image or file
-  bytes, so those show as a notice in their message. A real export (486
+  bytes, so those show as a note in their message: bracketed text on the
+  user's side, so an API replay doesn't drop an image-only turn, and a
+  notice on a reply. Tool calls claude.ai left without an id get ones every
+  provider accepts, and `replayToolName` (`engine-aisdk/src/convert.ts`)
+  turns names such as `Home Assistant:ha_get_state` into a form providers
+  take on the way to the model. A real export (486
   conversations, 6,532 messages) imported 442 chats in about 15 seconds,
   plus about 30 seconds for seven memory calls; the other 44 conversations
   came through blank and are left out.
@@ -690,9 +697,12 @@ check, so the desktop's token is no longer the only defence.
 take an absolute folder path, as a chat's workspace does, behind the same
 token, Host and cross-site checks as every other write. Only files whose
 names match the export's parts are read (`conversations.json`,
-`projects/*.json`, `memories/*.json`, `artifacts/<id>/...`), links are
-skipped, every path is checked with `containPath`, and a file over 512 MiB
-or a ZIP over 2 GiB is refused. ZIPs are read in memory by a small reader
+`projects/*.json`, `memories/*.json`, `artifacts/<id>/...`), from files or
+from ZIPs named as the export's are (`conversations-000.zip` and the like;
+any other ZIP in the folder is left alone). Every path is checked with
+`containPath`, so a link is only followed when it leads somewhere inside
+the folder, a file over 512 MiB or a ZIP of 2 GiB is refused, and the parts
+read may add up to 2 GiB and 50,000 at most. ZIPs are read in memory by a small reader
 (`packages/server/src/import/zip.ts`) that refuses ZIP64, encryption and
 anything but stored or deflated entries, never inflates past an entry's
 stated size and checks every CRC. Entry names are only compared, never used
@@ -701,8 +711,11 @@ goes under `<db>.imported/claude/` through `containPath`, with names made
 safe by `safeFileName`. The export's content is treated as untrusted:
 claude.ai's memory notes are fenced as `<claude-notes>` in the condensing
 prompts with the summariser's rules (no instructions, commands or URLs
-copied in), and each answer is checked the same way as a summariser update
-before it is saved.
+copied in). The learned note and project notes are checked the same way as
+a summariser update before they are saved, and both reach chats fenced as
+untrusted background. About you can't be fenced (it is the user's own
+words, which the model follows), so the import only drafts it: the user
+reads it in the report and saves it, or doesn't.
 
 ### Claude Code engine
 
@@ -912,9 +925,20 @@ this on startup.
   doesn't record which project a conversation was in, so every imported
   chat lands in No project and has to be moved by hand.
 - **Importing again with memory ticked folds claude.ai's notes in again.**
-  About you is only written when it is blank, but the learned note and the
-  project notes take whatever the model makes of the notes a second time.
-  Untick the box for a re-run.
+  The learned note and the project notes take whatever the model makes of
+  the notes a second time. Untick the box for a re-run.
+- **A second import doesn't add messages a chat gained on claude.ai since
+  the first.** A chat that is already here is skipped whole, so one carried
+  on in Grunt keeps its own branch; the preview and the report count the
+  chats this affects.
+- **An imported project's docs folder does nothing until there is a
+  workspace.** Extra folders only apply to a chat with a workspace folder
+  (spec 2026-10-07-extra-folders), and imported projects have none, so the
+  report says so for each docs folder.
+- **Reading an export blocks the server for a moment.** `JSON.parse` of the
+  conversations (about 54 MB for 486 conversations) and inflating the ZIPs
+  run on the main thread, about a third of a second here; a much larger
+  export would hold up other requests for longer. A worker would fix it.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 
 ## Deviations from the v2 spec and plan
