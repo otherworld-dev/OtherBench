@@ -229,6 +229,26 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#recall trigger', () => {
+    it('#recall searches with the rest of the line through the real tool, then names the chats it found', async () => {
+      const execute = vi.fn(async () => ({ projects: [], chats: [{ chatId: 'c1', title: 'Staging box', date: '2026-10-01', role: 'user', messageId: 'm1', snippet: 'zebrafish' }] }));
+      const recall: ToolSpec = { name: 'recall', description: '', parameters: {}, risk: 'read', source: 'recall', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall zebrafish host\nthanks', { tools: [recall] })));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'recall', args: { command: 'search', query: 'zebrafish host' } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'recall', isError: false }));
+      expect(events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('')).toBe('I found: Staging box.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('#recall says so when nothing matched, or no recall tool was offered', async () => {
+      const recall: ToolSpec = { name: 'recall', description: '', parameters: {}, risk: 'read', source: 'recall', execute: async () => ({ projects: [], chats: [] }) };
+      const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall nothing', { tools: [recall] }))))).toBe('I found nothing.');
+      const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall nothing')));
+      expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'recall', isError: true }));
+    });
+  });
+
   describe('#slow trigger', () => {
     it('streams exactly 20 chunks at 400ms each', async () => {
       const sleep = fakeSleep();
