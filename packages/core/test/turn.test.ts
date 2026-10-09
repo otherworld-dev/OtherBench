@@ -1597,6 +1597,50 @@ describe('global memory in the system prompt', () => {
     expect(engine.requests[0]!.profile.systemPrompt).toBe('Base.');
   });
 
+  it("holds an active chat's global memory steady, so its prompt cache and Claude Code session survive, and refreshes it once the chat has been quiet", async () => {
+    const QUIET = 5 * 60_000;
+    const { store, engine } = setup('proj', 'one');
+    let t = 1_000_000;
+    const runner = new TurnRunner(store, engine, { now: () => t });
+    store.globalMemory.saveNote(NOTE, 'summariser', null, 1);
+    const first = await turn(runner, {});
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    // Another chat went quiet and the summariser rewrote the note.
+    store.globalMemory.saveNote(NOTE.replace('British English', 'American English'), 'summariser', 'other-chat', 2);
+    t += 60_000;
+    const second = await turn(runner, {}, firstId);
+    const secondId = second.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(secondId)!.status).toBe('complete'));
+    expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
+
+    t += QUIET;
+    await turn(runner, {}, secondId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
+    expect(engine.requests[2]!.profile.systemPrompt).toContain('American English');
+  });
+
+  it("applies the user's own save of About you or the note at once, even while the chat is active", async () => {
+    const { store, engine } = setup('proj', 'one');
+    const runner = new TurnRunner(store, engine, { now: () => 1_000_000 });
+    store.globalMemory.saveAbout('First.', 1);
+    const first = await turn(runner, {});
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    store.globalMemory.saveAbout('Second.', 2);
+    const second = await turn(runner, {}, firstId);
+    const secondId = second.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(secondId)!.status).toBe('complete'));
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('Second.');
+
+    store.globalMemory.saveNote(NOTE, 'user', null, 3);
+    await turn(runner, {}, secondId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
+    expect(engine.requests[2]!.profile.systemPrompt).toContain('- British English');
+  });
+
   it('reads About you and the note fresh for every turn', async () => {
     const { store, engine, runner } = setup('proj', 'one');
     store.globalMemory.saveAbout('First.');

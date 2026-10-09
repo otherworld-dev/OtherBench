@@ -10,9 +10,9 @@ import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
-import { hasMemoryContent, projectMemoryPrompt } from './memory.js';
+import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { projectInstructionsPrompt } from './projects.js';
-import { aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
+import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
@@ -152,6 +152,9 @@ export interface TurnRunnerOptions {
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
 
+/** How long a chat must be quiet before its global memory block is rebuilt (see `globalMemoryBlock`). */
+const GLOBAL_BLOCK_STEADY_MS = MEMORY_QUIET_MS;
+
 /** What a chat's unresolved folder means for a turn, in words for the error shown on the reply. */
 export function workspaceUnresolvedMessage(status: Extract<WorkspaceStatus, { status: 'unresolved' }>): string {
   switch (status.reason) {
@@ -228,6 +231,8 @@ export class TurnRunner {
   private readonly pathExists: (path: string) => boolean;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
+  /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
+  private readonly globalBlocks = new Map<string, { block: string | null; at: number; userStamp: string }>();
 
   constructor(
     private readonly store: Store,
@@ -750,19 +755,46 @@ export class TurnRunner {
    */
   private withGlobalMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
     if (profile.useGlobalMemory === false) return profile;
+    const block = this.globalMemoryBlock(chat);
+    if (!block) return profile;
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
+  /**
+   * The chat's global memory block, held steady while the chat is active.
+   * The summariser rewrites the note and project notes (their current focus
+   * is in the index) a few minutes after any chat goes quiet; letting that
+   * change an active chat's system prompt would throw away its prompt cache
+   * and restart its Claude Code process. So the block a chat last got is
+   * reused until the chat has been quiet for `GLOBAL_BLOCK_STEADY_MS` (its
+   * cache is cold by then anyway). The user's own saves of About you or the
+   * note apply at once.
+   */
+  private globalMemoryBlock(chat: Chat | null): string | null {
     const memory = this.store.globalMemory.get();
+    const userStamp = `${memory.aboutUpdatedAt}:${memory.noteUpdatedBy === 'user' ? memory.noteUpdatedAt : 0}`;
+    const key = chat?.id ?? '';
+    const now = this.now();
+    const kept = this.globalBlocks.get(key);
+    if (kept && kept.userStamp === userStamp && now - kept.at < GLOBAL_BLOCK_STEADY_MS) {
+      kept.at = now;
+      return kept.block;
+    }
     const index = projectIndexPrompt(
-      this.store.projects.list().map((p) => ({
-        name: p.name,
-        description: p.description,
-        currentFocus: currentFocusLine(this.store.projectMemory.get(p.id)?.body ?? ''),
-        current: p.id === chat?.projectId,
-      }))
+      this.store.projects
+        .list()
+        .slice(0, PROJECT_INDEX_MAX)
+        .map((p) => ({
+          name: p.name,
+          description: p.description,
+          currentFocus: currentFocusLine(this.store.projectMemory.get(p.id)?.body ?? ''),
+          current: p.id === chat?.projectId,
+        }))
     );
     const blocks = [aboutUserPrompt(memory.about), globalMemoryPrompt(memory.note), index].filter((b): b is string => b !== null);
-    if (blocks.length === 0) return profile;
-    const block = blocks.join('\n\n');
-    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+    const block = blocks.length === 0 ? null : blocks.join('\n\n');
+    this.globalBlocks.set(key, { block, at: now, userStamp });
+    return block;
   }
 
   /**
