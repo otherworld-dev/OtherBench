@@ -179,13 +179,11 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
-    // Recall (spec 2026-10-09-recall-design) only reads the user's own chats
-    // and project notes, never one marked "Don't add to memory", so like
-    // artifacts it never needs a card; the profile's "Search past chats"
-    // switch (checked above) is how it's turned off.
-    if (tool.source === 'recall') {
-      return { kind: 'allow', grantedBy: 'policy' };
-    }
+    // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
+    // user's OTHER chats, so text injected into this one could use it to
+    // reach them. It falls through to the grants, and the card's "for this
+    // chat" covers the rest of the chat. It never takes the ask-on-mutate
+    // read pass below, which only fs, agent and mcp tools get.
 
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
@@ -220,7 +218,7 @@ export class PermissionBroker {
       risk: tool.risk,
       source: tool.source,
       args,
-      summary: summarize(tool, args),
+      summary: tool.source === 'recall' ? this.recallSummary(args) : summarize(tool, args),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
@@ -315,6 +313,20 @@ export class PermissionBroker {
       constraint: choice.constraint,
       expiresAt: null,
     });
+  }
+
+  /** What a recall call will look at, for its card: the query, or the chat's title, or the project. */
+  private recallSummary(args: unknown): string {
+    const command = stringField(args, 'command');
+    const chatId = stringField(args, 'chatId');
+    const project = stringField(args, 'project');
+    if (command === 'search') return `Search past chats for "${stringField(args, 'query') ?? ''}"`;
+    if (command === 'read' && chatId !== null) {
+      const title = this.store.chats.get(chatId)?.title;
+      return title !== undefined ? `Read the chat "${title}"` : `Read a chat (${chatId})`;
+    }
+    if (command === 'read' && project !== null) return `Read the project "${project}"`;
+    return `recall: ${command ?? '?'}`;
   }
 
   /**

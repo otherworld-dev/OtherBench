@@ -760,7 +760,7 @@ describe('ClaudeCodeChatEngine recall', () => {
     e.dispose();
   });
 
-  it("checks its own server's recall tool as Grunt's (no card), a look-alike as an MCP tool, and reports it as `recall`", async () => {
+  it("checks its own server's recall tool as Grunt's, a look-alike as an MCP tool, and reports it as `recall`", async () => {
     const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
     const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
     const { query } = fakeQuery(async function* ({ options }) {

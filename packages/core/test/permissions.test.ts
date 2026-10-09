@@ -87,13 +87,32 @@ describe('PermissionBroker', () => {
     expect(broker.decide(artifact, {}, { ...always, artifacts: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
   });
 
-  it('allows recall calls without a card, even under "always ask", unless the profile turns Search past chats off', () => {
-    const broker = new PermissionBroker(new InMemoryStore());
+  it('asks before recall first reads other chats in a chat, even under "ask on mutate", and "for this chat" covers the rest of that chat', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
+    const lenient = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const };
+    const recall = { name: 'recall', description: '', parameters: {}, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const first = broker.decide(recall, { command: 'search', query: 'api key' }, lenient, ctx);
+    expect(first).toMatchObject({ kind: 'ask', request: { toolName: 'recall', source: 'recall', summary: 'Search past chats for "api key"' } });
+    broker.resolve((first as { request: { id: string } }).request.id, { choice: 'chat' });
+    expect(broker.decide(recall, { command: 'read', chatId: 'x' }, lenient, ctx)).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    expect(broker.decide(recall, { command: 'search', query: 'x' }, lenient, { ...ctx, chatId: 'c2' })).toMatchObject({ kind: 'ask' });
+    expect(broker.decide(recall, {}, { ...lenient, recall: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Searching past chats is turned off for this profile.' });
+  });
+
+  it("names what recall will read on its card: the query, or the chat's title, or the project", () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'c9', title: 'Staging box', profileId: 'p', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const broker = new PermissionBroker(store);
     const ctx = { chatId: 'c1', messageId: 'm1', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
     const always = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
     const recall = { name: 'recall', description: '', parameters: {}, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
-    expect(broker.decide(recall, { command: 'search', query: 'x' }, always, ctx)).toEqual({ kind: 'allow', grantedBy: 'policy' });
-    expect(broker.decide(recall, {}, { ...always, recall: false }, ctx)).toMatchObject({ kind: 'deny', reason: 'Searching past chats is turned off for this profile.' });
+    const summary = (args: unknown) => (broker.decide(recall, args, always, ctx) as { request: { summary: string } }).request.summary;
+    expect(summary({ command: 'read', chatId: 'c9', messageId: 'm' })).toBe('Read the chat "Staging box"');
+    expect(summary({ command: 'read', chatId: 'gone' })).toBe('Read a chat (gone)');
+    expect(summary({ command: 'read', project: 'Website' })).toBe('Read the project "Website"');
+    expect(summary({ command: 'forget' })).toBe('recall: forget');
   });
 
   it("gives no Claude Code tool the artifact tool's pass by its name: any MCP server can take a name", () => {
