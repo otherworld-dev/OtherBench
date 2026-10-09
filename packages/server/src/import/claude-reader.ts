@@ -9,18 +9,25 @@ import { listZipEntries, readZipEntry, ZipError } from './zip.js';
  * §1): the ZIPs as downloaded from the export email, what's in them once
  * extracted, or a mix. Only the parts the import uses are read, by name:
  * `conversations.json`, `projects/*.json`, `memories/*.json` and
- * `artifacts/<id>/artifact.json` with its `versions/*.html`. ZIPs are read in
- * memory; nothing is written. Links are skipped and every path is checked
- * with `containPath`, so nothing outside the folder is read.
+ * `artifacts/<id>/artifact.json` with its `versions/*.html`, from files or
+ * from the export's own ZIPs (`conversations-000.zip` and the like; any other
+ * ZIP is left alone). ZIPs are read in memory; nothing is written. Every path
+ * is checked with `containPath`, so a link leading outside the folder is
+ * never followed, and what is read is capped in size and number.
  */
 
 /** The largest single file read, extracted or in a ZIP. */
 export const MAX_EXPORT_FILE_BYTES = 512 * 1024 * 1024;
-/** The largest ZIP read whole into memory. */
-export const MAX_EXPORT_ZIP_BYTES = 2 * 1024 * 1024 * 1024;
+/** The largest ZIP read whole into memory: under Node's 2 GiB limit for one read. */
+export const MAX_EXPORT_ZIP_BYTES = 2 * 1024 * 1024 * 1024 - 1;
+/** The most the export's parts may add up to once read and decompressed, and how many of them there may be. */
+export const MAX_EXPORT_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_PARTS = 50_000;
 /** How deep the folder is searched, and how many files at most. */
 const MAX_DEPTH = 6;
 const MAX_FILES = 20_000;
+/** The ZIPs a claude.ai export arrives as, e.g. `conversations-000.zip` (a browser may add " (1)"); other ZIPs in the folder are left alone. */
+const EXPORT_ZIP = /^(conversations|projects|memories|frames)-\d+( \(\d+\))?\.zip$/i;
 
 export interface ClaudeExportRead {
   files: ClaudeExportFiles;
@@ -50,10 +57,21 @@ class Collector {
   readonly artifactMeta = new Map<string, unknown>();
   readonly artifactHtml = new Map<string, Record<string, string>>();
   readonly sources: string[] = [];
+  private bytes = 0;
+  private parts = 0;
+
+  /** Counts a part about to be read, refusing an export that adds up to more than the import holds in memory. */
+  admit(size: number): void {
+    this.bytes += size;
+    this.parts += 1;
+    if (this.bytes > MAX_EXPORT_TOTAL_BYTES) throw new ClaudeExportError('The export is too big to import: its parts add up to more than 2 GiB.');
+    if (this.parts > MAX_PARTS) throw new ClaudeExportError(`The export has more than ${MAX_PARTS.toLocaleString('en-US')} parts, which is more than the import reads.`);
+  }
 
   add(part: Part, source: string, content: Buffer): void {
     if (part.kind === 'artifact-html') {
-      const html = this.artifactHtml.get(part.artifact) ?? {};
+      // No prototype: a version id such as "constructor" is just a key.
+      const html = this.artifactHtml.get(part.artifact) ?? (Object.create(null) as Record<string, string>);
       html[part.version] = content.toString('utf8');
       this.artifactHtml.set(part.artifact, html);
       return;
@@ -84,17 +102,39 @@ class Collector {
   }
 }
 
-/** Every regular file under `root` (no links), as paths relative to it with `/` separators. */
+/** What `rel` under `root` is once links are followed, or null when it leads outside `root` or can't be read. */
+async function kindOf(root: string, rel: string): Promise<'file' | 'dir' | null> {
+  try {
+    const info = await stat(containPath(root, rel));
+    return info.isFile() ? 'file' : info.isDirectory() ? 'dir' : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every file under `root`, as paths relative to it with `/` separators.
+ * Links (on Windows, any reparse point, which includes OneDrive's files) are
+ * followed only when they lead somewhere inside `root`. A folder that can't
+ * be read is passed over; only `root` itself must be readable.
+ */
 async function listFiles(root: string): Promise<string[]> {
   const found: string[] = [];
   const walk = async (rel: string, depth: number): Promise<void> => {
-    const entries = await readdir(rel ? join(root, rel) : root, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await readdir(rel ? join(root, rel) : root, { withFileTypes: true });
+    } catch (err) {
+      if (rel) return;
+      throw new ClaudeExportError(`The folder can't be read: ${err instanceof Error ? err.message : String(err)}`);
+    }
     for (const e of entries) {
       const child = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isFile()) {
+      const kind = e.isFile() ? 'file' : e.isDirectory() ? 'dir' : await kindOf(root, child);
+      if (kind === 'file') {
         if (found.length >= MAX_FILES) throw new ClaudeExportError(`The folder has more than ${MAX_FILES.toLocaleString('en-US')} files in it. Choose the folder that holds just the export.`);
         found.push(child);
-      } else if (e.isDirectory() && depth < MAX_DEPTH) {
+      } else if (kind === 'dir' && depth < MAX_DEPTH) {
         await walk(child, depth + 1);
       }
     }
@@ -124,13 +164,14 @@ export async function readClaudeExport(folder: string): Promise<ClaudeExportRead
       throw err;
     }
     if (rel.toLowerCase().endsWith('.zip')) {
-      await readZip(path, rel, collector);
+      if (EXPORT_ZIP.test(basename(rel))) await readZip(path, rel, collector);
       continue;
     }
     const part = classifyExportPath(rel);
     if (!part) continue;
     const size = (await stat(path)).size;
     if (size > MAX_EXPORT_FILE_BYTES) throw new ClaudeExportError(`${rel} is too big to import (${size.toLocaleString('en-US')} bytes).`);
+    collector.admit(size);
     collector.add(part, rel, await readFile(path));
   }
 
@@ -149,6 +190,7 @@ async function readZip(path: string, rel: string, collector: Collector): Promise
     for (const entry of listZipEntries(zip)) {
       const part = classifyExportPath(entry.name);
       if (!part) continue;
+      collector.admit(entry.size);
       collector.add(part, `${rel}: ${entry.name}`, readZipEntry(zip, entry, MAX_EXPORT_FILE_BYTES));
     }
   } catch (err) {

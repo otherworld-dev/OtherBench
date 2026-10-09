@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -70,6 +70,32 @@ describe('readClaudeExport', () => {
     expect(read.files.conversations).toEqual(expect.arrayContaining([{ uuid: 'c1', chat_messages: [] }, { uuid: 'c2', chat_messages: [] }]));
     expect(read.files.projects).toEqual([{ uuid: 'p1' }]);
     expect(read.files.artifacts).toEqual([{ meta: { id: 'a1' }, html: { v1: '<p>one</p>' } }]);
+  });
+
+  it("leaves alone ZIPs that aren't the export's, even unreadable ones", async () => {
+    await put('conversations.json', conversations);
+    await put('holiday-photos.zip', Buffer.from('not a zip'));
+    await put('backup-000.zip', Buffer.from('not a zip either'));
+    await put('conversations-000 (1).zip', makeZip([{ name: 'conversations.json', content: JSON.stringify([{ uuid: 'c2', chat_messages: [] }]) }]));
+    const read = await readClaudeExport(dir);
+    expect(read.files.conversations).toHaveLength(2);
+  });
+
+  it('follows a link only when it leads somewhere inside the folder', async () => {
+    const outside = await mkdtemp(join(tmpdir(), 'grunt-claude-outside-'));
+    try {
+      await mkdir(join(outside, 'projects'));
+      await writeFile(join(outside, 'projects', 'secret.json'), '{"uuid":"outside"}');
+      await put('conversations.json', conversations);
+      await put('real/projects/p1.json', '{"uuid":"p1"}');
+      await symlink(outside, join(dir, 'away'), 'junction');
+      await symlink(join(dir, 'real'), join(dir, 'here'), 'junction');
+      const read = await readClaudeExport(dir);
+      // real/ and the link to it, which the planner reads as one project; never the folder outside.
+      expect(read.files.projects).toEqual([{ uuid: 'p1' }, { uuid: 'p1' }]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('says what is wrong when the folder is missing, not a folder, relative or has no conversations', async () => {

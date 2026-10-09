@@ -7,6 +7,9 @@ export type ImportPhase = 'reading' | 'chats' | 'artifacts' | 'projects' | 'memo
 
 export type MemoryOutcome = { status: 'saved' } | { status: 'skipped' | 'failed'; reason: string };
 
+/** About you is drafted, not saved: it goes into every chat as the user's own words, so the user reads it first. */
+export type AboutOutcome = { status: 'drafted'; text: string } | { status: 'skipped' | 'failed'; reason: string };
+
 export interface ImportFailure {
   title: string;
   error: string;
@@ -16,11 +19,12 @@ export interface ImportPreview {
   folder: string;
   /** The files the conversations and memory were read from. */
   sources: string[];
-  chats: { total: number; existing: number; messages: number; branched: number };
+  /** `newer`: already imported, with messages since that the import won't add. */
+  chats: { total: number; existing: number; newer: number; messages: number; branched: number };
   /** Conversations with nothing in them, left out. */
   emptyChats: number;
   artifacts: { title: string; versions: number; existing: boolean }[];
-  projects: { name: string; action: 'create' | 'merge' | 'existing'; mergeInto: string | null; docs: number; hasInstructions: boolean; hasMemory: boolean }[];
+  projects: { id: string; name: string; action: 'create' | 'merge' | 'existing'; mergeInto: string | null; docs: number; hasInstructions: boolean; hasMemory: boolean }[];
   projectsSkipped: number;
   memory: { about: boolean; aboutTaken: boolean; note: boolean; projectNotes: number; files: number };
   /** The profile that would condense memory, or null when none can. */
@@ -32,13 +36,17 @@ export interface ImportPreview {
 }
 
 export interface ImportReport {
-  chats: { imported: number; existing: number; messages: number; failed: ImportFailure[] };
+  /** `newer`: already imported, with messages since that weren't added. */
+  chats: { imported: number; existing: number; newer: number; messages: number; failed: ImportFailure[] };
   emptyChats: number;
   artifacts: { imported: number; existing: number; failed: ImportFailure[] };
   projects: { created: string[]; merged: string[]; existing: string[]; failed: ImportFailure[]; skipped: number };
-  docs: { written: number; folders: { project: string; path: string; attached: boolean }[] };
+  /** `workspace`: whether the project has a workspace folder, without which its chats can't see the docs folder. */
+  docs: { written: number; folders: { project: string; path: string; attached: boolean; workspace: boolean }[] };
+  /** Docs and memory files that couldn't be written. */
+  fileErrors: ImportFailure[];
   /** Null when memory was switched off. */
-  memory: { model: string | null; about: MemoryOutcome; note: MemoryOutcome; projects: { name: string; outcome: MemoryOutcome }[] } | null;
+  memory: { model: string | null; about: AboutOutcome; note: MemoryOutcome; projects: { name: string; outcome: MemoryOutcome }[] } | null;
   /** Where claude.ai's memory files were kept, or null when there were none. */
   memoryFiles: string | null;
   filesNotIncluded: number;

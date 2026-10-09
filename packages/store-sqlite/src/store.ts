@@ -83,7 +83,8 @@ export class SqliteStore implements Store {
       this.db.exec('COMMIT');
       return result;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      // SQLite may have rolled back already (a full disk, an I/O error): a second ROLLBACK would hide `err`.
+      if (this.db.isTransaction) this.db.exec('ROLLBACK');
       throw err;
     }
   }

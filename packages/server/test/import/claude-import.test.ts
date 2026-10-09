@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -136,7 +136,7 @@ describe('ClaudeImportService: chats', () => {
   it('imports every conversation with its messages, branches, times and memory cursors', async () => {
     const status = await runImport(makeService());
     expect(status).toMatchObject({ state: 'done', done: 2, total: 2, error: null });
-    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, messages: 5, failed: [] });
+    expect(status.report!.chats).toEqual({ imported: 2, existing: 0, newer: 0, messages: 5, failed: [] });
     expect(status.report!.emptyChats).toBe(1);
 
     const chat = store.chats.get('c1')!;
@@ -152,8 +152,17 @@ describe('ClaudeImportService: chats', () => {
   it('skips chats already imported on a second run', async () => {
     await runImport(makeService());
     const again = await runImport(makeService());
-    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, messages: 0, failed: [] });
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 0, messages: 0, failed: [] });
     expect(store.chats.list()).toHaveLength(2);
+  });
+
+  it('counts, without adding, messages a chat gained on claude.ai since it was imported', async () => {
+    await runImport(makeService());
+    (exportFiles.conversations as Record<string, unknown>[])[1]!['chat_messages'] = [message('u2', 'human', CLAUDE_ROOT_PARENT, 4), message('a3', 'assistant', 'u2', 5), message('u4', 'human', 'a3', 6)];
+    expect((await makeService().preview(root)).chats).toMatchObject({ total: 2, existing: 2, newer: 1 });
+    const again = await runImport(makeService());
+    expect(again.report!.chats).toEqual({ imported: 0, existing: 2, newer: 1, messages: 0, failed: [] });
+    expect(store.messages.get('u4')).toBeNull();
   });
 
   it('rolls back a chat that fails part-way, says so, and carries on with the rest', async () => {
@@ -239,10 +248,33 @@ describe('ClaudeImportService: projects and files', () => {
 
     const folder = join(root, 'imported', 'claude', 'Home Stuff-019f3c80');
     expect(await readFile(join(folder, 'shed-plan.md'), 'utf8')).toBe('# Shed');
-    expect(status.report!.docs).toEqual({ written: 1, folders: [{ project: 'Home Stuff', path: expect.stringContaining('Home Stuff-019f3c80'), attached: true }] });
+    expect(status.report!.docs).toEqual({ written: 1, folders: [{ project: 'Home Stuff', path: expect.stringContaining('Home Stuff-019f3c80'), attached: true, workspace: false }] });
+    expect(status.report!.fileErrors).toEqual([]);
     const folders = store.projects.get('019f3c80-aaaa')!.folders!;
     expect(folders).toHaveLength(1);
     expect(folders[0]).toMatchObject({ access: 'read', workspace: { kind: 'machine', nodeId: store.nodes.self().id } });
+  });
+
+  it('keeps two claude.ai projects with one name apart, rather than merging the second into the first', async () => {
+    exportFiles.projects = [
+      { uuid: 'aaaa1111-x', name: 'Notes', prompt_template: 'A.', docs: [] },
+      { uuid: 'bbbb2222-y', name: 'notes', prompt_template: 'B.', docs: [] },
+    ];
+    expect((await makeService().preview(root)).projects.map((p) => p.action)).toEqual(['create', 'create']);
+    const status = await runImport(makeService());
+    expect(status.report!.projects.created).toEqual(['Notes', 'notes']);
+    expect(store.projects.get('aaaa1111-x')!.instructions).toBe('A.');
+    expect(store.projects.get('bbbb2222-y')!.instructions).toBe('B.');
+  });
+
+  it('reports a doc it could not write and carries on', async () => {
+    // A folder where the doc should go makes its write fail.
+    await mkdir(join(root, 'imported', 'claude', 'Home Stuff-019f3c80', 'shed-plan.md'), { recursive: true });
+    const status = await runImport(makeService());
+    expect(status.state).toBe('done');
+    expect(status.report!.docs.written).toBe(0);
+    expect(status.report!.fileErrors).toEqual([{ title: 'Home Stuff: shed-plan.md', error: expect.any(String) }]);
+    expect(status.report!.projects.created).toContain('Home Stuff');
   });
 
   it('on a second run finds its own projects by id and attaches the docs folder only once', async () => {
@@ -273,30 +305,46 @@ describe('ClaudeImportService: memory', () => {
     exportFiles.memories = [{ account_uuid: 'acc', conversations_memory: 'Lives in Wales.', memory_files: [{ path: '/preferences.md', content: 'British spelling.' }], project_memories: { p1: 'Raised beds.' } }];
   });
 
-  it('writes About you, the learned note and the project note with the memory model', async () => {
+  it('drafts About you for the user to accept, and saves the learned note and the project note', async () => {
     const status = await runImport(makeService(), { memory: true });
     expect(status.report!.memory).toEqual({
       model: 'Claude Opus',
-      about: { status: 'saved' },
+      about: { status: 'drafted', text: 'I live in Wales and run a small company.' },
       note: { status: 'saved' },
       projects: [{ name: 'Garden', outcome: { status: 'saved' } }],
     });
-    expect(store.globalMemory.get()).toMatchObject({ about: 'I live in Wales and run a small company.', note: GLOBAL_NOTE, noteUpdatedBy: 'summariser' });
+    // About you goes into every chat as the user's own words, so it is never saved without them.
+    expect(store.globalMemory.get()).toMatchObject({ about: '', note: GLOBAL_NOTE, noteUpdatedBy: 'summariser' });
     expect(store.projectMemory.get('p1')!.body).toBe(PROJECT_NOTE);
     expect(requests.map((r) => r.purpose)).toEqual(['utility', 'utility', 'utility']);
     expect(promptOf(requests[2]!)).toContain('Raised beds.');
     expect(status).toMatchObject({ done: 4, total: 4 });
   });
 
-  it('leaves About you alone when it has text, and records a rejected note without stopping', async () => {
+  it('drafts About you even when it has text, leaving it as it is, and records a rejected note without stopping', async () => {
     store.globalMemory.saveAbout('Written by me.');
     respond = (req) => (promptOf(req).includes('lasting facts about the user') ? reply('no headings at all') : goodModel(req));
     const status = await runImport(makeService(), { memory: true });
     const memory = status.report!.memory!;
-    expect(memory.about).toEqual({ status: 'skipped', reason: 'About you already has text, so it was left as it is.' });
+    expect(memory.about.status).toBe('drafted');
     expect(memory.note.status).toBe('failed');
     expect(memory.projects[0]!.outcome).toEqual({ status: 'saved' });
     expect(store.globalMemory.get()).toMatchObject({ about: 'Written by me.', note: '' });
+  });
+
+  it('never starts a memory call still queued when Grunt shuts down', async () => {
+    const queue = new MemoryQueue();
+    let release!: () => void;
+    // A summariser call holds the queue while the import's calls wait behind it.
+    void queue.add(() => new Promise<void>((r) => (release = r)));
+    const service = makeService({ queue });
+    await service.start({ folder: root, profileId: 'claude', memory: true });
+    await new Promise((r) => setTimeout(r, 20));
+    service.dispose();
+    release();
+    await service.idle();
+    expect(requests).toHaveLength(0);
+    expect(service.status().state).toBe('failed');
   });
 
   it("doesn't save a condensed note with nothing in it", async () => {
