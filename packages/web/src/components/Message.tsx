@@ -407,6 +407,9 @@ export function Message({
         </div>
       )}
 
+      {/* Notices on the user side: an imported message's files the claude.ai export didn't include, say. */}
+      {isUser && !editing && message.parts.map((p, i) => (p.type === 'notice' ? <NoticeBlock key={i} text={p.text} /> : null))}
+
       {pendingApprovals.length > 0 && onResolveApproval && (
         <div className="space-y-1">
           {pendingApprovals.map((request) => (
