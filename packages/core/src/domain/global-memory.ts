@@ -100,11 +100,12 @@ function indexLine(entry: ProjectIndexEntry): string {
  * when there is no project besides the chat's own. Fenced as background: the
  * focus lines are model-written.
  */
-export function projectIndexPrompt(entries: ProjectIndexEntry[]): string | null {
+export function projectIndexPrompt(entries: ProjectIndexEntry[], canLookUp = false): string | null {
   if (!entries.some((e) => !e.current)) return null;
   const lines = entries.slice(0, PROJECT_INDEX_MAX).map(indexLine);
   const body = defuse(lines.join('\n'), 'user-projects');
-  return `# The user's projects\nOther projects in Grunt, for context only. If you need more than this, ask.\n\n<user-projects>\n${body}\n</user-projects>`;
+  const more = canLookUp ? 'look it up with the recall tool' : 'ask';
+  return `# The user's projects\nOther projects in Grunt, for context only. If you need more than this, ${more}.\n\n<user-projects>\n${body}\n</user-projects>`;
 }
 
 /** The summariser's single user message for the learned note: the rules, the current note, then the new conversation. */

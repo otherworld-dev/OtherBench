@@ -217,6 +217,7 @@ export class FakeToolProvider implements ToolProvider {
     else if (policy.fs === 'read') raw.push(...this.tools.filter((t) => t.source === 'fs' && t.risk === 'read'));
     if (policy.shell) raw.push(...this.tools.filter((t) => t.source === 'shell'));
     if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
+    if (policy.recall !== false) raw.push(...this.tools.filter((t) => t.source === 'recall'));
     for (const id of policy.mcpServerIds) {
       const server = this.mcpServers.find((s) => s.id === id);
       if (!server) continue;
@@ -953,9 +954,10 @@ class InMemoryMessageRepo implements MessageRepo {
     return newest?.id ?? null;
   }
 
-  searchText(query: string, limit: number): { messageId: string; chatId: string; snippet: string }[] {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return [];
+  searchText(query: string, limit: number, offset = 0): { messageId: string; chatId: string; snippet: string }[] {
+    // Every word must appear, like the SQLite store's FTS match.
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return [];
 
     const results: { messageId: string; chatId: string; snippet: string }[] = [];
     for (const m of this.byId.values()) {
@@ -963,15 +965,16 @@ class InMemoryMessageRepo implements MessageRepo {
         .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
         .map((p) => p.text)
         .join(' ');
-      const idx = text.toLowerCase().indexOf(needle);
-      if (idx === -1) continue;
+      const lower = text.toLowerCase();
+      if (!words.every((w) => lower.includes(w))) continue;
 
+      const idx = lower.indexOf(words[0]!);
       const start = Math.max(0, idx - 20);
-      const end = Math.min(text.length, idx + needle.length + 20);
+      const end = Math.min(text.length, idx + words[0]!.length + 20);
       results.push({ messageId: m.id, chatId: m.chatId, snippet: text.slice(start, end) });
-      if (results.length >= limit) break;
+      if (results.length >= offset + limit) break;
     }
-    return results;
+    return results.slice(offset);
   }
 }
 

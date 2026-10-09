@@ -623,6 +623,15 @@ describe('ClaudeCodeChatEngine live processes', () => {
     expect(names[0]![0]).not.toBe(names[1]![0]);
     e.dispose();
   });
+  it('a change to the recall switch starts a new process too', async () => {
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, recallTool: async () => null, mcpServer });
+    await collect(e.stream(req()));
+    await collect(e.stream(followUp({ profile: profile({ toolPolicy: { ...profile().toolPolicy, recall: false } }) })));
+    expect(starts).toHaveLength(2);
+    e.dispose();
+  });
 });
 
 describe('ClaudeCodeChatEngine artifacts', () => {
@@ -705,5 +714,72 @@ describe('ClaudeCodeChatEngine artifacts', () => {
     expect(mcpServer).not.toHaveBeenCalled();
     e.dispose();
     bare.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine recall', () => {
+  const serverOf = (o: Options): string => {
+    const names = Object.keys(o.mcpServers ?? {});
+    expect(names).toHaveLength(1);
+    return names[0]!;
+  };
+  const sig = () => ({ signal: new AbortController().signal });
+  const named = (defs: { name: string }[]) => defs.map((d) => d.name);
+
+  it('puts recall on the same Grunt server as artifacts, acting for the chat that is running', async () => {
+    const recallTool = vi.fn(async (_ctx: { chatId: string }, args: unknown) => ({ chats: [], projects: [], args }));
+    let tools: { name: string; handler: (args: unknown, extra: unknown) => Promise<unknown> }[] = [];
+    const mcpServer = vi.fn((name: string, defs: typeof tools) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const { query } = fakeQuery(async function* () {
+      yield init('sess-1');
+      await tools.find((t) => t.name === 'recall')!.handler({ command: 'search', query: 'hetzner' }, {});
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, recallTool, mcpServer });
+    await collect(e.stream(req()));
+    expect(named(tools)).toEqual(['artifact', 'recall']);
+    expect(recallTool).toHaveBeenCalledWith({ chatId: req().chatId }, { command: 'search', query: 'hetzner' });
+    e.dispose();
+  });
+
+  it('starts the server for recall alone when artifacts are off, and none when both are off', async () => {
+    const seen: string[][] = [];
+    const mcpServer = vi.fn((name: string, defs: { name: string }[]) => {
+      seen.push(named(defs));
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, recallTool: async () => null, mcpServer });
+    await collect(e.stream(req({ profile: profile({ toolPolicy: { ...profile().toolPolicy, artifacts: false } }) })));
+    await collect(e.stream(req({ profile: profile({ toolPolicy: { ...profile().toolPolicy, artifacts: false, recall: false } }) })));
+    expect(seen).toEqual([['recall']]);
+    expect(calls[1]!.options.mcpServers).toBeUndefined();
+    e.dispose();
+  });
+
+  it("checks its own server's recall tool as Grunt's, a look-alike as an MCP tool, and reports it as `recall`", async () => {
+    const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query } = fakeQuery(async function* ({ options }) {
+      const name = serverOf(options);
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${name}__recall`, tool_input: { command: 'search', query: 'x' }, tool_use_id: 't1' } as never, 't1', sig());
+      await pre({ hook_event_name: 'PreToolUse', tool_name: 'mcp__grunt__recall', tool_input: { command: 'search', query: 'x' }, tool_use_id: 't2' } as never, 't2', sig());
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${name}__recall`, input: { command: 'search', query: 'x' } }] } } as unknown as SDKMessage;
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, recallTool: async () => null, mcpServer });
+    const events = await collect(e.stream(req()));
+    const specs = a.requestApproval.mock.calls.map((c) => c[0] as { name: string; source: string });
+    expect(specs.map(({ name, source }) => ({ name, source }))).toEqual([
+      { name: 'recall', source: 'recall' },
+      { name: 'mcp__grunt__recall', source: 'agent' },
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'recall' }));
+    e.dispose();
   });
 });

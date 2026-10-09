@@ -179,6 +179,12 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
+    // user's OTHER chats, so text injected into this one could use it to
+    // reach them. It falls through to the grants, and the card's "for this
+    // chat" covers the rest of the chat. It never takes the ask-on-mutate
+    // read pass below, which only fs, agent and mcp tools get.
+
     if (policy.approvalMode === 'ask_on_mutate' && tool.risk === 'read') {
       if (tool.source === 'fs') return { kind: 'allow', grantedBy: 'auto_read' };
       // Name-based, not declared-risk-based: only Claude Code's known file-read tools.
@@ -212,7 +218,7 @@ export class PermissionBroker {
       risk: tool.risk,
       source: tool.source,
       args,
-      summary: summarize(tool, args),
+      summary: tool.source === 'recall' ? this.recallSummary(args) : summarize(tool, args),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
@@ -307,6 +313,20 @@ export class PermissionBroker {
       constraint: choice.constraint,
       expiresAt: null,
     });
+  }
+
+  /** What a recall call will look at, for its card: the query, or the chat's title, or the project. */
+  private recallSummary(args: unknown): string {
+    const command = stringField(args, 'command');
+    const chatId = stringField(args, 'chatId');
+    const project = stringField(args, 'project');
+    if (command === 'search') return `Search past chats for "${stringField(args, 'query') ?? ''}"`;
+    if (command === 'read' && chatId !== null) {
+      const title = this.store.chats.get(chatId)?.title;
+      return title !== undefined ? `Read the chat "${title}"` : `Read a chat (${chatId})`;
+    }
+    if (command === 'read' && project !== null) return `Read the project "${project}"`;
+    return `recall: ${command ?? '?'}`;
   }
 
   /**
@@ -465,6 +485,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return agentPolicyDenial(tool.name, policy);
     case 'artifact':
       return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
+    case 'recall':
+      return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

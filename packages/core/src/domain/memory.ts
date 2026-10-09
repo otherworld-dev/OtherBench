@@ -245,6 +245,11 @@ function messageText(parts: Part[]): string {
   return lines.join('\n').trim();
 }
 
+/** One user or assistant message as transcript text, uncapped (recall caps its own way). */
+export function renderTranscriptMessage(m: CanonMessage): string {
+  return `${m.role === 'user' ? 'User' : 'Assistant'}: ${messageText(m.parts)}`;
+}
+
 /**
  * New turns as plain text for the summariser (spec §2 "Update"): user and
  * assistant text, tool calls as one-liners, reasoning and notices dropped,
@@ -253,7 +258,7 @@ function messageText(parts: Part[]): string {
 export function renderMemoryTranscript(messages: CanonMessage[]): string {
   const text = messages
     .filter((m) => m.role !== 'system')
-    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${messageText(m.parts)}`)
+    .map(renderTranscriptMessage)
     .join('\n\n');
   if (text.length <= MEMORY_INPUT_MAX_CHARS) return text;
   let kept = text.slice(text.length - MEMORY_INPUT_MAX_CHARS);

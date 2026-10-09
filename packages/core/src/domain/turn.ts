@@ -13,6 +13,7 @@ import { isCompareSet } from './tree.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { projectInstructionsPrompt } from './projects.js';
 import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
+import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
@@ -545,11 +546,15 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      // Artifacts are on by default, so a model that can't use tools (as its
-      // model row says) isn't sent the artifact tool it would refuse the
+      // Artifacts and recall are on by default, so a model that can't use
+      // tools (as its model row says) isn't sent a tool it would refuse the
       // whole request over.
-      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact') : listed;
-      const requestProfile = this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat), chat), chat), folders), tools), tools);
+      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall') : listed;
+      const canRecall = tools.some((t) => t.source === 'recall');
+      const requestProfile = this.withRecall(
+        this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), tools), tools),
+        canRecall
+      );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
       const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
@@ -753,9 +758,9 @@ export class TurnRunner {
    * own prompt so a project's own text comes later. Nothing for a profile
    * with global memory off. Read fresh each turn.
    */
-  private withGlobalMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
+  private withGlobalMemory(profile: ResolvedProfile, chat: Chat | null, canRecall: boolean): ResolvedProfile {
     if (profile.useGlobalMemory === false) return profile;
-    const block = this.globalMemoryBlock(chat);
+    const block = this.globalMemoryBlock(chat, canRecall);
     if (!block) return profile;
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
@@ -770,10 +775,13 @@ export class TurnRunner {
    * cache is cold by then anyway). The user's own saves of About you or the
    * note apply at once.
    */
-  private globalMemoryBlock(chat: Chat | null): string | null {
+  private globalMemoryBlock(chat: Chat | null, canRecall: boolean): string | null {
     const memory = this.store.globalMemory.get();
     const userStamp = `${memory.aboutUpdatedAt}:${memory.noteUpdatedBy === 'user' ? memory.noteUpdatedAt : 0}`;
-    const key = chat?.id ?? '';
+    // Whether the turn offers recall changes the index's last line, so each
+    // kind of turn keeps its own block: a compare between a profile with
+    // recall and one without mustn't keep rebuilding both.
+    const key = `${chat?.id ?? ''}:${canRecall}`;
     const now = this.now();
     const kept = this.globalBlocks.get(key);
     if (kept && kept.userStamp === userStamp && now - kept.at < GLOBAL_BLOCK_STEADY_MS) {
@@ -789,7 +797,8 @@ export class TurnRunner {
           description: p.description,
           currentFocus: currentFocusLine(this.store.projectMemory.get(p.id)?.body ?? ''),
           current: p.id === chat?.projectId,
-        }))
+        })),
+      canRecall
     );
     const blocks = [aboutUserPrompt(memory.about), globalMemoryPrompt(memory.note), index].filter((b): b is string => b !== null);
     const block = blocks.length === 0 ? null : blocks.join('\n\n');
@@ -858,6 +867,12 @@ export class TurnRunner {
   private withArtifacts(profile: ResolvedProfile, tools: readonly ToolSpec[]): ResolvedProfile {
     if (!tools.some((t) => t.source === 'artifact')) return profile;
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${ARTIFACTS_GUIDANCE}` : ARTIFACTS_GUIDANCE };
+  }
+
+  /** When to use the recall tool (spec 2026-10-09-recall-design), for a turn that offers it. Fixed text, so it never churns the prompt. */
+  private withRecall(profile: ResolvedProfile, canRecall: boolean): ResolvedProfile {
+    if (!canRecall) return profile;
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${RECALL_GUIDANCE}` : RECALL_GUIDANCE };
   }
 
   /**

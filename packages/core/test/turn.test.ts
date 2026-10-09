@@ -662,6 +662,37 @@ describe('TurnRunner names the tools a turn can use', () => {
     expect(engine.requests[0]!.messages.at(-1)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
   });
 
+  it('tells the model how to use recall, and points the project index at it, when the turn offers the tool', async () => {
+    const store = new InMemoryStore();
+    store.projects.create({ id: 'proj', name: 'Alpha', workspaceRoot: null, defaultProfileId: null });
+    store.projects.create({ id: 'site', name: 'Website', workspaceRoot: null, defaultProfileId: null });
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, projectId: 'proj' });
+    const engine = new FakeChatEngine([finish]);
+    const recall = { name: 'recall', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const withTool = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [recall] }) });
+    await turn(withTool, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    const offered = engine.requests[0]!.profile.systemPrompt!;
+    expect(offered).toContain('# Looking things up');
+    expect(offered).toContain('look it up with the recall tool');
+
+    const without = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider() });
+    await turn(without, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    const notOffered = engine.requests[1]!.profile.systemPrompt!;
+    expect(notOffered).not.toContain('# Looking things up');
+    expect(notOffered).toContain('If you need more than this, ask.');
+  });
+
+  it("offers no recall tool to a model that can't use tools", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const recall = { name: 'recall', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [recall] }) });
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off'), model: makeModel({ supportsTools: false }) }));
+    expect(engine.requests[0]!.tools).toEqual([]);
+    expect(engine.requests[0]!.profile.systemPrompt ?? '').not.toContain('# Looking things up');
+  });
+
   it('says nothing for a turn with no tools, or for Claude Code, which runs its own', async () => {
     const store = new InMemoryStore();
     store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
@@ -1619,6 +1650,29 @@ describe('global memory in the system prompt', () => {
     await turn(runner, {}, secondId);
     await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
     expect(engine.requests[2]!.profile.systemPrompt).toContain('American English');
+  });
+
+  it("keeps a block per kind of turn, so a compare between a profile with recall and one without rebuilds neither", async () => {
+    const { store, engine } = setup();
+    const recall = { name: 'recall', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'recall' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { now: () => 1_000_000, toolProvider: new FakeToolProvider({ tools: [recall] }) });
+    const withRecall = { toolPolicy: { ...makeResolvedProfile().toolPolicy, fs: 'off' as const } };
+    const without = { toolPolicy: { ...withRecall.toolPolicy, recall: false } };
+    const first = await turn(runner, withRecall);
+    const firstId = first.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(firstId)!.status).toBe('complete'));
+
+    // The summariser gives another project a focus while this chat is active.
+    store.projectMemory.save('site', '## Pinned\n\n## Goals\n\n## Decisions\n\n## Current focus\n- Launch week\n\n## Open questions', 'summariser', null);
+    const second = await turn(runner, without, firstId);
+    const secondId = second.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(secondId)!.status).toBe('complete'));
+    await turn(runner, withRecall, secondId);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(3));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('look it up with the recall tool');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('If you need more than this, ask.');
+    expect(engine.requests[2]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
   });
 
   it("applies the user's own save of About you or the note at once, even while the chat is active", async () => {

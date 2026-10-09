@@ -1054,6 +1054,21 @@ export function runStoreContract(
         expect(results.some((r) => r.messageId === 'msg-both-words')).toBe(true);
       });
 
+      it('searchText needs every word in one message, in any order, and pages with an offset', () => {
+        const { chat } = seedChat(store, 'chat-a');
+        for (let i = 0; i < 5; i++) {
+          store.messages.create(makeMessageInput({ id: `msg-page-${i}`, chatId: chat.id, parts: [{ type: 'text', text: `staging box quince ${i}` }] }));
+        }
+        store.messages.create(makeMessageInput({ id: 'msg-half', chatId: chat.id, parts: [{ type: 'text', text: 'only quince here' }] }));
+
+        expect(store.messages.searchText('box staging', 10).map((r) => r.messageId).sort()).toEqual(['msg-page-0', 'msg-page-1', 'msg-page-2', 'msg-page-3', 'msg-page-4']);
+        const first = store.messages.searchText('quince staging', 2).map((r) => r.messageId);
+        const rest = store.messages.searchText('quince staging', 10, 2).map((r) => r.messageId);
+        expect(first).toHaveLength(2);
+        expect(rest).toHaveLength(3);
+        expect([...first, ...rest].sort()).toEqual(['msg-page-0', 'msg-page-1', 'msg-page-2', 'msg-page-3', 'msg-page-4']);
+      });
+
       it('create throws on a duplicate id', () => {
         const { chat } = seedChat(store, 'chat-a');
         store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));

@@ -102,6 +102,12 @@ describe('projectIndexPrompt', () => {
     expect(lines[0]).toBe(`- P0: ${'d'.repeat(119)}…. Current focus: ${'f'.repeat(119)}…`);
   });
 
+  it('points at the recall tool instead of asking when the chat can look things up', () => {
+    const block = projectIndexPrompt([{ name: 'Website', description: '', currentFocus: null, current: false }], true)!;
+    expect(block).toContain('Other projects in Grunt, for context only. If you need more than this, look it up with the recall tool.');
+    expect(block).not.toContain('ask.');
+  });
+
   it("is null when the chat's own project is the only one, or there are none", () => {
     expect(projectIndexPrompt([])).toBeNull();
     expect(projectIndexPrompt([{ name: 'Grunt', description: 'x', currentFocus: null, current: true }])).toBeNull();

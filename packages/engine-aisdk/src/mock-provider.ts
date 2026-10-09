@@ -133,7 +133,9 @@ function isToolErrorResult(result: unknown): boolean {
  * Triggers (checked against the prompt text, first match wins, in this
  * order): `#fail` -> a single `rate_limit` error event. `#artifact` -> an
  * `artifact` create through the real tool when offered (Deck #896), then
- * "I made the artifact.". `#tool` -> a
+ * "I made the artifact.". `#recall <query>` -> a `recall` search for the
+ * rest of that line through the real tool when offered, then the titles of
+ * the chats it found. `#tool` -> a
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
@@ -172,6 +174,12 @@ export class MockChatEngine implements ChatEngine {
 
     if (prompt.includes('#artifact')) {
       yield* this.streamArtifactTurn(req, tokensIn);
+      return;
+    }
+
+    const recall = /#recall[ \t]+([^\r\n]*)/.exec(prompt);
+    if (recall) {
+      yield* this.streamRecallTurn(req, recall[1]!.trim(), tokensIn);
       return;
     }
 
@@ -234,6 +242,28 @@ export class MockChatEngine implements ChatEngine {
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
     const answer = isError ? `The artifact didn't work: ${JSON.stringify(result)}` : 'I made the artifact.';
+    for (const chunk of splitIntoChunks(answer, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /** `#recall <query>` (spec 2026-10-09-recall-design): one `recall` search through the real tool when offered, then the titles it found. */
+  private async *streamRecallTurn(req: EngineRequest, query: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-recall-${randomUUID()}`;
+    const args = { command: 'search', query };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'recall', args };
+    const tool = req.tools.find((t) => t.name === 'recall');
+    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No recall tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'recall', result: JSON.stringify(result), isError };
+    const titles = isError ? [] : ((result as { chats?: { title?: unknown }[] }).chats ?? []).map((c) => String(c.title));
+    const answer = isError ? `Recall didn't work: ${JSON.stringify(result)}` : titles.length > 0 ? `I found: ${titles.join(', ')}.` : 'I found nothing.';
     for (const chunk of splitIntoChunks(answer, 6)) {
       if (req.signal.aborted) return;
       await this.sleep(30, req.signal);

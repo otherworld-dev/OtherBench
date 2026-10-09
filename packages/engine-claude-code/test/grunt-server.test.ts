@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { gruntArtifactTool, gruntServerName } from '../src/artifact-server.js';
+import { gruntArtifactTool, gruntRecallTool, gruntServerName } from '../src/grunt-server.js';
 
-describe("Grunt's artifact tool for Claude Code", () => {
+describe("Grunt's own tools for Claude Code", () => {
   it('passes the call to the running reply and returns its outcome as JSON, flagging errors', async () => {
     const run = vi.fn(async (args: unknown) => ({ ok: true, echoed: args }));
     const def = gruntArtifactTool(() => run);
@@ -18,6 +18,19 @@ describe("Grunt's artifact tool for Claude Code", () => {
     const result = await gruntArtifactTool(() => undefined).handler({ command: 'view', id: 'x' }, {});
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain('Artifacts are turned off for this profile, or no Grunt reply is running.');
+  });
+
+  it('offers recall on the same server: the call goes to the running reply, and is refused when none is running or recall is off', async () => {
+    const run = vi.fn(async (args: unknown) => ({ chats: [], projects: [], echoed: args }));
+    const def = gruntRecallTool(() => run);
+    expect(def.name).toBe('recall');
+    const ok = await def.handler({ command: 'search', query: 'hetzner' }, {});
+    expect(run).toHaveBeenCalledWith({ command: 'search', query: 'hetzner' });
+    expect(ok.isError).toBe(false);
+
+    const off = await gruntRecallTool(() => undefined).handler({ command: 'search', query: 'x' }, {});
+    expect(off.isError).toBe(true);
+    expect(JSON.stringify(off.content)).toContain('Searching past chats is turned off for this profile, or no Grunt reply is running.');
   });
 
   it("names each process's server afresh, so a project's MCP config can't take the name", () => {

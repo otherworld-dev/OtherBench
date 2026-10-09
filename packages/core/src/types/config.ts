@@ -50,7 +50,7 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
  * Grunt only gates, never performs.
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -71,6 +71,8 @@ export interface ToolPolicy {
   agentMcp?: boolean;
   /** Artifacts (Deck #896): the `artifact` tool, for both engines. Absent = on. */
   artifacts?: boolean;
+  /** Search past chats (spec 2026-10-09-recall-design): the `recall` tool, for both engines. Absent = on. */
+  recall?: boolean;
 }
 
 export interface ModelParams {
