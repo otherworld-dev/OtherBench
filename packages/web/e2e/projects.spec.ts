@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
 
 /**
@@ -127,6 +127,12 @@ test('dragging a chat onto the top half of another places it there, and the orde
   await expect.poll(order).toEqual([first, third, second]);
 });
 
+/** Picks a layout from the tab bar's Layout dropdown. */
+async function chooseLayout(page: Page, name: string): Promise<void> {
+  await page.getByRole('button', { name: /^Layout: / }).click();
+  await page.getByRole('menuitemradio', { name }).click();
+}
+
 test('Open in new tab from any project, two side by side, and tabs and layout survive a reload (#824)', async ({ page, request }) => {
   const run = randomUUID().slice(0, 8);
   const project = (await (await request.post(`${BASE_URL}/api/projects`, { data: { name: `E2E Tabs ${run}` } })).json()) as { id: string };
@@ -149,7 +155,7 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
   await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Go to tab' }).click();
 
-  await page.getByRole('button', { name: 'Two side by side' }).click();
+  await chooseLayout(page, 'Two side by side');
   const main = page.getByRole('main');
   await expect(main.getByTestId('pane-0')).toContainText(`Admin ${run}`);
   await expect(main.getByTestId('pane-1')).toContainText(`Planning ${run}`);
@@ -158,12 +164,12 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
 
   await page.reload();
   await expect(tabs).toHaveCount(2);
-  await expect(page.getByRole('button', { name: 'Two side by side' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Layout: Two side by side' })).toBeVisible();
   await expect(main.getByTestId('pane-0')).toContainText(`Admin ${run}`);
   await expect(main.getByTestId('pane-1')).toContainText(`Planning ${run}`);
 
   // Back to one chat for whatever runs next in this browser.
-  await page.getByRole('button', { name: 'One chat' }).click();
+  await chooseLayout(page, 'One chat');
   await page.getByRole('button', { name: `Close tab Admin ${run}` }).click();
   await expect(tabs).toHaveCount(1);
   await expect(nav.getByTestId(`chat-row-${loose.id}`)).toBeVisible();
@@ -183,7 +189,7 @@ test('dragging a divider resizes panes and is remembered; Ctrl+Shift+Enter maxim
     await nav.getByTestId(`chat-row-${id}`).locator('[data-row-main]').click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
   }
-  await page.getByRole('button', { name: 'Two side by side' }).click();
+  await chooseLayout(page, 'Two side by side');
   const main = page.getByRole('main');
   const left = main.getByTestId('pane-0');
   const before = (await left.boundingBox())!.width;
@@ -207,7 +213,7 @@ test('dragging a divider resizes panes and is remembered; Ctrl+Shift+Enter maxim
   await expect(main.getByTestId('pane-0')).toBeVisible();
 
   // Back to one chat for whatever runs next in this browser.
-  await page.getByRole('button', { name: 'One chat' }).click();
+  await chooseLayout(page, 'One chat');
 });
 
 test("a project's instructions, set from Project settings…, reach the model in every chat", async ({ page, request }) => {

@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent } from 'react';
+import { Menu } from '../components/Menu.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
@@ -52,6 +53,10 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const setLayout = useGruntStore((s) => s.setLayout);
   const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined);
   const tabRefs = useRef(new Map<string, HTMLButtonElement>());
+  // The layout picker is one button with a dropdown, rather than a button per layout, to save room.
+  const [layoutMenu, setLayoutMenu] = useState<{ x: number; y: number } | null>(null);
+  const layoutButton = useRef<HTMLButtonElement>(null);
+  const currentLayout = LAYOUTS.find((l) => l.id === paneState.layout) ?? LAYOUTS[0]!;
 
   const tabs = useMemo(
     () =>
@@ -185,22 +190,43 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
         {tabs.length === 0 && <span className="px-2 pb-1 text-xs text-[var(--text-faint)]">Right-click a chat and choose Open in new tab, or drag one here.</span>}
       </div>
       {!narrow && (
-        <div role="group" aria-label="Layout" className="mb-1 flex shrink-0 items-center gap-0.5">
-          {LAYOUTS.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              aria-label={l.label}
-              aria-pressed={paneState.layout === l.id}
-              title={l.label}
-              onClick={() => setLayout(l.id)}
-              className={`rounded px-1.5 py-1 text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)] ${
-                paneState.layout === l.id ? 'bg-[var(--bg-sunken)] text-[var(--text)]' : ''
-              }`}
-            >
-              <LayoutIcon layout={l.id} />
-            </button>
-          ))}
+        <div className="mb-1 flex shrink-0 items-center">
+          <button
+            ref={layoutButton}
+            type="button"
+            aria-label={`Layout: ${currentLayout.label}`}
+            aria-haspopup="menu"
+            aria-expanded={layoutMenu !== null}
+            title="Layout"
+            // Keep the open menu's outside-click handler from closing it first, so the button toggles.
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              if (layoutMenu) {
+                setLayoutMenu(null);
+                return;
+              }
+              const r = e.currentTarget.getBoundingClientRect();
+              setLayoutMenu({ x: r.left, y: r.bottom });
+            }}
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+          >
+            <LayoutIcon layout={currentLayout.id} />
+            <span aria-hidden="true" className="text-xs leading-none">
+              ▾
+            </span>
+          </button>
+          {layoutMenu && (
+            <Menu
+              label="Layout"
+              position={layoutMenu}
+              items={LAYOUTS.map((l) => ({ id: l.id, label: l.label, checked: paneState.layout === l.id, onSelect: () => setLayout(l.id) }))}
+              onClose={(reason) => {
+                setLayoutMenu(null);
+                // A click elsewhere keeps focus where the user put it.
+                if (reason !== 'pointer') layoutButton.current?.focus();
+              }}
+            />
+          )}
         </div>
       )}
     </div>

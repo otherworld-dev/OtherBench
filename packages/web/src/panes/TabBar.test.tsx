@@ -66,8 +66,10 @@ describe('TabBar (#824)', () => {
     useGruntStore.getState().openTab('b');
     const user = userEvent.setup();
     render(<TabBar narrow={false} />);
-    await user.click(screen.getByRole('button', { name: 'Two side by side' }));
-    expect(screen.getByRole('button', { name: 'Two side by side' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'Layout: One chat' }));
+    await user.click(screen.getByRole('menuitemradio', { name: 'Two side by side' }));
+    expect(screen.queryByRole('menu', { name: 'Layout' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Layout: Two side by side' })).toBeInTheDocument();
     expect(useGruntStore.getState().paneState.panes).toEqual(['b', 'a']);
     expect(screen.getByTestId('tab-pane-b')).toHaveTextContent('1');
     expect(screen.getByTestId('tab-pane-a')).toHaveTextContent('2');
@@ -76,7 +78,24 @@ describe('TabBar (#824)', () => {
   it('offers no layouts in a narrow window', () => {
     useGruntStore.getState().openTab('a');
     render(<TabBar narrow />);
-    expect(screen.queryByRole('group', { name: 'Layout' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Layout/ })).not.toBeInTheDocument();
+  });
+
+  it('picks the layout from one dropdown that lists every layout and ticks the current one', async () => {
+    useGruntStore.getState().openTab('a');
+    const user = userEvent.setup();
+    render(<TabBar narrow={false} />);
+    const button = screen.getByRole('button', { name: 'Layout: One chat' });
+    expect(button).toHaveAttribute('aria-haspopup', 'menu');
+    expect(screen.getAllByRole('button').filter((b) => /side by side|stacked|grid/i.test(b.getAttribute('aria-label') ?? ''))).toEqual([]);
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    const items = screen.getAllByRole('menuitemradio');
+    expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['One chat', 'Two side by side', 'Two stacked', 'Three side by side', 'One big, two stacked', 'Four in a grid']);
+    expect(screen.getByRole('menuitemradio', { name: 'One chat' })).toHaveAttribute('aria-checked', 'true');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu', { name: 'Layout' })).toBeNull();
+    expect(button).toHaveFocus();
   });
 
   it('marks a tab replying, or waiting for an approval', () => {
