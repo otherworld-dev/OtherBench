@@ -16,11 +16,18 @@ export type GateDecision = { allow: true } | { allow: false; reason: string } | 
  * go to Claude Code's classifier instead of a card.
  */
 /**
- * `opts.own`: the call is to one of this process's own Grunt tools (artifact
- * or recall) -- the engine matched the exact per-process name
- * (grunt-server.ts), never a name alone.
+ * `opts.own`: the call is to one of this process's own Grunt tools -- the
+ * engine matched the exact per-process name (grunt-server.ts), never a name
+ * alone. Either artifact or recall, or `{ relay }`: a tool relayed from one of
+ * Grunt's MCP servers, carrying the ToolSpec an API model would get for it
+ * (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2).
  */
-export type Gate = (toolName: string, input: Record<string, unknown>, signal?: AbortSignal, opts?: { mayDefer?: boolean; own?: GruntTool }) => Promise<GateDecision>;
+export type Gate = (
+  toolName: string,
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+  opts?: { mayDefer?: boolean; own?: GruntTool | { relay: ToolSpec } }
+) => Promise<GateDecision>;
 
 /** Grunt's own tools on its per-process server, as the broker knows them. */
 export type GruntTool = 'artifact' | 'recall';
@@ -31,6 +38,9 @@ const OWN_TOOLS: Record<GruntTool, { name: string; description: string }> = {
 };
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
+
+/** A clean chat's refusal for any Claude Code tool that needs a folder (everything but web). */
+export const NO_FOLDER_REASON = "This chat has no folder: Claude Code's file, shell and own MCP tools aren't available.";
 
 function isAbsoluteLike(v: string): boolean {
   return isAbsolute(v) || /^[a-zA-Z]:/.test(v) || v.startsWith('/') || v.startsWith('\\');
@@ -130,11 +140,15 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
     const signal = callSignal ? AbortSignal.any([deps.ctx.signal, callSignal]) : deps.ctx.signal;
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
-      if (!workspaceRoot) return { allow: false, reason: 'This chat has no workspace folder.' };
       // Grunt's own tools have no path arguments; each is checked as
-      // Grunt's (the profile's switch, no card), never as an MCP tool.
+      // Grunt's (the profile's switch, no card), never as an MCP tool. A
+      // relayed tool is checked exactly as an API model's call to it would be.
       const own = opts?.own;
-      const normalised = own ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
+      const relay = typeof own === 'object' ? own.relay : undefined;
+      const ownTool = typeof own === 'string' ? own : undefined;
+      // With no folder (a clean chat) only Grunt's own tools and web tools may go on.
+      if (!workspaceRoot && !own && classifyAgentTool(toolName).category !== 'web') return { allow: false, reason: NO_FOLDER_REASON };
+      const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
       }
@@ -144,12 +158,12 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
       if ('unusable' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: it has an unusable path argument (${normalised.unusable}).` };
       }
-      const spec: ToolSpec = {
-        name: own ? OWN_TOOLS[own].name : toolName,
-        description: own ? OWN_TOOLS[own].description : 'Claude Code tool',
+      const spec: ToolSpec = relay ?? {
+        name: ownTool ? OWN_TOOLS[ownTool].name : toolName,
+        description: ownTool ? OWN_TOOLS[ownTool].description : 'Claude Code tool',
         parameters: {},
-        risk: own ? 'read' : classifyAgentTool(toolName).risk,
-        source: own ?? 'agent',
+        risk: ownTool ? 'read' : classifyAgentTool(toolName).risk,
+        source: ownTool ?? 'agent',
         execute: async () => undefined, // never called: Claude Code executes its own tools
       };
       // Only the PreToolUse hook, and only in auto mode, may hand a call to

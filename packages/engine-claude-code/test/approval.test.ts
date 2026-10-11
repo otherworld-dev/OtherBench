@@ -35,6 +35,51 @@ describe('normaliseAgentArgs', () => {
   });
 });
 
+describe('createGate with no folder (a clean chat)', () => {
+  const noFolder = (): ToolContext => ({ chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal });
+  const NO_FOLDER = "This chat has no folder: Claude Code's file, shell and own MCP tools aren't available.";
+
+  it("lets Grunt's own tools and web tools through to requestApproval", async () => {
+    const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'policy' }));
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: noFolder() });
+    expect(await gate('mcp__grunt_x__artifact', { command: 'view' }, undefined, { own: 'artifact' })).toEqual({ allow: true });
+    expect(await gate('mcp__grunt_x__recall', { command: 'search' }, undefined, { own: 'recall' })).toEqual({ allow: true });
+    expect(await gate('WebFetch', { url: 'https://example.com' })).toEqual({ allow: true });
+    expect(requestApproval.mock.calls.map(([t]) => [t.name, t.source])).toEqual([
+      ['artifact', 'artifact'],
+      ['recall', 'recall'],
+      ['WebFetch', 'agent'],
+    ]);
+  });
+
+  it("refuses file, shell and Claude Code's own MCP tools, saying why, without asking", async () => {
+    const requestApproval = vi.fn();
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: noFolder() });
+    for (const name of ['Read', 'Edit', 'Bash', 'mcp__x__y', 'SomethingNew']) {
+      expect(await gate(name, { file_path: 'a.txt' })).toEqual({ allow: false, reason: NO_FOLDER });
+    }
+    expect(requestApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('createGate with a relayed MCP tool', () => {
+  const relay: ToolSpec = { name: 'mcp__nextcloud__deck_add', description: 'Add a card', parameters: { type: 'object' }, risk: 'mutate', source: 'mcp', serverId: 's1', execute: async () => undefined };
+
+  it("asks with the API model's spec for the tool, folder or not, and passes its args through untouched", async () => {
+    const requestApproval = vi.fn(async (_t: ToolSpec, _a: unknown) => ({ allowed: true as const, grantedBy: 'policy' }));
+    const noFolder: ToolContext = { chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
+    for (const c of [noFolder, ctx()]) {
+      const gate = createGate({ approvals: { requestApproval }, policy, ctx: c });
+      expect(await gate('mcp__grunt_x__nextcloud__deck_add', { title: 'x', path: '../../etc' }, undefined, { own: { relay } })).toEqual({ allow: true });
+    }
+    expect(requestApproval).toHaveBeenCalledTimes(2);
+    for (const [spec, args] of requestApproval.mock.calls) {
+      expect(spec).toMatchObject({ name: 'mcp__nextcloud__deck_add', source: 'mcp', serverId: 's1', risk: 'mutate' });
+      expect(args).toEqual({ title: 'x', path: '../../etc' });
+    }
+  });
+});
+
 describe('createGate', () => {
   it('sends a classified agent ToolSpec with normalised args to requestApproval', async () => {
     const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'ask:once' }));

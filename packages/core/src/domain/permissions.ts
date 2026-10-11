@@ -145,8 +145,12 @@ export class PermissionBroker {
     // chat there is nothing for them to legitimately operate on (shell's
     // cwd is forced to workspace_root -- task 24 -- agent (Claude Code) tools run in it too, and every fs tool call
     // goes through containPath(workspaceRoot, ...), which itself denies a
-    // null root). mcp tools carry no such requirement.
-    if ((tool.source === 'fs' || tool.source === 'shell' || tool.source === 'agent') && !ctx.workspaceRoot) {
+    // null root). mcp tools carry no such requirement, and neither do Claude
+    // Code's web tools, which reach nothing local: a clean Claude Code chat
+    // (spec 2026-10-11-claude-code-clean-chat-and-mcp-design) may use them.
+    const needsWorkspace =
+      tool.source === 'fs' || tool.source === 'shell' || (tool.source === 'agent' && classifyAgentTool(tool.name).category !== 'web');
+    if (needsWorkspace && !ctx.workspaceRoot) {
       return {
         kind: 'deny',
         reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.`,

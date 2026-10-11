@@ -17,9 +17,16 @@ const ctx = (o: Partial<ToolContext> = {}): ToolContext => ({ chatId: 'c1', mess
 const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
 
 describe('PermissionBroker with source "agent"', () => {
-  it('denies every agent tool without a workspace', () => {
+  it('denies agent tools without a workspace, except web tools, which work on nothing local', () => {
     const b = new PermissionBroker(new InMemoryStore());
-    expect(b.decide(spec('Read'), { path: 'a' }, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
+    for (const n of ['Read', 'Edit', 'Bash', 'mcp__x__y', 'SomethingNew']) {
+      expect(b.decide(spec(n), { path: 'a' }, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
+    }
+    // A clean Claude Code chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design): web tools get the usual card.
+    for (const n of ['WebSearch', 'WebFetch']) {
+      expect(b.decide(spec(n), { query: 'x' }, policy(), ctx({ workspaceRoot: null })).kind).toBe('ask');
+    }
+    expect(b.decide(spec('WebSearch'), { query: 'x' }, policy({ agentWeb: false }), ctx({ workspaceRoot: null })).kind).toBe('deny');
   });
   it('auto-allows read tools under ask_on_mutate, asks under always_ask', () => {
     const b = new PermissionBroker(new InMemoryStore());
