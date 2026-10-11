@@ -107,9 +107,9 @@ export class LiveProcess {
  * Hashed, so no second plaintext copy of a credential is kept.
  */
 export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntServerSwitches): string {
-  const { cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
+  const { cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, cwd, additionalDirectories, model, permissionMode, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 

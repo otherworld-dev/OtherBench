@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
@@ -44,6 +45,13 @@ export interface ClaudeCodeEngineDeps {
   artifactTool?: (ctx: { chatId: string; messageId: string }, args: unknown) => Promise<unknown>;
   /** Runs a `recall` tool call for a reply (spec 2026-10-09-recall-design): the server's executor. Without it, Claude Code gets no recall tool. */
   recallTool?: (ctx: { chatId: string }, args: unknown) => Promise<unknown>;
+  /**
+   * Where a chat with no folder runs (a clean chat, spec
+   * 2026-10-11-claude-code-clean-chat-and-mcp-design §1): each such chat gets
+   * `<scratchRoot>/<chat id>`, the same folder every turn so its session
+   * resumes. Defaults to `<tmpdir>/grunt-claude-scratch`.
+   */
+  scratchRoot?: string;
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: GruntServerTool[]) => McpServerConfig;
 }
@@ -115,14 +123,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* this.utility(req);
       return;
     }
-    if (!req.workspaceRoot) {
-      yield { type: 'error', error: { kind: 'capability', retryable: false, message: 'Set a workspace folder to use Claude Code.' } };
-      return;
-    }
-    if (!existsSync(req.workspaceRoot)) {
+    if (req.workspaceRoot && !existsSync(req.workspaceRoot)) {
       yield { type: 'error', error: { kind: 'unknown', retryable: false, message: `Workspace folder ${req.workspaceRoot} doesn't exist.` } };
       return;
     }
+    // No folder: a clean chat, run in the chat's own empty scratch folder.
+    const clean = !req.workspaceRoot;
+    const cwd = req.workspaceRoot ?? this.scratchFolder(req.chatId);
 
     // Not yielded yet: an event yielded before the engine has done any real
     // work reaches TurnRunner before the turn's live stream is registered and
@@ -133,13 +140,13 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
     const conn = req.profile.connection;
     const backend = backendOf(conn);
-    const plan = pickSession({ history: req.messages, backend, cwd: req.workspaceRoot, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
+    const plan = pickSession({ history: req.messages, backend, cwd, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
     try {
-      const first = yield* this.runTurn(req, plan, backend, notice);
+      const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
         yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history." };
-        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice);
+        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean);
       }
     } finally {
       if (plan.mode === 'continue') this.claims.release(plan.sessionId);
@@ -155,7 +162,14 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * is gone. Yields `notice.text` once, after the init message or before an
    * error, and clears it.
    */
-  private async *runTurn(req: EngineRequest, plan: SessionPlan, backend: string, notice: PendingNotice): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
+  private async *runTurn(
+    req: EngineRequest,
+    plan: SessionPlan,
+    backend: string,
+    notice: PendingNotice,
+    cwd: string,
+    clean: boolean
+  ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const flushNotice = function* (): Generator<EngineEvent> {
       const text = notice.text;
       if (text === null) return;
@@ -163,7 +177,6 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield { type: 'notice', text };
     };
     const profile = req.profile;
-    const cwd = req.workspaceRoot!;
     const content = await this.userContent(req, plan.mode === 'fresh');
 
     // Auto mode needs the Claude login; an endpoint backend always runs in
@@ -173,7 +186,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       chatId: req.chatId,
       messageId: req.messageId,
       profileId: profile.id,
-      workspaceRoot: cwd,
+      // A clean chat's scratch folder is not a workspace: the gate refuses path tools there.
+      workspaceRoot: clean ? null : cwd,
       ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
       signal: req.signal,
     };
@@ -191,7 +205,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
     };
-    const options = this.processOptions(req, cwd, autoMode);
+    const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
     const taken = plan.mode === 'continue' ? this.pool.take(plan.sessionId, key) : null;
     const reused = taken !== null;
@@ -266,9 +280,37 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return 'done';
   }
 
+  /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
+  private scratchFolder(chatId: string): string {
+    const folder = join(this.deps.scratchRoot ?? join(tmpdir(), 'grunt-claude-scratch'), chatId.replace(/[^A-Za-z0-9_-]/g, '_'));
+    mkdirSync(folder, { recursive: true });
+    return folder;
+  }
+
   /** The options a Claude Code process is started with, minus what each process wires up itself (startProcess). */
-  private processOptions(req: EngineRequest, cwd: string, autoMode: boolean): Options {
+  private processOptions(req: EngineRequest, cwd: string, autoMode: boolean, clean: boolean): Options {
     const profile = req.profile;
+    if (clean) {
+      // A clean chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design
+      // §1): none of the user's Claude Code settings, CLAUDE.md, skills, hooks
+      // or MCP config, no coding-agent prompt, and of the built-in tools only
+      // web search and fetch. Its MCP tools are Grunt's own server's.
+      return {
+        cwd,
+        model: profile.modelId,
+        env: buildChildEnv(this.deps.baseEnv ?? process.env, profile.connection, profile.apiKey, profile.modelId),
+        permissionMode: autoMode ? 'auto' : 'default',
+        includePartialMessages: true,
+        settingSources: [],
+        strictMcpConfig: true,
+        settings: { disableSkillShellExecution: true },
+        tools: profile.toolPolicy.agentWeb === false ? [] : ['WebSearch', 'WebFetch'],
+        disallowedTools: agentDisallowedTools(profile.toolPolicy),
+        ...(profile.systemPrompt ? { systemPrompt: profile.systemPrompt } : {}),
+        ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
+        ...(req.effort ? { effort: req.effort } : {}),
+      };
+    }
     return {
       cwd,
       model: profile.modelId,

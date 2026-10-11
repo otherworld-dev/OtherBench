@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '../src/engine.js';
+import { liveKey } from '../src/live.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-cce-')); });
@@ -133,9 +134,8 @@ describe('ClaudeCodeChatEngine.stream', () => {
     expect(events.at(-1)).toMatchObject({ type: 'finish' });
   });
 
-  it('refuses to run without a workspace, or with a missing one', async () => {
+  it('refuses a workspace folder that no longer exists', async () => {
     const { query, calls } = fakeQuery(async function* () { yield success(); });
-    expect(await collect(engine(query).stream(req({ workspaceRoot: null })))).toEqual([{ type: 'error', error: { kind: 'capability', retryable: false, message: 'Set a workspace folder to use Claude Code.' } }]);
     const gone = join(ws, 'deleted');
     expect(await collect(engine(query).stream(req({ workspaceRoot: gone })))).toEqual([{ type: 'error', error: { kind: 'unknown', retryable: false, message: `Workspace folder ${gone} doesn't exist.` } }]);
     expect(calls).toHaveLength(0);
@@ -222,6 +222,72 @@ describe('ClaudeCodeChatEngine.stream', () => {
     await collect(engine(query).stream(req({ purpose: 'utility', workspaceRoot: null, signal })));
     expect(add).toHaveBeenCalledTimes(1);
     expect(remove).toHaveBeenCalledWith('abort', add.mock.calls[0]![1]);
+  });
+});
+
+describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
+  let scratch: string;
+  beforeEach(() => { scratch = mkdtempSync(join(tmpdir(), 'grunt-scratch-')); });
+  afterEach(() => rmSync(scratch, { recursive: true, force: true }));
+  const clean = (query: QueryFn) => new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, scratchRoot: scratch });
+  const answeredIn = (cwd: string): CanonMessage => ({ ...user('a'), id: 'a1', chatId: 'c1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-1', backend: 'claude', cwd } });
+  const followUp = (o: Partial<EngineRequest>): EngineRequest =>
+    req({ chatId: 'c1', messages: [user('q1'), answeredIn(join(scratch, 'c1')), { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1', messageId: 'm2', ...o });
+
+  it('runs in its own scratch folder with no settings, strict MCP, only web tools and the plain prompt', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const events = await collect(clean(query).stream(req({ workspaceRoot: null, chatId: 'c1', profile: profile({ systemPrompt: 'Be brief.' }) })));
+    const folder = join(scratch, 'c1');
+    expect(existsSync(folder)).toBe(true);
+    const o = calls[0]!.options;
+    expect(o.cwd).toBe(folder);
+    expect(o.settingSources).toEqual([]);
+    expect(o.strictMcpConfig).toBe(true);
+    expect(o.tools).toEqual(['WebSearch', 'WebFetch']);
+    expect(o.systemPrompt).toBe('Be brief.');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'engine-meta', meta: expect.objectContaining({ cwd: folder }) }));
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('has no web tools when the profile turns them off, and no system prompt when there is none', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const toolPolicy = { fs: 'readwrite' as const, shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const, agentWeb: false };
+    await collect(clean(query).stream(req({ workspaceRoot: null, chatId: 'c1', profile: profile({ toolPolicy }) })));
+    expect(calls[0]!.options.tools).toEqual([]);
+    expect(calls[0]!.options.systemPrompt).toBeUndefined();
+  });
+
+  it('keeps the full Claude Code setup for a chat with a folder', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(clean(query).stream(req({ profile: profile({ systemPrompt: 'Be brief.' }) })));
+    const o = calls[0]!.options;
+    expect(o.cwd).toBe(ws);
+    expect(o.settingSources).toEqual(['user', 'project', 'local']);
+    expect(o.tools).toBeUndefined();
+    expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: 'Be brief.' });
+  });
+
+  it('continues the clean session on the next message, and starts afresh in the folder once the chat has one', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const e = clean(query);
+    await collect(e.stream(followUp({ workspaceRoot: null })));
+    expect(calls[0]!.options).toMatchObject({ cwd: join(scratch, 'c1'), resume: 'sess-1' });
+    await collect(e.stream(followUp({ workspaceRoot: ws })));
+    expect(calls[1]!.options.cwd).toBe(ws);
+    expect(calls[1]!.options.resume).toBeUndefined();
+    e.dispose();
+  });
+
+  it("keeps a chat id that isn't a plain name inside the scratch folder", async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    await collect(clean(query).stream(req({ workspaceRoot: null, chatId: '../escape' })));
+    expect(calls[0]!.options.cwd).toBe(join(scratch, '___escape'));
+  });
+
+  it('starts a new process when only the built-in tools differ', () => {
+    const own = { artifacts: false, recall: false };
+    const connection = { backend: 'claude', token: null };
+    expect(liveKey({ cwd: 'x', tools: ['WebSearch', 'WebFetch'] }, connection, own)).not.toBe(liveKey({ cwd: 'x', tools: [] }, connection, own));
   });
 });
 
