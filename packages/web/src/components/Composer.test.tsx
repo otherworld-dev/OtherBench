@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -130,6 +130,26 @@ describe('Composer', () => {
   });
   afterEach(() => {
     cleanup();
+  });
+
+  it('keeps the message field, attach, the profile and Send in one box', () => {
+    render(<Composer chat={makeChat()} />);
+    const box = screen.getByRole('textbox', { name: /message/i }).closest('[data-composer-box]') as HTMLElement;
+    expect(box).not.toBeNull();
+    for (const name of ['Attach files', 'Send', 'Default · mock-standard', '+ Compare']) {
+      expect(within(box).getByRole('button', { name })).toBeInTheDocument();
+    }
+  });
+
+  it('starts one line high with a short placeholder, the keys in its tooltip, and grows with the text', async () => {
+    render(<Composer chat={makeChat()} />);
+    const textbox = screen.getByRole('textbox', { name: /message/i });
+    expect(textbox).toHaveAttribute('rows', '1');
+    expect(textbox).toHaveAttribute('placeholder', 'Message…');
+    expect(textbox.getAttribute('title')).toMatch(/Enter to send, Shift\+Enter for a new line/);
+    Object.defineProperty(textbox, 'scrollHeight', { configurable: true, get: () => 120 });
+    await userEvent.setup().type(textbox, 'a');
+    expect(textbox.style.height).toBe('120px');
   });
 
   it('sending posts the right body to the turns API', async () => {

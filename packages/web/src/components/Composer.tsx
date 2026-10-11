@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@grunt/core/types/config.js';
@@ -115,6 +115,13 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [sendError, setSendError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // The message field starts one line high and grows with its text, up to its max height (then it scrolls).
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    if (el.scrollHeight > 0) el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Attachments already on the server but not yet sent -- left by a reload,
@@ -356,197 +363,86 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`border-t p-3 ${dragOver ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border)] bg-[var(--bg-raised)]'}`}
+      className={`border-t px-3 py-2 ${dragOver ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border)] bg-[var(--bg-raised)]'}`}
     >
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setPickerOpen((o) => !o)}
-            aria-haspopup="listbox"
-            aria-expanded={pickerOpen}
-            className="rounded-full border border-[var(--border-strong)] px-2.5 py-1 font-mono text-[0.6875rem] hover:bg-[var(--bg-sunken)]"
-          >
-            {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
-          </button>
-          {pickerOpen && (
-            <ul role="listbox" aria-label="Profile" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
-              {profiles.map((p) => (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={p.id === selectedProfileIds[0]}
-                    onClick={() => {
-                      setSelectedProfileIds([p.id, ...selectedProfileIds.slice(1).filter((id) => id !== p.id)]);
-                      setPickerOpen(false);
-                    }}
-                    className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
-                  >
-                    {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
-                    <span className="label-caps ml-1 text-[0.6875rem] text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'Grunt tools'}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {showAutoToggle && (
-          <button
-            type="button"
-            aria-label="Auto mode"
-            aria-pressed={autoActive}
-            disabled={autoUnavailable || autoSaving}
-            title={autoUnavailable ? 'Auto mode needs the Claude login' : 'Let Claude Code decide routine tool calls (from the next turn)'}
-            onClick={() => void toggleAutoMode()}
-            className={`rounded-full border px-2.5 py-1 font-mono text-[0.6875rem] disabled:opacity-50 ${
-              autoActive
-                ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]'
-                : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
-            }`}
-          >
-            Auto
-          </button>
-        )}
-
-        {showAutoToggle && (
-          <select
-            aria-label="Effort"
-            value={effort ?? ''}
-            disabled={effortSaving}
-            title="How much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
-            onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
-            className="rounded-full border border-[var(--border-strong)] bg-[var(--bg-raised)] px-2 py-1 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
-          >
-            <option value="">Effort: default</option>
-            {CLAUDE_EFFORTS.map((level) => (
-              <option key={level} value={level}>
-                Effort: {EFFORT_LABELS[level]}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
-        {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
-
-        {comparedProfiles.map((p) => (
-          <span key={p.id} className="rounded-full border border-[var(--border)] px-2.5 py-1 font-mono text-[0.6875rem] text-[var(--text-muted)]">
-            + {p.name}
-          </span>
-        ))}
-
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setComparePickerOpen((o) => !o)}
-            aria-haspopup="listbox"
-            aria-expanded={comparePickerOpen}
-            title="Compare against other profiles"
-            className="rounded-full border border-dashed border-[var(--border-strong)] px-2.5 py-1 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
-          >
-            + Compare
-          </button>
-          {comparePickerOpen && (
-            <ul role="listbox" aria-label="Compare profiles" aria-multiselectable="true" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
-              {profiles
-                .filter((p) => p.id !== selectedProfileIds[0])
-                .map((p) => (
-                  <li key={p.id}>
-                    <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--bg-sunken)]">
-                      <input type="checkbox" checked={selectedProfileIds.includes(p.id)} onChange={() => togglePickerProfile(p.id)} />
-                      {p.name}
-                    </label>
-                  </li>
-                ))}
-            </ul>
-          )}
-        </div>
-      </div>
-
-      {attachments.length > 0 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          {attachments.map((a) => (
-            <AttachmentChip
-              key={a.id}
-              filename={a.filename}
-              mime={a.mime}
-              size={a.size}
-              previewUrl={api.attachments.previewable(a.mime) ? api.attachments.contentUrl(a.id) : undefined}
-              onRemove={() => void removeAttachment(a.id)}
-              removeDisabled={sending}
-            />
-          ))}
-        </div>
-      )}
-
       {uploadError && (
-        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {uploadError}
         </div>
       )}
 
       {removeError && (
-        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {removeError}
         </div>
       )}
 
       {needsWorkspace && (
-        <p role="status" className="mb-2 text-xs text-[var(--danger)]">Set a workspace folder to use Claude Code.</p>
+        <p role="status" className="mb-1.5 text-xs text-[var(--danger)]">Set a workspace folder to use Claude Code.</p>
       )}
 
       {autoError && (
-        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {autoError}
         </div>
       )}
 
       {effortError && (
-        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {effortError}
         </div>
       )}
 
       {sendError && (
-        <div role="alert" className="mb-2 text-xs text-[var(--danger)]">
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {sendError}
         </div>
       )}
 
       {continuesFrom && (
-        <p role="status" className="mb-2 text-xs text-[var(--text-muted)]">
+        <p role="status" className="mb-1.5 text-xs text-[var(--text-muted)]">
           Sending continues from {continuesFrom}'s reply, the tab you're on. The other replies stay in the tabs.
         </p>
       )}
 
       {autoActive && (
-        <p className="mb-2 text-xs text-[var(--text-muted)]">Auto mode: Claude Code decides routine tool calls; your profile limits still apply.</p>
+        <p className="mb-1.5 text-xs text-[var(--text-muted)]">Auto mode: Claude Code decides routine tool calls; your profile limits still apply.</p>
       )}
 
-      <div className="flex items-end gap-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          hidden
-          data-testid="composer-file-input"
-          onChange={(e) => {
-            const files = Array.from(e.target.files ?? []);
-            e.target.value = ''; // so choosing the same file again still fires
-            if (files.length > 0) void uploadFiles(files);
-          }}
-        />
-        <button
-          type="button"
-          aria-label="Attach files"
-          title="Attach files"
-          onClick={() => fileInputRef.current?.click()}
-          className="rounded-sm border border-[var(--border-strong)] px-2.5 py-2 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
-        >
-          <span aria-hidden="true">📎</span>
-        </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        data-testid="composer-file-input"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = ''; // so choosing the same file again still fires
+          if (files.length > 0) void uploadFiles(files);
+        }}
+      />
+
+      {/* One box: attachments, the message, and a toolbar of the turn's settings with Send at its end. */}
+      <div
+        data-composer-box=""
+        className="rounded border border-[var(--border-strong)] bg-[var(--bg)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]"
+      >
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2">
+            {attachments.map((a) => (
+              <AttachmentChip
+                key={a.id}
+                filename={a.filename}
+                mime={a.mime}
+                size={a.size}
+                previewUrl={api.attachments.previewable(a.mime) ? api.attachments.contentUrl(a.id) : undefined}
+                onRemove={() => void removeAttachment(a.id)}
+                removeDisabled={sending}
+              />
+            ))}
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           value={text}
@@ -554,28 +450,148 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           aria-label="Message"
-          placeholder="Message... (Enter to send, Shift+Enter for a newline) -- drag & drop or paste to attach a file"
-          rows={2}
-          className="min-h-[2.5rem] flex-1 resize-y rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+          placeholder="Message…"
+          title="Enter to send, Shift+Enter for a new line. Drag and drop or paste to attach a file."
+          rows={1}
+          className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 pb-1 text-sm outline-none"
         />
-        {isStreaming ? (
+
+        <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5">
           <button
             type="button"
-            onClick={() => void handleStop()}
-            className="btn btn-danger bg-[var(--danger)] px-4 py-2 text-[var(--bg)]"
+            aria-label="Attach files"
+            title="Attach files"
+            onClick={() => fileInputRef.current?.click()}
+            className="rounded px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
           >
-            Stop
+            <span aria-hidden="true">📎</span>
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void handleSend()}
-            disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved || elsewhereUnreachable}
-            className="btn btn-primary px-4 py-2"
-          >
-            Send
-          </button>
-        )}
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setPickerOpen((o) => !o)}
+              aria-haspopup="listbox"
+              aria-expanded={pickerOpen}
+              className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
+            >
+              {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
+            </button>
+            {pickerOpen && (
+              <ul role="listbox" aria-label="Profile" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
+                {profiles.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={p.id === selectedProfileIds[0]}
+                      onClick={() => {
+                        setSelectedProfileIds([p.id, ...selectedProfileIds.slice(1).filter((id) => id !== p.id)]);
+                        setPickerOpen(false);
+                      }}
+                      className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[var(--bg-sunken)]"
+                    >
+                      {p.name} <span className="text-[var(--text-muted)]">· {p.modelId}</span>
+                      <span className="label-caps ml-1 text-[0.6875rem] text-[var(--text-faint)]">{isClaudeCodeProfile(p, connections) ? 'CC tools' : 'Grunt tools'}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {showAutoToggle && (
+            <button
+              type="button"
+              aria-label="Auto mode"
+              aria-pressed={autoActive}
+              disabled={autoUnavailable || autoSaving}
+              title={autoUnavailable ? 'Auto mode needs the Claude login' : 'Let Claude Code decide routine tool calls (from the next turn)'}
+              onClick={() => void toggleAutoMode()}
+              className={`rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${
+                autoActive
+                  ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]'
+                  : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
+              }`}
+            >
+              Auto
+            </button>
+          )}
+
+          {showAutoToggle && (
+            <select
+              aria-label="Effort"
+              value={effort ?? ''}
+              disabled={effortSaving}
+              title="How much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
+              onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
+              className="rounded-full border border-[var(--border-strong)] bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+            >
+              <option value="">Effort: default</option>
+              {CLAUDE_EFFORTS.map((level) => (
+                <option key={level} value={level}>
+                  Effort: {EFFORT_LABELS[level]}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {comparedProfiles.map((p) => (
+            <span key={p.id} className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border)] text-[var(--text-muted)]">
+              + {p.name}
+            </span>
+          ))}
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setComparePickerOpen((o) => !o)}
+              aria-haspopup="listbox"
+              aria-expanded={comparePickerOpen}
+              title="Compare against other profiles"
+              className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
+            >
+              + Compare
+            </button>
+            {comparePickerOpen && (
+              <ul role="listbox" aria-label="Compare profiles" aria-multiselectable="true" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
+                {profiles
+                  .filter((p) => p.id !== selectedProfileIds[0])
+                  .map((p) => (
+                    <li key={p.id}>
+                      <label className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--bg-sunken)]">
+                        <input type="checkbox" checked={selectedProfileIds.includes(p.id)} onChange={() => togglePickerProfile(p.id)} />
+                        {p.name}
+                      </label>
+                    </li>
+                  ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="ml-auto flex items-center gap-2">
+            {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
+            {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
+            {isStreaming ? (
+              <button
+                type="button"
+                onClick={() => void handleStop()}
+                className="btn btn-danger bg-[var(--danger)] px-3 py-1 text-[var(--bg)]"
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleSend()}
+                disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved || elsewhereUnreachable}
+                className="btn btn-primary px-3 py-1"
+              >
+                Send
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
