@@ -114,6 +114,8 @@ describe('Thread', () => {
     render(<ThreadForChat chatId="chat-1" />);
     const user = userEvent.setup();
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+    // In the pane's header row, not floating over the thread.
+    expect(within(screen.getByRole('region', { name: 'Conversation' })).getByRole('button', { name: 'Viewer' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Viewer' }));
     expect(screen.getByRole('complementary', { name: 'Viewer' })).toBeInTheDocument();
     expect(viewerFor(useViewerStore.getState().viewers, 'chat-1').open).toBe(true);

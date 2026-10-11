@@ -256,6 +256,20 @@ describe('Message', () => {
   });
 
   describe('regenerate and edit actions', () => {
+    it('puts the actions on the label line, shown on hover or keyboard focus', () => {
+      render(<Message message={base({ role: 'user', producedBy: null })} onEdit={vi.fn()} />);
+      const edit = screen.getByRole('button', { name: 'Edit' });
+      expect(edit.closest('[data-message-header]')).not.toBeNull();
+      expect(edit.parentElement).toHaveClass('opacity-0', 'group-hover:opacity-100', 'group-has-[:focus-visible]:opacity-100');
+    });
+
+    it('draws a box around the message only when framed', () => {
+      const { container, rerender } = render(<Message message={base()} />);
+      expect(container.querySelector('article')).not.toHaveClass('border');
+      rerender(<Message message={base()} framed />);
+      expect(container.querySelector('article')).toHaveClass('border', 'rounded');
+    });
+
     it('offers Regenerate on an assistant message only when a handler is given, and calls it', async () => {
       const onRegenerate = vi.fn();
       const { rerender } = render(<Message message={base()} />);

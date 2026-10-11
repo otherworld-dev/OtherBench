@@ -139,6 +139,16 @@ describe('ConversationStrip', () => {
     expect(useGruntStore.getState().inspectorOverlayOpen).toBe(true);
   });
 
+  it('has a Viewer toggle when given one, pressed while the viewer is open', async () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<ConversationStrip chat={makeChat(null)} />);
+    expect(screen.queryByRole('button', { name: 'Viewer' })).toBeNull();
+    rerender(<ConversationStrip chat={makeChat(null)} viewer={{ open: true, onToggle }} />);
+    expect(screen.getByRole('button', { name: 'Viewer' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Viewer' }));
+    expect(onToggle).toHaveBeenCalled();
+  });
+
   it('keeps its buttons with a very long title', () => {
     narrow(true);
     render(<ConversationStrip chat={{ ...makeChat(null), title: 'x'.repeat(300) }} />);

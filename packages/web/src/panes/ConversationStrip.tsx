@@ -47,7 +47,13 @@ function writeOpen(open: boolean): void {
  * even before the first message. Scoped to this chat's messages for the same
  * reason Thread is: the store's message pool is cross-chat.
  */
-export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element {
+export interface ConversationStripProps {
+  chat: Chat;
+  /** The pane's viewer toggle, at the row's right end. */
+  viewer?: { open: boolean; onToggle: () => void };
+}
+
+export function ConversationStrip({ chat, viewer }: ConversationStripProps): JSX.Element {
   const messages = useGruntStore((s) => s.messages);
   const streamStatus = useGruntStore((s) => s.streamStatus);
   const machines = useGruntStore((s) => s.machines);
@@ -152,6 +158,17 @@ export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element {
           <span data-testid="stream-status" title={status} className="min-w-0 truncate text-xs text-[var(--text-muted)]">
             {status}
           </span>
+        )}
+        {viewer && (
+          <button
+            type="button"
+            aria-pressed={viewer.open}
+            title={viewer.open ? 'Hide the viewer' : 'Show the viewer: files, images and pages from this chat'}
+            onClick={viewer.onToggle}
+            className="btn shrink-0 px-2 py-0.5"
+          >
+            Viewer
+          </button>
         )}
         {isNarrow && (
           <button type="button" onClick={() => setOverlayOpen(!overlayOpen)} aria-expanded={overlayOpen} className="btn shrink-0 px-2 py-0.5">
