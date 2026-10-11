@@ -29,6 +29,21 @@ writeFileSync(
     .join('\n')
 );
 
+// A Claude Desktop config the server reads instead of the real one
+// (GRUNT_CLAUDE_DESKTOP_CONFIG), for mcp-import.spec.ts. The commands don't
+// exist anywhere, so importing a server never starts anything.
+export const DESKTOP_SERVERS = { secret: 'e2e-desktop-secret-value', command: 'grunt-e2e-no-such-command' };
+const desktopConfig = join(dbDir, 'claude_desktop_config.json');
+writeFileSync(
+  desktopConfig,
+  JSON.stringify({
+    mcpServers: {
+      'E2E Desktop Notes': { command: DESKTOP_SERVERS.command, args: ['notes'], env: { NOTES_TOKEN: DESKTOP_SERVERS.secret } },
+      'E2E Desktop Legacy': { type: 'sse', url: 'https://example.invalid/sse' },
+    },
+  })
+);
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -49,6 +64,6 @@ export default defineConfig({
     url: `${BASE_URL}/api/health`,
     reuseExistingServer: false,
     timeout: 15_000,
-    env: { ...(process.env as Record<string, string>), GRUNT_COWORK_ROOT: coworkDir },
+    env: { ...(process.env as Record<string, string>), GRUNT_COWORK_ROOT: coworkDir, GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig },
   },
 });
