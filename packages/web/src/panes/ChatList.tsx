@@ -11,7 +11,7 @@ import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state
 import { setChatPinned } from '../state/chatActions.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
-import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
+import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { chatMenuItems, projectMenuItems } from './sidebar/menus.js';
 import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './sidebar/model.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
@@ -96,6 +96,9 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
+  // The chat being dragged, while it is: with nothing pinned yet, an empty Pinned section appears to drop it on.
+  const [draggingChatId, setDraggingChatId] = useState<string | null>(null);
+  const [pinZoneActive, setPinZoneActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -460,9 +463,12 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         chat={chat}
         active={chat.id === activeChatId}
         onSelect={() => setActiveChatId(chat.id)}
+        onDragStart={() => setDraggingChatId(chat.id)}
         onDragEnd={() => {
           setDropTarget(null);
           setRowDrop(null);
+          setDraggingChatId(null);
+          setPinZoneActive(false);
         }}
         reorder={
           // Reordering against a filtered list would place chats relative to ones the user can't see.
@@ -510,11 +516,45 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
           ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
           window scroll once a group sat below the fold. */}
       <div className="relative flex-1 overflow-y-auto px-1.5 py-1" data-testid="chat-list-scroll">
-        {sidebar.pinned.length > 0 && (
+        {sidebar.pinned.length > 0 ? (
           <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
             <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
           </div>
+        ) : (
+          draggingChatId !== null &&
+          !searching && (
+            <div className="mb-1.5">
+              <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
+              <div
+                data-testid="pinned-drop-zone"
+                data-drop-active={pinZoneActive ? 'true' : undefined}
+                onDragOver={(e) => {
+                  if (!Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME)) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (!pinZoneActive) setPinZoneActive(true);
+                }}
+                onDragLeave={(e) => {
+                  if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+                  setPinZoneActive(false);
+                }}
+                onDrop={(e) => {
+                  const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
+                  setPinZoneActive(false);
+                  setDraggingChatId(null);
+                  if (!chatId) return;
+                  e.preventDefault();
+                  void placeChat(chatId, { chats: [], pinned: true, projectId: null }, null);
+                }}
+                className={`mx-1 rounded border border-dashed px-2 py-1.5 text-xs text-[var(--text-muted)] ${
+                  pinZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border-strong)]'
+                }`}
+              >
+                Drop here to pin
+              </div>
+            </div>
+          )
         )}
 
         {searching && sidebar.pinned.length === 0 && sidebar.groups.length === 0 && sidebar.archived.length === 0 && (

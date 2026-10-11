@@ -357,6 +357,45 @@ describe('ChatList drag and drop', () => {
     expect(mockedPatch).not.toHaveBeenCalled();
   });
 
+  it('shows an empty Pinned drop zone while a chat is dragged and nothing is pinned; dropping pins it', async () => {
+    render(<ChatList />);
+    expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
+    fireEvent.dragStart(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' }), { dataTransfer: dataTransfer('c1') });
+    const zone = screen.getByTestId('pinned-drop-zone');
+    expect(zone).toHaveTextContent('Drop here to pin');
+    fireEvent.dragOver(zone, { dataTransfer: dataTransfer('c1') });
+    expect(zone).toHaveAttribute('data-drop-active', 'true');
+    fireEvent.drop(zone, { dataTransfer: dataTransfer('c1') });
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { sortOrder: 0, pinned: true });
+    await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c1']));
+    expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
+  });
+
+  it('takes the drop zone away when the drag ends without a drop', () => {
+    render(<ChatList />);
+    const row = within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' });
+    fireEvent.dragStart(row, { dataTransfer: dataTransfer('c1') });
+    expect(screen.getByTestId('pinned-drop-zone')).toBeInTheDocument();
+    fireEvent.dragEnd(row, { dataTransfer: dataTransfer('c1') });
+    expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
+  });
+
+  it('has no drop zone while something is already pinned', () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1' }), makeChat({ id: 'p', pinned: true })] });
+    render(<ChatList />);
+    fireEvent.dragStart(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' }), { dataTransfer: dataTransfer('c1') });
+    expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
+  });
+
+  it('has no drop zone while searching', async () => {
+    mockedSearch.mockResolvedValue([{ messageId: 'm', chatId: 'c1', snippet: 'x' }]);
+    render(<ChatList />);
+    await userEvent.setup().type(screen.getByRole('searchbox', { name: 'Search chats' }), 'x');
+    await waitFor(() => expect(screen.queryByTestId('group-p-a')).toBeNull());
+    fireEvent.dragStart(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' }), { dataTransfer: dataTransfer('c1') });
+    expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
+  });
+
   it('a pinned chat dropped on a project joins it but stays under Pinned, and the project count goes up', async () => {
     useGruntStore.setState({ chats: [makeChat({ id: 'c1', pinned: true })] });
     render(<ChatList />);
