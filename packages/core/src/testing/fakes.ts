@@ -564,6 +564,7 @@ class InMemoryChatRepo implements ChatRepo {
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
+      projectPinned: c.projectPinned ?? false,
       globalMemoryCursor: c.globalMemoryCursor ?? null,
       sortOrder: c.sortOrder ?? c.createdAt ?? now,
       createdAt: c.createdAt ?? now,
@@ -582,7 +583,7 @@ class InMemoryChatRepo implements ChatRepo {
     const current = this.repo.get(id);
     const stored = toStoredWorkspace(patch, this.selfNodeId) as Partial<Omit<Chat, 'id'>>;
     const moved = current !== null && stored.projectId !== undefined && stored.projectId !== current.projectId;
-    return this.repo.update(id, moved ? { ...stored, memoryCursor: null } : stored);
+    return this.repo.update(id, moved ? { ...stored, memoryCursor: null, projectPinned: stored.projectPinned ?? false } : stored);
   }
   delete(id: string): void {
     this.repo.delete(id);

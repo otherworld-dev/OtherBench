@@ -517,6 +517,42 @@ export function runStoreContract(
       });
     });
 
+    describe('chats: project pin', () => {
+      function addProject(id: string): void {
+        store.projects.create({ id, name: id, workspaceRoot: null, defaultProfileId: null });
+      }
+
+      it('projectPinned defaults to false and round-trips through create, update and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        addProject('proj-a');
+        expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a' })).projectPinned).toBe(false);
+        store.chats.update('chat-a', { projectPinned: true });
+        expect(store.chats.get('chat-a')!.projectPinned).toBe(true);
+        expect(store.chats.list().find((c) => c.id === 'chat-a')!.projectPinned).toBe(true);
+        store.chats.create(makeChatInput({ id: 'chat-b', profileId, projectId: 'proj-a', projectPinned: true }));
+        expect(store.chats.get('chat-b')!.projectPinned).toBe(true);
+      });
+
+      it('moving a chat to another project clears projectPinned, unless the same update sets it; other updates keep it', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        addProject('proj-a');
+        addProject('proj-b');
+        store.chats.create(makeChatInput({ id: 'chat-a', profileId, projectId: 'proj-a' }));
+        store.chats.update('chat-a', { projectPinned: true });
+        store.chats.update('chat-a', { title: 'Renamed' });
+        expect(store.chats.get('chat-a')!.projectPinned).toBe(true);
+
+        store.chats.update('chat-a', { projectId: 'proj-b' });
+        expect(store.chats.get('chat-a')!.projectPinned).toBe(false);
+
+        store.chats.update('chat-a', { projectId: 'proj-a', projectPinned: true });
+        expect(store.chats.get('chat-a')!.projectPinned).toBe(true);
+
+        store.chats.update('chat-a', { projectId: null });
+        expect(store.chats.get('chat-a')!.projectPinned).toBe(false);
+      });
+    });
+
     describe('chats: memory fields', () => {
       function addProject(id: string): void {
         store.projects.create({ id, name: id, workspaceRoot: null, defaultProfileId: null });

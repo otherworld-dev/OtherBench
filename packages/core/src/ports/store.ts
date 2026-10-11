@@ -63,6 +63,12 @@ export interface Chat {
   folders?: ExtraFolder[];
   folderViews?: FolderView[];
   pinned: boolean;
+  /**
+   * Kept at the top of its own project's group in the sidebar (spec
+   * 2026-10-11-sidebar-layout-design §5), separate from `pinned`. Cleared
+   * when the chat changes project, unless the same update sets it.
+   */
+  projectPinned: boolean;
   archivedAt: number | null;
   /**
    * Claude Code auto mode for this chat's turns (spec
@@ -121,7 +127,7 @@ export interface Chat {
  */
 export type NewChat = Omit<
   Chat,
-  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
+  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'projectPinned' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
 > & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
@@ -133,6 +139,7 @@ export type NewChat = Omit<
   projectId?: string | null;
   memoryCursor?: string | null;
   memoryExcluded?: boolean;
+  projectPinned?: boolean;
 };
 
 export interface ChatRepo {
@@ -141,7 +148,8 @@ export interface ChatRepo {
   list(): Chat[];
   /**
    * A patch that changes `projectId` also sets `memoryCursor: null`: the chat
-   * starts over in its new project's memory. A `workspaceRoot` in the patch
+   * starts over in its new project's memory. It also clears `projectPinned`,
+   * unless the patch sets that too. A `workspaceRoot` in the patch
    * (and no `workspace`) is stored as a folder bound to this machine.
    */
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat;

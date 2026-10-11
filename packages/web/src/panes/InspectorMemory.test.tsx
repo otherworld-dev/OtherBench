@@ -33,6 +33,7 @@ function chat(over: Partial<Chat> = {}): Chat {
     runsOn: 'node-self',
     workspaceRoot: null,
     pinned: false,
+    projectPinned: false,
     archivedAt: null,
     autoMode: false,
     projectId: 'proj',

@@ -21,6 +21,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       'folders',
       'runs_on',
       'pinned',
+      'project_pinned',
       'archived_at',
       'auto_mode',
       'effort',
@@ -41,6 +42,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       foldersToRow(c.folders),
       c.runsOn,
       toBool(c.pinned),
+      toBool(c.projectPinned),
       c.archivedAt,
       toBool(c.autoMode),
       c.effort ?? null,
@@ -61,6 +63,7 @@ function chatMapping(selfId: () => string): CrudMapping<Chat> {
       ...foldersFromRow(row),
       runsOn: (row.runs_on as string | null) ?? selfId(),
       pinned: fromBool(row.pinned as number),
+      projectPinned: fromBool(row.project_pinned as number),
       archivedAt: row.archived_at as number | null,
       autoMode: fromBool(row.auto_mode as number),
       // Unset, or a level this version doesn't know, follows Claude Code's own settings.
@@ -100,6 +103,7 @@ export class SqliteChatRepo implements ChatRepo {
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
+      projectPinned: c.projectPinned ?? false,
       globalMemoryCursor: c.globalMemoryCursor ?? null,
       sortOrder: c.sortOrder ?? c.createdAt ?? now,
       createdAt: c.createdAt ?? now,
@@ -125,12 +129,12 @@ export class SqliteChatRepo implements ChatRepo {
     return this.crud.list();
   }
 
-  /** A chat that changes project starts over in the new project's memory (ChatRepo.update's doc). */
+  /** A chat that changes project starts over in the new project's memory, and loses its project pin unless the patch sets it (ChatRepo.update's doc). */
   update(id: string, patch: Partial<Omit<Chat, 'id'>>): Chat {
     const current = this.crud.get(id);
     const stored = toStoredWorkspace(patch, this.selfId()) as Partial<Omit<Chat, 'id'>>;
     const moved = current !== null && stored.projectId !== undefined && stored.projectId !== current.projectId;
-    const next = moved ? { ...stored, memoryCursor: null } : stored;
+    const next = moved ? { ...stored, memoryCursor: null, projectPinned: stored.projectPinned ?? false } : stored;
     const previous = this.db.prepare('SELECT hlc, field_hlc FROM chat WHERE id = ?').get(id) as { hlc: string; field_hlc: string } | undefined;
     const stamp = this.clock.stamp();
     const updated = this.crud.update(id, next, stamp);

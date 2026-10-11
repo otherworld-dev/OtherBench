@@ -98,6 +98,7 @@ export const CHAT_FIELDS: Record<string, string[]> = {
   workspace: ['workspace_location_id', 'workspace_subpath', 'workspace_root', 'workspace_node'],
   runsOn: ['runs_on'],
   pinned: ['pinned'],
+  projectPinned: ['project_pinned'],
   archivedAt: ['archived_at'],
   autoMode: ['auto_mode'],
   effort: ['effort'],

@@ -72,6 +72,7 @@ const chat: Chat = {
   runsOn: 'node-self',
   workspaceRoot: null,
   pinned: false,
+  projectPinned: false,
   autoMode: false,
   projectId: null,
   memoryCursor: null,
