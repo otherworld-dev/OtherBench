@@ -67,6 +67,11 @@ export interface ClaudeCodeEngineDeps {
 
 const PROBE_TIMEOUT_MS = 20_000;
 
+/** A clean chat's folder name under the scratch root: its id, made a plain name so it can't point outside (the server deletes it by the same rule). */
+export function scratchFolderName(chatId: string): string {
+  return chatId.replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
 /** A notice waiting for a safe moment to be yielded (see ClaudeCodeChatEngine.stream). */
 type PendingNotice = { text: string | null };
 
@@ -300,7 +305,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
   private scratchFolder(chatId: string): string {
     this.privateScratch ??= this.deps.scratchRoot ?? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-'));
-    const folder = join(this.privateScratch, chatId.replace(/[^A-Za-z0-9_-]/g, '_'));
+    const folder = join(this.privateScratch, scratchFolderName(chatId));
     mkdirSync(folder, { recursive: true });
     return folder;
   }

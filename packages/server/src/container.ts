@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -57,6 +58,13 @@ export interface Container {
   toolProvider: ToolProvider;
   /** Owns live MCP server connections; `toolProvider` reads its cached tools, routes/tools.ts calls `sync()` after any write to the `mcp_server` table. */
   mcpManager: McpServerManager;
+  /**
+   * Where Claude Code clean chats (no folder) run, one folder per chat
+   * (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §1): next to the
+   * database, or a private temp folder for `:memory:`. Deleting a chat
+   * removes its folder. Optional so hand-built test containers can leave it out.
+   */
+  claudeScratchRoot?: string;
   /** Content-addressed blob storage for attachments (task 21) -- `routes/attachments.ts` writes to it on upload; `TurnRunner`'s `loadAttachment` (wired below) reads from it to embed real bytes for a vision-capable model. */
   blobStore: BlobStore;
   /**
@@ -270,6 +278,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const broker = new PermissionBroker(store);
   const mcpManager = new McpServerManager(store, secrets);
   const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  const claudeScratchRoot =
+    options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
     aisdkEngine,
     new ClaudeCodeChatEngine({
@@ -279,6 +289,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Artifacts (Deck #896) and recall: the same executors as the API engines' tools.
       artifactTool: async (ctx, args) => runArtifactCommand(store, ctx, args),
       recallTool: async (ctx, args) => runRecallCommand(store, ctx, args),
+      // Clean chats, and the profile's MCP servers relayed through Grunt's own server.
+      scratchRoot: claudeScratchRoot,
+      relayTools: (serverIds) => toolProvider.relayMcpTools(serverIds),
     })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
@@ -376,6 +389,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     streamRegistry,
     toolProvider,
     mcpManager,
+    claudeScratchRoot,
     blobStore,
     memory,
     claudeImport,

@@ -1,5 +1,5 @@
-import { mkdirSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, mkdirSync } from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
@@ -428,6 +428,17 @@ describe('chats CRUD', () => {
     const res = await app().request(`/api/chats/${id}`, { method: 'DELETE' });
     expect(res.status).toBe(204);
     expect((await app().request(`/api/chats/${id}`)).status).toBe(404);
+  });
+
+  it("deletes a clean Claude Code chat's scratch folder with it, and doesn't mind when there is none", async () => {
+    container.claudeScratchRoot = join(dataDir, 'claude-scratch');
+    const id = (await createChat())['id'] as string;
+    const folder = join(container.claudeScratchRoot, id);
+    await mkdir(join(folder, 'inner'), { recursive: true });
+    expect((await app().request(`/api/chats/${id}`, { method: 'DELETE' })).status).toBe(204);
+    expect(existsSync(folder)).toBe(false);
+    const other = (await createChat())['id'] as string;
+    expect((await app().request(`/api/chats/${other}`, { method: 'DELETE' })).status).toBe(204);
   });
 });
 

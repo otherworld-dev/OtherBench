@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { chatToJson, chatToMarkdown, exportFilename } from '@grunt/core/domain/export.js';
@@ -8,6 +10,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import { CLAUDE_EFFORTS, isClaudeEffort } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { RecordedUsage } from '@grunt/core/types/usage.js';
+import { scratchFolderName } from '@grunt/engine-claude-code/engine.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
 import { contentDisposition } from './attachments.js';
@@ -225,6 +228,13 @@ export function chatsRoutes(container: Container): Hono {
     // wiring error (see its own doc), which surfaces as a 500 here on
     // purpose rather than silently no-op-ing.
     await sweepOrphanedBlobs(container.store, container.blobStore);
+    // A Claude Code clean chat's scratch folder goes with it. Best effort:
+    // the chat is already gone, so a locked file only leaves an empty folder behind.
+    if (container.claudeScratchRoot) {
+      await rm(join(container.claudeScratchRoot, scratchFolderName(id)), { recursive: true, force: true }).catch((err: unknown) =>
+        console.error(`[grunt-server] couldn't remove the scratch folder of chat ${id}:`, err)
+      );
+    }
     return c.body(null, 204);
   });
 

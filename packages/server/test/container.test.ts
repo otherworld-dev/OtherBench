@@ -1,4 +1,5 @@
 ﻿import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -111,6 +112,19 @@ describe('createContainer', () => {
     const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
     expect(container.store.connections.list()).toEqual([]);
     container.close();
+  });
+
+  it("puts Claude Code clean chats' scratch folders next to the database, or in a private temp folder for :memory:", async () => {
+    const onDisk = await createContainer({ dbPath: join(dir, 'grunt.db'), secretsPath: join(dir, 'secrets.json') });
+    expect(onDisk.claudeScratchRoot).toBe(join(dir, 'claude-scratch'));
+    onDisk.close();
+    const a = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    const b = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    expect(a.claudeScratchRoot!.startsWith(tmpdir())).toBe(true);
+    expect(existsSync(a.claudeScratchRoot!)).toBe(true);
+    expect(a.claudeScratchRoot).not.toBe(b.claudeScratchRoot);
+    a.close();
+    b.close();
   });
 
   it('wires project memory: a restart re-queues a project chat that went quiet while the server was down', async () => {
