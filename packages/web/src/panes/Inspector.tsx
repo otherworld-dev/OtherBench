@@ -393,10 +393,48 @@ function StatusDot({ status }: { status: McpServerHealth['status'] }): JSX.Eleme
   return <span data-testid="mcp-status-dot" data-status={status} className={`inline-block h-2 w-2 shrink-0 rounded-full ${MCP_STATUS_COLOR[status]}`} aria-hidden="true" />;
 }
 
-/** "MCP server health" -- every configured server (enabled or not), its live connection status, tool count, and a manual refresh action (`POST /api/mcp-servers/:id/refresh`, task 25's reconnect-with-backoff still runs on its own regardless). */
-function McpHealthSection(): JSX.Element {
+/**
+ * "MCP servers" -- every configured server (enabled or not), its live
+ * connection status, tool count, and a manual refresh action (`POST
+ * /api/mcp-servers/:id/refresh`, task 25's reconnect-with-backoff still runs
+ * on its own regardless). With the chat's profile loaded, each server also
+ * gets a box for whether that profile may use it: its
+ * `toolPolicy.mcpServerIds`, the same list as Settings > Profiles, so a
+ * change applies to every chat on the profile. Servers it can't use are
+ * dimmed, so a green dot doesn't read as "this chat has these tools".
+ */
+function McpServersSection({ profile }: { profile: Profile | null }): JSX.Element {
   const { data: servers, failed } = usePolled(() => api.mcpServers.list(), []);
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
+  const upsertProfile = useGruntStore((s) => s.upsertProfile);
+  const profileIds = profile?.toolPolicy.mcpServerIds ?? [];
+  // The list as last saved from here, until the profile prop catches up.
+  const [localIds, setLocalIds] = useState<string[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const profileKey = `${profile?.id ?? ''}:${profileIds.join(',')}`;
+  useEffect(() => {
+    setLocalIds(null);
+    setSaveError(null);
+  }, [profileKey]);
+  const onIds = localIds ?? profileIds;
+
+  async function toggleOn(id: string): Promise<void> {
+    if (!profile) return;
+    const before = onIds;
+    const next = before.includes(id) ? before.filter((x) => x !== id) : [...before, id];
+    setLocalIds(next);
+    setSaving(true);
+    setSaveError(null);
+    try {
+      upsertProfile(await api.profiles.patch(profile.id, { toolPolicy: { mcpServerIds: next } }));
+    } catch (err) {
+      setLocalIds(before);
+      setSaveError(`Couldn't save the change to ${profile.name}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function refresh(id: string): Promise<void> {
     setRefreshingIds((s) => new Set(s).add(id));
@@ -419,22 +457,44 @@ function McpHealthSection(): JSX.Element {
 
   return (
     <div data-testid="mcp-health" className="space-y-2">
-      {servers.map((s) => (
-        <div key={s.id} data-testid={`mcp-server-${s.id}`} className="flex items-center gap-2 text-sm">
-          <StatusDot status={s.status} />
-          <span className="min-w-0 flex-1 truncate">{s.name}</span>
-          <span className="text-xs text-[var(--text-muted)]">{s.enabled ? `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}` : 'disabled'}</span>
-          <button
-            type="button"
-            aria-label={`Refresh ${s.name}`}
-            disabled={refreshingIds.has(s.id)}
-            onClick={() => void refresh(s.id)}
-            className="rounded-sm border border-[var(--border-strong)] px-1.5 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
-          >
-            ↻
-          </button>
-        </div>
-      ))}
+      {profile && <p className="text-xs text-[var(--text-muted)]">Ticked servers are on for {profile.name}, in every chat that uses it.</p>}
+      {servers.map((s) => {
+        const dim = profile !== null && !onIds.includes(s.id) ? 'opacity-50' : '';
+        return (
+          <div key={s.id} data-testid={`mcp-server-${s.id}`} className="flex items-center gap-2 text-sm">
+            <label className="flex min-w-0 flex-1 items-center gap-2">
+              {profile && (
+                <input
+                  type="checkbox"
+                  aria-label={`Use ${s.name} in ${profile.name}`}
+                  checked={onIds.includes(s.id)}
+                  disabled={saving}
+                  onChange={() => void toggleOn(s.id)}
+                />
+              )}
+              <span className={`flex min-w-0 flex-1 items-center gap-2 ${dim}`}>
+                <StatusDot status={s.status} />
+                <span className="min-w-0 flex-1 truncate">{s.name}</span>
+              </span>
+            </label>
+            <span className={`text-xs text-[var(--text-muted)] ${dim}`}>{s.enabled ? `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}` : 'disabled'}</span>
+            <button
+              type="button"
+              aria-label={`Refresh ${s.name}`}
+              disabled={refreshingIds.has(s.id)}
+              onClick={() => void refresh(s.id)}
+              className="rounded-sm border border-[var(--border-strong)] px-1.5 py-0.5 text-xs hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+            >
+              ↻
+            </button>
+          </div>
+        );
+      })}
+      {saveError && (
+        <p role="alert" className="text-xs text-[var(--danger)]">
+          {saveError}
+        </p>
+      )}
       {servers.some((s) => s.status === 'error' && s.lastError) && (
         <div className="space-y-1 pt-1">
           {servers
@@ -802,8 +862,8 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
         {chat ? <GrantsSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
-      <Section title="MCP server health">
-        <McpHealthSection />
+      <Section title="MCP servers">
+        <McpServersSection profile={chat ? profile : null} />
       </Section>
 
       <Section title="Audit trail">

@@ -114,6 +114,9 @@ export interface CreateProfileBody {
   useGlobalMemory?: boolean;
 }
 
+/** `PATCH /api/profiles/:id`: any `CreateProfileBody` field, and only the `toolPolicy` fields to change (the server keeps the rest). */
+export type ProfilePatchBody = Partial<Omit<CreateProfileBody, 'toolPolicy'>> & { toolPolicy?: Partial<ToolPolicy> };
+
 /** What `GET /api/memory/global` and its writes return (spec 2026-10-08-global-memory-design §3). */
 export interface GlobalMemoryView {
   memory: GlobalMemory;
@@ -155,6 +158,8 @@ export interface ClaudeDesktopListing {
 export interface ClaudeDesktopImportResult {
   imported: string[];
   skipped: { name: string; reason: string }[];
+  /** The profiles the imported servers were turned on for, as they are now. */
+  profiles: Profile[];
 }
 
 export type ChatPatchBody = Partial<{
@@ -358,7 +363,7 @@ export const api = {
     list: () => request<Profile[]>('/profiles'),
     create: (body: CreateProfileBody) => post<Profile>('/profiles', body),
     get: (id: string) => request<Profile>(`/profiles/${id}`),
-    patch: (id: string, body: Partial<CreateProfileBody>) => patch<Profile>(`/profiles/${id}`, body),
+    patch: (id: string, body: ProfilePatchBody) => patch<Profile>(`/profiles/${id}`, body),
     delete: (id: string) => del(`/profiles/${id}`),
   },
 
@@ -507,7 +512,8 @@ export const api = {
     /** The MCP servers in Claude Desktop's config: names, commands and the NAMES of their env vars and headers, never the values. */
     claudeDesktop: () => request<ClaudeDesktopListing>('/mcp-servers/import/claude-desktop'),
     /** Imports the named servers; their env and header values go server-side into the secret store. */
-    importClaudeDesktop: (names: string[]) => post<ClaudeDesktopImportResult>('/mcp-servers/import/claude-desktop', { names }),
+    /** Imports the named servers, and turns the ones imported on for `profileIds`. */
+    importClaudeDesktop: (names: string[], profileIds: string[]) => post<ClaudeDesktopImportResult>('/mcp-servers/import/claude-desktop', { names, profileIds }),
   },
 
   grants: {

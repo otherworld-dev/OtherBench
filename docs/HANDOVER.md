@@ -908,7 +908,8 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
   - **Reading the config.** `GET /api/mcp-servers/import/claude-desktop` reads Claude Desktop's config: `%APPDATA%\Claude\claude_desktop_config.json`, the macOS or Linux equivalent, or `GRUNT_CLAUDE_DESKTOP_CONFIG`. It lists the servers by name, command or URL, and the names of their env vars and headers.
   - **Importing.** `POST` with the chosen names re-reads the file and creates them through the same code as `POST /api/mcp-servers`, so values go straight into the secret store and never reach the browser.
   - **Skipped servers.** Existing names, SSE servers and malformed entries are skipped with a reason.
-  - **Profiles.** Imported servers start enabled but aren't added to any profile.
+  - **Profiles.** Imported servers start enabled, and are turned on only for the profiles ticked under "Turn on for" (none by default). `POST` takes them as `profileIds`, refuses an unknown one with a 400 before creating anything, and returns the updated profiles.
+- **Turning servers on from the Inspector.** The Inspector's "MCP servers" section lists every server with its health, and with the chat's profile loaded each has a box for whether that profile may use it. Ticking one saves the profile's `toolPolicy.mcpServerIds` (`PATCH /api/profiles/:id` with just that field), the same list as Settings > Profiles, so it applies to every chat on the profile from the next message. Servers the profile can't use are dimmed. In a compare chat the boxes follow the chat's main profile.
 - **Gaps.**
   - Each Claude Code process gets its own relay, but the real servers run once in Grunt's manager, so a stateful server's state is shared between chats (as it already was for API profiles).
   - A relayed call's result isn't added to the audit trail; only its approval is ("delegated to Claude Code").

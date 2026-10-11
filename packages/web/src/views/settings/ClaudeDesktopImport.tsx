@@ -1,10 +1,19 @@
 import { useEffect, useState, type JSX } from 'react';
 import { ApiError, api, type ClaudeDesktopImportResult, type ClaudeDesktopListing, type ClaudeDesktopServerView } from '../../state/api.js';
+import { useGruntStore } from '../../state/store.js';
 
 /** What a server would run as, for the list: its command and arguments, or its URL. */
 function summary(s: ClaudeDesktopServerView): string {
   if (s.transport === 'http') return s.url ?? '';
   return [s.command, ...s.args].filter(Boolean).join(' ');
+}
+
+/** `set` with `key` added, or removed if it was there. */
+function flip(set: Set<string>, key: string): Set<string> {
+  const next = new Set(set);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return next;
 }
 
 /** Why a server can't be ticked, or null when it can. */
@@ -19,7 +28,9 @@ function blocked(s: ClaudeDesktopServerView): string | null {
  * 2026-10-11-claude-code-clean-chat-and-mcp-design §3). Lists the servers
  * in Claude Desktop's config by name and command, with the names of their
  * env vars and headers (their values never leave the server), and imports
- * the ticked ones. Imports aren't added to any profile.
+ * the ticked ones. They are turned on only for the profiles ticked under
+ * "Turn on for", none by default: a profile's MCP list is what its chats may
+ * call, so adding to it stays an explicit choice.
  */
 export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () => void; onClose: () => void }): JSX.Element {
   const [listing, setListing] = useState<ClaudeDesktopListing | null>(null);
@@ -27,6 +38,10 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ClaudeDesktopImportResult | null>(null);
+  const allProfiles = useGruntStore((s) => s.profiles);
+  const upsertProfile = useGruntStore((s) => s.upsertProfile);
+  const profiles = allProfiles.filter((p) => p.archivedAt === null);
+  const [forProfiles, setForProfiles] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -44,21 +59,18 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
   }, []);
 
   function toggle(name: string): void {
-    setChosen((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+    setChosen((prev) => flip(prev, name));
   }
 
   async function runImport(): Promise<void> {
     setBusy(true);
     setError(null);
     try {
-      const done = await api.mcpServers.importClaudeDesktop([...chosen]);
+      const done = await api.mcpServers.importClaudeDesktop([...chosen], [...forProfiles]);
+      for (const p of done.profiles) upsertProfile(p);
       setResult(done);
       setChosen(new Set());
+      setForProfiles(new Set());
       onImported();
       // Show the imported ones as Grunt's now.
       setListing(await api.mcpServers.claudeDesktop().catch(() => listing));
@@ -120,6 +132,23 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
               })}
             </ul>
           )}
+          {profiles.length > 0 && (
+            <fieldset className="space-y-1.5">
+              <legend className="text-xs text-[var(--text-muted)]">Turn on for</legend>
+              {profiles.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    aria-label={p.name}
+                    checked={forProfiles.has(p.id)}
+                    disabled={busy}
+                    onChange={() => setForProfiles((prev) => flip(prev, p.id))}
+                  />
+                  {p.name}
+                </label>
+              ))}
+            </fieldset>
+          )}
           <button type="button" onClick={() => void runImport()} disabled={chosen.size === 0 || busy} className="btn btn-primary px-3 py-1.5">
             {busy ? 'Importing…' : 'Import'}
           </button>
@@ -128,8 +157,9 @@ export function ClaudeDesktopImport({ onImported, onClose }: { onImported: () =>
       {result && (
         <p role="status" className="text-sm">
           {result.imported.length > 0 ? `Imported ${result.imported.join(', ')}.` : 'Nothing was imported.'}
+          {result.profiles.length > 0 && ` Turned on for ${result.profiles.map((p) => p.name).join(', ')}.`}
           {result.skipped.map((s) => ` Skipped ${s.name}: ${s.reason}`).join('')}
-          {result.imported.length > 0 && " Tick them under each profile's MCP servers to use them in chats."}
+          {result.imported.length > 0 && result.profiles.length === 0 && " Turn them on for a profile under its MCP servers, or in the Inspector, to use them in chats."}
         </p>
       )}
     </section>

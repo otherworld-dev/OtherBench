@@ -42,6 +42,9 @@ vi.mock('../state/api.js', async (importOriginal) => {
       projects: {
         patch: vi.fn(),
       },
+      profiles: {
+        patch: vi.fn(),
+      },
     },
   };
 });
@@ -62,6 +65,7 @@ const mockedAuditList = vi.mocked(api.audit.list);
 const mockedHealth = vi.mocked(api.health);
 const mockedChatsPatch = vi.mocked(api.chats.patch);
 const mockedProjectsPatch = vi.mocked(api.projects.patch);
+const mockedProfilesPatch = vi.mocked(api.profiles.patch);
 const mockedIsDesktop = vi.mocked(isDesktop);
 const mockedPickFolder = vi.mocked(pickFolder);
 
@@ -145,6 +149,7 @@ beforeEach(() => {
   mockedHealth.mockReset().mockResolvedValue({ status: 'ok', time: '', platform: 'win32' });
   mockedChatsPatch.mockReset();
   mockedProjectsPatch.mockReset();
+  mockedProfilesPatch.mockReset();
 });
 
 describe('Inspector collapsed strip', () => {
@@ -253,7 +258,7 @@ describe('Inspector session spend', () => {
 });
 
 function mcpHealthSection(): HTMLElement {
-  return screen.getByRole('heading', { name: 'MCP server health' }).closest('section')!;
+  return screen.getByRole('heading', { name: 'MCP servers' }).closest('section')!;
 }
 function grantsSection(): HTMLElement {
   return screen.getByRole('heading', { name: 'Tool grants' }).closest('section')!;
@@ -458,6 +463,63 @@ describe('Inspector MCP server health', () => {
     mockedMcpList.mockRejectedValue(new Error('down'));
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(await within(mcpHealthSection()).findByText(/couldn.t load mcp server health/i)).toBeInTheDocument();
+  });
+});
+
+describe("Inspector MCP servers on the chat's profile", () => {
+  afterEach(cleanup);
+
+  const servers = [
+    { id: 'srv-1', name: 'nextcloud', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 73 },
+    { id: 'srv-2', name: 'blender', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 9 },
+  ];
+  const opus = (mcpServerIds: string[]) =>
+    makeProfile({ name: 'Claude Opus 5.5', toolPolicy: { fs: 'off', shell: false, mcpServerIds, approvalMode: 'ask_on_mutate' } });
+
+  it("ticks the servers that are on for the chat's profile, and says whose list it is", async () => {
+    mockedMcpList.mockResolvedValue(servers);
+    render(<Inspector chat={makeChat()} profile={opus(['srv-1'])} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(mcpHealthSection()).findByRole('checkbox', { name: 'Use nextcloud in Claude Opus 5.5' })).toBeChecked();
+    expect(within(mcpHealthSection()).getByRole('checkbox', { name: 'Use blender in Claude Opus 5.5' })).not.toBeChecked();
+    expect(mcpHealthSection()).toHaveTextContent('Ticked servers are on for Claude Opus 5.5, in every chat that uses it.');
+  });
+
+  it('turning a server on or off saves the change to the profile and the store', async () => {
+    const profile = opus(['srv-1']);
+    useGruntStore.setState({ profiles: [profile] });
+    mockedMcpList.mockResolvedValue(servers);
+    mockedProfilesPatch.mockImplementation(async (_id, body) => ({ ...profile, toolPolicy: { ...profile.toolPolicy, mcpServerIds: body.toolPolicy!.mcpServerIds! } }));
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat()} profile={profile} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const blender = await within(mcpHealthSection()).findByRole('checkbox', { name: 'Use blender in Claude Opus 5.5' });
+    await user.click(blender);
+    expect(mockedProfilesPatch).toHaveBeenCalledWith('p1', { toolPolicy: { mcpServerIds: ['srv-1', 'srv-2'] } });
+    await waitFor(() => expect(useGruntStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['srv-1', 'srv-2']));
+    expect(blender).toBeChecked();
+
+    await user.click(within(mcpHealthSection()).getByRole('checkbox', { name: 'Use nextcloud in Claude Opus 5.5' }));
+    expect(mockedProfilesPatch).toHaveBeenLastCalledWith('p1', { toolPolicy: { mcpServerIds: ['srv-2'] } });
+    await waitFor(() => expect(useGruntStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['srv-2']));
+  });
+
+  it('flips the box back and says why when the save fails', async () => {
+    mockedMcpList.mockResolvedValue(servers);
+    mockedProfilesPatch.mockRejectedValue(new ApiError(500, 'disk full'));
+    const user = userEvent.setup();
+    render(<Inspector chat={makeChat()} profile={opus([])} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const blender = await within(mcpHealthSection()).findByRole('checkbox', { name: 'Use blender in Claude Opus 5.5' });
+    await user.click(blender);
+    expect(await within(mcpHealthSection()).findByRole('alert')).toHaveTextContent("Couldn't save the change to Claude Opus 5.5: disk full");
+    expect(blender).not.toBeChecked();
+  });
+
+  it('shows no toggles when the profile is not loaded', async () => {
+    mockedMcpList.mockResolvedValue(servers);
+    render(<Inspector chat={makeChat()} profile={null} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(mcpHealthSection()).findByText('nextcloud')).toBeInTheDocument();
+    expect(within(mcpHealthSection()).queryByRole('checkbox')).toBeNull();
   });
 });
 

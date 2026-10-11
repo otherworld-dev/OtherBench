@@ -2,7 +2,9 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { McpServer } from '@grunt/core/ports/store.js';
+import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { useGruntStore } from '../../state/store.js';
 import { McpServersPanel } from './McpServersPanel.js';
 
 vi.mock('../../state/api.js', async (importOriginal) => {
@@ -439,10 +441,28 @@ describe('McpServersPanel', () => {
   });
 });
 describe('McpServersPanel import from Claude Desktop', () => {
+  beforeEach(() => useGruntStore.setState({ profiles: [] }));
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
   });
+
+  function makeProfile(overrides: Partial<Profile> = {}): Profile {
+    return {
+      id: 'p1',
+      name: 'Default',
+      description: null,
+      colour: null,
+      connectionId: 'c1',
+      modelId: 'm',
+      systemPrompt: null,
+      params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' },
+      isDefault: false,
+      archivedAt: null,
+      ...overrides,
+    };
+  }
 
   it("lists Claude Desktop's servers, greys out ones Grunt has or can't use with why, and imports the chosen ones", async () => {
     mockedList.mockResolvedValue([]);
@@ -455,7 +475,7 @@ describe('McpServersPanel import from Claude Desktop', () => {
         { name: 'legacy', transport: null, command: null, args: [], url: null, envNames: [], headerNames: [], exists: false, supported: false, reason: "SSE servers aren't supported." },
       ],
     });
-    mockedImport.mockResolvedValue({ imported: ['nextcloud'], skipped: [] });
+    mockedImport.mockResolvedValue({ imported: ['nextcloud'], skipped: [], profiles: [] });
     const user = userEvent.setup();
     render(<McpServersPanel />);
 
@@ -470,10 +490,41 @@ describe('McpServersPanel import from Claude Desktop', () => {
 
     await user.click(nextcloud);
     await user.click(screen.getByRole('button', { name: 'Import' }));
-    expect(mockedImport).toHaveBeenCalledWith(['nextcloud']);
+    expect(mockedImport).toHaveBeenCalledWith(['nextcloud'], []);
     const report = await screen.findByRole('status');
     expect(report).toHaveTextContent('Imported nextcloud.');
-    expect(report).toHaveTextContent("Tick them under each profile's MCP servers to use them in chats.");
+    expect(report).toHaveTextContent('Turn them on for a profile under its MCP servers, or in the Inspector, to use them in chats.');
+  });
+
+  it('turns the imported servers on for the profiles ticked under "Turn on for", and says so', async () => {
+    useGruntStore.setState({
+      profiles: [makeProfile({ id: 'p1', name: 'Claude Opus 5.5' }), makeProfile({ id: 'p2', name: 'Haiku' }), makeProfile({ id: 'p3', name: 'Old', archivedAt: 5 })],
+    });
+    mockedList.mockResolvedValue([]);
+    mockedDesktop.mockResolvedValue({
+      path: 'C:\\x\\claude_desktop_config.json',
+      found: true,
+      servers: [{ name: 'nextcloud', transport: 'stdio', command: 'python.exe', args: [], url: null, envNames: [], headerNames: [], exists: false, supported: true }],
+    });
+    const updated = makeProfile({ id: 'p1', name: 'Claude Opus 5.5', toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['new-id'], approvalMode: 'ask_on_mutate' } });
+    mockedImport.mockResolvedValue({ imported: ['nextcloud'], skipped: [], profiles: [updated] });
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Import from Claude Desktop…' }));
+    const turnOnFor = await screen.findByRole('group', { name: 'Turn on for' });
+    const boxes = within(turnOnFor).getAllByRole('checkbox');
+    expect(boxes.map((b) => b.getAttribute('aria-label'))).toEqual(['Claude Opus 5.5', 'Haiku']);
+    expect(boxes.every((b) => !(b as HTMLInputElement).checked)).toBe(true);
+
+    await user.click(screen.getByRole('checkbox', { name: 'nextcloud' }));
+    await user.click(within(turnOnFor).getByRole('checkbox', { name: 'Claude Opus 5.5' }));
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    expect(mockedImport).toHaveBeenCalledWith(['nextcloud'], ['p1']);
+    const report = await screen.findByRole('status');
+    expect(report).toHaveTextContent('Imported nextcloud. Turned on for Claude Opus 5.5.');
+    expect(report).not.toHaveTextContent('Turn them on');
+    expect(useGruntStore.getState().profiles.find((p) => p.id === 'p1')!.toolPolicy.mcpServerIds).toEqual(['new-id']);
   });
 
   it("says when Claude Desktop's config wasn't found", async () => {
