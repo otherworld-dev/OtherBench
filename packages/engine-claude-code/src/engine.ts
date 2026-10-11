@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage, SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
@@ -10,7 +10,7 @@ import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
-import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName } from './grunt-server.js';
+import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName, type GruntServerTool } from './grunt-server.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
@@ -45,7 +45,7 @@ export interface ClaudeCodeEngineDeps {
   /** Runs a `recall` tool call for a reply (spec 2026-10-09-recall-design): the server's executor. Without it, Claude Code gets no recall tool. */
   recallTool?: (ctx: { chatId: string }, args: unknown) => Promise<unknown>;
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
-  mcpServer?: (name: string, tools: SdkMcpToolDefinition<any>[]) => McpServerConfig;
+  mcpServer?: (name: string, tools: GruntServerTool[]) => McpServerConfig;
 }
 
 const PROBE_TIMEOUT_MS = 20_000;
@@ -316,7 +316,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const ownRecallTool = server && own.recall ? gruntRecallToolName(server) : null;
     const ownTool = (toolName: string): GruntTool | undefined =>
       toolName === ownArtifactTool ? 'artifact' : toolName === ownRecallTool ? 'recall' : undefined;
-    const tools: SdkMcpToolDefinition<any>[] = [
+    const tools: GruntServerTool[] = [
       ...(own.artifacts ? [gruntArtifactTool(() => live?.binding?.artifact)] : []),
       ...(own.recall ? [gruntRecallTool(() => live?.binding?.recall)] : []),
     ];

@@ -653,7 +653,7 @@ describe('ClaudeCodeChatEngine artifacts', () => {
     let handled: unknown = null;
     const { query, calls } = fakeQuery(async function* () {
       yield init('sess-1');
-      handled = await tools[0]!.handler({ command: 'view', id: 'calc' }, {});
+      handled = await tools[0]!.call({ command: 'view', id: 'calc' });
       yield success();
     });
     const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool, mcpServer });
@@ -735,7 +735,7 @@ describe('ClaudeCodeChatEngine recall', () => {
     });
     const { query } = fakeQuery(async function* () {
       yield init('sess-1');
-      await tools.find((t) => t.name === 'recall')!.handler({ command: 'search', query: 'hetzner' }, {});
+      await tools.find((t) => t.name === 'recall')!.call({ command: 'search', query: 'hetzner' });
       yield success();
     });
     const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool: async () => null, recallTool, mcpServer });

@@ -34,3 +34,8 @@ Each `*.json` is the raw array of `SDKMessage` objects from one `query()` run (w
 
 - `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })` works on an idle process with no prompt sent (no tokens used): about 1 s on a fresh process; a second call on the same process answered at once with the same figures (cached in the process). `behaviors` was null, as asked.
 - A Claude Max login answered `subscription_type: 'max'`, `rate_limits_available: true`, and `rate_limits` with `five_hour` and `seven_day` (`utilization` 0-100, `resets_at` ISO with microseconds), `seven_day_opus`/`seven_day_sonnet`/`seven_day_oauth_apps` null, `model_scoped: [{ display_name: 'Fable', utilization, resets_at }]` and `extra_usage`. The windows also carried fields the d.ts doesn't list (`limit_dollars`, `used_dollars`, ...), and `rate_limits` many undocumented keys; Grunt reads only the documented ones (`src/plan-usage.ts`).
+
+## Raw-handler in-process server (raw-server-probe.mjs, SDK 0.3.287, 2026-10-11)
+
+- An in-process server built as an MCP `McpServer` with its own `tools/list` and `tools/call` handlers (a JSON input schema, no zod), passed as `{ type: 'sdk', name, instance }`, works: with `settingSources: []`, `strictMcpConfig: true` and `tools: []`, init listed only `mcp__probe__echo_raw`, the model (haiku) called it with `{ text: 'ping' }`, and the result came back as `PING-RAW`.
+- So Grunt's own server can carry tools relayed from Grunt's MCP servers with their real schemas, and a clean chat (no settings, no built-in tools) still gets its MCP tools.
