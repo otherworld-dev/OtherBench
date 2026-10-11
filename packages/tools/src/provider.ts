@@ -251,9 +251,15 @@ export class GruntToolProvider implements ToolProvider {
           // this profile never enabled is denied rather than riding on the
           // fact that some other server is enabled.
           serverId: id,
+          // Looks the server's client up again at call time rather than
+          // using the one it was listed with: turning a server off and on
+          // replaces its client, and the Claude Code relay keeps these specs
+          // for the life of a process, which can span that.
           execute: async (args: unknown) => {
+            const live = this.mcp.listFor([id])[0]?.client;
+            if (!live) return toolError('mcp_call_failed', `MCP server "${name}" isn't connected.`);
             try {
-              const result = await client.callTool(tool.name, args);
+              const result = await live.callTool(tool.name, args);
               if (result.isError) return toolError('mcp_tool_error', summarizeMcpContent(result.content));
               return result.content;
             } catch (err) {

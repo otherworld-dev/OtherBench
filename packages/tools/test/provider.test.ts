@@ -162,6 +162,40 @@ describe('GruntToolProvider.relayMcpTools (the Claude Code relay)', () => {
     expect(pending).toEqual([]); // no card: the Claude Code gate has already approved the call
     expect(provider.relayMcpTools([])).toEqual([]);
   });
+
+  it('runs each call on the server\'s current connection, so a spec kept across a reconnect still works', async () => {
+    // Turning a server off and on again swaps its McpClient, while a Claude
+    // Code process keeps the specs it started with for as long as it lives.
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    let live = 1;
+    const client = (gen: number) =>
+      ({
+        id: 's1',
+        status: 'ok',
+        lastError: null,
+        tools: [{ name: 'deck_list', description: '', inputSchema: {} }],
+        callTool: async () => {
+          if (gen !== live) throw new Error(`client ${gen} is not connected`);
+          return { content: [{ type: 'text', text: `ran on client ${gen}` }], isError: false };
+        },
+      }) as unknown as McpClient;
+    let current: McpClient | null = client(1);
+    const mcp: Pick<McpServerManager, 'listFor' | 'refresh' | 'shutdown'> = {
+      listFor: (ids) => (current && ids.includes('s1') ? [{ id: 's1', name: 'nextcloud', client: current }] : []),
+      refresh: async () => {},
+      shutdown: async () => {},
+    };
+    const provider = new GruntToolProvider(store, broker, mcp);
+    const [spec] = provider.relayMcpTools(['s1']);
+
+    live = 2;
+    current = client(2);
+    expect(await spec!.execute({}, ctx())).toEqual([{ type: 'text', text: 'ran on client 2' }]);
+
+    current = null;
+    expect(await spec!.execute({}, ctx())).toMatchObject({ error: true, code: 'mcp_call_failed', message: 'MCP server "nextcloud" isn\'t connected.' });
+  });
 });
 
 describe('GruntToolProvider gating', () => {
