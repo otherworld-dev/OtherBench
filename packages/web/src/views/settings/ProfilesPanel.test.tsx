@@ -500,8 +500,10 @@ describe('ProfilesPanel', () => {
     expect(screen.queryByLabelText('Top P')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Bash')).toBeInTheDocument();
     expect(screen.getByLabelText('Web tools')).toBeInTheDocument();
-    expect(screen.getByLabelText('MCP servers from your Claude config')).toBeInTheDocument();
-    expect(screen.queryByTestId('mcp-server-allowlist')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('MCP servers from your Claude Code config (folder chats only)')).toBeInTheDocument();
+    // Grunt's own MCP servers are relayed into Claude Code chats, so the checklist is there too.
+    expect(await screen.findByTestId('mcp-server-allowlist')).toBeInTheDocument();
+    expect(screen.getByText('MCP servers (from Grunt)')).toBeInTheDocument();
 
     await user.click(screen.getByLabelText('Web tools'));
     await user.click(screen.getByRole('button', { name: /^save$/i }));

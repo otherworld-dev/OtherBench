@@ -395,42 +395,46 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
                 Web tools
               </label>
               <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
-                <input type="checkbox" aria-label="MCP servers from your Claude config" checked={agentMcp} onChange={(e) => setAgentMcp(e.target.checked)} />
-                MCP servers from your Claude config
+                <input
+                  type="checkbox"
+                  aria-label="MCP servers from your Claude Code config (folder chats only)"
+                  checked={agentMcp}
+                  onChange={(e) => setAgentMcp(e.target.checked)}
+                />
+                MCP servers from your Claude Code config (folder chats only)
               </label>
             </>
           )}
         </div>
       </div>
 
-      {!isClaudeCode && (
-        <div>
-          <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">MCP servers this profile may use</span>
-          <p className="mb-1.5 text-xs text-[var(--text-muted)]">
-            This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
-            having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
+      {/* Claude Code profiles too: Grunt relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
+      <div>
+        <span className="mb-1 block text-xs font-medium text-[var(--text-muted)]">{isClaudeCode ? 'MCP servers (from Grunt)' : 'MCP servers this profile may use'}</span>
+        <p className="mb-1.5 text-xs text-[var(--text-muted)]">
+          This is an access-control decision, not a convenience filter: the permission broker treats a server being checked here as this profile
+          having authorised its tools. A tool from a server that is <em>not</em> checked is hard-denied, with no approval prompt offered for it.
+        </p>
+        {mcpServersFailed ? (
+          <p role="alert" data-testid="mcp-allowlist-error" className="text-xs text-[var(--danger)]">
+            Couldn&rsquo;t load MCP servers -- this profile&rsquo;s existing allowlist ({mcpServerIds.length} server
+            {mcpServerIds.length === 1 ? '' : 's'}) is preserved, but can&rsquo;t be shown or edited until this loads. Reload the page, or
+            check Settings &gt; MCP Servers.
           </p>
-          {mcpServersFailed ? (
-            <p role="alert" data-testid="mcp-allowlist-error" className="text-xs text-[var(--danger)]">
-              Couldn&rsquo;t load MCP servers -- this profile&rsquo;s existing allowlist ({mcpServerIds.length} server
-              {mcpServerIds.length === 1 ? '' : 's'}) is preserved, but can&rsquo;t be shown or edited until this loads. Reload the page, or
-              check Settings &gt; MCP Servers.
-            </p>
-          ) : mcpServers.length === 0 ? (
-            <p className="text-xs text-[var(--text-faint)]">No MCP servers configured yet -- add one in Settings &gt; MCP Servers.</p>
-          ) : (
-            <div data-testid="mcp-server-allowlist" className="space-y-1">
-              {mcpServers.map((s) => (
-                <label key={s.id} className="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" aria-label={`Allow MCP server ${s.name}`} checked={mcpServerIds.includes(s.id)} onChange={() => toggleMcpServer(s.id)} />
-                  {s.name}
-                  {!s.enabled && <span className="text-xs text-[var(--text-muted)]">(disabled -- contributes no tools until re-enabled)</span>}
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+        ) : mcpServers.length === 0 ? (
+          <p className="text-xs text-[var(--text-faint)]">No MCP servers configured yet -- add one in Settings &gt; MCP Servers.</p>
+        ) : (
+          <div data-testid="mcp-server-allowlist" className="space-y-1">
+            {mcpServers.map((s) => (
+              <label key={s.id} className="flex items-center gap-1.5 text-sm">
+                <input type="checkbox" aria-label={`Allow MCP server ${s.name}`} checked={mcpServerIds.includes(s.id)} onChange={() => toggleMcpServer(s.id)} />
+                {s.name}
+                {!s.enabled && <span className="text-xs text-[var(--text-muted)]">(disabled -- contributes no tools until re-enabled)</span>}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div>
         <label className="flex items-center gap-1.5 text-sm">

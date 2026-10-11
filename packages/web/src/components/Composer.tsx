@@ -152,7 +152,6 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   // A chat that runs on a machine that can't be reached waits for it, or for Run here (UnreachableBanner).
   const machines = useGruntStore((s) => s.machines);
   const elsewhereUnreachable = remoteUnreachable(machines, storedChat ?? chat);
-  const needsWorkspace = !folderUnresolved && !chat.workspaceRoot && selectedProfiles.some((p) => isClaudeCodeProfile(p, connections));
   // Auto mode (spec 2026-10-03-claude-code-auto-mode-design section 2): offered
   // when any selected profile runs through Claude Code; it needs the Claude
   // login, so it's unavailable when every such profile uses an endpoint backend.
@@ -298,8 +297,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if ((trimmed.length === 0 && attachments.length === 0) || sending || selectedProfileIds.length === 0) return;
     // The same rules as the Send button, which Enter reaches without: never
     // while a reply is still running (that would start a second reply beside
-    // it), and never for Claude Code without a workspace folder.
-    if (isStreaming || needsWorkspace || folderUnresolved || elsewhereUnreachable) return;
+    // it). A Claude Code chat with no folder is a clean chat and may send.
+    if (isStreaming || folderUnresolved || elsewhereUnreachable) return;
 
     setSending(true);
     // A stale remove-failure message from before this send must not linger
@@ -375,10 +374,6 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {removeError}
         </div>
-      )}
-
-      {needsWorkspace && (
-        <p role="status" className="mb-1.5 text-xs text-[var(--danger)]">Set a workspace folder to use Claude Code.</p>
       )}
 
       {autoError && (
@@ -591,7 +586,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               <button
                 type="button"
                 onClick={() => void handleSend()}
-                disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || needsWorkspace || folderUnresolved || elsewhereUnreachable}
+                disabled={sending || (text.trim().length === 0 && attachments.length === 0) || selectedProfileIds.length === 0 || folderUnresolved || elsewhereUnreachable}
                 className="btn btn-primary px-3 py-1"
               >
                 Send

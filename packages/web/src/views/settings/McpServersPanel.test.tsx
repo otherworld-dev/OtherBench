@@ -17,6 +17,8 @@ vi.mock('../../state/api.js', async (importOriginal) => {
         patch: vi.fn(),
         delete: vi.fn(),
         refresh: vi.fn(),
+        claudeDesktop: vi.fn(),
+        importClaudeDesktop: vi.fn(),
       },
     },
   };
@@ -30,6 +32,8 @@ const mockedCreate = vi.mocked(api.mcpServers.create);
 const mockedPatch = vi.mocked(api.mcpServers.patch);
 const mockedDelete = vi.mocked(api.mcpServers.delete);
 const mockedRefresh = vi.mocked(api.mcpServers.refresh);
+const mockedDesktop = vi.mocked(api.mcpServers.claudeDesktop);
+const mockedImport = vi.mocked(api.mcpServers.importClaudeDesktop);
 
 function makeHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -432,5 +436,52 @@ describe('McpServersPanel', () => {
 
     await waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('srv-1'));
     confirmSpy.mockRestore();
+  });
+});
+describe('McpServersPanel import from Claude Desktop', () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("lists Claude Desktop's servers, greys out ones Grunt has or can't use with why, and imports the chosen ones", async () => {
+    mockedList.mockResolvedValue([]);
+    mockedDesktop.mockResolvedValue({
+      path: 'C:\\Users\\a\\AppData\\Roaming\\Claude\\claude_desktop_config.json',
+      found: true,
+      servers: [
+        { name: 'nextcloud', transport: 'stdio', command: 'python.exe', args: ['nc_mcp.py'], url: null, envNames: ['NC_CONFIG'], headerNames: [], exists: false, supported: true },
+        { name: 'blender', transport: 'stdio', command: 'uvx', args: ['blender-mcp'], url: null, envNames: [], headerNames: [], exists: true, supported: true },
+        { name: 'legacy', transport: null, command: null, args: [], url: null, envNames: [], headerNames: [], exists: false, supported: false, reason: "SSE servers aren't supported." },
+      ],
+    });
+    mockedImport.mockResolvedValue({ imported: ['nextcloud'], skipped: [] });
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Import from Claude Desktop…' }));
+    const nextcloud = await screen.findByRole('checkbox', { name: /nextcloud/ });
+    expect(screen.getByText(/NC_CONFIG/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /blender/ })).toBeDisabled();
+    expect(screen.getByText(/Grunt already has it/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /legacy/ })).toBeDisabled();
+    expect(screen.getByText("SSE servers aren't supported.")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+
+    await user.click(nextcloud);
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    expect(mockedImport).toHaveBeenCalledWith(['nextcloud']);
+    const report = await screen.findByRole('status');
+    expect(report).toHaveTextContent('Imported nextcloud.');
+    expect(report).toHaveTextContent("Tick them under each profile's MCP servers to use them in chats.");
+  });
+
+  it("says when Claude Desktop's config wasn't found", async () => {
+    mockedList.mockResolvedValue([]);
+    mockedDesktop.mockResolvedValue({ path: 'C:\\x\\claude_desktop_config.json', found: false, servers: [] });
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+    await user.click(screen.getByRole('button', { name: 'Import from Claude Desktop…' }));
+    expect(await screen.findByText("Claude Desktop's config wasn't found at C:\\x\\claude_desktop_config.json.")).toBeInTheDocument();
   });
 });

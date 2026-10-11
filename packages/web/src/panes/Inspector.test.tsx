@@ -327,6 +327,14 @@ describe('Inspector workspace root', () => {
     expect(within(workspaceSection()).getByText(/filesystem and shell tools are unavailable/i)).toBeInTheDocument();
   });
 
+  it('says a Claude Code chat with no folder is a plain chat with web and MCP tools only', async () => {
+    useGruntStore.setState({ connections: [{ id: 'c1', name: 'Claude Code', kind: 'claude_code', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null }] });
+    render(<Inspector chat={makeChat({ workspaceRoot: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(await within(workspaceSection()).findByText('No folder: a plain chat. Web and MCP tools only; set a folder to let Claude Code use your files.')).toBeInTheDocument();
+    expect(within(workspaceSection()).queryByText(/filesystem and shell tools are unavailable/i)).not.toBeInTheDocument();
+    useGruntStore.setState({ connections: [] });
+  });
+
   it('shows the current workspace path and the concrete consequence for this profile when one is set', async () => {
     render(
       <Inspector

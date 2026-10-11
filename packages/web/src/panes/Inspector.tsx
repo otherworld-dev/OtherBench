@@ -13,6 +13,7 @@ import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
 import { FolderList } from '../components/FolderList.js';
+import { isClaudeCodeProfile } from '../components/Composer.js';
 
 export interface InspectorProps {
   chat: Chat | null;
@@ -165,6 +166,7 @@ function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
 
 function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | null }): JSX.Element {
   const upsertChat = useGruntStore((s) => s.upsertChat);
+  const connections = useGruntStore((s) => s.connections);
   const machines = useGruntStore((s) => s.machines);
   const chats = useGruntStore((s) => s.chats);
   const activeElsewhere = alsoActive(machines, chats, chat);
@@ -329,7 +331,12 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
   if (!displayedWorkspaceRoot) {
     return (
       <div className="space-y-2" data-testid="workspace-section">
-        <p className="text-sm text-[var(--text-faint)]">No workspace folder is set. Filesystem and shell tools are unavailable in this chat until one is.</p>
+        <p className="text-sm text-[var(--text-faint)]">
+          {profile && isClaudeCodeProfile(profile, connections)
+            ? // A clean chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §1).
+              'No folder: a plain chat. Web and MCP tools only; set a folder to let Claude Code use your files.'
+            : 'No workspace folder is set. Filesystem and shell tools are unavailable in this chat until one is.'}
+        </p>
         <button type="button" onClick={openEdit} className="btn px-2 py-1">
           Set workspace…
         </button>

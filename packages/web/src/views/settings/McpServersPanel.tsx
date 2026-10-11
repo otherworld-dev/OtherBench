@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type JSX } from 'react';
 import type { McpServer } from '@grunt/core/ports/store.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { usePolled } from '../../lib/usePolled.js';
+import { ClaudeDesktopImport } from './ClaudeDesktopImport.js';
 import { ApiError, api, type CreateMcpServerBody } from '../../state/api.js';
 
 const STATUS_COLOR: Record<McpServerHealth['status'], string> = {
@@ -701,6 +702,7 @@ export function McpServersPanel(): JSX.Element {
   const bumpPoll = (): void => setPollNonce((n) => n + 1);
 
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
+  const [importing, setImporting] = useState(false);
   const [selectedConfig, setSelectedConfig] = useState<McpServer | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -802,10 +804,23 @@ export function McpServersPanel(): JSX.Element {
       <div className="w-80 shrink-0">
         <button
           type="button"
-          onClick={() => setEditingId('new')}
-          className="btn btn-primary mb-3 w-full px-2 py-1.5"
+          onClick={() => {
+            setImporting(false);
+            setEditingId('new');
+          }}
+          className="btn btn-primary mb-2 w-full px-2 py-1.5"
         >
           + New MCP server
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setEditingId(null);
+            setImporting(true);
+          }}
+          className="btn mb-3 w-full px-2 py-1.5"
+        >
+          Import from Claude Desktop…
         </button>
         {healthFailed && <p className="mb-2 text-xs text-[var(--danger)]">Couldn&rsquo;t load MCP server health.</p>}
         {servers === null ? (
@@ -820,7 +835,10 @@ export function McpServersPanel(): JSX.Element {
                 health={h}
                 active={h.id === editingId}
                 busy={busyIds.has(h.id)}
-                onSelect={() => setEditingId(h.id)}
+                onSelect={() => {
+                  setImporting(false);
+                  setEditingId(h.id);
+                }}
                 onToggleEnabled={() => void toggleEnabled(h)}
                 onRefresh={() => void refreshOne(h)}
               />
@@ -830,7 +848,9 @@ export function McpServersPanel(): JSX.Element {
       </div>
 
       <div className="flex-1">
-        {editingId === 'new' ? (
+        {importing ? (
+          <ClaudeDesktopImport onImported={bumpPoll} onClose={() => setImporting(false)} />
+        ) : editingId === 'new' ? (
           <McpServerForm key="new" server={null} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
         ) : editingId && loadingConfig ? (
           <p className="text-sm text-[var(--text-faint)]">Loading…</p>

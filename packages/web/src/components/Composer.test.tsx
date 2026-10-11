@@ -639,7 +639,7 @@ describe('Composer', () => {
     });
   });
 
-  it('tags each profile with its toolset and blocks sending a Claude Code turn without a workspace', async () => {
+  it('tags each profile with its toolset, and lets a Claude Code chat with no folder send (a clean chat)', async () => {
     const conn = (id: string, kind: Connection['kind']): Connection => ({
       id,
       name: id,
@@ -663,12 +663,13 @@ describe('Composer', () => {
     expect(screen.getByRole('option', { name: /Sonnet.*CC tools/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Qwen.*Grunt tools/ })).toBeInTheDocument();
 
+    mockedCreate.mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+    mockedSetHead.mockResolvedValue(makeChat({ profileId: 'sonnet', workspaceRoot: null }));
     await user.type(screen.getByRole('textbox', { name: /message/i }), 'hello');
-    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
-    expect(screen.getByText('Set a workspace folder to use Claude Code.')).toBeInTheDocument();
-    // Enter is held to the same rule as the disabled Send button.
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+    expect(screen.queryByText(/Set a workspace folder/)).not.toBeInTheDocument();
     await user.keyboard('{Enter}');
-    expect(mockedCreate).not.toHaveBeenCalled();
+    expect(mockedCreate).toHaveBeenCalledTimes(1);
   });
 });
 

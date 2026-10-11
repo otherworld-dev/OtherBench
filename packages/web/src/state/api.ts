@@ -131,6 +131,32 @@ export interface CreateChatBody {
   projectId?: string;
 }
 
+/** One server in Claude Desktop's config, as the import lists it (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §3). */
+export interface ClaudeDesktopServerView {
+  name: string;
+  transport: 'stdio' | 'http' | null;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  envNames: string[];
+  headerNames: string[];
+  /** Grunt already has a server with this name. */
+  exists: boolean;
+  supported: boolean;
+  reason?: string;
+}
+
+export interface ClaudeDesktopListing {
+  path: string;
+  found: boolean;
+  servers: ClaudeDesktopServerView[];
+}
+
+export interface ClaudeDesktopImportResult {
+  imported: string[];
+  skipped: { name: string; reason: string }[];
+}
+
 export type ChatPatchBody = Partial<{
   title: string;
   profileId: string;
@@ -478,6 +504,10 @@ export const api = {
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),
     refresh: (id: string) => post<void>(`/mcp-servers/${id}/refresh`),
+    /** The MCP servers in Claude Desktop's config: names, commands and the NAMES of their env vars and headers, never the values. */
+    claudeDesktop: () => request<ClaudeDesktopListing>('/mcp-servers/import/claude-desktop'),
+    /** Imports the named servers; their env and header values go server-side into the secret store. */
+    importClaudeDesktop: (names: string[]) => post<ClaudeDesktopImportResult>('/mcp-servers/import/claude-desktop', { names }),
   },
 
   grants: {
