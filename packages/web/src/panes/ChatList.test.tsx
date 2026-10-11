@@ -539,6 +539,20 @@ describe('ChatList chat menu', () => {
     expect(screen.getByRole('menuitem', { name: 'Unpin' })).toBeInTheDocument();
   });
 
+  it('Pin in project keeps the chat at the top of its project, marked, and the menu then offers Unpin from project', async () => {
+    const user = setup();
+    act(() => useGruntStore.setState({ chats: [...useGruntStore.getState().chats, makeChat({ id: 'c3', title: 'Third', projectId: 'p-a', sortOrder: 50 })] }));
+    expect(rowIds('group-p-a')).toEqual(['c3', 'c1']);
+    fireEvent.contextMenu(row('First'));
+    await user.click(screen.getByRole('menuitem', { name: 'Pin in project' }));
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { projectPinned: true });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['c1', 'c3']));
+    expect(within(screen.getByTestId('chat-row-c1')).getByTestId('project-pin-marker')).toBeInTheDocument();
+    expect(within(screen.getByTestId('chat-row-c3')).queryByTestId('project-pin-marker')).toBeNull();
+    fireEvent.contextMenu(row('First'));
+    expect(screen.getByRole('menuitem', { name: 'Unpin from project' })).toBeInTheDocument();
+  });
+
   it('Pin moves the chat under Pinned and puts focus back on its row; the menu then offers Unpin', async () => {
     const user = setup();
     fireEvent.contextMenu(row('Second'));
@@ -986,6 +1000,30 @@ describe('ChatList reordering (#823)', () => {
     dropOnRow('pin', 'b', 'top');
     expect(mockedPatch).toHaveBeenLastCalledWith('pin', { sortOrder: 21, pinned: false });
     await waitFor(() => expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['pin', 'b', 'c']));
+  });
+
+  it("dropping a chat among a project's pinned chats pins it there, and dropping it back among the rest unpins it", async () => {
+    useGruntStore.setState({
+      chats: [...useGruntStore.getState().chats, makeChat({ id: 'kept', projectId: 'p-a', projectPinned: true, sortOrder: 2 }), makeChat({ id: 'y', projectId: 'p-a', sortOrder: 8 })],
+    });
+    render(<ChatList />);
+    expect(rowIds('group-p-a')).toEqual(['kept', 'y', 'x']);
+
+    dropOnRow('x', 'kept', 'bottom');
+    expect(mockedPatch).toHaveBeenLastCalledWith('x', { sortOrder: 1, projectPinned: true });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['kept', 'x', 'y']));
+
+    dropOnRow('x', 'y', 'bottom');
+    expect(mockedPatch).toHaveBeenLastCalledWith('x', { sortOrder: 7, projectPinned: false });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['kept', 'y', 'x']));
+  });
+
+  it('dropping a chat from another group among a project\'s pinned chats moves and pins it in one PATCH', async () => {
+    useGruntStore.setState({ chats: [...useGruntStore.getState().chats, makeChat({ id: 'kept', projectId: 'p-a', projectPinned: true, sortOrder: 2 })] });
+    render(<ChatList />);
+    dropOnRow('a', 'kept', 'top');
+    expect(mockedPatch).toHaveBeenLastCalledWith('a', { sortOrder: 3, projectPinned: true, projectId: 'p-a' });
+    await waitFor(() => expect(rowIds('group-p-a')).toEqual(['a', 'kept', 'x']));
   });
 
   it('dropping a chat onto itself, or where it already is, sends nothing', () => {

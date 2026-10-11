@@ -11,7 +11,7 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), setProjectPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
@@ -26,7 +26,7 @@ describe('chatMenuItems', () => {
     const h = chatHandlers();
 
     const items = chatMenuItems(chat({ projectId: 'a' }), projects, h);
-    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Pin in project', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
     items.find((i) => i.id === 'memory')!.onSelect!();
     expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(true);
 
@@ -72,6 +72,24 @@ describe('chatMenuItems', () => {
     expect(h.exportAs).toHaveBeenLastCalledWith('markdown');
     exportItem.submenu![1]!.onSelect!();
     expect(h.exportAs).toHaveBeenLastCalledWith('json');
+  });
+
+  it('offers Pin in project for a chat in a listed project, Unpin from project once pinned there, and sets the opposite state', () => {
+    const projects = [project('a', 'Alpha')];
+    const h = chatHandlers();
+    chatMenuItems(chat({ projectId: 'a' }), projects, h).find((i) => i.id === 'project-pin')!.onSelect!();
+    expect(h.setProjectPinned).toHaveBeenLastCalledWith(true);
+    const pinned = chatMenuItems(chat({ projectId: 'a', projectPinned: true }), projects, h).find((i) => i.id === 'project-pin')!;
+    expect(pinned.label).toBe('Unpin from project');
+    pinned.onSelect!();
+    expect(h.setProjectPinned).toHaveBeenLastCalledWith(false);
+  });
+
+  it('has no Pin in project for a chat outside a listed project, or an archived one', () => {
+    const projects = [project('a', 'Alpha')];
+    for (const c of [chat(), chat({ projectId: 'gone' }), chat({ projectId: 'a', archivedAt: 5 })]) {
+      expect(chatMenuItems(c, projects, chatHandlers()).some((i) => i.id === 'project-pin')).toBe(false);
+    }
   });
 
   it('hides Pin and Unpin for an archived chat', () => {

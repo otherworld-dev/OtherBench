@@ -7,7 +7,12 @@ export interface SidebarGroup {
   key: string;
   /** Null for No project. */
   project: Project | null;
-  /** The group's unpinned chats in sidebar order (`sortOrder`, highest first); only search matches while searching. */
+  /**
+   * Chats pinned in this project (`projectPinned`, spec 2026-10-11-sidebar-layout-design §5), shown first, in
+   * sidebar order; only search matches while searching. Always empty for No project, where the flag means nothing.
+   */
+  pinnedChats: Chat[];
+  /** The group's other unpinned chats in sidebar order (`sortOrder`, highest first); only search matches while searching. */
   chats: Chat[];
   /** Every unarchived chat in the group, pinned ones included (they display under Pinned). */
   total: number;
@@ -26,7 +31,7 @@ export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder |
 
 /**
  * The sidebar's layout (spec 2026-10-03-projects-design §3): Pinned, each
- * project in `compareProjects` order, then No project. Archived chats never
+ * project in `compareProjects` order (its own pinned chats first), then No project. Archived chats never
  * appear in those; they are returned separately in `archived`. Pinned chats
  * appear only under Pinned (but count towards their project). A chat whose
  * project isn't loaded falls under No project. While searching (`matches`
@@ -45,12 +50,15 @@ export function buildSidebar(chats: Chat[], projects: Project[], matches: Readon
   ];
   const groups = slots.map(({ key, project }) => {
     const members = live.filter((c) => keyOf(c) === key);
-    return { key, project, total: members.length, chats: members.filter((c) => !c.pinned && shown(c)).sort(byOrder) };
+    const listed = members.filter((c) => !c.pinned && shown(c)).sort(byOrder);
+    // A chat whose project was deleted keeps the flag (the foreign key clears projectId only); in No project it means nothing.
+    const pinnedHere = (c: Chat): boolean => project !== null && c.projectPinned;
+    return { key, project, total: members.length, pinnedChats: listed.filter(pinnedHere), chats: listed.filter((c) => !pinnedHere(c)) };
   });
 
   return {
     pinned: live.filter((c) => c.pinned && shown(c)).sort(byOrder),
-    groups: matches === null ? groups : groups.filter((g) => g.chats.length > 0),
+    groups: matches === null ? groups : groups.filter((g) => g.pinnedChats.length + g.chats.length > 0),
     archived: chats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
   };
 }

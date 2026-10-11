@@ -54,6 +54,8 @@ export interface ChatRowProps {
   onTogglePin?: () => void;
   /** Shows the pin icon before a pinned chat's title; off inside the Pinned section, whose heading says it. */
   showPinMarker?: boolean;
+  /** Shows an outline pin before the title: the chat is pinned at the top of its project. */
+  projectPinMarker?: boolean;
   /** A drag of this row has started (ChatList shows the empty Pinned drop zone). */
   onDragStart?: () => void;
 }
@@ -67,7 +69,7 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, onDragStart } = props;
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, onDragStart } = props;
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -158,6 +160,11 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
         {showPinMarker && chat.pinned && (
           <span data-testid="pin-marker" className="shrink-0 text-[var(--text-muted)]">
             <PinIcon filled className="h-3 w-3" />
+          </span>
+        )}
+        {projectPinMarker && (
+          <span data-testid="project-pin-marker" title="Pinned in project" className="shrink-0 text-[var(--text-muted)]">
+            <PinIcon className="h-3 w-3" />
           </span>
         )}
         <span className="min-w-0 truncate">{chat.title}</span>

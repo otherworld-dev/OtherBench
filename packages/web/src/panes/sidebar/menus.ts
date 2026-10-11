@@ -8,6 +8,8 @@ export interface ChatMenuHandlers {
   rename(): void;
   /** Sets the pin state the menu item asked for (the opposite of the state the menu was built with). */
   setPinned(pinned: boolean): void;
+  /** Pins the chat at the top of its own project, or unpins it there (the opposite of the state the menu was built with). */
+  setProjectPinned(pinned: boolean): void;
   /** One place up (-1) or down (+1) within its sidebar section (#823). */
   reorder(dir: -1 | 1): void;
   moveTo(projectId: string | null): void;
@@ -52,6 +54,9 @@ export function chatMenuItems(
     { id: 'tab', label: isTab ? 'Go to tab' : 'Open in new tab', onSelect: h.openInTab },
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     ...(archived ? [] : [{ id: 'pin', label: chat.pinned ? 'Unpin' : 'Pin', onSelect: () => h.setPinned(!chat.pinned) }]),
+    ...(archived || !inListedProject
+      ? []
+      : [{ id: 'project-pin', label: chat.projectPinned ? 'Unpin from project' : 'Pin in project', onSelect: () => h.setProjectPinned(!chat.projectPinned) }]),
     ...(position
       ? [
           { id: 'up', label: 'Move up', disabled: position.index <= 0, onSelect: () => h.reorder(-1) },

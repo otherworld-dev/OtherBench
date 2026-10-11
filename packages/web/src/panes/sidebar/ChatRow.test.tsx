@@ -116,6 +116,15 @@ describe('ChatRow', () => {
     expect(screen.queryByTestId('pin-marker')).toBeNull();
   });
 
+  it('shows an outline pin for a chat pinned in its project, when asked', () => {
+    renderRow({ projectPinMarker: true });
+    expect(screen.getByTestId('project-pin-marker')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    cleanup();
+    renderRow();
+    expect(screen.queryByTestId('project-pin-marker')).toBeNull();
+  });
+
   it('reports a drag starting', () => {
     const onDragStart = vi.fn();
     renderRow({ onDragStart });

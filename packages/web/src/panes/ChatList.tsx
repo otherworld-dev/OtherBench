@@ -53,10 +53,11 @@ function loadShowArchived(): boolean {
   }
 }
 
-/** A list of chats as the sidebar shows them: Pinned, or one project's group (null = No project). */
+/** A list of chats as the sidebar shows them: Pinned, a project's own pinned chats, or the rest of one project's group (null = No project). */
 interface Section {
   chats: Chat[];
   pinned: boolean;
+  projectPinned: boolean;
   projectId: string | null;
 }
 
@@ -211,6 +212,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     const body: ChatPatchBody = {
       ...(own ? { sortOrder: own.sortOrder } : {}),
       ...(chat.pinned !== section.pinned ? { pinned: section.pinned } : {}),
+      // Pinned in its project when dropped among that project's pinned chats, unpinned when dropped among the rest.
+      ...(!section.pinned && chat.projectPinned !== section.projectPinned ? { projectPinned: section.projectPinned } : {}),
       ...(!section.pinned && chat.projectId !== section.projectId ? { projectId: section.projectId } : {}),
     };
     if (Object.keys(body).length === 0) return;
@@ -244,9 +247,13 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   /** The section the sidebar shows `chat` in, or null when it isn't shown in one (archived). */
   function sectionOf(chat: Chat): Section | null {
     if (chat.archivedAt !== null) return null;
-    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectId: null };
-    const group = sidebar.groups.find((g) => g.chats.some((c) => c.id === chat.id));
-    return group ? { chats: group.chats, pinned: false, projectId: group.project?.id ?? null } : null;
+    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null };
+    for (const group of sidebar.groups) {
+      const projectId = group.project?.id ?? null;
+      if (group.pinnedChats.some((c) => c.id === chat.id)) return { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId };
+      if (group.chats.some((c) => c.id === chat.id)) return { chats: group.chats, pinned: false, projectPinned: false, projectId };
+    }
+    return null;
   }
 
   /** The chat's place in its section, for the menu's Move up / Move down; null while searching or when archived. */
@@ -313,6 +320,11 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
       console.error(`[grunt-web] failed to update chat ${chat.id}:`, err);
       setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
     }
+  }
+
+  async function setProjectPinned(chat: Chat, pinned: boolean): Promise<void> {
+    const action = pinned ? "Couldn't pin the chat in its project" : "Couldn't unpin the chat from its project";
+    if (await patchChat(chat, { projectPinned: pinned }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
   }
 
   async function setMemoryExcluded(chat: Chat, excluded: boolean): Promise<void> {
@@ -495,6 +507,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         muted={section === null}
         onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
         showPinMarker={!section?.pinned}
+        projectPinMarker={section?.projectPinned === true}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
@@ -528,7 +541,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               setDraggingChatId(null);
               if (!chatId) return;
               e.preventDefault();
-              void placeChat(chatId, { chats: [], pinned: true, projectId: null }, null);
+              void placeChat(chatId, { chats: [], pinned: true, projectPinned: false, projectId: null }, null);
             }}
             // Same box as the search field it stands in for, so nothing below it moves.
             className={`flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
@@ -557,7 +570,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         {sidebar.pinned.length > 0 && (
           <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
-            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
+            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null }))}</ul>
           </div>
         )}
 
@@ -581,7 +594,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               onDropChat={(chatId) => void moveChat(chatId, project?.id ?? null)}
               {...(project ? projectGroupProps(project) : {})}
             >
-              {group.chats.map((c) => renderRow(c, { chats: group.chats, pinned: false, projectId: project?.id ?? null }))}
+              {group.pinnedChats.map((c) => renderRow(c, { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId: project?.id ?? null }))}
+              {group.chats.map((c) => renderRow(c, { chats: group.chats, pinned: false, projectPinned: false, projectId: project?.id ?? null }))}
             </ProjectGroup>
           );
         })}
@@ -636,6 +650,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               openInTab: () => openTab(menuChat.id),
               rename: () => setRenamingChatId(menuChat.id),
               setPinned: (pinned) => void setPinned(menuChat, pinned),
+              setProjectPinned: (pinned) => void setProjectPinned(menuChat, pinned),
               reorder: (dir) => void reorderChat(menuChat, dir),
               moveTo: (projectId) => void moveChat(menuChat.id, projectId),
               moveToNewProject: () => void moveToNewProject(menuChat),
