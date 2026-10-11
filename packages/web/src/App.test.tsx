@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetSidebarWidthForTests } from './state/sidebarWidth.js';
 import { useGruntStore } from './state/store.js';
 import { App } from './App.js';
 
@@ -35,6 +36,8 @@ const mockedGrantsList = vi.mocked(api.grants.list);
 const mockedAuditList = vi.mocked(api.audit.list);
 
 function reset(): void {
+  window.localStorage.clear();
+  resetSidebarWidthForTests();
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   mockedConnections.mockReset();
   mockedModels.mockReset();
@@ -181,5 +184,13 @@ describe('App view', () => {
     window.history.replaceState({}, '', '/');
     render(<App />);
     expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
+  });
+
+  it('sizes the sidebar column from the saved width, capped at 40% of the window', () => {
+    window.localStorage.setItem('grunt.sidebarWidth', '20');
+    resetSidebarWidthForTests();
+    const { container } = render(<App />);
+    expect((container.firstElementChild as HTMLElement).style.gridTemplateColumns).toBe('min(20rem, 40vw) minmax(0, 1fr)');
+    expect(screen.getByRole('separator', { name: 'Resize sidebar' })).toBeInTheDocument();
   });
 });

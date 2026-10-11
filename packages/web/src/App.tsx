@@ -4,9 +4,11 @@ import { useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
 import { PaneGrid } from './panes/PaneGrid.js';
+import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
 import { streamStatusText } from './state/machines.js';
+import { useSidebarWidth } from './state/sidebarWidth.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
@@ -45,6 +47,7 @@ function MainApp(): JSX.Element {
   const setProjects = useGruntStore((s) => s.setProjects);
 
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
+  const sidebarWidth = useSidebarWidth();
   // Separate from `inspectorCollapsed` (the docked-mode show/hide
   // preference, which lives in the store so it's stable across chat
   // switches): whether the narrow-mode overlay is currently open. Purely
@@ -112,7 +115,12 @@ function MainApp(): JSX.Element {
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
 
   return (
-    <div className="grid h-screen grid-cols-[16.25rem_minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden" data-narrow={isNarrow || undefined}>
+    <div
+      className="grid h-screen grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden"
+      // Never more than 40% of the window, whatever was saved on a bigger screen.
+      style={{ gridTemplateColumns: `min(${sidebarWidth}rem, 40vw) minmax(0, 1fr)` }}
+      data-narrow={isNarrow || undefined}
+    >
       {unreachable && (
         <div
           role="alert"
@@ -152,7 +160,7 @@ function MainApp(): JSX.Element {
         </div>
       </header>
 
-      <div className="row-start-3 h-full min-h-0 min-w-0">
+      <div className="relative row-start-3 h-full min-h-0 min-w-0">
         {/* Settings and Usage are app-level overlays, so App owns them; they just render in the sidebar's footer. */}
         <ChatList
           footer={
@@ -166,6 +174,7 @@ function MainApp(): JSX.Element {
             </div>
           }
         />
+        <SidebarResizer />
       </div>
 
       <div className="relative row-start-3 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
