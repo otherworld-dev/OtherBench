@@ -1,14 +1,23 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
+
+vi.mock('../state/api.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../state/api.js')>();
+  return { ...actual, api: { ...actual.api, chats: { ...actual.api.chats, patch: vi.fn() } } };
+});
+
+import { api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ConversationStrip } from './ConversationStrip.js';
 
+const mockedPatch = vi.mocked(api.chats.patch);
+
 const makeChat = (head: string | null): Chat => ({
   id: 'chat-1', title: 'Chat 1', profileId: 'p1', headMessageId: head, workspace: null, runsOn: 'node-self', workspaceRoot: null,
-  pinned: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1,
+  pinned: false, projectPinned: false, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, archivedAt: null, createdAt: 1, updatedAt: 1,
 });
 const msg = (id: string, overrides: Partial<CanonMessage>): CanonMessage => ({
   id, chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null, createdAt: 0, ...overrides,
@@ -18,6 +27,7 @@ const reply = (id: string, parentId: string, text: string, status: CanonMessage[
   msg(id, { parentId, status, parts: text ? [{ type: 'text', text }] : [] });
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
+const originalMatchMedia = window.matchMedia;
 beforeEach(() => {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   window.localStorage.clear();
@@ -25,7 +35,23 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   Element.prototype.scrollIntoView = originalScrollIntoView;
+  window.matchMedia = originalMatchMedia;
+  mockedPatch.mockReset();
 });
+
+/** Puts the window in (or out of) the narrow layout. */
+function narrow(matches: boolean): void {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
 
 const renderFor = (head: string | null): void => {
   render(<ConversationStrip chat={makeChat(head)} />);
@@ -35,16 +61,21 @@ const open = async (): Promise<void> => {
 };
 
 describe('ConversationStrip', () => {
-  it('renders nothing when the chat has no user message', () => {
+  it('with no user message shows just the title and pin toggle', () => {
     renderFor(null);
-    expect(screen.queryByRole('region', { name: 'Conversation' })).not.toBeInTheDocument();
+    const header = screen.getByRole('region', { name: 'Conversation' });
+    expect(header).toHaveTextContent('Chat 1');
+    expect(within(header).getByRole('button', { name: 'Pin chat' })).toBeInTheDocument();
+    expect(header).not.toHaveTextContent('prompt');
+    expect(screen.queryByRole('button', { name: 'Show conversation outline' })).toBeNull();
   });
 
-  it('is collapsed by default: count, latest prompt preview, no list', () => {
+  it('is collapsed by default: title, count, latest prompt preview, no list', () => {
     useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'first'), reply('a1', 'u1', 'r'), user('u2', 'a1', 'latest question')], null);
     renderFor('u2');
     const strip = screen.getByRole('region', { name: 'Conversation' });
-    expect(strip).toHaveTextContent('Conversation · 2 prompts');
+    expect(strip).toHaveTextContent('Chat 1');
+    expect(strip).toHaveTextContent('· 2 prompts');
     expect(strip).toHaveTextContent('latest question');
     expect(screen.queryByTestId('outline-u1')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Show conversation outline' })).toHaveAttribute('aria-expanded', 'false');
@@ -53,8 +84,77 @@ describe('ConversationStrip', () => {
   it('uses the singular for one prompt', () => {
     useGruntStore.getState().loadMessages('chat-1', [user('u1', null, 'only')], null);
     renderFor('u1');
-    expect(screen.getByRole('region', { name: 'Conversation' })).toHaveTextContent('Conversation · 1 prompt');
+    expect(screen.getByRole('region', { name: 'Conversation' })).toHaveTextContent('· 1 prompt');
     expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent('1 prompts');
+  });
+
+  it('the pin toggle pins and unpins the chat', async () => {
+    const c = makeChat(null);
+    useGruntStore.setState({ chats: [c] });
+    mockedPatch.mockResolvedValueOnce({ ...c, pinned: true });
+    render(<ConversationStrip chat={c} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Pin chat' }));
+    expect(mockedPatch).toHaveBeenCalledWith('chat-1', { pinned: true });
+    await waitFor(() => expect(useGruntStore.getState().chats[0]!.pinned).toBe(true));
+    cleanup();
+    render(<ConversationStrip chat={{ ...c, pinned: true }} />);
+    expect(screen.getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
+  });
+
+  it('has no pin toggle for an archived chat, as the row and menu have none', () => {
+    render(<ConversationStrip chat={{ ...makeChat(null), archivedAt: 5 }} />);
+    expect(screen.queryByRole('button', { name: /pin chat/i })).toBeNull();
+  });
+
+  it('says so when pinning fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockedPatch.mockRejectedValueOnce(new Error('offline'));
+    renderFor(null);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Pin chat' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't pin the chat");
+    expect(alert).toHaveClass('truncate');
+    expect(alert).toHaveAttribute('title', "Couldn't pin the chat");
+    error.mockRestore();
+  });
+
+  it('shows the connection status only when there is something to say', () => {
+    renderFor(null);
+    expect(screen.queryByTestId('stream-status')).toBeNull();
+    cleanup();
+    useGruntStore.setState({ streamStatus: 'reconnecting' });
+    renderFor(null);
+    expect(screen.getByTestId('stream-status')).toHaveTextContent('Reconnecting…');
+    expect(screen.getByTestId('stream-status')).toHaveClass('min-w-0', 'truncate');
+    expect(screen.getByTestId('stream-status')).toHaveAttribute('title', 'Reconnecting…');
+  });
+
+  it('has an Inspector button only in the narrow layout, which opens the overlay', async () => {
+    renderFor(null);
+    expect(screen.queryByRole('button', { name: 'Inspector' })).toBeNull();
+    cleanup();
+    narrow(true);
+    renderFor(null);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Inspector' }));
+    expect(useGruntStore.getState().inspectorOverlayOpen).toBe(true);
+  });
+
+  it('has a Viewer toggle when given one, pressed while the viewer is open', async () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<ConversationStrip chat={makeChat(null)} />);
+    expect(screen.queryByRole('button', { name: 'Viewer' })).toBeNull();
+    rerender(<ConversationStrip chat={makeChat(null)} viewer={{ open: true, onToggle }} />);
+    expect(screen.getByRole('button', { name: 'Viewer' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Viewer' }));
+    expect(onToggle).toHaveBeenCalled();
+  });
+
+  it('keeps its buttons with a very long title', () => {
+    narrow(true);
+    render(<ConversationStrip chat={{ ...makeChat(null), title: 'x'.repeat(300) }} />);
+    expect(screen.getByRole('button', { name: 'Pin chat' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Inspector' })).toBeInTheDocument();
+    expect(screen.getByTitle('x'.repeat(300))).toHaveClass('truncate');
   });
 
   it('expands and collapses with the chevron', async () => {

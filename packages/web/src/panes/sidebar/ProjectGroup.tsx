@@ -40,7 +40,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
-    <div role="group" aria-label={name} id={groupDomId(groupKey)} data-testid={`group-${groupKey}`} className="mb-3">
+    <div role="group" aria-label={name} id={groupDomId(groupKey)} data-testid={`group-${groupKey}`} className="mb-1.5">
       <div
         data-testid={`group-heading-${groupKey}`}
         data-drop-active={dropActive ? 'true' : undefined}
@@ -137,7 +137,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         (empty ? (
           <p className="px-2 py-1 text-sm text-[var(--text-faint)]">No chats yet</p>
         ) : (
-          <ul id={listId} className="space-y-0.5">
+          <ul id={listId}>
             {children}
           </ul>
         ))}

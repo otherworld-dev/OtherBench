@@ -4,7 +4,7 @@ import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
-  return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
+  return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
 }
 
 function project(id: string, name: string, sortOrder = 0): Project {
@@ -29,6 +29,36 @@ describe('buildSidebar', () => {
     expect(ids(model.pinned)).toEqual(['pinned']);
     expect(ids(model.groups[0]!.chats)).toEqual(['plain']);
     expect(model.groups[0]!.total).toBe(2);
+  });
+
+  it("lists a project's pinned chats first, apart from the rest; a globally pinned chat stays under Pinned; No project ignores the flag", () => {
+    const model = buildSidebar(
+      [
+        chat('plain', { projectId: 'a', sortOrder: 9 }),
+        chat('kept-low', { projectId: 'a', projectPinned: true, sortOrder: 1 }),
+        chat('kept-high', { projectId: 'a', projectPinned: true, sortOrder: 2 }),
+        chat('both', { projectId: 'a', projectPinned: true, pinned: true }),
+        chat('loose', { projectPinned: true }), // its project was deleted
+      ],
+      [project('a', 'Alpha')],
+      null
+    );
+    const alpha = model.groups[0]!;
+    expect(ids(alpha.pinnedChats)).toEqual(['kept-high', 'kept-low']);
+    expect(ids(alpha.chats)).toEqual(['plain']);
+    expect(alpha.total).toBe(4);
+    expect(ids(model.pinned)).toEqual(['both']);
+    const none = model.groups.at(-1)!;
+    expect(ids(none.pinnedChats)).toEqual([]);
+    expect(ids(none.chats)).toEqual(['loose']);
+  });
+
+  it("filters a project's pinned chats by search too, and drops a group whose only match is pinned in it", () => {
+    const chats = [chat('kept', { projectId: 'a', projectPinned: true }), chat('plain', { projectId: 'a' }), chat('other', { projectId: 'b' })];
+    const model = buildSidebar(chats, [project('a', 'Alpha'), project('b', 'Beta')], new Set(['kept']));
+    expect(model.groups.map((g) => g.key)).toEqual(['a']);
+    expect(ids(model.groups[0]!.pinnedChats)).toEqual(['kept']);
+    expect(ids(model.groups[0]!.chats)).toEqual([]);
   });
 
   it('returns archived chats in a separate list, newest activity first, filtered by search (controller ruling R2)', () => {

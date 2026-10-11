@@ -142,6 +142,8 @@ export type ChatPatchBody = Partial<{
   /** The machine its turns run on: this one or a paired one (v2 spec §5). */
   runsOn: string;
   pinned: boolean;
+  /** Pinned at the top of its own project's group; refused (400) for a chat with no project. */
+  projectPinned: boolean;
   archivedAt: number | null;
   autoMode: boolean;
   /** Claude Code's effort from the next message; null follows the user's Claude Code settings. */

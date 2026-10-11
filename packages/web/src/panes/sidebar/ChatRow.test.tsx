@@ -6,7 +6,7 @@ import { CHAT_DRAG_MIME, ChatRow, type ChatRowProps } from './ChatRow.js';
 
 afterEach(cleanup);
 
-const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 
 function renderRow(props: Partial<ChatRowProps> = {}) {
   const handlers = { onSelect: vi.fn(), onDragEnd: vi.fn(), onOpenMenu: vi.fn(), onRename: vi.fn(), onRenameCancel: vi.fn() };
@@ -27,6 +27,8 @@ describe('ChatRow', () => {
       </ul>
     );
     expect(screen.getAllByRole('img', { name: 'Not added to memory' })).toHaveLength(2);
+    // Outside the button: a button's children are presentational, so inside it the marker isn't announced.
+    expect(screen.getAllByRole('img', { name: 'Not added to memory' })[0]!.closest('button')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Notes' })).toHaveLength(2);
     cleanup();
 
@@ -83,6 +85,51 @@ describe('ChatRow', () => {
     fireEvent.dragStart(screen.getByRole('button', { name: 'Notes' }), { dataTransfer });
     expect(dataTransfer.setData).toHaveBeenCalledWith(CHAT_DRAG_MIME, 'chat-1');
     expect(dataTransfer.effectAllowed).toBe('move');
+  });
+
+  it("has a pin button labelled for the chat's state, only when onTogglePin is given", async () => {
+    const onTogglePin = vi.fn();
+    renderRow({ onTogglePin });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Pin chat' }));
+    expect(onTogglePin).toHaveBeenCalled();
+    cleanup();
+    renderRow({ chat: { ...chat, pinned: true }, onTogglePin });
+    expect(screen.getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
+    cleanup();
+    renderRow();
+    expect(screen.queryByRole('button', { name: /pin chat/i })).toBeNull();
+  });
+
+  it('puts the pin button before ⋯ in tab order', () => {
+    renderRow({ onTogglePin: vi.fn() });
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Notes', 'Pin chat', 'Chat actions']);
+  });
+
+  it('shows the pin marker only for a pinned chat with showPinMarker', () => {
+    renderRow({ chat: { ...chat, pinned: true }, showPinMarker: true });
+    expect(screen.getByTestId('pin-marker')).toBeInTheDocument();
+    cleanup();
+    renderRow({ chat: { ...chat, pinned: true } });
+    expect(screen.queryByTestId('pin-marker')).toBeNull();
+    cleanup();
+    renderRow({ showPinMarker: true });
+    expect(screen.queryByTestId('pin-marker')).toBeNull();
+  });
+
+  it('shows an outline pin for a chat pinned in its project, when asked', () => {
+    renderRow({ projectPinMarker: true });
+    expect(screen.getByTestId('project-pin-marker')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    cleanup();
+    renderRow();
+    expect(screen.queryByTestId('project-pin-marker')).toBeNull();
+  });
+
+  it('reports a drag starting', () => {
+    const onDragStart = vi.fn();
+    renderRow({ onDragStart });
+    fireEvent.dragStart(screen.getByRole('button', { name: 'Notes' }), { dataTransfer: { setData: vi.fn(), effectAllowed: 'all' } });
+    expect(onDragStart).toHaveBeenCalled();
   });
 
   it('shows the rename field instead of the buttons while renaming', () => {

@@ -31,7 +31,7 @@ test('a project with a folder: a chat from its + inherits the folder, then moves
     const nav = page.getByRole('navigation', { name: 'Chats' });
 
     // Create the project, with its folder, on the project page.
-    await nav.getByRole('button', { name: '+ New project' }).click();
+    await nav.getByRole('button', { name: 'New project' }).click();
     const projectPage = page.getByTestId('project-view');
     await projectPage.getByRole('textbox', { name: 'Name' }).fill(projectName);
     await projectPage.getByRole('textbox', { name: 'Main folder' }).fill(folder);
@@ -70,7 +70,7 @@ test('archiving a chat moves it to the archived section, and Unarchive brings it
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: 'Chats' });
 
-  await nav.getByRole('button', { name: '+ New project' }).click();
+  await nav.getByRole('button', { name: 'New project' }).click();
   await page.getByRole('textbox', { name: 'Name' }).fill(projectName);
   await page.getByRole('button', { name: 'Create project' }).click();
   const group = nav.getByRole('group', { name: projectName });

@@ -1,12 +1,13 @@
 import { useEffect, useState, type JSX } from 'react';
+import { ChartIcon, GearIcon } from './components/icons.js';
 import { isQuickView } from './desktop/bridge.js';
-import { useMediaQuery } from './lib/useMediaQuery.js';
+import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
 import { PaneGrid } from './panes/PaneGrid.js';
+import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
-import { streamStatusText } from './state/machines.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
@@ -19,9 +20,6 @@ import { ProjectView } from './views/ProjectView.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
 
-/** Below this width the inspector can no longer sit as a third docked column -- it collapses (task 19 brief). */
-const NARROW_BREAKPOINT = '(max-width: 1099.98px)';
-
 /** The quick-chat window gets its own small view (`?view=quick`); everything else is the main app. */
 export function App(): JSX.Element {
   return isQuickView() ? <QuickChat /> : <MainApp />;
@@ -33,8 +31,6 @@ function MainApp(): JSX.Element {
   const activeChatId = useGruntStore((s) => s.activeChatId);
   const inspectorCollapsed = useGruntStore((s) => s.inspectorCollapsed);
   const setInspectorCollapsed = useGruntStore((s) => s.setInspectorCollapsed);
-  const streamStatus = useGruntStore((s) => s.streamStatus);
-  const machines = useGruntStore((s) => s.machines);
   const projectPage = useGruntStore((s) => s.projectPage);
   const closeProjectPage = useGruntStore((s) => s.closeProjectPage);
 
@@ -46,12 +42,12 @@ function MainApp(): JSX.Element {
 
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   // Separate from `inspectorCollapsed` (the docked-mode show/hide
-  // preference, which lives in the store so it's stable across chat
-  // switches): whether the narrow-mode overlay is currently open. Purely
-  // ephemeral view state, and must default closed regardless of the docked
-  // preference's value, or the inspector would pop over the thread the
-  // instant the window narrows.
-  const [narrowOverlayOpen, setNarrowOverlayOpen] = useState(false);
+  // preference): whether the narrow-mode overlay is currently open. In the
+  // store so each pane's header can open it; ephemeral, and starts closed
+  // regardless of the docked preference, or the inspector would pop over the
+  // thread the instant the window narrows.
+  const narrowOverlayOpen = useGruntStore((s) => s.inspectorOverlayOpen);
+  const setNarrowOverlayOpen = useGruntStore((s) => s.setInspectorOverlayOpen);
   // Task 28: the global usage/pricing settings view -- a full-screen
   // overlay, ephemeral like the narrow inspector overlay above (there is no
   // "docked" mode for it, and no reason to remember it across reloads).
@@ -112,7 +108,13 @@ function MainApp(): JSX.Element {
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;
 
   return (
-    <div className="grid h-screen grid-cols-[16.25rem_minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden" data-narrow={isNarrow || undefined}>
+    <div
+      className="grid h-screen grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+      // --sidebar-w comes from state/sidebarWidth.ts; never more than 40% of the window (SIDEBAR_WIDTH_MAX_SHARE),
+      // whatever was saved on a bigger screen.
+      style={{ gridTemplateColumns: 'min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)' }}
+      data-narrow={isNarrow || undefined}
+    >
       {unreachable && (
         <div
           role="alert"
@@ -132,43 +134,24 @@ function MainApp(): JSX.Element {
         </div>
       )}
 
-      <header className="col-span-2 row-start-2 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
-        <div className="flex items-baseline gap-2">
-          <span className="font-label text-base leading-none font-bold tracking-[0.06em] uppercase">Grunt</span>
-          {activeChat && <span className="text-sm text-[var(--text-muted)]">{activeChat.title}</span>}
-        </div>
-        <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
-          {activeChat && <span data-testid="stream-status">{streamStatusText(streamStatus, activeChat, machines)}</span>}
-          {isNarrow && (
-            <button
-              type="button"
-              onClick={() => setNarrowOverlayOpen((open) => !open)}
-              aria-expanded={narrowOverlayOpen}
-              className="btn px-2 py-0.5"
-            >
-              Inspector
-            </button>
-          )}
-        </div>
-      </header>
-
-      <div className="row-start-3 h-full min-h-0 min-w-0">
+      <div className="relative row-start-2 h-full min-h-0 min-w-0">
         {/* Settings and Usage are app-level overlays, so App owns them; they just render in the sidebar's footer. */}
         <ChatList
           footer={
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setSettingsViewOpen(true)} className="btn flex-1 px-2 py-1">
-                Settings
+            <>
+              <button type="button" onClick={() => setSettingsViewOpen(true)} aria-label="Settings" title="Settings" className="btn px-2 py-1.5">
+                <GearIcon />
               </button>
-              <button type="button" onClick={() => setUsageViewOpen(true)} className="btn flex-1 px-2 py-1">
-                Usage
+              <button type="button" onClick={() => setUsageViewOpen(true)} aria-label="Usage" title="Usage" className="btn px-2 py-1.5">
+                <ChartIcon />
               </button>
-            </div>
+            </>
           }
         />
+        <SidebarResizer />
       </div>
 
-      <div className="relative row-start-3 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
+      <div className="relative row-start-2 grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)]">
         <div className="flex h-full min-h-0 min-w-0 flex-col">
           <TabBar narrow={isNarrow} />
           <PaneGrid narrow={isNarrow} />
@@ -176,11 +159,13 @@ function MainApp(): JSX.Element {
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
         {!isNarrow && (
-          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : '20rem' }}>
+          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed || !activeChat ? undefined : '20rem' }}>
+            {/* With no chat there is nothing to inspect: the slim strip, whatever the saved choice. */}
             <Inspector
               chat={activeChat}
               profile={activeProfile}
-              collapsed={inspectorCollapsed}
+              collapsed={inspectorCollapsed || !activeChat}
+              disabled={!activeChat}
               onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)}
             />
           </div>

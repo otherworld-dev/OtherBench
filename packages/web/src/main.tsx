@@ -3,14 +3,16 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { desktopBootstrap } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
+import { initSidebarWidth } from './state/sidebarWidth.js';
 import { initTextSize } from './state/textSize.js';
 import './index.css';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root element missing from index.html');
 
-// Apply the saved text size before first paint.
+// Apply the saved text size and sidebar width before first paint.
 initTextSize();
+initSidebarWidth();
 
 const root = createRoot(rootEl);
 

@@ -31,6 +31,7 @@ function chat(over: Partial<Chat>): Chat {
     runsOn: 'node-laptop',
     workspaceRoot: null,
     pinned: false,
+    projectPinned: false,
     archivedAt: null,
     autoMode: false,
     projectId: null,

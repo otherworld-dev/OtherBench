@@ -212,6 +212,22 @@ describe('sync (Task 50)', () => {
     for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ title: 'Renamed on A', pinned: true });
   });
 
+  it('a project pin is a field of its own: pinned in its project on one machine while the other pins it, both stand', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    a.store.projects.create({ id: 'proj', name: 'proj', workspaceRoot: null, defaultProfileId: null });
+    chat(a, 'c', { projectId: 'proj' });
+    s.both();
+
+    a.store.chats.update('c', { projectPinned: true });
+    b.store.chats.update('c', { pinned: true });
+    s.both();
+
+    for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ projectPinned: true, pinned: true });
+  });
+
   it("a chat's effort is a field of its own: set on one machine while the other renames the chat, both stand", () => {
     const a = node('a');
     const b = node('b');

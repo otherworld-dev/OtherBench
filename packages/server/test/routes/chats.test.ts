@@ -1023,6 +1023,34 @@ describe('chats in projects', () => {
     expect(container.store.chats.get(id)!.sortOrder).toBe(before);
   });
 
+  it('PATCH projectPinned pins a chat within its project without counting as activity; a move clears it', async () => {
+    container.store.projects.create({ id: 'proj-2', name: 'Beta', workspaceRoot: null, defaultProfileId: null });
+    const created = await json(await post({ projectId: 'proj-1' }));
+    const id = created['id'] as string;
+    expect(created).toMatchObject({ projectPinned: false });
+    const updatedAt = container.store.chats.get(id)!.updatedAt;
+
+    const res = await patchChat(id, { projectPinned: true });
+    expect(res.status).toBe(200);
+    expect(await json(res)).toMatchObject({ projectPinned: true, updatedAt });
+    expect(await json(await patchChat(id, { projectId: 'proj-2' }))).toMatchObject({ projectId: 'proj-2', projectPinned: false });
+    // Dropped among another project's pinned chats: moved and pinned in one PATCH.
+    expect(await json(await patchChat(id, { projectId: 'proj-1', projectPinned: true }))).toMatchObject({ projectId: 'proj-1', projectPinned: true });
+  });
+
+  it('refuses projectPinned on a chat with no project (after the patch), and a non-boolean, with 400', async () => {
+    const loose = (await json(await post({ profileId: 'profile-1' })))['id'] as string;
+    const res = await patchChat(loose, { projectPinned: true });
+    expect(res.status).toBe(400);
+    expect((await json(res))['error']).toBe('"projectPinned" needs the chat to be in a project.');
+    const filed = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
+    expect((await patchChat(filed, { projectId: null, projectPinned: true })).status).toBe(400);
+    expect((await patchChat(filed, { projectPinned: 'yes' })).status).toBe(400);
+    expect(container.store.chats.get(filed)).toMatchObject({ projectId: 'proj-1', projectPinned: false });
+    // Unpinning a loose chat is fine: it's already not pinned.
+    expect((await patchChat(loose, { projectPinned: false })).status).toBe(200);
+  });
+
   it('rejects a non-boolean memoryExcluded with 400 and leaves the chat unchanged', async () => {
     const id = (await json(await post({ projectId: 'proj-1' })))['id'] as string;
     for (const bad of ['yes', 1, null]) {

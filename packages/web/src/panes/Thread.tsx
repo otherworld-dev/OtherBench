@@ -321,17 +321,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               </button>
             </div>
           )}
-          <ConversationStrip chat={chat} />
+          <ConversationStrip chat={chat} viewer={{ open: viewer.open, onToggle: () => setViewerOpen(chat.id, !viewer.open) }} />
           <div className="relative min-h-0 flex-1">
-            <button
-              type="button"
-              aria-pressed={viewer.open}
-              title={viewer.open ? 'Hide the viewer' : 'Show the viewer: files, images and pages from this chat'}
-              onClick={() => setViewerOpen(chat.id, !viewer.open)}
-              className="btn absolute top-2 right-3 z-10 bg-[var(--bg-raised)] px-2 py-0.5 hover:bg-[var(--bg-sunken)]"
-            >
-              Viewer
-            </button>
             <div ref={scrollRef} onScroll={onScroll} data-testid="thread-scroll" className="absolute inset-0 overflow-y-auto">
               <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-6">
                 {displayPath.length === 0 ? (
@@ -366,6 +357,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                       <Message
                         key={m.id}
                         message={m}
+                        framed
                         otherVariantsCount={compare ? siblings.length - 1 : 0}
                         onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
                         pendingApprovals={extras[m.id]?.pendingApprovals ?? []}

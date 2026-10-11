@@ -19,6 +19,8 @@ export interface InspectorProps {
   profile: Profile | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** The collapsed strip can't be expanded (no chat selected, so there is nothing to inspect). */
+  disabled?: boolean;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
@@ -696,17 +698,19 @@ function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element
  * and spend all land in later tasks; this task wires the pane and its
  * collapse behaviour, not those features.
  */
-export function Inspector({ chat, profile, collapsed, onToggleCollapsed }: InspectorProps): JSX.Element {
+export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disabled = false }: InspectorProps): JSX.Element {
   // The chat's project, when it's loaded: the memory section needs both.
   const memoryProject = useGruntStore((s) => (chat?.projectId ? (s.projects.find((p) => p.id === chat.projectId) ?? null) : null));
   if (collapsed) {
     return (
       <button
         type="button"
-        onClick={onToggleCollapsed}
+        onClick={disabled ? undefined : onToggleCollapsed}
         aria-label="Expand inspector"
         aria-expanded={false}
-        className="flex h-full w-9 flex-col items-center justify-center gap-2 border-l border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text)]"
+        aria-disabled={disabled || undefined}
+        title={disabled ? 'Select a chat to see its details' : undefined}
+        className="flex h-full w-9 flex-col items-center justify-center gap-2 border-l border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text-muted)] hover:text-[var(--text)] aria-disabled:cursor-default aria-disabled:opacity-50 aria-disabled:hover:text-[var(--text-muted)]"
       >
         <span className="[writing-mode:vertical-rl] text-xs tracking-wide">Inspector</span>
       </button>

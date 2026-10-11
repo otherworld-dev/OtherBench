@@ -48,6 +48,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     runsOn: 'node-self',
     workspaceRoot: null,
     pinned: false,
+    projectPinned: false,
     autoMode: false,
     projectId: null,
     memoryCursor: null,
@@ -114,6 +115,8 @@ describe('Thread', () => {
     render(<ThreadForChat chatId="chat-1" />);
     const user = userEvent.setup();
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+    // In the pane's header row, not floating over the thread.
+    expect(within(screen.getByRole('region', { name: 'Conversation' })).getByRole('button', { name: 'Viewer' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Viewer' }));
     expect(screen.getByRole('complementary', { name: 'Viewer' })).toBeInTheDocument();
     expect(viewerFor(useViewerStore.getState().viewers, 'chat-1').open).toBe(true);
@@ -401,9 +404,9 @@ describe('Thread composer per chat', () => {
     expect(screen.queryByRole('button', { name: 'Auto mode' })).not.toBeInTheDocument();
   });
 
-  it('renders the conversation strip above (outside) the scroller, only once a user message exists', () => {
+  it('renders the pane header above (outside) the scroller, before and after the first message', () => {
     const view = render(<Thread chat={makeChat({ id: 'chat-a', headMessageId: null })} />);
-    expect(screen.queryByRole('region', { name: 'Conversation' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent('prompt');
     useGruntStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
     view.rerender(<Thread chat={makeChat({ id: 'chat-a', headMessageId: 'root-a' })} />);
     const strip = screen.getByRole('region', { name: 'Conversation' });

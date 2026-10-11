@@ -3,13 +3,15 @@ import { exportFilename } from '@grunt/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import { FolderPlusIcon, PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
 import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
+import { setChatPinned } from '../state/chatActions.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
-import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
+import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
 import { chatMenuItems, projectMenuItems } from './sidebar/menus.js';
 import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './sidebar/model.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
@@ -24,12 +26,12 @@ function errorText(err: unknown, action: string): string {
  * its new group), unless focus has meanwhile gone into a menu, a dialog or a
  * text field -- another action took it on purpose.
  */
-function focusLater(selector: string, fallback?: string): void {
+function focusLater(selector: string, fallback?: string, options?: FocusOptions): void {
   setTimeout(() => {
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.closest('[role="menu"], [role="alertdialog"], input, select, textarea')) return;
     const target = document.querySelector<HTMLElement>(selector) ?? (fallback ? document.querySelector<HTMLElement>(fallback) : null);
-    target?.focus();
+    target?.focus(options);
   }, 0);
 }
 
@@ -51,10 +53,11 @@ function loadShowArchived(): boolean {
   }
 }
 
-/** A list of chats as the sidebar shows them: Pinned, or one project's group (null = No project). */
+/** A list of chats as the sidebar shows them: Pinned, a project's own pinned chats, or the rest of one project's group (null = No project). */
 interface Section {
   chats: Chat[];
   pinned: boolean;
+  projectPinned: boolean;
   projectId: string | null;
 }
 
@@ -69,8 +72,8 @@ function headingSelector(projectId: string): string {
  * every group to the matching chats; groups with no match hide, and
  * collapsed groups show expanded, while a search is active.
  *
- * `footer` renders under the New chat / New project row, still inside the
- * sidebar, for app-level controls the caller owns (Settings, Usage).
+ * `footer` renders at the end of the New chat / New project row, for
+ * app-level controls the caller owns (Settings, Usage).
  */
 export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
@@ -94,6 +97,10 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
+  // The chat being dragged, while it is: with nothing pinned yet, a "Drop here to pin" target takes the search
+  // box's place. Not a new section in the list, which would push every row down under the pointer mid-drag.
+  const [draggingChatId, setDraggingChatId] = useState<string | null>(null);
+  const [pinZoneActive, setPinZoneActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chatMenu, setChatMenu] = useState<{ chatId: string; position: { x: number; y: number } } | null>(null);
   const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
@@ -205,6 +212,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     const body: ChatPatchBody = {
       ...(own ? { sortOrder: own.sortOrder } : {}),
       ...(chat.pinned !== section.pinned ? { pinned: section.pinned } : {}),
+      // Pinned in its project when dropped among that project's pinned chats, unpinned when dropped among the rest.
+      ...(!section.pinned && chat.projectPinned !== section.projectPinned ? { projectPinned: section.projectPinned } : {}),
       ...(!section.pinned && chat.projectId !== section.projectId ? { projectId: section.projectId } : {}),
     };
     if (Object.keys(body).length === 0) return;
@@ -238,9 +247,13 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   /** The section the sidebar shows `chat` in, or null when it isn't shown in one (archived). */
   function sectionOf(chat: Chat): Section | null {
     if (chat.archivedAt !== null) return null;
-    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectId: null };
-    const group = sidebar.groups.find((g) => g.chats.some((c) => c.id === chat.id));
-    return group ? { chats: group.chats, pinned: false, projectId: group.project?.id ?? null } : null;
+    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null };
+    for (const group of sidebar.groups) {
+      const projectId = group.project?.id ?? null;
+      if (group.pinnedChats.some((c) => c.id === chat.id)) return { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId };
+      if (group.chats.some((c) => c.id === chat.id)) return { chats: group.chats, pinned: false, projectPinned: false, projectId };
+    }
+    return null;
   }
 
   /** The chat's place in its section, for the menu's Move up / Move down; null while searching or when archived. */
@@ -293,9 +306,25 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     if (await patchChat(chat, { title }, "Couldn't rename the chat")) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
   }
 
-  async function setPinned(chat: Chat, pinned: boolean): Promise<void> {
-    const action = pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat";
-    if (await patchChat(chat, { pinned }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+  /**
+   * `preventScroll` for the row's own pin button: the row moves into or out
+   * of Pinned at the top, and following it there would lose the user's place
+   * when pinning several chats from far down the list.
+   */
+  async function setPinned(chat: Chat, pinned: boolean, preventScroll = false): Promise<void> {
+    setError(null);
+    try {
+      await setChatPinned(chat.id, pinned);
+      focusLater(chatRowSelector(chat.id), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
+    } catch (err) {
+      console.error(`[grunt-web] failed to update chat ${chat.id}:`, err);
+      setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
+    }
+  }
+
+  async function setProjectPinned(chat: Chat, pinned: boolean): Promise<void> {
+    const action = pinned ? "Couldn't pin the chat in its project" : "Couldn't unpin the chat from its project";
+    if (await patchChat(chat, { projectPinned: pinned }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
   }
 
   async function setMemoryExcluded(chat: Chat, excluded: boolean): Promise<void> {
@@ -452,9 +481,12 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         chat={chat}
         active={chat.id === activeChatId}
         onSelect={() => setActiveChatId(chat.id)}
+        onDragStart={() => setDraggingChatId(chat.id)}
         onDragEnd={() => {
           setDropTarget(null);
           setRowDrop(null);
+          setDraggingChatId(null);
+          setPinZoneActive(false);
         }}
         reorder={
           // Reordering against a filtered list would place chats relative to ones the user can't see.
@@ -473,6 +505,9 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         menuOpen={chatMenu?.chatId === chat.id}
         renaming={renamingChatId === chat.id}
         muted={section === null}
+        onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
+        showPinMarker={!section?.pinned}
+        projectPinMarker={section?.projectPinned === true}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
@@ -485,25 +520,57 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
 
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
-      <div className="border-b border-[var(--border)] p-3">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => void runSearch(e.target.value)}
-          placeholder="Search chats..."
-          aria-label="Search chats"
-          className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
-        />
+      <div className="border-b border-[var(--border)] p-2">
+        {draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
+          <div
+            data-testid="pinned-drop-zone"
+            data-drop-active={pinZoneActive ? 'true' : undefined}
+            onDragOver={(e) => {
+              if (!Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              if (!pinZoneActive) setPinZoneActive(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+              setPinZoneActive(false);
+            }}
+            onDrop={(e) => {
+              const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
+              setPinZoneActive(false);
+              setDraggingChatId(null);
+              if (!chatId) return;
+              e.preventDefault();
+              void placeChat(chatId, { chats: [], pinned: true, projectPinned: false, projectId: null }, null);
+            }}
+            // Same box as the search field it stands in for, so nothing below it moves.
+            className={`flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
+              pinZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] bg-[var(--bg)]'
+            }`}
+          >
+            <PinIcon />
+            Drop here to pin
+          </div>
+        ) : (
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => void runSearch(e.target.value)}
+            placeholder="Search chats..."
+            aria-label="Search chats"
+            className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+          />
+        )}
       </div>
 
       {/* relative: the group headings' screen-reader text is absolutely positioned, and without a positioned
           ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
           window scroll once a group sat below the fold. */}
-      <div className="relative flex-1 overflow-y-auto p-2" data-testid="chat-list-scroll">
+      <div className="relative flex-1 overflow-y-auto px-1.5 py-1" data-testid="chat-list-scroll">
         {sidebar.pinned.length > 0 && (
-          <div className="mb-3" data-testid="group-pinned">
+          <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
-            <ul className="space-y-0.5">{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
+            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null }))}</ul>
           </div>
         )}
 
@@ -527,13 +594,14 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               onDropChat={(chatId) => void moveChat(chatId, project?.id ?? null)}
               {...(project ? projectGroupProps(project) : {})}
             >
-              {group.chats.map((c) => renderRow(c, { chats: group.chats, pinned: false, projectId: project?.id ?? null }))}
+              {group.pinnedChats.map((c) => renderRow(c, { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId: project?.id ?? null }))}
+              {group.chats.map((c) => renderRow(c, { chats: group.chats, pinned: false, projectPinned: false, projectId: project?.id ?? null }))}
             </ProjectGroup>
           );
         })}
 
         {sidebar.archived.length > 0 && (
-          <div className="mb-3" data-testid="archived-section">
+          <div className="mb-1.5" data-testid="archived-section">
             <button
               type="button"
               aria-expanded={showArchived}
@@ -542,7 +610,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
             >
               {showArchived ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}
             </button>
-            {showArchived && <ul className="space-y-0.5">{sidebar.archived.map((c) => renderRow(c, null))}</ul>}
+            {showArchived && <ul>{sidebar.archived.map((c) => renderRow(c, null))}</ul>}
           </div>
         )}
 
@@ -553,22 +621,20 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         )}
       </div>
 
-      <div className="space-y-2 border-t border-[var(--border)] p-2">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void createChat()}
-            // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
-            aria-disabled={creating || profiles.length === 0 || undefined}
-            title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
-            className="btn btn-primary flex-1 px-2 py-1.5"
-          >
-            + New chat
-          </button>
-          <button type="button" onClick={() => openProjectPage({ mode: 'create' })} className="btn px-2 py-1.5">
-            + New project
-          </button>
-        </div>
+      <div className="flex items-center gap-1 border-t border-[var(--border)] p-2">
+        <button
+          type="button"
+          onClick={() => void createChat()}
+          // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
+          aria-disabled={creating || profiles.length === 0 || undefined}
+          title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
+          className="btn btn-primary flex-1 px-2 py-1.5"
+        >
+          + New chat
+        </button>
+        <button type="button" onClick={() => openProjectPage({ mode: 'create' })} aria-label="New project" title="New project" className="btn px-2 py-1.5">
+          <FolderPlusIcon />
+        </button>
         {footer}
       </div>
 
@@ -584,6 +650,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               openInTab: () => openTab(menuChat.id),
               rename: () => setRenamingChatId(menuChat.id),
               setPinned: (pinned) => void setPinned(menuChat, pinned),
+              setProjectPinned: (pinned) => void setProjectPinned(menuChat, pinned),
               reorder: (dir) => void reorderChat(menuChat, dir),
               moveTo: (projectId) => void moveChat(menuChat.id, projectId),
               moveToNewProject: () => void moveToNewProject(menuChat),

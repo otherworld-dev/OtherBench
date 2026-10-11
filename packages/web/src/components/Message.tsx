@@ -325,6 +325,8 @@ export interface MessageProps {
   onRegenerate?: () => void;
   /** Offers "Edit" (user messages). */
   onEdit?: () => void;
+  /** Draws the message in a bordered box (the thread does; compare cards have their own). */
+  framed?: boolean;
   /** Greys out Regenerate/Edit, e.g. while a reply in this chat is streaming. */
   actionsDisabled?: boolean;
   /** Replaces a user message's body with the inline editor. */
@@ -358,6 +360,7 @@ export function Message({
   onEdit,
   actionsDisabled = false,
   editing,
+  framed = false,
 }: MessageProps): JSX.Element {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : (message.producedBy?.profileName ?? 'Assistant');
@@ -371,8 +374,13 @@ export function Message({
     : [];
 
   return (
-    <article id={`msg-${message.id}`} data-role={message.role} data-status={message.status} className="group space-y-1">
-      <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+    <article
+      id={`msg-${message.id}`}
+      data-role={message.role}
+      data-status={message.status}
+      className={`group space-y-1 ${framed ? 'rounded border border-[var(--border)] bg-[var(--bg)] px-3 py-2' : ''}`}
+    >
+      <div data-message-header="" className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
         <span className={`label-caps ${isUser ? 'text-[var(--text-muted)]' : 'text-[var(--accent)]'}`}>{label}</span>
         {!isUser && message.producedBy && <span className="font-mono text-[var(--text-faint)]">{message.producedBy.modelId}</span>}
         {message.status === 'error' && <span className="text-[var(--danger)]">error</span>}
@@ -387,6 +395,23 @@ export function Message({
           >
             ⤺ {otherVariantsCount} other variant{otherVariantsCount === 1 ? '' : 's'}
           </button>
+        )}
+        {/* On the label line rather than a line of their own; shown on hover or keyboard focus (opacity only, so still clickable). */}
+        {!editing && (onRegenerate || onEdit) && (
+          <span
+            className={`${otherVariantsCount > 0 ? '' : 'ml-auto'} flex gap-3 opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100`}
+          >
+            {onRegenerate && (
+              <button type="button" onClick={onRegenerate} disabled={actionsDisabled} className="label-caps hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]">
+                Regenerate
+              </button>
+            )}
+            {onEdit && (
+              <button type="button" onClick={onEdit} disabled={actionsDisabled} className="label-caps hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]">
+                Edit
+              </button>
+            )}
+          </span>
         )}
       </div>
 
@@ -422,30 +447,6 @@ export function Message({
         <p className="text-xs text-[var(--danger)]">{message.error.message}</p>
       )}
 
-      {!editing && (onRegenerate || onEdit) && (
-        <div className="flex gap-3 text-[var(--text-muted)]">
-          {onRegenerate && (
-            <button
-              type="button"
-              onClick={onRegenerate}
-              disabled={actionsDisabled}
-              className="label-caps hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
-            >
-              Regenerate
-            </button>
-          )}
-          {onEdit && (
-            <button
-              type="button"
-              onClick={onEdit}
-              disabled={actionsDisabled}
-              className="label-caps hover:text-[var(--text)] focus-visible:text-[var(--text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
-            >
-              Edit
-            </button>
-          )}
-        </div>
-      )}
     </article>
   );
 }
