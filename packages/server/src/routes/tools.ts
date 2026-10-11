@@ -267,15 +267,27 @@ export function toolsRoutes(container: Container): Hono {
   });
 
   app.post('/mcp-servers/import/claude-desktop', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { names?: unknown };
+    const body = (await c.req.json().catch(() => ({}))) as { names?: unknown; profileIds?: unknown };
     if (!Array.isArray(body.names) || !body.names.every((n) => typeof n === 'string')) {
       throw new HTTPException(400, { message: '"names" must be a list of server names.' });
     }
+    // The profiles to turn the imported servers on for, all checked before
+    // anything is created so a bad id never leaves a half-done import.
+    const profileIds = body.profileIds ?? [];
+    if (!Array.isArray(profileIds) || !profileIds.every((id) => typeof id === 'string')) {
+      throw new HTTPException(400, { message: '"profileIds" must be a list of profile ids.' });
+    }
+    const profiles = [...new Set(profileIds as string[])].map((id) => {
+      const profile = container.store.profiles.get(id);
+      if (!profile) throw new HTTPException(400, { message: `There is no profile "${id}".` });
+      return profile;
+    });
     const path = claudeDesktopConfigPath();
     const read = await claudeDesktopServers(path);
     if (!read.found) throw new HTTPException(404, { message: `Claude Desktop's config wasn't found at ${path}.` });
     const existing = new Set(container.store.mcpServers.list().map((r) => r.name));
     const imported: string[] = [];
+    const importedIds: string[] = [];
     const skipped: { name: string; reason: string }[] = [];
     for (const name of body.names as string[]) {
       const s = read.servers.find((x) => x.name === name);
@@ -283,13 +295,22 @@ export function toolsRoutes(container: Container): Hono {
       else if (existing.has(name)) skipped.push({ name, reason: `Grunt already has a server called "${name}".` });
       else if (!s.supported || !s.transport) skipped.push({ name, reason: s.reason ?? "Grunt can't use it." });
       else {
-        await createMcpServer(container, { name, transport: s.transport, command: s.command, args: s.args, env: s.env, url: s.url, headers: s.headers, enabled: true });
+        const created = await createMcpServer(container, { name, transport: s.transport, command: s.command, args: s.args, env: s.env, url: s.url, headers: s.headers, enabled: true });
         existing.add(name);
         imported.push(name);
+        importedIds.push(created.id);
       }
     }
     if (imported.length > 0) await container.mcpManager.sync();
-    return c.json({ imported, skipped });
+    const updated =
+      importedIds.length === 0
+        ? []
+        : profiles.map((p) =>
+            container.store.profiles.update(p.id, {
+              toolPolicy: { ...p.toolPolicy, mcpServerIds: [...p.toolPolicy.mcpServerIds, ...importedIds.filter((id) => !p.toolPolicy.mcpServerIds.includes(id))] },
+            })
+          );
+    return c.json({ imported, skipped, profiles: updated });
   });
 
   app.get('/mcp-servers', (c) => c.json(container.mcpManager.health()));

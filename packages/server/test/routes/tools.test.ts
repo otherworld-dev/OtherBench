@@ -441,6 +441,52 @@ describe('Import from Claude Desktop', () => {
     expect(JSON.stringify(row)).not.toContain('very-secret-token');
   });
 
+  const profile = (id: string, mcpServerIds: string[]) =>
+    store.profiles.create({
+      id,
+      name: `Profile ${id}`,
+      description: null,
+      colour: null,
+      connectionId: 'conn-1',
+      modelId: 'model-x',
+      systemPrompt: null,
+      params: {},
+      toolPolicy: { fs: 'off', shell: false, mcpServerIds, approvalMode: 'ask_on_mutate' },
+      isDefault: false,
+      archivedAt: null,
+    });
+
+  it('turns the imported servers on for the chosen profiles, keeping what those already had', async () => {
+    config();
+    profile('pa', ['already-on']);
+    profile('pb', []);
+    const res = await postImport({ names: ['Home Assistant', 'blender', 'legacy'], profileIds: ['pa'] });
+    expect(res.status).toBe(200);
+    const ids = ['Home Assistant', 'blender'].map((n) => store.mcpServers.list().find((r) => r.name === n)!.id);
+    expect(store.profiles.get('pa')!.toolPolicy.mcpServerIds).toEqual(['already-on', ...ids]);
+    expect(store.profiles.get('pb')!.toolPolicy.mcpServerIds).toEqual([]);
+    const body = (await res.json()) as { profiles: { id: string; toolPolicy: { mcpServerIds: string[] } }[] };
+    expect(body.profiles.map((p) => [p.id, p.toolPolicy.mcpServerIds])).toEqual([['pa', ['already-on', ...ids]]]);
+  });
+
+  it('leaves profiles alone when no profile is chosen or nothing was imported', async () => {
+    config();
+    profile('pa', []);
+    expect(await (await postImport({ names: ['blender'] })).json()).toMatchObject({ imported: ['blender'], profiles: [] });
+    expect(await (await postImport({ names: ['blender'], profileIds: ['pa'] })).json()).toMatchObject({ imported: [], profiles: [] });
+    expect(store.profiles.get('pa')!.toolPolicy.mcpServerIds).toEqual([]);
+  });
+
+  it('refuses an unknown profile, or a profile list that is not one, before importing anything', async () => {
+    config();
+    profile('pa', []);
+    const res = await postImport({ names: ['Home Assistant'], profileIds: ['pa', 'nope'] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('nope');
+    expect((await postImport({ names: ['Home Assistant'], profileIds: 'pa' })).status).toBe(400);
+    expect(store.mcpServers.list()).toEqual([]);
+  });
+
   it('404s an import when there is no config, and 400s a names list that is not one', async () => {
     expect((await postImport({ names: ['x'] })).status).toBe(404);
     config();
