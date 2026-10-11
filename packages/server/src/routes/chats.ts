@@ -22,6 +22,7 @@ interface ChatBody {
   workspacePath?: unknown;
   workspaceRoot?: unknown;
   pinned?: unknown;
+  projectPinned?: unknown;
   archivedAt?: unknown;
   autoMode?: unknown;
   effort?: unknown;
@@ -33,7 +34,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'memoryExcluded', 'sortOrder']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -190,9 +191,17 @@ export function chatsRoutes(container: Container): Hono {
       // Moving files the chat; its folder and profile stay as they are (spec §2).
       patch.projectId = body.projectId === null ? null : requireExistingProject(container, body.projectId).id;
     }
+    if (body.projectPinned !== undefined) {
+      patch.projectPinned = optionalBoolean(body.projectPinned, 'projectPinned', false);
+      // Pinned "in its project" means nothing for a chat in none (after this patch).
+      const projectAfter = patch.projectId !== undefined ? patch.projectId : getChatOrThrow(container, id).projectId;
+      if (patch.projectPinned && projectAfter === null) {
+        throw new HTTPException(400, { message: '"projectPinned" needs the chat to be in a project.' });
+      }
+    }
 
-    // Toggling Auto, turning project memory off or on, moving a chat to another project or reordering it is not
-    // chat activity: such a PATCH leaves updatedAt alone. Every other PATCH, including an empty one, still bumps it.
+    // Toggling Auto, turning project memory off or on, moving a chat to another project, pinning it within its
+    // project or reordering it is not chat activity: such a PATCH leaves updatedAt alone. Every other PATCH, including an empty one, still bumps it.
     const keys = Object.keys(patch);
     const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k));
     if (!nonActivity) patch.updatedAt = Date.now();
