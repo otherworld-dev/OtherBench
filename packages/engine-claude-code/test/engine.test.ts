@@ -8,6 +8,8 @@ import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '../src/engine.js';
 import { liveKey } from '../src/live.js';
+import type { GruntServerTool } from '../src/grunt-server.js';
+import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-cce-')); });
@@ -278,6 +280,20 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
     e.dispose();
   });
 
+  it('without a scratch root, runs in a private temp folder made for the engine, never a fixed path another user could make first', async () => {
+    const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
+    const one = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    const two = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+    await collect(one.stream(req({ workspaceRoot: null, chatId: 'c1' })));
+    await collect(one.stream(req({ workspaceRoot: null, chatId: 'c2' })));
+    await collect(two.stream(req({ workspaceRoot: null, chatId: 'c1' })));
+    const [a, b, c] = calls.map((x) => x.options.cwd!);
+    expect(a).not.toBe(join(tmpdir(), 'grunt-claude-scratch', 'c1'));
+    expect(join(a!, '..')).toBe(join(b!, '..')); // one private folder per engine
+    expect(join(a!, '..')).not.toBe(join(c!, '..'));
+    for (const cwd of [a, b, c]) rmSync(join(cwd!, '..'), { recursive: true, force: true });
+  });
+
   it("keeps a chat id that isn't a plain name inside the scratch folder", async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield success(); });
     await collect(clean(query).stream(req({ workspaceRoot: null, chatId: '../escape' })));
@@ -285,7 +301,7 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
   });
 
   it('starts a new process when only the built-in tools differ', () => {
-    const own = { artifacts: false, recall: false };
+    const own = { artifacts: false, recall: false, relay: '' };
     const connection = { backend: 'claude', token: null };
     expect(liveKey({ cwd: 'x', tools: ['WebSearch', 'WebFetch'] }, connection, own)).not.toBe(liveKey({ cwd: 'x', tools: [] }, connection, own));
   });
@@ -697,6 +713,82 @@ describe('ClaudeCodeChatEngine live processes', () => {
     await collect(e.stream(followUp({ profile: profile({ toolPolicy: { ...profile().toolPolicy, recall: false } }) })));
     expect(starts).toHaveLength(2);
     e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine relayed MCP tools', () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const deckAdd = (execute: ToolSpec['execute']): ToolSpec => ({
+    name: 'mcp__nextcloud__deck_add',
+    description: 'Add a Deck card',
+    parameters: { type: 'object', properties: { title: { type: 'string' } } },
+    risk: 'mutate',
+    source: 'mcp',
+    serverId: 's1',
+    execute,
+  });
+  const withServers = (ids: string[]) => profile({ toolPolicy: { ...profile().toolPolicy, mcpServerIds: ids } });
+
+  for (const where of ['a chat with a folder', 'a clean chat'] as const) {
+    it(`puts the profile's MCP tools on Grunt's server in ${where}, approves each call as the API model's tool, and runs it for the reply`, async () => {
+      const execute = vi.fn(async () => [{ type: 'text', text: 'card added' }]);
+      const relayTools = vi.fn(() => [deckAdd(execute)]);
+      const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'ask:once' })), recordAgentDenial: vi.fn() };
+      let tools: GruntServerTool[] = [];
+      const mcpServer = vi.fn((name: string, defs: GruntServerTool[]) => {
+        tools = defs;
+        return { type: 'sdk', name, instance: {} } as never;
+      });
+      let decision: unknown = null;
+      let result: unknown = null;
+      const { query } = fakeQuery(async function* ({ options }) {
+        yield init('sess-1');
+        const server = Object.keys(options.mcpServers ?? {})[0]!;
+        const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+        decision = await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${server}__nextcloud__deck_add`, tool_input: { title: 'x' }, tool_use_id: 't1' } as never, 't1', sig());
+        result = await tools.find((t) => t.name === 'nextcloud__deck_add')!.call({ title: 'x' });
+        yield success();
+      });
+      const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools, mcpServer });
+      await collect(e.stream(req({ profile: withServers(['s1']), ...(where === 'a clean chat' ? { workspaceRoot: null } : {}) })));
+      expect(relayTools).toHaveBeenCalledWith(['s1']);
+      expect(tools.find((t) => t.name === 'nextcloud__deck_add')!.inputSchema).toEqual(deckAdd(execute).parameters);
+      expect(a.requestApproval.mock.calls[0]![0]).toMatchObject({ name: 'mcp__nextcloud__deck_add', source: 'mcp', serverId: 's1' });
+      expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+      expect(execute).toHaveBeenCalledWith({ title: 'x' }, expect.objectContaining({ chatId: 'chat', messageId: 'm1' }));
+      expect(result).toEqual({ content: [{ type: 'text', text: 'card added' }] });
+      e.dispose();
+    });
+  }
+
+  it("reports a relayed call under the API model's name", async () => {
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query } = fakeQuery(async function* ({ options }) {
+      const server = Object.keys(options.mcpServers ?? {})[0]!;
+      yield init('sess-1');
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${server}__nextcloud__deck_add`, input: { title: 'x' } }] } } as unknown as SDKMessage;
+      yield { type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'card added' }] } } as unknown as SDKMessage;
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [deckAdd(async () => [])], mcpServer });
+    const events = await collect(e.stream(req({ profile: withServers(['s1']) })));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'mcp__nextcloud__deck_add' }));
+    e.dispose();
+  });
+
+  it('adds no server when there is nothing to relay', async () => {
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [], mcpServer });
+    await collect(e.stream(req({ profile: withServers(['s1']) })));
+    await collect(e.stream(req()));
+    expect(calls.map((c) => c.options.mcpServers)).toEqual([undefined, undefined]);
+    e.dispose();
+  });
+
+  it('starts a new process when the relayed tools change', () => {
+    const connection = { backend: 'claude', token: null };
+    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, relay: 'b' }));
   });
 });
 

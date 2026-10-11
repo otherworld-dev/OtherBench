@@ -203,6 +203,17 @@ export class GruntToolProvider implements ToolProvider {
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
   }
 
+  /**
+   * The given MCP servers' tools as `listTools` names and describes them,
+   * but UNGATED: for the Claude Code relay only (spec
+   * 2026-10-11-claude-code-clean-chat-and-mcp-design §2), whose gate approves
+   * each call through `requestApproval` with the very same spec before it
+   * calls `execute`. Never hand these to a model directly.
+   */
+  relayMcpTools(serverIds: string[]): ToolSpec[] {
+    return serverIds.length === 0 ? [] : this.deduplicateNames(this.mcpToolSpecs(serverIds));
+  }
+
   async refreshMcp(serverId: string): Promise<void> {
     await this.mcp.refresh(serverId);
   }

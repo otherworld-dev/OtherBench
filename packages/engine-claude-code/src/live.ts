@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Gate } from './approval.js';
 
 /** How long a Claude Code process with no reply in progress stays alive for the next message. */
@@ -44,12 +45,16 @@ export interface TurnBinding {
   artifact?: (args: unknown) => Promise<unknown>;
   /** Runs a `recall` call for this reply (spec 2026-10-09-recall-design); absent when the profile turns recall off. */
   recall?: (args: unknown) => Promise<unknown>;
+  /** Runs a relayed MCP tool's (already approved) call for this reply, with the reply's tool context. */
+  relay?: (spec: ToolSpec, args: unknown) => Promise<unknown>;
 }
 
 /** Which of Grunt's own tools a process's server carries; fixed when it starts. */
 export interface GruntServerSwitches {
   artifacts: boolean;
   recall: boolean;
+  /** `buildRelay(...).hash` of the relayed MCP tools; '' for none (relay.ts). */
+  relay: string;
 }
 
 /**
@@ -67,6 +72,8 @@ export class LiveProcess {
   artifactTool: string | null = null;
   /** Claude Code's name for this process's recall tool, or null when its Grunt server has none. */
   recallTool: string | null = null;
+  /** Claude Code's name for each relayed MCP tool on this process's Grunt server -> the API model's name for it. */
+  relayNames = new Map<string, string>();
   readonly stderr: string[] = [];
   readonly iterator: AsyncIterator<SDKMessage>;
   private closed = false;
@@ -109,7 +116,7 @@ export class LiveProcess {
 export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntServerSwitches): string {
   const { cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, relay: own.relay, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 

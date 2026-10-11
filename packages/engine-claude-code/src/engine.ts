@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -6,7 +6,7 @@ import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext, ToolProvider } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
@@ -18,6 +18,7 @@ import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
+import { buildRelay, relayServerTool, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
@@ -49,9 +50,17 @@ export interface ClaudeCodeEngineDeps {
    * Where a chat with no folder runs (a clean chat, spec
    * 2026-10-11-claude-code-clean-chat-and-mcp-design §1): each such chat gets
    * `<scratchRoot>/<chat id>`, the same folder every turn so its session
-   * resumes. Defaults to `<tmpdir>/grunt-claude-scratch`.
+   * resumes. Without it, a private folder made in the system temp folder for
+   * this engine (never a fixed path there, which another user could make first).
    */
   scratchRoot?: string;
+  /**
+   * The ToolSpecs of the given MCP servers' tools, as an API model gets them
+   * but ungated (GruntToolProvider.relayMcpTools): relayed to Claude Code
+   * through Grunt's server, each call approved by the gate first (spec
+   * 2026-10-11-claude-code-clean-chat-and-mcp-design §2). Without it, no relay.
+   */
+  relayTools?: (serverIds: string[]) => ToolSpec[];
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: GruntServerTool[]) => McpServerConfig;
 }
@@ -102,6 +111,8 @@ const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? [])
  */
 export class ClaudeCodeChatEngine implements ChatEngine {
   private readonly claims = new SessionClaims();
+  /** Where clean chats run when `deps.scratchRoot` isn't given: made on first use (scratchFolder). */
+  private privateScratch: string | undefined;
   /** Claude Code processes kept alive between replies, by session (see live.ts). */
   private readonly pool: LivePool;
   /** Every process started, so `dispose` can stop the busy ones too. */
@@ -195,21 +206,26 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // process's Grunt server has each tool or not from its start, so the
     // switches are part of the process key.
     const { artifactTool, recallTool } = this.deps;
+    // The profile's MCP servers, relayed through the same server (relay.ts).
+    const serverIds = profile.toolPolicy.mcpServerIds;
+    const relay = buildRelay(this.deps.relayTools && serverIds.length > 0 ? this.deps.relayTools(serverIds) : []);
     const own: GruntServerSwitches = {
       artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
       recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
+      relay: relay.hash,
     };
     const binding: TurnBinding = {
       gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
       ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
+      ...(relay.tools.size > 0 ? { relay: (spec: ToolSpec, args: unknown) => spec.execute(args, gateCtx) } : {}),
     };
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
     const taken = plan.mode === 'continue' ? this.pool.take(plan.sessionId, key) : null;
     const reused = taken !== null;
-    const live = taken ?? this.startProcess(options, key, plan, own);
+    const live = taken ?? this.startProcess(options, key, plan, own, relay);
     live.binding = binding;
 
     // Stopping a reply stops its process: the next message resumes the
@@ -224,6 +240,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const renames = new Map<string, string>();
     if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
     if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
+    for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
     const mapper = new SdkEventMapper(renames.size > 0 ? renames : undefined);
     let sawInit = false;
     let finished = false;
@@ -282,7 +299,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
 
   /** A clean chat's own folder, created if need be. A chat id that isn't a plain name is made into one, so it can't point outside. */
   private scratchFolder(chatId: string): string {
-    const folder = join(this.deps.scratchRoot ?? join(tmpdir(), 'grunt-claude-scratch'), chatId.replace(/[^A-Za-z0-9_-]/g, '_'));
+    this.privateScratch ??= this.deps.scratchRoot ?? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-'));
+    const folder = join(this.privateScratch, chatId.replace(/[^A-Za-z0-9_-]/g, '_'));
     mkdirSync(folder, { recursive: true });
     return folder;
   }
@@ -344,7 +362,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
    * reply is running decides its tool calls, and with none running every
    * call is refused.
    */
-  private startProcess(options: Options, key: string, plan: SessionPlan, own: GruntServerSwitches): LiveProcess {
+  private startProcess(options: Options, key: string, plan: SessionPlan, own: GruntServerSwitches, relay: Relay): LiveProcess {
     this.pool.makeRoom();
     const input = new PromptQueue();
     const abortController = new AbortController();
@@ -353,14 +371,21 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // The gate passes its artifact and recall tools without a card, matching
     // those exact names, so no project MCP config can name a server to get
     // the same pass.
-    const server = own.artifacts || own.recall ? gruntServerName() : null;
+    const server = own.artifacts || own.recall || relay.tools.size > 0 ? gruntServerName() : null;
     const ownArtifactTool = server && own.artifacts ? gruntArtifactToolName(server) : null;
     const ownRecallTool = server && own.recall ? gruntRecallToolName(server) : null;
-    const ownTool = (toolName: string): GruntTool | undefined =>
-      toolName === ownArtifactTool ? 'artifact' : toolName === ownRecallTool ? 'recall' : undefined;
+    // A relayed tool is matched by its exact name on this process's server, like artifact and recall.
+    const relayed = new Map<string, ToolSpec>(server ? [...relay.tools].map(([name, spec]) => [`mcp__${server}__${name}`, spec] as const) : []);
+    const ownTool = (toolName: string): GruntTool | { relay: ToolSpec } | undefined => {
+      if (toolName === ownArtifactTool) return 'artifact';
+      if (toolName === ownRecallTool) return 'recall';
+      const spec = relayed.get(toolName);
+      return spec ? { relay: spec } : undefined;
+    };
     const tools: GruntServerTool[] = [
       ...(own.artifacts ? [gruntArtifactTool(() => live?.binding?.artifact)] : []),
       ...(own.recall ? [gruntRecallTool(() => live?.binding?.recall)] : []),
+      ...[...relay.tools].map(([name, spec]) => relayServerTool(name, spec, () => live?.binding?.relay)),
     ];
     const gate: Gate = (toolName, toolInput, signal, opts) => {
       const which = ownTool(toolName);
@@ -393,6 +418,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const process = new LiveProcess(key, input, abortController, this.deps.query({ prompt: input, options: full }));
     process.artifactTool = ownArtifactTool;
     process.recallTool = ownRecallTool;
+    for (const [claudeName, spec] of relayed) process.relayNames.set(claudeName, spec.name);
     live = process;
     for (const p of this.processes) if (p.isClosed) this.processes.delete(p);
     this.processes.add(process);

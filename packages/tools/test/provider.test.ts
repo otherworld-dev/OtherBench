@@ -144,6 +144,26 @@ describe('GruntToolProvider.listTools', () => {
   });
 });
 
+describe('GruntToolProvider.relayMcpTools (the Claude Code relay)', () => {
+  it('returns the allowlisted servers\' MCP specs as listTools names them, ungated: execute calls the server straight away', async () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const mcp = fakeMcpManager([
+      { id: 's1', name: 'nextcloud', tools: [{ name: 'deck_add' }] },
+      { id: 's2', name: 'other', tools: [{ name: 'x' }] },
+    ]);
+    const provider = new GruntToolProvider(store, broker, mcp);
+    const specs = provider.relayMcpTools(['s1']);
+    expect(specs.map((s) => [s.name, s.source, s.serverId])).toEqual([['mcp__nextcloud__deck_add', 'mcp', 's1']]);
+    const pending: unknown[] = [];
+    provider.onApprovalEvent((e) => pending.push(e));
+    const ctx = { chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
+    expect(await specs[0]!.execute({ title: 'x' }, ctx)).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(pending).toEqual([]); // no card: the Claude Code gate has already approved the call
+    expect(provider.relayMcpTools([])).toEqual([]);
+  });
+});
+
 describe('GruntToolProvider gating', () => {
   it('fs:"off" and fs:"read" both keep write_file out of the returned tool list entirely', async () => {
     const { provider } = makeProvider();
