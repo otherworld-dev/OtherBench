@@ -26,12 +26,12 @@ function errorText(err: unknown, action: string): string {
  * its new group), unless focus has meanwhile gone into a menu, a dialog or a
  * text field -- another action took it on purpose.
  */
-function focusLater(selector: string, fallback?: string): void {
+function focusLater(selector: string, fallback?: string, options?: FocusOptions): void {
   setTimeout(() => {
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.closest('[role="menu"], [role="alertdialog"], input, select, textarea')) return;
     const target = document.querySelector<HTMLElement>(selector) ?? (fallback ? document.querySelector<HTMLElement>(fallback) : null);
-    target?.focus();
+    target?.focus(options);
   }, 0);
 }
 
@@ -299,11 +299,16 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     if (await patchChat(chat, { title }, "Couldn't rename the chat")) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
   }
 
-  async function setPinned(chat: Chat, pinned: boolean): Promise<void> {
+  /**
+   * `preventScroll` for the row's own pin button: the row moves into or out
+   * of Pinned at the top, and following it there would lose the user's place
+   * when pinning several chats from far down the list.
+   */
+  async function setPinned(chat: Chat, pinned: boolean, preventScroll = false): Promise<void> {
     setError(null);
     try {
       await setChatPinned(chat.id, pinned);
-      focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+      focusLater(chatRowSelector(chat.id), LIST_SELECTOR, preventScroll ? { preventScroll: true } : undefined);
     } catch (err) {
       console.error(`[grunt-web] failed to update chat ${chat.id}:`, err);
       setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
@@ -488,7 +493,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         menuOpen={chatMenu?.chatId === chat.id}
         renaming={renamingChatId === chat.id}
         muted={section === null}
-        onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned) : undefined}
+        onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
         showPinMarker={!section?.pinned}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}

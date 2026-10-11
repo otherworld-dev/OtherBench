@@ -5,6 +5,8 @@ export const SIDEBAR_WIDTH_STORAGE_KEY = 'grunt.sidebarWidth';
 export const SIDEBAR_WIDTH_DEFAULT = 16.25;
 export const SIDEBAR_WIDTH_MIN = 12.5;
 export const SIDEBAR_WIDTH_MAX = 30;
+/** The sidebar never takes more than this share of the window (App's grid column), whatever was saved. */
+export const SIDEBAR_WIDTH_MAX_SHARE = 0.4;
 
 /** `rem` clamped to the allowed range; anything that isn't a finite number is the default. */
 export function clampSidebarWidth(rem: number): number {
@@ -26,6 +28,19 @@ function load(): number {
 let width: number | null = null;
 const listeners = new Set<() => void>();
 
+/**
+ * Hands the width to the layout as `--sidebar-w` on the document root, so a
+ * drag restyles one grid column instead of re-rendering the whole app.
+ */
+function apply(rem: number): void {
+  document.documentElement.style.setProperty('--sidebar-w', `${rem}rem`);
+}
+
+/** Applies the saved width; call once before first render. */
+export function initSidebarWidth(): void {
+  apply(getSidebarWidth());
+}
+
 /** The sidebar's width in rem right now. */
 export function getSidebarWidth(): number {
   if (width === null) width = load();
@@ -44,6 +59,7 @@ export function setSidebarWidth(rem: number, save = true): void {
   const next = clampSidebarWidth(rem);
   if (next !== width) {
     width = next;
+    apply(next);
     listeners.forEach((l) => l());
   }
   if (!save) return;

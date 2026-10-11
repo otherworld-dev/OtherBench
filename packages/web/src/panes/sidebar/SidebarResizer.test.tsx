@@ -46,6 +46,21 @@ describe('SidebarResizer', () => {
     expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe('20.25');
   });
 
+  it('works from the width on screen when the 40% cap applies', () => {
+    const innerWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 }); // cap: 320px = 20rem
+    setSidebarWidth(30);
+    render(<SidebarResizer />);
+    expect(handle()).toHaveAttribute('aria-valuenow', '20');
+    fireEvent.pointerDown(handle(), { button: 0, clientX: 320, pointerId: 1 });
+    fireEvent.pointerMove(handle(), { clientX: 304, pointerId: 1 }); // -16px = -1rem from what is shown
+    fireEvent.pointerUp(handle(), { clientX: 304, pointerId: 1 });
+    expect(getSidebarWidth()).toBe(19);
+    fireEvent.keyDown(handle(), { key: 'ArrowLeft' });
+    expect(getSidebarWidth()).toBe(18);
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth });
+  });
+
   it('double-click resets to the default', () => {
     setSidebarWidth(25);
     render(<SidebarResizer />);

@@ -101,12 +101,20 @@ describe('ConversationStrip', () => {
     expect(screen.getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
   });
 
+  it('has no pin toggle for an archived chat, as the row and menu have none', () => {
+    render(<ConversationStrip chat={{ ...makeChat(null), archivedAt: 5 }} />);
+    expect(screen.queryByRole('button', { name: /pin chat/i })).toBeNull();
+  });
+
   it('says so when pinning fails', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockedPatch.mockRejectedValueOnce(new Error('offline'));
     renderFor(null);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Pin chat' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't pin the chat");
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't pin the chat");
+    expect(alert).toHaveClass('truncate');
+    expect(alert).toHaveAttribute('title', "Couldn't pin the chat");
     error.mockRestore();
   });
 
@@ -117,6 +125,8 @@ describe('ConversationStrip', () => {
     useGruntStore.setState({ streamStatus: 'reconnecting' });
     renderFor(null);
     expect(screen.getByTestId('stream-status')).toHaveTextContent('Reconnecting…');
+    expect(screen.getByTestId('stream-status')).toHaveClass('min-w-0', 'truncate');
+    expect(screen.getByTestId('stream-status')).toHaveAttribute('title', 'Reconnecting…');
   });
 
   it('has an Inspector button only in the narrow layout, which opens the overlay', async () => {

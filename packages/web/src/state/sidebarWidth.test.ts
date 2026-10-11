@@ -6,6 +6,7 @@ import {
   SIDEBAR_WIDTH_STORAGE_KEY,
   clampSidebarWidth,
   getSidebarWidth,
+  initSidebarWidth,
   resetSidebarWidthForTests,
   setSidebarWidth,
 } from './sidebarWidth.js';
@@ -43,6 +44,18 @@ describe('sidebarWidth', () => {
     expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBeNull();
     setSidebarWidth(24);
     expect(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)).toBe('24');
+  });
+
+  it('puts the width on the document root as --sidebar-w', () => {
+    setSidebarWidth(22);
+    expect(document.documentElement.style.getPropertyValue('--sidebar-w')).toBe('22rem');
+  });
+
+  it('applies the saved width at start-up', () => {
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, '19');
+    resetSidebarWidthForTests();
+    initSidebarWidth();
+    expect(document.documentElement.style.getPropertyValue('--sidebar-w')).toBe('19rem');
   });
 
   it('still applies the width when storage throws', () => {

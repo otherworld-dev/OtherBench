@@ -27,6 +27,8 @@ describe('ChatRow', () => {
       </ul>
     );
     expect(screen.getAllByRole('img', { name: 'Not added to memory' })).toHaveLength(2);
+    // Outside the button: a button's children are presentational, so inside it the marker isn't announced.
+    expect(screen.getAllByRole('img', { name: 'Not added to memory' })[0]!.closest('button')).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Notes' })).toHaveLength(2);
     cleanup();
 

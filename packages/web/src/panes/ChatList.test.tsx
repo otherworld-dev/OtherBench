@@ -296,6 +296,16 @@ describe('ChatList pin button', () => {
     expect(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
   });
 
+  it('refocuses the moved row without scrolling the list to it', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    render(<ChatList />);
+    await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
+    await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c1']));
+    await waitFor(() => expect(focus).toHaveBeenLastCalledWith({ preventScroll: true }));
+    focus.mockRestore();
+  });
+
   it('says so when pinning fails', async () => {
     useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
     mockedPatch.mockRejectedValueOnce(new ApiError(500, 'disk full'));

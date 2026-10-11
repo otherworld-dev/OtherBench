@@ -8,7 +8,6 @@ import { PaneGrid } from './panes/PaneGrid.js';
 import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
-import { useSidebarWidth } from './state/sidebarWidth.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
@@ -42,7 +41,6 @@ function MainApp(): JSX.Element {
   const setProjects = useGruntStore((s) => s.setProjects);
 
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
-  const sidebarWidth = useSidebarWidth();
   // Separate from `inspectorCollapsed` (the docked-mode show/hide
   // preference): whether the narrow-mode overlay is currently open. In the
   // store so each pane's header can open it; ephemeral, and starts closed
@@ -112,8 +110,9 @@ function MainApp(): JSX.Element {
   return (
     <div
       className="grid h-screen grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
-      // Never more than 40% of the window, whatever was saved on a bigger screen.
-      style={{ gridTemplateColumns: `min(${sidebarWidth}rem, 40vw) minmax(0, 1fr)` }}
+      // --sidebar-w comes from state/sidebarWidth.ts; never more than 40% of the window (SIDEBAR_WIDTH_MAX_SHARE),
+      // whatever was saved on a bigger screen.
+      style={{ gridTemplateColumns: 'min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)' }}
       data-narrow={isNarrow || undefined}
     >
       {unreachable && (

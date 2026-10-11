@@ -107,15 +107,18 @@ export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element {
         <span title={chat.title} className="min-w-0 shrink truncate text-sm font-medium">
           {chat.title}
         </span>
-        <button
-          type="button"
-          onClick={() => void togglePin()}
-          aria-label={chat.pinned ? 'Unpin chat' : 'Pin chat'}
-          title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
-          className={`shrink-0 rounded p-1 hover:bg-[var(--bg-sunken)] ${chat.pinned ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'}`}
-        >
-          <PinIcon filled={chat.pinned} />
-        </button>
+        {/* Archived chats can't be pinned, here as in the sidebar row and its menu. */}
+        {chat.archivedAt === null && (
+          <button
+            type="button"
+            onClick={() => void togglePin()}
+            aria-label={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+            title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+            className={`shrink-0 rounded p-1 hover:bg-[var(--bg-sunken)] ${chat.pinned ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'}`}
+          >
+            <PinIcon filled={chat.pinned} />
+          </button>
+        )}
         {latest ? (
           <>
             <span className="shrink-0 text-xs text-[var(--text-muted)]">
@@ -139,13 +142,14 @@ export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element {
         ) : (
           <span className="flex-1" />
         )}
+        {/* These truncate rather than push the buttons out of a narrow pane. */}
         {pinError && (
-          <span role="alert" className="shrink-0 text-xs text-[var(--danger)]">
+          <span role="alert" title={pinError} className="min-w-0 truncate text-xs text-[var(--danger)]">
             {pinError}
           </span>
         )}
         {status && (
-          <span data-testid="stream-status" className="shrink-0 text-xs text-[var(--text-muted)]">
+          <span data-testid="stream-status" title={status} className="min-w-0 truncate text-xs text-[var(--text-muted)]">
             {status}
           </span>
         )}

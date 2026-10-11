@@ -42,6 +42,26 @@ test('pins a chat from its row and unpins it from the pane header', async ({ pag
   }
 });
 
+/** The pin and ⋯ buttons show on hover and keyboard focus, not just because a click left focus on the row. */
+test("a clicked row doesn't keep its action buttons showing once the pointer leaves", async ({ page, request }) => {
+  const title = `Click me ${randomUUID().slice(0, 8)}`;
+  const id = await createChat(request, title);
+
+  try {
+    await page.goto('/');
+    const row = page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${id}`);
+    const actions = row.locator('[data-row-actions]');
+    await row.getByRole('button', { name: title }).click();
+    await page.mouse.move(700, 400);
+    await expect(actions).toHaveCSS('opacity', '0');
+    await page.keyboard.press('Tab');
+    await expect(row.getByRole('button', { name: 'Pin chat' })).toBeFocused();
+    await expect(actions).toHaveCSS('opacity', '1');
+  } finally {
+    await request.delete(`${BASE_URL}/api/chats/${id}`);
+  }
+});
+
 /**
  * With nothing pinned, dragging a chat swaps the search box for a "Drop here
  * to pin" target; the list itself doesn't move, and dropping there pins it.

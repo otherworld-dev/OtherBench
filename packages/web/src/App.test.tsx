@@ -199,11 +199,9 @@ describe('App view', () => {
     expect(screen.queryByRole('complementary', { name: 'Inspector' })).toBeNull();
   });
 
-  it('sizes the sidebar column from the saved width, capped at 40% of the window', () => {
-    window.localStorage.setItem('grunt.sidebarWidth', '20');
-    resetSidebarWidthForTests();
+  it('sizes the sidebar column from --sidebar-w, capped at 40% of the window', () => {
     const { container } = render(<App />);
-    expect((container.firstElementChild as HTMLElement).style.gridTemplateColumns).toBe('min(20rem, 40vw) minmax(0, 1fr)');
+    expect((container.firstElementChild as HTMLElement).style.gridTemplateColumns).toBe('min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)');
     expect(screen.getByRole('separator', { name: 'Resize sidebar' })).toBeInTheDocument();
   });
 });

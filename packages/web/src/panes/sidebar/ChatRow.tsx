@@ -62,7 +62,8 @@ export interface ChatRowProps {
  * One chat in the sidebar: select it, drag it onto a group heading or between
  * other chats, pin it, or open its menu. The title takes the whole row; the
  * pin and ⋯ buttons sit over its end only on hover, keyboard focus, or while
- * the menu is open.
+ * the menu is open (not mouse focus: clicking a row focuses it, and the
+ * buttons would then stay over its title).
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
@@ -148,8 +149,6 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             : undefined
         }
         aria-current={active ? 'true' : undefined}
-        // The markers inside would otherwise join the accessible name; the row is named by its title.
-        aria-label={chat.title}
         className={`flex min-w-0 flex-1 items-center gap-1 px-2 py-[3px] text-left text-sm ${
           active
             ? 'rounded-r-sm bg-[var(--bg)] text-[var(--text)] shadow-[inset_2px_0_0_var(--accent)]'
@@ -162,26 +161,28 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
           </span>
         )}
         <span className="min-w-0 truncate">{chat.title}</span>
-        {chat.memoryExcluded && (
-          <span
-            data-testid="memory-excluded-marker"
-            role="img"
-            aria-label="Not added to memory"
-            title="Not added to memory"
-            className="shrink-0 text-xs text-[var(--text-faint)]"
-          >
-            ⊘
-          </span>
-        )}
       </button>
+      {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip it. */}
+      {chat.memoryExcluded && (
+        <span
+          data-testid="memory-excluded-marker"
+          role="img"
+          aria-label="Not added to memory"
+          title="Not added to memory"
+          className="shrink-0 px-1 text-xs text-[var(--text-faint)]"
+        >
+          ⊘
+        </span>
+      )}
       {(onTogglePin || onOpenMenu) && (
         <div
+          data-row-actions=""
           className={`absolute inset-y-0 right-0 flex items-center gap-0.5 rounded-r-sm pr-0.5 pl-3 ${
             active ? 'bg-[linear-gradient(to_right,transparent,var(--bg)_0.75rem)]' : 'bg-[linear-gradient(to_right,transparent,var(--bg-sunken)_0.75rem)]'
           } ${
             menuOpen
               ? 'opacity-100'
-              : 'pointer-events-none opacity-0 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100'
+              : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100'
           }`}
         >
           {onTogglePin && (
