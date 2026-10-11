@@ -186,6 +186,11 @@ describe('App view', () => {
     expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
   });
 
+  it('has no top bar', () => {
+    render(<App />);
+    expect(screen.queryByRole('banner')).toBeNull();
+  });
+
   it('shows the inspector as a disabled strip while no chat is selected, without changing the saved state', async () => {
     render(<App />);
     const strip = await screen.findByRole('button', { name: 'Expand inspector' });

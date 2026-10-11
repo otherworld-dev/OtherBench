@@ -1,7 +1,11 @@
-import { useMemo, useState, type JSX } from 'react';
+import { useEffect, useMemo, useState, type JSX } from 'react';
 import { activePath, childrenOf, extendToTip } from '@grunt/core/domain/tree.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { PinIcon } from '../components/icons.js';
+import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
+import { setChatPinned } from '../state/chatActions.js';
+import { streamStatusText } from '../state/machines.js';
 import { useGruntStore } from '../state/store.js';
 
 const OUTLINE_USER_CHARS = 60;
@@ -31,19 +35,28 @@ function writeOpen(open: boolean): void {
 }
 
 /**
- * A slim strip above the chat: an outline of the user turns on the chat's
- * CURRENT branch (the same display path Thread renders: head -> root,
- * extended forward through single-child replies), each with a one-line peek
- * at the reply. Collapsed it is one row (count + latest prompt); expanded it
- * lists every prompt, newest at the bottom. Clicking one scrolls the thread
- * to that message (Message gives its article the DOM id `msg-<id>`) and
- * leaves the strip open. Renders nothing until the chat has a user message.
- * Scoped to this chat's messages for the same reason Thread is: the store's
- * message pool is cross-chat.
+ * The pane's header row (spec 2026-10-11-sidebar-layout-design §1): the
+ * chat's title and pin toggle, then an outline of the user turns on the
+ * chat's CURRENT branch (the same display path Thread renders: head -> root,
+ * extended forward through single-child replies), the live stream's status
+ * when there's a problem, and in the narrow layout the Inspector button.
+ * Collapsed the outline is one row (count + latest prompt); expanded it
+ * lists every prompt, each with a one-line peek at the reply, newest at the
+ * bottom. Clicking one scrolls the thread to that message (Message gives its
+ * article the DOM id `msg-<id>`) and leaves the outline open. Always renders,
+ * even before the first message. Scoped to this chat's messages for the same
+ * reason Thread is: the store's message pool is cross-chat.
  */
-export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element | null {
+export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element {
   const messages = useGruntStore((s) => s.messages);
+  const streamStatus = useGruntStore((s) => s.streamStatus);
+  const machines = useGruntStore((s) => s.machines);
+  const overlayOpen = useGruntStore((s) => s.inspectorOverlayOpen);
+  const setOverlayOpen = useGruntStore((s) => s.setInspectorOverlayOpen);
+  const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   const [open, setOpen] = useState(readOpen);
+  const [pinError, setPinError] = useState<string | null>(null);
+  useEffect(() => setPinError(null), [chat.id]);
 
   const turns = useMemo(() => {
     const chatMessages = Object.values(messages).filter((m) => m.chatId === chat.id);
@@ -69,7 +82,7 @@ export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element | null 
   }, [messages, chat.id, chat.headMessageId]);
 
   const latest = turns.at(-1);
-  if (!latest) return null;
+  const status = streamStatusText(streamStatus, chat, machines);
 
   function toggle(): void {
     const next = !open;
@@ -77,25 +90,72 @@ export function ConversationStrip({ chat }: { chat: Chat }): JSX.Element | null 
     writeOpen(next);
   }
 
+  async function togglePin(): Promise<void> {
+    const pinned = !chat.pinned;
+    setPinError(null);
+    try {
+      await setChatPinned(chat.id, pinned);
+    } catch (err) {
+      console.error(`[grunt-web] failed to ${pinned ? 'pin' : 'unpin'} chat ${chat.id}:`, err);
+      setPinError(pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat");
+    }
+  }
+
   return (
     <section aria-label="Conversation" className="flex max-h-[40%] min-h-0 shrink-0 flex-col border-b border-[var(--border)] bg-[var(--bg-raised)] text-sm">
-      <div className="flex shrink-0 items-center gap-2 px-4 py-1">
-        <span className="shrink-0 text-xs font-medium text-[var(--text-muted)]">
-          Conversation · {turns.length} prompt{turns.length === 1 ? '' : 's'}
+      <div className="flex shrink-0 items-center gap-2 px-3 py-1">
+        <span title={chat.title} className="min-w-0 shrink truncate text-sm font-medium">
+          {chat.title}
         </span>
-        {!open && <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-faint)]">{oneLine(latest.user, OUTLINE_USER_CHARS) || '(attachment)'}</span>}
-        {open && <span className="flex-1" />}
         <button
           type="button"
-          onClick={toggle}
-          aria-expanded={open}
-          aria-label={open ? 'Hide conversation outline' : 'Show conversation outline'}
-          className="shrink-0 rounded px-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+          onClick={() => void togglePin()}
+          aria-label={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+          title={chat.pinned ? 'Unpin chat' : 'Pin chat'}
+          className={`shrink-0 rounded p-1 hover:bg-[var(--bg-sunken)] ${chat.pinned ? 'text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text)]'}`}
         >
-          <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+          <PinIcon filled={chat.pinned} />
         </button>
+        {latest ? (
+          <>
+            <span className="shrink-0 text-xs text-[var(--text-muted)]">
+              · {turns.length} prompt{turns.length === 1 ? '' : 's'}
+            </span>
+            {open ? (
+              <span className="flex-1" />
+            ) : (
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-faint)]">{oneLine(latest.user, OUTLINE_USER_CHARS) || '(attachment)'}</span>
+            )}
+            <button
+              type="button"
+              onClick={toggle}
+              aria-expanded={open}
+              aria-label={open ? 'Hide conversation outline' : 'Show conversation outline'}
+              className="shrink-0 rounded px-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+            >
+              <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+            </button>
+          </>
+        ) : (
+          <span className="flex-1" />
+        )}
+        {pinError && (
+          <span role="alert" className="shrink-0 text-xs text-[var(--danger)]">
+            {pinError}
+          </span>
+        )}
+        {status && (
+          <span data-testid="stream-status" className="shrink-0 text-xs text-[var(--text-muted)]">
+            {status}
+          </span>
+        )}
+        {isNarrow && (
+          <button type="button" onClick={() => setOverlayOpen(!overlayOpen)} aria-expanded={overlayOpen} className="btn shrink-0 px-2 py-0.5">
+            Inspector
+          </button>
+        )}
       </div>
-      {open && (
+      {open && latest && (
         <ul data-testid="outline-list" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-2">
           {turns.map(({ user, reply }) => {
             const preview = !reply ? '(no reply)' : reply.status === 'streaming' ? `${oneLine(reply, OUTLINE_REPLY_CHARS)}…` : oneLine(reply, OUTLINE_REPLY_CHARS) || '(no reply)';

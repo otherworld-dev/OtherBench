@@ -203,6 +203,9 @@ export interface GruntState {
   // --- UI ---------------------------------------------------------------------
   inspectorCollapsed: boolean;
   setInspectorCollapsed(collapsed: boolean): void;
+  /** Narrow layout only: whether the inspector overlay is open. Never remembered; it starts closed. */
+  inspectorOverlayOpen: boolean;
+  setInspectorOverlayOpen(open: boolean): void;
   /** The open project page, or null. Opened from the sidebar, a project's menu or the Inspector; App renders it. */
   projectPage: ProjectPageState | null;
   openProjectPage(page: ProjectPageState): void;
@@ -572,6 +575,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
 
   inspectorCollapsed: loadInspectorCollapsed(),
   setInspectorCollapsed: (collapsed) => set({ inspectorCollapsed: collapsed }),
+  inspectorOverlayOpen: false,
+  setInspectorOverlayOpen: (open) => set({ inspectorOverlayOpen: open }),
   projectPage: null,
   openProjectPage: (page) => set({ projectPage: page }),
   closeProjectPage: () => set({ projectPage: null }),

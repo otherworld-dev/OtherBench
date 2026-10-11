@@ -401,9 +401,9 @@ describe('Thread composer per chat', () => {
     expect(screen.queryByRole('button', { name: 'Auto mode' })).not.toBeInTheDocument();
   });
 
-  it('renders the conversation strip above (outside) the scroller, only once a user message exists', () => {
+  it('renders the pane header above (outside) the scroller, before and after the first message', () => {
     const view = render(<Thread chat={makeChat({ id: 'chat-a', headMessageId: null })} />);
-    expect(screen.queryByRole('region', { name: 'Conversation' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Conversation' })).not.toHaveTextContent('prompt');
     useGruntStore.getState().loadMessages('chat-a', [makeMessage('root-a', 'chat-a')], null);
     view.rerender(<Thread chat={makeChat({ id: 'chat-a', headMessageId: 'root-a' })} />);
     const strip = screen.getByRole('region', { name: 'Conversation' });
