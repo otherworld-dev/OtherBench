@@ -146,6 +146,20 @@ beforeEach(() => {
   mockedProjectsPatch.mockReset();
 });
 
+describe('Inspector collapsed strip', () => {
+  afterEach(cleanup);
+
+  it('a disabled strip says why and does nothing when clicked', async () => {
+    const onToggle = vi.fn();
+    render(<Inspector chat={null} profile={null} collapsed disabled onToggleCollapsed={onToggle} />);
+    const strip = screen.getByRole('button', { name: 'Expand inspector' });
+    expect(strip).toHaveAttribute('aria-disabled', 'true');
+    expect(strip).toHaveAttribute('title', 'Select a chat to see its details');
+    await userEvent.setup().click(strip);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+});
+
 describe('Inspector session spend', () => {
   beforeEach(() => {
     useGruntStore.setState(useGruntStore.getInitialState(), true);

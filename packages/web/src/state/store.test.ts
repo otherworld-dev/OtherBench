@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
-import { selectPendingApprovalCount, useGruntStore } from './store.js';
+import { INSPECTOR_COLLAPSED_STORAGE_KEY, loadInspectorCollapsed, selectPendingApprovalCount, useGruntStore } from './store.js';
 
 function makeConnection(overrides: Partial<Connection> = {}): Connection {
   return {
@@ -554,6 +554,31 @@ describe('running replies from app-wide events (#824)', () => {
       { type: 'notice', text: '1 image attachment was left out' },
       { type: 'text', text: 'Hello there' },
     ]);
+  });
+});
+
+describe('inspector collapsed state', () => {
+  beforeEach(() => {
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    window.localStorage.clear();
+  });
+
+  it('loads false with nothing stored or unreadable storage, true when stored', () => {
+    expect(loadInspectorCollapsed()).toBe(false);
+    window.localStorage.setItem(INSPECTOR_COLLAPSED_STORAGE_KEY, 'true');
+    expect(loadInspectorCollapsed()).toBe(true);
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect(loadInspectorCollapsed()).toBe(false);
+    get.mockRestore();
+  });
+
+  it('saves when it changes', () => {
+    useGruntStore.getState().setInspectorCollapsed(true);
+    expect(window.localStorage.getItem(INSPECTOR_COLLAPSED_STORAGE_KEY)).toBe('true');
+    useGruntStore.getState().setInspectorCollapsed(false);
+    expect(window.localStorage.getItem(INSPECTOR_COLLAPSED_STORAGE_KEY)).toBe('false');
   });
 });
 

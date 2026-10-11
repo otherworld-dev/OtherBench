@@ -186,6 +186,14 @@ describe('App view', () => {
     expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
   });
 
+  it('shows the inspector as a disabled strip while no chat is selected, without changing the saved state', async () => {
+    render(<App />);
+    const strip = await screen.findByRole('button', { name: 'Expand inspector' });
+    expect(strip).toHaveAttribute('aria-disabled', 'true');
+    expect(useGruntStore.getState().inspectorCollapsed).toBe(false);
+    expect(screen.queryByRole('complementary', { name: 'Inspector' })).toBeNull();
+  });
+
   it('sizes the sidebar column from the saved width, capped at 40% of the window', () => {
     window.localStorage.setItem('grunt.sidebarWidth', '20');
     resetSidebarWidthForTests();

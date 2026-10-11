@@ -239,6 +239,25 @@ function withPanes(next: PaneState): { paneState: PaneState; activeChatId: strin
 
 const initialPanes = loadPaneState();
 
+/** localStorage key: whether the docked inspector is collapsed. Per device. */
+export const INSPECTOR_COLLAPSED_STORAGE_KEY = 'grunt.inspectorCollapsed';
+
+export function loadInspectorCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(INSPECTOR_COLLAPSED_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveInspectorCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(INSPECTOR_COLLAPSED_STORAGE_KEY, String(collapsed));
+  } catch {
+    // storage blocked or full -- the choice still applies for this session.
+  }
+}
+
 function bump(counts: Record<string, number>, chatId: string): Record<string, number> {
   return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
 }
@@ -551,7 +570,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
       };
     }),
 
-  inspectorCollapsed: false,
+  inspectorCollapsed: loadInspectorCollapsed(),
   setInspectorCollapsed: (collapsed) => set({ inspectorCollapsed: collapsed }),
   projectPage: null,
   openProjectPage: (page) => set({ projectPage: page }),
@@ -561,7 +580,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
 /** How many tool calls are waiting for approval across the whole app. */
 export const selectPendingApprovalCount = (s: GruntState): number => Object.keys(s.appPendingApprovals).length;
 
-// Tabs, layout and panes are remembered on this device.
+// Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device.
 useGruntStore.subscribe((state, previous) => {
   if (state.paneState !== previous.paneState) savePaneState(state.paneState);
+  if (state.inspectorCollapsed !== previous.inspectorCollapsed) saveInspectorCollapsed(state.inspectorCollapsed);
 });

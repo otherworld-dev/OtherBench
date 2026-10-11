@@ -185,11 +185,13 @@ function MainApp(): JSX.Element {
 
         {/* Wide layout: the inspector is a genuine third column, collapsible to a slim strip. */}
         {!isNarrow && (
-          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed ? undefined : '20rem' }}>
+          <div className="h-full min-h-0 min-w-0" style={{ width: inspectorCollapsed || !activeChat ? undefined : '20rem' }}>
+            {/* With no chat there is nothing to inspect: the slim strip, whatever the saved choice. */}
             <Inspector
               chat={activeChat}
               profile={activeProfile}
-              collapsed={inspectorCollapsed}
+              collapsed={inspectorCollapsed || !activeChat}
+              disabled={!activeChat}
               onToggleCollapsed={() => setInspectorCollapsed(!inspectorCollapsed)}
             />
           </div>
