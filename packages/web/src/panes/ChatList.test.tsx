@@ -371,6 +371,16 @@ describe('ChatList drag and drop', () => {
     expect(screen.queryByTestId('pinned-drop-zone')).toBeNull();
   });
 
+  it('puts the drop zone in place of the search box, so the list does not move under the pointer', () => {
+    render(<ChatList />);
+    fireEvent.dragStart(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' }), { dataTransfer: dataTransfer('c1') });
+    expect(within(screen.getByTestId('chat-list-scroll')).queryByTestId('pinned-drop-zone')).toBeNull();
+    expect(screen.getByTestId('pinned-drop-zone')).toBeInTheDocument();
+    expect(screen.queryByRole('searchbox', { name: 'Search chats' })).toBeNull();
+    fireEvent.dragEnd(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' }), { dataTransfer: dataTransfer('c1') });
+    expect(screen.getByRole('searchbox', { name: 'Search chats' })).toBeInTheDocument();
+  });
+
   it('takes the drop zone away when the drag ends without a drop', () => {
     render(<ChatList />);
     const row = within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Chat c1' });

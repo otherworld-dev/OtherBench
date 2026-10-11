@@ -3,7 +3,7 @@ import { exportFilename } from '@grunt/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
-import { FolderPlusIcon } from '../components/icons.js';
+import { FolderPlusIcon, PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
 import { saveFile } from '../lib/saveFile.js';
@@ -96,7 +96,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
-  // The chat being dragged, while it is: with nothing pinned yet, an empty Pinned section appears to drop it on.
+  // The chat being dragged, while it is: with nothing pinned yet, a "Drop here to pin" target takes the search
+  // box's place. Not a new section in the list, which would push every row down under the pointer mid-drag.
   const [draggingChatId, setDraggingChatId] = useState<string | null>(null);
   const [pinZoneActive, setPinZoneActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -502,59 +503,57 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
       <div className="border-b border-[var(--border)] p-2">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => void runSearch(e.target.value)}
-          placeholder="Search chats..."
-          aria-label="Search chats"
-          className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
-        />
+        {draggingChatId !== null && sidebar.pinned.length === 0 && !searching ? (
+          <div
+            data-testid="pinned-drop-zone"
+            data-drop-active={pinZoneActive ? 'true' : undefined}
+            onDragOver={(e) => {
+              if (!Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              if (!pinZoneActive) setPinZoneActive(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+              setPinZoneActive(false);
+            }}
+            onDrop={(e) => {
+              const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
+              setPinZoneActive(false);
+              setDraggingChatId(null);
+              if (!chatId) return;
+              e.preventDefault();
+              void placeChat(chatId, { chats: [], pinned: true, projectId: null }, null);
+            }}
+            // Same box as the search field it stands in for, so nothing below it moves.
+            className={`flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
+              pinZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] bg-[var(--bg)]'
+            }`}
+          >
+            <PinIcon />
+            Drop here to pin
+          </div>
+        ) : (
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => void runSearch(e.target.value)}
+            placeholder="Search chats..."
+            aria-label="Search chats"
+            className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+          />
+        )}
       </div>
 
       {/* relative: the group headings' screen-reader text is absolutely positioned, and without a positioned
           ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
           window scroll once a group sat below the fold. */}
       <div className="relative flex-1 overflow-y-auto px-1.5 py-1" data-testid="chat-list-scroll">
-        {sidebar.pinned.length > 0 ? (
+        {sidebar.pinned.length > 0 && (
           <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
             <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
           </div>
-        ) : (
-          draggingChatId !== null &&
-          !searching && (
-            <div className="mb-1.5">
-              <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
-              <div
-                data-testid="pinned-drop-zone"
-                data-drop-active={pinZoneActive ? 'true' : undefined}
-                onDragOver={(e) => {
-                  if (!Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME)) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'move';
-                  if (!pinZoneActive) setPinZoneActive(true);
-                }}
-                onDragLeave={(e) => {
-                  if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
-                  setPinZoneActive(false);
-                }}
-                onDrop={(e) => {
-                  const chatId = e.dataTransfer.getData(CHAT_DRAG_MIME);
-                  setPinZoneActive(false);
-                  setDraggingChatId(null);
-                  if (!chatId) return;
-                  e.preventDefault();
-                  void placeChat(chatId, { chats: [], pinned: true, projectId: null }, null);
-                }}
-                className={`mx-1 rounded border border-dashed px-2 py-1.5 text-xs text-[var(--text-muted)] ${
-                  pinZoneActive ? 'border-[var(--accent)] bg-[var(--bg-sunken)]' : 'border-[var(--border-strong)]'
-                }`}
-              >
-                Drop here to pin
-              </div>
-            </div>
-          )
         )}
 
         {searching && sidebar.pinned.length === 0 && sidebar.groups.length === 0 && sidebar.archived.length === 0 && (
