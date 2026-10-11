@@ -85,6 +85,42 @@ describe('ChatRow', () => {
     expect(dataTransfer.effectAllowed).toBe('move');
   });
 
+  it("has a pin button labelled for the chat's state, only when onTogglePin is given", async () => {
+    const onTogglePin = vi.fn();
+    renderRow({ onTogglePin });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Pin chat' }));
+    expect(onTogglePin).toHaveBeenCalled();
+    cleanup();
+    renderRow({ chat: { ...chat, pinned: true }, onTogglePin });
+    expect(screen.getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
+    cleanup();
+    renderRow();
+    expect(screen.queryByRole('button', { name: /pin chat/i })).toBeNull();
+  });
+
+  it('puts the pin button before ⋯ in tab order', () => {
+    renderRow({ onTogglePin: vi.fn() });
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual(['Notes', 'Pin chat', 'Chat actions']);
+  });
+
+  it('shows the pin marker only for a pinned chat with showPinMarker', () => {
+    renderRow({ chat: { ...chat, pinned: true }, showPinMarker: true });
+    expect(screen.getByTestId('pin-marker')).toBeInTheDocument();
+    cleanup();
+    renderRow({ chat: { ...chat, pinned: true } });
+    expect(screen.queryByTestId('pin-marker')).toBeNull();
+    cleanup();
+    renderRow({ showPinMarker: true });
+    expect(screen.queryByTestId('pin-marker')).toBeNull();
+  });
+
+  it('reports a drag starting', () => {
+    const onDragStart = vi.fn();
+    renderRow({ onDragStart });
+    fireEvent.dragStart(screen.getByRole('button', { name: 'Notes' }), { dataTransfer: { setData: vi.fn(), effectAllowed: 'all' } });
+    expect(onDragStart).toHaveBeenCalled();
+  });
+
   it('shows the rename field instead of the buttons while renaming', () => {
     renderRow({ renaming: true });
     expect(screen.getByRole('textbox', { name: 'Chat title' })).toHaveValue('Notes');

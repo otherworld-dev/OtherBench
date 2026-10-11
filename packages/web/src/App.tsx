@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { ChartIcon, GearIcon } from './components/icons.js';
 import { isQuickView } from './desktop/bridge.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
@@ -138,14 +139,14 @@ function MainApp(): JSX.Element {
         {/* Settings and Usage are app-level overlays, so App owns them; they just render in the sidebar's footer. */}
         <ChatList
           footer={
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setSettingsViewOpen(true)} className="btn flex-1 px-2 py-1">
-                Settings
+            <>
+              <button type="button" onClick={() => setSettingsViewOpen(true)} aria-label="Settings" title="Settings" className="btn px-2 py-1.5">
+                <GearIcon />
               </button>
-              <button type="button" onClick={() => setUsageViewOpen(true)} className="btn flex-1 px-2 py-1">
-                Usage
+              <button type="button" onClick={() => setUsageViewOpen(true)} aria-label="Usage" title="Usage" className="btn px-2 py-1.5">
+                <ChartIcon />
               </button>
-            </div>
+            </>
           }
         />
         <SidebarResizer />

@@ -3,10 +3,12 @@ import { exportFilename } from '@grunt/core/domain/export.js';
 import { compareProjects, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import { FolderPlusIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
 import { saveFile } from '../lib/saveFile.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
+import { setChatPinned } from '../state/chatActions.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 import { ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
@@ -69,8 +71,8 @@ function headingSelector(projectId: string): string {
  * every group to the matching chats; groups with no match hide, and
  * collapsed groups show expanded, while a search is active.
  *
- * `footer` renders under the New chat / New project row, still inside the
- * sidebar, for app-level controls the caller owns (Settings, Usage).
+ * `footer` renders at the end of the New chat / New project row, for
+ * app-level controls the caller owns (Settings, Usage).
  */
 export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
@@ -294,8 +296,14 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   }
 
   async function setPinned(chat: Chat, pinned: boolean): Promise<void> {
-    const action = pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat";
-    if (await patchChat(chat, { pinned }, action)) focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    setError(null);
+    try {
+      await setChatPinned(chat.id, pinned);
+      focusLater(chatRowSelector(chat.id), LIST_SELECTOR);
+    } catch (err) {
+      console.error(`[grunt-web] failed to update chat ${chat.id}:`, err);
+      setError(errorText(err, pinned ? "Couldn't pin the chat" : "Couldn't unpin the chat"));
+    }
   }
 
   async function setMemoryExcluded(chat: Chat, excluded: boolean): Promise<void> {
@@ -473,6 +481,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         menuOpen={chatMenu?.chatId === chat.id}
         renaming={renamingChatId === chat.id}
         muted={section === null}
+        onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned) : undefined}
+        showPinMarker={!section?.pinned}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
@@ -485,7 +495,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
 
   return (
     <nav aria-label="Chats" data-chat-list="" tabIndex={-1} className="flex h-full w-full flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
-      <div className="border-b border-[var(--border)] p-3">
+      <div className="border-b border-[var(--border)] p-2">
         <input
           type="search"
           value={query}
@@ -499,11 +509,11 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
       {/* relative: the group headings' screen-reader text is absolutely positioned, and without a positioned
           ancestor here it was placed against the page, escaped this scroll area's clipping and made the whole
           window scroll once a group sat below the fold. */}
-      <div className="relative flex-1 overflow-y-auto p-2" data-testid="chat-list-scroll">
+      <div className="relative flex-1 overflow-y-auto px-1.5 py-1" data-testid="chat-list-scroll">
         {sidebar.pinned.length > 0 && (
-          <div className="mb-3" data-testid="group-pinned">
+          <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
-            <ul className="space-y-0.5">{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
+            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectId: null }))}</ul>
           </div>
         )}
 
@@ -533,7 +543,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         })}
 
         {sidebar.archived.length > 0 && (
-          <div className="mb-3" data-testid="archived-section">
+          <div className="mb-1.5" data-testid="archived-section">
             <button
               type="button"
               aria-expanded={showArchived}
@@ -542,7 +552,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
             >
               {showArchived ? 'Hide archived' : `Show archived (${sidebar.archived.length})`}
             </button>
-            {showArchived && <ul className="space-y-0.5">{sidebar.archived.map((c) => renderRow(c, null))}</ul>}
+            {showArchived && <ul>{sidebar.archived.map((c) => renderRow(c, null))}</ul>}
           </div>
         )}
 
@@ -553,22 +563,20 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         )}
       </div>
 
-      <div className="space-y-2 border-t border-[var(--border)] p-2">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void createChat()}
-            // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
-            aria-disabled={creating || profiles.length === 0 || undefined}
-            title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
-            className="btn btn-primary flex-1 px-2 py-1.5"
-          >
-            + New chat
-          </button>
-          <button type="button" onClick={() => openProjectPage({ mode: 'create' })} className="btn px-2 py-1.5">
-            + New project
-          </button>
-        </div>
+      <div className="flex items-center gap-1 border-t border-[var(--border)] p-2">
+        <button
+          type="button"
+          onClick={() => void createChat()}
+          // aria-disabled, not disabled: a disabled button drops keyboard focus while a chat is being created.
+          aria-disabled={creating || profiles.length === 0 || undefined}
+          title={profiles.length === 0 ? 'Create a profile before starting a chat.' : undefined}
+          className="btn btn-primary flex-1 px-2 py-1.5"
+        >
+          + New chat
+        </button>
+        <button type="button" onClick={() => openProjectPage({ mode: 'create' })} aria-label="New project" title="New project" className="btn px-2 py-1.5">
+          <FolderPlusIcon />
+        </button>
         {footer}
       </div>
 

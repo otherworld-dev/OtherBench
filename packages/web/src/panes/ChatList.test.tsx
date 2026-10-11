@@ -274,15 +274,44 @@ describe('ChatList groups', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['c1', 'c2']);
   });
 
-  it('"+ New project" opens the project page for a new project', async () => {
+  it('New project opens the project page for a new project', async () => {
     const user = userEvent.setup();
     render(<ChatList />);
-    await user.click(screen.getByRole('button', { name: '+ New project' }));
+    await user.click(screen.getByRole('button', { name: 'New project' }));
     expect(useGruntStore.getState().projectPage).toEqual({ mode: 'create' });
     expect(screen.queryByRole('textbox', { name: 'Project name' })).toBeNull();
     expect(mockedProjectCreate).not.toHaveBeenCalled();
   });
 
+});
+
+describe('ChatList pin button', () => {
+  it('pins from the row, moving the chat under Pinned, with no marker there', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    render(<ChatList />);
+    await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
+    expect(mockedPatch).toHaveBeenCalledWith('c1', { pinned: true });
+    await waitFor(() => expect(rowIds('group-pinned')).toEqual(['c1']));
+    expect(within(screen.getByTestId('group-pinned')).queryByTestId('pin-marker')).toBeNull();
+    expect(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Unpin chat' })).toBeInTheDocument();
+  });
+
+  it('says so when pinning fails', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'First' })] });
+    mockedPatch.mockRejectedValueOnce(new ApiError(500, 'disk full'));
+    render(<ChatList />);
+    await userEvent.setup().click(within(screen.getByTestId('chat-row-c1')).getByRole('button', { name: 'Pin chat' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't pin the chat: disk full");
+  });
+
+  it('archived rows have no pin button, and show the marker when they were pinned', () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'Old', archivedAt: 5, pinned: true })] });
+    window.localStorage.setItem('grunt.showArchived', 'true');
+    render(<ChatList />);
+    const row = screen.getByTestId('chat-row-c1');
+    expect(within(row).queryByRole('button', { name: /pin chat/i })).toBeNull();
+    expect(within(row).getByTestId('pin-marker')).toBeInTheDocument();
+  });
 });
 
 describe('ChatList drag and drop', () => {
