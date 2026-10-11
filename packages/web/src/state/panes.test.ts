@@ -36,6 +36,18 @@ describe('pane state (#824)', () => {
     expect(closeTab(opened, 'zzz')).toBe(opened);
   });
 
+  it('opening a tab keeps the chat the focused pane was showing as a tab too, so it is not replaced and lost', () => {
+    expect(openTab(state({ tabs: [], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['open', 'new'], panes: ['new'] });
+    expect(openTab(state({ tabs: ['x'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['x', 'open', 'new'], panes: ['new'] });
+    // Already a tab, the same chat, or an empty pane: nothing extra to keep.
+    expect(openTab(state({ tabs: ['open'], panes: ['open'] }), 'new')).toMatchObject({ tabs: ['open', 'new'] });
+    expect(openTab(state({ tabs: [], panes: ['a'] }), 'a')).toMatchObject({ tabs: ['a'] });
+    expect(openTab(state({ tabs: [], panes: [null] }), 'new')).toMatchObject({ tabs: ['new'] });
+    // A chat already showing in another pane is only focused, so nothing is replaced.
+    const two = state({ layout: 'columns-2', tabs: [], panes: ['open', 'new'], focusedPane: 0 });
+    expect(openTab(two, 'new')).toMatchObject({ tabs: ['new'], panes: ['open', 'new'], focusedPane: 1 });
+  });
+
   it('a bigger layout keeps the panes in place and fills new ones with tabs not yet showing', () => {
     const s = state({ tabs: ['a', 'b', 'c'], panes: ['b'], focusedPane: 0 });
     expect(setLayout(s, 'columns-3')).toMatchObject({ layout: 'columns-3', panes: ['b', 'a', 'c'], focusedPane: 0 });
