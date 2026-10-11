@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
@@ -370,6 +372,80 @@ describe('MCP server routes', () => {
 
     const missing = await app().request('/api/mcp-servers/does-not-exist/refresh', { method: 'POST' });
     expect(missing.status).toBe(404);
+  });
+});
+
+describe('Import from Claude Desktop', () => {
+  let dir: string;
+  // A command no machine has: the import's MCP sync must never start anything real.
+  const NO_SUCH = 'grunt-test-no-such-command';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'grunt-desktop-import-'));
+    vi.stubEnv('GRUNT_CLAUDE_DESKTOP_CONFIG', join(dir, 'claude_desktop_config.json'));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const writeConfig = (content: string): void => writeFileSync(join(dir, 'claude_desktop_config.json'), content);
+  const config = (): void =>
+    writeConfig(
+      JSON.stringify({
+        mcpServers: {
+          blender: { command: NO_SUCH, args: ['blender'] },
+          'Home Assistant': { command: NO_SUCH, args: ['ha'], env: { HOMEASSISTANT_TOKEN: 'very-secret-token', HOMEASSISTANT_URL: 'http://ha.local' } },
+          legacy: { type: 'sse', url: 'https://mcp.example.com/sse' },
+        },
+      })
+    );
+  const postImport = (body: unknown) =>
+    app().request('/api/mcp-servers/import/claude-desktop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  it('lists the servers it finds by name, never with their values, marking ones Grunt has and ones it cannot use', async () => {
+    config();
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    const res = await app().request('/api/mcp-servers/import/claude-desktop');
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain('very-secret-token');
+    const body = JSON.parse(text) as { path: string; found: boolean; servers: Record<string, unknown>[] };
+    expect(body).toMatchObject({ path: join(dir, 'claude_desktop_config.json'), found: true });
+    const byName = Object.fromEntries(body.servers.map((s) => [s['name'], s]));
+    expect(byName['Home Assistant']).toMatchObject({ transport: 'stdio', command: NO_SUCH, args: ['ha'], envNames: ['HOMEASSISTANT_TOKEN', 'HOMEASSISTANT_URL'], exists: false, supported: true });
+    expect(byName['Home Assistant']).not.toHaveProperty('env');
+    expect(byName['blender']).toMatchObject({ exists: true });
+    expect(byName['legacy']).toMatchObject({ supported: false, reason: expect.stringContaining('SSE') });
+  });
+
+  it('says when Claude Desktop has no config here, and refuses one that is not JSON', async () => {
+    expect(await (await app().request('/api/mcp-servers/import/claude-desktop')).json()).toMatchObject({ found: false, servers: [] });
+    writeConfig('{ nope');
+    const bad = await app().request('/api/mcp-servers/import/claude-desktop');
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toContain('claude_desktop_config.json');
+  });
+
+  it('imports the chosen servers, their values going into the secret store, and skips the rest with reasons', async () => {
+    config();
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    const res = await postImport({ names: ['Home Assistant', 'blender', 'legacy', 'ghost'] });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
+    expect(body.imported).toEqual(['Home Assistant']);
+    expect(body.skipped.map((s) => s.name)).toEqual(['blender', 'legacy', 'ghost']);
+    expect(body.skipped[0]!.reason).toContain('already');
+    const row = store.mcpServers.list().find((r) => r.name === 'Home Assistant')!;
+    expect(row).toMatchObject({ transport: 'stdio', command: NO_SUCH, args: ['ha'], enabled: true });
+    expect(Object.keys(row.envRefs).sort()).toEqual(['HOMEASSISTANT_TOKEN', 'HOMEASSISTANT_URL']);
+    expect(await secrets.get(row.envRefs['HOMEASSISTANT_TOKEN']!)).toBe('very-secret-token');
+    expect(JSON.stringify(row)).not.toContain('very-secret-token');
+  });
+
+  it('404s an import when there is no config, and 400s a names list that is not one', async () => {
+    expect((await postImport({ names: ['x'] })).status).toBe(404);
+    config();
+    expect((await postImport({ names: 'Home Assistant' })).status).toBe(400);
+    expect((await postImport({ names: [5] })).status).toBe(400);
   });
 });
 

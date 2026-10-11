@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Grant, McpServer } from '@grunt/core/ports/store.js';
 import type { Container } from '../container.js';
+import { ClaudeDesktopConfigError, claudeDesktopConfigPath, readClaudeDesktopServers } from '../mcp-import.js';
 import {
   optionalBoolean,
   optionalNonEmptySecretRecord,
@@ -194,8 +195,102 @@ export function parseApprovalChoice(body: ApprovalBody): ApprovalChoice {
 
 // ---------------------------------------------------------------------------
 
+/** A new MCP server's fields, already parsed: shared by `POST /mcp-servers` and the Claude Desktop import. */
+interface NewMcpServerInput {
+  name: string;
+  transport: 'stdio' | 'http';
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url: string | null;
+  headers: Record<string, string>;
+  enabled: boolean;
+}
+
+/** Creates the server row, its env and header values going into SecretStore (only the refs are stored). Doesn't sync the manager. */
+async function createMcpServer(container: Container, input: NewMcpServerInput): Promise<McpServer> {
+  const id = randomUUID();
+  const envRefs = input.transport === 'stdio' ? await storeMcpSecrets(container, id, 'env', input.env) : {};
+  const headerRefs = await storeMcpSecrets(container, id, 'header', input.headers);
+  return container.store.mcpServers.create({
+    id,
+    name: input.name,
+    transport: input.transport,
+    command: input.transport === 'stdio' ? input.command : null,
+    args: input.transport === 'stdio' ? input.args : [],
+    envRefs,
+    url: input.transport === 'http' ? input.url : null,
+    headerRefs,
+    enabled: input.enabled,
+    status: 'unknown',
+    toolsCache: null,
+  });
+}
+
+/** Claude Desktop's servers, or a 400 when its config isn't valid JSON. */
+async function claudeDesktopServers(path: string) {
+  try {
+    return await readClaudeDesktopServers(path);
+  } catch (err) {
+    if (err instanceof ClaudeDesktopConfigError) throw new HTTPException(400, { message: err.message });
+    throw err;
+  }
+}
+
 export function toolsRoutes(container: Container): Hono {
   const app = new Hono();
+
+  // Import from Claude Desktop (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §3).
+  // Only names, commands, URLs and the NAMES of env vars and headers go back:
+  // their values stay on the server and go straight into SecretStore on import.
+  app.get('/mcp-servers/import/claude-desktop', async (c) => {
+    const path = claudeDesktopConfigPath();
+    const read = await claudeDesktopServers(path);
+    if (!read.found) return c.json({ path, found: false, servers: [] });
+    const existing = new Set(container.store.mcpServers.list().map((r) => r.name));
+    return c.json({
+      path,
+      found: true,
+      servers: read.servers.map((s) => ({
+        name: s.name,
+        transport: s.transport,
+        command: s.command,
+        args: s.args,
+        url: s.url,
+        envNames: Object.keys(s.env),
+        headerNames: Object.keys(s.headers),
+        exists: existing.has(s.name),
+        supported: s.supported,
+        ...(s.reason ? { reason: s.reason } : {}),
+      })),
+    });
+  });
+
+  app.post('/mcp-servers/import/claude-desktop', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { names?: unknown };
+    if (!Array.isArray(body.names) || !body.names.every((n) => typeof n === 'string')) {
+      throw new HTTPException(400, { message: '"names" must be a list of server names.' });
+    }
+    const path = claudeDesktopConfigPath();
+    const read = await claudeDesktopServers(path);
+    if (!read.found) throw new HTTPException(404, { message: `Claude Desktop's config wasn't found at ${path}.` });
+    const existing = new Set(container.store.mcpServers.list().map((r) => r.name));
+    const imported: string[] = [];
+    const skipped: { name: string; reason: string }[] = [];
+    for (const name of body.names as string[]) {
+      const s = read.servers.find((x) => x.name === name);
+      if (!s) skipped.push({ name, reason: "It isn't in Claude Desktop's config." });
+      else if (existing.has(name)) skipped.push({ name, reason: `Grunt already has a server called "${name}".` });
+      else if (!s.supported || !s.transport) skipped.push({ name, reason: s.reason ?? "Grunt can't use it." });
+      else {
+        await createMcpServer(container, { name, transport: s.transport, command: s.command, args: s.args, env: s.env, url: s.url, headers: s.headers, enabled: true });
+        existing.add(name);
+        imported.push(name);
+      }
+    }
+    if (imported.length > 0) await container.mcpManager.sync();
+    return c.json({ imported, skipped });
+  });
 
   app.get('/mcp-servers', (c) => c.json(container.mcpManager.health()));
 
@@ -213,22 +308,15 @@ export function toolsRoutes(container: Container): Hono {
     const transport = parseTransport(body.transport);
     const env = optionalNonEmptySecretRecord(body.env, 'env');
     const headers = optionalNonEmptySecretRecord(body.headers, 'headers');
-    const id = randomUUID();
-    const envRefs = transport === 'stdio' ? await storeMcpSecrets(container, id, 'env', env) : {};
-    const headerRefs = await storeMcpSecrets(container, id, 'header', headers);
-
-    const created = container.store.mcpServers.create({
-      id,
+    const created = await createMcpServer(container, {
       name,
       transport,
       command: transport === 'stdio' ? (optionalNullableString(body.command, 'command') ?? null) : null,
       args: transport === 'stdio' ? optionalStringArray(body.args, 'args') : [],
-      envRefs,
+      env,
       url: transport === 'http' ? (optionalNullableString(body.url, 'url') ?? null) : null,
-      headerRefs,
+      headers,
       enabled: optionalBoolean(body.enabled, 'enabled', true),
-      status: 'unknown',
-      toolsCache: null,
     });
     await container.mcpManager.sync();
     return c.json(created, 201);
