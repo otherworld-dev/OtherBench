@@ -136,9 +136,25 @@ describe('Composer', () => {
     render(<Composer chat={makeChat()} />);
     const box = screen.getByRole('textbox', { name: /message/i }).closest('[data-composer-box]') as HTMLElement;
     expect(box).not.toBeNull();
-    for (const name of ['Attach files', 'Send', 'Default · mock-standard', '+ Compare']) {
+    for (const name of ['Attach files', 'Send', 'Default · mock-standard', 'Compare']) {
       expect(within(box).getByRole('button', { name })).toBeInTheDocument();
     }
+  });
+
+  it('keeps its toolbar on one line: it never wraps, the profile name truncates (full name in its tooltip), Compare is a +', () => {
+    render(<Composer chat={makeChat()} />);
+    const attach = screen.getByRole('button', { name: 'Attach files' });
+    expect(attach.parentElement).toHaveClass('flex-nowrap');
+    expect(attach.parentElement).not.toHaveClass('flex-wrap');
+    expect(attach.closest('[data-composer-box]')).toHaveClass('@container');
+    const profile = screen.getByRole('button', { name: 'Default · mock-standard' });
+    expect(profile).toHaveClass('truncate');
+    // It gives way first, but never down to nothing.
+    expect(profile.parentElement).toHaveClass('shrink', 'min-w-14');
+    expect(profile).toHaveAttribute('title', 'Default · mock-standard');
+    const compare = screen.getByRole('button', { name: 'Compare' });
+    expect(compare).toHaveTextContent(/^\+$/);
+    expect(compare).toHaveAttribute('title', 'Compare against other profiles');
   });
 
   it('starts one line high with a short placeholder, the keys in its tooltip, and grows with the text', async () => {
@@ -696,12 +712,12 @@ describe('Composer auto mode toggle', () => {
   it('shows in a compare turn when any selected profile uses Claude Code', async () => {
     const user = userEvent.setup();
     renderWith({ profileId: 'qwen' });
-    await user.click(screen.getByRole('button', { name: '+ Compare' }));
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
     await user.click(screen.getByRole('checkbox', { name: 'Sonnet' }));
     expect(toggle()).toBeEnabled();
   });
 
-  it('turns on optimistically, patches the chat, and shows the hint', async () => {
+  it('turns on optimistically, patches the chat, and says what Auto does in its tooltip rather than a line of its own', async () => {
     let resolvePatch!: (c: Chat) => void;
     mockedChatsPatch.mockReturnValue(new Promise<Chat>((r) => { resolvePatch = r; }));
     const chat = renderWith({ profileId: 'sonnet' });
@@ -709,7 +725,8 @@ describe('Composer auto mode toggle', () => {
     expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { autoMode: true });
     expect(useGruntStore.getState().chats[0]!.autoMode).toBe(true);
     expect(toggle()).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText(HINT)).toBeInTheDocument();
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+    expect(toggle()).toHaveAttribute('title', 'Auto mode is on: Claude Code decides routine tool calls; your profile limits still apply.');
     resolvePatch({ ...chat, autoMode: true });
     await waitFor(() => expect(toggle()).toBeEnabled());
     expect(toggle()).toHaveAttribute('aria-pressed', 'true');
@@ -772,7 +789,11 @@ describe('Composer auto mode toggle', () => {
     it("shows beside Auto for a Claude Code profile, on Claude Code's own setting by default, and not otherwise", () => {
       renderWith({ profileId: 'sonnet' });
       expect(effort()).toHaveValue('');
-      expect(effort()).toHaveDisplayValue('Effort: default');
+      // Just the level, to keep the toolbar short; the tooltip says what it is.
+      expect(effort()).toHaveDisplayValue('default');
+      expect(effort().getAttribute('title')).toMatch(/^Effort:/);
+      // Sized to the level it shows, not its longest option, so it takes no more room than it needs.
+      expect(effort()).toHaveClass('field-sizing-content');
       cleanup();
       renderWith({ profileId: 'qwen' });
       expect(screen.queryByRole('combobox', { name: 'Effort' })).not.toBeInTheDocument();
@@ -783,12 +804,12 @@ describe('Composer auto mode toggle', () => {
       renderWith({ profileId: 'sonnet' });
       const user = userEvent.setup();
 
-      await user.selectOptions(effort(), 'Effort: high');
+      await user.selectOptions(effort(), 'high');
       expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { effort: 'high' });
       await waitFor(() => expect(useGruntStore.getState().chats[0]!.effort).toBe('high'));
       expect(effort()).toHaveValue('high');
 
-      await user.selectOptions(effort(), 'Effort: default');
+      await user.selectOptions(effort(), 'default');
       expect(mockedChatsPatch).toHaveBeenLastCalledWith('chat-1', { effort: null });
       await waitFor(() => expect(effort()).toHaveValue(''));
     });
@@ -796,7 +817,7 @@ describe('Composer auto mode toggle', () => {
     it('goes back to what it was and says why when saving fails', async () => {
       mockedChatsPatch.mockRejectedValue(new ApiError(500, 'Database is locked.'));
       renderWith({ profileId: 'sonnet', effort: 'medium' });
-      await userEvent.setup().selectOptions(effort(), 'Effort: max');
+      await userEvent.setup().selectOptions(effort(), 'max');
       expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
       expect(effort()).toHaveValue('medium');
       expect(useGruntStore.getState().chats[0]!.effort).toBe('medium');

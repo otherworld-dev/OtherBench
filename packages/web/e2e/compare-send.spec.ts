@@ -34,9 +34,9 @@ test('sending with compare tabs open continues from the tab on screen', async ({
   const main = page.getByRole('main');
   const box = page.getByRole('textbox', { name: /message/i });
 
-  await page.getByRole('button', { name: '+ Compare' }).click();
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
   await page.getByRole('checkbox', { name: SECOND, exact: true }).check();
-  await page.getByRole('button', { name: '+ Compare' }).click();
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
   await box.fill('compare these');
   await box.press('Enter');
 

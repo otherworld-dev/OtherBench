@@ -54,6 +54,15 @@ describe('PlanUsageMeter', () => {
     expect(screen.getByText('96%').className).toContain('--danger');
   });
 
+  it("drops the 5h / week labels in a narrow composer, leaving the percentages (the tooltip still has every window)", async () => {
+    render(<PlanUsageMeter busy={false} />);
+    await settle();
+    const label = screen.getByText('5h', { exact: false, selector: 'span span span' });
+    expect(label).toHaveClass('@max-md:hidden');
+    // In a very narrow composer there's no room for it at all.
+    expect(screen.getByTestId('plan-usage')).toHaveClass('@max-sm:hidden');
+  });
+
   it('shows nothing when the login has no plan', async () => {
     planUsage.mockResolvedValue({ usage: null });
     render(<PlanUsageMeter busy={false} />);

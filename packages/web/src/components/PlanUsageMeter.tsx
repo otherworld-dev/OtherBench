@@ -71,12 +71,15 @@ export function PlanUsageMeter({ busy }: { busy: boolean }): JSX.Element | null 
       data-testid="plan-usage"
       title={details}
       aria-label={`Claude plan usage. ${details.replace(/\n/g, '. ')}`}
-      className="whitespace-nowrap text-xs text-[var(--text-muted)]"
+      // Hidden in a very narrow composer (its @container), where Send would otherwise be pushed out.
+      className="whitespace-nowrap text-xs text-[var(--text-muted)] @max-sm:hidden"
     >
       {compact.map((w, i) => (
         <span key={w.id}>
           {i > 0 && ' · '}
-          {SHORT[w.id]} <span className={`font-medium ${usageColour(w.percent)}`}>{Math.round(w.percent)}%</span>
+          {/* The window names give way in a narrow composer (its @container); the tooltip still lists every window. */}
+          <span className="@max-md:hidden">{SHORT[w.id]} </span>
+          <span className={`font-medium ${usageColour(w.percent)}`}>{Math.round(w.percent)}%</span>
         </span>
       ))}
     </span>

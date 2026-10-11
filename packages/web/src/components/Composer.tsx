@@ -405,10 +405,6 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         </p>
       )}
 
-      {autoActive && (
-        <p className="mb-1.5 text-xs text-[var(--text-muted)]">Auto mode: Claude Code decides routine tool calls; your profile limits still apply.</p>
-      )}
-
       <input
         ref={fileInputRef}
         type="file"
@@ -425,7 +421,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       {/* One box: attachments, the message, and a toolbar of the turn's settings with Send at its end. */}
       <div
         data-composer-box=""
-        className="rounded border border-[var(--border-strong)] bg-[var(--bg)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]"
+        // A container, so the toolbar can tighten up by the box's own width (a narrow pane, not just a narrow window).
+        className="@container rounded border border-[var(--border-strong)] bg-[var(--bg)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]"
       >
         {attachments.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 px-2 pt-2">
@@ -456,24 +453,26 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 pb-1 text-sm outline-none"
         />
 
-        <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5">
+        {/* One line at any width: the profile name gives way first, everything else keeps its size. */}
+        <div className="flex flex-nowrap items-center gap-1.5 px-2 pb-1.5">
           <button
             type="button"
             aria-label="Attach files"
             title="Attach files"
             onClick={() => fileInputRef.current?.click()}
-            className="rounded px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+            className="shrink-0 rounded px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
           >
             <span aria-hidden="true">📎</span>
           </button>
 
-          <div className="relative">
+          <div className="relative min-w-14 shrink">
             <button
               type="button"
               onClick={() => setPickerOpen((o) => !o)}
               aria-haspopup="listbox"
               aria-expanded={pickerOpen}
-              className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
+              title={primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : undefined}
+              className="block max-w-full truncate rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
             >
               {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
             </button>
@@ -506,9 +505,15 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               aria-label="Auto mode"
               aria-pressed={autoActive}
               disabled={autoUnavailable || autoSaving}
-              title={autoUnavailable ? 'Auto mode needs the Claude login' : 'Let Claude Code decide routine tool calls (from the next turn)'}
+              title={
+                autoUnavailable
+                  ? 'Auto mode needs the Claude login'
+                  : autoActive
+                    ? 'Auto mode is on: Claude Code decides routine tool calls; your profile limits still apply.'
+                    : 'Let Claude Code decide routine tool calls (from the next turn)'
+              }
               onClick={() => void toggleAutoMode()}
-              className={`rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${
+              className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${
                 autoActive
                   ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]'
                   : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
@@ -523,35 +528,37 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               aria-label="Effort"
               value={effort ?? ''}
               disabled={effortSaving}
-              title="How much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
+              title="Effort: how much Claude Code thinks before it answers, from the next message. Default follows your Claude Code settings."
               onChange={(e) => void changeEffort(isClaudeEffort(e.target.value) ? e.target.value : null)}
-              className="rounded-full border border-[var(--border-strong)] bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
+              className="shrink-0 field-sizing-content rounded-full border border-[var(--border-strong)] bg-[var(--bg)] px-1.5 py-0.5 font-mono text-[0.6875rem] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] disabled:opacity-50"
             >
-              <option value="">Effort: default</option>
+              {/* Just the level, to keep the toolbar to one line; the tooltip says what it is. */}
+              <option value="">default</option>
               {CLAUDE_EFFORTS.map((level) => (
                 <option key={level} value={level}>
-                  Effort: {EFFORT_LABELS[level]}
+                  {EFFORT_LABELS[level]}
                 </option>
               ))}
             </select>
           )}
 
           {comparedProfiles.map((p) => (
-            <span key={p.id} className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border)] text-[var(--text-muted)]">
+            <span key={p.id} className="shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border)] text-[var(--text-muted)]">
               + {p.name}
             </span>
           ))}
 
-          <div className="relative">
+          <div className="relative shrink-0">
             <button
               type="button"
               onClick={() => setComparePickerOpen((o) => !o)}
               aria-haspopup="listbox"
               aria-expanded={comparePickerOpen}
+              aria-label="Compare"
               title="Compare against other profiles"
               className="rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]"
             >
-              + Compare
+              +
             </button>
             {comparePickerOpen && (
               <ul role="listbox" aria-label="Compare profiles" aria-multiselectable="true" className="absolute bottom-full z-10 mb-1 w-56 rounded border border-[var(--border)] bg-[var(--bg-raised)] py-1 shadow-lg">
@@ -569,7 +576,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
             )}
           </div>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             {/* Plan limits belong to the Claude login, so not to a Claude Code profile on an endpoint (Deck #825). */}
             {showAutoToggle && !autoUnavailable && <PlanUsageMeter busy={isStreaming} />}
             {isStreaming ? (

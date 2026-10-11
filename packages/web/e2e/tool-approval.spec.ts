@@ -168,15 +168,15 @@ test('an approval raised by one variant of a compare turn does not block its sib
   await page.goto('/');
   await page.getByRole('button', { name: chatTitle }).click();
 
-  // Add Variant B to the turn via the "+ Compare" picker (a plain
+  // Add Variant B to the turn via the Compare (+) picker (a plain
   // checkbox list, not role="option" -- unlike the primary-profile picker).
   // Closed by clicking its own toggle button again -- Escape does not close
   // it (no such handler exists), and leaving it open lets its dropdown
   // intercept later clicks underneath it (flaky failure observed: "Deny"
   // click blocked by the still-open listbox overlapping it).
-  await page.getByRole('button', { name: '+ Compare' }).click();
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
   await page.getByRole('checkbox', { name: variantBName }).check();
-  await page.getByRole('button', { name: '+ Compare' }).click();
+  await page.getByRole('button', { name: 'Compare', exact: true }).click();
   await expect(page.getByRole('listbox', { name: 'Compare profiles' })).toBeHidden();
 
   const textbox = page.getByRole('textbox', { name: /message/i });

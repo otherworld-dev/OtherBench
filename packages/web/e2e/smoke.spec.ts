@@ -192,10 +192,10 @@ test('full product journey: connection + profile, chat, streaming, tool approval
     await expect(page.getByLabel('streaming')).toHaveCount(0);
 
     // --- Run a compare turn across all three profiles.
-    await page.getByRole('button', { name: '+ Compare' }).click();
+    await page.getByRole('button', { name: 'Compare', exact: true }).click();
     await page.getByRole('checkbox', { name: profileBName }).check();
     await page.getByRole('checkbox', { name: profileCName }).check();
-    await page.getByRole('button', { name: '+ Compare' }).click(); // closes the picker -- Escape has no handler (see tool-approval.spec.ts)
+    await page.getByRole('button', { name: 'Compare', exact: true }).click(); // closes the picker -- Escape has no handler (see tool-approval.spec.ts)
     await expect(page.getByRole('listbox', { name: 'Compare profiles' })).toBeHidden();
 
     await textbox.fill('Compare all three of you');
