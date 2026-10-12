@@ -531,6 +531,14 @@ export const api = {
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),
     refresh: (id: string) => post<void>(`/mcp-servers/${id}/refresh`),
+    /** Starts a browser sign-in (spec 2026-10-12-mcp-oauth-design §6); the caller opens `authorizationUrl`. */
+    signIn: (id: string) => post<{ authorizationUrl: string }>(`/mcp-servers/${id}/sign-in`),
+    cancelSignIn: (id: string) => post<void>(`/mcp-servers/${id}/sign-in/cancel`),
+    /** Paste-back: finishes a sign-in from the address a browser on another device ended on. */
+    completeSignIn: (id: string, url: string) => post<{ signedIn: true }>(`/mcp-servers/${id}/sign-in/complete`, { url }),
+    /** Forgets the sign-in here; the provider isn't told. */
+    signOut: (id: string) => post<void>(`/mcp-servers/${id}/sign-out`),
+    signInRedirectUri: () => request<{ redirectUri: string | null }>('/mcp-servers/sign-in/redirect-uri'),
     /** The MCP servers in Claude Desktop's config: names, commands and the NAMES of their env vars and headers, never the values. */
     claudeDesktop: () => request<ClaudeDesktopListing>('/mcp-servers/import/claude-desktop'),
     /** Imports the named servers; their env and header values go server-side into the secret store. */

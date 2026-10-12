@@ -478,7 +478,7 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
                 <span className="min-w-0 flex-1 truncate">{s.name}</span>
               </span>
             </label>
-            <span className={`text-xs text-[var(--text-muted)] ${dim}`}>{s.enabled ? `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}` : 'disabled'}</span>
+            <span className={`text-xs text-[var(--text-muted)] ${dim}`}>{!s.enabled ? 'disabled' : s.status === 'needs_auth' ? 'needs sign-in' : `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}`}</span>
             <button
               type="button"
               aria-label={`Refresh ${s.name}`}
@@ -503,6 +503,17 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
             .map((s) => (
               <p key={s.id} className="text-xs text-[var(--danger)]">
                 {s.name}: {s.lastError}
+              </p>
+            ))}
+        </div>
+      )}
+      {servers.some((s) => s.status === 'needs_auth') && (
+        <div className="space-y-1 pt-1">
+          {servers
+            .filter((s) => s.status === 'needs_auth')
+            .map((s) => (
+              <p key={s.id} className="text-xs text-[var(--warn)]">
+                {`${s.name}: needs sign-in (Settings > MCP servers).`}
               </p>
             ))}
         </div>

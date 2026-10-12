@@ -21,6 +21,11 @@ vi.mock('../../state/api.js', async (importOriginal) => {
         refresh: vi.fn(),
         claudeDesktop: vi.fn(),
         importClaudeDesktop: vi.fn(),
+        signIn: vi.fn(),
+        cancelSignIn: vi.fn(),
+        completeSignIn: vi.fn(),
+        signOut: vi.fn(),
+        signInRedirectUri: vi.fn(),
       },
     },
   };
@@ -76,6 +81,7 @@ function reset(): void {
   mockedPatch.mockReset();
   mockedDelete.mockReset();
   mockedRefresh.mockReset();
+  vi.mocked(api.mcpServers.signInRedirectUri).mockReset().mockResolvedValue({ redirectUri: 'http://127.0.0.1:4747/oauth/callback' });
 }
 
 describe('McpServersPanel', () => {
@@ -94,6 +100,28 @@ describe('McpServersPanel', () => {
     expect(within(list).getByText('Filesystem MCP')).toBeInTheDocument();
     expect(within(list).getByText(/3 tools/)).toBeInTheDocument();
     expect(within(list).getByText(/connection refused/)).toBeInTheDocument();
+  });
+
+  it('a server that needs sign-in reads "needs sign-in" in its row, and its form shows the Sign-in section', async () => {
+    mockedList.mockResolvedValue([
+      makeHealth({ id: 'srv-h', name: 'Hosted Docs', transport: 'http', status: 'needs_auth', toolCount: 0, auth: { state: 'needs_sign_in', account: null, signedInAt: null, pending: false, error: null } }),
+    ]);
+    mockedGet.mockResolvedValue(makeServer({ id: 'srv-h', name: 'Hosted Docs', transport: 'http', command: null, args: [], url: 'https://mcp.example.com/mcp' }));
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+
+    const row = await screen.findByTestId('mcp-row-srv-h');
+    expect(row).toHaveTextContent('http · needs sign-in');
+    await user.click(row);
+    expect(await screen.findByTestId('mcp-sign-in-status')).toHaveTextContent('This server needs you to sign in.');
+  });
+
+  it('a new http server says to save it before signing in', async () => {
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New MCP server' }));
+    await user.selectOptions(screen.getByLabelText('Transport'), 'http');
+    expect(screen.getByText('Save the server first; then you can sign in.')).toBeInTheDocument();
   });
 
   it('shows an honest empty state when no servers are configured', async () => {

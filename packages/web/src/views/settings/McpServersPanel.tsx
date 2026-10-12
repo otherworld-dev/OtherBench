@@ -3,6 +3,7 @@ import type { McpServer } from '@grunt/core/ports/store.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { usePolled } from '../../lib/usePolled.js';
 import { ClaudeDesktopImport } from './ClaudeDesktopImport.js';
+import { McpSignIn } from './McpSignIn.js';
 import { ApiError, api, type CreateMcpServerBody } from '../../state/api.js';
 
 const STATUS_COLOR: Record<McpServerHealth['status'], string> = {
@@ -198,6 +199,10 @@ function KvRowsEditor({
 interface McpServerFormProps {
   /** `null` means "creating a new server". */
   server: McpServer | null;
+  /** The selected server's live health from the panel's poll (null while loading, or for a new server). */
+  health: McpServerHealth | null;
+  /** Asks the panel to re-poll after a sign-in action. */
+  onSignInChanged: () => void;
   onSaved: (server: McpServer) => void;
   onDeleted: (id: string) => void;
   onCancel: () => void;
@@ -232,7 +237,7 @@ interface McpServerFormProps {
  * row's blank value looked identical to "the user wants this empty" and
  * was dropped the same way an unfinished new row is.
  */
-function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormProps): JSX.Element {
+function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, onCancel }: McpServerFormProps): JSX.Element {
   const [name, setName] = useState(server?.name ?? '');
   const [transport, setTransport] = useState<McpServer['transport']>(server?.transport ?? 'stdio');
   const [command, setCommand] = useState(server?.command ?? '');
@@ -549,6 +554,12 @@ function McpServerForm({ server, onSaved, onDeleted, onCancel }: McpServerFormPr
               </label>
             )}
           </div>
+
+          {server && server.transport === 'http' ? (
+            <McpSignIn server={server} health={health} onChanged={onSignInChanged} />
+          ) : (
+            <p className="text-xs text-[var(--text-muted)]">Save the server first; then you can sign in.</p>
+          )}
         </>
       )}
 
@@ -648,7 +659,7 @@ function McpServerRow({
           <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${STATUS_COLOR[health.status]}`} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate">{health.name}</span>
           <span className="shrink-0 text-xs text-[var(--text-muted)]">
-            {health.transport} · {health.enabled ? `${health.toolCount} tool${health.toolCount === 1 ? '' : 's'}` : 'disabled'}
+            {health.transport} · {!health.enabled ? 'disabled' : health.status === 'needs_auth' ? 'needs sign-in' : `${health.toolCount} tool${health.toolCount === 1 ? '' : 's'}`}
           </span>
         </button>
         <button
@@ -852,13 +863,21 @@ export function McpServersPanel(): JSX.Element {
         {importing ? (
           <ClaudeDesktopImport onImported={bumpPoll} onClose={() => setImporting(false)} />
         ) : editingId === 'new' ? (
-          <McpServerForm key="new" server={null} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
+          <McpServerForm key="new" server={null} health={null} onSignInChanged={bumpPoll} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
         ) : editingId && loadingConfig ? (
           <p className="text-sm text-[var(--text-faint)]">Loading…</p>
         ) : editingId && loadError ? (
           <p className="text-sm text-[var(--danger)]">{loadError}</p>
         ) : showForm && selectedConfig ? (
-          <McpServerForm key={selectedConfig.id} server={selectedConfig} onSaved={handleSaved} onDeleted={handleDeleted} onCancel={() => setEditingId(null)} />
+          <McpServerForm
+            key={selectedConfig.id}
+            server={selectedConfig}
+            health={servers?.find((h) => h.id === selectedConfig.id) ?? null}
+            onSignInChanged={bumpPoll}
+            onSaved={handleSaved}
+            onDeleted={handleDeleted}
+            onCancel={() => setEditingId(null)}
+          />
         ) : (
           <p className="text-sm text-[var(--text-faint)]">Select a server to edit, or create a new one.</p>
         )}
