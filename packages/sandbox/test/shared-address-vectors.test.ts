@@ -5,12 +5,13 @@ import { isPrivateAddress } from '../resources/agent-core.mjs';
 
 /**
  * The agent in the VM can't import core, so it keeps its own copy of the
- * address ranges. Core's shared table holds it to the browser's
- * (`isPublicAddress`, checked in core's shared-host-vectors.test.ts) and pins
- * the addresses where the two differ on purpose.
+ * address ranges. Core's shared table names the cases, with one answer each
+ * for the browser (`isPublicAddress`, checked in core's
+ * shared-host-vectors.test.ts) and for the agent. agent-addresses.test.ts
+ * holds the copy to core's across every range.
  */
 describe("the shared address vectors: the sandbox agent's side", () => {
   it('judges every resolved address the way the table says', () => {
-    for (const v of SHARED_ADDRESS_VECTORS) expect(!isPrivateAddress(v.address), `${v.note}: ${v.address}`).toBe(v.sandboxAgent);
+    for (const v of SHARED_ADDRESS_VECTORS) expect(!isPrivateAddress(v.address), `${v.note}: ${v.address}`).toBe(v.reachable);
   });
 });

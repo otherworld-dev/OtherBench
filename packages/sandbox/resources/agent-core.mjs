@@ -29,14 +29,18 @@
 //    read-only over it. So tmpRoot itself is never in allowRead (only rt and the
 //    run's own folder are), or the run's folder would come out read-only.
 //
-// Private networks. The runtime always refuses loopback, link-local, this host's
-// own addresses and cloud metadata at connect time, on the address it actually
-// dials (so a name that resolves to one is caught even when it changes between
-// the check and the connect). It refuses the private-use ranges only when told
-// to, which is DENIED_RESOLVED_ADDRESSES in the network config. On top of that
-// ask() resolves a host before bothering Grunt with a card, and answers no when
-// the name can't be resolved or any address is one the sandbox must not reach.
-// That is an early refusal only: the runtime's check is the enforcement.
+// Private networks. A command may reach the public internet and nothing else,
+// by the same rule as Grunt's own browser (isPublicAddress in core's
+// browser-hosts.ts). The runtime always refuses loopback, link-local, this
+// host's own addresses and cloud metadata at connect time, on the address it
+// actually dials (so a name that resolves to one is caught even when it changes
+// between the check and the connect). It refuses the rest only when told to,
+// which is DENIED_RESOLVED_ADDRESSES in the network config: everything
+// isPrivateAddress refuses, as ranges. On top of that ask() resolves a host
+// before bothering Grunt with a card, and answers no when the name can't be
+// resolved or any address is one the sandbox must not reach. For a name that is
+// an early refusal only: the runtime's check is the enforcement. For a host
+// given as a number it is the only check (the runtime doesn't judge those).
 //
 // Protected files. Some files in a folder make something run when the folder is
 // next used ON WINDOWS: git's hooks and config (Git for Windows, and VS Code
@@ -63,30 +67,6 @@ export const COMMAND_PATH = '/opt/grunt-sandbox/node/bin:/usr/local/sbin:/usr/lo
 /** Unreadable unless a run allows a path below them: other chats' folders, homes and temp files. */
 export const DENY_READ = ['/mnt', '/home', '/tmp'];
 
-/**
- * Addresses a permitted host name must not resolve to, given to the runtime as
- * `deniedResolvedAddresses`: the private-use ranges (RFC 1918, CGNAT, unique
- * local), multicast, the reserved block and benchmarking. Loopback and
- * link-local are listed too, though the runtime refuses them anyway. Mirrors
- * isPrivateAddress below. This script can't import core, so both are its own
- * copy of the ranges, which in core now live in browser-hosts.ts
- * (isPublicAddress; network-hosts.ts uses that). The copy is looser for a few
- * special ranges: core's testing/shared-host-vectors.ts pins each one, and
- * sandbox/test/shared-address-vectors.test.ts runs that table against
- * isPrivateAddress.
- */
-export const DENIED_RESOLVED_ADDRESSES = [
-  '10.0.0.0/8',
-  '172.16.0.0/12',
-  '192.168.0.0/16',
-  '100.64.0.0/10',
-  'fc00::/7',
-  '224.0.0.0/4',
-  '240.0.0.0/4',
-  '198.18.0.0/15',
-  '127.0.0.0/8',
-  '169.254.0.0/16',
-];
 /** The longest ask() waits for a host name to resolve before refusing it. */
 export const LOOKUP_TIMEOUT_MS = 5000;
 
@@ -187,7 +167,60 @@ const isAbsolute = (value) => typeof value === 'string' && (value.startsWith('/'
 const strings = (value) => (Array.isArray(value) ? value.map(String) : []);
 const errorMessage = (err) => (err instanceof Error ? err.message : String(err));
 
-/** The four numbers of a dotted-decimal IPv4 address, or null for anything else (leading zeros included: they are ambiguous). @param {string} text */
+// Addresses the sandbox must not reach.
+//
+// The rule is core's isPublicAddress (packages/core/src/domain/browser-hosts.ts),
+// the one Grunt's browser and the sandbox's network card use: an address may be
+// reached only when it is on the public internet. This script runs in the VM
+// and can't import core, so the two tables and the reading of an address below
+// are its own copy of core's. sandbox/test/agent-addresses.test.ts holds the
+// copy to core: the tables must be equal, isPrivateAddress must answer
+// !isPublicAddress (at every range boundary, for every IPv6 form that carries
+// an IPv4 address, across a seeded sample and for text that isn't an address),
+// and DENIED_RESOLVED_ADDRESSES must cover exactly what isPrivateAddress
+// refuses. core's testing/shared-host-vectors.ts lists the cases by name.
+// Change a range in core and here together.
+
+/** IPv4 ranges that are not the public internet: [a, b, c, d, prefix length]. Core's V4_NOT_PUBLIC, row for row. */
+export const V4_NOT_PUBLIC = [
+  [0, 0, 0, 0, 8], // "this network"
+  [10, 0, 0, 0, 8],
+  [100, 64, 0, 0, 10], // CGNAT
+  [127, 0, 0, 0, 8],
+  [169, 254, 0, 0, 16], // link-local, cloud metadata
+  [172, 16, 0, 0, 12],
+  [192, 0, 0, 0, 24], // IETF protocol assignments
+  [192, 0, 2, 0, 24], // TEST-NET-1
+  [192, 88, 99, 0, 24], // 6to4 relay anycast
+  [192, 168, 0, 0, 16],
+  [198, 18, 0, 0, 15], // benchmarking
+  [198, 51, 100, 0, 24], // TEST-NET-2
+  [203, 0, 113, 0, 24], // TEST-NET-3
+  [224, 0, 0, 0, 4], // multicast
+  [240, 0, 0, 0, 4], // reserved, broadcast
+];
+
+/**
+ * Blocks of global unicast (2000::/3) that are not the public internet either:
+ * [first group, second group, prefix length]. Core's V6_GLOBAL_NOT_PUBLIC, row
+ * for row.
+ */
+export const V6_GLOBAL_NOT_PUBLIC = [
+  [0x2001, 0x0000, 23], // IETF protocol assignments (Teredo, ORCHID, ...)
+  [0x2001, 0x0db8, 32], // documentation
+  [0x3fff, 0x0000, 20], // documentation (RFC 9637)
+];
+
+/** An IPv6 block: its eight groups (those given, then zeros) and its prefix length. @param {number[]} groups @param {number} prefix */
+const block = (groups, prefix) => ({ g: [...groups, 0, 0, 0, 0, 0, 0, 0, 0].slice(0, 8), prefix });
+/** The only IPv6 that is the public internet, less the blocks above. */
+const GLOBAL_UNICAST = block([0x2000], 3);
+/** The IPv6 forms that carry an IPv4 address and are judged by it: ::ffff:a.b.c.d, 64:ff9b::a.b.c.d (both in the last two groups) and 2002:aabb:ccdd:: (in the second and third). */
+const V4_MAPPED = block([0, 0, 0, 0, 0, 0xffff], 96);
+const NAT64 = block([0x64, 0xff9b], 96);
+const SIX_TO_FOUR = block([0x2002], 16);
+
+/** The four numbers of a dotted-decimal IPv4 address, or null for anything else (leading zeros included: some parsers read them as octal). @param {string} text */
 function parseIpv4(text) {
   const parts = text.split('.');
   if (parts.length !== 4) return null;
@@ -199,72 +232,161 @@ function parseIpv4(text) {
   return octets;
 }
 
-/** The eight 16-bit groups of an IPv6 address (brackets and zone dropped, a dotted IPv4 tail allowed), or null. @param {string} text */
+/**
+ * The eight 16-bit groups of an IPv6 address, or null: `::`, a dotted IPv4 tail
+ * and a `%zone` are read, brackets are not. Core's parseIPv6, step for step, so
+ * the two never read the same text differently. @param {string} text
+ */
 function parseIpv6(text) {
-  let rest = text.replace(/^\[|\]$/g, '');
-  const zone = rest.indexOf('%');
-  if (zone !== -1) rest = rest.slice(0, zone);
-  if (rest.includes('.')) {
-    const tail = rest.lastIndexOf(':');
-    const v4 = parseIpv4(rest.slice(tail + 1));
+  let s = text;
+  const zone = s.indexOf('%');
+  if (zone >= 0) s = s.slice(0, zone);
+  let v4Tail = [];
+  if (s.includes('.')) {
+    const cut = s.lastIndexOf(':');
+    if (cut < 0) return null;
+    const v4 = parseIpv4(s.slice(cut + 1));
     if (!v4) return null;
-    rest = `${rest.slice(0, tail + 1)}${((v4[0] << 8) | v4[1]).toString(16)}:${((v4[2] << 8) | v4[3]).toString(16)}`;
+    v4Tail = [(v4[0] << 8) | v4[1], (v4[2] << 8) | v4[3]];
+    s = s.slice(0, cut + 1);
+    if (s.endsWith(':') && !s.endsWith('::')) s = s.slice(0, -1);
   }
-  const halves = rest.split('::');
+  const halves = s.split('::');
   if (halves.length > 2) return null;
-  const groups = (part) => (part === '' ? [] : part.split(':'));
+  const groups = (part) => {
+    if (part === '') return [];
+    const out = [];
+    for (const group of part.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/i.test(group)) return null;
+      out.push(parseInt(group, 16));
+    }
+    return out;
+  };
   const head = groups(halves[0]);
-  const back = halves.length === 2 ? groups(halves[1]) : [];
-  const missing = 8 - head.length - back.length;
-  if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
-  const all = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...back];
-  if (!all.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g))) return null;
-  return all.map((g) => parseInt(g, 16));
+  const rest = halves.length === 2 ? groups(halves[1]) : [];
+  if (!head || !rest) return null;
+  const total = 8 - v4Tail.length;
+  if (halves.length === 2) {
+    const fill = total - head.length - rest.length;
+    if (fill < 1) return null;
+    return [...head, ...Array(fill).fill(0), ...rest, ...v4Tail];
+  }
+  return head.length === total ? [...head, ...v4Tail] : null;
 }
 
-/** Whether an IPv4 address (its four numbers) is one the sandbox must not reach: this host, the LAN, link-local, CGNAT, multicast and reserved, benchmarking and documentation. @param {number[]} o */
-function isPrivateIpv4([a, b, c]) {
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    a >= 224 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
-    (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    (a === 198 && b === 51 && c === 100) ||
-    (a === 203 && b === 0 && c === 113)
-  );
+/** Whether the eight groups `g` are inside an IPv6 block. @param {number[]} g @param {{ g: number[], prefix: number }} range */
+function inBlock(g, range) {
+  for (let bit = 0; bit < range.prefix; bit += 1) {
+    const mask = 1 << (15 - (bit & 15));
+    if ((g[bit >> 4] & mask) !== (range.g[bit >> 4] & mask)) return false;
+  }
+  return true;
+}
+
+/** The IPv4 address (its four numbers) in the two groups of `g` from `at`. @param {number[]} g @param {number} at */
+const v4In = (g, at) => [g[at] >> 8, g[at] & 0xff, g[at + 1] >> 8, g[at + 1] & 0xff];
+/** @param {number[]} o */
+const v4Number = (o) => ((o[0] << 24) | (o[1] << 16) | (o[2] << 8) | o[3]) >>> 0;
+
+/** @param {number[]} o */
+function isPublicIpv4(o) {
+  const ip = v4Number(o);
+  return !V4_NOT_PUBLIC.some(([a, b, c, d, prefix]) => {
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    return ((ip & mask) >>> 0) === ((v4Number([a, b, c, d]) & mask) >>> 0);
+  });
+}
+
+/** Core's isPublicV6, step for step. @param {number[]} g */
+function isPublicIpv6(g) {
+  if (inBlock(g, V4_MAPPED) || inBlock(g, NAT64)) return isPublicIpv4(v4In(g, 6));
+  // Only 2000::/3 is global unicast: this also refuses ::, ::1, ::a.b.c.d,
+  // 100::/64, 64:ff9b:1::/48, fc00::/7, fe80::/10, fec0::/10 and ff00::/8.
+  if (!inBlock(g, GLOBAL_UNICAST)) return false;
+  if (V6_GLOBAL_NOT_PUBLIC.some(([a, b, prefix]) => inBlock(g, block([a, b], prefix)))) return false;
+  if (inBlock(g, SIX_TO_FOUR)) return isPublicIpv4(v4In(g, 1));
+  return true;
 }
 
 /**
- * Whether a resolved address is one the sandbox must not reach: loopback,
- * unspecified, private-use, link-local, multicast, reserved and documentation,
- * in IPv4 and IPv6, and an IPv4 address carried inside IPv6 (::ffff:a.b.c.d,
- * the deprecated ::a.b.c.d, and NAT64's 64:ff9b::a.b.c.d). An address that
+ * Whether a resolved address is one the sandbox must not reach: anything but
+ * the public internet. The answer is !isPublicAddress(address) of core's
+ * browser-hosts.ts for every string, so loopback, unspecified, private-use,
+ * CGNAT, link-local, multicast, reserved, documentation and the other
+ * special-purpose blocks in IPv4; all of IPv6 outside global unicast (2000::/3)
+ * and the special blocks inside it; and an IPv4 address carried in IPv6
+ * (v4-mapped, NAT64, 6to4) by the IPv4 address it carries. An address that
  * can't be read counts as private: the answer is no when in doubt.
  * @param {unknown} address
  */
 export function isPrivateAddress(address) {
   if (typeof address !== 'string') return true;
   const v4 = parseIpv4(address);
-  if (v4) return isPrivateIpv4(v4);
+  if (v4) return !isPublicIpv4(v4);
   const g = parseIpv6(address);
-  if (!g) return true;
-  const embedded = () => isPrivateIpv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff]);
-  if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0 || g[5] === 0xffff)) return embedded();
-  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return embedded();
-  return (
-    (g[0] & 0xffc0) === 0xfe80 ||
-    (g[0] & 0xffc0) === 0xfec0 ||
-    (g[0] & 0xfe00) === 0xfc00 ||
-    g[0] >> 8 === 0xff ||
-    (g[0] === 0x2001 && g[1] === 0xdb8)
-  );
+  return g ? !isPublicIpv6(g) : true;
 }
+
+/** An IPv6 address (its eight groups) as text, its longest run of zero groups as `::`. @param {number[]} g */
+function ipv6Text(g) {
+  let start = 0;
+  let length = 0;
+  for (let i = 0; i < 8; i += 1) {
+    let end = i;
+    while (end < 8 && g[end] === 0) end += 1;
+    if (end - i > length) [start, length] = [i, end - i];
+  }
+  const text = (part) => part.map((x) => x.toString(16)).join(':');
+  return length < 2 ? text(g) : `${text(g.slice(0, start))}::${text(g.slice(start + length))}`;
+}
+
+/**
+ * An IPv6 block less the `holes` inside it, as whole blocks: it is halved until
+ * each piece is clear of every hole (kept) or inside one (dropped).
+ * @param {{ g: number[], prefix: number }} range @param {Array<{ g: number[], prefix: number }>} holes
+ * @returns {Array<{ g: number[], prefix: number }>}
+ */
+function outside(range, holes) {
+  if (holes.some((hole) => hole.prefix <= range.prefix && inBlock(range.g, hole))) return [];
+  if (!holes.some((hole) => inBlock(hole.g, range))) return [range];
+  const upper = [...range.g];
+  upper[range.prefix >> 4] |= 1 << (15 - (range.prefix & 15));
+  return [...outside({ g: range.g, prefix: range.prefix + 1 }, holes), ...outside({ g: upper, prefix: range.prefix + 1 }, holes)];
+}
+
+/** An IPv4 range inside an IPv6 form that carries IPv4 from group `at`. @param {{ g: number[], prefix: number }} form @param {number} at @param {number[]} range */
+function carried(form, at, [a, b, c, d, prefix]) {
+  const g = [...form.g];
+  g[at] = (a << 8) | b;
+  g[at + 1] = (c << 8) | d;
+  return { g, prefix: form.prefix + prefix };
+}
+
+/**
+ * Addresses a permitted host name must not resolve to, given to the runtime as
+ * `deniedResolvedAddresses`, which it enforces on the address it dials: all
+ * that isPrivateAddress refuses and nothing else, as CIDR ranges built from the
+ * same tables.
+ *  - every IPv4 range in V4_NOT_PUBLIC;
+ *  - all of IPv6 outside global unicast, less the two forms there that carry an
+ *    IPv4 address (::ffff:0:0/96 and 64:ff9b::/96): one range can't leave a
+ *    hole, so this is some 180 of them, down to /96 on each side of both;
+ *  - the special blocks of global unicast (V6_GLOBAL_NOT_PUBLIC);
+ *  - every IPv4 range again inside NAT64 and inside 6to4.
+ * The v4-mapped form has no entries of its own, because the runtime can't hold
+ * one: it reads a v4-mapped range as the IPv4 range itself, and it matches a
+ * v4-mapped address against the IPv4 entries. So the IPv4 ranges cover it.
+ * (The runtime also applies the IPv4 entries to the IPv4 address in a NAT64 or
+ * 6to4 answer. Those are listed anyway, so the list doesn't lean on that.)
+ */
+export const DENIED_RESOLVED_ADDRESSES = [
+  ...V4_NOT_PUBLIC.map(([a, b, c, d, prefix]) => `${a}.${b}.${c}.${d}/${prefix}`),
+  ...[
+    ...outside(block([], 0), [GLOBAL_UNICAST, V4_MAPPED, NAT64]),
+    ...V6_GLOBAL_NOT_PUBLIC.map(([a, b, prefix]) => block([a, b], prefix)),
+    ...V4_NOT_PUBLIC.flatMap((range) => [carried(NAT64, 6, range), carried(SIX_TO_FOUR, 1, range)]),
+  ].map((range) => `${ipv6Text(range.g)}/${range.prefix}`),
+];
 
 /** @param {AgentDeps} deps */
 export function createAgent(deps) {

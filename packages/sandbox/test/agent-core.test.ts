@@ -1064,19 +1064,30 @@ describe('the sandbox agent, private destinations', () => {
     async () =>
       addresses.map((address) => ({ address }));
 
-  it('asks the runtime to refuse the private-use, multicast and reserved ranges once a name is resolved', () => {
-    expect(DENIED_RESOLVED_ADDRESSES).toEqual([
+  it('asks the runtime to refuse, once a name is resolved, every range that is not the public internet', () => {
+    // The IPv4 table, as written in core. agent-addresses.test.ts holds the whole list to core's rule.
+    expect(DENIED_RESOLVED_ADDRESSES.slice(0, 15)).toEqual([
+      '0.0.0.0/8',
       '10.0.0.0/8',
-      '172.16.0.0/12',
-      '192.168.0.0/16',
       '100.64.0.0/10',
-      'fc00::/7',
-      '224.0.0.0/4',
-      '240.0.0.0/4',
-      '198.18.0.0/15',
       '127.0.0.0/8',
       '169.254.0.0/16',
+      '172.16.0.0/12',
+      '192.0.0.0/24',
+      '192.0.2.0/24',
+      '192.88.99.0/24',
+      '192.168.0.0/16',
+      '198.18.0.0/15',
+      '198.51.100.0/24',
+      '203.0.113.0/24',
+      '224.0.0.0/4',
+      '240.0.0.0/4',
     ]);
+    // IPv6: all but global unicast (around the two forms there that carry IPv4), its special blocks, and each IPv4 range inside NAT64 and 6to4.
+    expect(DENIED_RESOLVED_ADDRESSES).toEqual(expect.arrayContaining(['::/81', '4000::/2', '8000::/1', '2001::/23', '2001:db8::/32', '3fff::/20', '64:ff9b::a00:0/104', '2002:c0a8::/32']));
+    expect(DENIED_RESOLVED_ADDRESSES).toHaveLength(228);
+    // Not one range for everything outside 2000::/3: that would take v4-mapped and NAT64 answers with it.
+    for (const whole of ['::/0', '::/1', '::/2', '::/3', '::/80', '::/96', '64:ff9b::/96', '2002::/16']) expect(DENIED_RESOLVED_ADDRESSES).not.toContain(whole);
   });
 
   it('resolves the host and goes on to ask Grunt when every address is public', async () => {
@@ -1094,6 +1105,11 @@ describe('the sandbox agent, private destinations', () => {
     ['the cloud metadata address', '169.254.169.254'],
     ['IPv6 loopback', '::1'],
     ['a unique local IPv6 address', 'fd12:3456::1'],
+    ['the 6to4 relay range', '192.88.99.1'],
+    ['a 6to4 address of a private one', '2002:c0a8:101::1'],
+    ['a Teredo address', '2001::1'],
+    ['an IPv6 address outside global unicast', 'fb00::1'],
+    ['a public IPv4 address in the deprecated ::a.b.c.d form', '::8.8.8.8'],
   ])('refuses a name that resolves to %s, without asking Grunt', async (_name, address) => {
     const h = harness({}, { lookup: resolvingTo(address) });
     await h.init();
@@ -1101,11 +1117,23 @@ describe('the sandbox agent, private destinations', () => {
     expect(asksSent(h)).toEqual([]);
   });
 
-  it('refuses a name when any one of its addresses is private', async () => {
-    const h = harness({}, { lookup: resolvingTo('93.184.216.34', '192.168.1.5') });
+  it.each([
+    ['the last of two', ['93.184.216.34', '192.168.1.5']],
+    ['the last of many, in IPv6', ['93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946', '151.101.0.223', '2a04:4e42::223', '2002:a00:1::1']],
+    ['the first', ['64:ff9b::10.0.0.1', '93.184.216.34']],
+    ['one that is no address', ['93.184.216.34', 'not-an-address']],
+  ])('refuses a name when any one of its addresses is private: %s', async (_name, addresses) => {
+    const h = harness({}, { lookup: resolvingTo(...addresses) });
     await h.init();
     await expect(h.ask({ host: 'mixed.example.com', port: 443 })).resolves.toBe(false);
     expect(asksSent(h)).toEqual([]);
+  });
+
+  it('goes on to ask Grunt for a name with many addresses, all public, some behind NAT64 and 6to4', async () => {
+    const h = harness({}, { lookup: resolvingTo('93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946', '64:ff9b::5db8:d822', '2002:5db8:d822::1', '::ffff:93.184.216.34') });
+    await h.init();
+    void h.ask({ host: 'pypi.org', port: 443 });
+    await vi.waitFor(() => expect(asksSent(h)).toEqual([{ type: 'ask', askId: 1, host: 'pypi.org', port: 443 }]));
   });
 
   it.each([
@@ -1166,6 +1194,9 @@ describe('isPrivateAddress', () => {
     '::', '::1', 'fe80::1', 'fe80::1%eth0', 'febf::1', 'fec0::1', 'fc00::1', 'fd12:3456:789a::1', 'ff02::1', '2001:db8::1',
     '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:10.1.2.3', '::ffff:a9fe:a9fe', '::ffff:0:0', '::127.0.0.1', '0:0:0:0:0:ffff:c0a8:101',
     '64:ff9b::7f00:1', '64:ff9b::10.0.0.1', '[::1]',
+    // Core's rule whole (isPublicAddress): the special IPv4 blocks, everything outside global unicast, its special blocks, 6to4 by its IPv4 address.
+    '192.88.99.1', '192.0.0.192', 'fb00::1', 'fe00::1', '100::1', '1fff::1', '4000::1', '2001::1', '2001:1ff::1', '3fff::1', '3fff:fff::1',
+    '2002:c0a8:101::1', '2002:7f00:1::', '2002:a9fe:a9fe::1', '::8.8.8.8', '::ffff:0:8.8.8.8', '64:ff9b:1::808:808', '64:ff9b::192.88.99.1', '[2606:4700:4700::1111]',
     // Unreadable addresses are refused, not guessed at.
     '', 'localhost', '1.2.3', '1.2.3.4.5', '256.1.1.1', '010.0.0.1', '1.2.3.-4', '::ffff:1.2.3', '1::2::3', '1:2:3:4:5:6:7:8:9', 'g::1', ':1:2:3:4:5:6:7', 42, null, undefined,
   ])('refuses %j', (address) => {
@@ -1176,8 +1207,9 @@ describe('isPrivateAddress', () => {
     '1.1.1.1', '8.8.8.8', '93.184.216.34', '9.255.255.255', '11.0.0.1', '100.63.255.255', '100.128.0.1', '126.255.255.255', '128.0.0.1',
     '169.253.1.1', '169.255.1.1', '172.15.255.255', '172.32.0.1', '192.0.1.1', '192.0.3.1', '192.167.1.1', '192.169.1.1', '198.17.255.255',
     '198.20.0.1', '198.51.99.1', '198.51.101.1', '203.0.112.1', '203.0.114.1', '223.255.255.255',
-    '2606:2800:220:1:248:1893:25c8:1946', '2001:4860:4860::8888', '2001:db9::1', '2a00:1450:4009:81f::200e', 'fb00::1', 'fe00::1',
-    '::ffff:8.8.8.8', '::ffff:0808:0808', '64:ff9b::808:808',
+    '192.88.98.1', '192.88.100.1',
+    '2606:2800:220:1:248:1893:25c8:1946', '2001:4860:4860::8888', '2001:db9::1', '2a00:1450:4009:81f::200e', '2000::1', '3ffe::1', '2001:200::1', '3fff:1000::1',
+    '2606:4700:4700::1111%eth0', '::ffff:8.8.8.8', '::ffff:0808:0808', '64:ff9b::808:808', '2002:808:808::1',
   ])('lets %s through', (address) => {
     expect(isPrivateAddress(address)).toBe(false);
   });

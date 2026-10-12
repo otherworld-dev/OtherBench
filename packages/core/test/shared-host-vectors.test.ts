@@ -125,13 +125,11 @@ describe('the shared host vectors through the broker', () => {
 
 describe('the shared address vectors: the browser side', () => {
   it("judges every resolved address the way the table says (the sandbox agent's side is checked in the sandbox package)", () => {
-    for (const v of SHARED_ADDRESS_VECTORS) expect(isPublicAddress(v.address), `${v.note}: ${v.address}`).toBe(v.browser);
+    for (const v of SHARED_ADDRESS_VECTORS) expect(isPublicAddress(v.address), `${v.note}: ${v.address}`).toBe(v.reachable);
   });
 
-  it('marks a row as a difference exactly when the two sides differ, and only ever with the browser the narrower', () => {
-    for (const v of SHARED_ADDRESS_VECTORS) {
-      expect(v.differs === undefined, `${v.note}: ${v.address}`).toBe(v.browser === v.sandboxAgent);
-      if (v.differs !== undefined) expect(v.browser, `${v.note}: ${v.address}`).toBe(false);
-    }
+  it('has one answer a row, for both sides: the table has no way to say they differ', () => {
+    for (const v of SHARED_ADDRESS_VECTORS) expect(Object.keys(v).sort(), v.note).toEqual(['address', 'note', 'reachable']);
+    expect(new Set(SHARED_ADDRESS_VECTORS.map((v) => v.address)).size).toBe(SHARED_ADDRESS_VECTORS.length);
   });
 });

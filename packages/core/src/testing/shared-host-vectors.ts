@@ -140,26 +140,21 @@ export const SHARED_HOST_VECTORS: readonly SharedHostVector[] = [
 /**
  * Resolved addresses, as the browser's proxy (`isPublicAddress`) and the
  * sandbox's agent in the VM (`isPrivateAddress`, sandbox/resources/agent-core.mjs)
- * judge them. The agent is a plain script that can't import core, so it keeps
- * its own copy of the ranges: this table is what holds the two together.
+ * judge them. One rule, core's: an address may be reached only when it is on
+ * the public internet. The agent is a plain script that can't import core, so
+ * it keeps its own copy of the ranges; this table names the cases, and
+ * sandbox/test/agent-addresses.test.ts holds the copy to core's across every
+ * range. There is no row on which the two differ, and no way to write one.
  * `reachable`: whether a connection to the address may be made.
  */
 export interface SharedAddressVector {
   note: string;
   address: string;
-  browser: boolean;
-  sandboxAgent: boolean;
-  /** Set exactly when the two sides differ: why. */
-  differs?: string;
+  reachable: boolean;
 }
 
-const both = (reachable: boolean) => (note: string, address: string): SharedAddressVector => ({ note, address, browser: reachable, sandboxAgent: reachable });
-const reachable = both(true);
-const unreachable = both(false);
-/** The browser refuses it and the sandbox's agent doesn't: the agent names the ranges it refuses, the browser names the one IPv6 range it allows. */
-const browserOnly = (note: string, address: string, differs: string): SharedAddressVector => ({ note, address, browser: false, sandboxAgent: true, differs });
-
-const AGENT_LISTS_RANGES = "The sandbox's agent lists the IPv6 ranges it refuses; the browser allows only global unicast (2000::/3) less its special ranges.";
+const reachable = (note: string, address: string): SharedAddressVector => ({ note, address, reachable: true });
+const unreachable = (note: string, address: string): SharedAddressVector => ({ note, address, reachable: false });
 
 export const SHARED_ADDRESS_VECTORS: readonly SharedAddressVector[] = [
   reachable('public IPv4', '8.8.8.8'),
@@ -208,11 +203,33 @@ export const SHARED_ADDRESS_VECTORS: readonly SharedAddressVector[] = [
   unreachable('a part over 255', '256.1.1.1'),
   unreachable('a leading zero (octal to some parsers)', '010.0.0.1'),
 
-  browserOnly('6to4 relay anycast', '192.88.99.1', "Not on the sandbox agent's list of IPv4 ranges."),
-  browserOnly('6to4 of a private IPv4', '2002:c0a8:101::1', AGENT_LISTS_RANGES),
-  browserOnly('Teredo and the other 2001::/23 assignments', '2001::1', AGENT_LISTS_RANGES),
-  browserOnly('documentation IPv6 (RFC 9637)', '3fff::1', AGENT_LISTS_RANGES),
-  browserOnly('discard-only IPv6', '100::1', AGENT_LISTS_RANGES),
-  browserOnly('v4-compatible public IPv4 (deprecated)', '::8.8.8.8', AGENT_LISTS_RANGES),
-  browserOnly('outside global unicast', 'fb00::1', AGENT_LISTS_RANGES),
+  // Ranges the sandbox's agent used to let through, before it took core's rule whole.
+  unreachable('6to4 relay anycast', '192.88.99.1'),
+  unreachable('6to4 of a private IPv4', '2002:c0a8:101::1'),
+  unreachable('6to4 of loopback', '2002:7f00:1::'),
+  unreachable('Teredo and the other 2001::/23 assignments', '2001::1'),
+  unreachable('the top of 2001::/23', '2001:1ff:ffff::1'),
+  unreachable('documentation IPv6 (RFC 9637)', '3fff::1'),
+  unreachable('the top of 3fff::/20', '3fff:fff:ffff::1'),
+  unreachable('discard-only IPv6', '100::1'),
+  unreachable('v4-compatible public IPv4 (deprecated)', '::8.8.8.8'),
+  unreachable('v4-translated public IPv4', '::ffff:0:8.8.8.8'),
+  unreachable("NAT64's local-use prefix", '64:ff9b:1::808:808'),
+  unreachable('outside global unicast', 'fb00::1'),
+  unreachable('outside global unicast (2)', 'fe00::1'),
+  unreachable('just below global unicast', '1fff:ffff::1'),
+  unreachable('just above global unicast', '4000::1'),
+  unreachable('NAT64 of the 6to4 relay range', '64:ff9b::192.88.99.1'),
+  unreachable('an IPv6 address in brackets', '[2606:4700:4700::1111]'),
+
+  // Their public neighbours: still reachable.
+  reachable('6to4 of a public IPv4', '2002:808:808::1'),
+  reachable('just above 2001::/23', '2001:200::1'),
+  reachable('just below documentation IPv6', '2001:db7:ffff::1'),
+  reachable('just above documentation IPv6', '2001:db9::1'),
+  reachable('just above 3fff::/20', '3fff:1000::1'),
+  reachable('the bottom of global unicast', '2000::1'),
+  reachable('just below 6to4', '2001:ffff::1'),
+  reachable('just above 6to4', '2003::1'),
+  reachable('public IPv6 with a zone', '2606:4700:4700::1111%eth0'),
 ];
