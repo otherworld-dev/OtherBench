@@ -57,7 +57,7 @@ export class AgentPool {
   /** Agents being closed, by chat, until their close has finished and `onClosed` has run. */
   private readonly closing = new Map<string, Promise<void>>();
   private readonly waiters = new Set<() => void>();
-  /** Set by closeAll (Grunt is stopping): nothing may start an agent that would outlive it. */
+  /** Set by closeAll (Grunt is stopping): nothing may start an agent that would outlive it. closeAgents leaves it alone. */
   private shutDown = false;
   private readonly maxAgents: number;
   private readonly idleMs: number;
@@ -106,8 +106,19 @@ export class AgentPool {
     await this.closing.get(chatId);
   }
 
+  /** Grunt is stopping: closes every agent, and refuses every command from now on. */
   async closeAll(): Promise<void> {
     this.shutDown = true;
+    await this.closeAgents();
+  }
+
+  /**
+   * Closes every agent and cancels every start (setup and Remove are about to
+   * replace the distro), with the usual onClosed/onDied calls; later commands
+   * start new agents. The caller keeps commands out while this runs: one that
+   * arrives meanwhile may start an agent this doesn't close.
+   */
+  async closeAgents(): Promise<void> {
     for (const starting of this.starting.values()) starting.cancel.abort();
     await Promise.all([...this.starting.values()].map((s) => s.promise.catch(() => undefined)));
     await Promise.all([...this.agents].map(([chatId, entry]) => this.closeEntry(chatId, entry)));

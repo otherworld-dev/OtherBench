@@ -310,4 +310,18 @@ describe('AgentPool', () => {
     expect(closed.sort()).toEqual(['c1', 'c2']);
     expect(pool.size).toBe(0);
   });
+
+  it('closeAgents closes every agent and cancels a pending start, and the pool keeps working', async () => {
+    const { pool, started, closed } = poolWith();
+    await pool.run('c1', run());
+    await pool.run('c2', run());
+    const pending = pool.run('c3', run());
+    const refused = expect(pending).rejects.toMatchObject({ code: 'aborted' });
+    await pool.closeAgents();
+    await refused;
+    expect(closed.sort()).toEqual(['c1', 'c2']);
+    expect(pool.size).toBe(0);
+    expect((await pool.run('c1', run())).exitCode).toBe(0);
+    expect(started.map((s) => s.chatId)).toEqual(['c1', 'c2', 'c1']);
+  });
 });
