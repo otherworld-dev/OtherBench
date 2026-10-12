@@ -699,3 +699,23 @@ describe('upstream sockets are freed when the browser goes away', () => {
     req.destroy();
   });
 });
+
+describe('the proxy and approvals (security fix round 1)', () => {
+  it("judges every request on its own address, so a page on an approved site can't reach a private one by sub-resource or redirect, and does not ask for a grant per site", async () => {
+    const p = await start();
+    const auth = { 'Proxy-Authorization': basic('chat-a', p.password) };
+    const port = portOf(site);
+    // The approved site loads; so does another public site a page pulls a script or an image from (grants are per model action, not per request).
+    expect((await getVia(p, `http://approved.test:${port}/`, auth)).status).toBe(200);
+    expect((await getVia(p, `http://cdn.other.test:${port}/lib.js`, auth)).status).toBe(200);
+    const hits = siteHits.length;
+    // What a sub-resource or a redirect target looks like to the proxy: just another request. Private ones are refused, by literal or by lookup.
+    for (const url of ['http://10.0.0.5/pixel.png', 'http://192.168.1.1/', 'http://169.254.169.254/latest/meta-data/', 'http://[::ffff:10.0.0.1]/', `http://intranet.test:${port}/x`, 'http://localhost/']) {
+      expect((await getVia(p, url, auth)).status, url).toBe(403);
+    }
+    const tunnel = await connectVia(p, '10.0.0.5:443', basic('chat-a', p.password));
+    tunnel.socket.destroy();
+    expect(tunnel.status).toBe(403);
+    expect(siteHits.length).toBe(hits);
+  });
+});

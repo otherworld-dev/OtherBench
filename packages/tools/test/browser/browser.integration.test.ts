@@ -30,6 +30,7 @@ const pageHtml = (otherPort: number) => `<!doctype html><title>Fixture</title>
 <a href="/second" target="_blank">Pop</a>
 <button onclick="alert('hi there')">Alert</button>
 <a href="/file.txt">Get file</a>
+<button onclick="history.pushState({}, '', '/pushed')">Push</button>
 <script>fetch('http://127.0.0.1:${otherPort}/secret').catch(() => {});</script>`;
 
 const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
@@ -43,6 +44,13 @@ async function call(args: Record<string, unknown>): Promise<Record<string, unkno
   const result = (await tool.execute(d.args, ctx)) as Record<string, unknown>;
   allNotes.push(...((result['notes'] as string[] | undefined) ?? []));
   return result;
+}
+
+/** What describeCall hands the broker (and, once approved, execute): the call bound to the page it was described on. */
+async function described(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const d = await tool.describeCall!(args, ctx);
+  if ('refuse' in d) throw new Error(d.refuse);
+  return d.args as Record<string, unknown>;
 }
 
 /** The ref on the snapshot line naming `role "name"`. */
@@ -158,4 +166,26 @@ describe('the browser against a loopback fixture site', () => {
       stop();
     }
   }, 30_000);
+  it('does nothing when the page navigated within the site after the call was described (the history API), but still reads', async (t) => {
+    if (skipReason) t.skip();
+    const first = await call({ command: 'open', url: `http://127.0.0.1:${port}/` });
+    const greet = await described({ command: 'click', ref: refFor(first['snapshot'], 'button', 'Greet') });
+    const read = await described({ command: 'snapshot' });
+    // While the card is open, the page moves itself: same website, a different navigation.
+    const pushed = await call({ command: 'click', ref: refFor(first['snapshot'], 'button', 'Push') });
+    expect(pushed['url']).toBe(`http://127.0.0.1:${port}/pushed`);
+    expect(await tool.execute(greet, ctx)).toMatchObject({ error: true, code: 'page_moved', message: expect.stringContaining('since this was approved') });
+    const after = await call({ command: 'snapshot' });
+    expect(after['snapshot']).toContain('Fixture heading'); // the Greet click never ran: the heading would read "Hello ..."
+    expect(await tool.execute(read, ctx)).toMatchObject({ url: `http://127.0.0.1:${port}/pushed`, snapshot: expect.stringContaining('Fixture heading') });
+  }, 60_000);
+
+  it('does nothing when the call was described on an older snapshot of the same page', async (t) => {
+    if (skipReason) t.skip();
+    const first = await call({ command: 'open', url: `http://127.0.0.1:${port}/` });
+    const greet = await described({ command: 'click', ref: refFor(first['snapshot'], 'button', 'Greet') });
+    await call({ command: 'snapshot' });
+    expect(await tool.execute(greet, ctx)).toMatchObject({ error: true, code: 'stale_ref' });
+    expect((await call({ command: 'snapshot' }))['snapshot']).toContain('Fixture heading');
+  }, 60_000);
 });

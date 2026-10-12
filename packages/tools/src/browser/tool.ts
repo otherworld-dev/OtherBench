@@ -1,7 +1,7 @@
 import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@grunt/core/domain/browser-hosts.js';
 import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
-import { BrowserBusyError, StaleRefError } from './session.js';
+import { BrowserBusyError, PageMovedError, StaleRefError, type ActionGuard } from './session.js';
 import { MAX_NOTE_CHARS, MAX_TARGET_CHARS, cutSnapshot, pageText, refLines } from './snapshot.js';
 
 export const NO_PAGE = 'No page is open: use open first.';
@@ -163,40 +163,57 @@ async function describe(manager: BrowserManager, raw: unknown, ctx: ToolContext)
     return { args: { ...callArgs(call), url: target.href, host: target.site }, risk };
   }
   const chat = manager.peek(ctx.chatId);
-  const host = chat ? siteOf(chat.session.url()) : null;
-  if (!chat || host === null) return { refuse: NO_PAGE };
+  const url = chat ? chat.session.url() : null;
+  const host = url !== null ? siteOf(url) : null;
+  if (!chat || url === null || host === null) return { refuse: NO_PAGE };
   // `host` is the committed URL's site (never a title, a link or the model's word); `target` is the element as the page describes it, cleaned.
   const line = call.ref !== undefined ? chat.refs.get(call.ref) : undefined;
   const target = line !== undefined ? pageText(line, MAX_TARGET_CHARS) : undefined;
-  return { args: { ...callArgs(call), host, ...(target !== undefined ? { target } : {}) }, risk };
+  // What this approval is for, besides the site: the page it was described on (its navigation and address) and, for a ref, the snapshot
+  // the ref came from. Internal fields: callArgs only carries the call's own, so nothing the model sent can stand in for them.
+  const bound = call.command === 'close' ? {} : { nav: { id: chat.session.navigationId(), url }, ...(call.ref !== undefined ? { gen: chat.refsGen } : {}) };
+  return { args: { ...callArgs(call), host, ...bound, ...(target !== undefined ? { target } : {}) }, risk };
 }
 
-async function act(chat: ChatBrowser, call: BrowserCall): Promise<void> {
+/** The navigation a call was described on, from its (internal) `nav` field; null when it has none. */
+function describedNav(args: unknown): { id: number; url: string } | null {
+  const nav = (args as { nav?: unknown } | null)?.nav;
+  if (typeof nav !== 'object' || nav === null) return null;
+  const { id, url } = nav as { id?: unknown; url?: unknown };
+  return typeof id === 'number' && Number.isSafeInteger(id) && typeof url === 'string' ? { id, url } : null;
+}
+
+function setRefs(chat: ChatBrowser, refs: Map<string, string>): void {
+  chat.refs = refs;
+  chat.refsGen += 1;
+}
+
+async function act(chat: ChatBrowser, call: BrowserCall, guard: ActionGuard): Promise<void> {
   const s = chat.session;
   switch (call.command) {
     case 'open':
       return s.open(call.url!);
     case 'click':
-      return s.click(call.ref!, call.double === true);
+      return s.click(call.ref!, call.double === true, guard);
     case 'type':
-      return s.type(call.ref!, call.text!, call.submit === true);
+      return s.type(call.ref!, call.text!, call.submit === true, guard);
     case 'select':
-      return s.select(call.ref!, call.values!);
+      return s.select(call.ref!, call.values!, guard);
     case 'press':
-      return s.press(call.key!);
+      return s.press(call.key!, guard);
     case 'scroll':
-      return s.scroll(call.direction ?? 'down', call.ref);
+      return s.scroll(call.direction ?? 'down', call.ref, guard);
     case 'back':
-      return s.back();
+      return s.back(guard);
     default:
       return;
   }
 }
 
-async function pageResult(chat: ChatBrowser): Promise<Record<string, unknown>> {
+async function pageResult(chat: ChatBrowser, guard?: ActionGuard): Promise<Record<string, unknown>> {
   const url = chat.session.url();
-  const [title, raw] = await Promise.all([chat.session.title(), chat.session.snapshot()]);
-  chat.refs = refLines(raw);
+  const [title, raw] = await Promise.all([chat.session.title(), chat.session.snapshot(guard)]);
+  setRefs(chat, refLines(raw));
   const { snapshot, truncated } = cutSnapshot(raw);
   // The page's own words (its title, a dialog's message, a popup's address) are cleaned and capped; the site named in `about` is the committed URL's.
   const notes = chat.takeNotes().map((n) => pageText(n, MAX_NOTE_CHARS)).filter((n) => n !== '');
@@ -216,6 +233,14 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
   const approved = (args as { host?: unknown }).host;
   const host = typeof approved === 'string' ? normaliseHost(approved) : null;
   if (host === null) return failure('bad_call', NO_APPROVAL);
+  // What the approval was given for (describeCall's `nav`): every call on a page carries the navigation it was described on. Reads (a
+  // snapshot, a scroll) only need the page to still be on the approved site; everything that changes the page needs the same navigation.
+  let guard: ActionGuard = { site: host };
+  if (call.command !== 'open' && call.command !== 'close') {
+    const nav = describedNav(args);
+    if (nav === null || siteOf(nav.url) !== host) return failure('bad_call', NO_APPROVAL);
+    guard = call.command === 'snapshot' || call.command === 'scroll' ? { site: host } : { site: host, navId: nav.id };
+  }
   if (call.command === 'open') {
     // Go to the address Grunt judged, and only if it is on the website the call was approved for.
     const target = openTarget(call.url!);
@@ -239,19 +264,36 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     }
     return { closed: true };
   }
-  // The page may have moved itself since the call was approved: act only on the site that was approved.
+  // The page may have moved itself since the call was approved (a redirect, a script, the history API, a card answered minutes later):
+  // act only on the page that was approved. The session checks again, in the same step as the action itself.
   if (call.command !== 'open') {
-    const now = siteOf(chat.session.url());
-    if (now !== host) return failure('page_moved', `The page moved to ${now ?? 'a blank page'} before this ran. Nothing was done.`);
+    const site = siteOf(chat.session.url());
+    if (site !== guard.site || (guard.navId !== undefined && guard.navId !== chat.session.navigationId())) {
+      setRefs(chat, new Map());
+      return failure('page_moved', new PageMovedError(site).message);
+    }
   }
-  if (call.ref !== undefined && !chat.refs.has(call.ref)) return failure('stale_ref', new StaleRefError(call.ref).message);
+  // A ref must come from the snapshot the call was described against, and still be in it.
+  if (call.ref !== undefined && ((args as { gen?: unknown }).gen !== chat.refsGen || !chat.refs.has(call.ref))) {
+    return failure('stale_ref', new StaleRefError(call.ref).message);
+  }
   try {
-    await act(chat, call);
+    await act(chat, call, guard);
     await chat.session.settle();
-    return await pageResult(chat);
+    const result = await pageResult(chat, call.command === 'snapshot' ? guard : undefined);
+    if (call.command === 'snapshot') {
+      // The page moved while it was being read: what was read is from a site nobody approved, so none of it is passed on.
+      const site = siteOf(chat.session.url());
+      if (site !== guard.site) {
+        setRefs(chat, new Map());
+        return failure('page_moved', new PageMovedError(site).message);
+      }
+    }
+    return result;
   } catch (err) {
     // Whatever went wrong, the page is not what the refs were read from: the next ref fails fast.
-    chat.refs = new Map();
+    setRefs(chat, new Map());
+    if (err instanceof PageMovedError) return failure('page_moved', err.message);
     if (err instanceof StaleRefError) return failure('stale_ref', err.message);
     return failure('browser_error', firstLine(err));
   }

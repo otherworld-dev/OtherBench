@@ -1,5 +1,9 @@
 import type { EgressProxy, EgressProxyOptions } from '../../src/browser/proxy.js';
-import type { BrowserSession, ProxyCredentials, SessionFactory } from '../../src/browser/session.js';
+import { siteOf } from '@grunt/core/domain/browser-hosts.js';
+import { PageMovedError, type ActionGuard, type BrowserSession, type ProxyCredentials, type SessionFactory } from '../../src/browser/session.js';
+
+/** Like the real sessions: every navigation takes the next number, across sessions. */
+let navigations = 0;
 
 /** A page that records what was done to it. `navigate` plays the page moving by itself (a redirect, a link). */
 export class FakeSession implements BrowserSession {
@@ -13,12 +17,17 @@ export class FakeSession implements BrowserSession {
   fail: Error | null = null;
   onFrame: ((jpeg: Buffer) => void) | null = null;
   private readonly nav = new Set<() => void>();
+  private navId = 0;
+  /** Runs once as an action starts, after the tool's own look at the page and before the session's check: where a test makes the page move "just now". */
+  beforeAct: (() => void) | null = null;
 
   constructor(readonly proxy: ProxyCredentials) {}
 
   url(): string { return this.current; }
+  navigationId(): number { return this.navId; }
   async title(): Promise<string> { return this.pageTitle; }
-  async snapshot(): Promise<string> {
+  async snapshot(guard?: ActionGuard): Promise<string> {
+    this.check(guard);
     if (this.fail) throw this.fail;
     return this.snap;
   }
@@ -26,12 +35,12 @@ export class FakeSession implements BrowserSession {
     this.act(`open ${url}`);
     this.navigate(url, 'Opened');
   }
-  async click(ref: string, double: boolean): Promise<void> { this.act(`${double ? 'dblclick' : 'click'} ${ref}`); }
-  async type(ref: string, text: string, submit: boolean): Promise<void> { this.act(`type ${ref} ${text}${submit ? ' +Enter' : ''}`); }
-  async select(ref: string, values: string[]): Promise<void> { this.act(`select ${ref} ${values.join(',')}`); }
-  async press(key: string): Promise<void> { this.act(`press ${key}`); }
-  async scroll(direction: 'up' | 'down', ref?: string): Promise<void> { this.act(`scroll ${direction}${ref ? ` ${ref}` : ''}`); }
-  async back(): Promise<void> { this.act('back'); }
+  async click(ref: string, double: boolean, guard?: ActionGuard): Promise<void> { this.act(`${double ? 'dblclick' : 'click'} ${ref}`, guard); }
+  async type(ref: string, text: string, submit: boolean, guard?: ActionGuard): Promise<void> { this.act(`type ${ref} ${text}${submit ? ' +Enter' : ''}`, guard); }
+  async select(ref: string, values: string[], guard?: ActionGuard): Promise<void> { this.act(`select ${ref} ${values.join(',')}`, guard); }
+  async press(key: string, guard?: ActionGuard): Promise<void> { this.act(`press ${key}`, guard); }
+  async scroll(direction: 'up' | 'down', ref?: string, guard?: ActionGuard): Promise<void> { this.act(`scroll ${direction}${ref ? ` ${ref}` : ''}`, guard); }
+  async back(guard?: ActionGuard): Promise<void> { this.act('back', guard); }
   async settle(): Promise<void> {}
   takeNotes(): string[] {
     const notes = this.notes;
@@ -58,12 +67,23 @@ export class FakeSession implements BrowserSession {
 
   navigate(url: string, title = ''): void {
     this.current = url;
+    this.navId = ++navigations;
     this.pageTitle = title;
     for (const cb of this.nav) cb();
   }
 
-  private act(what: string): void {
+  private check(guard: ActionGuard | undefined): void {
+    if (!guard) return;
+    const site = siteOf(this.current);
+    if (site !== guard.site || (guard.navId !== undefined && guard.navId !== this.navId)) throw new PageMovedError(site);
+  }
+
+  private act(what: string, guard?: ActionGuard): void {
     if (this.fail) throw this.fail;
+    const hook = this.beforeAct;
+    this.beforeAct = null;
+    hook?.();
+    this.check(guard);
     this.actions.push(what);
   }
 }

@@ -337,6 +337,14 @@ export class GruntToolProvider implements ToolProvider {
       this.audit(ctx, tool.name, auditArgs(tool, args), toolError('permission_denied', call.refuse), this.now() - startedAt, 'deny:policy');
       return { allowed: false, reason: call.refuse };
     }
+    // The turn ended while the call was being described: nobody is there to answer, and nothing may be approved.
+    if (ctx.signal.aborted) {
+      const gone = cancelledAuth();
+      if (!gone.ok) {
+        this.audit(ctx, tool.name, auditArgs(tool, call.args), toolError(gone.code, gone.reason), this.now() - startedAt, gone.grantedBy);
+        return { allowed: false, reason: gone.reason };
+      }
+    }
     const decision = this.broker.decide(call.tool, call.args, policy, ctx);
     if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(call.tool, call.args)) {
       // Auto mode: Claude Code's classifier decides this call. No card, no
@@ -424,7 +432,8 @@ export class GruntToolProvider implements ToolProvider {
             return result;
           }
           callArgs = call.args;
-          auth = await this.authorize(call.tool, callArgs, policy, ctx);
+          // The turn may have ended while the call was being described: it must not run, even when a grant would allow it.
+          auth = ctx.signal.aborted ? cancelledAuth() : await this.authorize(call.tool, callArgs, policy, ctx);
         }
         if (!auth.ok) {
           const result = toolError(auth.code, auth.reason);

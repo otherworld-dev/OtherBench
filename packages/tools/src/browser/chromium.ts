@@ -1,6 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Locator, type Page } from 'playwright-core';
+import { siteOf } from '@grunt/core/domain/browser-hosts.js';
 import { pageText } from './snapshot.js';
-import { BrowserUnavailableError, StaleRefError, type BrowserSession, type ProxyCredentials, type SessionFactory } from './session.js';
+import { BrowserUnavailableError, PageMovedError, StaleRefError, type ActionGuard, type BrowserSession, type ProxyCredentials, type SessionFactory } from './session.js';
 
 export const VIEWPORT = { width: 1280, height: 800 };
 export const SCREENCAST = { size: { width: 1024, height: 640 }, quality: 60 };
@@ -177,12 +178,16 @@ export class ChromiumSessions implements SessionFactory {
   }
 }
 
+/** Every main-frame navigation of every page takes the next number, so an id never repeats, even across sessions. */
+let navigationCounter = 0;
+
 /** One chat's page: its events turned into notes, its actions by aria ref. */
 class PageSession implements BrowserSession {
   private notes: string[] = [];
   private readonly navListeners = new Set<() => void>();
   private screencasting = false;
   private lastUrl = 'about:blank';
+  private navId = 0;
 
   constructor(
     private readonly context: BrowserContext,
@@ -208,6 +213,8 @@ class PageSession implements BrowserSession {
     });
     page.on('framenavigated', (frame) => {
       if (frame !== page.mainFrame()) return;
+      // Same-document navigations (the history API, a #fragment) arrive here too.
+      this.navId = ++navigationCounter;
       this.remember();
       for (const cb of this.navListeners) cb();
     });
@@ -219,11 +226,16 @@ class PageSession implements BrowserSession {
     return this.lastUrl;
   }
 
+  navigationId(): number {
+    return this.navId;
+  }
+
   title(): Promise<string> {
     return this.page.title().catch(() => '');
   }
 
-  snapshot(): Promise<string> {
+  snapshot(guard?: ActionGuard): Promise<string> {
+    this.check(guard);
     return this.page.ariaSnapshot({ mode: 'ai', timeout: ACTION_TIMEOUT_MS });
   }
 
@@ -231,36 +243,60 @@ class PageSession implements BrowserSession {
     await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
   }
 
-  async click(ref: string, double: boolean): Promise<void> {
+  // Each action below finds its element (an await), then checks the guard and
+  // hands the action to Playwright in the same synchronous step: no await
+  // between the check and the call. What can still slip in is a navigation that
+  // starts after the check but before Chromium dispatches the input; that input
+  // then lands on the document that was approved, or the navigation cancels it.
+
+  async click(ref: string, double: boolean, guard?: ActionGuard): Promise<void> {
     const el = await this.element(ref);
+    this.check(guard);
     if (double) await el.dblclick({ timeout: ACTION_TIMEOUT_MS });
     else await el.click({ timeout: ACTION_TIMEOUT_MS });
   }
 
-  async type(ref: string, text: string, submit: boolean): Promise<void> {
+  async type(ref: string, text: string, submit: boolean, guard?: ActionGuard): Promise<void> {
     const el = await this.element(ref);
+    this.check(guard);
     await el.fill(text, { timeout: ACTION_TIMEOUT_MS });
-    if (submit) await el.press('Enter', { timeout: ACTION_TIMEOUT_MS });
+    if (!submit) return;
+    // The typing itself may have moved the page (a field that navigates on change): Enter is then not pressed on another website.
+    // Same-site changes (a search box that updates the address as you type) are the page's own and fine.
+    try {
+      this.check(guard && { site: guard.site });
+    } catch (err) {
+      if (!(err instanceof PageMovedError)) throw err;
+      this.notes.push("The page changed while the text was typed, so Enter wasn't pressed.");
+      return;
+    }
+    await el.press('Enter', { timeout: ACTION_TIMEOUT_MS });
   }
 
-  async select(ref: string, values: string[]): Promise<void> {
+  async select(ref: string, values: string[], guard?: ActionGuard): Promise<void> {
     const el = await this.element(ref);
+    this.check(guard);
     await el.selectOption(values, { timeout: ACTION_TIMEOUT_MS });
   }
 
-  async press(key: string): Promise<void> {
+  async press(key: string, guard?: ActionGuard): Promise<void> {
+    this.check(guard);
     await this.page.keyboard.press(key);
   }
 
-  async scroll(direction: 'up' | 'down', ref?: string): Promise<void> {
+  async scroll(direction: 'up' | 'down', ref?: string, guard?: ActionGuard): Promise<void> {
     if (ref !== undefined) {
-      await (await this.element(ref)).scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS });
+      const el = await this.element(ref);
+      this.check(guard);
+      await el.scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT_MS });
       return;
     }
+    this.check(guard);
     await this.page.mouse.wheel(0, direction === 'down' ? 600 : -600);
   }
 
-  async back(): Promise<void> {
+  async back(guard?: ActionGuard): Promise<void> {
+    this.check(guard);
     await this.page.goBack({ waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
   }
 
@@ -303,6 +339,14 @@ class PageSession implements BrowserSession {
     this.navListeners.clear();
     // A context that won't close is left to the browser's own shutdown; it must not hold the caller.
     await within(this.context.close(), this.closeTimeoutMs);
+  }
+
+  /** Throws PageMovedError unless the page is still on the approved site (and, when asked, on the same navigation). Synchronous. */
+  private check(guard: ActionGuard | undefined): void {
+    if (!guard) return;
+    this.remember();
+    const site = siteOf(this.lastUrl);
+    if (site !== guard.site || (guard.navId !== undefined && guard.navId !== this.navId)) throw new PageMovedError(site);
   }
 
   private remember(): void {

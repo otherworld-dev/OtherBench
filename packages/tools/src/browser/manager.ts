@@ -34,6 +34,8 @@ export interface ChatBrowser {
   readonly session: BrowserSession;
   /** Each ref's line in the latest snapshot (so a card can say what `click e12` points at). */
   refs: Map<string, string>;
+  /** Which snapshot `refs` came from: counts up each time they are replaced, so a ref described against an older one can be told apart. */
+  refsGen: number;
   /** The page's notes since the last result, plus how many requests the proxy refused. Reading clears them. */
   takeNotes(): string[];
 }
@@ -62,6 +64,7 @@ interface Watcher {
 
 class OpenBrowser implements ChatBrowser {
   refs = new Map<string, string>();
+  refsGen = 0;
   blockedHosts: readonly string[] = [];
   refused = 0;
   holder: Holder | null = null;

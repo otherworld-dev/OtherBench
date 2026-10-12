@@ -814,6 +814,90 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     expect(makeProvider().provider.relayGruntTools(on())).toEqual([]);
   });
 
+  describe('describing a call (security fix round 1)', () => {
+    it('treats a describeCall that throws as a refusal: audited, no card, no crash', async () => {
+      const { provider, store } = makeProvider();
+      const cards = answerAll(provider);
+      const bad = {
+        name: 'odd', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const,
+        describeCall: async (): Promise<never> => { throw new Error('boom'); },
+        execute: async () => 'ran',
+      };
+      expect(await provider.requestApproval(bad, {}, policy(), ctx())).toEqual({ allowed: false, reason: "Grunt couldn't check this call: boom" });
+      expect(cards).toEqual([]);
+      expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'odd', grantedBy: 'deny:policy' });
+      // and through the gate, on the browser tool itself
+      const store2 = new InMemoryStore();
+      const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
+      browser.peek = () => { throw new Error('boom'); };
+      const gated = new GruntToolProvider(store2, new PermissionBroker(store2), emptyMcp, { browser });
+      const cards2 = answerAll(gated);
+      const tool = (await browserOf(gated, on()))!;
+      expect(await tool.execute({ command: 'snapshot' }, ctx())).toEqual({ error: true, code: 'permission_denied', message: "Grunt couldn't check this call: boom" });
+      expect(cards2).toEqual([]);
+      expect(store2.audit.list('chat-1')[0]).toMatchObject({ toolName: 'browser', grantedBy: 'deny:policy' });
+    });
+
+    it('a denied requestApproval carries no args, so nothing described leaks out with a refusal', async () => {
+      const { provider } = browserProvider();
+      answerAll(provider, { choice: 'deny' });
+      const [spec] = provider.relayGruntTools(on());
+      expect(await provider.requestApproval(spec!, { command: 'open', url: 'example.com' }, on(), ctx())).toEqual({ allowed: false, reason: 'The user denied this tool call.' });
+    });
+
+    it('does not run, or approve, a call whose turn ended while it was being described', async () => {
+      const { provider, store, factory } = browserProvider();
+      answerAll(provider);
+      const tool = (await browserOf(provider, on()))!;
+      await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+      // The page (hence the call's site) is looked up while describing: the turn is stopped right then.
+      const turn = new AbortController();
+      const browser = (provider as unknown as { browser: BrowserManager }).browser;
+      const peek = browser.peek.bind(browser);
+      browser.peek = (chatId) => { turn.abort(); return peek(chatId); };
+      // A snapshot is a read: the broker would let it through without a card.
+      expect(await tool.execute({ command: 'snapshot' }, ctx({ signal: turn.signal }))).toMatchObject({ error: true, code: 'cancelled' });
+      const [spec] = provider.relayGruntTools(on());
+      expect(await provider.requestApproval(spec!, { command: 'snapshot' }, on(), ctx({ signal: turn.signal }))).toMatchObject({ allowed: false });
+      expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
+      expect(store.audit.list('chat-1').filter((r) => r.grantedBy === 'deny:cancelled')).toHaveLength(2);
+    });
+
+    it('refuses a call whose card was answered after the page moved to another website', async () => {
+      const { provider, factory } = browserProvider();
+      const cards: ApprovalRequest[] = [];
+      let moveOnCard: (() => void) | null = null;
+      provider.onApprovalEvent((e) => {
+        if (e.type !== 'request') return;
+        cards.push(e.request);
+        moveOnCard?.(); // the page moves on while the card is open
+        provider.resolveApproval(e.request.id, { choice: 'once' });
+      });
+      const tool = (await browserOf(provider, on()))!;
+      await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+      moveOnCard = () => factory.sessions[0]!.navigate('https://other.test/landing');
+      const result = await tool.execute({ command: 'click', ref: 'e3' }, ctx());
+      expect(cards).toHaveLength(2);
+      expect(cards[1]).toMatchObject({ args: { command: 'click', host: 'example.com' } });
+      expect(result).toEqual({ error: true, code: 'page_moved', message: 'The page moved to other.test since this was approved. Nothing was done: ask again.' });
+      expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
+    });
+
+    it('refuses the relayed call too: the arguments the gate approved carry the page they were approved on', async () => {
+      const { provider, factory } = browserProvider();
+      answerAll(provider);
+      const [spec] = provider.relayGruntTools(on());
+      const opened = await provider.requestApproval(spec!, { command: 'open', url: 'https://example.com/' }, on(), ctx());
+      if (!opened.allowed) throw new Error(opened.reason);
+      await spec!.execute(opened.args, ctx());
+      const clicked = await provider.requestApproval(spec!, { command: 'click', ref: 'e3' }, on(), ctx());
+      if (!clicked.allowed) throw new Error(clicked.reason);
+      factory.sessions[0]!.navigate('https://example.com/changed'); // the same website, but not the page that was approved
+      expect(await spec!.execute(clicked.args, ctx())).toMatchObject({ error: true, code: 'page_moved' });
+      expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/']);
+    });
+  });
+
   it('leaves tools without describeCall exactly as they were', async () => {
     const { provider } = makeProvider();
     const agent = { name: 'Read', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => undefined };

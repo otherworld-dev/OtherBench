@@ -72,15 +72,18 @@ describe('browser tool: describeCall', () => {
     expect(NO_PAGE).toBe('No page is open: use open first.');
   });
 
-  it("names the open page's site and the ref's line from the last snapshot", async () => {
-    const { tool, ctx, call } = setup();
+  it("names the open page's site and the ref's line from the last snapshot, and binds the call to that page", async () => {
+    const { tool, ctx, call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
-    expect(await tool.describeCall!({ command: 'click', ref: 'e3', host: 'evil.test', target: 'lie' }, ctx())).toEqual({
-      args: { command: 'click', ref: 'e3', host: 'example.com', target: 'button "Go" [ref=e3]' },
+    const nav = { id: session().navigationId(), url: 'https://example.com/' };
+    expect(nav.id).toBeGreaterThan(0);
+    // `nav` and `gen` are Grunt's: whatever the model sends under those names is gone.
+    expect(await tool.describeCall!({ command: 'click', ref: 'e3', host: 'evil.test', target: 'lie', nav: { id: 1, url: 'https://evil.test/' }, gen: 99 }, ctx())).toEqual({
+      args: { command: 'click', ref: 'e3', host: 'example.com', nav, gen: 1, target: 'button "Go" [ref=e3]' },
       risk: 'mutate',
     });
-    expect(await tool.describeCall!({ command: 'snapshot', host: 'evil.test' }, ctx())).toEqual({ args: { command: 'snapshot', host: 'example.com' }, risk: 'read' });
-    expect(await tool.describeCall!({ command: 'scroll', host: 'evil.test' }, ctx())).toEqual({ args: { command: 'scroll', direction: 'down', host: 'example.com' }, risk: 'read' });
+    expect(await tool.describeCall!({ command: 'snapshot', host: 'evil.test' }, ctx())).toEqual({ args: { command: 'snapshot', host: 'example.com', nav }, risk: 'read' });
+    expect(await tool.describeCall!({ command: 'scroll', host: 'evil.test' }, ctx())).toEqual({ args: { command: 'scroll', direction: 'down', host: 'example.com', nav }, risk: 'read' });
     expect(await tool.describeCall!({ command: 'close', target: 'lie' }, ctx())).toEqual({ args: { command: 'close', host: 'example.com' }, risk: 'read' });
   });
 
@@ -88,7 +91,10 @@ describe('browser tool: describeCall', () => {
     const { tool, ctx, call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
     session().navigate('HTTPS://EXAMPLE.COM.:443/Page');
-    expect(await tool.describeCall!({ command: 'snapshot' }, ctx())).toEqual({ args: { command: 'snapshot', host: 'example.com' }, risk: 'read' });
+    expect(await tool.describeCall!({ command: 'snapshot' }, ctx())).toEqual({
+      args: { command: 'snapshot', host: 'example.com', nav: { id: session().navigationId(), url: 'HTTPS://EXAMPLE.COM.:443/Page' } },
+      risk: 'read',
+    });
   });
 });
 
@@ -127,18 +133,17 @@ describe('browser tool: execute', () => {
     const described = await tool.describeCall!({ command: 'click', ref: 'e3' }, ctx());
     if ('refuse' in described) throw new Error(described.refuse);
     session().navigate('https://other.test/landing');
-    expect(await tool.execute(described.args, ctx())).toEqual({ error: true, code: 'page_moved', message: 'The page moved to other.test before this ran. Nothing was done.' });
+    expect(await tool.execute(described.args, ctx())).toEqual({ error: true, code: 'page_moved', message: 'The page moved to other.test since this was approved. Nothing was done: ask again.' });
     expect(session().actions).toEqual(['open https://example.com/']);
   });
 
   it('compares sites by canonical host, so a respelling of the same site is not a move', async () => {
     const { tool, ctx, call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
-    const described = await tool.describeCall!({ command: 'click', ref: 'e3' }, ctx());
+    const described = await tool.describeCall!({ command: 'snapshot' }, ctx());
     if ('refuse' in described) throw new Error(described.refuse);
     session().navigate('https://EXAMPLE.com.:8443/other');
     expect(await tool.execute({ ...described.args, host: 'Example.COM.' }, ctx())).toMatchObject({ about: ABOUT });
-    expect(session().actions).toContain('click e3');
   });
 
   it('refuses an open whose URL is not on the website that was approved', async () => {
@@ -299,7 +304,7 @@ describe('browser tool: fix round 2 (page text on cards)', () => {
     expect(result['about']).toBe(ABOUT);
     expect(result['url']).toBe('https://example.com/');
     expect(await tool.describeCall!({ command: 'click', ref: 'e2', host: 'bank.example' }, ctx())).toEqual({
-      args: { command: 'click', ref: 'e2', host: 'example.com', target: 'link "Go to https://bank.example" [ref=e2]' },
+      args: { command: 'click', ref: 'e2', host: 'example.com', nav: expect.any(Object), gen: expect.any(Number), target: 'link "Go to https://bank.example" [ref=e2]' },
       risk: 'mutate',
     });
   });
@@ -322,7 +327,10 @@ describe('browser tool: fix round 2 (page text on cards)', () => {
     await call({ command: 'open', url: 'https://example.com/' });
     session().snap = `- button "${HOSTILE}" [ref=e4]`;
     await call({ command: 'snapshot' });
-    expect(await tool.describeCall!({ command: 'click', ref: 'e4' }, ctx())).toEqual({ args: { command: 'click', ref: 'e4', host: 'example.com' }, risk: 'mutate' });
+    expect(await tool.describeCall!({ command: 'click', ref: 'e4' }, ctx())).toEqual({
+      args: { command: 'click', ref: 'e4', host: 'example.com', nav: expect.any(Object), gen: expect.any(Number) },
+      risk: 'mutate',
+    });
     expect(await call({ command: 'click', ref: 'e4' })).toMatchObject({ code: 'stale_ref' });
   });
 
