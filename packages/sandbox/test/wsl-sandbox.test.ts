@@ -643,6 +643,15 @@ describe('WslSandbox remove and packages', () => {
     expect(runner.commands.some((l) => l.includes('apt-get'))).toBe(false);
     expect(state.value).toEqual({ state: 'not_set_up', packages: ['ffmpeg'] });
   });
+
+  it('setPackages refuses a name apt would read as something else, and stores nothing', async () => {
+    const { sandbox, runner, state } = make({}, undefined, { state: 'not_set_up', packages: ['ffmpeg'] });
+    for (const bad of ['foo-', 'x.deb', 'a:b', '-y', 'Foo']) {
+      await expect(sandbox.setPackages(['pandoc', bad])).rejects.toMatchObject({ code: 'bad_package', message: `"${bad}" is not an apt package name.` });
+    }
+    expect(state.value).toEqual({ state: 'not_set_up', packages: ['ffmpeg'] });
+    expect(runner.commands.some((l) => l.includes('apt-get'))).toBe(false);
+  });
 });
 
 describe('UnsupportedSandbox', () => {

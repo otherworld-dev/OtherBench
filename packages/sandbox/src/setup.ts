@@ -149,10 +149,19 @@ const apt = (args: string[]): string[] => ['/usr/bin/env', 'DEBIAN_FRONTEND=noni
 
 /** A Debian package name (lower case letters, digits, + - .; starts with a letter or digit). apt runs as root, so a name that looks like an option (`-o ...`) must never reach it. */
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9+.-]*$/;
-export function assertPackageNames(packages: readonly string[]): void {
+export function isAptPackageName(name: string): boolean {
   // A trailing `-` tells apt to remove the package, and a `.deb` name is a file to install.
-  const bad = packages.find((p) => !PACKAGE_NAME.test(p) || p.endsWith('-') || p.endsWith('.deb'));
-  if (bad !== undefined) throw new Error(`"${bad}" is not an apt package name.`);
+  return PACKAGE_NAME.test(name) && !name.endsWith('-') && !name.endsWith('.deb');
+}
+
+/** The message for a name `isAptPackageName` refuses. */
+export function notAnAptPackageName(name: string): string {
+  return `"${name}" is not an apt package name.`;
+}
+
+export function assertPackageNames(packages: readonly string[]): void {
+  const bad = packages.find((p) => !isAptPackageName(p));
+  if (bad !== undefined) throw new Error(notAnAptPackageName(bad));
 }
 
 const checkWsl: SetupStep = {

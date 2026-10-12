@@ -10,7 +10,7 @@ import { AgentClient, type AgentOutcome } from './agent-client.js';
 import { AgentPool, type AgentPoolOptions } from './agent-pool.js';
 import { MountManager, wslMountRunner, type MountRunner } from './mounts.js';
 import { runSelfTest, selfTestCases } from './selftest.js';
-import { distroNames, INSTALL_DIR, installExtraPackages, runSetup, SETUP_STEPS, type SetupStep } from './setup.js';
+import { distroNames, INSTALL_DIR, installExtraPackages, isAptPackageName, notAnAptPackageName, runSetup, SETUP_STEPS, type SetupStep } from './setup.js';
 import { DISTRO, type WslRunner } from './wsl.js';
 
 export const AGENT_ARGV = [`${INSTALL_DIR}/node/bin/node`, `${INSTALL_DIR}/agent.mjs`];
@@ -227,6 +227,9 @@ export class WslSandbox implements Sandbox {
   async setPackages(packages: string[]): Promise<void> {
     if (this.job) throw new SandboxError('busy', "The sandbox is being set up. Change its packages when that's finished.");
     if (this.removal) throw new SandboxError('busy', "The sandbox is being removed. Change its packages when that's finished.");
+    // Setup installs the list as root, so a name apt would read as an option never gets stored.
+    const bad = packages.find((p) => !isAptPackageName(p));
+    if (bad !== undefined) throw new SandboxError('bad_package', notAnAptPackageName(bad));
     const stored = this.stored();
     // On a ready sandbox a new list also clears what an earlier failed install left in detail and log.
     this.opts.state.set({ ...(stored.state === 'ready' ? readyState(stored) : stored), packages: [...packages] });

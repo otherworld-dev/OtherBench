@@ -93,7 +93,7 @@ export interface SandboxRunResult {
 
 export const SANDBOX_MAX_OUTPUT_BYTES = 100 * 1024;
 
-export type SandboxErrorCode = 'unsupported' | 'not_set_up' | 'busy' | 'bad_folder' | 'mount_failed' | 'agent_failed' | 'remove_failed' | 'aborted';
+export type SandboxErrorCode = 'unsupported' | 'not_set_up' | 'busy' | 'bad_folder' | 'mount_failed' | 'agent_failed' | 'remove_failed' | 'aborted' | 'bad_package';
 
 /** A refusal or failure the tool turns into a tool error with this code. */
 export class SandboxError extends Error {
