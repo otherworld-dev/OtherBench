@@ -396,14 +396,39 @@ export function toolsRoutes(container: Container): Hono {
       if (body.args === undefined) patch.args = [];
     }
 
-    const updated = container.store.mcpServers.update(id, patch);
+    // Sign-in (spec 2026-10-12-mcp-oauth-design, "Edits"). Values are
+    // compared, not presence: the web form re-sends url/command/args on
+    // every save, and an unchanged save must not sign the server out.
+    // env/headers are only sent when edited, so their presence counts.
+    const urlChanged = newTransport === 'http' && patch.url !== undefined && patch.url !== existing.url;
+    const connectionChanged =
+      transportChanged ||
+      urlChanged ||
+      (patch.command !== undefined && patch.command !== existing.command) ||
+      (patch.args !== undefined && JSON.stringify(patch.args) !== JSON.stringify(existing.args)) ||
+      patch.envRefs !== undefined ||
+      patch.headerRefs !== undefined;
+    if (transportChanged && newTransport === 'stdio') {
+      await container.mcpManager.forgetSignIn(id, { keepManualClient: false });
+      patch.oauth = null;
+    } else if (urlChanged) {
+      // Tokens are bound to the resource; a hand-registered client belongs to the provider, so it stays.
+      await container.mcpManager.forgetSignIn(id, { keepManualClient: true });
+    }
+
+    container.store.mcpServers.update(id, patch);
     await container.mcpManager.sync();
-    return c.json(updated);
+    // A server that was on before and still is keeps its old connection through sync(); restart it so the change takes effect.
+    if (connectionChanged && existing.enabled && container.store.mcpServers.get(id)?.enabled) {
+      await container.mcpManager.restart(id);
+    }
+    return c.json(getMcpServerOrThrow(container, id));
   });
 
   app.delete('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
     const existing = getMcpServerOrThrow(container, id);
+    await container.mcpManager.forgetSignIn(id, { keepManualClient: false });
     await deleteAllMcpSecrets(container, existing);
     container.store.mcpServers.delete(id);
     await container.mcpManager.sync();

@@ -64,7 +64,8 @@ export function mcpSignInRoutes(container: Container, redirectUri: () => string 
   app.post('/mcp-servers/:id/sign-in/complete', async (c) => {
     const id = c.req.param('id');
     requireServer(container, id);
-    const body = (await c.req.json().catch(() => ({}))) as { url?: unknown };
+    const parsed: unknown = await c.req.json().catch(() => null);
+    const body = (parsed && typeof parsed === 'object' ? parsed : {}) as { url?: unknown };
     if (typeof body.url !== 'string' || body.url.trim().length === 0) {
       throw new HTTPException(400, { message: 'Paste the address the sign-in ended on.' });
     }

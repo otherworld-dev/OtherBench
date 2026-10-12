@@ -350,6 +350,21 @@ describe('MCP server routes', () => {
     expect(mcpManager.listFor([created.id])).toHaveLength(0);
   });
 
+  it('a PATCH that changes a connected server\'s env restarts it so the change takes effect', async () => {
+    const createRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Restartable', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { A: 'one' } }),
+    });
+    const { id } = (await createRes.json()) as { id: string };
+    await waitFor(() => mcpManager.health().find((h) => h.id === id)?.status === 'ok');
+    const before = mcpManager.listFor([id])[0]!.client;
+
+    await app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ env: { A: 'two' } }) });
+    await waitFor(() => mcpManager.health().find((h) => h.id === id)?.status === 'ok');
+    expect(mcpManager.listFor([id])[0]!.client).not.toBe(before);
+  });
+
   it('refresh forces a reconnect and 404s for an unknown server', async () => {
     store.mcpServers.create({
       id: 'srv-x',

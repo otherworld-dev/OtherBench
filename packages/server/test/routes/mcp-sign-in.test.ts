@@ -145,6 +145,7 @@ describe('MCP sign-in routes', () => {
     expect((await app().request(`/api/mcp-servers/${id}/sign-in/complete`, json({ url: 'not a url' }))).status).toBe(400);
     expect((await app().request(`/api/mcp-servers/${id}/sign-in/complete`, json({ url: `${REDIRECT}?code=x` }))).status).toBe(400);
     expect((await app().request(`/api/mcp-servers/${id}/sign-in/complete`, json({}))).status).toBe(400);
+    expect((await app().request(`/api/mcp-servers/${id}/sign-in/complete`, json(null))).status).toBe(400);
   });
 
   it('sign-out forgets the sign-in and the server needs sign-in again', async () => {
@@ -315,5 +316,76 @@ describe('sign-in mode (remote access)', () => {
     const bearerApp = createApp(container, { remote: fx.remote, token: 'tok', hostCheckPort: () => 9 });
     const res = await bearerApp.request('/api/mcp-servers/sign-in/redirect-uri', { headers: { ...HOST, Authorization: 'Bearer tok' } }, from('10.0.0.7'));
     expect(await res.json()).toEqual({ redirectUri: PUBLIC_REDIRECT });
+  });
+});
+
+describe('editing and deleting a signed-in server', () => {
+  async function signedIn(name = 'Hosted Docs'): Promise<string> {
+    const id = await createServer(name);
+    await app().request(callbackPath(await endedOn(await startSignIn(id))));
+    await waitFor(() => healthOf(id).status === 'ok');
+    return id;
+  }
+  const patchJson = (body: unknown) => ({ method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const liveClient = (id: string) => mcpManager.listFor([id])[0]?.client;
+
+  it('saving without changes keeps the sign-in and the live connection', async () => {
+    const id = await signedIn();
+    const before = liveClient(id);
+    const signedInAt = store.mcpServers.get(id)!.oauth!.signedInAt;
+    // Exactly what the web form sends on Save: every field, unchanged.
+    const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ name: 'Hosted Docs', transport: 'http', command: null, args: [], url: fixture.url, enabled: true }));
+    expect(res.status).toBe(200);
+    expect(liveClient(id)).toBe(before);
+    expect(store.mcpServers.get(id)!.oauth!.signedInAt).toBe(signedInAt);
+    expect(await secrets.get(oauthRefs(id).tokens)).not.toBeNull();
+  });
+
+  it('a rename alone keeps the sign-in and the live connection', async () => {
+    const id = await signedIn();
+    const before = liveClient(id);
+    await app().request(`/api/mcp-servers/${id}`, patchJson({ name: 'Renamed' }));
+    expect(liveClient(id)).toBe(before);
+    expect(healthOf(id).auth).toMatchObject({ state: 'signed_in' });
+  });
+
+  it('a URL change forgets the tokens and restarts against the new URL', async () => {
+    const id = await signedIn();
+    const second = await startOAuthEchoServer();
+    try {
+      const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ url: second.url }));
+      expect(res.status).toBe(200);
+      expect(await secrets.get(oauthRefs(id).tokens)).toBeNull();
+      expect(await secrets.get(oauthRefs(id).client)).toBeNull();
+      await waitFor(() => healthOf(id).status === 'needs_auth');
+      expect(second.mcpRequests()).toBeGreaterThan(0);
+      expect(healthOf(id).auth).toMatchObject({ state: 'needs_sign_in', signedInAt: null });
+    } finally {
+      await second.close(); // the server is in needs_auth, so nothing retries against it
+    }
+  });
+
+  it('switching to stdio forgets every OAuth secret and clears the summary', async () => {
+    const id = await signedIn();
+    const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ transport: 'stdio', command: 'grunt-test-no-such-command', enabled: false }));
+    expect(res.status).toBe(200);
+    expect(store.mcpServers.get(id)!.oauth).toBeNull();
+    for (const ref of Object.values(oauthRefs(id))) expect(await secrets.get(ref)).toBeNull();
+  });
+
+  it('DELETE removes every OAuth secret', async () => {
+    const id = await signedIn();
+    expect((await app().request(`/api/mcp-servers/${id}`, { method: 'DELETE' })).status).toBe(204);
+    for (const ref of Object.values(oauthRefs(id))) expect(await secrets.get(ref)).toBeNull();
+  });
+
+  it('deleting a server mid sign-in removes every OAuth secret and refuses the late callback', async () => {
+    const id = await createServer();
+    const ended = await endedOn(await startSignIn(id));
+    expect((await app().request(`/api/mcp-servers/${id}`, { method: 'DELETE' })).status).toBe(204);
+
+    const late = await app().request(callbackPath(ended));
+    expect(late.status).toBe(400);
+    for (const ref of Object.values(oauthRefs(id))) expect(await secrets.get(ref)).toBeNull();
   });
 });
