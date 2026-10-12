@@ -7,6 +7,9 @@ import { machineName } from '../../state/machines.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
+const SUBAGENTS_HELP =
+  "Lets this profile hand jobs to sub-agents that work on their own, several at once. They get at most this profile's tools, and their tool calls ask you the same way. Each one's tokens are counted.";
+
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
@@ -73,6 +76,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [artifacts, setArtifacts] = useState(profile?.toolPolicy.artifacts ?? true);
   // Recall (spec 2026-10-09-recall-design): on unless the profile turned it off.
   const [recall, setRecall] = useState(profile?.toolPolicy.recall ?? true);
+  // Sub-agents (spec 2026-10-12-api-subagents-design): off unless turned on; API profiles only.
+  const [subagents, setSubagents] = useState(profile?.toolPolicy.subagents ?? false);
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
@@ -137,7 +142,9 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       modelId,
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
-      toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall } : { fs, shell, approvalMode, mcpServerIds, artifacts, recall },
+      toolPolicy: isClaudeCode
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall }
+        : { fs, shell, approvalMode, mcpServerIds, artifacts, recall, ...(subagents || profile?.toolPolicy.subagents !== undefined ? { subagents } : {}) },
       isDefault,
       useGlobalMemory,
     };
@@ -388,6 +395,12 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             <input type="checkbox" aria-label="Search past chats" checked={recall} onChange={(e) => setRecall(e.target.checked)} />
             Search past chats
           </label>
+          {!isClaudeCode && (
+            <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title={SUBAGENTS_HELP}>
+              <input type="checkbox" aria-label="Sub-agents" checked={subagents} onChange={(e) => setSubagents(e.target.checked)} />
+              Sub-agents
+            </label>
+          )}
           {isClaudeCode && (
             <>
               <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
@@ -406,6 +419,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             </>
           )}
         </div>
+        {!isClaudeCode && <p className="mt-1 text-xs text-[var(--text-muted)]">{SUBAGENTS_HELP}</p>}
       </div>
 
       {/* Claude Code profiles too: Grunt relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}
