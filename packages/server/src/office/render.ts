@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker, type ResourceLimits } from 'node:worker_threads';
-import { checkOfficeContent, type OfficeKind } from '@grunt/core/domain/office-spec.js';
+import { checkOfficeContent, parseSpreadsheet, type OfficeKind } from '@grunt/core/domain/office-spec.js';
 import { renderDocx } from './docx.js';
+import { renderXlsx } from './xlsx.js';
 import type { RenderJob, RenderReply } from './render-worker.js';
 
 /**
@@ -38,8 +39,11 @@ export async function renderOfficeFileInProcess(kind: OfficeKind, content: strin
         if (problem) throw new OfficeRenderError(problem);
         return await renderDocx(content, title);
       }
-      case 'spreadsheet':
-        throw new OfficeRenderError("Grunt can't make spreadsheets yet.");
+      case 'spreadsheet': {
+        const parsed = parseSpreadsheet(content);
+        if (!parsed.ok) throw new OfficeRenderError(parsed.error);
+        return await renderXlsx(parsed.spec);
+      }
       default: {
         const never: never = kind;
         throw new OfficeRenderError(`Grunt can't make a ${String(never)} file.`);

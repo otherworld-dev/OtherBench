@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { checkOfficeContent, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@grunt/core/domain/office-spec.js';
+import { checkOfficeContent, formulaForFile, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@grunt/core/domain/office-spec.js';
 import { listZipEntries, readZipEntry } from '../../src/import/zip.js';
 import { extractOfficeText } from '../../src/office/extract.js';
+import { renderXlsx } from '../../src/office/xlsx.js';
 // renderOfficeFile makes the file in a worker run from the compiled dist/office/render-worker.js: run `npx tsc -b` first.
 import { OFFICE_RENDER_CONCURRENCY, OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess } from '../../src/office/render.js';
 
@@ -203,12 +204,12 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     const queued = (settled[2] as PromiseFulfilledResult<{ bytes: Buffer; ms: number }>).value;
     expect(extractOfficeText(queued.bytes)).toContain('# Queued');
     expect(queued.ms).toBeGreaterThanOrEqual(1500);
-    expect((settled[3] as PromiseRejectedResult).reason.message).toBe("Grunt can't make spreadsheets yet.");
+    expect((settled[3] as PromiseRejectedResult).reason.message).toBe('sheets: must be a list of 1-50 sheets');
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 
   it('gives an error the renderer posts back as an OfficeRenderError', async () => {
-    await expect(renderOfficeFile('spreadsheet', '{"sheets":[]}', 'S')).rejects.toThrow(new OfficeRenderError("Grunt can't make spreadsheets yet."));
+    await expect(renderOfficeFile('spreadsheet', '{"sheets":[]}', 'S')).rejects.toThrow(new OfficeRenderError('sheets: must be a list of 1-50 sheets'));
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 
@@ -225,4 +226,112 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     files.forEach((f, i) => expect(extractOfficeText(f)).toContain(`# ${['One', 'Two', 'Three'][i]}`));
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
+});
+
+describe('renderOfficeFile: spreadsheet', () => {
+  const BUDGET = {
+    sheets: [
+      {
+        name: 'Costs',
+        columns: [{ width: 20 }, { width: 12 }],
+        freeze: { rows: 1 },
+        rows: [
+          [{ value: 'Item', bold: true }, { value: 'Cost', bold: true }],
+          ['Widgets', 12],
+          ['Gadgets', 30.5],
+          ['Total', '=SUM(B2:B3)'],
+          ['When', { date: '2026-10-12' }],
+          ['Literal', { value: '=not a formula' }],
+          ['Flag', true],
+          ['Café 😀', 'bad \u0001 char'],
+        ],
+      },
+      { name: 'Second sheet', rows: [['Double', "='Costs'!B4*2"]] },
+    ],
+  };
+
+  it('makes an .xlsx Excel calculates on open, with formulas written without their "="', async () => {
+    const bytes = await renderOfficeFile('spreadsheet', JSON.stringify(BUDGET), 'Budget');
+    expect(bytes.subarray(0, 4).toString('latin1')).toBe('PK\x03\x04');
+    expect(part(bytes, 'xl/workbook.xml')).toContain('fullCalcOnLoad="1"');
+    expect(part(bytes, 'xl/worksheets/sheet1.xml')).toContain('<f>SUM(B2:B3)</f>');
+    const text = extractOfficeText(bytes)!;
+    expect(text).toContain('Sheet "Costs" (A1:B8) as CSV:');
+    for (const line of ['B4: =SUM(B2:B3)', 'When,2026-10-12', 'Literal,=not a formula', 'Flag,TRUE', 'Café 😀,bad  char', `B1: ='Costs'!B4*2`]) expect(text, line).toContain(line);
+    expect(text).not.toContain('==');
+    expect(text).not.toContain('\u0001');
+  }, 30_000);
+
+  it("refuses a source that doesn't parse, with the parse message", async () => {
+    await expect(renderOfficeFile('spreadsheet', '{"sheets":', 'Broken')).rejects.toBeInstanceOf(OfficeRenderError);
+    await expect(renderOfficeFile('spreadsheet', '{"sheets":[]}', 'Empty')).rejects.toThrow('sheets: must be a list of 1-50 sheets');
+  }, 30_000);
+
+  it('makes a workbook with an empty sheet', async () => {
+    const text = extractOfficeText(await renderOfficeFile('spreadsheet', JSON.stringify({ sheets: [{ name: 'Blank', rows: [] }] }), 'B'))!;
+    expect(text).toContain('Sheet "Blank"');
+  }, 30_000);
+
+  // Every formula is written as exactly the text core checked (formulaForFile): no "=", canonical function names with Excel's file
+  // prefixes, everything else as given. Read back out of the sheet XML, each <f> is compared with formulaForFile's own text.
+  const ROUND_TRIP_FORMULAS = [
+    '=SUM(B2:B3)',
+    'SUM(B2:B3)',
+    "='Second sheet'!B1*2",
+    '=XLOOKUP(A1,B1:B5,C1:C5)',
+    '=_xlfn.XLOOKUP(A1,B1:B5,C1:C5)',
+    '=FILTER(A1:A9,B1:B9>0)',
+    '=sum(a1:a3)',
+    '=IF(A1<B1,"a & b","<>")',
+    '=IF(A1="say ""hi""","x","y")',
+    '=A1&" & "&B1',
+    '=IF(A1>1,"café 😀","")',
+    '=IFERROR(VLOOKUP(A1,$A$1:$C$9,2,FALSE),"none")',
+    '=SUM(A1:A3,\n  B1)',
+    '=SUM(A1,\r\n  B1)',
+    '=IF(A1,"two\nlines","one")',
+    '=TEXTJOIN(", ",TRUE,A1:A9)',
+    '=COUNTIF(A1:A9,">5")',
+    '=IF(A1,"a\rb\r\nc","d")',
+    '=A1&"\u0085 \u007f \u0090 �"',
+  ];
+
+  const unescapeXml = (s: string): string =>
+    s.replace(/&(#x[0-9a-fA-F]+|#\d+|lt|gt|amp|quot|apos);/g, (_m, e: string) => {
+      if (e === 'lt') return '<';
+      if (e === 'gt') return '>';
+      if (e === 'amp') return '&';
+      if (e === 'quot') return '"';
+      if (e === 'apos') return "'";
+      return String.fromCodePoint(e.startsWith('#x') ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+    });
+
+  it('writes the text of every formula exactly as formulaForFile gives it', async () => {
+    const names = new Set(['Costs', 'Second sheet']);
+    const rows = ROUND_TRIP_FORMULAS.map((f, i) => (i % 2 === 0 ? [f] : [{ formula: f }]));
+    const source = JSON.stringify({ sheets: [{ name: 'Costs', rows }, { name: 'Second sheet', rows: [['x']] }] });
+    const xml = part(await renderOfficeFile('spreadsheet', source, 'F'), 'xl/worksheets/sheet1.xml');
+    const written = [...xml.matchAll(/<f>([\s\S]*?)<\/f>/g)].map((m) => unescapeXml(m[1]!));
+    expect(written).toHaveLength(ROUND_TRIP_FORMULAS.length);
+    ROUND_TRIP_FORMULAS.forEach((formula, i) => {
+      const expected = formulaForFile(formula, names);
+      expect(expected.ok, formula).toBe(true);
+      expect(written[i], JSON.stringify(formula)).toBe((expected as { text: string }).text);
+    });
+    expect(written[3]).toBe('_xlfn.XLOOKUP(A1,B1:B5,C1:C5)');
+    expect(written[5]).toBe('_xlfn._xlws.FILTER(A1:A9,B1:B9>0)');
+    expect(xml).not.toMatch(/<f>=/);
+    // An XML reader turns a literal CR into LF, so a CR in a formula has to be written as a character reference.
+    expect(xml).not.toContain('\r');
+    expect(xml).toContain('&#13;');
+    expect(written[13]).toContain('\r\n');
+  }, 30_000);
+
+  it("won't write a formula formulaForFile refuses, with its message (a spec that never went through parseSpreadsheet)", async () => {
+    const spec = { sheets: [{ name: 'S', rows: [['=SUM(']] }] };
+    const refused = formulaForFile('=SUM(', new Set(['S']));
+    expect(refused.ok).toBe(false);
+    await expect(renderXlsx(spec)).rejects.toThrow((refused as { error: string }).error);
+    await expect(renderXlsx({ sheets: [{ name: 'S', rows: [[{ formula: 'NOSUCHFUNCTION(1)' }]] }] })).rejects.toThrow(/NOSUCHFUNCTION/);
+  });
 });
