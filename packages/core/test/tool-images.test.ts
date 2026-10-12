@@ -336,6 +336,35 @@ describe('TurnRunner and references in tool results', () => {
     expect(store.attachments.list('chat-b')).toEqual([]);
   });
 
+  it('binds the images last: a path translation that rewrites a reference cannot make another chat\'s file replay', async () => {
+    const run = async (from: string, to: string, item: Record<string, unknown>, rows: [string, string, string][]): Promise<unknown[]> => {
+      const store = new InMemoryStore('node-self');
+      store.locations.create({ id: 'nc', name: 'Nextcloud' });
+      store.locations.setPath({ locationId: 'nc', nodeId: 'node-laptop', path: from });
+      store.locations.setPath({ locationId: 'nc', nodeId: 'node-self', path: to });
+      for (const [id, chatId, messageId] of rows) store.attachments.create(attachment(id, chatId, messageId));
+      store.messages.create({ id: 'u1', chatId: 'chat-b', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+      store.messages.create({
+        id: 'msg-b', chatId: 'chat-b', parentId: 'u1', role: 'assistant', status: 'complete', error: null, producedBy: null, originNode: 'node-laptop',
+        parts: [{ type: 'tool-call', id: 'k', name: 'computer', args: {} }, { type: 'tool-result', id: 'k', name: 'computer', result: [item], isError: false }],
+      });
+      const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+      const loadAttachment = vi.fn(async () => FAKE_PNG);
+      const turn = await new TurnRunner(store, engine, { loadAttachment }).run({ chatId: 'chat-b', parentId: 'msg-b', userParts: [{ type: 'text', text: 'go' }], profiles: [profile()] });
+      await done(store, turn.assistantMessageIds[0]!);
+      expect(loadAttachment).not.toHaveBeenCalled();
+      return toolResults(engine.requests[0]!.messages)[0] as unknown[];
+    };
+    const noteOnly = [{ type: 'text', text: TOOL_IMAGE_NOT_BOUND }];
+
+    // "text" on the peer is a location root whose path here is "image": the item below stops being text after translation.
+    const turned = await run('text', 'image', { type: 'text', text: 'x', attachmentId: 'att-a', mimeType: 'image/png' }, [['att-a', 'chat-a', 'msg-a']]);
+    expect(turned).toEqual(noteOnly);
+    // An id that is the peer's root for a location is changed to another id after the check.
+    const repointed = await run('att-mine', 'att-theirs', ref('att-mine'), [['att-mine', 'chat-b', 'msg-b'], ['att-theirs', 'chat-a', 'msg-a']]);
+    expect(repointed).toEqual(noteOnly);
+  });
+
   it('gives the engine a loader that reads a blob only for a row stored for this chat and a message on its thread', async () => {
     const store = new InMemoryStore();
     store.attachments.create(attachment('att-ok', 'chat-b', 'msg-b'));

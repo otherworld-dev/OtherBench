@@ -18,7 +18,8 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
-import { bindToolImages, keepToolImages, toolImageBound, type SaveToolImage } from './tool-images.js';
+import { bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from './attachment-binding.js';
+import { bindToolImages, keepToolImages, MAX_TOOL_IMAGE_BYTES, toolImageBound, type SaveToolImage } from './tool-images.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -424,6 +425,13 @@ export class TurnRunner {
       throw new Error(`retry: message "${messageId}" is ${message.status}, not error -- only an errored message can be retried`);
     }
 
+    // The images the failed run stored for this reply are tied to nothing once
+    // its parts are cleared: they go with them, so a retry starts the reply's
+    // image budget from zero without the old ones piling up behind it. (Blobs
+    // nothing references any more are collected by the server's sweep.)
+    for (const stranded of this.store.attachments.list(chatId)) {
+      if (stranded.messageId === messageId) this.store.attachments.delete(stranded.id);
+    }
     this.store.messages.updateParts(messageId, []);
     this.store.messages.updateStatus(messageId, 'streaming'); // omitting `error` clears it -- see MessageRepo.updateStatus's doc.
     this.emit({ messageId, type: 'status', status: 'streaming' });
@@ -569,23 +577,30 @@ export class TurnRunner {
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      // Every image a tool result refers to is checked against its attachment
-      // row first (this chat, the message that holds it): a reference that
-      // came from anywhere but this runner's own storing is never replayed.
-      const bound = bindToolImages(this.buildRequestMessages(userMessageId, requestProfile), chatId, (id) => this.store.attachments.get(id));
-      const history = this.withArtifactsList(translateForNode(bound, selfNodeId, locationPaths), tools, chatId, userMessageId);
+      const translated = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
+      // The attachments the history names are checked LAST, after every rewrite
+      // above (so nothing can change a reference once it has passed): an
+      // image or file of the user's must be in this chat, and an image a tool
+      // result refers to must be stored for this chat and the message that holds
+      // it. Anything else is a note, and the turn goes on.
+      const history = bindToolImages(
+        bindHistoryAttachments(translated, (id) => this.attachmentInChat(id, chatId)),
+        chatId,
+        (id) => this.store.attachments.get(id)
+      );
       // The only way an engine gets a stored tool image's bytes back: for this
       // chat, a message on this thread, and the row stored for exactly that
       // pair. Anything else (an id from tool output, another chat's history)
       // gets nothing, and no blob is read.
-      const threadIds = new Set(bound.map((m) => m.id));
+      const threadIds = new Set(history.map((m) => m.id));
       const loadStored = this.loadAttachment;
       const loadToolImage: ToolImageLoader | undefined = loadStored
         ? async (ref) => {
             if (ref.chatId !== chatId || !threadIds.has(ref.messageId)) return null;
             const row = this.store.attachments.get(ref.attachmentId);
             if (!row || !toolImageBound(row, chatId, ref.messageId)) return null;
-            return loadStored(ref.attachmentId);
+            const bytes = await loadStored(ref.attachmentId);
+            return bytes.length > MAX_TOOL_IMAGE_BYTES ? null : bytes;
           }
         : undefined;
 
@@ -625,7 +640,7 @@ export class TurnRunner {
         messageId,
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
-        loadAttachment: this.loadAttachment,
+        ...(this.loadAttachment ? { loadAttachment: this.chatScopedLoader(this.loadAttachment, chatId) } : {}),
         ...(loadToolImage ? { loadToolImage } : {}),
         purpose: 'turn',
         autoMode,
@@ -771,6 +786,23 @@ export class TurnRunner {
    * `Profile`, not in the tree -- so this is assembled fresh per variant
    * rather than read back from the store.
    */
+  /** Whether attachment `id` may be replayed in chat `chatId`: its row is in that chat, within the size cap, and was sent in a message of that chat. */
+  private attachmentInChat(id: string, chatId: string): boolean {
+    const row = this.store.attachments.get(id);
+    if (!row || row.chatId !== chatId || !(row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES) || row.messageId === null) return false;
+    return this.store.messages.get(row.messageId)?.chatId === chatId;
+  }
+
+  /** `load` for one chat: it refuses an attachment `attachmentInChat` would not let through, and bytes over the cap, so no engine can read across chats by id. */
+  private chatScopedLoader(load: (id: string) => Promise<Buffer>, chatId: string): (id: string) => Promise<Buffer> {
+    return async (id) => {
+      if (!this.attachmentInChat(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
+      const bytes = await load(id);
+      if (bytes.length > MAX_HISTORY_ATTACHMENT_BYTES) throw new Error(`Attachment "${id}" is over the size limit.`);
+      return bytes;
+    };
+  }
+
   private buildRequestMessages(userMessageId: string, profile: ResolvedProfile): CanonMessage[] {
     const history = this.store.messages.pathToRoot(userMessageId);
     if (!profile.systemPrompt) return history;

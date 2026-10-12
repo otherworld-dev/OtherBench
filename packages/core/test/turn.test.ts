@@ -858,21 +858,84 @@ describe('TurnRunner capability fallback for image attachments', () => {
     expect(noVisionReq.messages.at(-1)!.parts.some((p) => p.type === 'image')).toBe(false);
   });
 
-  it('threads TurnRunnerOptions.loadAttachment through onto every EngineRequest', async () => {
+  it('threads TurnRunnerOptions.loadAttachment through onto every EngineRequest, scoped to the chat it is for', async () => {
     const store = new InMemoryStore();
     const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
     const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
     const runner = new TurnRunner(store, engine, { loadAttachment });
+    store.attachments.create(makeAttachment({ id: 'att-mine', chatId: 'chat-1' }));
+    store.attachments.create(makeAttachment({ id: 'att-theirs', chatId: 'chat-2', messageId: null }));
 
     await runner.run({
       chatId: 'chat-1',
       parentId: null,
-      userParts: [{ type: 'text', text: 'hi' }],
+      userParts: [{ type: 'text', text: 'hi' }, { type: 'image', attachmentId: 'att-mine', mime: 'image/png' }],
       profiles: [makeResolvedProfile()],
     });
     await flush();
 
-    expect(engine.requests[0]?.loadAttachment).toBe(loadAttachment);
+    const load = engine.requests[0]!.loadAttachment!;
+    expect((await load('att-mine')).toString()).toBe('bytes');
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+    await expect(load('att-theirs')).rejects.toThrow('not available in this chat');
+    await expect(load('no-such-id')).rejects.toThrow('not available in this chat');
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns an image or file part naming another chat\'s attachment (a synced message) into a note, and the turn still runs', async () => {
+    const store = new InMemoryStore();
+    store.attachments.create(makeAttachment({ id: 'att-theirs', chatId: 'chat-2', messageId: 'theirs-msg' }));
+    store.attachments.create(makeAttachment({ id: 'att-unsent', chatId: 'chat-1', messageId: null }));
+    store.attachments.create(makeAttachment({ id: 'att-orphan-msg', chatId: 'chat-1', messageId: 'no-such-message' }));
+    store.attachments.create(makeAttachment({ id: 'att-huge', chatId: 'chat-1', messageId: 'u1', size: 26 * 1024 * 1024 }));
+    store.attachments.create(makeAttachment({ id: 'att-ok', chatId: 'chat-1', messageId: 'u1' }));
+    store.messages.create({
+      id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null,
+      parts: [
+        { type: 'text', text: 'look' },
+        { type: 'image', attachmentId: 'att-theirs', mime: 'image/png' },
+        { type: 'file', attachmentId: 'att-unsent', mime: 'application/pdf', filename: 'a.pdf' },
+        { type: 'image', attachmentId: 'att-orphan-msg', mime: 'image/png' },
+        { type: 'file', attachmentId: 'att-huge', mime: 'application/pdf', filename: 'b.pdf' },
+        { type: 'image', attachmentId: 'att-ok', mime: 'image/png' },
+      ],
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const runner = new TurnRunner(store, engine, { loadAttachment });
+    // Vision on, so an image part reaches the engine as an image unless it was turned into a note.
+    const profile = makeResolvedProfile({ model: { id: 'm', connectionId: 'conn-1', modelId: 'model-1', displayName: 'M', source: 'manual', supportsVision: true, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' } });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: 'u1', userParts: [{ type: 'text', text: 'and?' }], profiles: [profile] });
+    await flush();
+
+    expect(store.messages.get(result.assistantMessageIds[0]!)?.status).toBe('complete');
+    const sent = engine.requests[0]!.messages.find((m) => m.id === 'u1')!;
+    expect(sent.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'image' || p.type === 'file' ? p.attachmentId : p.type))).toEqual([
+      'look',
+      "[attachment omitted: it doesn't belong to this chat]",
+      "[attachment omitted: it doesn't belong to this chat]",
+      "[attachment omitted: it doesn't belong to this chat]",
+      "[attachment omitted: it doesn't belong to this chat]",
+      'att-ok',
+    ]);
+    // The stored message is untouched.
+    expect(store.messages.get('u1')!.parts).toHaveLength(6);
+    expect(store.messages.get('u1')!.parts[1]).toMatchObject({ type: 'image', attachmentId: 'att-theirs' });
+  });
+
+  it('removes the images a failed run stored for a reply when it is retried, so the reply starts its image budget from zero', async () => {
+    const store = new InMemoryStore();
+    store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null, parts: [{ type: 'text', text: 'hi' }] });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', status: 'error', error: { kind: 'unknown', message: 'x', retryable: true }, producedBy: null, parts: [] });
+    store.attachments.create(makeAttachment({ id: 'old-shot', chatId: 'chat-1', messageId: 'a1' }));
+    store.attachments.create(makeAttachment({ id: 'user-upload', chatId: 'chat-1', messageId: 'u1' }));
+    store.attachments.create(makeAttachment({ id: 'other-reply', chatId: 'chat-1', messageId: 'a2' }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+
+    await new TurnRunner(store, engine).retry('chat-1', 'a1', makeResolvedProfile());
+
+    expect(store.attachments.list('chat-1').map((a) => a.id).sort()).toEqual(['other-reply', 'user-upload']);
   });
 });
 
