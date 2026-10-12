@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './App.js';
+import { Root } from './Root.js';
 import { desktopBootstrap } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
 import { initSidebarWidth } from './state/sidebarWidth.js';
@@ -24,7 +24,7 @@ try {
   if (desktop) configureTransport(desktop);
   root.render(
     <StrictMode>
-      <App />
+      <Root desktop={desktop !== null} />
     </StrictMode>
   );
 } catch (err) {
