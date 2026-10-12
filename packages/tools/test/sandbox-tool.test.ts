@@ -1,12 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
+import { toolContextFor } from '@grunt/core/domain/tool-context.js';
+import { TurnRunner } from '@grunt/core/domain/turn.js';
+import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { SandboxRunRequest, SandboxRunResult } from '@grunt/core/ports/sandbox.js';
 import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { DEFAULT_SANDBOX_HOSTS, type ToolPolicy } from '@grunt/core/types/config.js';
+import { DEFAULT_SANDBOX_HOSTS, type Connection, type ResolvedProfile, type ToolPolicy } from '@grunt/core/types/config.js';
 import { GruntToolProvider } from '../src/provider.js';
 import { SANDBOX_RUN_COMMAND_DESCRIPTION } from '../src/sandbox-tool.js';
 
@@ -190,7 +194,7 @@ describe('GruntToolProvider and the sandbox', () => {
     const sandbox = new FakeSandbox({ ready: true });
     const { provider, events } = setup(sandbox);
     expect(isError(await (await runCommand(provider, policy())).execute({ command: 'ls' }, ctx({ unattended: true })))).toBe(false);
-    expect(isError(await (await runCommand(provider, policy({ approvalMode: 'always_ask' }))).execute({ command: 'ls' }, ctx({ unattended: true })), 'unattended')).toBe(true);
+    expect(isError(await (await runCommand(provider, policy({ approvalMode: 'always_ask' }))).execute({ command: 'ls' }, ctx({ unattended: true })), 'approval_unavailable')).toBe(true);
     expect(sandbox.requests).toHaveLength(1);
     expect(events).toEqual([]);
   });
@@ -254,5 +258,90 @@ describe('GruntToolProvider and the sandbox', () => {
       const host = await provider.listTools(policy({ shellRuns: 'host' }));
       expect(host.filter((t) => t.source === 'sandbox')).toHaveLength(0);
     }
+  });
+});
+
+// The integration seams with thread cards and scheduled tasks: what a turn
+// sets (TurnInput.unattended from the schedule service, the chat's Plan mode)
+// must reach the sandboxed run_command through the one ToolContext builder.
+describe('a turn reaching the sandboxed shell', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const connection: Connection = { id: 'conn-1', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null };
+  const profile = (p: ToolPolicy): ResolvedProfile => ({
+    id: 'profile-1', name: 'P', description: null, colour: null, connectionId: 'conn-1', modelId: 'model-1', systemPrompt: null, params: {},
+    toolPolicy: p, isDefault: false, archivedAt: null, connection, apiKey: null, model: null,
+  });
+
+  /** An engine that runs one sandboxed command the way every engine builds a ToolContext, and reports its result. */
+  function engine(results: unknown[]): ChatEngine {
+    return {
+      async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+        const tool = req.tools.find((t) => t.name === 'run_command');
+        results.push(tool ? await tool.execute({ command: 'curl https://example.com' }, toolContextFor(req)) : 'not offered');
+        yield finish;
+      },
+      async listModels() {
+        return [];
+      },
+      async testConnection() {
+        return { ok: true, message: 'ok', latencyMs: 0 };
+      },
+    };
+  }
+
+  async function turn(sandbox: FakeSandbox, o: { unattended?: boolean; planMode?: boolean; approvalMode?: ToolPolicy['approvalMode'] }) {
+    const { store, provider, events } = setup(sandbox);
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null, planMode: o.planMode === true });
+    const results: unknown[] = [];
+    const runner = new TurnRunner(store, engine(results), { toolProvider: provider });
+    const { assistantMessageIds } = await runner.run({
+      chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'go' }],
+      profiles: [profile(policy({ approvalMode: o.approvalMode ?? 'ask_on_mutate' }))],
+      ...(o.unattended ? { unattended: true } : {}),
+    });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageIds[0]!)!.status).toBe('complete'));
+    return { store, events, results };
+  }
+
+  it('an unattended (scheduled) turn runs the sandboxed command with no card and refuses its unlisted host without one', async () => {
+    const sandbox = new FakeSandbox({ ready: true, askHosts: [{ host: 'example.com', port: 443 }] });
+    const { store, events, results } = await turn(sandbox, { unattended: true });
+    expect(sandbox.requests).toHaveLength(1);
+    expect(isError(results[0])).toBe(false);
+    expect(sandbox.asked).toEqual([{ host: 'example.com', port: 443, allowed: false }]);
+    expect(events).toEqual([]);
+    expect(store.audit.list('chat-1').find((a) => a.toolName === 'sandbox_network')).toMatchObject({ grantedBy: 'deny:unattended' });
+  });
+
+  it('the same turn attended raises the network card', async () => {
+    const sandbox = new FakeSandbox({ ready: true, askHosts: [{ host: 'example.com', port: 443 }] });
+    const { store, provider } = setup(sandbox);
+    answerEvery(provider, 'deny');
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: ws, pinned: false, archivedAt: null });
+    const requests: string[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request.toolName);
+    });
+    const runner = new TurnRunner(store, engine([]), { toolProvider: provider });
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'go' }], profiles: [profile(policy())] });
+    await vi.waitFor(() => expect(store.messages.get(assistantMessageIds[0]!)!.status).toBe('complete'));
+    expect(requests).toEqual(['sandbox_network']);
+  });
+
+  it('an unattended turn under "always ask" refuses the sandboxed command itself, raising no card and running nothing', async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { events, results } = await turn(sandbox, { unattended: true, approvalMode: 'always_ask' });
+    expect(isError(results[0], 'approval_unavailable')).toBe(true);
+    expect(sandbox.requests).toHaveLength(0);
+    expect(events).toEqual([]);
+  });
+
+  it('a Plan-mode turn refuses the sandboxed command until a plan is approved, raising no card and running nothing', async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { events, results } = await turn(sandbox, { planMode: true });
+    expect(isError(results[0], 'plan_mode')).toBe(true);
+    expect((results[0] as { message: string }).message).toBe(PLAN_REFUSAL);
+    expect(sandbox.requests).toHaveLength(0);
+    expect(events).toEqual([]);
   });
 });
