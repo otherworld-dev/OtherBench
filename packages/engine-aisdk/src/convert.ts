@@ -9,20 +9,32 @@ import type {
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
 import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
-import { MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, selectWithinBudget, withinAfterLoad, type Verdict } from '@grunt/core/domain/request-budget.js';
+import {
+  ATTACHMENT_BUDGET_NOTE,
+  ATTACHMENT_TOO_LARGE_NOTE,
+  ATTACHMENT_UNAVAILABLE_NOTE,
+  MAX_REQUEST_ATTACHMENT_BYTES,
+  MAX_REQUEST_ATTACHMENTS,
+  omissionNote,
+  selectWithinBudget,
+  withinAfterLoad,
+  type Verdict,
+} from '@grunt/core/domain/request-budget.js';
 import { IMAGE_UNSUPPORTED_NOTE, loadReplayImages, replayCandidates, replayedBytes, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
 
-export { MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS };
-export const ATTACHMENT_BUDGET_NOTE = '[attachment omitted: this request already carries as much attached data as it can]';
-export const ATTACHMENT_TOO_LARGE_NOTE = '[attachment omitted: too large to send]';
-export const ATTACHMENT_UNAVAILABLE_NOTE = '[attachment omitted: it is not available in this chat]';
+// The notes for an attachment left out are core's (one wording for every engine); they are exported from here as before.
+export { ATTACHMENT_BUDGET_NOTE, ATTACHMENT_TOO_LARGE_NOTE, ATTACHMENT_UNAVAILABLE_NOTE, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS };
 export const ATTACHMENT_REPEAT_NOTE = '[attachment omitted: it appears again later in this conversation]';
 
 /** How one occurrence of an attachment in the history is treated: loaded, or a note. */
 type Placement = Verdict | 'repeat';
 
-/** What a part gets: the bytes, or the note that stands in for them. */
-type Taken = { bytes: Buffer } | { note: string };
+/**
+ * What a part gets: the bytes, or the note that stands in for them. `cap` is
+ * set when the note is for one of the two caps (too large, or the request is
+ * full): those are the notes that name the file when its part carries a name.
+ */
+type Taken = { bytes: Buffer } | { note: string; cap?: 'too-large' | 'over-budget' };
 type Take = (messageId: string, index: number, attachmentId: string) => Promise<Taken>;
 
 function placeId(messageId: string, index: number): string {
@@ -93,14 +105,15 @@ function takeFrom(plan: Map<string, Placement>, load: (id: string) => Promise<Bu
           loaded.set(attachmentId, pending);
         }
         const bytes = await pending;
-        return withinAfterLoad(bytes.length, real, limits) ? { bytes } : { note: bytes.length > limits.maxEach ? ATTACHMENT_TOO_LARGE_NOTE : ATTACHMENT_BUDGET_NOTE };
+        if (withinAfterLoad(bytes.length, real, limits)) return { bytes };
+        return bytes.length > limits.maxEach ? { note: ATTACHMENT_TOO_LARGE_NOTE, cap: 'too-large' } : { note: ATTACHMENT_BUDGET_NOTE, cap: 'over-budget' };
       }
       case 'repeat':
         return { note: ATTACHMENT_REPEAT_NOTE };
       case 'too-large':
-        return { note: ATTACHMENT_TOO_LARGE_NOTE };
+        return { note: ATTACHMENT_TOO_LARGE_NOTE, cap: 'too-large' };
       case 'over-budget':
-        return { note: ATTACHMENT_BUDGET_NOTE };
+        return { note: ATTACHMENT_BUDGET_NOTE, cap: 'over-budget' };
       default:
         return { note: ATTACHMENT_UNAVAILABLE_NOTE };
     }
@@ -378,7 +391,8 @@ async function convertImagePartAsAssistantBlock(part: Extract<Part, { type: 'ima
 
 async function convertFilePart(part: Extract<Part, { type: 'file' }>, take: () => Promise<Taken>): Promise<FilePart | TextPart> {
   const taken = await take();
-  if ('note' in taken) return { type: 'text', text: taken.note };
+  // A file left out for a cap is named (the name cleaned first), so the model can say which one it did not get.
+  if ('note' in taken) return { type: 'text', text: taken.cap ? omissionNote(taken.cap, part.filename) : taken.note };
   // A file keeps the type it was sent with: providers need it (a PDF, a text file), and it is not an image.
   return { type: 'file', data: taken.bytes, mediaType: part.mime, filename: part.filename };
 }

@@ -1,7 +1,7 @@
 import type { JSONValue, ToolResultPart } from 'ai';
 import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, type InlineToolImage, type ValidatedToolImage } from '@grunt/core/domain/tool-images.js';
 import type { ToolImageLoader, ToolImageSizer } from '@grunt/core/ports/chat-engine.js';
-import { selectWithinBudget, withinAfterLoad } from '@grunt/core/domain/request-budget.js';
+import { IMAGE_UNSUPPORTED_NOTE, selectWithinBudget, withinAfterLoad } from '@grunt/core/domain/request-budget.js';
 import type { ConnectionKind } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 
@@ -26,7 +26,8 @@ export const IMAGE_UNAVAILABLE_NOTE = '[image not available]';
 export const IMAGE_NOT_YOURS_NOTE = "[image omitted: it doesn't belong to this chat]";
 export const IMAGE_TOO_LARGE_NOTE = '[image omitted: too large to send]';
 export const IMAGE_NOT_SHOWN_NOTE = '[image omitted]';
-export const IMAGE_UNSUPPORTED_NOTE = '[image omitted: not a PNG, JPEG, GIF or WebP image]';
+/** Core's wording, shared with the Claude Code engine; exported from here as before. */
+export { IMAGE_UNSUPPORTED_NOTE };
 export const REPLAYED_TOOL_IMAGES = 3;
 /** One replayed (or live) image: the same cap as storing one. */
 export const REPLAYED_IMAGE_MAX_BYTES = MAX_TOOL_IMAGE_BYTES;

@@ -1123,4 +1123,85 @@ describe('ClaudeCodeChatEngine images in the new message', () => {
     expect(many).toHaveBeenCalledTimes(20);
     expect(out.media).toHaveLength(20);
   });
+
+  /** One turn with `ids` as the new message's images: what Claude Code was sent (text, a note, or an image's type, in order) and the notices in the transcript. */
+  async function turn(ids: string[], load: (id: string) => Promise<Buffer>, size: (id: string) => number | null, extraParts: CanonMessage['parts'] = []): Promise<{ content: string[]; notices: string[]; events: string[] }> {
+    const { query, calls } = fakeQuery(async function* () {
+      yield init();
+      yield success();
+    });
+    const e = engine(query);
+    const message = imageMessage(ids);
+    const events = await collect(e.stream(req({ messages: [{ ...message, parts: [...message.parts, ...extraParts] }], loadAttachment: load, attachmentSize: size })));
+    e.dispose();
+    const content = (calls[0]!.prompt.message as unknown as { content: { type: string; text?: string; source?: { media_type: string } }[] }).content;
+    return {
+      content: content.map((c) => (c.type === 'text' ? c.text! : c.source!.media_type)),
+      notices: events.flatMap((ev) => (ev.type === 'notice' ? [ev.text] : [])),
+      events: events.map((ev) => ev.type),
+    };
+  }
+
+  const TOO_LARGE = '[attachment omitted: too large to send]';
+  const FULL = '[attachment omitted: this request already carries as much attached data as it can]';
+  const UNAVAILABLE = '[attachment omitted: it is not available in this chat]';
+  const NOT_IMAGE = '[image omitted: not a PNG, JPEG, GIF or WebP image]';
+
+  it('says so, to the model where the image was and once in the transcript, for every image it leaves out', async () => {
+    // By its row: over the cap, and not available in this chat. Once read: longer than its row said, and not an image at all.
+    const sizes: Record<string, number | null> = { huge: 26 * MB, foreign: null, liar: 10, html: 10, ok: 10 };
+    const bytes: Record<string, Buffer> = { liar: png(26 * MB), html: Buffer.from('<html></html>'), ok: png() };
+    const load = vi.fn(async (id: string) => bytes[id]!);
+    const out = await turn(['huge', 'foreign', 'liar', 'html', 'ok'], load, (id) => sizes[id] ?? null);
+    expect(out.content).toEqual(['look', TOO_LARGE, UNAVAILABLE, TOO_LARGE, NOT_IMAGE, 'image/png']);
+    expect(out.notices).toEqual(['Not sent to Claude Code: 4 images (too large to send; it is not available in this chat; not a PNG, JPEG, GIF or WebP image).']);
+    expect(out.events).toEqual(['engine-meta', 'notice', 'finish']);
+    expect(load.mock.calls.map((c) => c[0])).toEqual(['liar', 'html', 'ok']);
+  });
+
+  it('notes the images past the count cap (the oldest), and those past the total', async () => {
+    const ids = Array.from({ length: 22 }, (_, i) => `f${i}`);
+    const counted = await turn(ids, async () => png(), () => 10);
+    expect(counted.content).toEqual(['look', FULL, FULL, ...Array.from({ length: 20 }, () => 'image/png')]);
+    expect(counted.notices).toEqual(['Not sent to Claude Code: 2 images (this request already carries as much attached data as it can).']);
+
+    // Three of 24 MB: the newest two fit in 50 MB, the oldest does not.
+    const heavy = await turn(['a', 'b', 'c'], async () => png(24 * MB), () => 24 * MB);
+    expect(heavy.content).toEqual(['look', FULL, 'image/png', 'image/png']);
+    expect(heavy.notices).toEqual(['Not sent to Claude Code: 1 image (this request already carries as much attached data as it can).']);
+  });
+
+  it('adds nothing when every image is sent, and keeps the note about files beside the one about images', async () => {
+    const fine = await turn(['a', 'b', 'a'], async () => png(), () => 10);
+    expect(fine.content).toEqual(['look', 'image/png', 'image/png']); // a repeat is one image, and nothing was left out
+    expect(fine.notices).toEqual([]);
+
+    const file = { type: 'file' as const, attachmentId: 'f1', filename: 'a.pdf', mime: 'application/pdf' };
+    const both = await turn(['html'], async () => Buffer.from('<html></html>'), () => 10, [file]);
+    expect(both.content).toEqual(['look\n\n(Attached files not sent, because Claude Code turns in Grunt only receive images: a.pdf.)', NOT_IMAGE]);
+    expect(both.notices).toEqual(['Not sent to Claude Code (only images are): a.pdf. Not sent to Claude Code: 1 image (not a PNG, JPEG, GIF or WebP image).']);
+  });
+
+  it('reads the images once and says what was left out once when the session is missing and the turn starts again', async () => {
+    let n = 0;
+    const { query, calls } = fakeQuery(async function* () {
+      n++;
+      if (n === 1) { yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['No conversation found with session ID: sess-0'], usage: {} } as unknown as SDKMessage; return; }
+      yield init('sess-2'); yield success();
+    });
+    const prev: CanonMessage = { ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId: 'sess-0', backend: 'claude', cwd: ws } };
+    const load = vi.fn(async (id: string) => (id === 'html' ? Buffer.from('<html></html>') : png()));
+    const e = engine(query);
+    const events = await collect(e.stream(req({ messages: [user('q1'), prev, { ...imageMessage(['html', 'ok']), id: 'u2' }], latestMessageForSession: () => 'a1', loadAttachment: load, attachmentSize: () => 10 })));
+    e.dispose();
+    expect(events.flatMap((ev) => (ev.type === 'notice' ? [ev.text] : []))).toEqual([
+      "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history.",
+      'Not sent to Claude Code: 1 image (not a PNG, JPEG, GIF or WebP image).',
+    ]);
+    expect(load).toHaveBeenCalledTimes(2);
+    for (const call of calls) {
+      const content = (call.prompt.message as unknown as { content: { type: string; text?: string }[] }).content;
+      expect(content.slice(1).map((c) => (c.type === 'text' ? c.text : c.type))).toEqual([NOT_IMAGE, 'image']);
+    }
+  });
 });

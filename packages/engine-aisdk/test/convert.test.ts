@@ -254,7 +254,8 @@ describe('toModelMessages', () => {
     const result = await toModelMessages(messages, VISION_AND_TOOLS, async (id) => (id === 'c' ? FAKE_PNG : big));
     const content = (result[0] as { content: { type: string; text?: string }[] }).content;
     expect(content.map((c) => c.type)).toEqual(['image', 'file', 'image', 'text']);
-    expect(content[3]!.text).toBe(ATTACHMENT_BUDGET_NOTE);
+    expect(ATTACHMENT_BUDGET_NOTE).toBe('[attachment omitted: this request already carries as much attached data as it can]');
+    expect(content[3]!.text).toBe('[attachment "again.pdf" omitted: this request already carries as much attached data as it can]');
   });
 
   it('converts a file part using loadAttachment regardless of vision support', async () => {
