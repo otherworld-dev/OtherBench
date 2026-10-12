@@ -878,6 +878,20 @@ describe('PermissionBroker and sub-agents', () => {
     expect(decision.request.messageId).toBe('msg-1');
   });
 
+  // Integration with live artifacts: a sub-agent has no artifact tool, and the
+  // subagent tool can never be a live call, so a page can't start one.
+  it('the subagent tool can never feed a live artifact, with or without a live grant row', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const policy = makePolicy({ subagents: true });
+    const live = { artifactId: 'art-1', callId: 'value', hash: 'h'.repeat(64), serverId: 'srv-1' };
+    expect(broker.liveIneligibility(SUBAGENT(), policy)).toBe('Only MCP tools can feed a live artifact.');
+    expect(() => broker.grantLive({ chatId: 'chat-1', profileId: 'profile-1', artifactId: 'art-1', policy, calls: [{ tool: SUBAGENT(), callId: 'value', hash: live.hash, serverId: 'srv-1' }] })).toThrow();
+    // A hand-made live grant row for it still allows nothing.
+    store.grants.create({ id: 'g-live', chatId: 'chat-1', profileId: 'profile-1', toolName: 'subagent', source: 'subagent', scope: 'chat', constraint: { live }, expiresAt: null });
+    expect(broker.decide(SUBAGENT(), {}, policy, makeCtx({ live }))).toMatchObject({ kind: 'deny', reason: 'Only MCP tools can feed a live artifact.' });
+  });
+
   it("leaves a parent's own card untagged", () => {
     const broker = new PermissionBroker(new InMemoryStore());
     const decision = expectAsk(broker.decide(READ_FILE(), { path: 'a.txt' }, makePolicy({ approvalMode: 'always_ask' }), makeCtx()));
