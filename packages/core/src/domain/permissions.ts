@@ -627,6 +627,13 @@ export function allowedWhilePlanning(tool: ToolSpec): boolean {
     case 'artifact':
     case 'recall':
       return true;
+    // Starting a sub-agent changes nothing by itself, so a planning reply may
+    // send one to look around. This is only safe because the sub-agent's own
+    // request carries the same plan gate (SubagentRunner.requestFor): each
+    // call it makes comes back through `decide` and is refused here like the
+    // parent's would be. Never keep this case without that.
+    case 'subagent':
+      return true;
     case 'fs':
     case 'mcp':
       return tool.risk === 'read';

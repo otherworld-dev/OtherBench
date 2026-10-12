@@ -90,6 +90,53 @@ describe('plan mode in the broker', () => {
     expect(b.decide(network, { host: 'pypi.org' }, sandboxed, ctx({ plan: gate }))).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g1' });
   });
 
+  // Integration with sub-agents: a planning reply may start one, and the
+  // sub-agent's own calls meet the same gate (its request carries it).
+  it('lets a planning reply start a sub-agent, when the profile has sub-agents on', () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    const subagent = tool('subagent', 'subagent', 'read');
+    expect(allowedWhilePlanning(subagent)).toBe(true);
+    for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+      expect(b.decide(subagent, { description: 'Look', prompt: 'Read it.' }, policy({ subagents: true, approvalMode }), planning())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    }
+    // The profile's switch still comes first, and a sub-agent still can't start another.
+    expect(b.decide(subagent, {}, policy(), planning())).toEqual({ kind: 'deny', reason: 'Sub-agents are turned off for this profile.' });
+    const nested = ctx({ plan: createPlanGate(), subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'p1' } });
+    expect(b.decide(subagent, {}, policy({ subagents: true }), nested)).toEqual({ kind: 'deny', reason: "A sub-agent can't start another sub-agent." });
+    expect(b.pendingCount).toBe(0);
+  });
+
+  it("refuses a sub-agent's own changes while its parent's plan waits: files, the host shell, the sandbox, its network and MCP", () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    const gate = createPlanGate();
+    const asSubagent = (): ToolContext => ctx({ plan: gate, subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'p1', profileName: 'Other' } });
+    // Grants that would otherwise let each one through with no card.
+    store.grants.create({ id: 'g-write', chatId: null, profileId: 'p1', toolName: 'write_file', source: 'fs', scope: 'always', constraint: null, expiresAt: null });
+    store.grants.create({ id: 'g-ls', chatId: null, profileId: 'p1', toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandExact: 'ls' }, expiresAt: null });
+    store.grants.create({ id: 'g-host', chatId: null, profileId: 'p1', toolName: 'sandbox_network', source: 'network', scope: 'always', constraint: { host: 'pypi.org' }, expiresAt: null });
+    const sandboxed = policy({ shellRuns: 'sandbox' });
+    const refused: [ToolSpec, unknown, ToolPolicy][] = [
+      [tool('write_file', 'fs', 'mutate'), { path: 'a.txt' }, policy()],
+      [tool('run_command', 'shell', 'execute'), { command: 'ls' }, policy()],
+      [tool('run_command', 'sandbox', 'execute'), { command: 'touch x' }, sandboxed],
+      [tool('sandbox_network', 'network', 'execute'), { host: 'pypi.org' }, sandboxed],
+      [tool('mcp__srv__send', 'mcp', 'mutate', { serverId: 'srv-1' }), {}, policy()],
+    ];
+    for (const [t, args, p] of refused) {
+      for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+        expect(b.decide(t, args, { ...p, approvalMode }, asSubagent()), `${t.name} (${t.source})`).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+      }
+    }
+    expect(b.pendingCount).toBe(0);
+    // It can still look around.
+    expect(b.decide(tool('read_file', 'fs', 'read'), { path: 'a.txt' }, policy(), asSubagent())).toMatchObject({ kind: 'allow', grantedBy: 'auto_read' });
+    // The same gate, approved by the user for the parent, opens them for the sub-agent too.
+    gate.approve();
+    expect(b.decide(tool('write_file', 'fs', 'mutate'), { path: 'a.txt' }, policy(), asSubagent())).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g-write' });
+    expect(b.decide(tool('run_command', 'sandbox', 'execute'), { command: 'touch x' }, sandboxed, asSubagent())).toEqual({ kind: 'allow', grantedBy: 'sandbox' });
+  });
+
   it('fails closed for a source it has never heard of', () => {
     expect(allowedWhilePlanning(tool('teleport', 'teleport' as ToolSource, 'read'))).toBe(false);
   });

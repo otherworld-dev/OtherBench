@@ -6,8 +6,9 @@ import type { Part } from '../src/types/messages.js';
 import type { Usage } from '../src/types/usage.js';
 import { FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import type { SubagentEvent, SubagentPart } from '../src/domain/parts.js';
+import { createPlanGate } from '../src/domain/thread-tools.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
-import { SUBAGENT_RESULT_COPY_MAX_CHARS, SubagentRunner, type SubagentRunnerDeps } from '../src/domain/subagent.js';
+import { SUBAGENT_PLAN_NOTE, SUBAGENT_RESULT_COPY_MAX_CHARS, SubagentRunner, type SubagentRunnerDeps } from '../src/domain/subagent.js';
 
 const USAGE: Usage = { tokensIn: 40, tokensOut: 8, tokensCached: 0, tokensReasoning: 0 };
 const finish = (finishReason = 'stop'): EngineEvent => ({ type: 'finish', usage: USAGE, finishReason });
@@ -160,6 +161,59 @@ describe('SubagentRunner', () => {
     const sources = engine.requests.map((req) => req.tools.filter((t) => t.name === 'run_command').map((t) => t.source));
     expect(sources).toEqual([['sandbox'], ['shell'], []]);
     expect(engine.requests.map((req) => req.profile.systemPrompt!.includes('# Sandbox'))).toEqual([true, false, false]);
+  });
+
+  // Integration with thread cards and scheduled tasks: what limits the parent reply limits its sub-agents.
+  it("carries the parent call's plan gate onto the sub-agent's request, so every call it makes meets the same gate", async () => {
+    const plan = createPlanGate();
+    const engine = childEngine(() => answer('ok'));
+    const h = harness(engine);
+    await h.runner.run({ description: 'Look', prompt: 'Read it.' }, { ...h.ctx('call-1'), plan });
+    const req = engine.requests[0]!;
+    // The same object, not a copy: approving the parent's plan opens the sub-agent's calls too.
+    expect(req.plan).toBe(plan);
+    expect(toolContextFor(req).plan).toBe(plan);
+    expect(req.profile.systemPrompt).toContain(SUBAGENT_PLAN_NOTE);
+    expect(req).not.toHaveProperty('unattended');
+  });
+
+  it("carries the turn's own plan gate even when the call's context has none, and no gate or note when there is none", async () => {
+    const plan = createPlanGate();
+    const engine = childEngine(() => answer('ok'));
+    const h = harness(engine, { plan });
+    await h.runner.run({ description: 'Look', prompt: 'Read it.' }, h.ctx('call-1'));
+    expect(engine.requests[0]!.plan).toBe(plan);
+
+    const plain = childEngine(() => answer('ok'));
+    const h2 = harness(plain);
+    await h2.runner.run({ description: 'Look', prompt: 'Read it.' }, h2.ctx('call-1'));
+    expect(plain.requests[0]).not.toHaveProperty('plan');
+    expect(plain.requests[0]!.profile.systemPrompt).not.toContain('# Plan mode');
+
+    // Started after the plan was approved: still the gate, but no note saying changes are refused.
+    plan.approve();
+    await h.runner.run({ description: 'Do it', prompt: 'Write it.' }, h.ctx('call-2'));
+    expect(engine.requests[1]!.plan).toBe(plan);
+    expect(engine.requests[1]!.profile.systemPrompt).not.toContain('# Plan mode');
+  });
+
+  it("marks a scheduled run's sub-agent unattended, from the call's context or from the turn, and no other", async () => {
+    const fromCtx = childEngine(() => answer('ok'));
+    const h = harness(fromCtx);
+    await h.runner.run({ description: 'Look', prompt: 'Read it.' }, { ...h.ctx('call-1'), unattended: true });
+    expect(fromCtx.requests[0]!.unattended).toBe(true);
+    expect(toolContextFor(fromCtx.requests[0]!).unattended).toBe(true);
+
+    const fromTurn = childEngine(() => answer('ok'));
+    const h2 = harness(fromTurn, { unattended: true });
+    await h2.runner.run({ description: 'Look', prompt: 'Read it.' }, h2.ctx('call-1'));
+    expect(fromTurn.requests[0]!.unattended).toBe(true);
+
+    const attended = childEngine(() => answer('ok'));
+    const h3 = harness(attended);
+    await h3.runner.run({ description: 'Look', prompt: 'Read it.' }, h3.ctx('call-1'));
+    expect(attended.requests[0]).not.toHaveProperty('unattended');
+    expect(toolContextFor(attended.requests[0]!)).not.toHaveProperty('unattended');
   });
 
   it('refuses bad input without starting anything', async () => {

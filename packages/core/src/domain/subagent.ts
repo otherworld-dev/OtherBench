@@ -4,6 +4,7 @@ import type { SubagentHost, ToolContext, ToolProvider, ToolSpec } from '../ports
 import { runsShellInSandbox, sandboxHostsOf, type FsMode, type Profile, type ResolvedProfile, type ToolPolicy } from '../types/config.js';
 import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
 import type { Usage } from '../types/usage.js';
+import type { PlanGate } from '../types/thread.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import { classifyProviderError } from '../types/errors.js';
 import { availableOn } from './availability.js';
@@ -22,6 +23,11 @@ import { extraFoldersPrompt } from './workspace.js';
 export const SUBAGENT_ROLE_PROMPT =
   '# Working as a sub-agent\n' +
   "Another assistant gave you the task in the next message. You can't ask it or the user anything, and nobody reads your messages until you finish. Do the task with your tools, then end with a complete answer: your last message is all the other assistant gets back, so put everything it needs in it (what you found, file paths, what you changed, what you couldn't do).";
+
+/** For a sub-agent started while the chat's Plan mode is on and no plan is approved yet: it has no propose_plan of its own. */
+export const SUBAGENT_PLAN_NOTE =
+  '# Plan mode\n' +
+  "The user hasn't approved a plan for this work yet, so tools that change things (writing files, running commands) are refused for you too, and you can't propose a plan yourself. Look around with the tools that only read, and report what you found and what you would change.";
 
 export const MAX_CONCURRENT_SUBAGENTS = 4;
 export const MAX_SUBAGENTS_PER_REPLY = 10;
@@ -264,8 +270,9 @@ export async function runSubagentTool(args: unknown, ctx: ToolContext): Promise<
 
 /**
  * A sub-agent's system prompt: its profile's own prompt, the role, the
- * folders note, the sandbox note when its run_command is the sandboxed one
- * (`sandboxNote`, from `sandboxFoldersPrompt`), the tools note and recall
+ * folders note, any `notes` for this run (the sandbox note from
+ * `sandboxFoldersPrompt` when its run_command is the sandboxed one,
+ * `SUBAGENT_PLAN_NOTE` while a plan is waiting), the tools note and recall
  * guidance when recall is offered. No memory and no project text: the parent
  * puts what it needs in the prompt.
  */
@@ -274,13 +281,13 @@ export function subagentSystemPrompt(
   tools: readonly ToolSpec[],
   folders: readonly ResolvedFolder[],
   canRecall: boolean,
-  sandboxNote: string | null = null
+  notes: readonly (string | null)[] = []
 ): string {
   const blocks = [
     profile.systemPrompt?.trim() || null,
     SUBAGENT_ROLE_PROMPT,
     folders.length > 0 ? extraFoldersPrompt(folders) : null,
-    sandboxNote,
+    ...notes,
     tools.length > 0 && namesItsTools(profile.connection.kind) ? availableToolsPrompt(tools.map((t) => t.name)) : null,
     canRecall ? RECALL_GUIDANCE : null,
   ];
@@ -380,6 +387,15 @@ export interface SubagentRunnerDeps {
   resolveProfile?: (id: string) => Promise<ResolvedProfile>;
   /** A folder's real path, as the sandbox mounts it (`TurnRunnerOptions.canonicalPath`); the sandbox note names that one. */
   canonicalPath?: (path: string) => string;
+  /**
+   * The parent reply's plan gate, when the chat's Plan mode is on (spec
+   * 2026-10-12-thread-cards-design §4). Every sub-agent's request carries the
+   * same gate object, so its calls are refused for changes until the user
+   * approves the parent's plan, and allowed from then on.
+   */
+  plan?: PlanGate;
+  /** The parent reply is a scheduled run with nobody watching: so is every sub-agent, which can raise no card either. */
+  unattended?: boolean;
   now: () => number;
   generateId: () => string;
   chatId: string;
@@ -505,7 +521,7 @@ export class SubagentRunner implements SubagentHost {
       if (slot) {
         this.send(callId, { type: 'running' }, true);
         const tools = await this.toolsFor(chosen, narrowed.policy);
-        const request = this.requestFor(chosen, label, prompt, callId, tools, child.signal);
+        const request = this.requestFor(chosen, label, prompt, callId, tools, child.signal, ctx);
         for await (const event of this.deps.engine.stream(request)) {
           const subEvent = toSubagentEvent(event);
           if (subEvent) {
@@ -623,11 +639,19 @@ export class SubagentRunner implements SubagentHost {
     return listed.filter((t) => !NEVER_FOR_SUBAGENTS.has(t.source) && !(chosen.model?.supportsTools === false && t.source === 'recall'));
   }
 
-  private requestFor(chosen: ResolvedProfile, label: string, prompt: string, callId: string, tools: ToolSpec[], signal: AbortSignal): EngineRequest {
+  private requestFor(chosen: ResolvedProfile, label: string, prompt: string, callId: string, tools: ToolSpec[], signal: AbortSignal, ctx: ToolContext): EngineRequest {
     const { chatId, messageId, workspaceRoot, folders } = this.deps;
+    // The parent's plan gate and unattended flag go with the sub-agent, from
+    // the `subagent` call's own context and from the turn that made this
+    // runner (either is enough: both only take permissions away). Plan mode
+    // lets a planning reply start a sub-agent (`allowedWhilePlanning`) only
+    // because of the first; a scheduled run's sub-agent can raise no card
+    // because of the second.
+    const plan = ctx.plan ?? this.deps.plan;
+    const unattended = ctx.unattended === true || this.deps.unattended === true;
     // Its run_command is the sandboxed one (the narrowed policy decides): say where the folders are in there, as the parent's prompt does.
     const sandboxNote = workspaceRoot !== null && tools.some((t) => t.source === 'sandbox') ? sandboxFoldersPrompt(workspaceRoot, folders, this.deps.canonicalPath) : null;
-    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), sandboxNote);
+    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), [sandboxNote, plan && !plan.approved ? SUBAGENT_PLAN_NOTE : null]);
     // Synthetic, never stored: the sub-agent sees no chat history.
     const message = (id: string, role: 'system' | 'user', text: string): CanonMessage => ({
       id,
@@ -650,6 +674,8 @@ export class SubagentRunner implements SubagentHost {
       workspaceRoot,
       ...(folders.length > 0 ? { folders } : {}),
       purpose: 'turn',
+      ...(plan ? { plan } : {}),
+      ...(unattended ? { unattended: true } : {}),
       subagent: { callId, label, parentProfileId: this.deps.parent.id, ...(chosen.id !== this.deps.parent.id ? { profileName: chosen.name } : {}) },
     };
   }

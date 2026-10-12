@@ -683,6 +683,9 @@ export class TurnRunner {
           toolProvider: this.toolProvider,
           ...(this.resolveProfile ? { resolveProfile: this.resolveProfile } : {}),
           canonicalPath: this.canonicalPath,
+          // The reply's plan gate and unattended flag go with every sub-agent it starts.
+          ...(plan ? { plan } : {}),
+          ...(unattended ? { unattended: true } : {}),
           now: this.now,
           generateId: this.generateId,
           chatId,
