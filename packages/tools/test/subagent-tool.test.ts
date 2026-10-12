@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import { GruntToolProvider } from '../src/provider.js';
 
@@ -29,19 +29,24 @@ function setup() {
   return { store, provider };
 }
 
+/** What the provider lists for a policy, without the thread tools every profile gets (integration: thread cards). */
+async function listed(provider: GruntToolProvider, p: ToolPolicy): Promise<ToolSpec[]> {
+  return (await provider.listTools(p)).filter((t) => t.source !== 'thread');
+}
+
 describe('the subagent tool', () => {
   it('is offered only with the switch on', async () => {
     const { provider } = setup();
-    expect((await provider.listTools(policy())).map((t) => t.name)).toEqual([]);
-    expect((await provider.listTools(policy({ subagents: false }))).map((t) => t.name)).toEqual([]);
-    const tools = await provider.listTools(policy({ subagents: true }));
+    expect((await listed(provider, policy())).map((t) => t.name)).toEqual([]);
+    expect((await listed(provider, policy({ subagents: false }))).map((t) => t.name)).toEqual([]);
+    const tools = await listed(provider, policy({ subagents: true }));
     expect(tools.map((t) => [t.name, t.source, t.risk])).toEqual([['subagent', 'subagent', 'read']]);
     expect(tools[0]!.parameters).toMatchObject({ required: ['description', 'prompt'] });
   });
 
   it('lists only the profiles a sub-agent can run as in its description', async () => {
     const { provider } = setup();
-    const [tool] = await provider.listTools(policy({ subagents: true }));
+    const [tool] = await listed(provider, policy({ subagents: true }));
     expect(tool!.description).toContain('"Writer" (p-a-model)');
     for (const name of ['Coder', 'Old one', 'PC Llama']) expect(tool!.description).not.toContain(name);
   });
@@ -50,7 +55,7 @@ describe('the subagent tool', () => {
     const { provider, store } = setup();
     const events: ToolApprovalEvent[] = [];
     provider.onApprovalEvent((e) => events.push(e));
-    const [tool] = await provider.listTools(policy({ subagents: true }));
+    const [tool] = await listed(provider, policy({ subagents: true }));
     expect(await tool!.execute({ description: 'a', prompt: 'b' }, ctx())).toMatchObject({ error: true, code: 'subagents_unavailable' });
     expect(events).toEqual([]);
     expect(store.audit.list('chat-1')).toHaveLength(1);
@@ -60,7 +65,7 @@ describe('the subagent tool', () => {
     const { provider, store } = setup();
     const events: ToolApprovalEvent[] = [];
     provider.onApprovalEvent((e) => events.push(e));
-    const [tool] = await provider.listTools(policy({ subagents: true }));
+    const [tool] = await listed(provider, policy({ subagents: true }));
     const result = await tool!.execute({ description: 'a', prompt: 'b' }, ctx({ subagents: { run: async () => 'The answer.' } }));
     expect(result).toBe('The answer.');
     expect(events).toEqual([]);
@@ -69,7 +74,7 @@ describe('the subagent tool', () => {
 
   it('is refused by the gate inside a sub-agent', async () => {
     const { provider } = setup();
-    const [tool] = await provider.listTools(policy({ subagents: true }));
+    const [tool] = await listed(provider, policy({ subagents: true }));
     const result = await tool!.execute({ description: 'a', prompt: 'b' }, ctx({ subagent: { callId: 'c', label: 'L', parentProfileId: 'p' }, subagents: { run: async () => 'nope' } }));
     expect(result).toMatchObject({ error: true, code: 'permission_denied', message: "A sub-agent can't start another sub-agent." });
   });
