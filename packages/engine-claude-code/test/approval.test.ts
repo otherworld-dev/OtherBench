@@ -107,6 +107,51 @@ describe('createGate approval tickets (onApproved)', () => {
   });
 });
 
+describe('createGate with the browser, the sandboxed shell and the ask path on one gate', () => {
+  const browser: ToolSpec = { name: 'browser', description: 'b', parameters: { type: 'object' }, risk: 'mutate', source: 'browser', describeCall: async (a) => ({ args: a }), execute: async () => undefined };
+  const shell: ToolSpec = { name: 'run_command', description: 's', parameters: { type: 'object' }, risk: 'execute', source: 'sandbox', execute: async () => undefined };
+  const QUESTIONS = { questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] };
+  const described = { command: 'open', url: 'https://example.com/', host: 'example.com' };
+
+  it('keeps a ticket for the browser only, asks the question on a card, and approves each call as the tool it is', async () => {
+    const onApproved = vi.fn();
+    const requestApproval = vi.fn(async (spec: ToolSpec, ..._rest: unknown[]) => (spec.source === 'browser' ? { allowed: true as const, grantedBy: 'ask:once', args: described } : { allowed: true as const, grantedBy: 'policy' }));
+    const askUser = vi.fn(async (_c: ToolContext, _i: AskInput): Promise<AskOutcome> => ({ reply: { answers: ['Blue'] } }));
+    const gate = createGate({ approvals: { requestApproval, askUser }, policy: { ...policy, shellRuns: 'sandbox', browser: true }, ctx: ctx(), onApproved });
+
+    expect(await gate('mcp__grunt_x__run_command', { command: 'ls' }, undefined, { own: { relay: shell } })).toEqual({ allow: true });
+    expect(await gate('mcp__grunt_x__browser', { command: 'open', url: 'example.com' }, undefined, { own: { relay: browser } })).toEqual({ allow: true });
+    expect(await gate('AskUserQuestion', QUESTIONS, undefined, { toolUseId: 't1' })).toEqual({ allow: true, updatedInput: { ...QUESTIONS, answers: { 'Which colour?': 'Blue' } } });
+    expect(await gate('mcp__grunt_x__propose_plan', { plan: '1. x' }, undefined, { own: 'plan' })).toEqual({ allow: true });
+    // A look-alike on another server is Claude Code's own MCP tool, not Grunt's browser: no ticket.
+    expect(await gate('mcp__grunt__browser', { command: 'open', url: 'evil.test' })).toEqual({ allow: true });
+
+    expect(requestApproval.mock.calls.map((c) => [(c[0] as ToolSpec).name, (c[0] as ToolSpec).source])).toEqual([
+      ['run_command', 'sandbox'],
+      ['browser', 'browser'],
+      ['AskUserQuestion', 'agent'],
+      ['propose_plan', 'thread'],
+      ['mcp__grunt__browser', 'agent'],
+    ]);
+    // The sandboxed command's arguments go to the broker as they are: it has no path to normalise.
+    expect(requestApproval.mock.calls[0]![1]).toEqual({ command: 'ls' });
+    expect(onApproved).toHaveBeenCalledTimes(1);
+    expect(onApproved).toHaveBeenCalledWith(browser, { command: 'open', url: 'example.com' }, described);
+    expect(askUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('in a clean chat lets the relayed browser through and still refuses a folder tool, with the question card working', async () => {
+    const onApproved = vi.fn();
+    const requestApproval = vi.fn(async (spec: ToolSpec, ..._rest: unknown[]) => (spec.source === 'browser' ? { allowed: true as const, grantedBy: 'ask:once', args: described } : { allowed: true as const, grantedBy: 'policy' }));
+    const askUser = vi.fn(async (_c: ToolContext, _i: AskInput): Promise<AskOutcome> => ({ reply: { answers: ['Red'] } }));
+    const gate = createGate({ approvals: { requestApproval, askUser }, policy: { ...policy, browser: true }, ctx: { ...ctx(), workspaceRoot: null }, onApproved });
+    expect(await gate('mcp__grunt_x__browser', { command: 'open', url: 'example.com' }, undefined, { own: { relay: browser } })).toEqual({ allow: true });
+    expect(onApproved).toHaveBeenCalledTimes(1);
+    expect(await gate('Bash', { command: 'ls' })).toMatchObject({ allow: false });
+    expect(await gate('AskUserQuestion', QUESTIONS)).toMatchObject({ allow: true, updatedInput: { answers: { 'Which colour?': 'Red' } } });
+  });
+});
+
 describe('createGate', () => {
   it('sends a classified agent ToolSpec with normalised args to requestApproval', async () => {
     const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'ask:once' }));

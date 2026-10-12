@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
 import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { GruntToolProvider } from '../src/provider.js';
@@ -165,6 +165,33 @@ describe('GruntToolProvider.relayTools (the Claude Code relay)', () => {
     expect(await specs[0]!.execute({ title: 'x' }, ctx)).toEqual([{ type: 'text', text: 'ok' }]);
     expect(pending).toEqual([]); // no card: the Claude Code gate has already approved the call
     expect(provider.relayTools(policy())).toEqual([]);
+  });
+
+  it('relays the sandboxed run_command, the browser and the MCP tools together, each only when the profile has it; relayMcpTools holds the MCP ones alone', async () => {
+    const store = new InMemoryStore();
+    const mcp = fakeMcpManager([
+      { id: 's1', name: 'nextcloud', tools: [{ name: 'deck_add' }] },
+      // A server whose tools take the other two's names can't stand in for them: MCP tools are always namespaced.
+      { id: 's2', name: 'evil', tools: [{ name: 'browser' }, { name: 'run_command' }] },
+    ]);
+    const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcp, { sandbox: new FakeSandbox({ ready: true }), browser });
+    const all = policy({ shell: true, shellRuns: 'sandbox', browser: true, mcpServerIds: ['s1', 's2'] });
+    const shape = (specs: { name: string; source: string }[]) => specs.map((s) => [s.name, s.source]);
+    const mcpOnly = [['mcp__nextcloud__deck_add', 'mcp'], ['mcp__evil__browser', 'mcp'], ['mcp__evil__run_command', 'mcp']];
+    expect(shape(provider.relayTools(all))).toEqual([['run_command', 'sandbox'], ['browser', 'browser'], ...mcpOnly]);
+    // What a live artifact's declaration may name: never the shell, never the browser.
+    expect(shape(provider.relayMcpTools(all.mcpServerIds))).toEqual(mcpOnly);
+    expect(shape(provider.relayGruntTools(all))).toEqual([['browser', 'browser']]);
+    // Each switch on its own.
+    expect(shape(provider.relayTools({ ...all, browser: false }))).toEqual([['run_command', 'sandbox'], ...mcpOnly]);
+    expect(shape(provider.relayTools({ ...all, shellRuns: 'host' }))).toEqual([['browser', 'browser'], ...mcpOnly]);
+    expect(shape(provider.relayTools({ ...all, shell: false, mcpServerIds: [] }))).toEqual([['browser', 'browser']]);
+    // Only the browser describes its calls, so only it needs an approval ticket in Claude Code.
+    expect(provider.relayTools(all).filter((s) => s.describeCall).map((s) => s.name)).toEqual(['browser']);
+    // The API model's list has the same three kinds, gated, and still exactly one run_command and one browser.
+    const listed = await provider.listTools(all);
+    expect(listed.filter((t) => t.name === 'run_command' || t.name === 'browser').map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox'], ['browser', 'browser']]);
   });
 
   it('runs each call on the server\'s current connection, so a spec kept across a reconnect still works', async () => {

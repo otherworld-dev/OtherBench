@@ -1368,3 +1368,202 @@ describe('ClaudeCodeChatEngine relayed browser (spec 2026-10-12-model-browser-de
     e.dispose();
   });
 });
+
+// Integration: the browser's describeCall and approval tickets beside the
+// sandbox's relay (currentRelayed, fail closed) and thread cards' ask path
+// (AskUserQuestion and plan cards), all on one Grunt server in one reply.
+describe('ClaudeCodeChatEngine: the browser beside the sandboxed shell, relayed MCP tools and the cards', () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const QUESTIONS = { questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }], multiSelect: false }] };
+  const everything = (o: Partial<ToolPolicy> = {}) => profile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: ['s1'], approvalMode: 'ask_on_mutate', browser: true, ...o } });
+  type Run = ToolSpec['execute'];
+  const shellSpec = (execute: Run): ToolSpec => ({ name: 'run_command', description: 'bash in a Linux sandbox', parameters: { type: 'object' }, risk: 'execute', source: 'sandbox', execute });
+  const browserSpec = (execute: Run, over: Partial<ToolSpec> = {}): ToolSpec => ({
+    name: 'browser',
+    description: 'Your own web browser',
+    parameters: { type: 'object' },
+    risk: 'mutate',
+    source: 'browser',
+    describeCall: async (args) => ({ args: { ...(args as Record<string, unknown>), host: 'example.com' }, risk: 'mutate' }),
+    execute,
+    ...over,
+  });
+  const deckSpec = (execute: Run): ToolSpec => ({ name: 'mcp__nextcloud__deck_add', description: 'Add a Deck card', parameters: { type: 'object' }, risk: 'mutate', source: 'mcp', serverId: 's1', execute });
+  const DESCRIBED = { command: 'open', url: 'https://example.com/', host: 'example.com' };
+  /** Approves everything; a browser call comes back with the arguments Grunt described, as the real provider's does. */
+  const approving = () => ({
+    requestApproval: vi.fn(async (spec: ToolSpec, ..._rest: unknown[]) => (spec.source === 'browser' ? { allowed: true as const, grantedBy: 'ask:once', args: DESCRIBED } : { allowed: true as const, grantedBy: 'policy' })),
+    recordAgentDenial: vi.fn(),
+    askUser: vi.fn(async (_ctx: unknown, input: { kind: string }) => (input.kind === 'plan' ? { reply: { approve: true as const } } : { reply: { answers: ['Blue'] } })),
+  });
+  function server() {
+    let tools: GruntServerTool[] = [];
+    const mcpServer = vi.fn((name: string, defs: GruntServerTool[]) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    return { mcpServer, names: () => tools.map((t) => t.name).sort(), tool: (name: string) => tools.find((t) => t.name === name)! };
+  }
+  const hook = (options: Options) => {
+    const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+    const own = Object.keys(options.mcpServers ?? {})[0]!;
+    let n = 0;
+    return {
+      own: (tool: string, input: Record<string, unknown>) => pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${own}__${tool}`, tool_input: input, tool_use_id: `t${++n}` } as never, `t${n}`, sig()),
+      agent: (tool: string, input: Record<string, unknown>) => pre({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, tool_use_id: `t${++n}` } as never, `t${n}`, sig()),
+    };
+  };
+  const NO_APPROVAL = { content: [{ type: 'text', text: 'Grunt has no approval for this call.' }], isError: true };
+
+  it('runs a sandboxed command, a browser call, an MCP tool, a question card and a plan card in one reply, each by its own rule', async () => {
+    const ran = {
+      shell: vi.fn(async () => ({ exitCode: 0, output: 'Linux\n', sandbox: true })),
+      browser: vi.fn(async () => ({ url: 'https://example.com/', title: 'Example' })),
+      deck: vi.fn(async () => [{ type: 'text', text: 'card added' }]),
+    };
+    const a = approving();
+    const s = server();
+    const plan = createPlanGate();
+    const decisions: Record<string, unknown> = {};
+    const results: Record<string, unknown> = {};
+    const { query, calls } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      const pre = hook(options);
+      decisions.shell = await pre.own('run_command', { command: 'uname -s' });
+      results.shell = await s.tool('run_command').call({ command: 'uname -s' });
+      decisions.browser = await pre.own('browser', { command: 'open', url: 'example.com' });
+      results.browser = await s.tool('browser').call({ command: 'open', url: 'example.com' });
+      // A ticket runs once, and a call nobody approved has none: the sandbox's and the MCP tool's approvals don't count for it.
+      results.browserAgain = await s.tool('browser').call({ command: 'open', url: 'example.com' });
+      results.browserUnapproved = await s.tool('browser').call({ command: 'open', url: 'never-approved.test' });
+      decisions.deck = await pre.own('nextcloud__deck_add', { title: 'x' });
+      results.deck = await s.tool('nextcloud__deck_add').call({ title: 'x' });
+      decisions.ask = await pre.agent('AskUserQuestion', QUESTIONS);
+      decisions.plan = await pre.own('propose_plan', { plan: '1. x' });
+      results.plan = await s.tool('propose_plan').call({ plan: '1. x' });
+      yield success();
+    });
+    const relayTools = vi.fn(() => [shellSpec(ran.shell), browserSpec(ran.browser), deckSpec(ran.deck)]);
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools, mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: everything(), plan })));
+
+    // One process, one Grunt server, with all four tools on it.
+    expect(calls).toHaveLength(1);
+    expect(s.names()).toEqual(['browser', 'nextcloud__deck_add', 'propose_plan', 'run_command']);
+    // Each call was approved as what it is, with the reply's plan gate in its context.
+    expect(a.requestApproval.mock.calls.map((c) => [(c[0] as ToolSpec).name, (c[0] as ToolSpec).source])).toEqual([
+      ['run_command', 'sandbox'],
+      ['browser', 'browser'],
+      ['mcp__nextcloud__deck_add', 'mcp'],
+      ['AskUserQuestion', 'agent'],
+      ['propose_plan', 'thread'],
+    ]);
+    for (const call of a.requestApproval.mock.calls) expect((call as unknown[])[3]).toMatchObject({ chatId: 'chat', messageId: 'm1', plan });
+    for (const key of ['shell', 'browser', 'deck', 'plan']) expect(decisions[key], key).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+
+    // The sandboxed command and the MCP tool run with Claude Code's own arguments.
+    expect(ran.shell).toHaveBeenCalledTimes(1);
+    expect(ran.shell).toHaveBeenCalledWith({ command: 'uname -s' }, expect.objectContaining({ workspaceRoot: ws, plan }));
+    expect(ran.deck).toHaveBeenCalledWith({ title: 'x' }, expect.objectContaining({ chatId: 'chat' }));
+    expect(results.deck).toEqual({ content: [{ type: 'text', text: 'card added' }] });
+    // The browser runs once, with exactly what Grunt approved, never Claude Code's raw input.
+    expect(ran.browser).toHaveBeenCalledTimes(1);
+    expect(ran.browser).toHaveBeenCalledWith(DESCRIBED, expect.objectContaining({ chatId: 'chat', messageId: 'm1', plan }));
+    expect(results.browserAgain).toEqual(NO_APPROVAL);
+    expect(results.browserUnapproved).toEqual(NO_APPROVAL);
+
+    // The question went to the user as a card and came back on the input; the plan card opened the gate.
+    expect(decisions.ask).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow', updatedInput: { ...QUESTIONS, answers: { 'Which colour?': 'Blue' } } } });
+    expect(a.askUser.mock.calls.map((c) => (c[1] as { kind: string }).kind)).toEqual(['question', 'plan']);
+    expect(plan.approved).toBe(true);
+    expect(JSON.stringify(results.plan)).toContain('The user approved the plan.');
+    e.dispose();
+  });
+
+  it('gives a clean chat the browser and the MCP tools, and no run_command', async () => {
+    const browser = vi.fn(async () => ({ url: 'https://example.com/' }));
+    const shell = vi.fn(async () => ({}));
+    const a = approving();
+    const s = server();
+    let result: unknown = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      await hook(options).own('browser', { command: 'open', url: 'example.com' });
+      result = await s.tool('browser').call({ command: 'open', url: 'example.com' });
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [shellSpec(shell), browserSpec(browser), deckSpec(async () => [])], mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: everything(), workspaceRoot: null })));
+    expect(s.names()).toEqual(['browser', 'nextcloud__deck_add']);
+    expect(browser).toHaveBeenCalledWith(DESCRIBED, expect.objectContaining({ workspaceRoot: null }));
+    expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ url: 'https://example.com/' }) }] });
+    expect(shell).not.toHaveBeenCalled();
+    e.dispose();
+  });
+
+  it("fails closed for the browser as for the shell: a call whose current spec is another kind of tool is refused, ticket or not, and never runs", async () => {
+    const first = vi.fn(async () => ({ from: 'first' }));
+    const impostor = vi.fn(async () => ({ from: 'impostor' }));
+    let gen = 0;
+    const s = server();
+    const results: unknown[] = [];
+    const { query, starts } = liveQuery(async function* ({ options }) {
+      yield init('sess-1');
+      await hook(options).own('browser', { command: 'open', url: 'example.com' });
+      results.push(await s.tool('browser').call({ command: 'open', url: 'example.com' }));
+      yield success();
+    });
+    // Same name, risk, description and schema, so the same process; the second reply's "browser" is an MCP tool with no describeCall.
+    const relayTools = () => [++gen === 1 ? browserSpec(first) : browserSpec(impostor, { source: 'mcp', describeCall: undefined })];
+    const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools, mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: everything() })));
+    await collect(e.stream(followUp({ profile: everything() })));
+    expect(starts).toHaveLength(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(impostor).not.toHaveBeenCalled();
+    expect(results[1]).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('changed since it was approved') }] });
+    e.dispose();
+  });
+
+  it('runs nothing for a browser call the plan or a scheduled run refused: the refusal reaches Claude Code, and there is no ticket', async () => {
+    const browser = vi.fn(async () => ({}));
+    const shell = vi.fn(async () => ({ sandbox: true }));
+    const refusing = {
+      // The real provider's answers: the plan refuses the browser's open, and a scheduled run has nobody to ask.
+      requestApproval: vi.fn(async (spec: ToolSpec, _args: unknown, _policy: unknown, ctx: ToolContextLike) =>
+        spec.source !== 'browser' ? { allowed: true as const, grantedBy: 'sandbox' } : { allowed: false as const, reason: ctx.unattended ? UNATTENDED_REASON : PLAN_REFUSAL }
+      ),
+      recordAgentDenial: vi.fn(),
+    };
+    for (const [over, reason] of [[{ plan: createPlanGate() }, PLAN_REFUSAL], [{ unattended: true }, UNATTENDED_REASON]] as const) {
+      const s = server();
+      let decision: unknown = null;
+      let result: unknown = null;
+      let shellResult: unknown = null;
+      const { query } = fakeQuery(async function* ({ options }) {
+        yield init('sess-1');
+        const pre = hook(options);
+        decision = await pre.own('browser', { command: 'open', url: 'example.com' });
+        result = await s.tool('browser').call({ command: 'open', url: 'example.com' });
+        // The sandboxed command beside it is unaffected: it needs no ticket.
+        await pre.own('run_command', { command: 'ls' });
+        shellResult = await s.tool('run_command').call({ command: 'ls' });
+        yield success();
+      });
+      const e = new ClaudeCodeChatEngine({ query, approvals: refusing, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [shellSpec(shell), browserSpec(browser)], mcpServer: s.mcpServer });
+      await collect(e.stream(req({ profile: everything(), ...over })));
+      expect(decision, reason).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: reason } });
+      expect(result, reason).toEqual(NO_APPROVAL);
+      expect(shellResult, reason).toEqual({ content: [{ type: 'text', text: JSON.stringify({ sandbox: true }) }] });
+      e.dispose();
+    }
+    expect(browser).not.toHaveBeenCalled();
+    expect(shell).toHaveBeenCalledTimes(2);
+    // The gate handed the browser's approval the reply's plan gate and its unattended flag.
+    const contexts = refusing.requestApproval.mock.calls.filter((c) => c[0].source === 'browser').map((c) => c[3]);
+    expect(contexts[0]).toMatchObject({ plan: expect.objectContaining({ approved: false }) });
+    expect(contexts[1]).toMatchObject({ unattended: true });
+  });
+});
+
+type ToolContextLike = { unattended?: boolean; plan?: unknown };
