@@ -395,6 +395,42 @@ describe('sync (Task 50)', () => {
     expect(b.store.artifacts.getVersion('v-fine')!.live).toEqual(good);
   });
 
+  it('stores a valid but non-canonical live declaration in canonical form', () => {
+    const b = node('b');
+    seedProfile(b);
+    chat(b, 'c');
+    b.store.artifacts.create({ id: 'ok', chatId: 'c', slug: 'ok', kind: 'html', language: null, createdAt: 1 });
+    // A relayed tool name, no "params", keys not sorted, whitespace: valid, but not as Grunt writes it.
+    const raw = '{ "calls": [ { "tool": "mcp__grunt_0123456789abcdef__s__lookup", "id": "value", "args": { "z": 1, "a": { "y": 2, "b": 3 } } } ] }';
+    const result = b.store.sync.apply([
+      {
+        tbl: 'artifact_version', id: 'v1', op: 'upsert', hlc: '9999999999999-0000-a',
+        row: { id: 'v1', artifact_id: 'ok', number: 1, title: 'T', content: '', kind: 'html', language: null, made_by: 'model', message_id: null, parent_version_id: null, created_at: 1, live: raw },
+      },
+    ]);
+    expect(result.applied).toBe(1);
+    const canonical = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: { a: { b: 3, y: 2 }, z: 1 }, params: {} }] };
+    expect(b.store.artifacts.getVersion('v1')!.live).toEqual(canonical);
+    expect((b.db.prepare('SELECT live FROM artifact_version WHERE id = ?').get('v1') as { live: string }).live).toBe(JSON.stringify(canonical));
+  });
+
+  it("a version's live declaration travels from one machine to another unchanged", () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+    a.store.artifacts.create({ id: 'art', chatId: 'c', slug: 'dash', kind: 'html', language: null, createdAt: 1 });
+    const live = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] };
+    a.store.artifacts.addVersion({ id: 'v1', artifactId: 'art', title: 'Dash', content: '<p></p>', madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2, live });
+    a.store.artifacts.addVersion({ id: 'v2', artifactId: 'art', title: 'Dash', content: '<p></p>', madeBy: 'model', messageId: null, parentVersionId: 'v1', createdAt: 3 });
+    s.aToB();
+    expect(b.store.artifacts.getVersion('v1')!.live).toEqual(live);
+    expect(b.store.artifacts.getVersion('v2')!.live).toBeNull();
+    expect(b.store.artifacts.versionInfos('art').map((v) => v.live)).toEqual([live, null]);
+  });
+
   it('the same field edited on both: the later change wins on both machines', () => {
     const a = node('a');
     const b = node('b');

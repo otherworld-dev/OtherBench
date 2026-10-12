@@ -72,6 +72,14 @@ function liveOk(row: SyncRow): boolean {
   return parsed.ok && parsed.spec !== null;
 }
 
+/** Rewrites a valid `live` to the form Grunt itself stores (names normalised, args and params filled in), so a peer's spelling never reaches the store. */
+function canonicaliseLive(row: SyncRow): void {
+  const live = row['live'];
+  if (typeof live !== 'string') return;
+  const parsed = parseLiveSpec(live);
+  if (parsed.ok && parsed.spec !== null) row['live'] = JSON.stringify(parsed.spec);
+}
+
 /** A version row as Grunt makes one: a one-line title, a whole number from 1, a known kind and maker, at most 1 MB, and a live declaration Grunt could have made. */
 function artifactVersionRowOk(row: SyncRow): boolean {
   const { title, number, content } = row;
@@ -293,7 +301,10 @@ export class SqliteSyncRepo implements SyncRepo {
     if (u.tbl === 'attachment' && !isSha256(row['sha256'])) return false;
     // Artifact rows reach the model's prompt and the viewer: only what Grunt itself could have made.
     if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
-    if (u.tbl === 'artifact_version' && !artifactVersionRowOk(row)) return false;
+    if (u.tbl === 'artifact_version') {
+      if (!artifactVersionRowOk(row)) return false;
+      canonicaliseLive(row);
+    }
     // A machine's own folder for a location is its to set; another machine
     // may only fill it in where there's none yet (adopting a location).
     if (u.tbl === 'location_path' && row['node_id'] === this.selfId() && local) return false;

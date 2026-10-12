@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, ArtifactVersionInfo, LiveSpec, NewArtifactVersion } from '@grunt/core/ports/store.js';
+import { parseLiveSpec } from '@grunt/core/domain/live-artifacts.js';
 import type { SyncClock } from './clock.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 
@@ -20,11 +21,8 @@ const ARTIFACT: CrudMapping<Artifact> = {
 /** A stored declaration, or null for none (or for text that no longer parses: the page is then shown plain). */
 function storedLive(value: unknown): LiveSpec | null {
   if (typeof value !== 'string') return null;
-  try {
-    return JSON.parse(value) as LiveSpec;
-  } catch {
-    return null;
-  }
+  const parsed = parseLiveSpec(value);
+  return parsed.ok ? parsed.spec : null;
 }
 
 const VERSION: CrudMapping<ArtifactVersion> = {
