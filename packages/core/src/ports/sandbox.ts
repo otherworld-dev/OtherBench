@@ -70,8 +70,12 @@ export interface SandboxRunRequest {
   writable: boolean;
   allowedHosts: string[];
   signal: AbortSignal;
-  /** A host not on the allowlist: raises the `sandbox_network` card; resolves whether the connection may go ahead. */
-  askHost(host: string, port: number | undefined): Promise<boolean>;
+  /**
+   * A host not on the allowlist: raises the `sandbox_network` card; resolves whether the connection may go ahead.
+   * `signal` aborts when the question stops mattering (the turn was stopped, the command ended, the sandbox went
+   * away): take the card down then; any answer is ignored.
+   */
+  askHost(host: string, port: number | undefined, signal?: AbortSignal): Promise<boolean>;
 }
 
 /** What `run_command` returns on the host, plus `sandbox: true` and the Linux `cwd`. */
