@@ -3,7 +3,7 @@ import { checkOfficeContent, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUME
 import { listZipEntries, readZipEntry } from '../../src/import/zip.js';
 import { extractOfficeText } from '../../src/office/extract.js';
 // renderOfficeFile makes the file in a worker run from the compiled dist/office/render-worker.js: run `npx tsc -b` first.
-import { OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess } from '../../src/office/render.js';
+import { OFFICE_RENDER_CONCURRENCY, OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess } from '../../src/office/render.js';
 
 /** One part of a made file, as text. */
 function part(zip: Buffer, name: string): string {
@@ -160,18 +160,52 @@ describe('renderOfficeFile: in a worker with a time and memory limit', () => {
     expect(officeRenderWorkersRunning()).toBe(0);
   }, 30_000);
 
-  // Lists and quotes nested thousands deep, inline where the size checks don't look: the parser's tree walk runs out of
-  // stack at 3,000 levels and the worker's 512 MB heap at 4,000 (both measured; each takes 4-15 s on a loaded machine).
-  it.each([
-    ['runs out of stack', `${'- > '.repeat(3_000)}x`, /^Maximum call stack size exceeded$/],
-    ['runs out of memory', `${'- > '.repeat(4_000)}x`, /^The document is too large or too complex to make: it needs more memory than Grunt allows\./],
-  ])('gives a worker that %s as an OfficeRenderError, and leaves no worker running', async (_name, md, message) => {
-    expect(checkOfficeContent('document', md)).toBeNull();
-    const error = await renderOfficeFile('document', md, 'Deep', { timeoutMs: 60_000 }).catch((e: unknown) => e);
+  // Kept cheap with small worker limits (a test-only option): with Grunt's own limits these failures take 4-15 s of
+  // CPU and sit on measured cliffs (3,000 levels of `- > ` overflow the stack, 4,000 the 512 MB heap).
+  it('gives a worker that runs out of stack as an OfficeRenderError, and leaves no worker running', async () => {
+    const limits = { resourceLimits: { maxOldGenerationSizeMb: 512, stackSizeMb: 0.5 }, timeoutMs: 5000 };
+    const deep = `${'- > '.repeat(1_000)}x`;
+    expect(checkOfficeContent('document', deep)).toBeNull();
+    const error = await renderOfficeFile('document', deep, 'Deep', limits).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OfficeRenderError);
-    expect((error as Error).message).toMatch(message);
+    expect((error as Error).message).toMatch(/Maximum call stack size exceeded|more memory than Grunt allows|too large or too complex to make in time/);
     expect(officeRenderWorkersRunning()).toBe(0);
-  }, 90_000);
+  }, 30_000);
+
+  it('gives a worker that runs out of memory as an OfficeRenderError, and leaves no worker running', async () => {
+    const limits = { resourceLimits: { maxOldGenerationSizeMb: 16 }, timeoutMs: 10_000 };
+    // The same tiny heap holds a one-line document: it's the content that runs it out.
+    expect(extractOfficeText(await renderOfficeFile('document', '# Small', 'Small', limits))).toContain('# Small');
+    const paragraphs = Array.from({ length: 500 }, (_, i) => `Paragraph ${i} with **bold** and a [link](https://example.com/${i}).`).join('\n\n');
+    const error = await renderOfficeFile('document', paragraphs, 'Big', limits).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OfficeRenderError);
+    expect((error as Error).message).toBe('The document is too large or too complex to make: it needs more memory than Grunt allows. Simplify it or split it into more than one artifact.');
+    expect(officeRenderWorkersRunning()).toBe(0);
+  }, 30_000);
+
+  it(`runs at most ${OFFICE_RENDER_CONCURRENCY} workers at once, starts each time limit when its worker starts, and loses no queued call when one ahead fails`, async () => {
+    let peak = 0;
+    const sampler = setInterval(() => (peak = Math.max(peak, officeRenderWorkersRunning())), 5);
+    const nestedLists = `${'- '.repeat(20_000)}x`;
+    const start = Date.now();
+    const settled = await Promise.allSettled([
+      // These two take both slots and fail on their time limit after 1.5 s.
+      renderOfficeFile('document', nestedLists, 'Slow 1', { timeoutMs: 1500 }),
+      renderOfficeFile('document', nestedLists, 'Slow 2', { timeoutMs: 1500 }),
+      // Queued for 1.5 s: its own 1.5 s only counts once its worker starts.
+      renderOfficeFile('document', '# Queued', 'Queued', { timeoutMs: 1500 }).then((bytes) => ({ bytes, ms: Date.now() - start })),
+      renderOfficeFile('spreadsheet', '{"sheets":[]}', 'Sheet'),
+    ]);
+    clearInterval(sampler);
+    expect(peak).toBe(OFFICE_RENDER_CONCURRENCY);
+    expect(settled.map((s) => s.status)).toEqual(['rejected', 'rejected', 'fulfilled', 'rejected']);
+    for (const s of settled) if (s.status === 'rejected') expect(s.reason).toBeInstanceOf(OfficeRenderError);
+    const queued = (settled[2] as PromiseFulfilledResult<{ bytes: Buffer; ms: number }>).value;
+    expect(extractOfficeText(queued.bytes)).toContain('# Queued');
+    expect(queued.ms).toBeGreaterThanOrEqual(1500);
+    expect((settled[3] as PromiseRejectedResult).reason.message).toBe("Grunt can't make spreadsheets yet.");
+    expect(officeRenderWorkersRunning()).toBe(0);
+  }, 30_000);
 
   it('gives an error the renderer posts back as an OfficeRenderError', async () => {
     await expect(renderOfficeFile('spreadsheet', '{"sheets":[]}', 'S')).rejects.toThrow(new OfficeRenderError("Grunt can't make spreadsheets yet."));
