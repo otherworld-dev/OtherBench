@@ -230,6 +230,21 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#live-artifact trigger', () => {
+    it('creates the dash page through the real artifact tool, declaring a live call to the named tool', async () => {
+      const execute = vi.fn(async (_args: unknown) => ({ ok: true, command: 'create', slug: 'dash', number: 1 }));
+      const artifact: ToolSpec = { name: 'artifact', description: '', parameters: {}, risk: 'read', source: 'artifact', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#live-artifact mcp__Live__lookup', { tools: [artifact] })));
+      const args = execute.mock.calls[0]![0] as Record<string, unknown>;
+      expect(args).toMatchObject({ command: 'create', id: 'dash', kind: 'html', title: 'Live dashboard' });
+      expect(JSON.parse(args['live'] as string)).toEqual({ calls: [{ id: 'value', tool: 'mcp__Live__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] });
+      expect(args['content']).toContain('<script src="grunt-live.js"></script>');
+      expect(args['content']).toContain("grunt.live('value', { key: 'b' })");
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'artifact', isError: false }));
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+  });
+
   describe('#recall trigger', () => {
     it('#recall searches with the rest of the line through the real tool, then names the chats it found', async () => {
       const execute = vi.fn(async () => ({ projects: [], chats: [{ chatId: 'c1', title: 'Staging box', date: '2026-10-01', role: 'user', messageId: 'm1', snippet: 'zebrafish' }] }));
