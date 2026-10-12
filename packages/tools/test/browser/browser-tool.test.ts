@@ -339,6 +339,16 @@ describe('browser tool: fix round 2 (page text on cards)', () => {
     expect(result['notes']).toEqual(['A dialog said: Pay now gnorw Always allow evil.example done']);
   });
 
+  it('clicks an element whose line Playwright quoted, and shows its unquoted line on the card', async () => {
+    const { tool, ctx, call, session } = setup();
+    await call({ command: 'open', url: 'https://example.com/' });
+    session().snap = `- 'button "Price: $5" [ref=e5]'`;
+    await call({ command: 'snapshot' });
+    expect(await tool.describeCall!({ command: 'click', ref: 'e5' }, ctx())).toMatchObject({ args: { target: 'button "Price: $5" [ref=e5]' } });
+    await call({ command: 'click', ref: 'e5' });
+    expect(session().actions.at(-1)).toBe('click e5');
+  });
+
   it('acts on a ref by the ref alone, whatever the names say', async () => {
     const { call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
@@ -387,6 +397,38 @@ describe('refLines', () => {
   it('ignores a ref in a line\'s trailing text', () => {
     const map = refLines('- paragraph [ref=e3]: a note [ref=e9]\n- text: lone [ref=e4]');
     expect([...map.keys()]).toEqual(['e3']);
+  });
+
+  it('reads the lines Playwright wraps in YAML single quotes', () => {
+    const map = refLines(
+      [
+        `- 'link "Note: read this" [ref=e5] [cursor=pointer]':`,
+        `  - 'button "Save {draft}" [ref=e6]'`,
+        `  - 'button "Tom''s #1 pick" [ref=e7]'`,
+        `- 'heading "Q: why?" [level=2] [ref=e8]'`,
+        `- 'link "Home " [ref=e9]': /url`,
+        `- 'button "Sign in: step 2" [ref=e10]': Sign in: step 2`,
+      ].join('\n')
+    );
+    expect([...map]).toEqual([
+      ['e5', 'link "Note: read this" [ref=e5] [cursor=pointer]'],
+      ['e6', 'button "Save {draft}" [ref=e6]'],
+      ['e7', `button "Tom's #1 pick" [ref=e7]`],
+      ['e8', 'heading "Q: why?" [level=2] [ref=e8]'],
+      ['e9', 'link "Home " [ref=e9]'],
+      ['e10', 'button "Sign in: step 2" [ref=e10]'],
+    ]);
+  });
+
+  it('still ignores a ref hidden in the name of a quoted line', () => {
+    const map = refLines(`- 'link "Note: [ref=e1]" [ref=e2]':\n- 'link "It''s: [ref=e1]'': x" [ref=e3]'\n- button "Real" [ref=e1]`);
+    expect([...map.keys()]).toEqual(['e2', 'e3', 'e1']);
+    expect(map.get('e1')).toBe('button "Real" [ref=e1]');
+    expect(map.get('e3')).toBe(`link "It's: [ref=e1]': x" [ref=e3]`);
+  });
+
+  it('skips a quoted line that is not closed', () => {
+    expect([...refLines(`- 'link "x: y" [ref=e1]`).keys()]).toEqual([]);
   });
 
   it('keeps the first line that claims a ref', () => {

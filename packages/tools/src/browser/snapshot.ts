@@ -46,22 +46,45 @@ export function pageText(text: string, max: number): string {
  * maybe `: text`. The name and the text are the page's own, so they can hold
  * anything, `[ref=e5]` included: only the attribute list between the (quoted,
  * backslash-escaped) name and the colon is Playwright's.
+ *
+ * When the key (role, name and attributes together) needs YAML quoting,
+ * Playwright wraps all of it in single quotes with each `'` doubled
+ * (`yamlEscapeKeyIfNeeded`: a name with `: `, a trailing `:`, ` #`, braces, a
+ * backtick, edge whitespace, a leading `-` or `[`, ...). The name inside is
+ * JSON-quoted, so its own quotes are escaped. Both shapes are read below.
  */
 const LINE_HEAD = /^([A-Za-z][\w-]*)(?:\s+"(?:[^"\\]|\\.)*")?((?:\s*\[[^\]]*\])*)/;
+/** A YAML single-quoted key at the start of a line, then the `:` (or the end) that follows it. */
+const QUOTED_KEY = /^'((?:[^']|'')*)'(?=\s*(?::|$))/;
 
 /**
- * Each element's `[ref=…]` in a snapshot -> its line, trimmed, without the
- * leading "- ", at most 200 characters. The first line that claims a ref keeps
- * it; a later one never overwrites it.
+ * The role/name/attributes part of one snapshot line (the line trimmed and
+ * without its "- "), unquoted if Playwright quoted it; null for a line that
+ * isn't an element. What follows the key (`:` and any text) is dropped.
+ */
+function lineKey(text: string): { key: string; attrs: string } | null {
+  let key = text;
+  if (text.startsWith("'")) {
+    const quoted = QUOTED_KEY.exec(text);
+    if (!quoted) return null;
+    key = quoted[1]!.replace(/''/g, "'");
+  }
+  const head = LINE_HEAD.exec(key);
+  return head ? { key: head[0], attrs: head[2]! } : null;
+}
+
+/**
+ * Each element's `[ref=…]` in a snapshot -> its key (role, name, attributes),
+ * cleaned by `pageText` to a single line of at most 200 characters. The first
+ * line that claims a ref keeps it; a later one never overwrites it.
  */
 export function refLines(snapshot: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const line of snapshot.split('\n')) {
-    const text = line.trim().replace(/^- /, '');
-    const head = LINE_HEAD.exec(text);
+    const head = lineKey(line.trim().replace(/^- /, ''));
     if (!head) continue;
-    const ref = /\[ref=([A-Za-z0-9]+)\]/.exec(head[2]!);
-    if (ref && !out.has(ref[1]!)) out.set(ref[1]!, pageText(text, MAX_TARGET_CHARS));
+    const ref = /\[ref=([A-Za-z0-9]+)\]/.exec(head.attrs);
+    if (ref && !out.has(ref[1]!)) out.set(ref[1]!, pageText(head.key, MAX_TARGET_CHARS));
   }
   return out;
 }
