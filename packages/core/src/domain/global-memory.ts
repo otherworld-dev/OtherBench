@@ -49,7 +49,7 @@ export function aboutUserPrompt(about: string): string | null {
 }
 
 /** Text that could close `tag`'s fence early (any case, whitespace or attributes), defused. */
-function defuse(text: string, tag: string): string {
+export function defuse(text: string, tag: string): string {
   return text.replace(new RegExp(`<\\s*/\\s*${tag}\\b[^>]*>`, 'gi'), `</${tag}_>`);
 }
 

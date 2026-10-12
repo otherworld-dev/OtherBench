@@ -12,7 +12,7 @@ import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { projectInstructionsPrompt } from './projects.js';
-import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
+import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, defuse, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
 import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
@@ -211,6 +211,27 @@ function degradedAttachmentsNotice(degraded: { filename: string }[], modelId: st
   const names = degraded.map((d) => `"${d.filename}"`).join(', ');
   const noun = degraded.length === 1 ? 'image attachment' : 'image attachments';
   return `${degraded.length} ${noun} (${names}) sent as text to "${modelId}" because this model does not support image input.`;
+}
+
+/** A file name as one plain line for a fence or a placeholder: control characters become spaces, double quotes single ones, and nothing in it can close the fence. */
+function fileLabel(filename: string): string {
+  return defuse(filename.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/"/g, "'").trim(), 'attached-file');
+}
+
+/**
+ * An attached file's text as the model gets it (spec 2026-10-12-office-files
+ * §2): fenced and named, with anything inside that would close the fence
+ * early defused. It's the user's file, so it may carry instructions; the
+ * fence says where it starts and ends.
+ */
+export function fencedFileText(filename: string, text: string): string {
+  return `<attached-file name="${fileLabel(filename)}">\n${defuse(text, 'attached-file')}\n</attached-file>`;
+}
+
+/** The notice's sentence for attached files Grunt had no text for. */
+function unreadFilesNotice(unread: { filename: string }[], modelId: string): string {
+  const names = unread.map((u) => `"${fileLabel(u.filename)}"`).join(', ');
+  return `Grunt couldn't read ${names} as text, so ${modelId} didn't get ${unread.length === 1 ? 'it' : 'them'}.`;
 }
 
 /**
@@ -569,7 +590,10 @@ export class TurnRunner {
       // to accept images, since sending bytes it silently drops would be
       // worse than a placeholder it can at least read as text.
       const vision = profile.model?.supportsVision ?? false;
-      const { messages: requestMessages, degraded } = this.degradeImagesForVision(history, vision);
+      const { messages: visionMessages, degraded } = this.degradeImagesForVision(history, vision);
+      // Attached files (spec 2026-10-12-office-files §2): text for every
+      // engine, except a PDF for one that takes PDFs.
+      const { messages: requestMessages, unread } = this.filesForModel(visionMessages, profile.connection.kind !== 'claude_code');
       // The LIVE emit of this notice is deliberately deferred to inside the
       // loop below (its first iteration), NOT fired here -- see the comment
       // at that call site for why emitting it this early loses a real race
@@ -577,8 +601,13 @@ export class TurnRunner {
       // (`parts`/`checkpoint`) has no such race -- a direct store write, not
       // a broadcast -- so that part happens right away regardless.
       let pendingNoticeText: string | null = null;
-      if (degraded.length > 0) {
-        pendingNoticeText = degradedAttachmentsNotice(degraded, profile.modelId);
+      const notices = [
+        ...(degraded.length > 0 ? [degradedAttachmentsNotice(degraded, profile.modelId)] : []),
+        ...(unread.length > 0 ? [unreadFilesNotice(unread, profile.modelId)] : []),
+      ];
+      if (notices.length > 0) {
+        // One notice holds both sentences when both apply.
+        pendingNoticeText = notices.join(' ');
         parts = [{ type: 'notice', text: pendingNoticeText }];
         // Forced (not throttled): the disclosure must be visible even if the
         // stream that follows errors out before its first checkpoint-worthy
@@ -945,6 +974,41 @@ export class TurnRunner {
     });
 
     return { messages: next, degraded };
+  }
+
+  /**
+   * Attached files as the model gets them (spec 2026-10-12-office-files §2),
+   * on this variant's own copy of the messages. A PDF stays a file for an
+   * engine that takes PDFs (`pdfNative`: every connection but Claude Code).
+   * Every other file part becomes its attachment's extracted text, fenced and
+   * named, or a placeholder naming it when there is none: providers refuse
+   * most file types outright, which used to fail the whole turn. The stored
+   * messages are untouched.
+   */
+  private filesForModel(
+    messages: CanonMessage[],
+    pdfNative: boolean
+  ): { messages: CanonMessage[]; unread: { attachmentId: string; filename: string }[] } {
+    const unread: { attachmentId: string; filename: string }[] = [];
+    const seen = new Set<string>();
+    const next = messages.map((message) => {
+      if (!message.parts.some((p) => p.type === 'file')) return message;
+      const parts = message.parts.map((part): Part => {
+        if (part.type !== 'file') return part;
+        if (pdfNative && part.mime === 'application/pdf') return part;
+        const attachment = this.store.attachments.get(part.attachmentId);
+        const filename = attachment?.filename ?? part.filename;
+        if (attachment?.extractedText) return { type: 'text', text: fencedFileText(filename, attachment.extractedText) };
+        if (!seen.has(part.attachmentId)) {
+          seen.add(part.attachmentId);
+          unread.push({ attachmentId: part.attachmentId, filename });
+        }
+        const mime = part.mime.replace(/[^\w.+/-]/g, '');
+        return { type: 'text', text: `[Attached file "${fileLabel(filename)}" (${mime}) couldn't be read as text, so it wasn't sent.]` };
+      });
+      return { ...message, parts };
+    });
+    return { messages: next, unread };
   }
 
   /** Re-reads the model row at finish time (not the possibly-stale `ResolvedProfile.model` captured when the request began) so pricing reflects whatever is current right now. */
