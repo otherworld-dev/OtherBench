@@ -140,14 +140,22 @@ describe('reconcileInterruptedTurns', () => {
     store.messages.create({ id: 'user-1', chatId: 'chat-a', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
     store.messages.create({ id: 'reply-1', chatId: 'chat-a', parentId: 'user-1', role: 'assistant', parts: [card('a', 'queued'), card('b', 'running'), card('c', 'complete')], status: 'streaming', error: null, producedBy: null });
 
+    // A message that is not streaming is nobody's orphan: its queued card is left alone.
+    store.messages.create({ id: 'reply-2', chatId: 'chat-a', parentId: 'user-1', role: 'assistant', parts: [card('d', 'queued')], status: 'complete', error: null, producedBy: null });
+
     reconcileInterruptedTurns(store);
 
-    const parts = store.messages.get('reply-1')!.parts as Extract<Part, { type: 'subagent' }>[];
+    const reply = store.messages.get('reply-1')!;
+    expect(reply.status).toBe('error');
+    const parts = reply.parts as Extract<Part, { type: 'subagent' }>[];
     expect(parts.map((p) => [p.callId, p.status, p.error])).toEqual([
       ['a', 'error', SUBAGENT_INTERRUPTED_MESSAGE],
       ['b', 'error', SUBAGENT_INTERRUPTED_MESSAGE],
       ['c', 'complete', undefined],
     ]);
+    const untouched = store.messages.get('reply-2')!;
+    expect(untouched.status).toBe('complete');
+    expect((untouched.parts as Extract<Part, { type: 'subagent' }>[])[0]!.status).toBe('queued');
   });
 
   it('leaves complete, error, and cancelled messages alone', () => {

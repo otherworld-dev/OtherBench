@@ -116,6 +116,20 @@ export function buildUsageRollup(
     return entry;
   }
 
+  /** Adds one usage row's tokens and cost to its profile, its chat, the grand total and the message's day. */
+  function addMeasured(pr: ProfileRollup, cr: ChatRollup, row: UsageRecord, message: CanonMessage): void {
+    const cost = row.costEstimate ?? 0;
+    pr.measuredCost += cost;
+    pr.tokensIn += row.tokensIn;
+    pr.tokensOut += row.tokensOut;
+    pr.tokensCached += row.tokensCached;
+    pr.tokensReasoning += row.tokensReasoning;
+    cr.measuredCost += cost;
+    totalMeasuredCost += cost;
+    const key = dateKey(message.createdAt);
+    bucketCosts.set(key, (bucketCosts.get(key) ?? 0) + cost);
+  }
+
   for (const row of usageRows) {
     const message = messagesById.get(row.messageId);
     if (!message) continue; // out of the caller's declared scope -- nothing to attribute this to.
@@ -131,17 +145,8 @@ export function buildUsageRollup(
       const fallbackName = message.producedBy?.profileId === row.profileId ? message.producedBy.profileName : 'Unknown profile';
       const pr = profileRollup(row.profileId, card?.profileName ?? fallbackName, card?.modelId ?? row.modelId, row.pricingSnapshot.currency);
       const cr = chatRollup(message.chatId);
-      const cost = row.costEstimate ?? 0;
-      pr.measuredCost += cost;
-      pr.tokensIn += row.tokensIn;
-      pr.tokensOut += row.tokensOut;
-      pr.tokensCached += row.tokensCached;
-      pr.tokensReasoning += row.tokensReasoning;
+      addMeasured(pr, cr, row, message);
       pr.subagentCount += 1;
-      cr.measuredCost += cost;
-      totalMeasuredCost += cost;
-      const subKey = dateKey(message.createdAt);
-      bucketCosts.set(subKey, (bucketCosts.get(subKey) ?? 0) + cost);
       continue;
     }
     measuredMessageIds.add(message.id);
@@ -161,18 +166,8 @@ export function buildUsageRollup(
 
     // 'complete', or the rare 'error' that still raced a `finish` -- both
     // carry a real, engine-reported usage row.
-    const cost = row.costEstimate ?? 0;
-    pr.measuredCost += cost;
-    pr.tokensIn += row.tokensIn;
-    pr.tokensOut += row.tokensOut;
-    pr.tokensCached += row.tokensCached;
-    pr.tokensReasoning += row.tokensReasoning;
+    addMeasured(pr, cr, row, message);
     pr.completeCount += 1;
-    cr.measuredCost += cost;
-    totalMeasuredCost += cost;
-
-    const key = dateKey(message.createdAt);
-    bucketCosts.set(key, (bucketCosts.get(key) ?? 0) + cost);
   }
 
   for (const message of assistantMessages) {

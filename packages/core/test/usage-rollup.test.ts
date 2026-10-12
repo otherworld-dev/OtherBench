@@ -55,6 +55,7 @@ describe('buildUsageRollup', () => {
     expect(a).toMatchObject({ completeCount: 1, subagentCount: 0, measuredCost: 3 });
     expect(b).toMatchObject({ profileName: 'Cheap', modelId: 'model-b', completeCount: 0, subagentCount: 1, measuredCost: 1, tokensIn: 10 });
     expect(rollup.totalMeasuredCost).toBe(4);
+    expect(rollup.chats[0]!.measuredCost).toBe(4);
     expect(rollup.buckets).toEqual([{ date: '2026-08-10', cost: 4 }]);
   });
 
