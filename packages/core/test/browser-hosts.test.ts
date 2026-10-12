@@ -116,6 +116,14 @@ describe('isPublicAddress', () => {
   it('fails closed on anything that is not an address', () => {
     for (const s of ['example.com', '1.2.3', '1.2.3.256', '::1::2', '', 'gggg::1']) expect(isPublicAddress(s), s).toBe(false);
   });
+
+  it('fails closed on IPv4 written with leading zeros (a parser may read them as octal)', () => {
+    for (const s of ['0177.0.0.1', '010.0.0.1', '08.8.8.8', '8.08.8.8', '8.8.8.008', '00.0.0.0', '::ffff:0177.0.0.1', '64:ff9b::08.8.8.8']) {
+      expect(isPublicAddress(s), s).toBe(false);
+    }
+    expect(isPublicAddress('8.8.8.8')).toBe(true);
+    expect(isPublicAddress('1.0.0.1')).toBe(true);
+  });
 });
 
 describe('isLocalName', () => {

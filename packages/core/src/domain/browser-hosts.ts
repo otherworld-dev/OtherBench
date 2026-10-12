@@ -102,7 +102,8 @@ function parseIPv4(s: string): number[] | null {
   if (parts.length !== 4) return null;
   const out: number[] = [];
   for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return null;
+    // No leading zeros: some parsers read `0177` as octal. Fail closed.
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return null;
     const n = Number(part);
     if (n > 255) return null;
     out.push(n);
