@@ -79,6 +79,15 @@ describe('nextRunAt', () => {
     expect(iso(nextRunAt(daily, LONDON, slot))).toBe('2026-10-13T08:00:00.000Z');
     expect(iso(nextRunAt({ cadence: 'daily', time: '00:00' }, 'UTC', at('2026-10-12T00:00:00Z')))).toBe('2026-10-13T00:00:00.000Z');
   });
+
+  it("doesn't skip a slot the clock change moved past midnight", () => {
+    // Nuuk springs from -02 to -01 at 2026-03-29 01:00 UTC, so local 23:00 on
+    // the 28th becomes 00:00 on the 29th: the 28th's 23:30 runs at 00:30 on the 29th.
+    const daily: ScheduleRule = { cadence: 'daily', time: '23:30' };
+    const after = Date.UTC(2026, 2, 29, 1, 10); // 29 Mar 00:10 in Nuuk
+    expect(iso(nextRunAt(daily, 'America/Nuuk', after))).toBe(iso(Date.UTC(2026, 2, 29, 1, 30)));
+    expect(iso(nextRunAt(daily, 'America/Godthab', after))).toBe(iso(Date.UTC(2026, 2, 29, 1, 30)));
+  });
 });
 
 describe('parseRule', () => {

@@ -181,11 +181,13 @@ function matchesRule(rule: ScheduleRule, date: WallDate): boolean {
  * The first instant strictly after `after` whose wall-clock date in
  * `timezone` matches `rule` and whose wall-clock time is its `time` (through
  * `wallToInstant`, so a slot in a fold runs once, at the first time). Walks
- * up to 400 days, which every valid rule falls inside.
+ * up to 400 days, which every valid rule falls inside. The walk starts the
+ * day before `after`'s date: a clock change can push that day's slot past
+ * midnight (23:30 in a gap at 23:00 runs at 00:30), still ahead of `after`.
  */
 export function nextRunAt(rule: ScheduleRule, timezone: string, after: number): number {
   const start = wallClock(after, timezone);
-  for (let i = 0; i <= 400; i++) {
+  for (let i = -1; i <= 400; i++) {
     const date = addDays(start, i);
     if (!matchesRule(rule, date)) continue;
     const instant = wallToInstant(date, rule.time, timezone);
