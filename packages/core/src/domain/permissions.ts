@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
+import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -16,6 +17,8 @@ export type Decision =
 export interface PermissionBrokerOptions {
   /** Hard cap on simultaneously pending approvals; the oldest is evicted past it. Default 200. */
   maxPending?: number;
+  /** Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): the browser may use 127.0.0.1; the proxy holds it to these ports. */
+  allowLoopbackPorts?: readonly number[];
 }
 
 /** Generous: a person answers a handful of cards at a time, so reaching this means requests are leaking. */
@@ -103,17 +106,23 @@ function isShellTool(tool: ToolSpec): boolean {
  *     unsandboxed), so the approval gate is the only control that exists for
  *     it; "approve this command for the rest of the chat" must therefore
  *     never widen into "approve any command for the rest of the chat".
+ *
+ * The browser (`source: 'browser'`) is refused for blocked, local and private
+ * sites before any card; its reads (`snapshot`, `scroll`, `close`) skip the
+ * card under ask_on_mutate; its grants are always pinned to one `host`.
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
   private readonly evictListeners = new Set<(requestId: string) => void>();
   private readonly maxPending: number;
+  private readonly allowLoopbackPorts: readonly number[];
 
   constructor(
     private readonly store: Store,
     options: PermissionBrokerOptions = {}
   ) {
     this.maxPending = options.maxPending ?? DEFAULT_MAX_PENDING;
+    this.allowLoopbackPorts = options.allowLoopbackPorts ?? [];
   }
 
   /** How many approval requests are currently waiting for an answer. */
@@ -164,6 +173,20 @@ export class PermissionBroker {
       const path = stringField(args, 'path');
       if (path !== null && inReadOnlyFolder(ctx, path)) {
         return { kind: 'deny', reason: `"${tool.name}" can't change ${path}: it's in a read-only folder.` };
+      }
+    }
+
+    // The browser (spec 2026-10-12-model-browser-design): a call is about one
+    // website, the `host` its describeCall worked out (a host the model sent
+    // is thrown away before this). A blocked, local or private site is
+    // refused before any card, and so is a call that names no site at all.
+    if (tool.source === 'browser') {
+      const denial = browserHostDenial(stringField(args, 'host'), policy, { allowLoopbackPorts: this.allowLoopbackPorts });
+      if (denial) return { kind: 'deny', reason: denial };
+      // Reading the open page needs no card under "ask on mutate". By command
+      // name, never by declared risk (as for Claude Code's file reads).
+      if (policy.approvalMode === 'ask_on_mutate' && BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '')) {
+        return { kind: 'allow', grantedBy: 'auto_read' };
       }
     }
 
@@ -222,7 +245,7 @@ export class PermissionBroker {
       risk: tool.risk,
       source: tool.source,
       args,
-      summary: tool.source === 'recall' ? this.recallSummary(args) : summarize(tool, args),
+      summary: tool.source === 'recall' ? this.recallSummary(args) : tool.source === 'browser' ? browserSummary(args) : summarize(tool, args),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
@@ -275,7 +298,9 @@ export class PermissionBroker {
       // approved; anything else asks again.
       const constraint = isShellTool(pending.tool)
         ? { commandExact: exactCommandForGrant(pending) }
-        : null;
+        : pending.tool.source === 'browser'
+          ? { host: hostForGrant(pending) }
+          : null;
       this.store.grants.create({
         id: randomUUID(),
         chatId: pending.ctx.chatId,
@@ -305,6 +330,15 @@ export class PermissionBroker {
         `Refusing to create an unconstrained "always" grant for shell tool "${pending.tool.name}": ` +
           'every always-scope grant for a shell tool must carry a commandPrefix or commandExact constraint.'
       );
+    }
+
+    // A browser grant is for the one site the card named, never blanket and
+    // never a different site than the one the person was shown.
+    if (pending.tool.source === 'browser') {
+      const host = hostForGrant(pending);
+      if (normaliseHost(choice.constraint?.host ?? '') !== host) {
+        throw new Error(`Refusing an "always" grant for the browser that doesn't name the site the card asked about (${host}).`);
+      }
     }
 
     this.store.grants.create({
@@ -404,6 +438,9 @@ export class PermissionBroker {
       // then matched in a different chat -- exactly the blanket always-grant
       // the shell guard in resolve() exists to prevent, through a side door.
       if (grant.source !== tool.source) continue;
+      // A browser grant always names its site; one that doesn't (made some
+      // other way) must not cover every site.
+      if (tool.source === 'browser' && grant.constraint?.host === undefined) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
       // null chatId = a global ('always') grant; a non-null chatId must
       // match this exact chat ('chat'-scope grants, or a scoped 'once').
@@ -522,6 +559,11 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
   if (constraint.commandPrefix !== undefined) {
     const command = stringField(args, 'command');
     return command !== null && commandPrefixMatches(constraint.commandPrefix, command);
+  }
+  if (constraint.host !== undefined) {
+    // Exact, ignoring case: a grant never covers a subdomain.
+    const host = stringField(args, 'host');
+    return host !== null && host.toLowerCase() === constraint.host.toLowerCase();
   }
   return false;
 }
@@ -650,6 +692,48 @@ function exactCommandForGrant(pending: PendingRequest): string {
     );
   }
   return command.trim();
+}
+
+/** The site a browser grant is pinned to. Throws when the call named none, so no unpinned grant is ever stored. */
+function hostForGrant(pending: PendingRequest): string {
+  const host = normaliseHost(stringField(pending.args, 'host') ?? '');
+  if (host === null) {
+    throw new Error(`Refusing to create a grant for the browser: the approved call named no website to pin it to.`);
+  }
+  return host;
+}
+
+/** A browser card's line: `Use <host>: <what the call does>`. */
+function browserSummary(args: unknown): string {
+  const host = stringField(args, 'host') ?? '?';
+  const ref = stringField(args, 'ref');
+  const target = stringField(args, 'target');
+  const on = ref !== null ? ` ${ref}${target !== null ? ` (${target})` : ''}` : '';
+  const record = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  switch (stringField(args, 'command')) {
+    case 'open':
+      return `Use ${host}: open ${stringField(args, 'url') ?? ''}`;
+    case 'click':
+      return `Use ${host}: ${record['double'] === true ? 'double-click' : 'click'}${on}`;
+    case 'type':
+      return `Use ${host}: type into${on}`;
+    case 'select': {
+      const values = Array.isArray(record['values']) ? record['values'].filter((v): v is string => typeof v === 'string').join(', ') : '';
+      return `Use ${host}: choose ${values} in${on}`;
+    }
+    case 'press':
+      return `Use ${host}: press ${stringField(args, 'key') ?? ''}`;
+    case 'scroll':
+      return `Use ${host}: scroll ${stringField(args, 'direction') ?? 'down'}${ref !== null ? ` to${on}` : ''}`;
+    case 'back':
+      return `Use ${host}: go back`;
+    case 'snapshot':
+      return `Use ${host}: read the page`;
+    case 'close':
+      return `Use ${host}: close the browser`;
+    default:
+      return `Use ${host}: ${stringField(args, 'command') ?? '?'}`;
+  }
 }
 
 function stringField(args: unknown, key: string): string | null {
