@@ -132,30 +132,44 @@ export class ScheduleService {
     this.check();
   }
 
-  /** Starts what it can of the due schedules, then re-arms the timer. */
+  /**
+   * Ends the runs whose chat was deleted, starts what it can of the due
+   * schedules, then re-arms the timer. A store error is logged and the timer
+   * still re-armed, so one bad check never stops the schedules for good.
+   */
   check(): void {
     if (this.disposed) return;
     const now = this.now();
-    for (const schedule of this.store.schedules.due(now)) {
-      try {
-        if (this.isRunning(schedule.id)) {
-          this.skipSlot(schedule, now);
-          continue;
+    try {
+      this.endDeletedRuns();
+      for (const schedule of this.store.schedules.due(now)) {
+        try {
+          if (this.isRunning(schedule.id)) {
+            this.skipSlot(schedule, now);
+            continue;
+          }
+          if (schedule.target.kind === 'chat' && this.chatInUse(schedule.target.chatId)) continue;
+          if (this.runningCount() >= this.limits.maxConcurrent) continue;
+          const due = schedule.nextRunAt ?? now;
+          this.begin(schedule, this.triggerFor(now, due), due);
+        } catch (err) {
+          console.error(`[grunt-server] schedule ${schedule.id} could not be checked:`, err);
         }
-        if (schedule.target.kind === 'chat' && this.chatInUse(schedule.target.chatId)) continue;
-        if (this.runningCount() >= this.limits.maxConcurrent) continue;
-        const due = schedule.nextRunAt ?? now;
-        this.begin(schedule, this.triggerFor(now, due), due);
-      } catch (err) {
-        console.error(`[grunt-server] schedule ${schedule.id} could not be checked:`, err);
       }
+    } catch (err) {
+      console.error('[grunt-server] the schedules could not be checked:', err);
+    } finally {
+      this.arm(now);
     }
-    this.arm(now);
   }
 
-  /** Checks now: after a create, an edit, a resume, and each run's end. */
+  /** Checks now: after a create, an edit, a resume, and each run's end. Never throws, so a route that pokes never fails over it. */
   poke(): void {
-    this.check();
+    try {
+      this.check();
+    } catch (err) {
+      console.error('[grunt-server] the schedules could not be checked:', err);
+    }
   }
 
   /** Starts a `manual` run now, or throws `ScheduleBusyError`. Leaves the timetable alone. */
@@ -246,16 +260,24 @@ export class ScheduleService {
       this.starting.delete(schedule.id);
       throw err;
     }
-    const launch: Promise<void> = this.launch(schedule, run).finally(() => this.launches.delete(launch));
+    const launch: Promise<void> = this.launch(schedule, run)
+      .catch((err: unknown) => console.error(`[grunt-server] schedule ${schedule.id} run ${run.id} could not be set up:`, err))
+      .finally(() => this.launches.delete(launch));
     this.launches.add(launch);
     return run;
   }
 
-  /** Resolves the profile and the target, sends the turn, and tracks its reply. Any failure before the turn starts ends the run as not started. */
+  /**
+   * Resolves the profile and the target, sends the turn, and tracks its reply.
+   * Any failure before the turn starts ends the run as not started. Disposed
+   * meanwhile (shutdown): stops where it is, writing nothing more; a run left
+   * `running` is closed by the next start.
+   */
   private async launch(schedule: Schedule, run: ScheduleRun): Promise<void> {
     let chatId: string | null = schedule.target.kind === 'chat' ? schedule.target.chatId : null;
     try {
       const profile = await this.profileFor(schedule);
+      if (this.disposed) return;
       const target = this.prepareTarget(schedule, run, profile);
       chatId = target.chatId;
       this.starting.set(schedule.id, target.chatId);
@@ -270,6 +292,8 @@ export class ScheduleService {
         previousAt: previous?.startedAt ?? null,
       });
       const result = await this.startTurn({ chatId: target.chatId, parentId: target.parentId, userParts: [{ type: 'text', text }], profiles: [profile], unattended: true });
+      // The turn has started, but the container's shutdown owns it now.
+      if (this.disposed) return;
       const messageId = result.assistantMessageIds[0];
       if (!messageId) throw new Error('The turn started without a reply.');
       const recorded = this.store.schedules.updateRun(run.id, { userMessageId: result.userMessageId, messageId });
@@ -278,8 +302,11 @@ export class ScheduleService {
       if (recorded) this.track(schedule, recorded, target.chatId, messageId);
     } catch (err) {
       this.starting.delete(schedule.id);
+      if (this.disposed) return;
       const ended = this.store.schedules.updateRun(run.id, { status: 'not_started', detail: errorMessage(err), finishedAt: this.now() });
       if (ended) this.announceFinished(schedule, ended, chatId);
+      // A slot is free again: a schedule waiting for one may go now.
+      this.poke();
     } finally {
       this.starting.delete(schedule.id);
     }
@@ -343,6 +370,11 @@ export class ScheduleService {
   private track(schedule: Schedule, run: ScheduleRun, chatId: string, messageId: string): void {
     const entry: ActiveRun = { runId: run.id, schedule, chatId, messageId, timer: null, timedOut: false };
     entry.timer = this.scheduler.setTimeout(() => {
+      if (this.chatDeleted(entry)) {
+        this.endDeleted(entry);
+        this.poke();
+        return;
+      }
       entry.timedOut = true;
       this.turnRunner.cancel(messageId);
     }, this.limits.timeoutMs);
@@ -365,19 +397,50 @@ export class ScheduleService {
   }
 
   private end(entry: ActiveRun, status: MessageStatus): void {
+    if (!this.active.has(entry.messageId)) return;
+    if (this.chatDeleted(entry)) {
+      this.endDeleted(entry);
+    } else {
+      this.active.delete(entry.messageId);
+      this.scheduler.clearTimeout(entry.timer);
+      const final: ScheduleRunStatus = status === 'complete' ? 'complete' : status === 'cancelled' ? (entry.timedOut ? 'timed_out' : 'cancelled') : 'error';
+      const detail =
+        final === 'timed_out'
+          ? `Stopped after ${Math.round(this.limits.timeoutMs / 60_000)} minutes.`
+          : final === 'error'
+            ? (this.store.messages.get(entry.messageId)?.error?.message ?? null)
+            : null;
+      const refusedCalls = this.store.audit.list(entry.chatId).filter((a) => a.messageId === entry.messageId && a.grantedBy === 'deny:unattended').length;
+      const run = this.store.schedules.updateRun(entry.runId, { status: final, detail, finishedAt: this.now(), refusedCalls });
+      if (run) this.announceFinished(entry.schedule, run, entry.chatId);
+    }
+    this.poke();
+  }
+
+  /** The run's reply is gone: its chat was deleted, and the messages with it. */
+  private chatDeleted(entry: ActiveRun): boolean {
+    return !this.store.messages.get(entry.messageId);
+  }
+
+  /**
+   * Ends a run whose chat was deleted mid-reply as an error, and stops the
+   * reply, which has nowhere left to write. Deleting a chat doesn't stop its
+   * reply, so the reply's own end could be up to the 30-minute timeout away:
+   * this is swept for at every check. Writes nothing if the schedule went too.
+   */
+  private endDeleted(entry: ActiveRun): void {
     if (!this.active.delete(entry.messageId)) return;
     this.scheduler.clearTimeout(entry.timer);
-    const final: ScheduleRunStatus = status === 'complete' ? 'complete' : status === 'cancelled' ? (entry.timedOut ? 'timed_out' : 'cancelled') : 'error';
-    const detail =
-      final === 'timed_out'
-        ? `Stopped after ${Math.round(this.limits.timeoutMs / 60_000)} minutes.`
-        : final === 'error'
-          ? (this.store.messages.get(entry.messageId)?.error?.message ?? null)
-          : null;
-    const refusedCalls = this.store.audit.list(entry.chatId).filter((a) => a.messageId === entry.messageId && a.grantedBy === 'deny:unattended').length;
-    const run = this.store.schedules.updateRun(entry.runId, { status: final, detail, finishedAt: this.now(), refusedCalls });
-    if (run) this.announceFinished(entry.schedule, run, entry.chatId);
-    this.poke();
+    this.turnRunner.cancel(entry.messageId);
+    const run = this.store.schedules.updateRun(entry.runId, { status: 'error', detail: 'The chat was deleted.', finishedAt: this.now() });
+    if (run) this.announceFinished(entry.schedule, run, null);
+  }
+
+  /** Swept at the top of every check: ends the runs whose chat was deleted. */
+  private endDeletedRuns(): void {
+    for (const entry of [...this.active.values()]) {
+      if (this.chatDeleted(entry)) this.endDeleted(entry);
+    }
   }
 
   private announceFinished(schedule: Schedule, run: ScheduleRun, chatId: string | null = run.chatId): void {
@@ -400,8 +463,14 @@ export class ScheduleService {
     this.timer = null;
     if (this.disposed) return;
     let wait = this.limits.checkMaxMs;
-    for (const s of this.store.schedules.list()) {
-      if (s.enabled && s.nextRunAt !== null && s.nextRunAt > now) wait = Math.min(wait, s.nextRunAt - now);
+    try {
+      for (const s of this.store.schedules.list()) {
+        if (s.enabled && s.nextRunAt !== null && s.nextRunAt > now) wait = Math.min(wait, s.nextRunAt - now);
+      }
+    } catch (err) {
+      // Checked again within checkMaxMs either way.
+      console.error('[grunt-server] the schedules could not be listed:', err);
+      wait = this.limits.checkMaxMs;
     }
     this.timer = this.scheduler.setTimeout(() => {
       this.timer = null;

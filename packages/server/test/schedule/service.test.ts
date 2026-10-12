@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SCHEDULE_CHECK_MAX_MS } from '@grunt/core/domain/schedule.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { resolveWorkspace } from '@grunt/core/domain/workspace.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
@@ -6,6 +7,7 @@ import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/c
 import type { NewSchedule } from '@grunt/core/ports/store.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import type { AppEvent } from '@grunt/core/types/events.js';
+import { collectMessageTree } from '../../src/routes/chats.js';
 import { ScheduleBusyError, ScheduleService, type ScheduleServiceDeps } from '../../src/schedule/service.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -454,5 +456,122 @@ describe('ScheduleService: targets, endings and Run now', () => {
     await vi.waitFor(() => expect(store.messages.get(messageId)!.status).toBe('complete'));
     await settle();
     expect(scheduleEvents().map((e) => e.type)).toEqual(['schedule-run-started']);
+  });
+});
+
+describe('ScheduleService: deleted chats and store errors', () => {
+  let logged: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => logged.mockRestore());
+
+  /** DELETE /api/chats/:id on SQLite: the chat's messages cascade away, so they read as missing and writing to them throws. */
+  function deleteChat(chatId: string): void {
+    const gone = new Set(collectMessageTree(store, chatId).map((m) => m.id));
+    store.chats.delete(chatId);
+    const messages = store.messages;
+    const missing = (id: string): void => {
+      if (gone.has(id)) throw new Error(`message: not found: ${id}`);
+    };
+    const get = messages.get.bind(messages);
+    const updateParts = messages.updateParts.bind(messages);
+    const updateStatus = messages.updateStatus.bind(messages);
+    vi.spyOn(messages, 'get').mockImplementation((id) => (gone.has(id) ? null : get(id)));
+    vi.spyOn(messages, 'updateParts').mockImplementation((id, parts) => {
+      missing(id);
+      updateParts(id, parts);
+    });
+    vi.spyOn(messages, 'updateStatus').mockImplementation((id, status, error) => {
+      missing(id);
+      updateStatus(id, status, error);
+    });
+  }
+
+  it("ends a run whose chat was deleted mid-reply as an error, and the schedule's next slot runs", async () => {
+    store.projects.create({ id: 'proj', name: 'Alpha', workspace: null, defaultProfileId: null });
+    addSchedule('s1', { target: { kind: 'project', projectId: 'proj' } });
+    service.start();
+    clock.advance(HOUR);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    const first = store.schedules.runs('s1')[0]!;
+    engine.push(first.messageId!, { type: 'text-delta', text: 'Working on it' });
+    await flush();
+
+    deleteChat(first.chatId!);
+    clock.advance(SCHEDULE_CHECK_MAX_MS);
+    await settle();
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ id: first.id, status: 'error', detail: 'The chat was deleted.', finishedAt: NINE + SCHEDULE_CHECK_MAX_MS });
+    expect(service.isRunning('s1')).toBe(false);
+    expect(engine.requests[0]!.signal.aborted).toBe(true);
+    expect(scheduleEvents().at(-1)).toMatchObject({ type: 'schedule-run-finished', runId: first.id, status: 'error', detail: 'The chat was deleted.' });
+
+    clock.advance(24 * HOUR - SCHEDULE_CHECK_MAX_MS);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ trigger: 'scheduled', status: 'running', dueAt: NINE + 24 * HOUR });
+    expect(store.schedules.runs('s1').filter((r) => r.status === 'not_started')).toEqual([]);
+  });
+
+  it('keeps checking after a store error: a due() that throws once leaves the timer armed, and the schedule runs on the next tick', async () => {
+    addSchedule('s1');
+    const due = store.schedules.due.bind(store.schedules);
+    let failures = 0;
+    vi.spyOn(store.schedules, 'due').mockImplementation((now) => {
+      if (now >= NINE && failures === 0) {
+        failures++;
+        throw new Error('database is locked');
+      }
+      return due(now);
+    });
+    service.start();
+    clock.advance(HOUR);
+    await settle();
+    expect(failures).toBe(1);
+    expect(engine.requests).toHaveLength(0);
+    expect(clock.pending()).toEqual([SCHEDULE_CHECK_MAX_MS]);
+    expect(logged).toHaveBeenCalled();
+
+    clock.advance(SCHEDULE_CHECK_MAX_MS);
+    await settle();
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(store.schedules.runs('s1')[0]).toMatchObject({ trigger: 'scheduled', dueAt: NINE });
+  });
+
+  it('a poke never throws to its caller, even when the store does', () => {
+    addSchedule('s1');
+    service.start();
+    vi.spyOn(store.schedules, 'due').mockImplementation(() => {
+      throw new Error('database is locked');
+    });
+    vi.spyOn(store.schedules, 'list').mockImplementation(() => {
+      throw new Error('database is locked');
+    });
+    expect(() => service.poke()).not.toThrow();
+    expect(clock.pending()).toEqual([SCHEDULE_CHECK_MAX_MS]);
+  });
+
+  it('a run being set up when the service is disposed never starts its turn', async () => {
+    addSchedule('s1', { nextRunAt: NINE + 24 * HOUR });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    service.dispose();
+    service = build({
+      resolveProfile: async (id) => {
+        await gate;
+        return resolveP(id);
+      },
+    });
+    service.start();
+    service.runNow('s1');
+    service.dispose();
+    release();
+    await settle();
+    expect(engine.requests).toHaveLength(0);
+    expect(store.chats.get('chat-1')!.headMessageId).toBeNull();
+    expect(clock.pending()).toEqual([]);
   });
 });
