@@ -9,12 +9,27 @@ export function cutSnapshot(snapshot: string): { snapshot: string; truncated: bo
   return { snapshot: `${snapshot.slice(0, cut > 0 ? cut : MAX_SNAPSHOT_CHARS)}\n${CUT_NOTE}`, truncated: true };
 }
 
-/** Each `[ref=…]` in a snapshot -> its line, trimmed, without the leading "- ", at most 200 characters. */
+/**
+ * A snapshot line is `- role "accessible name" [attr] [ref=e12] ...` and then
+ * maybe `: text`. The name and the text are the page's own, so they can hold
+ * anything, `[ref=e5]` included: only the attribute list between the (quoted,
+ * backslash-escaped) name and the colon is Playwright's.
+ */
+const LINE_HEAD = /^([A-Za-z][\w-]*)(?:\s+"(?:[^"\\]|\\.)*")?((?:\s*\[[^\]]*\])*)/;
+
+/**
+ * Each element's `[ref=…]` in a snapshot -> its line, trimmed, without the
+ * leading "- ", at most 200 characters. The first line that claims a ref keeps
+ * it; a later one never overwrites it.
+ */
 export function refLines(snapshot: string): Map<string, string> {
   const out = new Map<string, string>();
   for (const line of snapshot.split('\n')) {
-    const m = /\[ref=([A-Za-z0-9]+)\]/.exec(line);
-    if (m) out.set(m[1]!, line.trim().replace(/^- /, '').slice(0, 200));
+    const text = line.trim().replace(/^- /, '');
+    const head = LINE_HEAD.exec(text);
+    if (!head) continue;
+    const ref = /\[ref=([A-Za-z0-9]+)\]/.exec(head[2]!);
+    if (ref && !out.has(ref[1]!)) out.set(ref[1]!, text.slice(0, 200));
   }
   return out;
 }

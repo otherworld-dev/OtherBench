@@ -143,8 +143,15 @@ function failure(code: string, message: string): { error: true; code: string; me
   return { error: true, code, message };
 }
 
+const MAX_MESSAGE = 300;
+
+/** At most 300 characters, with an ellipsis when cut. */
+function cap(text: string): string {
+  return text.length <= MAX_MESSAGE ? text : `${text.slice(0, MAX_MESSAGE - 1)}…`;
+}
+
 function firstLine(err: unknown): string {
-  return (err instanceof Error ? err.message : String(err)).split('\n')[0] ?? '';
+  return cap((err instanceof Error ? err.message : String(err)).split('\n')[0] ?? '');
 }
 
 async function describe(manager: BrowserManager, raw: unknown, ctx: ToolContext): Promise<DescribedCall> {
@@ -195,9 +202,10 @@ async function pageResult(chat: ChatBrowser): Promise<Record<string, unknown>> {
   const [title, raw] = await Promise.all([chat.session.title(), chat.session.snapshot()]);
   chat.refs = refLines(raw);
   const { snapshot, truncated } = cutSnapshot(raw);
-  const notes = chat.takeNotes();
+  // Notes can carry the page's own words (a dialog's message, a popup's address): capped.
+  const notes = chat.takeNotes().map(cap);
   return {
-    about: aboutPage(siteOf(url) ?? url),
+    about: aboutPage(siteOf(url) ?? 'an unknown page'),
     url,
     title,
     snapshot,
@@ -211,7 +219,7 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
   if ('refuse' in call) return failure('bad_call', call.refuse);
   const approved = (args as { host?: unknown }).host;
   const host = typeof approved === 'string' ? normaliseHost(approved) : null;
-  if (host === null) return failure('bad_call', "Grunt couldn't tell which website this call is for.");
+  if (host === null) return failure('bad_call', NO_APPROVAL);
   if (call.command === 'open') {
     // Go to the address Grunt judged, and only if it is on the website the call was approved for.
     const target = openTarget(call.url!);
@@ -246,6 +254,8 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     await chat.session.settle();
     return await pageResult(chat);
   } catch (err) {
+    // Whatever went wrong, the page is not what the refs were read from: the next ref fails fast.
+    chat.refs = new Map();
     if (err instanceof StaleRefError) return failure('stale_ref', err.message);
     return failure('browser_error', firstLine(err));
   }
