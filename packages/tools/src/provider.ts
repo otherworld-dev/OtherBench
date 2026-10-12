@@ -44,9 +44,9 @@ type Authorization = (
   | { ok: true; grantedBy: string }
   | {
       ok: false;
-      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped';
+      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'plan_mode';
       reason: string;
-      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled';
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan';
     }
 ) & {
   /** The machine a person answered on, when it wasn't this one (v2 spec §3). */
@@ -348,7 +348,11 @@ export class GruntToolProvider implements ToolProvider {
 
   /** Turns a broker decision into an authorisation, raising (and waiting on) an approval card for 'ask'. */
   private async settle(decision: Decision, ctx: ToolContext): Promise<Authorization> {
-    if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
+    if (decision.kind === 'deny') {
+      return decision.plan
+        ? { ok: false, code: 'plan_mode', reason: decision.reason, grantedBy: 'deny:plan' }
+        : { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
+    }
     if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
 
     const { request } = decision;

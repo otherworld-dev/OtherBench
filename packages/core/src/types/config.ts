@@ -48,9 +48,11 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * source as well as name -- a tool merely sharing the shell tool's name must
  * not be able to satisfy, or to mint, a grant meant for the real shell.
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
- * Grunt only gates, never performs.
+ * Grunt only gates, never performs. `'thread'` is Grunt's own checklist,
+ * question and plan tools (spec 2026-10-12-thread-cards-design), allowed by
+ * policy and audited.
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'thread';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;

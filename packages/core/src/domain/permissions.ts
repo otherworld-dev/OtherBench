@@ -5,12 +5,13 @@ import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
 import type { ToolPolicy } from '../types/config.js';
+import { PLAN_REFUSAL } from './thread-tools.js';
 
 export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
 
 export type Decision =
   | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant'; grantId?: string }
-  | { kind: 'deny'; reason: string }
+  | { kind: 'deny'; reason: string; plan?: true }
   | { kind: 'ask'; request: ApprovalRequest };
 
 export interface PermissionBrokerOptions {
@@ -141,6 +142,14 @@ export class PermissionBroker {
     const policyDenial = checkPolicy(tool, policy);
     if (policyDenial) return { kind: 'deny', reason: policyDenial };
 
+    // Plan mode (spec 2026-10-12-thread-cards-design §4): until the user
+    // approves this reply's plan, anything that could change something is
+    // refused, with no card. This only adds refusals: an allowed call still
+    // goes on to its grants or card below.
+    if (ctx.plan && !ctx.plan.approved && !allowedWhilePlanning(tool)) {
+      return { kind: 'deny', reason: PLAN_REFUSAL, plan: true };
+    }
+
     // fs/shell tools act ON a workspace; without one configured for this
     // chat there is nothing for them to legitimately operate on (shell's
     // cwd is forced to workspace_root -- task 24 -- agent (Claude Code) tools run in it too, and every fs tool call
@@ -148,8 +157,11 @@ export class PermissionBroker {
     // null root). mcp tools carry no such requirement, and neither do Claude
     // Code's web tools, which reach nothing local: a clean Claude Code chat
     // (spec 2026-10-11-claude-code-clean-chat-and-mcp-design) may use them.
+    // Claude Code's internal tools (TodoWrite, AskUserQuestion) touch nothing
+    // local either, so a clean chat may use them.
+    const agentCategory = tool.source === 'agent' ? classifyAgentTool(tool.name).category : null;
     const needsWorkspace =
-      tool.source === 'fs' || tool.source === 'shell' || (tool.source === 'agent' && classifyAgentTool(tool.name).category !== 'web');
+      tool.source === 'fs' || tool.source === 'shell' || (agentCategory !== null && agentCategory !== 'web' && agentCategory !== 'internal');
     if (needsWorkspace && !ctx.workspaceRoot) {
       return {
         kind: 'deny',
@@ -180,6 +192,13 @@ export class PermissionBroker {
     // Grunt's: never a Claude Code tool's name, which any MCP server can take
     // (the Claude Code engine marks its own server's call itself).
     if (tool.source === 'artifact') {
+      return { kind: 'allow', grantedBy: 'policy' };
+    }
+
+    // Thread tools (spec 2026-10-12-thread-cards-design): a checklist, a
+    // question or a plan for the user. They change nothing, so they never
+    // need a card; they are still audited like every call.
+    if (tool.source === 'thread') {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
@@ -438,6 +457,31 @@ export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
 }
 
 /**
+ * Whether a call may run while its reply's plan is still unapproved (spec
+ * 2026-10-12-thread-cards-design §2): Grunt's own thread, artifact and
+ * recall tools; read-risk fs and MCP tools; and Claude Code's file-read,
+ * web and internal tools. Everything else, including any source added
+ * later, is refused: the default is false on purpose.
+ */
+export function allowedWhilePlanning(tool: ToolSpec): boolean {
+  switch (tool.source) {
+    case 'thread':
+    case 'artifact':
+    case 'recall':
+      return true;
+    case 'fs':
+    case 'mcp':
+      return tool.risk === 'read';
+    case 'agent': {
+      const category = classifyAgentTool(tool.name).category;
+      return category === 'file-read' || category === 'web' || category === 'internal';
+    }
+    default:
+      return false;
+  }
+}
+
+/**
  * A Claude Code file-write call where the workspace-relative `path` (set by the
  * engine's gate, engine-claude-code/src/approval.ts), or any other path key,
  * is Claude Code config.
@@ -491,6 +535,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     case 'recall':
       return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
+    case 'thread':
+      return null;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

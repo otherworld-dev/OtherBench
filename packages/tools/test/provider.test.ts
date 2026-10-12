@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ApprovalRequest, ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
@@ -718,5 +719,19 @@ describe('non-user denials are honest (approval cleanup round 1)', () => {
     expect(((await readFile.execute({ path: 'x.txt' }, ctx({ signal: dead.signal }))) as Record<string, unknown>).code).toBe('cancelled');
     const spec = { name: 'Read', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => undefined };
     expect(await provider.requestApproval(spec, { file_path: 'x' }, policy(), ctx({ signal: dead.signal }))).toMatchObject({ allowed: false });
+  });
+});
+
+describe('GruntToolProvider plan mode', () => {
+  it('refuses a write while the reply is planning, raising no card, and audits it as deny:plan', async () => {
+    const { provider, store } = makeProvider();
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => events.push(e));
+    const writeFile = (await provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const result = await writeFile.execute({ path: 'planned.txt', content: 'x' }, ctx({ plan: createPlanGate() }));
+    expect(result).toEqual({ error: true, code: 'plan_mode', message: PLAN_REFUSAL });
+    expect(events).toEqual([]);
+    expect(existsSync(join(ws, 'planned.txt'))).toBe(false);
+    expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'write_file', grantedBy: 'deny:plan' });
   });
 });
