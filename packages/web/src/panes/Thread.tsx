@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@grunt/core/domain/tree.js';
-import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
@@ -287,6 +287,19 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     }
   }
 
+  /** Answers a question or plan card; a 404 (already settled, turn ended, server restarted) drops the dead card. */
+  async function answerAsk(askId: string, reply: AskReply): Promise<void> {
+    try {
+      await api.asks.answer(askId, reply);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        useGruntStore.getState().dropAsk(askId);
+        return;
+      }
+      throw err;
+    }
+  }
+
   async function retryVariant(variant: CanonMessage): Promise<void> {
     setRetryingIds((s) => new Set(s).add(variant.id));
     // Optimistic, local-only: clears the failed attempt's parts/error so the
@@ -350,6 +363,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                           retryingIds={retryingIds}
                           onClose={() => setReopenedParentId(null)}
                           onResolveApproval={resolveApproval}
+                          onAnswerAsk={answerAsk}
                         />
                       );
                     }
@@ -362,6 +376,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
                         pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
                         onResolveApproval={resolveApproval}
+                        pendingAsks={extras[m.id]?.pendingAsks ?? []}
+                        onAnswerAsk={answerAsk}
                         branch={
                           !compare && siblings.length > 1
                             ? {
@@ -405,6 +421,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     onRetry={(v) => void retryVariant(v)}
                     retryingIds={retryingIds}
                     onResolveApproval={resolveApproval}
+                    onAnswerAsk={answerAsk}
                     onActiveChange={setShownVariantId}
                   />
                 )}

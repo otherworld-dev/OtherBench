@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState, type JSX } from 'react';
-import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@grunt/core/ports/tool-provider.js';
 import type { ModelInfo } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PricingSnapshot, RecordedUsage, Usage } from '@grunt/core/types/usage.js';
@@ -120,6 +120,9 @@ export interface VariantCardProps {
   /** This variant's own still-pending tool-call approvals (task 26) -- distinct per variant/messageId, which is exactly what keeps one variant's approval prompt from ever affecting a sibling's. */
   pendingApprovals?: ApprovalRequest[];
   onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
+  /** This variant's own pending questions and plans, like `pendingApprovals`. */
+  pendingAsks?: UserAsk[];
+  onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
 }
 
 /**
@@ -140,6 +143,8 @@ export function VariantCard({
   retrying,
   pendingApprovals = [],
   onResolveApproval,
+  pendingAsks = [],
+  onAnswerAsk,
 }: VariantCardProps): JSX.Element {
   const metrics = useVariantMetrics(variant, usage, models);
 
@@ -158,7 +163,7 @@ export function VariantCard({
         </span>
       </div>
 
-      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} />
+      <Message message={variant} pendingApprovals={pendingApprovals} onResolveApproval={onResolveApproval} pendingAsks={pendingAsks} onAnswerAsk={onAnswerAsk} />
 
       <div className="flex items-center justify-between gap-2">
         {/* One cut off when its machine went away is that machine's to finish: regenerate instead (forward.ts keepCutOffReply). */}
@@ -247,6 +252,7 @@ export interface VariantTabsProps {
   /** Present only when this strip was reopened from a "⤺ N other variants" chip -- lets the user collapse back without picking a different variant. Omitted for a fresh, unresolved compare turn (nothing to collapse back to). */
   onClose?: () => void;
   onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
+  onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
   /** Told which variant's tab is showing, on mount and whenever it changes (the composer sends under it). */
   onActiveChange?: (messageId: string) => void;
 }
@@ -270,6 +276,7 @@ export function VariantTabs({
   retryingIds,
   onClose,
   onResolveApproval,
+  onAnswerAsk,
   onActiveChange,
 }: VariantTabsProps): JSX.Element {
   const [activeId, setActiveId] = useState<string>(() => keptId ?? variants[0]?.id ?? '');
@@ -323,6 +330,7 @@ export function VariantTabs({
           onRetry={onRetry}
           retryingIds={retryingIds}
           onResolveApproval={onResolveApproval}
+          onAnswerAsk={onAnswerAsk}
         />
       ) : (
         active && (
@@ -337,6 +345,8 @@ export function VariantTabs({
               retrying={retryingIds.has(active.id)}
               pendingApprovals={extras[active.id]?.pendingApprovals ?? []}
               onResolveApproval={onResolveApproval}
+              pendingAsks={extras[active.id]?.pendingAsks ?? []}
+              onAnswerAsk={onAnswerAsk}
             />
           </div>
         )
@@ -355,6 +365,7 @@ export function VariantGrid({
   onRetry,
   retryingIds,
   onResolveApproval,
+  onAnswerAsk,
 }: Omit<VariantTabsProps, 'onClose'>): JSX.Element {
   return (
     <div data-testid="compare-split" className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2">
@@ -370,6 +381,8 @@ export function VariantGrid({
           retrying={retryingIds.has(v.id)}
           pendingApprovals={extras[v.id]?.pendingApprovals ?? []}
           onResolveApproval={onResolveApproval}
+          pendingAsks={extras[v.id]?.pendingAsks ?? []}
+          onAnswerAsk={onAnswerAsk}
         />
       ))}
     </div>

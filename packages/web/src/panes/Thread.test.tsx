@@ -21,6 +21,7 @@ vi.mock('../state/api.js', () => ({
     chats: { patch: vi.fn() },
     attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
     approvals: { resolve: vi.fn() },
+    asks: { answer: vi.fn() },
   },
   ApiError: class ApiError extends Error {
     readonly status: number;
@@ -488,6 +489,56 @@ describe('Thread approval prompts that were discarded server-side', () => {
     expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
     act(() => useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'cancelled' }));
     expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
+  });
+});
+
+describe('Thread question and plan cards', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  function setup(): void {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const reply = variantMessage('reply', 'root', { status: 'streaming' });
+    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'ask-request',
+      ask: { kind: 'question', toolName: 'ask_user', id: 'ask-1', chatId: 'chat-1', messageId: 'reply', questions: [{ question: 'Which?', header: '', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] },
+    });
+  }
+
+  it('sends the reply, and leaves the card for the ask-resolved event to remove', async () => {
+    setup();
+    vi.mocked(api.asks.answer).mockResolvedValue({ answered: true });
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    expect(api.asks.answer).toHaveBeenCalledWith('ask-1', { declined: true });
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
+  });
+
+  it('drops the card when the server says it is already settled (404), instead of leaving a dead card with a retry error', async () => {
+    setup();
+    vi.mocked(api.asks.answer).mockRejectedValue(new ApiError(404, 'unknown or already settled'));
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    await waitFor(() => expect(screen.queryByTestId('ask-card-ask-1')).not.toBeInTheDocument());
+    expect(screen.queryByText(/Could not send/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the card (and lets the user retry) on any other failure', async () => {
+    setup();
+    vi.mocked(api.asks.answer).mockRejectedValue(new ApiError(500, 'boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    await screen.findByText(/Could not send that answer/);
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
   });
 });
 
