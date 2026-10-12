@@ -10,6 +10,8 @@ import { ClaudeCodeChatEngine, type QueryFn } from '../src/engine.js';
 import { liveKey } from '../src/live.js';
 import type { GruntServerTool } from '../src/grunt-server.js';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
+import { FakeToolProvider } from '@grunt/core/testing/fakes.js';
 
 let ws: string;
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'grunt-cce-')); });
@@ -302,7 +304,7 @@ describe('ClaudeCodeChatEngine clean chats (no folder)', () => {
   });
 
   it('starts a new process when only the built-in tools differ', () => {
-    const own = { artifacts: false, recall: false, relay: '' };
+    const own = { artifacts: false, recall: false, plan: false, relay: '' };
     const connection = { backend: 'claude', token: null };
     expect(liveKey({ cwd: 'x', tools: ['WebSearch', 'WebFetch'] }, connection, own)).not.toBe(liveKey({ cwd: 'x', tools: [] }, connection, own));
   });
@@ -789,7 +791,7 @@ describe('ClaudeCodeChatEngine relayed MCP tools', () => {
 
   it('starts a new process when the relayed tools change', () => {
     const connection = { backend: 'claude', token: null };
-    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, relay: 'b' }));
+    expect(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, relay: 'a' })).not.toBe(liveKey({ cwd: 'x' }, connection, { artifacts: false, recall: false, plan: false, relay: 'b' }));
   });
 });
 
@@ -939,6 +941,70 @@ describe('ClaudeCodeChatEngine recall', () => {
       { name: 'mcp__grunt__recall', source: 'agent' },
     ]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'recall' }));
+    e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine plan mode', () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const serverOf = (o: Options): string => Object.keys(o.mcpServers ?? {})[0]!;
+
+  it('puts propose_plan on the server only for a reply with a plan gate, and turning it on starts a new process', async () => {
+    const seen: string[][] = [];
+    const mcpServer = vi.fn((name: string, defs: { name: string }[]) => {
+      seen.push(defs.map((d) => d.name));
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const { query, calls } = fakeQuery(async function* () { yield init('sess-1'); yield success(); });
+    const a = { ...approvals, askUser: vi.fn() };
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer });
+    await collect(e.stream(req()));
+    await collect(e.stream(req({ plan: createPlanGate() })));
+    expect(calls[0]!.options.mcpServers).toBeUndefined();
+    expect(seen).toEqual([['propose_plan']]);
+    e.dispose();
+  });
+
+  it('approves a propose_plan call as source thread, opens the gate on approval, and reports it as propose_plan', async () => {
+    const gate = createPlanGate();
+    let tools: { name: string; call: (args: unknown) => Promise<unknown> }[] = [];
+    const mcpServer = vi.fn((name: string, defs: typeof tools) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const a = { requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn(), askUser: vi.fn(async () => ({ reply: { approve: true as const } })) };
+    let answered: unknown = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      const name = serverOf(options);
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${name}__propose_plan`, tool_input: { plan: '1. x' }, tool_use_id: 't1' } as never, 't1', sig());
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${name}__propose_plan`, input: { plan: '1. x' } }] } } as unknown as SDKMessage;
+      answered = await tools.find((t) => t.name === 'propose_plan')!.call({ plan: '1. x' });
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer });
+    const events = await collect(e.stream(req({ plan: gate })));
+    expect((a.requestApproval.mock.calls[0]![0] as { name: string; source: string })).toMatchObject({ name: 'propose_plan', source: 'thread' });
+    expect(a.askUser).toHaveBeenCalledWith(expect.objectContaining({ plan: gate }), { kind: 'plan', toolName: 'propose_plan', plan: '1. x' });
+    expect(gate.approved).toBe(true);
+    expect(JSON.stringify(answered)).toContain('The user approved the plan.');
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'propose_plan' }));
+    e.dispose();
+  });
+
+  it("refuses a planning reply's Bash with the plan refusal", async () => {
+    const provider = new FakeToolProvider();
+    let decision: unknown = null;
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      decision = await pre({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'touch x' }, tool_use_id: 't2' } as never, 't2', sig());
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: provider, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer: (name) => ({ type: 'sdk', name, instance: {} }) as never });
+    await collect(e.stream(req({ plan: createPlanGate() })));
+    expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: PLAN_REFUSAL } });
     e.dispose();
   });
 });

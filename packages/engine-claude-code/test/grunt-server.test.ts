@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it, vi } from 'vitest';
-import { gruntArtifactTool, gruntMcpServer, gruntRecallTool, gruntServerName, type GruntServerTool } from '../src/grunt-server.js';
+import { gruntArtifactTool, gruntMcpServer, gruntPlanTool, gruntRecallTool, gruntServerName, gruntToolName, type GruntServerTool } from '../src/grunt-server.js';
 
 /** A real MCP client connected to Grunt's server over an in-memory link, as Claude Code talks to it. */
 async function connect(tools: GruntServerTool[]): Promise<Client> {
@@ -87,5 +87,23 @@ describe("Grunt's MCP server, on raw handlers", () => {
     const thrown = await client.callTool({ name: 'boom', arguments: {} });
     expect(thrown.isError).toBe(true);
     expect(JSON.stringify(thrown.content)).toContain('server went away');
+  });
+});
+
+describe("Grunt's plan tool for Claude Code", () => {
+  it("names each tool on the process's server", () => {
+    expect(gruntToolName('grunt_ab', 'propose_plan')).toBe('mcp__grunt_ab__propose_plan');
+  });
+  it("passes the plan to the running reply and answers with the runner's text, not JSON", async () => {
+    const run = vi.fn(async (_args: unknown) => 'The user approved the plan. Go ahead with it; tools that change things still need their usual approvals.');
+    const def = gruntPlanTool(() => run);
+    expect(def.name).toBe('propose_plan');
+    expect(await def.call({ plan: '1. x' })).toEqual({ content: [{ type: 'text', text: 'The user approved the plan. Go ahead with it; tools that change things still need their usual approvals.' }], isError: false });
+    expect(run).toHaveBeenCalledWith({ plan: '1. x' });
+  });
+  it('flags a tool error, and refuses when no reply is planning', async () => {
+    const bad = await gruntPlanTool(() => async () => ({ error: true, code: 'invalid_input', message: '"plan" must be your plan, in Markdown.' })).call({});
+    expect(bad).toEqual({ content: [{ type: 'text', text: '"plan" must be your plan, in Markdown.' }], isError: true });
+    expect((await gruntPlanTool(() => undefined).call({ plan: 'x' })).isError).toBe(true);
   });
 });

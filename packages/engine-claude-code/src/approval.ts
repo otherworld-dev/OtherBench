@@ -2,7 +2,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
-import { AGENT_ASK_TOOL, DECLINED_QUESTION, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@grunt/core/domain/thread-tools.js';
+import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@grunt/core/domain/thread-tools.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
@@ -19,7 +19,7 @@ export type GateDecision = { allow: true; updatedInput?: Record<string, unknown>
 /**
  * `opts.own`: the call is to one of this process's own Grunt tools -- the
  * engine matched the exact per-process name (grunt-server.ts), never a name
- * alone. Either artifact or recall, or `{ relay }`: a tool relayed from one of
+ * alone. One of artifact, recall or plan, or `{ relay }`: a tool relayed from one of
  * Grunt's MCP servers, carrying the ToolSpec an API model would get for it
  * (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2).
  */
@@ -31,11 +31,12 @@ export type Gate = (
 ) => Promise<GateDecision>;
 
 /** Grunt's own tools on its per-process server, as the broker knows them. */
-export type GruntTool = 'artifact' | 'recall';
+export type GruntTool = 'artifact' | 'recall' | 'plan';
 
 const OWN_TOOLS: Record<GruntTool, { name: string; description: string; source: ToolSource }> = {
   artifact: { name: ARTIFACT_TOOL, description: 'Grunt artifact tool', source: 'artifact' },
   recall: { name: RECALL_TOOL, description: 'Grunt recall tool', source: 'recall' },
+  plan: { name: PLAN_TOOL, description: 'Grunt plan tool', source: 'thread' },
 };
 
 /** When the engine was given no way to put a question to the user. */
