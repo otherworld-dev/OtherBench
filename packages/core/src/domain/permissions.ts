@@ -2,7 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
-import { COMPUTER_OFF_REASON } from './computer-apps.js';
+import {
+  actionSummary,
+  appKey,
+  COMPUTER_NO_APP_REASON,
+  COMPUTER_OFF_REASON,
+  COMPUTER_UNATTENDED_REASON,
+  isComputerAction,
+  isHighRiskApp,
+  isReadAction,
+  programName,
+} from './computer-apps.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -12,7 +22,7 @@ export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js'
 
 export type Decision =
   | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant'; grantId?: string }
-  | { kind: 'deny'; reason: string }
+  | { kind: 'deny'; reason: string; unattended?: true }
   | { kind: 'ask'; request: ApprovalRequest };
 
 export interface PermissionBrokerOptions {
@@ -111,6 +121,11 @@ function isShellTool(tool: ToolSpec): boolean {
  * The browser (`source: 'browser'`) is refused for blocked, local and private
  * sites before any card; its reads (`snapshot`, `scroll`, `close`) skip the
  * card under ask_on_mutate; its grants are always pinned to one `host`.
+ *
+ * Computer use (`source: 'computer'`) is refused outright in an unattended
+ * run; its looking actions (`screenshot`, `cursor_position`, `wait`) skip the
+ * card in both modes; its grants are always pinned to one `app`, and a
+ * high-risk app (a shell, Explorer, Settings...) never gets one.
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
@@ -207,6 +222,21 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Computer use (spec 2026-10-12-computer-use-design §1). Never in a run
+    // nobody is watching, whatever grants exist: checked before them.
+    // Looking (screenshot, cursor position, wait) needs no card in either
+    // mode -- the shell's own start dialog was the consent to see the screen
+    // -- and goes by the action's NAME, never the declared risk. Anything
+    // else needs a grant for the app the tool's describeCall resolved, or a
+    // card; with no app at all it is refused (fail closed).
+    if (tool.source === 'computer') {
+      if (ctx.unattended === true) return { kind: 'deny', reason: COMPUTER_UNATTENDED_REASON, unattended: true };
+      const action = stringField(args, 'action');
+      if (!isComputerAction(action)) return { kind: 'deny', reason: `"${action ?? ''}" isn't a computer action Grunt can do.` };
+      if (isReadAction(action)) return { kind: 'allow', grantedBy: 'policy' };
+      if (stringField(args, 'app') === null) return { kind: 'deny', reason: COMPUTER_NO_APP_REASON };
+    }
+
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
     // user's OTHER chats, so text injected into this one could use it to
     // reach them. It falls through to the grants, and the card's "for this
@@ -228,8 +258,9 @@ export class PermissionBroker {
     }
 
     // A Claude Code write to its own config (see isProtectedAgentPath) always
-    // gets a card: no stored grant, however scoped, may cover it.
-    const grant = isProtectedAgentWrite(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
+    // gets a card: no stored grant, however scoped, may cover it. Nor may one
+    // cover computer use of a high-risk app.
+    const grant = isProtectedAgentWrite(tool, args) || isHighRiskComputerCall(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
     if (grant) {
       // A 'once' grant authorises exactly one call; consume it immediately
       // so a second identical call is asked about again rather than reusing
@@ -246,7 +277,14 @@ export class PermissionBroker {
       risk: tool.risk,
       source: tool.source,
       args,
-      summary: tool.source === 'recall' ? this.recallSummary(args) : tool.source === 'browser' ? browserSummary(args) : summarize(tool, args),
+      summary:
+        tool.source === 'recall'
+          ? this.recallSummary(args)
+          : tool.source === 'browser'
+            ? browserSummary(args)
+            : tool.source === 'computer'
+              ? computerSummary(args)
+              : summarize(tool, args),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
@@ -288,6 +326,11 @@ export class PermissionBroker {
     // such a write either.
     if (isProtectedAgentWrite(pending.tool, pending.args)) return;
 
+    // A high-risk app (a shell, Explorer, Settings...) is only ever allowed
+    // once: 'chat' and 'always' store nothing, and decide() never matches a
+    // grant for one either.
+    if (isHighRiskComputerCall(pending.tool, pending.args)) return;
+
     if (choice.choice === 'chat') {
       // A 'chat' answer for the shell is NOT a blanket grant for the rest of
       // the chat. `{choice:'chat'}` carries no constraint of its own (the UI
@@ -301,7 +344,9 @@ export class PermissionBroker {
         ? { commandExact: exactCommandForGrant(pending) }
         : pending.tool.source === 'browser'
           ? { host: hostForGrant(pending) }
-          : null;
+          : pending.tool.source === 'computer'
+            ? { app: appForGrant(pending) }
+            : null;
       this.store.grants.create({
         id: randomUUID(),
         chatId: pending.ctx.chatId,
@@ -344,6 +389,22 @@ export class PermissionBroker {
         throw new Error(`Refusing an "always" grant for the browser that doesn't name the site the card asked about (${host}).`);
       }
       constraint = { host };
+    }
+
+    // Likewise for computer use: the grant is for the one app the card named
+    // (its key, as the tool's describeCall worked it out), never blanket,
+    // never another app, and nothing else the answer carried is stored.
+    if (pending.tool.source === 'computer') {
+      const app = appForGrant(pending);
+      if (!choice.constraint?.app) {
+        throw new Error(
+          `Refusing to create an unconstrained "always" grant for computer use: it must name the app (constraint.app).`
+        );
+      }
+      if (appKey(choice.constraint.app) !== app) {
+        throw new Error(`Refusing an "always" grant for computer use that doesn't name the app the card asked about (${app}).`);
+      }
+      constraint = { app };
     }
 
     this.store.grants.create({
@@ -446,6 +507,8 @@ export class PermissionBroker {
       // A browser grant always names its site; one that doesn't (made some
       // other way) must not cover every site.
       if (tool.source === 'browser' && grant.constraint?.host === undefined) continue;
+      // Likewise a computer grant always names its app.
+      if (tool.source === 'computer' && grant.constraint?.app === undefined) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
       // null chatId = a global ('always') grant; a non-null chatId must
       // match this exact chat ('chat'-scope grants, or a scoped 'once').
@@ -497,6 +560,27 @@ function isProtectedAgentWrite(tool: ToolSpec, args: unknown): boolean {
     if (raw !== null && isProtectedAgentPath(raw)) return true;
   }
   return false;
+}
+
+/** A computer-use call on a high-risk app: it gets cards only, never grants. */
+function isHighRiskComputerCall(tool: ToolSpec, args: unknown): boolean {
+  return tool.source === 'computer' && isHighRiskApp(args);
+}
+
+/** The app a computer grant is pinned to (its key). Throws rather than store an unconstrained grant. */
+function appForGrant(pending: PendingRequest): string {
+  const app = stringField(pending.args, 'app');
+  if (app === null || app.trim() === '') {
+    throw new Error('Refusing to create a grant for computer use: the approved call named no app.');
+  }
+  return appKey(app);
+}
+
+/** `Use EXCEL: click at 512, 300` */
+function computerSummary(args: unknown): string {
+  const app = stringField(args, 'app');
+  const name = stringField(args, 'appName') ?? (app !== null ? programName(app) : 'the screen');
+  return `Use ${name}: ${actionSummary(args)}`;
 }
 
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
@@ -573,6 +657,12 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
     const want = normaliseHost(constraint.host);
     const got = normaliseHost(stringField(args, 'host') ?? '');
     return want !== null && got !== null && want === got;
+  }
+  if (constraint.app !== undefined) {
+    // Exact on the app's key (its full program path, `appKey`), never the
+    // program's name alone.
+    const app = stringField(args, 'app');
+    return app !== null && appKey(app) === appKey(constraint.app);
   }
   return false;
 }
