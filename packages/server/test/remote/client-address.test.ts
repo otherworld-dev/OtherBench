@@ -25,10 +25,21 @@ describe('clientAddress', () => {
     expect(await ask(['127.0.0.1'], '10.0.0.7', '1.2.3.4')).toBe('10.0.0.7');
   });
 
-  it('takes the right-most entry that is a valid IP and not a trusted proxy', async () => {
+  it('takes the right-most entry that is not a trusted proxy', async () => {
     expect(await ask(['127.0.0.1'], '127.0.0.1', '1.2.3.4')).toBe('1.2.3.4');
     expect(await ask(['127.0.0.1', '10.0.0.2'], '127.0.0.1', '6.6.6.6, 1.2.3.4, 10.0.0.2')).toBe('1.2.3.4');
-    expect(await ask(['127.0.0.1'], '127.0.0.1', '1.2.3.4, not-an-ip')).toBe('1.2.3.4');
+  });
+
+  it('does not fall back to an entry the client wrote when the right-most one is unusable', async () => {
+    expect(await ask(['127.0.0.1'], '127.0.0.1', '1.2.3.4, not-an-ip')).toBe('127.0.0.1');
+    expect(await ask(['127.0.0.1'], '127.0.0.1', '6.6.6.6, 1.2.3.4:notaport')).toBe('127.0.0.1');
+    expect(await ask(['127.0.0.1'], '127.0.0.1', '6.6.6.6, 1.2.3.4, ')).toBe('127.0.0.1');
+  });
+
+  it('drops a :port from the entry a proxy appended', async () => {
+    expect(await ask(['127.0.0.1'], '127.0.0.1', '6.6.6.6, 1.2.3.4:51234')).toBe('1.2.3.4');
+    expect(await ask(['127.0.0.1'], '127.0.0.1', '6.6.6.6, [FD00::5]:51234')).toBe('fd00::5');
+    expect(await ask(['127.0.0.1', '10.0.0.2'], '127.0.0.1', '1.2.3.4:1, 10.0.0.2:443')).toBe('1.2.3.4');
   });
 
   it("falls back to the proxy's own address when the header has nothing usable", async () => {

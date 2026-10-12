@@ -16,12 +16,24 @@ export function socketAddress(c: Context): string | null {
   return normalizeIp(env?.incoming?.socket?.remoteAddress);
 }
 
+/** `a.b.c.d:port` or `[v6]:port` without the port; anything else as it came. */
+function withoutPort(entry: string): string {
+  const v4 = /^(\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}$/.exec(entry);
+  if (v4) return v4[1] as string;
+  const v6 = /^(\[[^\]]+\]):\d{1,5}$/.exec(entry);
+  return v6 ? (v6[1] as string) : entry;
+}
+
 /**
  * Who is asking (spec, "Client address"): the socket's address; or, when
- * that is a trusted proxy, the right-most `X-Forwarded-For` entry that is a
- * valid IP and not a trusted proxy. Exact IPs only. With no usable entry it
- * stays the proxy's own address, so everyone behind it shares one, which
- * fails safe for the limiter and the `/view/` binding.
+ * that is a trusted proxy, the first `X-Forwarded-For` entry from the right
+ * that is not a trusted proxy. A `:port` on it is dropped. Exact IPs only.
+ * Only the entries the trusted proxies wrote are believed, so the walk stops
+ * at the first one that isn't a proxy: if that doesn't parse as an IP (a
+ * proxy that appends something odd), the answer is the proxy's own address,
+ * never an entry further left, which the client wrote. Everyone behind it
+ * then shares one address, which fails safe for the limiter and the `/view/`
+ * binding.
  */
 export function clientAddress(c: Context, trusted: ReadonlySet<string>): string | null {
   const peer = socketAddress(c);
@@ -30,8 +42,10 @@ export function clientAddress(c: Context, trusted: ReadonlySet<string>): string 
   if (!forwarded) return peer;
   const entries = forwarded.split(',');
   for (let i = entries.length - 1; i >= 0; i--) {
-    const ip = normalizeIp(entries[i]);
-    if (ip !== null && !trusted.has(ip)) return ip;
+    const entry = (entries[i] ?? '').trim();
+    const ip = normalizeIp(withoutPort(entry));
+    if (ip !== null && trusted.has(ip)) continue;
+    return ip ?? peer;
   }
   return peer;
 }
