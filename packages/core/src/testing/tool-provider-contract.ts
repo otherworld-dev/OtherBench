@@ -102,12 +102,17 @@ export function runToolProviderContract(
 
     const names = (specs: ToolSpec[]) => specs.map((s) => s.name);
 
+    // Thread tools (spec 2026-10-12-thread-cards-design) are offered whatever
+    // the policy; this contract is about fs, shell and MCP, so it reads the
+    // listing without them. Their own listing is pinned in tools/test/thread-tools.test.ts.
+    const listed = async (p: ToolPolicy): Promise<ToolSpec[]> => (await provider.listTools(p)).filter((t) => t.source !== 'thread');
+
     it('offers no tools when everything is off', async () => {
-      expect(await provider.listTools(policy())).toEqual([]);
+      expect(await listed(policy())).toEqual([]);
     });
 
     it('fs "read" offers only read-risk fs tools, and at least one', async () => {
-      const tools = await provider.listTools(policy({ fs: 'read' }));
+      const tools = await listed(policy({ fs: 'read' }));
       expect(tools.length).toBeGreaterThan(0);
       for (const t of tools) {
         expect(t.source).toBe('fs');
@@ -116,30 +121,30 @@ export function runToolProviderContract(
     });
 
     it('fs "readwrite" offers every read tool plus at least one mutate tool', async () => {
-      const read = await provider.listTools(policy({ fs: 'read' }));
-      const rw = await provider.listTools(policy({ fs: 'readwrite' }));
+      const read = await listed(policy({ fs: 'read' }));
+      const rw = await listed(policy({ fs: 'readwrite' }));
       expect(rw.every((t) => t.source === 'fs')).toBe(true);
       expect(rw.some((t) => t.risk === 'mutate')).toBe(true);
       for (const n of names(read)) expect(names(rw)).toContain(n);
     });
 
     it('shell is offered iff policy.shell, and only then', async () => {
-      const on = await provider.listTools(policy({ shell: true }));
+      const on = await listed(policy({ shell: true }));
       expect(on.length).toBeGreaterThan(0);
       expect(on.every((t) => t.source === 'shell' && t.risk === 'execute')).toBe(true);
-      const off = await provider.listTools(policy({ fs: 'readwrite', shell: false }));
+      const off = await listed(policy({ fs: 'readwrite', shell: false }));
       expect(off.some((t) => t.source === 'shell')).toBe(false);
     });
 
     it('combines fs and shell tools, with unique names', async () => {
-      const tools = await provider.listTools(policy({ fs: 'readwrite', shell: true }));
+      const tools = await listed(policy({ fs: 'readwrite', shell: true }));
       expect(tools.some((t) => t.source === 'fs')).toBe(true);
       expect(tools.some((t) => t.source === 'shell')).toBe(true);
       expect(new Set(names(tools)).size).toBe(tools.length);
     });
 
     it('every listed spec is well-formed', async () => {
-      const tools = await provider.listTools(policy({ fs: 'readwrite', shell: true }));
+      const tools = await listed(policy({ fs: 'readwrite', shell: true }));
       for (const t of tools) {
         expect(typeof t.name).toBe('string');
         expect(t.name.length).toBeGreaterThan(0);
@@ -153,12 +158,12 @@ export function runToolProviderContract(
     });
 
     it('naming an MCP server that is not connected contributes no tools and does not throw', async () => {
-      expect(await provider.listTools(policy({ mcpServerIds: ['no-such-server'] }))).toEqual([]);
+      expect(await listed(policy({ mcpServerIds: ['no-such-server'] }))).toEqual([]);
     });
 
     it('listTools is repeatable: the same policy yields the same tool names', async () => {
       const p = policy({ fs: 'readwrite', shell: true });
-      expect(names(await provider.listTools(p))).toEqual(names(await provider.listTools(p)));
+      expect(names(await listed(p))).toEqual(names(await listed(p)));
     });
 
     it('refreshMcp of an unknown server resolves', async () => {
@@ -207,14 +212,14 @@ export function runToolProviderContract(
     });
 
     it('requestApproval allows a read-risk fs call under ask_on_mutate with a workspace', async () => {
-      const [read] = await provider.listTools(policy({ fs: 'read' }));
+      const [read] = await listed(policy({ fs: 'read' }));
       expect(read).toBeDefined();
       const out = await provider.requestApproval(read as ToolSpec, {}, policy({ fs: 'read' }), ctx());
       expect(out).toMatchObject({ allowed: true });
     });
 
     it('requestApproval denies a call the policy forbids', async () => {
-      const [shell] = await provider.listTools(policy({ shell: true }));
+      const [shell] = await listed(policy({ shell: true }));
       expect(shell).toBeDefined();
       const out = await provider.requestApproval(shell as ToolSpec, { command: 'ls' }, policy({ shell: false }), ctx());
       expect(out).toMatchObject({ allowed: false });
@@ -222,7 +227,7 @@ export function runToolProviderContract(
     });
 
     it('requestApproval denies an fs call when the chat has no workspace', async () => {
-      const [read] = await provider.listTools(policy({ fs: 'read' }));
+      const [read] = await listed(policy({ fs: 'read' }));
       const out = await provider.requestApproval(read as ToolSpec, {}, policy({ fs: 'read' }), ctx({ workspaceRoot: null }));
       expect(out).toMatchObject({ allowed: false });
     });
@@ -248,7 +253,7 @@ export function runToolProviderContract(
     }
 
     async function tool(p: ToolPolicy, toolName: string): Promise<ToolSpec> {
-      const found = (await provider.listTools(p)).find((t) => t.name === toolName);
+      const found = (await listed(p)).find((t) => t.name === toolName);
       if (!found) throw new Error(`expected "${toolName}" to be listed`);
       return found;
     }
@@ -382,19 +387,19 @@ export function runToolProviderContract(
     // ---- MCP ----
 
     it('MCP tools are offered only for enabled servers, tagged with their serverId', async () => {
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'] }));
       expect(tools).toHaveLength(2);
       for (const t of tools) {
         expect(t.source).toBe('mcp');
         expect(t.serverId).toBe('srv-a');
       }
       expect(tools.map((t) => t.risk).sort()).toEqual(['mutate', 'read']);
-      expect(await provider.listTools(policy({ mcpServerIds: ['srv-b'] }))).toHaveLength(1);
+      expect(await listed(policy({ mcpServerIds: ['srv-b'] }))).toHaveLength(1);
     });
 
     it('a read-risk MCP tool under ask_on_mutate runs without asking; a mutate-risk one asks', async () => {
       const w = watch({ choice: 'once' });
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'] }));
       const read = tools.find((t) => t.risk === 'read') as ToolSpec;
       const mutate = tools.find((t) => t.risk === 'mutate') as ToolSpec;
       expect(isToolError(await read.execute({}, ctx()))).toBe(false);
@@ -406,13 +411,13 @@ export function runToolProviderContract(
 
     it('a mutate-risk MCP tool denied by the user returns approval_denied; under always_ask even a read-risk one asks', async () => {
       const w = watch({ choice: 'deny' });
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'], approvalMode: 'always_ask' }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'], approvalMode: 'always_ask' }));
       for (const t of tools) expect(isToolError(await t.execute({}, ctx()), 'approval_denied')).toBe(true);
       expect(w.requests).toHaveLength(2);
     });
 
     it('requestApproval for an MCP tool: allowed when read-risk, denied when its server is not enabled', async () => {
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'] }));
       const read = tools.find((t) => t.risk === 'read') as ToolSpec;
       expect(await provider.requestApproval(read, {}, policy({ mcpServerIds: ['srv-a'] }), ctx())).toMatchObject({ allowed: true });
       expect(await provider.requestApproval(read, {}, policy({ mcpServerIds: ['srv-b'] }), ctx())).toMatchObject({ allowed: false });
@@ -420,7 +425,7 @@ export function runToolProviderContract(
     });
 
     it('colliding tool names are de-duplicated with a numeric suffix, in order, and each still executes its own tool', async () => {
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-b', 'srv-c'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-b', 'srv-c'] }));
       expect(tools).toHaveLength(2);
       const [first, second] = names(tools) as [string, string];
       expect(second).toBe(`${first}_2`);
@@ -443,8 +448,8 @@ export function runToolProviderContract(
 
     it('requestApproval denies each source when policy forbids it, without raising a request', async () => {
       const w = watch();
-      const [write] = (await provider.listTools(policy({ fs: 'readwrite' }))).filter((t) => t.risk === 'mutate');
-      const [shell] = await provider.listTools(policy({ shell: true }));
+      const [write] = (await listed(policy({ fs: 'readwrite' }))).filter((t) => t.risk === 'mutate');
+      const [shell] = await listed(policy({ shell: true }));
       expect(await provider.requestApproval(write as ToolSpec, WRITE_ARGS, policy({ fs: 'read' }), ctx())).toMatchObject({ allowed: false });
       expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: false }), ctx())).toMatchObject({ allowed: false });
       expect(await provider.requestApproval(agent('Bash', 'execute'), { command: 'ls' }, policy({ shell: false }), ctx())).toMatchObject({ allowed: false });
@@ -495,7 +500,7 @@ export function runToolProviderContract(
 
     it('deferAsk does not defer fs, shell or mcp tools: those still ask', async () => {
       const w = watch({ choice: 'once' });
-      const [shell] = await provider.listTools(policy({ shell: true }));
+      const [shell] = await listed(policy({ shell: true }));
       expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
       expect(w.requests).toHaveLength(1);
     });
