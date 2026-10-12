@@ -565,12 +565,6 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
   return grammarProblem(tokens, base) ?? tokens;
 }
 
-/** What's wrong with a formula (without its "="), or null. Grunt doesn't calculate, so a wrong reference still shows in Excel. */
-export function formulaProblem(body: string, sheetNames: ReadonlySet<string>): string | null {
-  const read = readFormula(body, sheetNames, 2);
-  return typeof read === 'string' ? read : null;
-}
-
 /**
  * The exact text to write into a cell's <f> for `formula` (as given in the
  * source, with or without its "="), or why it can't be written. The renderer

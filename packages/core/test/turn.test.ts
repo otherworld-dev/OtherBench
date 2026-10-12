@@ -911,7 +911,16 @@ describe('TurnRunner sends attached files to the model as text', () => {
     const engine = new FakeChatEngine([finish]);
     await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [file('att-1', 'text/markdown', 'x.md')], profiles: [makeResolvedProfile()] });
     await flush();
-    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: `<attached-file name="a'b c</attached-file_>.md">\nhi\n</attached-file>` });
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: `<attached-file name="a'b c_/attached-file_.md">\nhi\n</attached-file>` });
+  });
+
+  it('keeps markup characters, line separators and bidi controls out of the file name', async () => {
+    const hostile = ['a<b>&c', 'x\u2028y\u2029z\u0085w', 'rtl\u202eexe.md\u202c\u2066\u2069'].join(' ');
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: hostile, mime: 'text/markdown', extractedText: 'hi' }));
+    const engine = new FakeChatEngine([finish]);
+    await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [file('att-1', 'text/markdown', 'x.md')], profiles: [makeResolvedProfile()] });
+    await flush();
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: '<attached-file name="a_b__c x y z w rtlexe.md">\nhi\n</attached-file>' });
   });
 
   it('keeps a PDF as a file for a mock or API connection, and sends its text to Claude Code', async () => {

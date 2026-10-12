@@ -491,8 +491,11 @@ describe('office-spec helpers', () => {
     expect([0, 25, 26, 701, 702, 16_383].map(columnName)).toEqual(['A', 'Z', 'AA', 'ZZ', 'AAA', 'XFD']);
   });
 
-  it('checkOfficeContent checks spreadsheets only, and isOfficeKind knows the kinds', () => {
+  it('checkOfficeContent checks spreadsheets and presentations by their source, and isOfficeKind knows the kinds', () => {
     expect(checkOfficeContent('document', 'anything at all')).toBeNull();
+    expect(checkOfficeContent('presentation', '{')).toMatch(/isn't valid JSON/);
+    expect(checkOfficeContent('presentation', '{"slides":[]}')).toBe('slides: must be a list of 1-200 slides');
+    expect(checkOfficeContent('presentation', JSON.stringify({ slides: [{ layout: 'title', title: 'Hi' }] }))).toBeNull();
     expect(checkOfficeContent('markdown', '{')).toBeNull();
     expect(checkOfficeContent('spreadsheet', '{')).toMatch(/isn't valid JSON/);
     expect(checkOfficeContent('spreadsheet', sheet([['x']]))).toBeNull();

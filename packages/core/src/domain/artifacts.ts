@@ -211,7 +211,7 @@ export function runArtifactCommand(store: Store, ctx: { chatId: string; messageI
       if (language !== null && !LANGUAGE.test(language)) return fail('bad_args', BAD_LANGUAGE);
       const invalid = invalidContent(kind, content);
       if (invalid) return invalid;
-      const made ={ title: title.trim(), content, kind, language };
+      const made = { title: title.trim(), content, kind, language };
       // Made on another branch (a regenerated reply, an edited prompt, a
       // compare variant): this branch's first version of the same artifact,
       // so switching branches switches it. Each version has its own kind.

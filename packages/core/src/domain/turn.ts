@@ -213,9 +213,21 @@ function degradedAttachmentsNotice(degraded: { filename: string }[], modelId: st
   return `${degraded.length} ${noun} (${names}) sent as text to "${modelId}" because this model does not support image input.`;
 }
 
-/** A file name as one plain line for a fence or a placeholder: control characters become spaces, double quotes single ones, and nothing in it can close the fence. */
+/**
+ * A file name as one plain line for a fence, a placeholder or a notice: control
+ * characters and line separators (U+0085, U+2028, U+2029) become spaces, double
+ * quotes single ones, `<`, `>` and `&` underscores, and bidirectional controls
+ * (U+202A-202E, U+2066-2069) are dropped, so nothing in it can close the fence,
+ * open a tag or reorder the text around it.
+ */
 function fileLabel(filename: string): string {
-  return defuse(filename.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/"/g, "'").trim(), 'attached-file');
+  const plain = filename
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/"/g, "'")
+    .replace(/[<>&]/g, '_')
+    .trim();
+  return defuse(plain, 'attached-file');
 }
 
 /**
