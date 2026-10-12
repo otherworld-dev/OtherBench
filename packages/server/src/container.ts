@@ -116,8 +116,10 @@ export function loopbackPortsFromEnv(value: string | undefined): number[] {
   if (!value) return [];
   return value
     .split(',')
-    .map((s) => Number(s.trim()))
-    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535);
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s)) // decimal digits only: no 0x1F90, 1e3 or +80
+    .map(Number)
+    .filter((n) => n >= 1 && n <= 65535);
 }
 
 export interface ContainerOptions {

@@ -80,6 +80,7 @@ describe('loopbackPortsFromEnv', () => {
     expect(loopbackPortsFromEnv(undefined)).toEqual([]);
     expect(loopbackPortsFromEnv('')).toEqual([]);
     expect(loopbackPortsFromEnv('4766, 5000,abc,0,70000,12.5')).toEqual([4766, 5000]);
+    expect(loopbackPortsFromEnv('0x1F90,1e3,+80,-80, ,8080')).toEqual([8080]);
   });
 });
 

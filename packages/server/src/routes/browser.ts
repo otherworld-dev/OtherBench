@@ -58,18 +58,28 @@ export function browserRoutes(container: Container): Hono {
       let pending: { seq: number; jpeg: string } | null = null;
       let lastSent = 0;
       let timer: ReturnType<typeof setTimeout> | null = null;
+      const schedule = (): void => {
+        timer ??= setTimeout(flush, Math.max(0, lastSent + FRAME_INTERVAL_MS - Date.now()));
+      };
       const flush = (): void => {
         timer = null;
         if (!pending) return;
+        // A client that hasn't read what it was sent yet gets nothing more: only
+        // the newest frame is kept, and tried again a frame interval later.
+        if (!sink.ready()) {
+          lastSent = Date.now();
+          schedule();
+          return;
+        }
         lastSent = Date.now();
-        sink.send(null, { type: 'frame', ...pending });
+        sink.send(null, { type: 'frame', seq: pending.seq, jpeg: pending.jpeg });
         pending = null;
       };
       const unwatch = browser.watch(
         chatId,
         (frame) => {
           pending = frame; // a newer frame replaces one not sent yet
-          timer ??= setTimeout(flush, Math.max(0, lastSent + FRAME_INTERVAL_MS - Date.now()));
+          schedule();
         },
         (state) => sink.send(null, { type: 'state', state })
       );

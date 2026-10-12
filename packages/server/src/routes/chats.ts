@@ -221,7 +221,8 @@ export function chatsRoutes(container: Container): Hono {
     container.store.chats.delete(id);
     container.memory?.cancel(id);
     // The chat's browser goes with it (spec 2026-10-12-model-browser-design §5).
-    await container.browser?.close(id).catch((err: unknown) => console.error(`[grunt-server] couldn't close the browser of chat ${id}:`, err));
+    // Not awaited: a browser still starting would hold the response up.
+    void container.browser?.close(id).catch((err: unknown) => console.error(`[grunt-server] couldn't close the browser of chat ${id}:`, err));
     // Deleting a chat cascades its attachment rows away in SQLite (ON
     // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
     // `sweepOrphanedBlobs` swallows filesystem-level failures (a locked

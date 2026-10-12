@@ -102,6 +102,33 @@ describe('browser routes', () => {
     expect(unwatched).toBe(true);
   });
 
+  it("holds back frames for a client that isn't reading, keeps only the newest, and sends it once the client catches up", async () => {
+    const reader = (await app().request('/api/chats/c1/browser/live')).body!.getReader();
+    await readUntil(reader, 'event: hello');
+    // The client stops reading while 25 frames arrive over 1.25 s (about six send slots).
+    for (let seq = 1; seq <= 25; seq++) {
+      watcher!.onFrame({ seq, jpeg: `frame-${seq}` });
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // It reads again: what was queued while it was away is a frame or two, never a backlog.
+    let text = '';
+    while (!text.includes('"seq":25')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+    }
+    expect(text).toContain('"seq":25');
+    expect(text.match(/"type":"frame"/g)?.length ?? 0).toBeLessThanOrEqual(2);
+    await reader.cancel();
+  });
+
+  it('404s a close and a live view of an unknown chat', async () => {
+    expect((await app().request('/api/chats/nope/browser', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })).status).toBe(404);
+    expect((await app().request('/api/chats/nope/browser/live')).status).toBe(404);
+    expect(browser.close).not.toHaveBeenCalled();
+    expect(browser.watch).not.toHaveBeenCalled();
+  });
+
   it('says which machine has the browser for a chat that runs elsewhere, and touches nothing here', async () => {
     container.store.peers.create({
       nodeId: 'node-pc',
@@ -129,6 +156,17 @@ describe('browser routes', () => {
     const res = await app().request('/api/chats/c1', { method: 'DELETE' });
     expect(res.status).toBe(204);
     expect(browser.close).toHaveBeenCalledWith('c1');
+  });
+
+  it("doesn't wait for a browser that is slow to close before answering a chat delete", async () => {
+    browser.close.mockImplementation(() => new Promise(() => {}));
+    const res = await app().request('/api/chats/c1', { method: 'DELETE' });
+    expect(res.status).toBe(204);
+    browser.close.mockImplementation(async () => {
+      throw new Error('boom');
+    });
+    container.store.chats.create({ id: 'c2', title: 'C2', profileId: 'p', headMessageId: null, pinned: false, archivedAt: null } as never);
+    expect((await app().request('/api/chats/c2', { method: 'DELETE' })).status).toBe(204);
   });
 
   it('is behind the token gate like the rest of /api', async () => {
