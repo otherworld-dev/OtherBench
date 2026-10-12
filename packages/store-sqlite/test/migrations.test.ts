@@ -660,6 +660,45 @@ describe('runMigrations', () => {
       }
     });
   });
+
+  it('schedules adds the local schedule tables: no sync triggers, one target, and cascades from chat, project and profile', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-schedules'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('chat1', 'Chat', 'p1', 1, 1)`);
+      db.exec(`INSERT INTO project (id, name, sort_order, created_at, updated_at) VALUES ('proj1', 'Alpha', 0, 1, 1)`);
+
+      runMigrations(db);
+
+      expect(tableNames(db)).toEqual(expect.arrayContaining(['schedule', 'schedule_run']));
+      const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_schedule%'").all();
+      expect(triggers).toEqual([]);
+      const insert = (id: string, chat: string | null, project: string | null): void =>
+        db.exec(
+          `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, project_id, rule, timezone, enabled, next_run_at, created_at, updated_at)
+           VALUES ('${id}', 'S', 'p', 'p1', ${chat ? `'${chat}'` : 'NULL'}, ${project ? `'${project}'` : 'NULL'}, '{"cadence":"daily","time":"09:00"}', 'UTC', 1, 5, 1, 1)`
+        );
+      expect(() => insert('both', 'chat1', 'proj1')).toThrow();
+      expect(() => insert('neither', null, null)).toThrow();
+      insert('on-chat', 'chat1', null);
+      insert('on-project', null, 'proj1');
+      db.exec(`INSERT INTO schedule_run (id, schedule_id, trigger, started_at, status, chat_id) VALUES ('r1', 'on-project', 'scheduled', 1, 'running', 'chat1')`);
+      expect(() => db.exec(`INSERT INTO schedule_run (id, schedule_id, trigger, started_at, status) VALUES ('r2', 'on-chat', 'hourly', 1, 'running')`)).toThrow();
+
+      db.exec(`DELETE FROM chat WHERE id = 'chat1'`);
+      expect(db.prepare(`SELECT id FROM schedule ORDER BY id`).all()).toEqual([{ id: 'on-project' }]);
+      expect(db.prepare(`SELECT chat_id FROM schedule_run WHERE id = 'r1'`).get()).toEqual({ chat_id: null });
+      db.exec(`DELETE FROM project WHERE id = 'proj1'`);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM schedule`).get()).toEqual({ n: 0 });
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM schedule_run`).get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
+  });
 });
 
 /** Seeds a minimal connection -> model -> profile -> chat chain so a message row can be inserted. */

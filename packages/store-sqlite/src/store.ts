@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { SqliteArtifactRepo } from './repos/artifacts.js';
-import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo } from '@grunt/core/ports/store.js';
+import type { AttachmentRepo, AuditRepo, ChatRepo, ConnectionRepo, GrantRepo, LocationRepo, McpServerRepo, MessageRepo, PeerRepo, SyncRepo, ModelRepo, ProfileRepo, ProjectMemoryRepo, GlobalMemoryRepo, ProjectRepo, SettingsRepo, Store, UsageRepo, ArtifactRepo, ScheduleRepo } from '@grunt/core/ports/store.js';
 import { SqliteAttachmentRepo } from './repos/attachments.js';
 import { SqliteAuditRepo } from './repos/audit.js';
 import { SqliteChatRepo } from './repos/chats.js';
@@ -18,6 +18,7 @@ import { SqliteProfileRepo } from './repos/profiles.js';
 import { SqliteProjectMemoryRepo } from './repos/project-memory.js';
 import { SqliteGlobalMemoryRepo } from './repos/global-memory.js';
 import { SqliteProjectRepo } from './repos/projects.js';
+import { SqliteScheduleRepo } from './repos/schedules.js';
 import { SqliteSettingsRepo } from './repos/settings.js';
 import { SqliteUsageRepo } from './repos/usage.js';
 
@@ -49,6 +50,7 @@ export class SqliteStore implements Store {
   readonly mcpServers: McpServerRepo;
   readonly grants: GrantRepo;
   readonly audit: AuditRepo;
+  readonly schedules: ScheduleRepo;
 
   constructor(private readonly db: DatabaseSync) {
     this.nodes = new SqliteNodeRepo(db);
@@ -73,6 +75,7 @@ export class SqliteStore implements Store {
     this.mcpServers = new SqliteMcpServerRepo(db);
     this.grants = new SqliteGrantRepo(db);
     this.audit = new SqliteAuditRepo(db, selfId);
+    this.schedules = new SqliteScheduleRepo(db);
   }
 
   transaction<T>(fn: () => T): T {
