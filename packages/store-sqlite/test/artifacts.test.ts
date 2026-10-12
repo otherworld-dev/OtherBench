@@ -49,4 +49,24 @@ describe('SqliteArtifactRepo', () => {
     expect(s.artifacts.get('a1')).toBeNull();
     expect(s.artifacts.getVersion('v1')).toBeNull();
   });
+
+  it("keeps a version's live declaration, null when it has none, in every read", () => {
+    const s = store();
+    s.artifacts.create({ id: 'a1', chatId: 'c1', slug: 'dash', kind: 'html', language: null, createdAt: 1 });
+    const live = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] };
+    const v1 = s.artifacts.addVersion({ id: 'v1', artifactId: 'a1', title: 'Dash', content: '<p></p>', madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2, live });
+    const v2 = s.artifacts.addVersion({ id: 'v2', artifactId: 'a1', title: 'Dash', content: '<p></p>', madeBy: 'model', messageId: null, parentVersionId: 'v1', createdAt: 3 });
+    expect(v1.live).toEqual(live);
+    expect(v2.live).toBeNull();
+    expect(s.artifacts.getVersion('v1')!.live).toEqual(live);
+    expect(s.artifacts.versions('a1').map((v) => v.live)).toEqual([live, null]);
+    expect(s.artifacts.versionInfos('a1').map((v) => v.live)).toEqual([live, null]);
+  });
+
+  it('adds artifact_version.live as a nullable column', () => {
+    const db = openDatabase(':memory:');
+    runMigrations(db);
+    const cols = db.prepare('PRAGMA table_info(artifact_version)').all() as { name: string; notnull: number; dflt_value: unknown }[];
+    expect(cols.find((c) => c.name === 'live')).toMatchObject({ notnull: 0, dflt_value: null });
+  });
 });

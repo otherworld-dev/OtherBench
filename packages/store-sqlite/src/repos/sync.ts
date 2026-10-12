@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@grunt/core/domain/artifacts.js';
+import { parseLiveSpec } from '@grunt/core/domain/live-artifacts.js';
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
@@ -59,7 +60,19 @@ function artifactRowOk(row: SyncRow): boolean {
   return isArtifactSlug(row['slug']) && isArtifactKind(row['kind']) && languageOk(row['language']);
 }
 
-/** A version row as Grunt makes one: a one-line title, a whole number from 1, a known kind and maker, at most 1 MB. */
+/** Longer than any declaration parseLiveSpec takes (32 KB canonical), with room for whitespace. */
+const MAX_LIVE_TEXT = 64 * 1024;
+
+/** A version's live declaration (spec 2026-10-12-live-artifacts): none, or one Grunt would make, and only on an html version. */
+function liveOk(row: SyncRow): boolean {
+  const live = row['live'];
+  if (live === null || live === undefined) return true;
+  if (typeof live !== 'string' || live.length > MAX_LIVE_TEXT || row['kind'] !== 'html') return false;
+  const parsed = parseLiveSpec(live);
+  return parsed.ok && parsed.spec !== null;
+}
+
+/** A version row as Grunt makes one: a one-line title, a whole number from 1, a known kind and maker, at most 1 MB, and a live declaration Grunt could have made. */
 function artifactVersionRowOk(row: SyncRow): boolean {
   const { title, number, content } = row;
   return (
@@ -67,7 +80,8 @@ function artifactVersionRowOk(row: SyncRow): boolean {
     typeof number === 'number' && Number.isInteger(number) && number >= 1 &&
     isArtifactKind(row['kind']) && languageOk(row['language']) &&
     (row['made_by'] === 'model' || row['made_by'] === 'user') &&
-    typeof content === 'string' && Buffer.byteLength(content, 'utf8') <= MAX_ARTIFACT_BYTES
+    typeof content === 'string' && Buffer.byteLength(content, 'utf8') <= MAX_ARTIFACT_BYTES &&
+    liveOk(row)
   );
 }
 

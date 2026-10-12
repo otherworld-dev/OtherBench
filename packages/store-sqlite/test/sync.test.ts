@@ -369,6 +369,32 @@ describe('sync (Task 50)', () => {
     expect(b.store.artifacts.versions('ok').map((v) => v.id)).toEqual(['v-fine']);
   });
 
+  it('refuses a version row whose live declaration Grunt could not have made, and takes a valid one', () => {
+    const b = node('b');
+    seedProfile(b);
+    chat(b, 'c');
+    b.store.artifacts.create({ id: 'ok', chatId: 'c', slug: 'ok', kind: 'html', language: null, createdAt: 1 });
+    const hlc = '9999999999999-0000-a';
+    const good = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} }] };
+    const version = (id: string, over: Record<string, unknown>) => ({
+      tbl: 'artifact_version' as const, id, op: 'upsert' as const, hlc,
+      row: { id, artifact_id: 'ok', number: 1, title: 'T', content: '', kind: 'html', language: null, made_by: 'model', message_id: null, parent_version_id: null, created_at: 1, live: null, ...over },
+    });
+    const result = b.store.sync.apply([
+      version('v-json', { live: '{not json' }),
+      version('v-rule', { live: JSON.stringify({ calls: [{ id: 'Bad Id', tool: 'mcp__s__t', args: {} }] }) }),
+      version('v-empty', { live: '{"calls":[]}' }),
+      version('v-md', { kind: 'markdown', live: JSON.stringify(good) }),
+      version('v-num', { live: 42 }),
+      version('v-huge', { live: JSON.stringify(good) + ' '.repeat(70_000) }),
+      version('v-fine', { live: JSON.stringify(good) }),
+      version('v-plain', { number: 2 }),
+    ]);
+    expect(result.applied).toBe(2);
+    expect(b.store.artifacts.versions('ok').map((v) => v.id).sort()).toEqual(['v-fine', 'v-plain']);
+    expect(b.store.artifacts.getVersion('v-fine')!.live).toEqual(good);
+  });
+
   it('the same field edited on both: the later change wins on both machines', () => {
     const a = node('a');
     const b = node('b');

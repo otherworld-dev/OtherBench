@@ -1041,7 +1041,7 @@ class InMemoryArtifactRepo implements ArtifactRepo {
     const artifact = this.artifacts.get(v.artifactId);
     if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
     const number = Math.max(0, ...this.versions(v.artifactId).map((x) => x.number)) + 1;
-    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number };
+    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, live: v.live ?? null, number };
     this.versionsById.set(v.id, full);
     return { ...full };
   }

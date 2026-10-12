@@ -16,7 +16,7 @@ import { useGruntStore } from '../state/store.js';
 import { ArtifactView } from './ArtifactView.js';
 
 const version = (id: string, number: number, content: string, madeBy: 'model' | 'user' = 'model', kind: ArtifactVersion['kind'] = 'html'): ArtifactVersion => ({
-  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
+  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, live: null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
 });
 const detail = (kind: 'html' | 'markdown' | 'code' = 'html'): ArtifactDetail => {
   const fileName = kind === 'html' ? 'calc.html' : kind === 'markdown' ? 'calc.md' : 'calc.ts';

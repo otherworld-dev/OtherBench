@@ -657,6 +657,12 @@ export interface ArtifactVersion {
   kind: ArtifactKind;
   /** A code version's language (ts, py), else null. */
   language: string | null;
+  /**
+   * The data calls this version's page may make each time it's opened (spec
+   * 2026-10-12-live-artifacts), or null for a plain version. Only html
+   * versions have one.
+   */
+  live: LiveSpec | null;
   madeBy: 'model' | 'user';
   /** The reply that made it (your edit: the newest message on the branch you were on). Not a foreign key: it may arrive by sync before its message. */
   messageId: string | null;
@@ -667,8 +673,8 @@ export interface ArtifactVersion {
 /** A version without its content: what lists and the branch's current version need. */
 export type ArtifactVersionInfo = Omit<ArtifactVersion, 'content'>;
 
-/** A version to add: everything but its number, with kind and language defaulting to the artifact's. */
-export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language'> & { kind?: ArtifactKind; language?: string | null };
+/** A version to add: everything but its number, with kind and language defaulting to the artifact's and `live` to null. */
+export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language' | 'live'> & { kind?: ArtifactKind; language?: string | null; live?: LiveSpec | null };
 
 export interface ArtifactRepo {
   create(a: Artifact): Artifact;
