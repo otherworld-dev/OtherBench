@@ -54,7 +54,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'subagents'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
@@ -82,6 +82,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
     ...(shellRuns !== undefined ? { shellRuns: shellRuns as ToolPolicy['shellRuns'] } : base.shellRuns !== undefined ? { shellRuns: base.shellRuns } : {}),
     ...(sandboxHosts !== undefined ? { sandboxHosts } : {}),
+    ...(typeof v['subagents'] === 'boolean' ? { subagents: v['subagents'] } : base.subagents !== undefined ? { subagents: base.subagents } : {}),
   };
 }
 

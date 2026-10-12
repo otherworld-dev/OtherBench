@@ -123,6 +123,17 @@ describe('POST /api/profiles', () => {
     expect((await post({ recall: 'yes' })).status).toBe(400);
   });
 
+  it('keeps toolPolicy.subagents, and refuses a non-boolean', async () => {
+    const post = (toolPolicy: unknown) =>
+      app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+    const created = await post({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', subagents: true });
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { toolPolicy: { subagents?: boolean } }).toolPolicy.subagents).toBe(true);
+    const plain = await post({ fs: 'off' });
+    expect(((await plain.json()) as { toolPolicy: Record<string, unknown> }).toolPolicy).not.toHaveProperty('subagents');
+    expect((await post({ subagents: 'yes' })).status).toBe(400);
+  });
+
   it('rejects a missing name with 400', async () => {
     const res = await app().request('/api/profiles', {
       method: 'POST',

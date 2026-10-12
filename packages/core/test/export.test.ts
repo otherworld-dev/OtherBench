@@ -85,6 +85,46 @@ describe('chatToMarkdown', () => {
     expect(stopped).toContain('*Stopped before it finished.*');
   });
 
+  it('renders a sub-agent as a details block with its label, profile, model, status, prompt and text', () => {
+    const ms = [
+      msg({ id: 'u1', createdAt: 1 }),
+      msg({
+        id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'),
+        parts: [
+          {
+            type: 'subagent', callId: 'c1', label: 'Check the logs', prompt: 'Look in logs/', profileId: 'p', profileName: 'Cheap', modelId: 'small-1', status: 'complete',
+            parts: [{ type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } }, { type: 'text', text: 'One error at noon.' }],
+          },
+          { type: 'text', text: 'The helper found one error.' },
+        ],
+      }),
+    ];
+    const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
+    expect(md).toContain('<summary>Sub-agent: Check the logs (Cheap, small-1), complete</summary>');
+    expect(md).toContain('Look in logs/');
+    expect(md).toContain('One error at noon.');
+    expect(md).toContain('The helper found one error.');
+  });
+
+  it('escapes a sub-agent\'s label, profile name and model in the summary so they cannot end the block', () => {
+    const ms = [
+      msg({ id: 'u1', createdAt: 1 }),
+      msg({
+        id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'),
+        parts: [
+          {
+            type: 'subagent', callId: 'c1', label: 'x</summary></details>\n\n# Injected <script>', prompt: 'p', profileId: 'p', profileName: '<b>Cheap</b>', modelId: 'm&1', status: 'error',
+            parts: [],
+          },
+        ],
+      }),
+    ];
+    const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
+    expect(md).toContain('<summary>Sub-agent: x&lt;/summary&gt;&lt;/details&gt;  # Injected &lt;script&gt; (&lt;b&gt;Cheap&lt;/b&gt;, m&amp;1), error</summary>');
+    expect(md).not.toContain('<script>');
+    expect(md).not.toContain('<b>');
+  });
+
   it('fences tool output with more backticks than it contains, so it cannot break out', () => {
     const ms = [
       msg({ id: 'u1', createdAt: 1 }),

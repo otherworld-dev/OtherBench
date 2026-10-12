@@ -6,6 +6,7 @@ import type {
   EngineEvent,
   EngineRequest,
 } from '@grunt/core/ports/chat-engine.js';
+import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
 import { toolContextFor } from '@grunt/core/domain/tool-context.js';
 import { ASK_TOOL, PLAN_APPROVED, PLAN_TOOL, TODO_TOOL, UNATTENDED_PLAN, STOPPED_ASK, type TodoItem } from '@grunt/core/domain/thread-tools.js';
 import type { Connection } from '@grunt/core/types/config.js';
@@ -183,7 +184,9 @@ function isToolErrorResult(result: unknown): boolean {
  * `ConnectionKind` `'mock'`.
  *
  * Triggers (checked against the prompt text, first match wins, in this
- * order): `#fail` -> a single `rate_limit` error event. `#office
+ * order): `#fail` -> a single `rate_limit` error event. `#subagents <rest>` ->
+ * two `subagent` calls at once through the real tool when offered, then
+ * "Sub-agents answered: 1) ... 2) ...". `#office
  * <document|spreadsheet|presentation>` -> that Office artifact made through the real tool,
  * then "I made the file.". `#echo-user` -> the latest user message's text
  * parts as the request carries them (an attached file's text included).
@@ -233,6 +236,12 @@ export class MockChatEngine implements ChatEngine {
           retryable: true,
         },
       };
+      return;
+    }
+
+    const subagents = /#subagents(?:[ \t]+([^\r\n]*))?/.exec(prompt);
+    if (subagents) {
+      yield* this.streamSubagentsTurn(req, (subagents[1] ?? '').trim(), tokensIn);
       return;
     }
 
@@ -339,7 +348,8 @@ export class MockChatEngine implements ChatEngine {
     if (req.signal.aborted) return;
     yield { type: 'tool-call', id: callId, name: 'artifact', args };
     const tool = req.tools.find((t) => t.name === 'artifact');
-    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
+    const ctx = toolContextFor(req, req.signal, callId);
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
     if (req.signal.aborted) return;
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
@@ -359,7 +369,8 @@ export class MockChatEngine implements ChatEngine {
     if (req.signal.aborted) return;
     yield { type: 'tool-call', id: callId, name: 'artifact', args };
     const tool = req.tools.find((t) => t.name === 'artifact');
-    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
+    const ctx = toolContextFor(req, req.signal, callId);
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
     if (req.signal.aborted) return;
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
@@ -393,7 +404,7 @@ export class MockChatEngine implements ChatEngine {
     if (req.signal.aborted) return null;
     yield { type: 'tool-call', id: callId, name, args };
     const tool = req.tools.find((t) => t.name === name);
-    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: `No ${name} tool was offered.` };
+    const result = tool ? await tool.execute(args, toolContextFor(req, req.signal, callId)) : { error: true, code: 'unavailable', message: `No ${name} tool was offered.` };
     if (req.signal.aborted) return null;
     const text = typeof result === 'string' ? result : JSON.stringify(result);
     yield { type: 'tool-result', id: callId, name, result: text, isError: isToolErrorResult(result) };
@@ -460,6 +471,42 @@ export class MockChatEngine implements ChatEngine {
     yield* this.answer(req, `Done: ${written}`, tokensIn);
   }
 
+  /**
+   * `#subagents <rest of line>` (spec 2026-10-12-api-subagents-design): two
+   * `subagent` calls in one go, run at once like a real step's, through the
+   * real tool when offered. The first helper's prompt is the rest of the
+   * line, so `#tool secrets.txt` in it makes that sub-agent (on the mock
+   * connection too) call the real, gated `read_file`.
+   */
+  private async *streamSubagentsTurn(req: EngineRequest, rest: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const tool = req.tools.find((t) => t.name === SUBAGENT_TOOL_NAME);
+    if (!tool) {
+      yield* this.streamReply(req, 'No subagent tool was offered.', 4, 20, tokensIn);
+      return;
+    }
+    const calls = [
+      { id: `mock-subagent-${randomUUID()}`, args: { description: 'First helper', prompt: rest.length > 0 ? rest : 'Say hello.' } },
+      { id: `mock-subagent-${randomUUID()}`, args: { description: 'Second helper', prompt: 'Say hello.' } },
+    ];
+    if (req.signal.aborted) return;
+    for (const call of calls) yield { type: 'tool-call', id: call.id, name: SUBAGENT_TOOL_NAME, args: call.args };
+    const results = await Promise.all(calls.map((call) => tool.execute(call.args, toolContextFor(req, req.signal, call.id))));
+    if (req.signal.aborted) return;
+    for (const [i, call] of calls.entries()) {
+      const result = results[i];
+      yield { type: 'tool-result', id: call.id, name: SUBAGENT_TOOL_NAME, result, isError: isToolErrorResult(result) };
+    }
+    const show = (r: unknown): string => (typeof r === 'string' ? r : JSON.stringify(r));
+    const answer = `Sub-agents answered: 1) ${show(results[0])} 2) ${show(results[1])}`;
+    for (const chunk of splitIntoChunks(answer, 8)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    if (req.signal.aborted) return;
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
   /** `#recall <query>` (spec 2026-10-09-recall-design): one `recall` search through the real tool when offered, then the titles it found. */
   private async *streamRecallTurn(req: EngineRequest, query: string, tokensIn: number): AsyncGenerator<EngineEvent> {
     const callId = `mock-recall-${randomUUID()}`;
@@ -467,7 +514,8 @@ export class MockChatEngine implements ChatEngine {
     if (req.signal.aborted) return;
     yield { type: 'tool-call', id: callId, name: 'recall', args };
     const tool = req.tools.find((t) => t.name === 'recall');
-    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: 'No recall tool was offered.' };
+    const ctx = toolContextFor(req, req.signal, callId);
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No recall tool was offered.' };
     if (req.signal.aborted) return;
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'recall', result: JSON.stringify(result), isError };
@@ -536,7 +584,7 @@ export class MockChatEngine implements ChatEngine {
     let isError = false;
 
     if (realTool) {
-      const result = await realTool.execute(args, toolContextFor(req));
+      const result = await realTool.execute(args, toolContextFor(req, req.signal, callId));
       if (req.signal.aborted) return;
       isError = isToolErrorResult(result);
       resultText = typeof result === 'string' ? result : JSON.stringify(result);

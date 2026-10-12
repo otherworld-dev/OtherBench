@@ -295,6 +295,48 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#subagents trigger', () => {
+    it('makes two subagent calls whose executes overlap, then answers with both results', async () => {
+      let running = 0;
+      let most = 0;
+      const execute = vi.fn(async (args: unknown, ctx: ToolContext) => {
+        running += 1;
+        most = Math.max(most, running);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        running -= 1;
+        return `answer to ${(args as { prompt: string }).prompt} (${ctx.toolCallId})`;
+      });
+      const subagent: ToolSpec = { name: 'subagent', description: '', parameters: {}, risk: 'read', source: 'subagent', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#subagents read #tool notes.txt\nthanks', { tools: [subagent] })));
+
+      const calls = events.filter((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>[];
+      expect(calls.map((c) => c.args)).toEqual([
+        { description: 'First helper', prompt: 'read #tool notes.txt' },
+        { description: 'Second helper', prompt: 'Say hello.' },
+      ]);
+      expect(most).toBe(2);
+      expect(execute.mock.calls.map(([, ctx]) => ctx.toolCallId)).toEqual(calls.map((c) => c.id));
+      expect(events.filter((e) => e.type === 'tool-result')).toHaveLength(2);
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+      expect(text).toContain('Sub-agents answered: 1) answer to read #tool notes.txt');
+      expect(text).toContain('2) answer to Say hello.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('says so when no subagent tool is offered', async () => {
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#subagents anything')));
+      expect(events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('')).toBe('No subagent tool was offered.');
+      expect(events.some((e) => e.type === 'tool-call')).toBe(false);
+    });
+
+    it("gives a sub-agent's read_file the sub-agent tag", async () => {
+      const seen: ToolContext[] = [];
+      const readFile: ToolSpec = { name: 'read_file', description: '', parameters: {}, risk: 'read', source: 'fs', execute: async (_a, ctx) => { seen.push(ctx); return 'text'; } };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('read #tool a.txt', { tools: [readFile], subagent: { callId: 'c1', label: 'First helper', parentProfileId: 'p' } })));
+      expect(seen[0]?.subagent).toEqual({ callId: 'c1', label: 'First helper', parentProfileId: 'p' });
+    });
+  });
+
   describe('#slow trigger', () => {
     it('streams exactly 20 chunks at 400ms each', async () => {
       const sleep = fakeSleep();

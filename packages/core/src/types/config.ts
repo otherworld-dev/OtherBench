@@ -55,8 +55,10 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * nothing but Grunt's own sandbox tool can claim to be sandboxed.
  * `'thread'` is Grunt's own checklist, question and plan tools (spec
  * 2026-10-12-thread-cards-design), allowed by policy and audited.
+ * `'subagent'` is the API engine's sub-agent tool (spec
+ * 2026-10-12-api-subagents-design).
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'sandbox' | 'network' | 'thread';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'sandbox' | 'network' | 'thread' | 'subagent';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -90,6 +92,8 @@ export interface ToolPolicy {
    * Absent = DEFAULT_SANDBOX_HOSTS. Any other host raises a card.
    */
   sandboxHosts?: string[];
+  /** Sub-agents (spec 2026-10-12-api-subagents-design): the `subagent` tool, API profiles only. Absent = off. */
+  subagents?: boolean;
 }
 
 /** What a sandboxed command may reach when the profile names no hosts of its own (spec 2026-10-12-sandbox-design). */

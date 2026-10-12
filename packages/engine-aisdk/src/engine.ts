@@ -428,9 +428,11 @@ function buildToolSet(req: EngineRequest): ToolSet {
     toolSet[spec.name] = tool({
       description: spec.description,
       inputSchema: jsonSchema(spec.parameters as JSONSchema7),
-      // The context carries the profile (it scopes grants), the reply's plan
-      // gate and the unattended flag: toolContextFor builds it for every engine.
-      execute: async (input: unknown, opts) => spec.execute(input, toolContextFor(req, opts.abortSignal ?? req.signal)),
+      // toolContextFor is the one place a ToolContext is built: ids, profile
+      // (it scopes grants, see ToolContext.profileId), workspace, folders,
+      // the reply's plan gate and unattended flag, the call id, and the
+      // reply's sub-agent host and tag.
+      execute: async (input: unknown, opts) => spec.execute(input, toolContextFor(req, opts.abortSignal ?? req.signal, opts.toolCallId)),
     });
   }
   return toolSet;

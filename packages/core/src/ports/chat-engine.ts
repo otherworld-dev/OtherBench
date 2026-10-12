@@ -3,7 +3,7 @@ import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.
 import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import type { PlanGate } from '../types/thread.js';
-import type { ToolSpec } from './tool-provider.js';
+import type { SubagentHost, SubagentTag, ToolSpec } from './tool-provider.js';
 
 export interface EngineRequest {
   profile: ResolvedProfile;
@@ -72,6 +72,10 @@ export interface EngineRequest {
    * context), so a call that would need a card is refused instead.
    */
   unattended?: boolean;
+  /** The reply's sub-agent runner, handed to tools on `ToolContext.subagents`. Absent: the `subagent` tool says sub-agents aren't available. */
+  subagents?: SubagentHost;
+  /** Set on a sub-agent's own request: every tool call it makes carries it. */
+  subagent?: SubagentTag;
 }
 
 export type EngineEvent =

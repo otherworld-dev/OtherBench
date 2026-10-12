@@ -38,6 +38,52 @@ function assistantMessage(over: Partial<CanonMessage> & { id: string }): CanonMe
 }
 
 describe('buildUsageRollup', () => {
+  const subPart = (callId: string, profileName: string, modelId: string) => ({
+    type: 'subagent' as const, callId, label: 'Helper', prompt: 'p', profileId: 'profile-b', profileName, modelId, status: 'complete' as const, parts: [],
+  });
+
+  it("counts a sub-agent's row as measured spend under its own profile, with subagentCount", () => {
+    const rollup = buildUsageRollup(
+      [
+        usage({ id: 'own', messageId: 'm1' }),
+        usage({ id: 'sub', messageId: 'm1', profileId: 'profile-b', modelId: 'model-b', subagentCallId: 'call-1', costEstimate: 1, tokensIn: 10 }),
+      ],
+      [assistantMessage({ id: 'm1', parts: [subPart('call-1', 'Cheap', 'model-b')] })]
+    );
+    const a = rollup.profiles.find((p) => p.profileId === 'profile-a')!;
+    const b = rollup.profiles.find((p) => p.profileId === 'profile-b')!;
+    expect(a).toMatchObject({ completeCount: 1, subagentCount: 0, measuredCost: 3 });
+    expect(b).toMatchObject({ profileName: 'Cheap', modelId: 'model-b', completeCount: 0, subagentCount: 1, measuredCost: 1, tokensIn: 10 });
+    expect(rollup.totalMeasuredCost).toBe(4);
+    expect(rollup.chats[0]!.measuredCost).toBe(4);
+    expect(rollup.buckets).toEqual([{ date: '2026-08-10', cost: 4 }]);
+  });
+
+  it('counts a sub-agent that finished under a cancelled reply as measured, not cancelled', () => {
+    const rollup = buildUsageRollup(
+      [usage({ id: 'own', messageId: 'm1', costEstimate: 0, tokensIn: 0 }), usage({ id: 'sub', messageId: 'm1', subagentCallId: 'call-1', costEstimate: 2 })],
+      [assistantMessage({ id: 'm1', status: 'cancelled', parts: [subPart('call-1', 'Profile A', 'model-x')] })]
+    );
+    expect(rollup.profiles[0]).toMatchObject({ cancelledCount: 1, subagentCount: 1, measuredCost: 2 });
+    expect(rollup.totalCancelledCount).toBe(1);
+  });
+
+  it("doesn't let a sub-agent's row hide a failed reply that has no row of its own", () => {
+    const rollup = buildUsageRollup(
+      [usage({ id: 'sub', messageId: 'm1', subagentCallId: 'call-1', costEstimate: 2 })],
+      [assistantMessage({ id: 'm1', status: 'error', parts: [] })]
+    );
+    expect(rollup.totalUnmeasuredErrorCount).toBe(1);
+    // Its card is gone (a retry clears the parts): the row still counts, under its own profile id,
+    // named after the reply's profile when it ran as that one.
+    expect(rollup.profiles.find((p) => p.subagentCount === 1)).toMatchObject({ profileId: 'profile-a', profileName: 'Profile A', modelId: 'model-x', measuredCost: 2 });
+    const other = buildUsageRollup(
+      [usage({ id: 'sub', messageId: 'm1', profileId: 'profile-z', subagentCallId: 'call-1', costEstimate: 2 })],
+      [assistantMessage({ id: 'm1', parts: [] })]
+    );
+    expect(other.profiles.find((p) => p.profileId === 'profile-z')).toMatchObject({ profileName: 'Unknown profile', subagentCount: 1 });
+  });
+
   it('sums cost and tokens for a single profile across two complete variants', () => {
     const rows = [
       usage({ id: 'u1', messageId: 'm1', costEstimate: 3, tokensIn: 1_000_000 }),

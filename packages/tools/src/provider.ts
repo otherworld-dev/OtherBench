@@ -32,6 +32,7 @@ import type { McpCallResult, McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
 import { SANDBOX_NETWORK_SPEC, SANDBOX_NETWORK_TOOL, sandboxRunCommandTool } from './sandbox-tool.js';
 import { runCommandTool, toolError } from './shell-tool.js';
+import { subagentTool } from './subagent-tool.js';
 import { threadTools } from './thread-tools.js';
 
 export interface GruntToolProviderOptions {
@@ -253,6 +254,8 @@ export class GruntToolProvider implements ToolProvider {
     // profile; TurnRunner drops propose_plan when the chat's Plan mode is off,
     // and all three for a model that can't use tools.
     raw.push(...threadTools((ctx, input) => this.askUser(ctx, input)));
+    // Sub-agents (spec 2026-10-12-api-subagents-design): off unless the profile turns them on.
+    if (policy.subagents === true) raw.push(subagentTool(this.store));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));

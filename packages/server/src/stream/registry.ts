@@ -1,3 +1,4 @@
+import { subagentPartEvents } from '@grunt/core/domain/parts.js';
 import type { TurnEvent, TurnRunner } from '@grunt/core/domain/turn.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { CanonMessage, MessageStatus } from '@grunt/core/types/messages.js';
@@ -64,6 +65,13 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
         // would silently lose the disclosure, which is worse than never
         // having sent it.
         events.push({ messageId: message.id, type: 'notice', text: part.text });
+        break;
+      case 'subagent':
+        // A sub-agent card is rebuilt from the same events that built it live,
+        // so a client rehydrating from the store sees the same card.
+        for (const event of subagentPartEvents(part)) {
+          events.push({ messageId: message.id, type: 'subagent', callId: part.callId, event });
+        }
         break;
       case 'image':
       case 'file':

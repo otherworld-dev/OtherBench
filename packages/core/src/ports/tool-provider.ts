@@ -4,6 +4,27 @@ import type { ResolvedFolder } from '../types/workspace.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 
+/** Which sub-agent a tool call or approval card belongs to (spec 2026-10-12-api-subagents-design). */
+export interface SubagentTag {
+  /** The parent's `subagent` tool call id. */
+  callId: string;
+  /** The label the parent model gave it. */
+  label: string;
+  /**
+   * The parent reply's profile id. The sub-agent's tool calls are matched
+   * against, and any grant given on them is stored under, this profile, not
+   * the one it runs as: a sub-agent can never do more than its parent.
+   */
+  parentProfileId: string;
+  /** The profile it runs as, set only when that isn't the parent's own (for its approval cards). */
+  profileName?: string;
+}
+
+/** Runs sub-agents for one reply. The `subagent` tool's `execute` hands its call here. */
+export interface SubagentHost {
+  run(input: unknown, ctx: ToolContext): Promise<unknown>;
+}
+
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
 /**
@@ -25,7 +46,8 @@ export interface ToolContext {
    * so approving a command while using a locked-down profile also approved
    * it for a permissive one. `PermissionBroker` stamps every grant it
    * creates with this id and refuses to match a grant belonging to a
-   * different profile.
+   * different profile. For a sub-agent's call it is the PARENT reply's
+   * profile (`SubagentTag.parentProfileId`), never the one it runs as.
    */
   profileId: string;
   workspaceRoot: string | null;
@@ -59,6 +81,12 @@ export interface ToolContext {
    */
   live?: LiveCallRef;
   signal: AbortSignal;
+  /** The model's id for this tool call, when the engine knows it. */
+  toolCallId?: string;
+  /** The reply's sub-agent runner; set only for a turn that offers the `subagent` tool. */
+  subagents?: SubagentHost;
+  /** Set on every call a sub-agent makes: whose call it is. */
+  subagent?: SubagentTag;
 }
 
 export interface ToolSpec {
@@ -102,6 +130,8 @@ export interface ApprovalRequest {
   source: ToolSpec['source'];
   args: unknown;
   summary: string;
+  /** Set when a sub-agent's tool call raised this card. */
+  subagent?: SubagentTag;
 }
 
 /** The human's answer to a previously-issued `ApprovalRequest`, as `PermissionBroker.resolve()` consumes it. */

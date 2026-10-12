@@ -277,6 +277,8 @@ export interface FakeToolProviderOptions {
   tools?: ToolSpec[];
   /** MCP servers whose tools are offered when the policy enables their id. */
   mcpServers?: FakeMcpServer[];
+  /** The store its `PermissionBroker` reads grants from and writes them to. Defaults to a private `InMemoryStore`. */
+  store?: Store;
 }
 
 /**
@@ -315,7 +317,7 @@ export class FakeToolProvider implements ToolProvider {
   private readonly asks = new UserAsks((event) => this.notify(event));
 
   constructor(options: FakeToolProviderOptions = {}) {
-    this.broker = new PermissionBroker(new InMemoryStore());
+    this.broker = new PermissionBroker(options.store ?? new InMemoryStore());
     this.tools = options.tools ?? [
       stubTool('read_file', 'read', 'fs'),
       stubTool('write_file', 'mutate', 'fs'),
@@ -334,6 +336,7 @@ export class FakeToolProvider implements ToolProvider {
     if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
     if (policy.recall !== false) raw.push(...this.tools.filter((t) => t.source === 'recall'));
     raw.push(...this.tools.filter((t) => t.source === 'thread'));
+    if (policy.subagents === true) raw.push(...this.tools.filter((t) => t.source === 'subagent'));
     for (const id of policy.mcpServerIds) {
       const server = this.mcpServers.find((s) => s.id === id);
       if (!server) continue;

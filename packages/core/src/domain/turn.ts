@@ -21,6 +21,12 @@ import { sandboxFoldersPrompt } from './sandbox-paths.js';
 import { LIVE_ARTIFACTS_GUIDANCE } from './live-artifacts.js';
 import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
+import { appendDelta } from './parts.js';
+import type { SubagentEvent } from './parts.js';
+import { SubagentRunner } from './subagent.js';
+
+// `appendDelta` lives in parts.ts now (the web folds with it too); kept exported here for peer/forward.ts.
+export { appendDelta } from './parts.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -55,6 +61,8 @@ export type TurnEvent = { messageId: string } & (
    * the first token, rather than only after its next full reload.
    */
   | { type: 'notice'; text: string }
+  /** A sub-agent's progress (spec 2026-10-12-api-subagents-design), folded into the reply's parts with `applySubagentEvent`. */
+  | { type: 'subagent'; callId: string; event: SubagentEvent }
 );
 
 export interface TurnInput {
@@ -138,6 +146,12 @@ export interface TurnRunnerOptions {
   /** How often (ms) a streaming variant's partial parts may be re-checkpointed to the store. */
   checkpointIntervalMs?: number;
   /**
+   * Resolves a profile by id for a sub-agent that runs as another profile
+   * (the server passes profile-resolution.ts's `resolveProfile`). Without
+   * it, a sub-agent can only run as the reply's own profile.
+   */
+  resolveProfile?: (id: string) => Promise<ResolvedProfile>;
+  /**
    * Supplies the tools a variant's `EngineRequest.tools` is populated with
    * (task 26). Omitted (the default) preserves the pre-task-26 behaviour of
    * every existing test and caller that constructs a `TurnRunner` without
@@ -205,23 +219,6 @@ class WorkspaceUnresolvedError extends Error {
 const ZERO_USAGE: Usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
 
 /**
- * Appends streamed text (or reasoning) onto `parts`, merging into the
- * trailing part when it is already the same kind (the common case -- a
- * run of `text-delta` events building up one paragraph) rather than
- * fragmenting one logical span of text into one `Part` per network chunk.
- * A different kind arriving (e.g. a tool-call between two text spans, or
- * the very first delta) starts a new part instead.
- */
-export function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): Part[] {
-  const last = parts.at(-1);
-  if (last && last.type === kind) {
-    const merged = { ...last, text: last.text + text } as Part;
-    return [...parts.slice(0, -1), merged];
-  }
-  return [...parts, { type: kind, text } as Part];
-}
-
-/**
  * The honest, human-readable disclosure text for `degradeImagesForVision`'s
  * result -- task 21 decision #3 ("the user must be told which happened, not
  * silently downgraded"). Lists every degraded attachment's real filename
@@ -282,6 +279,7 @@ export class TurnRunner {
   private readonly generateId: () => string;
   private readonly checkpointIntervalMs: number;
   private readonly toolProvider?: ToolProvider;
+  private readonly resolveProfile?: (id: string) => Promise<ResolvedProfile>;
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly pathExists: (path: string) => boolean;
   private readonly canonicalPath: (path: string) => string;
@@ -299,6 +297,7 @@ export class TurnRunner {
     this.generateId = options.generateId ?? randomUUID;
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
+    this.resolveProfile = options.resolveProfile;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
     this.canonicalPath = options.canonicalPath ?? ((p) => p);
@@ -570,6 +569,8 @@ export class TurnRunner {
     // teardown abort below -- that one must not turn a clean finish into a
     // cancellation.
     let cancelled = false;
+    // This reply's sub-agent runner, when it offers the subagent tool.
+    let subagents: SubagentRunner | null = null;
 
     const checkpoint = (force: boolean): void => {
       const nowTs = this.now();
@@ -613,12 +614,18 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      // Artifacts, recall and the thread tools are on by default, so a model
-      // that can't use tools (as its model row says) isn't sent a tool it
-      // would refuse the whole request over.
-      const usable = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread') : listed;
+      // Artifacts, recall, the thread tools and sub-agents are offered by
+      // the profile's switches (or on by default), so a model that can't use
+      // tools (as its model row says) isn't sent a tool it would refuse the
+      // whole request over.
+      const usable =
+        profile.model?.supportsTools === false
+          ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread' && t.source !== 'subagent')
+          : listed;
+      // Claude Code runs its own sub-agents (Task/Agent); Grunt's tool is for API profiles only.
+      const offered = profile.connection.kind === 'claude_code' ? usable.filter((t) => t.source !== 'subagent') : usable;
       // propose_plan only while the chat's Plan mode is on (spec 2026-10-12-thread-cards-design §4).
-      const tools = planMode ? usable : usable.filter((t) => !(t.source === 'thread' && t.name === PLAN_TOOL));
+      const tools = planMode ? offered : offered.filter((t) => !(t.source === 'thread' && t.name === PLAN_TOOL));
       // One gate per reply: compare variants, retries and the next message each start closed.
       const plan = planMode && tools.some((t) => t.source === 'thread' && t.name === PLAN_TOOL) ? createPlanGate() : undefined;
       const canRecall = tools.some((t) => t.source === 'recall');
@@ -669,6 +676,29 @@ export class TurnRunner {
         checkpoint(true);
       }
 
+      if (this.toolProvider && tools.some((t) => t.source === 'subagent')) {
+        subagents = new SubagentRunner({
+          store: this.store,
+          engine: this.engine,
+          toolProvider: this.toolProvider,
+          ...(this.resolveProfile ? { resolveProfile: this.resolveProfile } : {}),
+          now: this.now,
+          generateId: this.generateId,
+          chatId,
+          messageId,
+          parent: profile,
+          workspaceRoot,
+          folders,
+          signal: controller.signal,
+          emit: (callId, event) => this.emit({ messageId, type: 'subagent', callId, event }),
+          updateParts: (fn, force) => {
+            parts = fn(parts);
+            checkpoint(force);
+          },
+          writeUsage: (subProfile, subUsage, latencyMs, callId) => this.writeUsage(chatId, messageId, subProfile, subUsage, latencyMs, callId),
+        });
+      }
+
       const request: EngineRequest = {
         profile: requestProfile,
         messages: requestMessages,
@@ -678,6 +708,7 @@ export class TurnRunner {
         messageId,
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
+        ...(subagents ? { subagents } : {}),
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
         // Nobody can catch what auto mode's classifier allows in a scheduled
@@ -775,6 +806,12 @@ export class TurnRunner {
       // variant's own controller: siblings have their own.
       controller.abort();
     }
+
+    // Every sub-agent was told to stop by the abort above (or finished
+    // before the stream did). Wait for each to send its `end` and write its
+    // usage, so the stored parts never keep a running sub-agent and every
+    // `end` goes out before this reply's terminal status.
+    if (subagents) await subagents.settled();
 
     // The engine can end a stream cleanly on abort (no `error` event at
     // all -- MockChatEngine and this package's own `FakeChatEngine` both
@@ -1104,7 +1141,8 @@ export class TurnRunner {
     messageId: string,
     profile: ResolvedProfile,
     usage: Usage,
-    latencyMs: number
+    latencyMs: number,
+    subagentCallId?: string
   ): void {
     const currentModel = profile.model ? this.store.models.get(profile.model.id) : null;
     const pricingSnapshot: PricingSnapshot = currentModel
@@ -1130,6 +1168,7 @@ export class TurnRunner {
       costEstimate: estimateCost(usage, pricingSnapshot),
       pricingSnapshot,
       latencyMs,
+      ...(subagentCallId ? { subagentCallId } : {}),
     });
   }
 }

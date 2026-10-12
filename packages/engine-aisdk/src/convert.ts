@@ -162,6 +162,7 @@ async function userContentFromParts(
       case 'tool-call':
       case 'tool-result':
       case 'notice':
+      case 'subagent':
         // Not valid content for a user turn; defensively dropped rather
         // than forwarded to the model. `notice` also never legitimately
         // appears on a user message in practice (TurnRunner only ever adds
@@ -195,6 +196,11 @@ async function assistantContentFromParts(
         // fallback disclosure describes what GRUNT did, not something the
         // model said, so replaying it as this message's own content in a
         // later turn would misattribute it as assistant output.
+        break;
+      case 'subagent':
+        // A sub-agent's transcript is Grunt's record of what it did. The
+        // parent model only ever sees its own `subagent` tool call and the
+        // result (the sub-agent's answer), so this is never replayed.
         break;
       case 'image':
         // AssistantContent has no ImagePart variant; a model-authored

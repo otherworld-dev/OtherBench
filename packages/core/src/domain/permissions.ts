@@ -256,6 +256,13 @@ export class PermissionBroker {
       return { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Sub-agents (spec 2026-10-12-api-subagents-design): the call itself has
+    // no effect; every tool call the sub-agent makes comes back through here
+    // on its own, under a policy never wider than this one. One level only.
+    if (tool.source === 'subagent') {
+      return ctx.subagent ? { kind: 'deny', reason: "A sub-agent can't start another sub-agent." } : { kind: 'allow', grantedBy: 'policy' };
+    }
+
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
     // user's OTHER chats, so text injected into this one could use it to
     // reach them. It falls through to the grants, and the card's "for this
@@ -296,6 +303,7 @@ export class PermissionBroker {
       source: tool.source,
       args,
       summary: tool.source === 'recall' ? this.recallSummary(args) : tool.source === 'network' ? networkSummary(args) : summarize(tool, args),
+      ...(ctx.subagent ? { subagent: ctx.subagent } : {}),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
@@ -691,6 +699,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
     case 'thread':
       return null;
+    case 'subagent':
+      return policy.subagents === true ? null : 'Sub-agents are turned off for this profile.';
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

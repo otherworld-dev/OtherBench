@@ -141,6 +141,53 @@ describe('ProfilesPanel', () => {
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ recall: false }) })));
   });
 
+  it("saves the Sub-agents switch for an API profile, off by default", async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Splitter');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Sub-agents' });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/hand jobs to sub-agents that work on their own/)).toBeInTheDocument();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ subagents: true }) })));
+  });
+
+  it('hides the Sub-agents switch for a Claude Code profile', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useGruntStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByLabelText('Bash')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Sub-agents' })).not.toBeInTheDocument();
+  });
+
+  it('can turn sub-agents off again for a profile that had them on', async () => {
+    const profile = makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', subagents: true } });
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([profile]);
+    mockedPatch.mockResolvedValue(profile);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    const box = screen.getByRole('checkbox', { name: 'Sub-agents' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ subagents: false }) })));
+  });
+
   beforeEach(reset);
   afterEach(cleanup);
 

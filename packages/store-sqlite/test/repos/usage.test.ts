@@ -62,6 +62,21 @@ describe('SqliteUsageRepo', () => {
     db.close();
   });
 
+  it("round-trips a sub-agent row's call id, and reads a row without one back without it", () => {
+    const db = freshDb();
+    seedChatChain(db, { connectionId: 'c1', modelId: 'm1', profileId: 'p1', chatId: 'chat-a' });
+    new SqliteMessageRepo(db).create({ id: 'msg-a', chatId: 'chat-a', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const repo = new SqliteUsageRepo(db);
+
+    repo.create(makeUsage({ id: 'sub', chatId: 'chat-a', messageId: 'msg-a', profileId: 'p1', connectionId: 'c1', modelId: 'm1', subagentCallId: 'call-7' }));
+    repo.create(makeUsage({ id: 'own', chatId: 'chat-a', messageId: 'msg-a', profileId: 'p1', connectionId: 'c1', modelId: 'm1' }));
+
+    expect(repo.get('sub')?.subagentCallId).toBe('call-7');
+    expect(repo.get('own')).not.toHaveProperty('subagentCallId');
+    expect(repo.update('own', { tokensIn: 1 })).not.toHaveProperty('subagentCallId');
+    db.close();
+  });
+
   it('list(chatId) filters to that chat', () => {
     const db = freshDb();
     seedChatChain(db, { connectionId: 'c1', modelId: 'm1', profileId: 'p1', chatId: 'chat-a' });

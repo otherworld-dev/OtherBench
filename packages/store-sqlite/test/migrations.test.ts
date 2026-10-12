@@ -136,6 +136,20 @@ describe('runMigrations', () => {
     expect(logged()).toBe(before);
   });
 
+  it('usage-subagent adds a nullable usage.subagent_call_id', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('usage-subagent'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db);
+      const columns = db.prepare('PRAGMA table_info(usage)').all() as { name: string; notnull: number }[];
+      expect(columns.find((c) => c.name === 'subagent_call_id')).toMatchObject({ notnull: 0 });
+      expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+    } finally {
+      db.close();
+    }
+  });
+
   it('brings a fresh database to the latest migration version', () => {
     const db = freshDb();
     try {

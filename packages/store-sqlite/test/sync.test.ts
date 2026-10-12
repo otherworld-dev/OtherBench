@@ -197,6 +197,39 @@ describe('sync (Task 50)', () => {
     expect(latest(a)).toBe(aLog);
   });
 
+  // Peers on different schema versions refuse to sync (server peer/syncer.ts), so an older build never
+  // meets this column in practice; this pins the fallback if that gate relaxes: upsert writes only known columns.
+  it("a sub-agent usage row's call id syncs, and (fallback if the schema gate relaxes) an older build takes the row and drops only that", () => {
+    const a = node('a');
+    const b = node('b');
+    const old = openDatabase(':memory:');
+    runMigrations(old, MIGRATIONS.filter((m) => m.version < 22));
+    old.prepare('UPDATE node_self SET id = ?').run('old');
+    const o: Node = { id: 'old', db: old, store: new SqliteStore(old) };
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'm', 'c', null, { role: 'assistant' });
+    const pricingSnapshot = { priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
+    const row = { chatId: 'c', messageId: 'm', profileId: 'p1', connectionId: 'c1', modelId: 'm1', tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0, costEstimate: null, pricingSnapshot, latencyMs: 0 };
+    a.store.usage.create({ id: 'sub', ...row, subagentCallId: 'call-7' });
+    a.store.usage.create({ id: 'own', ...row });
+
+    pair(a, b).aToB();
+    pair(a, o).aToB();
+
+    expect(b.store.usage.get('sub')?.subagentCallId).toBe('call-7');
+    expect(b.store.usage.get('own')).not.toHaveProperty('subagentCallId');
+    expect(old.prepare("SELECT id, tokens_in FROM usage WHERE id = 'sub'").get()).toEqual({ id: 'sub', tokens_in: 1 });
+    expect(old.prepare('PRAGMA table_info(usage)').all().map((c) => (c as { name: string }).name)).not.toContain('subagent_call_id');
+
+    // The other way: the older build's change reaches a newer one without touching its call id.
+    // (Raw SQL: this store's code writes the column the older schema lacks.)
+    old.prepare("UPDATE usage SET tokens_out = 9, hlc = '9999999999999-0000-old' WHERE id = 'sub'").run();
+    pair(o, a).aToB();
+    expect(a.store.usage.get('sub')).toMatchObject({ tokensOut: 9, subagentCallId: 'call-7' });
+    old.close();
+  });
+
   it('merges a chat field by field: a rename on one machine and a pin on the other both stand', () => {
     const a = node('a');
     const b = node('b');

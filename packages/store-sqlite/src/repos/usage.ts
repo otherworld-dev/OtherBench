@@ -21,6 +21,7 @@ const mapping: CrudMapping<UsageRecord> = {
     'cost_estimate',
     'pricing_snapshot',
     'latency_ms',
+    'subagent_call_id',
   ],
   toRow: (u) => [
     u.id,
@@ -36,6 +37,7 @@ const mapping: CrudMapping<UsageRecord> = {
     u.costEstimate,
     toJson(u.pricingSnapshot),
     u.latencyMs,
+    u.subagentCallId ?? null,
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -51,6 +53,7 @@ const mapping: CrudMapping<UsageRecord> = {
     costEstimate: row.cost_estimate as number | null,
     pricingSnapshot: fromJson<PricingSnapshot>(row.pricing_snapshot as string),
     latencyMs: row.latency_ms as number,
+    ...(typeof row.subagent_call_id === 'string' ? { subagentCallId: row.subagent_call_id } : {}),
   }),
 };
 

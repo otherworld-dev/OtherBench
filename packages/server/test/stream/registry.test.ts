@@ -3,6 +3,8 @@ import { FakeToolProvider, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { TurnRunner, type TurnEvent } from '@grunt/core/domain/turn.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { Connection, ModelInfo, ResolvedProfile } from '@grunt/core/types/config.js';
+import { applySubagentEvent, type SubagentEvent } from '@grunt/core/domain/parts.js';
+import type { Part } from '@grunt/core/types/messages.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
 // ---------------------------------------------------------------------------
@@ -368,6 +370,26 @@ describe('StreamRegistry', () => {
     expect(buffer!.events.map((e) => e.type)).toEqual(['notice', 'text-delta', 'status']);
     const notice = buffer!.events.find((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
     expect(notice?.text).toContain('does not support image input');
+  });
+
+  it('rebuilds a stored subagent part into subagent events that fold back to the same part', () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const part: Part = {
+      type: 'subagent', callId: 'call-1', label: 'Helper', prompt: 'Look.', profileId: 'p', profileName: 'P', modelId: 'm', status: 'complete',
+      usage: { tokensIn: 3, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 },
+      parts: [{ type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'a' } }, { type: 'text', text: 'Found.' }],
+    };
+    store.messages.create({ id: 'assistant-1', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [{ type: 'text', text: 'Asking.' }, part], status: 'complete', error: null, producedBy: null });
+    const { engine } = manualEngine();
+    const registry = new StreamRegistry(new TurnRunner(store, engine), store);
+
+    const buffer = registry.snapshot('chat-1').find((b) => b.messageId === 'assistant-1')!;
+    expect(buffer.events.map((e) => e.type)).toEqual(['text-delta', 'subagent', 'subagent', 'subagent', 'subagent', 'subagent', 'status']);
+    const rebuilt = buffer.events
+      .filter((e): e is TurnEvent & { type: 'subagent' } => e.type === 'subagent')
+      .reduce<Part[]>((parts, e) => applySubagentEvent(parts, e.callId, e.event as SubagentEvent), []);
+    expect(rebuilt).toEqual([part]);
   });
 
   it('the LIVE capability-fallback notice reaches StreamRegistry through a toolProvider-bearing TurnRunner, in the same run()-then-registerTurn() sequence routes/turns.ts uses', async () => {

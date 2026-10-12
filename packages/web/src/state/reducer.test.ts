@@ -186,3 +186,35 @@ describe('error mid-step (server keeps streaming)', () => {
     expect(extras.pendingApprovals).toEqual([req]);
   });
 });
+
+describe('subagent events', () => {
+  const start: TurnEvent = { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'start', label: 'Helper', prompt: 'Look.', profileId: 'p', profileName: 'P', modelId: 'm' } };
+  const delta: TurnEvent = { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'text-delta', text: 'Found it.' } };
+  const end: TurnEvent = { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'end', status: 'complete' } };
+
+  it('folds a sub-agent into a card part on the message', () => {
+    const { message } = replayEvents(baseMessage(), emptyExtras, [start, { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'running' } }, delta, end]);
+    expect(message.parts).toEqual([
+      { type: 'subagent', callId: 'c1', label: 'Helper', prompt: 'Look.', profileId: 'p', profileName: 'P', modelId: 'm', status: 'complete', parts: [{ type: 'text', text: 'Found it.' }] },
+    ]);
+  });
+
+  it('ignores a malformed sub-agent event instead of folding it', () => {
+    const live = replayEvents(baseMessage(), emptyExtras, [start]).message;
+    const bad = [
+      { messageId: 'm1', type: 'subagent', callId: 7, event: { type: 'running' } },
+      { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'start', label: 1 } },
+      { messageId: 'm1', type: 'subagent', callId: 'c1', event: 'end' },
+      { messageId: 'm1', type: 'subagent', callId: 'c1' },
+    ] as unknown as TurnEvent[];
+    const { message } = replayEvents(live, emptyExtras, bad);
+    expect(message.parts).toBe(live.parts);
+  });
+
+  it('replays a hello buffer of sub-agent events without duplicating the card', () => {
+    const live = replayEvents(baseMessage(), emptyExtras, [start, delta]).message;
+    const { message } = applyHelloBuffer(live, [start, delta, end], 'complete');
+    expect(message.parts).toHaveLength(1);
+    expect(message.parts[0]).toMatchObject({ status: 'complete', parts: [{ type: 'text', text: 'Found it.' }] });
+  });
+});

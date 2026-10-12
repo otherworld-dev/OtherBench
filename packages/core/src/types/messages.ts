@@ -1,3 +1,8 @@
+import type { Usage } from './usage.js';
+
+/** Where a sub-agent is (spec 2026-10-12-api-subagents-design): waiting for a slot, working, or finished one way or another. */
+export type SubagentStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+
 export type Part =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
@@ -16,7 +21,31 @@ export type Part =
    * not something the model said, so forwarding it as conversation history
    * would misattribute it as assistant output.
    */
-  | { type: 'notice'; text: string };
+  | { type: 'notice'; text: string }
+  /**
+   * A sub-agent this reply started with the `subagent` tool (API profiles
+   * only), with its own transcript in `parts`: text, reasoning, tool-call,
+   * tool-result and notice parts, never another `subagent` part. Tool results
+   * in it are a cut copy (the sub-agent's model saw them whole). Added when
+   * the call starts and updated as it runs (domain/parts.ts folds it). The
+   * parent model never sees it: `toModelMessages` drops it, and the parent
+   * only sees its own `subagent` tool call and result.
+   */
+  | {
+      type: 'subagent';
+      callId: string;
+      label: string;
+      prompt: string;
+      profileId: string;
+      profileName: string;
+      modelId: string;
+      status: SubagentStatus;
+      parts: Part[];
+      /** Why it failed, for a person; set with status `error`. */
+      error?: string;
+      /** What its model reported when it finished. Absent when it never finished. */
+      usage?: Usage;
+    };
 
 export type Role = 'system' | 'user' | 'assistant';
 export type MessageStatus = 'streaming' | 'complete' | 'error' | 'cancelled';
