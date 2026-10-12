@@ -40,6 +40,7 @@ export function classifyForExtraction(mime: string, filename: string): Extractio
 
   const dot = filename.lastIndexOf('.');
   const ext = dot === -1 ? '' : filename.slice(dot).toLowerCase();
+  if (ext === '.pdf') return 'pdf';
   if (PLAIN_TEXT_EXTENSIONS.has(ext)) return 'plain-text';
   if (OFFICE_EXTENSIONS.has(ext)) return 'office';
   return null;

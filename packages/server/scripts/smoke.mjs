@@ -1,8 +1,8 @@
 // Smoke test for the bundled server (v2 plan, Task 40): starts
 // dist-bundle/server/cli.js the way the desktop app does (`--port 0
 // --announce`, token in GRUNT_TOKEN) against a scratch database, then
-// checks health, a mock-provider turn, search, a .docx and an .xlsx made by
-// the bundled writers, and that the packages left out of the bundle load.
+// checks health, a mock-provider turn, search, a .docx, an .xlsx and a .pptx
+// made by the bundled writers, and that the packages left out of the bundle load.
 // Exits non-zero on any failure.
 //
 // `npm run bundle:smoke -w @grunt/server`, after `npm run bundle`. Pass a

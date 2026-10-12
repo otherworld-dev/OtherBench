@@ -6,7 +6,7 @@ import { extractOfficeText } from '../../src/office/extract.js';
 import { renderPptx } from '../../src/office/pptx.js';
 import { renderXlsx } from '../../src/office/xlsx.js';
 // renderOfficeFile makes the file in a worker run from the compiled dist/office/render-worker.js: run `npx tsc -b` first.
-import { OFFICE_RENDER_CONCURRENCY, OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess } from '../../src/office/render.js';
+import { OFFICE_RENDER_CONCURRENCY, OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess, workerCandidates } from '../../src/office/render.js';
 
 /** One part of a made file, as text. */
 function part(zip: Buffer, name: string): string {
@@ -114,7 +114,8 @@ describe('renderOfficeFile: document links, titles and size limits', () => {
     expect(md.length).toBeLessThanOrEqual(MAX_DOCUMENT_CHARS);
     const start = Date.now();
     const bytes = await renderOfficeFile('document', md, 'Big');
-    expect(Date.now() - start).toBeLessThan(5000);
+    // A worker start plus the render: 2.7 s alone and over 5 s on a loaded machine, so the bound is generous for a slow CI runner.
+    expect(Date.now() - start).toBeLessThan(15_000);
     expect(extractOfficeText(bytes)).toContain('Paragraph 499');
   }, 30_000);
 
@@ -144,9 +145,20 @@ describe('renderOfficeFile: document links, titles and size limits', () => {
   });
 
   it('refuses an unknown kind instead of returning nothing', async () => {
-    await expect(renderOfficeFile('presentation' as never, 'x', 'T')).rejects.toBeInstanceOf(OfficeRenderError);
-    await expect(renderOfficeFileInProcess('presentation' as never, 'x', 'T')).rejects.toBeInstanceOf(OfficeRenderError);
+    await expect(renderOfficeFile('workbook' as never, 'x', 'T')).rejects.toThrow(/can't make a workbook file/);
+    await expect(renderOfficeFileInProcess('workbook' as never, 'x', 'T')).rejects.toThrow(/can't make a workbook file/);
   }, 30_000);
+});
+
+describe('workerCandidates', () => {
+  it('looks beside the module, and in dist/ only when run from the TypeScript sources', () => {
+    const sources = workerCandidates('file:///repo/packages/server/src/office/render.ts').map((u) => u.href);
+    expect(sources).toEqual(['file:///repo/packages/server/src/office/render-worker.js', 'file:///repo/packages/server/dist/office/render-worker.js']);
+    expect(workerCandidates('file:///repo/packages/server/dist/office/render.js').map((u) => u.href)).toEqual(['file:///repo/packages/server/dist/office/render-worker.js']);
+    expect(workerCandidates('file:///app/dist/cli.js').map((u) => u.href)).toEqual(['file:///app/dist/render-worker.js']);
+    // Where vitest really runs this module from.
+    expect(workerCandidates(new URL('../../src/office/render.ts', import.meta.url).href)).toHaveLength(2);
+  });
 });
 
 describe('renderOfficeFile: in a worker with a time and memory limit', () => {
@@ -437,5 +449,5 @@ describe('renderOfficeFile: presentation', () => {
     const bytes = await renderOfficeFile('presentation', JSON.stringify({ slides: [{ layout: 'title', title: 'Hello deck' }] }), 'Deck');
     expect(extractOfficeText(bytes)).toContain('Hello deck');
     await expect(renderOfficeFile('presentation', '{"slides":[]}', 'Empty')).rejects.toThrow('slides: must be a list of 1-200 slides');
-  });
+  }, 30_000);
 });

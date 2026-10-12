@@ -58,15 +58,22 @@ export async function renderOfficeFileInProcess(kind: OfficeKind, content: strin
 }
 
 /**
- * The worker's compiled file. Beside this module in `dist/office/` and in the
- * bundle (where this module is part of `cli.js` and the bundle script writes
- * `render-worker.js` next to it). Run from the TypeScript sources (vitest)
- * there is no .js beside this file, so the compiled one in
- * `packages/server/dist/office/` is used: server tests need `npx tsc -b` first.
+ * Where the worker's compiled file may be, for a module at `moduleUrl`. Always
+ * beside the module: in `dist/office/`, and in the bundle (where this module is
+ * part of `cli.js` and the bundle script writes `render-worker.js` next to it).
+ * Run from the TypeScript sources (vitest) there is no .js beside the module,
+ * so the compiled one in `packages/server/dist/office/` is tried too: server
+ * tests need `npx tsc -b` first. That fallback is for the sources only, never
+ * from dist or the bundle, where `../../dist` could name some other file.
  */
+export function workerCandidates(moduleUrl: string): URL[] {
+  const candidates = [new URL('./render-worker.js', moduleUrl)];
+  if (/\/src\/office\/render\.ts$/.test(new URL(moduleUrl).pathname)) candidates.push(new URL('../../dist/office/render-worker.js', moduleUrl));
+  return candidates;
+}
+
 function workerFile(): URL {
-  const candidates = [new URL('./render-worker.js', import.meta.url), new URL('../../dist/office/render-worker.js', import.meta.url)];
-  const found = candidates.find((url) => existsSync(fileURLToPath(url)));
+  const found = workerCandidates(import.meta.url).find((url) => existsSync(fileURLToPath(url)));
   if (!found) throw new OfficeRenderError("Grunt's server wasn't built: the Office file maker (render-worker.js) is missing.");
   return found;
 }

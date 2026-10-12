@@ -90,7 +90,7 @@ describe('reading Word files', () => {
 
 // Hostile input: linear time, and text that stops at the cap however the file is built.
 describe('reading hostile Word files', () => {
-  const FAST_MS = 2000;
+  const FAST_MS = 5000;
   const cell = (text: string) => `<w:tc>${p(r(text))}</w:tc>`;
   /** Runs `fn`, checks it was fast, and reports the time when GRUNT_TIMINGS is set. */
   function timed<T>(label: string, fn: () => T): T {

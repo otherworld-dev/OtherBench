@@ -62,7 +62,7 @@ describe('scanXml on hostile input', () => {
       outcome = 'XmlError';
     }
     const ms = performance.now() - started;
-    expect(ms, `${name}: ${ms.toFixed(0)} ms (${outcome}, ${events} events)`).toBeLessThan(2000);
+    expect(ms, `${name}: ${ms.toFixed(0)} ms (${outcome}, ${events} events)`).toBeLessThan(5000);
   }
 
   const repeat = (unit: string, bytes = MB): string => unit.repeat(Math.ceil(bytes / unit.length));

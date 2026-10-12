@@ -81,6 +81,12 @@ describe('extractAttachmentText', () => {
     expect(text).toContain('Hello PDF world');
   });
 
+  it('reads a PDF sent with an empty or generic MIME type, by its .pdf extension', async () => {
+    expect(classifyForExtraction('', 'report.pdf')).toBe('pdf');
+    expect(classifyForExtraction('application/octet-stream', 'REPORT.PDF')).toBe('pdf');
+    expect(await extractAttachmentText(MINIMAL_PDF, 'application/octet-stream', 'report.pdf')).toContain('Hello PDF world');
+  });
+
   it('degrades to null (not a thrown error) for bytes that are not actually a valid PDF', async () => {
     const text = await extractAttachmentText(Buffer.from('not a pdf at all'), 'application/pdf', 'fake.pdf');
     expect(text).toBeNull();
