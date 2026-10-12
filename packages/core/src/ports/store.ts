@@ -507,11 +507,13 @@ export interface Grant {
    * - `commandExact`: the command must equal this string exactly (modulo
    *   surrounding whitespace). What a `'chat'`-scope shell approval is
    *   stored as.
+   * - `host`: one website, for `source: 'browser'` (spec
+   *   2026-10-12-model-browser-design); matched exactly, ignoring case.
    *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string } | null;
+  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; host?: string } | null;
   expiresAt: number | null;
 }
 

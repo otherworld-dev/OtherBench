@@ -491,6 +491,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     case 'recall':
       return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
+    case 'browser':
+      return policy.browser === true ? null : 'The browser is turned off for this profile.';
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;
