@@ -1,7 +1,8 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { Message } from './Message.js';
 
 function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
@@ -349,5 +350,65 @@ describe('Message', () => {
       expect(onCancel).toHaveBeenCalledTimes(2);
       expect(onSave).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('Message sub-agent cards', () => {
+  afterEach(cleanup);
+
+  const card = (over: Partial<Extract<Part, { type: 'subagent' }>> = {}): Part => ({
+    type: 'subagent', callId: 'call-1', label: 'Check the logs', prompt: 'Look in logs/ for errors.', profileId: 'p', profileName: 'Cheap', modelId: 'small-1', status: 'complete',
+    usage: { tokensIn: 1200, tokensOut: 80, tokensCached: 0, tokensReasoning: 0 },
+    parts: [{ type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'logs/a.log' } }, { type: 'text', text: 'One error at noon.' }],
+    ...over,
+  });
+  const parentCall: Part = { type: 'tool-call', id: 'call-1', name: 'subagent', args: { description: 'Check the logs', prompt: 'Look in logs/ for errors.' } };
+  const parentResult: Part = { type: 'tool-result', id: 'call-1', name: 'subagent', result: 'One error at noon.', isError: false };
+
+  it('shows a closed card with label, profile, model, status and tokens, and hides the carded call and result', () => {
+    render(<Message message={base({ parts: [parentCall, card(), parentResult, { type: 'text', text: 'The helper found one error.' }] })} />);
+    const el = screen.getByTestId('subagent-card');
+    expect(el.tagName).toBe('DETAILS');
+    expect(el).not.toHaveAttribute('open');
+    expect(el).toHaveAttribute('data-status', 'complete');
+    expect(el).toHaveTextContent('◇ Check the logs');
+    expect(el).toHaveTextContent('Cheap');
+    expect(el).toHaveTextContent('small-1');
+    expect(el).toHaveTextContent('done');
+    expect(el).toHaveTextContent('1,200 in · 80 out');
+    expect(screen.queryByText(/Used 1 tool: subagent/)).not.toBeInTheDocument();
+    expect(screen.getByText('The helper found one error.')).toBeInTheDocument();
+  });
+
+  it("shows the sub-agent's prompt, its own tools and text when opened", async () => {
+    render(<Message message={base({ parts: [card()] })} />);
+    await userEvent.setup().click(screen.getByTestId('subagent-card').querySelector('summary')!);
+    expect(screen.getByTestId('subagent-card')).toHaveAttribute('open');
+    expect(screen.getByText('Look in logs/ for errors.')).toBeVisible();
+    expect(screen.getByText('Used 1 tool: read_file')).toBeVisible();
+    expect(screen.getByText('One error at noon.')).toBeVisible();
+  });
+
+  it('shows working while the reply streams, and stopped for an unfinished card on a finished reply', () => {
+    const { rerender } = render(<Message message={base({ status: 'streaming', parts: [card({ status: 'running', usage: undefined })] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('working…');
+    rerender(<Message message={base({ status: 'cancelled', parts: [card({ status: 'running', usage: undefined })] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveAttribute('data-status', 'cancelled');
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('stopped');
+    rerender(<Message message={base({ status: 'streaming', parts: [card({ status: 'queued', usage: undefined })] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('waiting to start');
+  });
+
+  it('says it needs your approval while one of its calls waits on a card', () => {
+    const request: ApprovalRequest = { id: 'r1', chatId: 'c1', messageId: 'm1', toolName: 'read_file', risk: 'read', source: 'fs', args: { path: 'a' }, summary: 'read_file(a)', subagent: { callId: 'call-1', label: 'Check the logs' } };
+    render(<Message message={base({ status: 'streaming', parts: [card({ status: 'running', usage: undefined })] })} pendingApprovals={[request]} onResolveApproval={vi.fn()} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('needs your approval');
+  });
+
+  it('shows a failed card with its error, and a refused subagent call with no card in the tool group', () => {
+    render(<Message message={base({ parts: [card({ status: 'error', error: 'Rate limited.', usage: undefined }), { type: 'tool-call', id: 'call-9', name: 'subagent', args: {} }, { type: 'tool-result', id: 'call-9', name: 'subagent', result: { error: true, code: 'subagent_limit' }, isError: true }] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('failed');
+    expect(screen.getByText('Rate limited.')).toBeInTheDocument();
+    expect(screen.getByText(/Used 1 tool: subagent/)).toBeInTheDocument();
   });
 });

@@ -1,10 +1,12 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
 import { api } from '../state/api.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { MarkdownBody } from './MarkdownBody.js';
+import { SubagentCard } from './SubagentCard.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
 import { useViewer } from '../viewer/ViewerContext.js';
 
@@ -145,12 +147,22 @@ function ToolGroup({ run }: { run: ToolPart[] }): JSX.Element {
   );
 }
 
+/** What `renderParts` needs to know about the reply around the parts it renders. */
+interface RenderContext {
+  /** The reply's approval cards still waiting, to mark the sub-agent that raised one. */
+  pendingApprovals: ApprovalRequest[];
+  replyStreaming: boolean;
+}
+
+const NO_CONTEXT: RenderContext = { pendingApprovals: [], replyStreaming: false };
+
 /**
  * Renders a message's parts, folding each run of consecutive tool-call/tool-result parts into one `ToolGroup`.
  * An artifact call that made a version (Deck #896) is a card instead, outside the fold; one still running,
  * failed or only viewing folds with the rest, so its error stays visible.
+ * A sub-agent is a card where its part sits, with its own parts rendered inside.
  */
-function renderParts(parts: Part[]): JSX.Element[] {
+function renderParts(parts: Part[], ctx: RenderContext = NO_CONTEXT): JSX.Element[] {
   const out: JSX.Element[] = [];
   let run: ToolPart[] = [];
   let runStart = 0;
@@ -165,7 +177,26 @@ function renderParts(parts: Part[]): JSX.Element[] {
     cards = [];
   };
   const carded = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isArtifactTool(p.name) && artifactOutcomeOf(p.result) ? [p.id] : [])));
+  // A sub-agent shows as its card; the parent's own subagent call and result
+  // for it are hidden. A subagent call with no card (refused before it
+  // started) stays in the tool group, so its error shows.
+  const subagentCards = new Set(parts.flatMap((p) => (p.type === 'subagent' ? [p.callId] : [])));
   parts.forEach((p, i) => {
+    if ((p.type === 'tool-call' || p.type === 'tool-result') && p.name === SUBAGENT_TOOL_NAME && subagentCards.has(p.id)) return;
+    if (p.type === 'subagent') {
+      flush();
+      out.push(
+        <SubagentCard
+          key={`subagent-${p.callId}`}
+          part={p}
+          replyStreaming={ctx.replyStreaming}
+          awaitingApproval={ctx.pendingApprovals.some((r) => r.subagent?.callId === p.callId)}
+        >
+          {renderParts(p.parts, ctx)}
+        </SubagentCard>
+      );
+      return;
+    }
     if (p.type === 'tool-call' || p.type === 'tool-result') {
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
@@ -419,7 +450,7 @@ export function Message({
         <MessageEditor message={message} editing={editing} />
       ) : (
       <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
-        {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : renderParts(message.parts)}
+        {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming' })}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
       )}
