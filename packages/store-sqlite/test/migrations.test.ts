@@ -28,14 +28,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).not.toContain(21);
-    expect(MIGRATIONS.slice(-4).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth']);
+    expect(MIGRATIONS.slice(-5).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(25);
+      expect(SCHEMA_VERSION).toBe(26);
     } finally {
       db.close();
     }
@@ -64,7 +64,9 @@ describe('runMigrations', () => {
         // The hand fix for that state keeps the sign-in data.
         db.exec('ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 25;');
         runMigrations(db);
-        expect(userVersion(db)).toBe(25);
+        // 026 (the sub-agent usage column) still follows the hand fix.
+        expect(userVersion(db)).toBe(26);
+        expect(columns(db, 'usage')).toContain('subagent_call_id');
         expect(columns(db, 'artifact_version')).toContain('live');
         expect(tableNames(db)).toContain('schedule');
       } finally {
@@ -77,7 +79,7 @@ describe('runMigrations', () => {
       try {
         db.exec('ALTER TABLE mcp_server DROP COLUMN oauth; PRAGMA user_version = 20;');
         runMigrations(db);
-        expect(userVersion(db)).toBe(25);
+        expect(userVersion(db)).toBe(26);
         expect(columns(db, 'chat')).toContain('plan_mode');
         expect(columns(db, 'mcp_server')).toContain('oauth');
       } finally {
@@ -92,6 +94,7 @@ describe('runMigrations', () => {
         expect(userVersion(db)).toBe(24);
         db.exec('ALTER TABLE artifact_version ADD COLUMN live TEXT; PRAGMA user_version = 25;');
         runMigrations(db);
+        expect(userVersion(db)).toBe(26);
         expect(columns(db, 'artifact_version')).toContain('live');
         expect(columns(db, 'chat')).toContain('plan_mode');
       } finally {

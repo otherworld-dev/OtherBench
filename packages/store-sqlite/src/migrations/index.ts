@@ -23,7 +23,7 @@ import { MIGRATION_022_CHAT_PLAN_MODE } from './022-chat-plan-mode.js';
 import { MIGRATION_023_SCHEDULES } from './023-schedules.js';
 import { MIGRATION_024_ARTIFACT_VERSION_LIVE } from './024-artifact-version-live.js';
 import { MIGRATION_025_MCP_OAUTH } from './025-mcp-oauth.js';
-import { MIGRATION_022_USAGE_SUBAGENT } from './022-usage-subagent.js';
+import { MIGRATION_026_USAGE_SUBAGENT } from './026-usage-subagent.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -53,7 +53,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_023_SCHEDULES,
   { version: 24, name: '024-artifact-version-live', sql: MIGRATION_024_ARTIFACT_VERSION_LIVE },
   MIGRATION_025_MCP_OAUTH,
-  { version: 22, name: '022-usage-subagent', sql: MIGRATION_022_USAGE_SUBAGENT },
+  { version: 26, name: '026-usage-subagent', sql: MIGRATION_026_USAGE_SUBAGENT },
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

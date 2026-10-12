@@ -4,6 +4,6 @@
 // schema versions refuse to sync (server peer/syncer.ts), so an older build
 // never sees the column; if that gate is ever relaxed, `SqliteSyncRepo.upsert`
 // writing only the columns it knows is the fallback.
-export const MIGRATION_022_USAGE_SUBAGENT = `
+export const MIGRATION_026_USAGE_SUBAGENT = `
 ALTER TABLE usage ADD COLUMN subagent_call_id TEXT;
 `;
