@@ -159,6 +159,21 @@ describe('dead approval prompts', () => {
   });
 });
 
+describe('asks', () => {
+  const ask = { kind: 'question' as const, toolName: 'ask_user', questions: [], id: 'a1', chatId: 'c1', messageId: 'm1' };
+  it('adds a pending ask on ask-request and removes it on ask-resolved', () => {
+    let acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'ask-request', ask });
+    expect(acc.extras.pendingAsks).toEqual([ask]);
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'ask-resolved', askId: 'a1' });
+    expect(acc.extras.pendingAsks).toEqual([]);
+  });
+  it('drops pending asks when the message stops streaming, and keeps them across a hello replay', () => {
+    const asked = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'ask-request', ask });
+    expect(applyEventToMessage(asked.message, asked.extras, { messageId: 'm1', type: 'status', status: 'cancelled' }).extras.pendingAsks ?? []).toEqual([]);
+    expect(applyHelloBuffer(baseMessage(), [{ messageId: 'm1', type: 'ask-request', ask }], 'streaming').extras.pendingAsks).toEqual([ask]);
+  });
+});
+
 describe('error mid-step (server keeps streaming)', () => {
   const req = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
 

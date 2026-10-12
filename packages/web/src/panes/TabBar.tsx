@@ -37,7 +37,7 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
  * layout picker. A tab shows its chat in the focused pane, or focuses the
  * pane already showing it; in a multi-pane layout each visible tab is
  * numbered with its pane. ✕ only closes the tab. A dot marks a chat that is
- * replying or waiting for an approval. Hidden while there are no tabs and
+ * replying or waiting for an approval, a question or a plan. Hidden while there are no tabs and
  * one pane.
  */
 export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
@@ -164,7 +164,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                     data-testid={`tab-status-${t.id}`}
                     data-status={status}
                     role="img"
-                    aria-label={status === 'waiting' ? 'waiting for approval' : 'replying'}
+                    aria-label={status === 'waiting' ? 'waiting for you' : 'replying'}
                     className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${status === 'waiting' ? 'bg-[var(--warn)]' : 'animate-pulse bg-[var(--accent)]'}`}
                   />
                 )}

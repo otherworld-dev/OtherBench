@@ -1,7 +1,7 @@
 import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { ImportPreview, ImportStart, ImportStatus } from '@grunt/core/types/claude-import.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
@@ -173,6 +173,8 @@ export type ChatPatchBody = Partial<{
   /** The machine its turns run on: this one or a paired one (v2 spec §5). */
   runsOn: string;
   pinned: boolean;
+  /** Plan first, from the next message (spec 2026-10-12-thread-cards-design §4). */
+  planMode: boolean;
   /** Pinned at the top of its own project's group; refused (400) for a chat with no project. */
   projectPinned: boolean;
   archivedAt: number | null;
@@ -528,6 +530,11 @@ export const api = {
 
   approvals: {
     resolve: (requestId: string, choice: ApprovalChoice) => post<{ resolved: boolean }>(`/approvals/${requestId}/resolve`, choice),
+  },
+
+  asks: {
+    /** Answers a question or plan card; 404 once it's settled, 400 when the reply doesn't fit it. */
+    answer: (askId: string, reply: AskReply) => post<{ answered: boolean }>(`/asks/${askId}/answer`, reply),
   },
 
   attachments: {

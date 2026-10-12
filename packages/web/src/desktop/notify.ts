@@ -7,7 +7,7 @@ export const NOTIFY_STORAGE_KEY = 'grunt.notifications';
 export interface NotifyPrefs {
   /** A reply finished (or failed). */
   replies: boolean;
-  /** A tool call is waiting for approval. */
+  /** A tool call, question or plan is waiting for the user. */
   approvals: boolean;
 }
 
@@ -69,7 +69,7 @@ export class Notifier {
     } else if (e.type === 'approval-requested') {
       if (!this.deps.prefs().approvals) return;
       key = `request:${e.requestId}`;
-      body = `Approval needed: ${e.toolName}`;
+      body = e.kind === 'question' ? 'Waiting for your answer' : e.kind === 'plan' ? 'Plan waiting for your approval' : `Approval needed: ${e.toolName}`;
     } else {
       return;
     }

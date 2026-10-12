@@ -88,7 +88,7 @@ describe('DesktopPanel', () => {
     const user = userEvent.setup();
     render(<DesktopPanel />);
     const replies = screen.getByRole('checkbox', { name: 'When a reply finishes' });
-    const approvals = screen.getByRole('checkbox', { name: 'When a tool call needs approval' });
+    const approvals = screen.getByRole('checkbox', { name: 'Approvals, questions and plans' });
     expect(replies).toBeChecked();
     expect(approvals).toBeChecked();
 

@@ -598,3 +598,20 @@ describe('the project page slot', () => {
     expect(useGruntStore.getState().projectPage).toBeNull();
   });
 });
+
+describe('asks and the app-wide pending list', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+  it('dropAsk removes a dead card from whichever message holds it', () => {
+    const ask = { kind: 'plan' as const, toolName: 'propose_plan', plan: '1. x', id: 'a1', chatId: 'c1', messageId: 'm1' };
+    useGruntStore.setState({ extras: { m1: { usage: null, pendingApprovals: [], pendingAsks: [ask] } } });
+    useGruntStore.getState().dropAsk('a1');
+    expect(useGruntStore.getState().extras['m1']!.pendingAsks).toEqual([]);
+  });
+  it('keeps the kind of a pending question, and the tray counts tool approvals only', () => {
+    const s = useGruntStore.getState();
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
+    expect(useGruntStore.getState().appPendingApprovals['a1']).toMatchObject({ kind: 'question' });
+    expect(selectPendingApprovalCount(useGruntStore.getState())).toBe(1);
+  });
+});

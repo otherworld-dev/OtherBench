@@ -173,6 +173,8 @@ export interface GruntState {
   applyTurnEvent(event: TurnEvent): void;
   /** Removes an approval prompt locally (the server says the request no longer exists), wherever it is showing. */
   dropApproval(requestId: string): void;
+  /** Drops a question or plan card the server no longer knows (a 404 on answering). */
+  dropAsk(askId: string): void;
 
   /**
    * Reconciles an SSE `hello` reply (sent on connect and on every
@@ -394,8 +396,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
         case 'chat-deleted':
           return { chats: state.chats.filter((c) => c.id !== event.chatId), ...withPanes(forgetChat(synced(state), event.chatId)) };
         case 'approval-requested': {
-          const { chatId, messageId, requestId, toolName } = event;
-          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName } } };
+          const { chatId, messageId, requestId, toolName, kind } = event;
+          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName, ...(kind ? { kind } : {}) } } };
         }
         case 'approval-resolved': {
           if (!(event.requestId in state.appPendingApprovals)) return state;
@@ -511,6 +513,20 @@ export const useGruntStore = create<GruntState>()((set) => ({
       };
     }),
 
+  dropAsk: (askId) =>
+    set((state) => {
+      let changed = false;
+      const extras = { ...state.extras };
+      for (const [messageId, e] of Object.entries(state.extras)) {
+        const asks = e.pendingAsks ?? [];
+        if (asks.some((a) => a.id === askId)) {
+          extras[messageId] = { ...e, pendingAsks: asks.filter((a) => a.id !== askId) };
+          changed = true;
+        }
+      }
+      return changed ? { extras } : {};
+    }),
+
   dropApproval: (requestId) =>
     set((state) => {
       let changed = false;
@@ -582,8 +598,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
   closeProjectPage: () => set({ projectPage: null }),
 }));
 
-/** How many tool calls are waiting for approval across the whole app. */
-export const selectPendingApprovalCount = (s: GruntState): number => Object.keys(s.appPendingApprovals).length;
+/** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
+export const selectPendingApprovalCount = (s: GruntState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
 
 // Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device.
 useGruntStore.subscribe((state, previous) => {

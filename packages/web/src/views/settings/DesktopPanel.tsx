@@ -129,7 +129,7 @@ export function DesktopPanel(): JSX.Element {
         </label>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={notify.approvals} onChange={(e) => setNotifyPref('approvals', e.target.checked)} />
-          When a tool call needs approval
+          Approvals, questions and plans
         </label>
         <p className="text-[var(--text-muted)]">Clicking the tray icon afterwards opens the chat you were last notified about.</p>
       </fieldset>
