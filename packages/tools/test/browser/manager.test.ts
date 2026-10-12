@@ -134,6 +134,42 @@ describe('BrowserManager', () => {
     expect(manager.peek('c1')!.takeNotes()).toEqual([]);
   });
 
+  it("holds the proxy to every blocked list one reply's calls bring, in any order, and starts again for the next reply", async () => {
+    const { factory, proxy, manager } = make();
+    const reply = turn();
+    // The reply itself (its profile blocks ads.test), then its sub-agent under the same message id (casino.test added by the profile it runs as).
+    await manager.acquire('c1', 'm1', reply.signal, ['ads.test']);
+    const user = factory.sessions[0]!.proxy.username;
+    const check = (host: string): string | null => proxy.options().check(user, host, 443);
+    const blocked = (host: string): string => `${host} is blocked for this profile.`;
+    expect(check('casino.test')).toBeNull();
+    await manager.acquire('c1', 'm1', reply.signal, ['ads.test', 'casino.test']);
+    expect(check('ads.test')).toBe(blocked('ads.test'));
+    expect(check('casino.test')).toBe(blocked('casino.test'));
+    // The parent calls again with its own shorter list while the sub-agent's page is still loading: nothing is lifted.
+    await manager.acquire('c1', 'm1', reply.signal, ['ads.test']);
+    expect(check('play.casino.test')).toBe(blocked('play.casino.test'));
+    // Calls arriving together, in either order, end the same.
+    await Promise.all([manager.acquire('c1', 'm1', reply.signal, ['tracker.example']), manager.acquire('c1', 'm1', reply.signal, []), manager.acquire('c1', 'm1', reply.signal, ['ads.test'])]);
+    for (const host of ['ads.test', 'casino.test', 'tracker.example']) expect(check(host), host).toBe(blocked(host));
+    expect(check('example.com')).toBeNull();
+
+    // The same reply after its signal changed (a new call's own signal) keeps the list.
+    const later = turn();
+    await manager.acquire('c1', 'm1', later.signal, []);
+    expect(check('casino.test')).toBe(blocked('casino.test'));
+
+    // Another reply takes the browser: the list is that reply's own, so a site taken off the profile's list is no longer blocked.
+    later.abort();
+    const next = turn();
+    await manager.acquire('c1', 'm2', next.signal, ['social.test']);
+    expect(check('social.test')).toBe(blocked('social.test'));
+    for (const host of ['ads.test', 'casino.test', 'tracker.example']) expect(check(host), host).toBeNull();
+    // A reply that is refused the browser (another holds it) changes nothing.
+    await expect(manager.acquire('c1', 'm3', turn().signal, [])).rejects.toThrow(BrowserBusyError);
+    expect(check('social.test')).toBe(blocked('social.test'));
+  });
+
   it('gives the proxy no loopback allowance and no permissive address override unless ports are configured', async () => {
     const { factory, proxy, manager } = make();
     await manager.acquire('c1', 'm1', turn().signal, []);

@@ -65,7 +65,16 @@ interface Watcher {
 class OpenBrowser implements ChatBrowser {
   refs = new Map<string, string>();
   refsGen = 0;
+  /**
+   * The sites the proxy refuses for this browser: every list handed in by the
+   * calls of the reply in `blockedFor`. A sub-agent's calls come in under its
+   * parent reply's message id with a longer list (its own profile's blocked
+   * sites added to the parent's), and the two can call at the same moment; the
+   * union means neither call can lift what the other blocks. It starts again
+   * when another reply takes the browser.
+   */
   blockedHosts: readonly string[] = [];
+  blockedFor: string | null = null;
   refused = 0;
   holder: Holder | null = null;
   lastUsed = 0;
@@ -131,7 +140,11 @@ export class BrowserManager {
       entry = await pending;
       this.claim(entry, messageId, signal);
     }
-    entry.blockedHosts = [...blockedHosts];
+    if (entry.blockedFor !== messageId) {
+      entry.blockedFor = messageId;
+      entry.blockedHosts = [];
+    }
+    entry.blockedHosts = [...new Set([...entry.blockedHosts, ...blockedHosts])];
     this.touch(entry);
     return entry;
   }
