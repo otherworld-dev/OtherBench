@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import type { AgentChannel, AgentExit } from '../src/agent-channel.js';
 import { AgentClient, type AgentInit } from '../src/agent-client.js';
 import type { AgentMessage, HostMessage } from '../src/protocol.js';
+import { INSTALL_DIR, NODE_SHA256, NODE_VERSION } from '../src/setup.js';
 import type { WslResult, WslRunner, WslUser } from '../src/wsl.js';
 
 export interface FakeChild {
@@ -80,6 +81,33 @@ export class FakeWsl implements WslRunner {
     this.calls.push(call);
     return { code: 0, stdout: '', stderr: '', timedOut: false, ...this.answer(call) };
   }
+}
+
+/** A distro where every setup step works. `override` answers first, for the step a test wants to fail. */
+export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolean; override?: (call: WslCall) => Partial<WslResult> | undefined } = {}): FakeWsl {
+  let nodeInstalled = opts.node === true;
+  return new FakeWsl((call) => {
+    const overridden = opts.override?.(call);
+    if (overridden) return overridden;
+    if (call.kind === 'wsl') {
+      if (call.args[0] === '--version') return { stdout: 'WSL version: 2.7.3.0\r\nKernel version: 6.6.87.2-1\r\n' };
+      if (call.args[0] === '--list') return { stdout: opts.distros ?? 'Ubuntu\r\n' };
+      return undefined;
+    }
+    const [program, ...rest] = call.argv;
+    if (program === '/usr/bin/test') return { code: 1 }; // no WSLInterop entry: interop is off
+    if (program === '/usr/bin/id') return opts.user === true ? { stdout: '1000\n' } : { code: 1, stderr: "id: 'grunt': no such user" };
+    if (program === '/usr/bin/sha256sum') return { stdout: `${NODE_SHA256}  /tmp/grunt-node.tar.xz\n` };
+    if (program === '/bin/tar') {
+      nodeInstalled = true;
+      return undefined;
+    }
+    if (program === `${INSTALL_DIR}/node/bin/node`) return nodeInstalled ? { stdout: `${NODE_VERSION}\n` } : { code: 127, stderr: 'No such file or directory' };
+    if (program === '/bin/cat' && rest[0] === '/etc/os-release') return { stdout: 'NAME="Ubuntu"\nPRETTY_NAME="Ubuntu 24.04.5 LTS"\n' };
+    if (program === '/bin/cat') return { stdout: '{"name":"@anthropic-ai/sandbox-runtime","version":"0.0.79"}' };
+    if (program === '/usr/sbin/ip') return { stdout: 'default via 172.20.48.1 dev eth0 proto kernel\n' };
+    return undefined;
+  });
 }
 
 const MOUNT_SH = join(dirname(fileURLToPath(import.meta.url)), '..', 'resources', 'mount.sh');
