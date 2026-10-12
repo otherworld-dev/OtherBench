@@ -40,9 +40,12 @@ import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
+import { ScheduleService } from './schedule/service.js';
 import { AppEventBus, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
+import { startTurn } from './turn-start.js';
+import { workspaceResolver } from './workspace-view.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -75,6 +78,12 @@ export interface Container {
    * can build a Container without one.
    */
   memory?: MemoryServices;
+  /**
+   * Scheduled tasks (spec 2026-10-12-scheduled-tasks-design): runs due
+   * schedules unattended. Always set by `createContainer`; optional so route
+   * tests can build a Container without one.
+   */
+  schedules?: ScheduleService;
   /**
    * Import from claude.ai (spec 2026-10-09-claude-import-design). Always set
    * by `createContainer`; optional so route tests can build a Container
@@ -400,6 +409,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
       claudeImport.dispose();
       memory.dispose();
+      // Before the engine and store go: stops the schedule timer and its reply listeners.
+      container.schedules?.dispose();
       // Claude Code processes kept alive between replies.
       engine.dispose();
       store.close();
@@ -437,6 +448,24 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   } catch (err) {
     // Never let the memory sweep stop the server starting.
     console.warn('[grunt-server] project memory startup sweep failed:', err);
+  }
+  // Scheduled tasks: built after the memory services, started after their sweep, and
+  // after the app event bus is attached to the turn runner (events.runningTurns() is
+  // what tells the service a chat is busy).
+  container.schedules = new ScheduleService({
+    store,
+    turnRunner,
+    startTurn: (input) => startTurn(container, input),
+    resolveProfile: (id) => resolveProfile({ store, secrets }, id),
+    resolveWorkspace: (ws) => workspaceResolver(container)(ws),
+    isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    emit: (e) => events.emit(e),
+  });
+  try {
+    container.schedules.start();
+  } catch (err) {
+    // Never let the scheduler stop the server starting.
+    console.warn('[grunt-server] scheduled tasks failed to start:', err);
   }
   // Listening for paired machines only if there are any. A failed bind
   // (another Grunt on this port, say) leaves this machine working alone

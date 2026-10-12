@@ -480,6 +480,8 @@ export function subscribeAutoTitle(container: Container): () => void {
 
     const chat = container.store.chats.get(message.chatId);
     if (!chat) return;
+    // A scheduled run's own chat keeps the title it was made with ("Weekly report · 12 Oct 2026").
+    if (container.store.schedules.madeChat(chat.id)) return;
 
     const completedCount = collectMessageTree(container.store, message.chatId).filter(
       (m) => m.role === 'assistant' && m.status === 'complete'

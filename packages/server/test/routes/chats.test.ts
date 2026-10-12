@@ -697,6 +697,25 @@ describe('GET /api/search', () => {
 // ---------------------------------------------------------------------------
 
 describe('auto-title', () => {
+  it("leaves alone the title of a chat a scheduled run made", async () => {
+    const created = await createChat();
+    const chatId = created['id'] as string;
+    container.store.projects.create({ id: 'proj-s', name: 'Sched', workspace: null, defaultProfileId: null });
+    container.store.schedules.create({
+      id: 'sched', name: 'Weekly', prompt: 'p', profileId: 'profile-1', target: { kind: 'project', projectId: 'proj-s' },
+      rule: { cadence: 'daily', time: '09:00' }, timezone: 'UTC', enabled: false, nextRunAt: null,
+    });
+    container.store.schedules.addRun({ id: 'run', scheduleId: 'sched', trigger: 'manual', dueAt: null, startedAt: 1, status: 'running', chatId, createdChat: true });
+    const titleBefore = container.store.chats.get(chatId)!.title;
+
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'hello');
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+
+    expect(requests.filter((r) => r.messageId !== assistantMessageIds[0])).toEqual([]);
+    expect(container.store.chats.get(chatId)!.title).toBe(titleBefore);
+  });
+
   it('generates a title from the same profile after the first assistant message completes', async () => {
     const created = await createChat();
     const chatId = created['id'] as string;

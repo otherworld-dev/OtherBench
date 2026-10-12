@@ -17,6 +17,7 @@ import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
 import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
+import { schedulesRoutes } from './routes/schedules.js';
 import { settingsRoutes } from './routes/settings.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
@@ -118,6 +119,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // owns /chats/:id itself and nothing under /artifacts.
   authed.route('/', artifactsRoutes(container));
   authed.route('/usage', usageRoutes(container));
+  authed.route('/schedules', schedulesRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));
   authed.route('/view', viewRoutes(container, viewLinks));

@@ -114,6 +114,23 @@ describe('createContainer', () => {
     container.close();
   });
 
+  it('wires scheduled tasks: a run left running by the previous process is marked as an error at startup', async () => {
+    const dbPath = join(dir, 'grunt.db');
+    const secretsPath = join(dir, 'secrets.json');
+    const first = await createContainer({ dbPath, secretsPath });
+    first.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    first.store.profiles.create({ id: 'p1', name: 'Mock', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null });
+    first.store.projects.create({ id: 'proj', name: 'Alpha', workspace: null, defaultProfileId: null });
+    first.store.schedules.create({ id: 's1', name: 'S', prompt: 'p', profileId: 'p1', target: { kind: 'project', projectId: 'proj' }, rule: { cadence: 'daily', time: '09:00' }, timezone: 'UTC', enabled: false, nextRunAt: null });
+    first.store.schedules.addRun({ id: 'r1', scheduleId: 's1', trigger: 'manual', dueAt: null, startedAt: 1, status: 'running' });
+    expect(first.schedules).toBeDefined();
+    first.close();
+
+    const second = await createContainer({ dbPath, secretsPath });
+    expect(second.store.schedules.runs('s1')[0]).toMatchObject({ status: 'error', detail: 'Grunt stopped before this run finished.' });
+    second.close();
+  });
+
   it("puts Claude Code clean chats' scratch folders next to the database, or in a private temp folder for :memory:", async () => {
     const onDisk = await createContainer({ dbPath: join(dir, 'grunt.db'), secretsPath: join(dir, 'secrets.json') });
     expect(onDisk.claudeScratchRoot).toBe(join(dir, 'claude-scratch'));
