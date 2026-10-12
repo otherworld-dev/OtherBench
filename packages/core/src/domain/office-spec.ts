@@ -22,8 +22,106 @@ export const EXCEL_MAX_COLUMNS = 16_384;
 export const EXCEL_MAX_CELL_CHARS = 32_767;
 export const MAX_SHEET_NAME = 31;
 export const MAX_FORMULA_CHARS = 8_192;
-/** Functions that could reach the network or another program when the file is opened. */
-export const REFUSED_FUNCTIONS: readonly string[] = ['WEBSERVICE', 'FILTERXML', 'IMAGE', 'HYPERLINK', 'RTD', 'CALL', 'REGISTER', 'REGISTER.ID', 'EXEC'];
+/**
+ * Functions that could reach the network or another program, or reveal details
+ * of this computer, when the file is opened. They are named in the error; any
+ * other function outside ALLOWED_FUNCTIONS is refused too.
+ */
+export const REFUSED_FUNCTIONS: readonly string[] = [
+  'WEBSERVICE',
+  'FILTERXML',
+  'IMAGE',
+  'HYPERLINK',
+  'RTD',
+  'CALL',
+  'REGISTER',
+  'REGISTER.ID',
+  'EXEC',
+  'STOCKHISTORY',
+  'TRANSLATE',
+  'DETECTLANGUAGE',
+  'COPILOT',
+  'INFO',
+  'CELL',
+  'INDIRECT',
+];
+
+/** Functions Excel 2007 had: stored in the file by name alone. */
+const EXCEL_2007_FUNCTIONS = [
+  // Maths and trigonometry
+  'ABS ACOS ACOSH ASIN ASINH ATAN ATAN2 ATANH CEILING COMBIN COS COSH DEGREES ECMA.CEILING EVEN EXP FACT FACTDOUBLE FLOOR GCD INT ISO.CEILING LCM LN LOG LOG10',
+  'MDETERM MINVERSE MMULT MOD MROUND MULTINOMIAL ODD PI POWER PRODUCT QUOTIENT RADIANS RAND RANDBETWEEN ROMAN ROUND ROUNDDOWN ROUNDUP SERIESSUM SIGN SIN SINH',
+  'SQRT SQRTPI SUBTOTAL SUM SUMIF SUMIFS SUMPRODUCT SUMSQ SUMX2MY2 SUMX2PY2 SUMXMY2 TAN TANH TRUNC',
+  // Statistical, with the pre-2010 names Excel keeps for compatibility
+  'AVEDEV AVERAGE AVERAGEA AVERAGEIF AVERAGEIFS BETADIST BETAINV BINOMDIST CHIDIST CHIINV CHITEST CONFIDENCE CORREL COUNT COUNTA COUNTBLANK COUNTIF COUNTIFS',
+  'COVAR CRITBINOM DEVSQ EXPONDIST FDIST FINV FISHER FISHERINV FORECAST FREQUENCY FTEST GAMMADIST GAMMAINV GAMMALN GEOMEAN GROWTH HARMEAN HYPGEOMDIST INTERCEPT',
+  'KURT LARGE LINEST LOGEST LOGINV LOGNORMDIST MAX MAXA MEDIAN MIN MINA MODE NEGBINOMDIST NORMDIST NORMINV NORMSDIST NORMSINV PEARSON PERCENTILE PERCENTRANK',
+  'PERMUT POISSON PROB QUARTILE RANK RSQ SKEW SLOPE SMALL STANDARDIZE STDEV STDEVA STDEVP STDEVPA STEYX TDIST TINV TREND TRIMMEAN TTEST VAR VARA VARP VARPA',
+  'WEIBULL ZTEST',
+  // Lookup and reference
+  'ADDRESS AREAS CHOOSE COLUMN COLUMNS GETPIVOTDATA HLOOKUP INDEX LOOKUP MATCH OFFSET ROW ROWS TRANSPOSE VLOOKUP',
+  // Text
+  'ASC BAHTTEXT CHAR CLEAN CODE CONCATENATE DOLLAR EXACT FIND FINDB FIXED JIS LEFT LEFTB LEN LENB LOWER MID MIDB PHONETIC PROPER REPLACE REPLACEB REPT RIGHT',
+  'RIGHTB SEARCH SEARCHB SUBSTITUTE T TEXT TRIM UPPER VALUE',
+  // Logical
+  'AND FALSE IF IFERROR NOT OR TRUE',
+  // Date and time
+  'DATE DATEDIF DATEVALUE DAY DAYS360 EDATE EOMONTH HOUR MINUTE MONTH NETWORKDAYS NETWORKDAYS.INTL NOW SECOND TIME TIMEVALUE TODAY WEEKDAY WEEKNUM WORKDAY',
+  'WORKDAY.INTL YEAR YEARFRAC',
+  // Financial
+  'ACCRINT ACCRINTM AMORDEGRC AMORLINC COUPDAYBS COUPDAYS COUPDAYSNC COUPNCD COUPNUM COUPPCD CUMIPMT CUMPRINC DB DDB DISC DOLLARDE DOLLARFR DURATION EFFECT FV',
+  'FVSCHEDULE INTRATE IPMT IRR ISPMT MDURATION MIRR NOMINAL NPER NPV ODDFPRICE ODDFYIELD ODDLPRICE ODDLYIELD PMT PPMT PRICE PRICEDISC PRICEMAT PV RATE RECEIVED',
+  'SLN SYD TBILLEQ TBILLPRICE TBILLYIELD VDB XIRR XNPV YIELD YIELDDISC YIELDMAT',
+  // Information (not CELL or INFO)
+  'ERROR.TYPE ISBLANK ISERR ISERROR ISEVEN ISLOGICAL ISNA ISNONTEXT ISNUMBER ISODD ISREF ISTEXT N NA TYPE',
+  // Engineering
+  'BESSELI BESSELJ BESSELK BESSELY BIN2DEC BIN2HEX BIN2OCT COMPLEX CONVERT DEC2BIN DEC2HEX DEC2OCT DELTA ERF ERFC GESTEP HEX2BIN HEX2DEC HEX2OCT IMABS IMAGINARY',
+  'IMARGUMENT IMCONJUGATE IMCOS IMDIV IMEXP IMLN IMLOG10 IMLOG2 IMPOWER IMPRODUCT IMREAL IMSIN IMSQRT IMSUB IMSUM OCT2BIN OCT2DEC OCT2HEX',
+  // Database
+  'DAVERAGE DCOUNT DCOUNTA DGET DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP',
+];
+
+/** Functions added after Excel 2007: stored as "_xlfn.NAME" ([MS-XLSX] 2.2.2's future functions), or Excel before them shows #NAME?. */
+const FUTURE_FUNCTIONS = [
+  // Maths and trigonometry
+  'ACOT ACOTH AGGREGATE ARABIC BASE CEILING.MATH CEILING.PRECISE COMBINA COT COTH CSC CSCH DECIMAL FLOOR.MATH FLOOR.PRECISE MUNIT SEC SECH',
+  // Statistical
+  'BETA.DIST BETA.INV BINOM.DIST BINOM.DIST.RANGE BINOM.INV CHISQ.DIST CHISQ.DIST.RT CHISQ.INV CHISQ.INV.RT CHISQ.TEST CONFIDENCE.NORM CONFIDENCE.T COVARIANCE.P',
+  'COVARIANCE.S EXPON.DIST F.DIST F.DIST.RT F.INV F.INV.RT F.TEST FORECAST.ETS FORECAST.ETS.CONFINT FORECAST.ETS.SEASONALITY FORECAST.ETS.STAT FORECAST.LINEAR GAMMA',
+  'GAMMA.DIST GAMMA.INV GAMMALN.PRECISE GAUSS HYPGEOM.DIST LOGNORM.DIST LOGNORM.INV MAXIFS MINIFS MODE.MULT MODE.SNGL NEGBINOM.DIST NORM.DIST NORM.INV NORM.S.DIST',
+  'NORM.S.INV PERCENTILE.EXC PERCENTILE.INC PERCENTRANK.EXC PERCENTRANK.INC PERMUTATIONA PHI POISSON.DIST QUARTILE.EXC QUARTILE.INC RANK.AVG RANK.EQ SKEW.P STDEV.P',
+  'STDEV.S T.DIST T.DIST.2T T.DIST.RT T.INV T.INV.2T T.TEST VAR.P VAR.S WEIBULL.DIST Z.TEST',
+  // Lookup, reference and dynamic arrays
+  'CHOOSECOLS CHOOSEROWS DROP EXPAND FORMULATEXT GROUPBY HSTACK PERCENTOF PIVOTBY RANDARRAY SEQUENCE SORTBY TAKE TOCOL TOROW TRIMRANGE UNIQUE VSTACK WRAPCOLS',
+  'WRAPROWS XLOOKUP XMATCH',
+  // Text
+  'ARRAYTOTEXT CONCAT NUMBERVALUE REGEXEXTRACT REGEXREPLACE REGEXTEST TEXTAFTER TEXTBEFORE TEXTJOIN TEXTSPLIT UNICHAR UNICODE VALUETOTEXT',
+  // Logical, LET and LAMBDA
+  'IFNA IFS SWITCH XOR LET LAMBDA MAP REDUCE SCAN BYROW BYCOL MAKEARRAY ISOMITTED',
+  // Date and time, financial, information
+  'DAYS ISOWEEKNUM PDURATION RRI ISFORMULA SHEET SHEETS',
+  // Engineering
+  'BITAND BITLSHIFT BITOR BITRSHIFT BITXOR ERF.PRECISE ERFC.PRECISE IMCOSH IMCOT IMCSC IMCSCH IMSEC IMSECH IMSINH IMTAN',
+];
+
+/** Worksheet-only future functions, stored as "_xlfn._xlws.NAME". */
+const WORKSHEET_ONLY_FUNCTIONS = ['FILTER SORT'];
+
+const withPrefix = (prefix: string, lines: readonly string[]): [string, string][] => lines.flatMap((line) => line.split(' ').map((name): [string, string] => [name, prefix]));
+
+/**
+ * Excel's built-in worksheet functions a formula may call: upper-case name ->
+ * the prefix Excel stores it with in the file ('' for Excel 2007's, '_xlfn.'
+ * for later ones, '_xlfn._xlws.' for FILTER and SORT). Left out on purpose:
+ * REFUSED_FUNCTIONS, the CUBE functions (external data connections), Python,
+ * Power Query, linked data types (FIELDVALUE), the web functions, and add-in or
+ * user-defined ones (_xludf.).
+ */
+export const ALLOWED_FUNCTIONS: ReadonlyMap<string, string> = new Map([
+  ...withPrefix('', EXCEL_2007_FUNCTIONS),
+  ...withPrefix('_xlfn.', FUTURE_FUNCTIONS),
+  ...withPrefix('_xlfn._xlws.', WORKSHEET_ONLY_FUNCTIONS),
+]);
 
 export interface SpreadsheetSpec {
   sheets: SheetSpec[];
@@ -67,8 +165,14 @@ const HEX = /^#[0-9a-fA-F]{6}$/;
 const SHEET_NAME_BAD = /[\\/?*[\]:]/;
 const FORMAT = /^[^\u0000-\u001f\u007f]{1,64}$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?$/;
-const WORD = /[A-Za-z_\\][A-Za-z0-9_.]*/y;
-const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+/** A name in a formula: a function, a sheet, a reference, a LET name, a number. Marks and format characters count, so a lookalike stays one (unknown) name. */
+const NAME = /[\p{L}\p{M}\p{N}\p{Pc}\p{Cf}.]+/uy;
+const SPACES = /\s*/uy;
+/** The prefixes a function can carry in the file, any number of times: future, worksheet-only, LAMBDA parameter. */
+const FILE_PREFIXES = /^(?:_xl(?:fn|ws|pm)\.)+/i;
+const ASCII_NAME = /^[A-Za-z0-9_.]+$/;
+const REFUSED = new Set(REFUSED_FUNCTIONS);
+const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 class SpecError extends Error {}
 
@@ -145,8 +249,27 @@ function closeQuote(text: string, start: number, quote: string): number {
 }
 
 /**
- * What's wrong with a formula (without its "="), or null. Syntax and sheet
- * names only: Grunt doesn't calculate, so a wrong reference shows in Excel.
+ * Why a call to `written` (as it appears before the "(") isn't allowed, or
+ * null. Only ASCII names can match: a fullwidth or other lookalike is unknown.
+ */
+function functionProblem(written: string): string | null {
+  const bare = written.replace(FILE_PREFIXES, '');
+  const name = ASCII_NAME.test(bare) ? bare.toUpperCase() : undefined;
+  if (name !== undefined && REFUSED.has(name)) return `uses ${name}, which Grunt refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened`;
+  if (name !== undefined && ALLOWED_FUNCTIONS.has(name)) return null;
+  return `uses ${shorten(bare || written)}, which isn't one of Excel's built-in functions Grunt allows`;
+}
+
+/**
+ * What's wrong with a formula (without its "="), or null. Syntax, sheet names
+ * and functions only: Grunt doesn't calculate, so a wrong reference shows in
+ * Excel. One pass: every character is read once (whitespace after a name at
+ * most twice), so a long formula can't make it slow.
+ *
+ * A function is a name, optional whitespace, then "(" (or a fullwidth one), so
+ * "@WEBSERVICE (", "_xlfn._xlws.FILTERXML(" and "1\WEBSERVICE(" are all seen.
+ * A name bound by LET or LAMBDA and then called ("f(2)") is unknown, so
+ * refused. Text inside "..." is inert and not looked at.
  */
 export function formulaProblem(body: string, sheetNames: ReadonlySet<string>): string | null {
   if (body.trim() === '') return 'is empty';
@@ -182,22 +305,23 @@ export function formulaProblem(body: string, sheetNames: ReadonlySet<string>): s
       i++;
       continue;
     }
-    WORD.lastIndex = i;
-    const word = WORD.exec(body);
-    if (word) {
-      // A word that starts mid-token (after a digit: "1abc") is skipped whole, not looked at, so every character is read once.
-      if (!/[A-Za-z0-9_.]/.test(body[i - 1] ?? '')) {
-        const after = body[i + word[0].length];
-        if (after === '!') {
-          if (!sheetNames.has(word[0].toLowerCase())) return `refers to sheet "${word[0]}", which isn't in the workbook`;
-        } else if (after === '(') {
-          const fn = word[0].toUpperCase().replace(/^_XL(?:FN|WS)\./, '');
-          if (REFUSED_FUNCTIONS.includes(fn)) return `uses ${fn}, which Grunt refuses: it could reach the network or another program when the file is opened`;
-        }
+    NAME.lastIndex = i;
+    const name = NAME.exec(body)?.[0];
+    if (name !== undefined) {
+      // Names are read whole, so each starts where the last token ended and none hides inside another.
+      const end = i + name.length;
+      if (body[end] === '!' && !sheetNames.has(name.toLowerCase())) return `refers to sheet "${name}", which isn't in the workbook`;
+      SPACES.lastIndex = end;
+      SPACES.exec(body);
+      const next = body[SPACES.lastIndex];
+      if (next === '(' || next === '\uFF08') {
+        const problem = functionProblem(name);
+        if (problem) return problem;
       }
-      i += word[0].length;
+      i = SPACES.lastIndex;
       continue;
     }
+    // Anything else ("@", "\", operators, "!", ":") is one character; the name after it is read on its own.
     i++;
   }
   return depth > 0 ? 'has an unclosed parenthesis' : null;
@@ -363,6 +487,6 @@ export const OFFICE_GUIDANCE = [
   'Office files: for a Word document or Excel spreadsheet the user wants as a file, make a "document" or "spreadsheet" artifact. Grunt makes the .docx or .xlsx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
   '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file.',
   '- "spreadsheet": JSON, e.g. {"sheets":[{"name":"Costs","columns":[{"width":24},{"width":12}],"freeze":{"rows":1},"rows":[[{"value":"Item","bold":true},{"value":"Cost","bold":true}],["Widgets",12],["Gadgets",30.5],["Total","=SUM(B2:B3)"]]}]}. rows[0] is row 1 and rows[0][0] is A1. A cell is null, text, a number, true/false, or an object with one of "value", "formula" or "date" (YYYY-MM-DD or YYYY-MM-DDTHH:MM) and optional "format" (an Excel number format such as "#,##0.00"), "bold", "italic", "wrap", "align" (left, center, right), "color" and "fill" (#RRGGBB). Text starting with "=" is a formula; {"value":"=..."} is literal text.',
-  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. WEBSERVICE, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, FILTERXML, DDE (|) and links to other workbooks ([) are refused.",
+  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT. Calling a LET or LAMBDA name, DDE (|) and links to other workbooks ([) are refused too.",
   '- Errors name the place in the JSON to fix.',
 ].join('\n');
