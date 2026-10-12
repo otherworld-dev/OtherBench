@@ -796,6 +796,12 @@ export class GruntToolProvider implements ToolProvider {
             this.broker.resolve(requestId, choice);
           } catch (err) {
             console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+            // The broker stored no grant (an "always" naming another host, a
+            // shell answer with no command to pin, ...). The person did say
+            // yes to this call, so it runs, but as what it now is: once. The
+            // audit row and the `resolved` event must not claim a grant that
+            // doesn't exist.
+            if (choice.choice !== 'deny') final = { choice: 'once' };
           }
         }
         resolve({

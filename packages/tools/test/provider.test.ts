@@ -763,6 +763,95 @@ describe('non-user denials are honest (approval cleanup round 1)', () => {
   });
 });
 
+describe("GruntToolProvider: an answer the broker won't store as a grant", () => {
+  /** A provider whose cards are answered with `choice`, recording every event. */
+  function answering(choice: ApprovalChoice, withBrowser = false) {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const browser = withBrowser ? new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start }) : undefined;
+    const provider = new GruntToolProvider(store, broker, emptyMcp, browser ? { browser } : {});
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => {
+      events.push(e);
+      if (e.type === 'request') provider.resolveApproval(e.request.id, choice);
+    });
+    const resolved = () => events.filter((e) => e.type === 'resolved').map((e) => (e as { choice: string }).choice);
+    const granted = () => store.audit.list('chat-1').map((a) => a.grantedBy);
+    return { store, broker, provider, resolved, granted };
+  }
+  const silenced = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  it('runs the call once and says "once" in the audit and the resolved event, for a file write answered "always" with a constraint it can\'t carry', async () => {
+    const errors = silenced();
+    const s = answering({ choice: 'always', constraint: { host: 'example.com' } });
+    const writeFile = (await s.provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    const result = await writeFile.execute({ path: 'a.txt', content: 'x' }, ctx());
+    // The person said yes to this call, so it ran...
+    expect((result as { error?: unknown }).error).toBeUndefined();
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('x');
+    // ...but no grant exists, and nothing says one does.
+    expect(s.store.grants.list()).toEqual([]);
+    expect(s.granted()).toEqual(['ask:once']);
+    expect(s.resolved()).toEqual(['once']);
+    expect(errors).toHaveBeenCalledTimes(1);
+    // The next identical call asks again.
+    await writeFile.execute({ path: 'a.txt', content: 'y' }, ctx());
+    expect(s.resolved()).toEqual(['once', 'once']);
+    errors.mockRestore();
+  });
+
+  it('does the same for a browser card answered "always" for another site, and for one answered with no site', async () => {
+    const errors = silenced();
+    for (const constraint of [{ host: 'evil.test' }, null]) {
+      const s = answering({ choice: 'always', constraint }, true);
+      const tool = (await s.provider.listTools(policy({ browser: true }))).find((t) => t.name === 'browser')!;
+      const result = await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+      expect((result as { error?: unknown }).error, JSON.stringify(constraint)).toBeUndefined();
+      expect(s.store.grants.list()).toEqual([]);
+      expect(s.granted()).toEqual(['ask:once']);
+      expect(s.resolved()).toEqual(['once']);
+    }
+    errors.mockRestore();
+  });
+
+  it("tells Claude Code's gate the same: allowed, granted by ask:once", async () => {
+    const errors = silenced();
+    const s = answering({ choice: 'always', constraint: { host: 'example.com' } });
+    const bash = { name: 'Bash', description: '', parameters: {}, risk: 'execute' as const, source: 'agent' as const, execute: async () => undefined };
+    // A shell "always" must carry a command key; a host is refused.
+    expect(await s.provider.requestApproval(bash, { command: 'npm test' }, policy(), ctx())).toEqual({ allowed: true, grantedBy: 'ask:once' });
+    expect(s.store.grants.list()).toEqual([]);
+    expect(s.granted()).toEqual(['ask:once']);
+    expect(s.resolved()).toEqual(['once']);
+    errors.mockRestore();
+  });
+
+  it('leaves an answer the broker does store as it was: always and chat keep their names, with their grants', async () => {
+    const errors = silenced();
+    const always = answering({ choice: 'always', constraint: { pathPrefix: '.' } });
+    const writeFile = (await always.provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    await writeFile.execute({ path: 'a.txt', content: 'x' }, ctx());
+    expect(always.granted()).toEqual(['ask:always']);
+    expect(always.resolved()).toEqual(['always']);
+    expect(always.store.grants.list()).toEqual([expect.objectContaining({ scope: 'always', constraint: { pathPrefix: '.' } })]);
+
+    const chat = answering({ choice: 'chat' }, true);
+    const tool = (await chat.provider.listTools(policy({ browser: true }))).find((t) => t.name === 'browser')!;
+    await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+    expect(chat.granted()).toEqual(['ask:chat']);
+    expect(chat.resolved()).toEqual(['chat']);
+    expect(chat.store.grants.list()).toEqual([expect.objectContaining({ scope: 'chat', constraint: { host: 'example.com' } })]);
+
+    // A denial is a denial, whatever constraint came with it.
+    const denied = answering({ choice: 'deny' });
+    const write = (await denied.provider.listTools(policy())).find((t) => t.name === 'write_file')!;
+    expect(((await write.execute({ path: 'b.txt', content: 'x' }, ctx())) as { code?: string }).code).toBe('approval_denied');
+    expect(denied.resolved()).toEqual(['deny']);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+});
+
 describe('GruntToolProvider plan mode', () => {
   it('refuses a write while the reply is planning, raising no card, and audits it as deny:plan', async () => {
     const { provider, store } = makeProvider();
