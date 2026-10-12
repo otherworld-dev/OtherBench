@@ -80,6 +80,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [sandboxReady, setSandboxReady] = useState<boolean | null>(null);
   useEffect(() => {
     if (!shell || shellRuns !== 'sandbox') return;
+    setSandboxReady(null);
     let cancelled = false;
     api.sandbox
       .status()
@@ -171,7 +172,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall }
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, ...sandboxFields }
         : { fs, shell, approvalMode, mcpServerIds, artifacts, recall, ...sandboxFields },
       isDefault,
       useGlobalMemory,
@@ -441,7 +442,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             </>
           )}
         </div>
-        {shell && !isClaudeCode && (
+        {shell && (
           <div data-testid="sandbox-shell-settings" className="mt-3 space-y-2">
             <label className="flex max-w-xs flex-col gap-1 text-xs text-[var(--text-muted)]">
               Shell runs
@@ -469,7 +470,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
                 </label>
                 <p className="text-xs text-[var(--text-muted)]">
                   One host per line. *.example.com covers its subdomains, and :443 after a host allows only that port. Reaching any other host asks you
-                  first.
+                  first. An empty list asks about every host.
                 </p>
                 <button type="button" onClick={() => setHostsText(DEFAULT_SANDBOX_HOSTS.join('\n'))} className="btn px-2 py-1 text-xs">
                   Reset to defaults

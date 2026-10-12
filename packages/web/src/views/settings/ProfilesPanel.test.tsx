@@ -608,4 +608,35 @@ describe('ProfilesPanel: where the shell runs', () => {
     await user.click(screen.getByRole('button', { name: /^save$/i }));
     expect(await screen.findByText(/"localhost" is not a hostname/)).toBeInTheDocument();
   });
+
+  it('a blank allowlist means ask for every host, and is sent as an empty list', async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    await user.clear(screen.getByLabelText('The sandbox can reach'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ shellRuns: 'sandbox', sandboxHosts: [] }) })));
+  });
+
+  it('a Claude Code profile can run its shell in the sandbox too', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Claude sandboxed');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'cc');
+    await user.click(screen.getByLabelText('Bash'));
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    const hosts = screen.getByLabelText('The sandbox can reach');
+    await user.clear(hosts);
+    await user.type(hosts, 'example.org');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['example.org'], agentWeb: true }) })
+      )
+    );
+  });
 });
