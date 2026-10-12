@@ -98,9 +98,16 @@ function redact(value: unknown, depth = 0): unknown {
  * to type (spec 2026-10-12-model-browser-design §3).
  */
 function auditArgs(tool: ToolSpec, args: unknown): unknown {
-  if (tool.source !== 'browser' || typeof args !== 'object' || args === null || !('text' in args)) return args;
+  return tool.source === 'browser' ? withoutTypedText(args) : args;
+}
+
+function withoutTypedText(args: unknown): unknown {
+  if (typeof args !== 'object' || args === null || !('text' in args)) return args;
   return { ...(args as Record<string, unknown>), text: '[redacted]' };
 }
+
+/** Claude Code's name for the browser relayed on its per-process Grunt server (`mcp__grunt_<hex>__browser`), or the tool's own name. */
+const RELAYED_BROWSER_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?browser$/;
 
 function summarizeResult(result: unknown): string {
   if (result && typeof result === 'object' && (result as { error?: unknown }).error === true) {
@@ -365,7 +372,9 @@ export class GruntToolProvider implements ToolProvider {
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void {
     const text = reason.trim().length > 0 ? reason.trim() : 'Blocked by Claude Code auto mode.';
     // redact() truncates a long string exactly as it does audit args.
-    this.audit(ctx, toolName, args, null, 0, 'deny:auto', redact(text) as string);
+    // The relayed browser's typed text is redacted here too, like auditArgs does for the calls Grunt runs.
+    const audited = RELAYED_BROWSER_NAME.test(toolName) ? withoutTypedText(args) : args;
+    this.audit(ctx, toolName, audited, null, 0, 'deny:auto', redact(text) as string);
   }
 
   /**

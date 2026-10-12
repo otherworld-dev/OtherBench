@@ -518,6 +518,17 @@ describe('recordAgentDenial', () => {
     ]);
   });
 
+  it("redacts the text typed in a relayed browser call, as the browser's own audit rows do", () => {
+    const { provider, store } = makeProvider();
+    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__browser', { command: 'type', ref: 'e3', text: 'my password' }, 'Types a password');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-b' }), 'browser', { command: 'type', ref: 'e3', text: 'my password' }, 'Types a password');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'mcp__grunt_0123456789abcdef__other__browser', { text: 'kept' }, 'Not the browser');
+    const rows = store.audit.list('chat-1');
+    expect(rows.find((r) => r.messageId === 'msg-a')!.argsRedacted).toEqual({ command: 'type', ref: 'e3', text: '[redacted]' });
+    expect(rows.find((r) => r.messageId === 'msg-b')!.argsRedacted).toEqual({ command: 'type', ref: 'e3', text: '[redacted]' });
+    expect(rows.find((r) => r.messageId === 'msg-c')!.argsRedacted).toEqual({ text: 'kept' });
+  });
+
   it('truncates a long reason and fills in a blank one', () => {
     const { provider, store } = makeProvider();
     provider.recordAgentDenial(ctx({ messageId: 'msg-long' }), 'Bash', { command: 'x' }, 'r'.repeat(500));
