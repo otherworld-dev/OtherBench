@@ -143,6 +143,13 @@ export class SqliteSyncRepo implements SyncRepo {
     return attachmentBound({ chatId, messageId }, message?.chat_id ?? null);
   }
 
+  /** Whether message `id` is one a peer is sent (everything but a reply still streaming). */
+  private messageOfferable(id: unknown): boolean {
+    if (typeof id !== 'string') return false;
+    const message = this.db.prepare('SELECT status FROM message WHERE id = ?').get(id) as { status: string } | undefined;
+    return message !== undefined && message.status !== 'streaming';
+  }
+
   private tombstone(tbl: SyncTable, id: string): string | null {
     return (this.db.prepare('SELECT hlc FROM tombstone WHERE tbl = ? AND row_id = ?').get(tbl, id) as { hlc: string } | undefined)?.hlc ?? null;
   }
@@ -164,10 +171,12 @@ export class SqliteSyncRepo implements SyncRepo {
       if (!isSyncTable(e.tbl)) continue;
       const row = this.select(e.tbl, e.row_id);
       if (row) {
-        // Not yet: a reply still streaming, or a file not yet sent. Each is logged again when it is.
+        // Not yet: a reply still streaming is logged again when it stops (the trigger).
         if (e.tbl === 'message' && row['status'] === 'streaming') continue;
-        // Never a file that isn't bound to a message of its own chat: not for a peer to learn of, and not yet sent.
-        if (e.tbl === 'attachment' && !this.isBound(row['chat_id'], row['message_id'])) continue;
+        // A file is offered only bound to a message of its own chat, and only once that message can be
+        // offered itself (a peer turns a file down when its message is missing). A file of a reply that
+        // is still streaming is logged again, behind the message, when the reply stops (`updateStatus`).
+        if (e.tbl === 'attachment' && !(this.isBound(row['chat_id'], row['message_id']) && this.messageOfferable(row['message_id']))) continue;
         rows.push(this.toUpsert(e.tbl, e.row_id, row));
       } else {
         const hlc = this.tombstone(e.tbl, e.row_id);

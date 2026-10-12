@@ -864,3 +864,68 @@ describe('the binding rule has one meaning in SQL and in JS', () => {
     expect(n.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'attachment')).toEqual([]);
   });
 });
+
+describe('a reply that stores files while it streams (tool screenshots)', () => {
+  const sha = 'a'.repeat(64);
+
+  /** Machine a: a chat with a user message and a reply that is still streaming, holding one file. */
+  function streaming(): Node {
+    const a = node('a');
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'u', 'c', null);
+    message(a, 'r1', 'c', 'u', { role: 'assistant', status: 'streaming' });
+    a.store.attachments.create({ id: 'shot', chatId: 'c', messageId: 'r1', filename: 'shot.png', mime: 'image/png', size: 1, sha256: sha, storagePath: 'E:/blobs/a', extractedText: null });
+    return a;
+  }
+
+  it('offers neither the reply nor its file while it streams, loses nothing, and brings both once it stops', () => {
+    const a = streaming();
+    const b = node('b');
+    const cursor = { seq: 0 };
+
+    pull(a, b, cursor);
+    expect(b.store.messages.get('r1')).toBeNull();
+    expect(b.store.attachments.get('shot')).toBeNull();
+    expect(a.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'attachment')).toEqual([]);
+
+    a.store.messages.updateStatus('r1', 'complete');
+    pull(a, b, cursor);
+
+    expect(b.store.messages.get('r1')).toMatchObject({ status: 'complete', chatId: 'c' });
+    expect(b.store.attachments.get('shot')).toMatchObject({ chatId: 'c', messageId: 'r1' });
+    expect(b.store.sync.missingBlobs()).toEqual([{ id: 'shot', sha256: sha }]);
+  });
+
+  it('also follows a reply that ends in an error, and puts the reply before its files, in one batch and across batches', () => {
+    const a = streaming();
+    a.store.attachments.create({ id: 'shot2', chatId: 'c', messageId: 'r1', filename: 'shot2.png', mime: 'image/png', size: 1, sha256: 'b'.repeat(64), storagePath: 'E:/blobs/b', extractedText: null });
+    a.store.messages.updateStatus('r1', 'error', { kind: 'unknown', message: 'x', retryable: true });
+
+    const order = a.store.sync.changesSince(0, 1000).rows.map((r) => `${r.tbl}:${r.id}`);
+    expect(order.indexOf('message:r1')).toBeGreaterThan(-1);
+    expect(order.indexOf('attachment:shot')).toBeGreaterThan(order.indexOf('message:r1'));
+    expect(order.indexOf('attachment:shot2')).toBeGreaterThan(order.indexOf('message:r1'));
+
+    // One row per batch: the reply still arrives before its files, so none is turned down.
+    const b = node('b');
+    pull(a, b, { seq: 0 }, 1);
+    expect(b.store.attachments.get('shot')).not.toBeNull();
+    expect(b.store.attachments.get('shot2')).not.toBeNull();
+  });
+
+  it('logs the files again each time the reply stops (a retry), and only for that reply', () => {
+    const a = streaming();
+    message(a, 'r2', 'c', 'u', { role: 'assistant', status: 'complete' });
+    a.store.attachments.create({ id: 'other', chatId: 'c', messageId: 'r2', filename: 'o.png', mime: 'image/png', size: 1, sha256: 'c'.repeat(64), storagePath: 'E:/blobs/c', extractedText: null });
+    const before = a.store.sync.latestSeq();
+    a.store.messages.updateStatus('r1', 'complete');
+    const logged = (a.db.prepare("SELECT tbl, row_id FROM change_log WHERE seq > ? AND tbl = 'attachment'").all(before) as { tbl: string; row_id: string }[]).map((r) => r.row_id);
+    expect(logged).toEqual(['shot']);
+    // Going back to streaming (a retry) logs nothing; stopping again does.
+    a.store.messages.updateStatus('r1', 'streaming');
+    const mid = a.store.sync.latestSeq();
+    a.store.messages.updateStatus('r1', 'complete');
+    expect((a.db.prepare("SELECT row_id FROM change_log WHERE seq > ? AND tbl = 'attachment'").all(mid) as { row_id: string }[]).map((r) => r.row_id)).toEqual(['shot']);
+  });
+});
