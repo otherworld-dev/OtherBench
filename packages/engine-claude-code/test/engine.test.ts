@@ -43,6 +43,28 @@ async function collect(it: AsyncIterable<EngineEvent>): Promise<EngineEvent[]> {
 const approvals = { requestApproval: vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' })), recordAgentDenial: vi.fn() };
 const engine = (query: QueryFn) => new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin', ANTHROPIC_API_KEY: 'leak' } });
 
+/** A fake long-lived Claude Code: runs `turn` for every message pushed into its input, until the input ends or it is stopped. */
+function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: number }) => AsyncGenerator<SDKMessage>) {
+  const starts: { options: Options; prompts: SDKUserMessage[]; stopped: () => boolean }[] = [];
+  const query: QueryFn = ({ prompt, options }) => {
+    const start = { options, prompts: [] as SDKUserMessage[], stopped: () => options.abortController?.signal.aborted ?? false };
+    starts.push(start);
+    const gen = (async function* () {
+      for await (const msg of prompt) {
+        if (start.stopped()) return;
+        start.prompts.push(msg);
+        yield* turn({ options, prompt: msg, n: start.prompts.length });
+      }
+    })();
+    return Object.assign(gen, { interrupt: async () => undefined, supportedModels: async () => [], accountInfo: async () => ({}) });
+  };
+  return { query, starts };
+}
+
+const answered = (sessionId = 'sess-1'): CanonMessage => ({ ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId, backend: 'claude', cwd: ws } });
+const followUp = (o: Partial<EngineRequest> = {}): EngineRequest =>
+  req({ messages: [user('q1'), answered(), { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1', messageId: 'm2', ...o });
+
 describe('ClaudeCodeChatEngine.stream', () => {
   it('runs a fresh turn with the right options and emits meta, text and finish', async () => {
     const { query, calls } = fakeQuery(async function* () { yield init(); yield delta('hello'); yield success(); });
@@ -524,27 +546,6 @@ describe('ClaudeCodeChatEngine auto mode', () => {
 });
 
 describe('ClaudeCodeChatEngine live processes', () => {
-  /** A fake long-lived Claude Code: runs `turn` for every message pushed into its input, until the input ends or it is stopped. */
-  function liveQuery(turn: (ctx: { options: Options; prompt: SDKUserMessage; n: number }) => AsyncGenerator<SDKMessage>) {
-    const starts: { options: Options; prompts: SDKUserMessage[]; stopped: () => boolean }[] = [];
-    const query: QueryFn = ({ prompt, options }) => {
-      const start = { options, prompts: [] as SDKUserMessage[], stopped: () => options.abortController?.signal.aborted ?? false };
-      starts.push(start);
-      const gen = (async function* () {
-        for await (const msg of prompt) {
-          if (start.stopped()) return;
-          start.prompts.push(msg);
-          yield* turn({ options, prompt: msg, n: start.prompts.length });
-        }
-      })();
-      return Object.assign(gen, { interrupt: async () => undefined, supportedModels: async () => [], accountInfo: async () => ({}) });
-    };
-    return { query, starts };
-  }
-
-  const answered = (sessionId = 'sess-1'): CanonMessage => ({ ...user('a'), id: 'a1', role: 'assistant', engineMeta: { engine: 'claude_code', sessionId, backend: 'claude', cwd: ws } });
-  const followUp = (o: Partial<EngineRequest> = {}): EngineRequest =>
-    req({ messages: [user('q1'), answered(), { ...user('q2'), id: 'u2' }], latestMessageForSession: () => 'a1', messageId: 'm2', ...o });
   const textOfPrompt = (p: SDKUserMessage): string => ((p.message as { content: { text?: string }[] }).content[0]!.text ?? '');
   const live = (query: QueryFn, extra: { liveIdleMs?: number; maxLive?: number } = {}) =>
     new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, ...extra });
@@ -938,6 +939,147 @@ describe('ClaudeCodeChatEngine recall', () => {
       { name: 'mcp__grunt__recall', source: 'agent' },
     ]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'recall' }));
+    e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine relayed browser (spec 2026-10-12-model-browser-design)', () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const described = { command: 'open', url: 'https://example.com/', host: 'example.com' };
+  const browserSpec = (execute: ToolSpec['execute']): ToolSpec => ({
+    name: 'browser',
+    description: 'Your own web browser',
+    parameters: { type: 'object', properties: { command: { type: 'string' }, url: { type: 'string' } } },
+    risk: 'mutate',
+    source: 'browser',
+    describeCall: async (args) => ({ args: { ...(args as Record<string, unknown>), host: 'example.com' }, risk: 'mutate' }),
+    execute,
+  });
+  const browserOn = (on: boolean) => profile({ toolPolicy: { ...profile().toolPolicy, browser: on } });
+  const approving = () => ({ requestApproval: vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'ask:once', args: described })), recordAgentDenial: vi.fn() });
+  function server() {
+    let tools: GruntServerTool[] = [];
+    const mcpServer = vi.fn((name: string, defs: GruntServerTool[]) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    return { mcpServer, tool: () => tools.find((t) => t.name === 'browser')! };
+  }
+  const relayGruntTools = (execute: ToolSpec['execute']) => (p: { browser?: boolean }) => (p.browser === true ? [browserSpec(execute)] : []);
+  const pre = (options: Options) => options.hooks!.PreToolUse![0]!.hooks[0]!;
+  const preCall = (options: Options, input: Record<string, unknown>) =>
+    pre(options)({ hook_event_name: 'PreToolUse', tool_name: `mcp__${Object.keys(options.mcpServers ?? {})[0]!}__browser`, tool_input: input, tool_use_id: 't1' } as never, 't1', sig());
+
+  for (const where of ['a chat with a folder', 'a clean chat'] as const) {
+    it(`relays the browser in ${where} and runs an approved call with exactly what Grunt approved`, async () => {
+      const execute = vi.fn(async () => ({ url: 'https://example.com/', title: 'Example' }));
+      const a = approving();
+      const s = server();
+      let decision: unknown = null;
+      let result: unknown = null;
+      const { query } = fakeQuery(async function* ({ options }) {
+        yield init('sess-1');
+        decision = await preCall(options, { command: 'open', url: 'example.com' });
+        result = await s.tool().call({ command: 'open', url: 'example.com' });
+        yield success();
+      });
+      const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayGruntTools: relayGruntTools(execute), mcpServer: s.mcpServer });
+      await collect(e.stream(req({ profile: browserOn(true), ...(where === 'a clean chat' ? { workspaceRoot: null } : {}) })));
+      expect(a.requestApproval.mock.calls[0]![0]).toMatchObject({ name: 'browser', source: 'browser' });
+      expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+      expect(execute).toHaveBeenCalledWith(described, expect.objectContaining({ chatId: 'chat', messageId: 'm1' }));
+      expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ url: 'https://example.com/', title: 'Example' }) }] });
+      e.dispose();
+    });
+  }
+
+  it('refuses a call Grunt never approved, and runs each approval once', async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const s = server();
+    const results: unknown[] = [];
+    const { query } = fakeQuery(async function* ({ options }) {
+      yield init('sess-1');
+      await preCall(options, { command: 'open', url: 'example.com' });
+      results.push(await s.tool().call({ command: 'open', url: 'example.com' }));
+      results.push(await s.tool().call({ command: 'open', url: 'example.com' }));
+      results.push(await s.tool().call({ command: 'open', url: 'never-approved.test' }));
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayGruntTools: relayGruntTools(execute), mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: browserOn(true) })));
+    expect(execute).toHaveBeenCalledTimes(1);
+    const refused = { content: [{ type: 'text', text: 'Grunt has no approval for this call.' }], isError: true };
+    expect(results.slice(1)).toEqual([refused, refused]);
+    e.dispose();
+  });
+
+  it("drops a reply's tickets when it ends: the next reply can't use them", async () => {
+    const execute = vi.fn(async () => ({ ok: true }));
+    const s = server();
+    let second: unknown = null;
+    const { query, starts } = liveQuery(async function* ({ options, n }) {
+      yield init('sess-1');
+      if (n === 1) await preCall(options, { command: 'open', url: 'example.com' });
+      else second = await s.tool().call({ command: 'open', url: 'example.com' });
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayGruntTools: relayGruntTools(execute), mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: browserOn(true) })));
+    await collect(e.stream(followUp({ profile: browserOn(true) })));
+    expect(starts).toHaveLength(1);
+    expect(second).toEqual({ content: [{ type: 'text', text: 'Grunt has no approval for this call.' }], isError: true });
+    expect(execute).not.toHaveBeenCalled();
+    e.dispose();
+  });
+
+  it("runs a call with the reply's own spec, not the one the process started with", async () => {
+    const first = vi.fn(async () => ({ from: 'first' }));
+    const second = vi.fn(async () => ({ from: 'second' }));
+    let n = 0;
+    const s = server();
+    const results: unknown[] = [];
+    const { query, starts } = liveQuery(async function* ({ options }) {
+      yield init('sess-1');
+      await preCall(options, { command: 'open', url: 'example.com' });
+      results.push(await s.tool().call({ command: 'open', url: 'example.com' }));
+      yield success();
+    });
+    const relay = () => [browserSpec(++n === 1 ? first : second)];
+    const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayGruntTools: relay, mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: browserOn(true) })));
+    await collect(e.stream(followUp({ profile: browserOn(true) })));
+    expect(starts).toHaveLength(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(2);
+    e.dispose();
+  });
+
+  it('puts no browser on the server when the profile has it off, and turning it on starts a new process', async () => {
+    const s = server();
+    const relay = vi.fn(relayGruntTools(async () => ({})));
+    const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+    const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayGruntTools: relay, mcpServer: s.mcpServer });
+    await collect(e.stream(req({ profile: browserOn(false) })));
+    await collect(e.stream(followUp({ profile: browserOn(true) })));
+    expect(relay).toHaveBeenCalledWith(expect.objectContaining({ browser: false }));
+    expect(starts).toHaveLength(2);
+    expect(starts[0]!.options.mcpServers).toBeUndefined();
+    expect(Object.keys(starts[1]!.options.mcpServers ?? {})).toHaveLength(1);
+    e.dispose();
+  });
+
+  it('reports the call as browser', async () => {
+    const s = server();
+    const { query } = fakeQuery(async function* ({ options }) {
+      const name = Object.keys(options.mcpServers ?? {})[0]!;
+      yield init('sess-1');
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${name}__browser`, input: { command: 'snapshot' } }] } } as unknown as SDKMessage;
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: approving(), listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayGruntTools: relayGruntTools(async () => ({})), mcpServer: s.mcpServer });
+    const events = await collect(e.stream(req({ profile: browserOn(true) })));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'browser' }));
     e.dispose();
   });
 });

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { GruntServerTool } from './grunt-server.js';
+import type { ApprovalTickets } from './tickets.js';
 
 /**
  * Relaying Grunt's MCP servers into Claude Code (spec
@@ -42,6 +43,21 @@ export function buildRelay(specs: ToolSpec[]): Relay {
   if (tools.size === 0) return { tools, hash: '' };
   const shape = [...tools].map(([name, s]) => [name, s.name, s.serverId ?? null, s.risk, s.description, s.parameters]);
   return { tools, hash: createHash('sha256').update(JSON.stringify(shape)).digest('hex') };
+}
+
+export const NO_TICKET = 'Grunt has no approval for this call.';
+
+/**
+ * Runs a relayed call for the running reply. A spec with `describeCall` (the
+ * browser) runs only with the arguments its approval ticket holds, never with
+ * Claude Code's raw input; with no ticket nothing runs. Other specs (MCP
+ * tools) run as before.
+ */
+export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext, tickets: ApprovalTickets): Promise<unknown> {
+  if (!spec.describeCall) return spec.execute(args, ctx);
+  const ticket = tickets.take(spec.name, args);
+  if (!ticket) return { error: true, code: 'no_approval', message: NO_TICKET };
+  return spec.execute(ticket.args, ctx);
 }
 
 /** The running reply's relay executor, or undefined when no Grunt reply is running. */

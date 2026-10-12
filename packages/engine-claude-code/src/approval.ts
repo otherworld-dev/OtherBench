@@ -129,7 +129,14 @@ export function normaliseAgentArgs(
   return { args: rel === undefined ? { ...input } : { ...input, path: rel } };
 }
 
-export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApproval'>; policy: ToolPolicy; ctx: ToolContext; autoMode?: boolean }): Gate {
+export function createGate(deps: {
+  approvals: Pick<ToolProvider, 'requestApproval'>;
+  policy: ToolPolicy;
+  ctx: ToolContext;
+  autoMode?: boolean;
+  /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4). */
+  onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
+}): Gate {
   return async (toolName, input, callSignal, opts) => {
     // No approval card for a turn that is already dead.
     if (deps.ctx.signal.aborted) return { allow: false, reason: 'The turn was stopped.' };
@@ -175,7 +182,9 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         return deferAsk ? { defer: true } : { allow: false, reason: 'Grunt could not check this tool call: unexpected deferral.' };
       }
       if (!('allowed' in outcome)) return { allow: false, reason: 'Grunt could not check this tool call: unrecognised approval outcome.' };
-      return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
+      if (!outcome.allowed) return { allow: false, reason: outcome.reason };
+      if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
+      return { allow: true };
     } catch (err) {
       return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
     }

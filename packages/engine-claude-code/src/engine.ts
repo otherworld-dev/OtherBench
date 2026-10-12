@@ -7,7 +7,7 @@ import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { Connection } from '@grunt/core/types/config.js';
+import type { Connection, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
@@ -18,8 +18,9 @@ import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
-import { buildRelay, relayServerTool, type Relay } from './relay.js';
+import { buildRelay, relayName, relayServerTool, runRelayed, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
+import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
@@ -61,6 +62,13 @@ export interface ClaudeCodeEngineDeps {
    * 2026-10-11-claude-code-clean-chat-and-mcp-design §2). Without it, no relay.
    */
   relayTools?: (serverIds: string[]) => ToolSpec[];
+  /**
+   * Grunt's own tools to relay (spec 2026-10-12-model-browser-design §4):
+   * today the browser, when the profile turns it on
+   * (GruntToolProvider.relayGruntTools). Ungated like `relayTools`; the gate
+   * approves each call and the server runs only what it approved.
+   */
+  relayGruntTools?: (policy: ToolPolicy) => ToolSpec[];
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: GruntServerTool[]) => McpServerConfig;
 }
@@ -213,18 +221,32 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const { artifactTool, recallTool } = this.deps;
     // The profile's MCP servers, relayed through the same server (relay.ts).
     const serverIds = profile.toolPolicy.mcpServerIds;
-    const relay = buildRelay(this.deps.relayTools && serverIds.length > 0 ? this.deps.relayTools(serverIds) : []);
+    const relay = buildRelay([
+      ...(this.deps.relayTools && serverIds.length > 0 ? this.deps.relayTools(serverIds) : []),
+      ...(this.deps.relayGruntTools?.(profile.toolPolicy) ?? []),
+    ]);
     const own: GruntServerSwitches = {
       artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
       recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
       relay: relay.hash,
     };
+    const tickets = new ApprovalTickets();
     const binding: TurnBinding = {
-      gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
+      gate: createGate({
+        approvals: this.deps.approvals,
+        policy: profile.toolPolicy,
+        ctx: gateCtx,
+        autoMode,
+        onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
+      }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
       ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
-      ...(relay.tools.size > 0 ? { relay: (spec: ToolSpec, args: unknown) => spec.execute(args, gateCtx) } : {}),
+      // The server's tools were fixed when the process started; this reply
+      // runs each call with ITS spec (built from the current profile, so the
+      // browser's blocked sites are current) and its tickets.
+      ...(relay.tools.size > 0 ? { relay: (spec: ToolSpec, args: unknown) => runRelayed(relay.tools.get(relayName(spec.name)) ?? spec, args, gateCtx, tickets) } : {}),
+      tickets,
     };
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
@@ -293,6 +315,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
+      tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       // Only a cleanly finished reply leaves its process waiting for the next message.
       if (finished && !req.signal.aborted && !live.isClosed) this.pool.release(live);
