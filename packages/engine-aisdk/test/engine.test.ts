@@ -260,6 +260,46 @@ describe('AiSdkChatEngine.stream', () => {
     }
   });
 
+  it('sends an image a tool returns to a vision model as image content, and a note to any other', async () => {
+    const shot = [
+      { type: 'text', text: 'Screenshot, 2×1.' },
+      { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+    ];
+    const toolSpec: ToolSpec = {
+      name: 'look',
+      description: 'Looks.',
+      parameters: { type: 'object', properties: {} },
+      risk: 'read',
+      source: 'mcp',
+      execute: async () => shot,
+    };
+    const model = (vision: boolean) => ({
+      id: 'model-1', connectionId: 'conn-1', modelId: 'claude-test-model', displayName: 'Test', source: 'manual' as const,
+      supportsVision: vision, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null,
+      priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
+    });
+    for (const vision of [true, false]) {
+      const mock = new MockLanguageModelV3({
+        doStream: stepsForModel(
+          [
+            { type: 'stream-start', warnings: [] },
+            { type: 'tool-call', toolCallId: 'call-1', toolName: 'look', input: '{}' },
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage: ZERO_USAGE },
+          ],
+          [
+            { type: 'stream-start', warnings: [] },
+            { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+          ]
+        ),
+      });
+      const engine = new AiSdkChatEngine(resolverFor(mock));
+      await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ model: model(vision) }) })));
+      const toolMessage = mock.doStreamCalls[1]!.prompt.find((m) => m.role === 'tool');
+      const image = vision ? { type: 'image-data', data: 'AAAA', mediaType: 'image/png' } : { type: 'text', text: "[image omitted: this model can't take images]" };
+      expect(toolMessage?.content[0]).toMatchObject({ type: 'tool-result', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2×1.' }, image] } });
+    }
+  });
+
   it('maps a 429 APICallError to a single error event with kind rate_limit, retryable true', async () => {
     const model = new MockLanguageModelV3({
       doStream: async () => {

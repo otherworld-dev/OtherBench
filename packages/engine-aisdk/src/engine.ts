@@ -14,6 +14,7 @@ import type { Connection } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
 import { toModelMessages } from './convert.js';
+import { liveToolOutput, toolImagesSupported } from './tool-images.js';
 import { MockChatEngine } from './mock-provider.js';
 import { DEFAULT_OLLAMA_BASE_URL, type ProviderHandle } from './registry.js';
 
@@ -125,8 +126,9 @@ export class AiSdkChatEngine implements ChatEngine {
         vision: req.profile.model?.supportsVision ?? false,
         tools: req.profile.model?.supportsTools ?? true,
       };
-      const messages = await toModelMessages(req.messages, caps, req.loadAttachment ?? loadAttachmentUnavailable);
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders);
+      const imagesOk = caps.vision && toolImagesSupported(req.profile.connection.kind);
+      const messages = await toModelMessages(req.messages, { ...caps, toolImages: imagesOk }, req.loadAttachment ?? loadAttachmentUnavailable);
+      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -433,13 +435,16 @@ function buildToolSet(
   messageId: string,
   profileId: string,
   workspaceRoot: string | null,
-  folders: ResolvedFolder[] | undefined
+  folders: ResolvedFolder[] | undefined,
+  imagesOk: boolean
 ): ToolSet {
   const toolSet: ToolSet = {};
   for (const spec of specs) {
     toolSet[spec.name] = tool({
       description: spec.description,
       inputSchema: jsonSchema(spec.parameters as JSONSchema7),
+      // Images a tool returns go to the model as images, or as a note when it can't take them.
+      toModelOutput: ({ output }) => liveToolOutput(output, imagesOk),
       execute: async (input: unknown, opts) => {
         const ctx: ToolContext = {
           chatId,

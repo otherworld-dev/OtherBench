@@ -1,17 +1,19 @@
 import type {
   FilePart,
   ImagePart,
-  JSONValue,
   ModelMessage,
   TextPart,
   ToolCallPart,
   ToolResultPart,
 } from 'ai';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { replayedImageIds, replayToolOutput } from './tool-images.js';
 
 export interface ModelCapabilities {
   vision: boolean;
   tools: boolean;
+  /** The model takes images inside tool results (vision AND a provider that supports it). Absent = false. */
+  toolImages?: boolean;
 }
 
 type AssistantBlock = TextPart | FilePart | ToolCallPart;
@@ -34,11 +36,6 @@ function extensionFromMime(mime: string): string {
 
 function imagePlaceholder(attachmentId: string, mime: string): string {
   return `[image: ${attachmentId}.${extensionFromMime(mime)} not supported by this model]`;
-}
-
-function toolOutput(result: unknown, isError: boolean): ToolResultPart['output'] {
-  const value = (result ?? null) as JSONValue;
-  return isError ? { type: 'error-json', value } : { type: 'json', value };
 }
 
 /**
@@ -89,6 +86,9 @@ export async function toModelMessages(
   // not scoped to one message -- so a result can match a call from an
   // earlier turn, not only one made in the same CanonMessage.
   const seenToolCallIds = new Set<string>();
+  // The images of the last few tool results are the only ones loaded; earlier
+  // ones are replayed as a note.
+  const replay = caps.toolImages === true ? replayedImageIds(messages) : new Set<string>();
 
   for (const message of messages) {
     if (message.role === 'system') {
@@ -107,7 +107,8 @@ export async function toModelMessages(
       message.parts,
       caps,
       loadAttachment,
-      seenToolCallIds
+      seenToolCallIds,
+      replay
     );
     if (assistantContent.length > 0) {
       result.push({ role: 'assistant', content: assistantContent });
@@ -177,7 +178,8 @@ async function assistantContentFromParts(
   parts: Part[],
   caps: ModelCapabilities,
   loadAttachment: (id: string) => Promise<Buffer>,
-  seenToolCallIds: Set<string>
+  seenToolCallIds: Set<string>,
+  replay: Set<string>
 ): Promise<{ assistantContent: AssistantBlock[]; toolResults: ToolResultPart[] }> {
   const assistantContent: AssistantBlock[] = [];
   const toolResults: ToolResultPart[] = [];
@@ -216,7 +218,7 @@ async function assistantContentFromParts(
           type: 'tool-result',
           toolCallId: part.id,
           toolName: replayToolName(part.name),
-          output: toolOutput(part.result, part.isError),
+          output: await replayToolOutput(part.result, part.isError, replay, caps.toolImages === true, loadAttachment),
         });
         break;
     }
