@@ -859,9 +859,10 @@ goes through `containPath`, and transcripts are capped at 512 MiB each and
 **Scheduled runs act with nobody watching.** What still runs unattended is
 exactly what needs no card: existing Always grants (exact host-shell commands
 included), read-only tools and read-only MCP tools under "Ask on changes",
-artifacts, web tools a profile allows and, once the sandbox (#935) lands,
-sandboxed commands. A prompt injection in a scheduled run is limited to
-those. The editor's warnings list what will be refused, not what will run.
+artifacts, web tools a profile allows and sandboxed commands (under "Ask on
+changes"; a host off the sandbox's list is refused, never asked). A prompt
+injection in a scheduled run is limited to those, and a sandboxed command can
+still push data to a host on the allowlist (see the sandbox's known limits). The editor's warnings list what will be refused, not what will run.
 There's no spend cap; usage rows are written as normal.
 
 ### Claude Code engine
@@ -1040,7 +1041,9 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
   - A chat deleted by peer sync (not through this machine's routes) is never released here: its agent closes when idle and its folders are unmounted then, but its home and temp folders in the VM stay until the sandbox is removed (Settings > Sandbox > Remove). Deleting a chat, a profile or a connection here releases them.
   - Under ask on mutate a sandboxed command runs with no card even when the profile's file access is off or read-only, and the default allowlist includes write-capable hosts (`github.com`, `registry.npmjs.org`). A command can therefore push data out to an account the attacker controls. This was agreed in the spec, and it is worth revisiting if the default list changes.
   - The host-name check can't see DNS that points a public name at a private address (`127.0.0.1.nip.io`, rebinding). The connect-time guard covers that (checked live). It doesn't judge a literal-IP dial at all: that rests on the allowlist never holding a literal and on the agent's ask-time lookup (checked live too).
-- **Not built.** Background processes in the sandbox; a Linux backend (phase 2); macOS; scheduled tasks, which will set `ToolContext.unattended` (the provider already refuses a card on an unattended run).
+- **Scheduled runs and Plan mode.** A scheduled run sets `ToolContext.unattended` (the one flag thread cards added); a sandboxed command runs with no card under "Ask on changes", and its `sandbox_network` question is refused without a card (`approval_unavailable`, audited `deny:unattended`). Under "Ask before every call" the command itself is refused. In Plan mode, until the plan is approved, the broker refuses both `sandbox` and `network` calls like the host shell, before the sandbox's no-card pass and before any host grant.
+- **Self-test and sign-in mode.** In sign-in mode (`--public-url`) Grunt's port speaks HTTPS only, so a plain-HTTP probe of it gets no status even when it connects. The self-test probes Grunt's port over both HTTP and HTTPS (`-k`) and needs both to fail to connect.
+- **Not built.** Background processes in the sandbox; a Linux backend (phase 2); macOS.
 
 ### Sign-in for HTTP MCP servers
 
@@ -1128,7 +1131,7 @@ Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925).
 - **Where it lives.** `schedule` and `schedule_run` (migration `023-schedules`) are local. They have no sync triggers, so a schedule runs only on the machine that holds it. Deleting its chat, project or profile deletes it. Archiving its profile leaves it, and its runs record "Didn't run" until the profile is changed.
 - **When it runs.** `ScheduleService` (`packages/server/src/schedule/service.ts`) re-arms one timer for the earliest next run, never more than 30 s away, so sleep and clock changes are caught within 30 s. A schedule that missed slots runs once, marked late if more than 5 minutes past due. At most two scheduled runs go at once. A busy target chat makes its schedule wait, and a schedule still running at its next slot records that slot as "Didn't run". Runs stop after 30 minutes ("Timed out"). On start, a run left running by the previous process is marked as an error. `nextRunAt` moves before a run starts, so a crash never repeats a slot.
 - **Unattended.** Every scheduled run (and Run now) is unattended: `TurnInput.unattended` → `EngineRequest.unattended` → `ToolContext.unattended`. The last two came from thread cards and nothing set them until now. The schedule service sets them, and `TurnInput.unattended` is new. `GruntToolProvider.settle` refuses any call that would raise a card with `approval_unavailable`, audited `deny:unattended` (the Inspector says "refused: nobody to approve (scheduled run)"), and the run's history counts them. Grants, read-only tools under "Ask on changes", artifacts and allowed web tools still run. Thread cards already answer for the model in an unattended run: a question gets the unattended text and a plan stays closed. Claude Code's auto mode is never used in a scheduled run. The flag is only ever set by the service, never from a request body, so the peer listener can't set it.
-- **Sandbox.** The sandbox (#935) is not on this branch. Once it lands, sandboxed commands will run unattended as well. Until then `unattendedWarnings` reads `shellRuns` through a widened type (`ToolPolicy & { shellRuns?: string }`), so every shell command is listed as one that will be refused.
+- **Sandbox.** Sandboxed commands run unattended under "Ask on changes" (no card). `unattendedWarnings` reads `ToolPolicy.shellRuns` through `runsShellInSandbox`: only a shell on this machine gets the "needs approval" line, and a sandboxed one gets a line saying hosts off its list are refused.
 - **Notifications.** Desktop only, shown even while Grunt is focused (Settings → Desktop → "Scheduled runs"). The run's own "Reply finished" is suppressed.
 - **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
 - **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
