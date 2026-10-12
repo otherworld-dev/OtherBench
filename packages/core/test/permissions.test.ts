@@ -816,3 +816,35 @@ describe('PermissionBroker live calls (spec 2026-10-12-live-artifacts)', () => {
     expect(broker.liveIneligibility(lookup('mutate'), makePolicy())).toBe('"mcp__s__lookup" can change things; live artifacts can only use tools their server marks read-only.');
   });
 });
+
+// Integration: live grants and the sandbox's grant rules (every-key matching,
+// host only for network calls, canonicalHost) live in one broker.
+describe('live grants beside the sandbox grants', () => {
+  const LIVE = { artifactId: 'art-1', callId: 'value', hash: 'h'.repeat(64), serverId: 'srv-1' };
+  const lookup = () => makeTool({ name: 'mcp__s__lookup', risk: 'read', source: 'mcp', serverId: 'srv-1' });
+  const network = () => makeTool({ name: 'sandbox_network', risk: 'execute', source: 'network' });
+  const sandboxed = () => makeTool({ name: 'run_command', risk: 'execute', source: 'sandbox' });
+  const policy = makePolicy({ shellRuns: 'sandbox', approvalMode: 'always_ask' });
+
+  it('a live grant never covers an ordinary call, a sandboxed command or a network host', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    broker.grantLive({ chatId: 'chat-1', profileId: 'profile-1', artifactId: LIVE.artifactId, policy, calls: [{ tool: lookup(), callId: LIVE.callId, hash: LIVE.hash, serverId: 'srv-1' }] });
+    // A live grant that also carried a host (a corrupt or hand-made row) still matches no network call.
+    store.grants.create({ id: 'g-mixed', chatId: 'chat-1', profileId: 'profile-1', toolName: 'sandbox_network', source: 'network', scope: 'chat', constraint: { live: LIVE, host: 'pypi.org' }, expiresAt: null });
+    expect(broker.decide(lookup(), {}, policy, makeCtx()).kind).toBe('ask');
+    expect(broker.decide(sandboxed(), { command: 'ls' }, policy, makeCtx()).kind).toBe('ask');
+    expect(broker.decide(network(), { host: 'pypi.org' }, policy, makeCtx()).kind).toBe('ask');
+  });
+
+  it("a host grant or a sandbox pass never lets a live call through, and the sandbox's tools can't be live", () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    store.grants.create({ id: 'g-host', chatId: null, profileId: 'profile-1', toolName: 'mcp__s__lookup', source: 'mcp', scope: 'always', constraint: { host: 'pypi.org' }, expiresAt: null });
+    const live = makeCtx({ workspaceRoot: null, live: LIVE });
+    expect(broker.decide(lookup(), { host: 'pypi.org' }, policy, live)).toMatchObject({ kind: 'deny', code: 'not_approved' });
+    expect(broker.decide(sandboxed(), { command: 'ls' }, makePolicy({ shellRuns: 'sandbox' }), live)).toMatchObject({ kind: 'deny', reason: 'Only MCP tools can feed a live artifact.' });
+    expect(broker.decide(network(), { host: 'pypi.org' }, policy, live)).toMatchObject({ kind: 'deny' });
+    expect(() => broker.grantLive({ chatId: 'chat-1', profileId: 'profile-1', artifactId: 'a', policy, calls: [{ tool: network(), callId: 'c', hash: 'h', serverId: 's' }] })).toThrow(/can't be allowed/);
+  });
+});
