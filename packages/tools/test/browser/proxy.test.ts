@@ -12,18 +12,60 @@ const listen = (s: Server | NetServer) => new Promise<void>((r) => s.listen(0, '
 let echo: NetServer;
 let site: Server;
 let siteHits: string[];
+/** The headers each request (plain or upgrade) reached the fixture site with. */
+let siteHeaders: IncomingMessage['headers'][];
+/** Every connection the echo fixture accepted, and a promise per connection that settles when it closes. */
+let echoSockets: Socket[];
+let echoClosed: Promise<void>[];
+/** Settles when the fixture's `/sse` or `/upload` response is cut off by the other side. */
+let sseClosed: Promise<void>;
+let uploadClosed: Promise<void>;
 let proxy: EgressProxy | null = null;
+
+/** Resolves true if `p` settles within `ms`, false if not. */
+const settlesWithin = (p: Promise<unknown>, ms: number): Promise<boolean> =>
+  Promise.race([p.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), ms))]);
+const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 beforeEach(async () => {
   siteHits = [];
-  echo = createNetServer((socket) => socket.pipe(socket));
+  siteHeaders = [];
+  echoSockets = [];
+  echoClosed = [];
+  let sseDone!: () => void;
+  let uploadDone!: () => void;
+  sseClosed = new Promise<void>((r) => (sseDone = r));
+  uploadClosed = new Promise<void>((r) => (uploadDone = r));
+  echo = createNetServer((socket) => {
+    echoSockets.push(socket);
+    echoClosed.push(new Promise<void>((r) => socket.on('close', () => r())));
+    socket.on('error', () => undefined);
+    socket.pipe(socket);
+  });
   site = createHttpServer((req, res) => {
     siteHits.push(req.url ?? '');
+    siteHeaders.push(req.headers);
+    if (req.url === '/sse') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(': hello\n\n');
+      res.on('close', () => sseDone());
+      return;
+    }
+    if (req.url === '/echo') {
+      req.pipe(res);
+      return;
+    }
+    if (req.url === '/upload') {
+      res.on('close', () => uploadDone());
+      return;
+    }
     res.end(`${req.url} ${req.headers.host} ${req.headers['proxy-authorization'] ?? 'none'}`);
   });
-  site.on('upgrade', (_req, socket: Socket) => {
+  site.on('upgrade', (req, socket: Socket) => {
+    siteHeaders.push(req.headers);
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
     socket.on('data', (d) => socket.write(d));
+    socket.on('error', () => undefined);
   });
   await listen(echo);
   await listen(site);
@@ -32,6 +74,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await proxy?.close();
   proxy = null;
+  for (const s of echoSockets) s.destroy();
   echo.close();
   site.closeAllConnections();
   site.close();
@@ -301,7 +344,7 @@ describe('the shared browser host vectors', () => {
     browserHostDenial(host, policyOf(v), { port, allowLoopbackPorts: v.allowLoopbackPorts });
 
   it.each(BROWSER_HOST_VECTORS.map((v) => [v.note, v] as const))('checkProxyTarget agrees with core: %s', (_note, v) => {
-    const ours = checkProxyTarget(v.input, checkOf(v));
+    const ours = checkProxyTarget(v.input, checkOf(v), { allowLoopbackPorts: v.allowLoopbackPorts });
     const core = browserUrlCheck(v.input, policyOf(v), { allowLoopbackPorts: v.allowLoopbackPorts });
     expect(ours.site).toBe(v.site);
     expect(ours.site).toBe(core.site);
@@ -326,7 +369,7 @@ describe('the shared browser host vectors', () => {
     expect(status, v.input).toBeGreaterThanOrEqual(400);
     expect(siteHits).toEqual([]);
     if (v.site !== null) expect(status).toBe(403);
-    if (v.site !== null && !v.input.includes('//localhost')) expect(onRefused).toHaveBeenCalledWith('chat-a', v.site, expect.any(String));
+    if (v.site !== null) expect(onRefused).toHaveBeenCalledWith('chat-a', v.site, expect.any(String));
   });
 
   it.each(
@@ -342,9 +385,317 @@ describe('the shared browser host vectors', () => {
     expect(resolve).toHaveBeenCalledWith(v.site);
   });
 
+  it('keeps core\'s floor under a check that allows everything: every vector denied for a local or private host is still denied', () => {
+    for (const v of BROWSER_HOST_VECTORS.filter((x) => x.blockedHosts === undefined)) {
+      const denial = checkProxyTarget(v.input, () => null, { allowLoopbackPorts: v.allowLoopbackPorts }).denial;
+      expect(denial !== null, v.note).toBe(v.denied);
+    }
+  });
+
   it('left the refused rows as refused: no vector with a null site is ever allowed by the pure check', () => {
     for (const v of BROWSER_HOST_VECTORS.filter((x) => x.site === null)) {
       expect(checkProxyTarget(v.input, () => null).denial, v.note).not.toBeNull();
     }
+  });
+});
+
+describe('the core floor holds whatever the supplied check says', () => {
+  it('refuses local names and private, loopback and mapped addresses even when check allows everything', async () => {
+    const p = await start({ check: () => null, addressAllowed: () => true });
+    const auth = basic('chat-a', p.password);
+    for (const authority of ['localhost:80', 'LOCALHOST.:80', `127.0.0.1:${portOf(echo)}`, `2130706433:${portOf(echo)}`, '[::1]:80', '[::ffff:7f00:1]:80', '10.0.0.5:80', '169.254.169.254:80', 'db.internal:443', 'printer.local:80']) {
+      const { status, socket } = await connectVia(p, authority, auth);
+      socket.destroy();
+      expect(status, authority).toBe(403);
+    }
+    expect(await rawVia(p, 'GET', `http://127.0.0.1:${portOf(site)}/`, auth)).toBe(403);
+    expect(await rawVia(p, 'GET', `http://localhost:${portOf(site)}/`, auth)).toBe(403);
+    expect(echoSockets).toHaveLength(0);
+    expect(siteHits).toEqual([]);
+  });
+
+  it('lets 127.0.0.1 through only on the ports it was explicitly given, and never localhost', async () => {
+    const p = await start({ check: () => null, allowLoopbackPorts: [portOf(echo)] });
+    const auth = basic('chat-a', p.password);
+    const ok = await connectVia(p, `127.0.0.1:${portOf(echo)}`, auth);
+    expect(ok.status).toBe(200);
+    ok.socket.destroy();
+    for (const authority of [`127.0.0.1:${portOf(site)}`, `localhost:${portOf(echo)}`, `127.0.0.2:${portOf(echo)}`]) {
+      const { status, socket } = await connectVia(p, authority, auth);
+      socket.destroy();
+      expect(status, authority).toBe(403);
+    }
+  });
+});
+
+describe('every request is judged on its own', () => {
+  it('checks a second request on the same keep-alive connection against its own host', async () => {
+    const onRefused = vi.fn();
+    const p = await start({ onRefused });
+    const { port } = new URL(p.server);
+    const auth = basic('chat-a', p.password);
+    const socket = netConnect({ host: '127.0.0.1', port: Number(port) });
+    let seen = '';
+    socket.on('data', (d) => (seen += d.toString()));
+    const until = async (text: string): Promise<void> => {
+      for (let i = 0; i < 100 && !seen.includes(text); i++) await pause(20);
+      expect(seen).toContain(text);
+    };
+    socket.write(`GET http://site.test:${portOf(site)}/first HTTP/1.1\r\nHost: site.test\r\nProxy-Authorization: ${auth}\r\n\r\n`);
+    await until('/first');
+    expect(seen).toMatch(/^HTTP\/1\.1 200/);
+    expect(seen).not.toMatch(/connection: close/i);
+    socket.write(`GET http://blocked.test/second HTTP/1.1\r\nHost: blocked.test\r\nProxy-Authorization: ${auth}\r\n\r\n`);
+    await until('403');
+    socket.write(`GET http://intranet.test/third HTTP/1.1\r\nHost: intranet.test\r\nProxy-Authorization: ${auth}\r\n\r\n`);
+    for (let i = 0; i < 100 && (seen.match(/HTTP\/1\.1 403/g) ?? []).length < 2; i++) await pause(20);
+    socket.destroy();
+    expect((seen.match(/HTTP\/1\.1 403/g) ?? []).length).toBe(2);
+    expect(siteHits).toEqual(['/first']);
+    expect(onRefused).toHaveBeenCalledWith('chat-a', 'blocked.test', expect.any(String));
+    expect(onRefused).toHaveBeenCalledWith('chat-a', 'intranet.test', expect.any(String));
+  });
+
+  it('sends an upgrade to the host in the request line, whatever its Host header says', async () => {
+    const resolve = vi.fn(async () => ['127.0.0.1']);
+    const p = await start({ resolve });
+    const { port } = new URL(p.server);
+    const upgraded = await new Promise<Socket>((res, rej) => {
+      const req = request({
+        host: '127.0.0.1',
+        port: Number(port),
+        method: 'GET',
+        path: `http://site.test:${portOf(site)}/ws`,
+        headers: { Host: 'evil.test', Connection: 'Upgrade', Upgrade: 'websocket', 'Proxy-Authorization': basic('chat-a', p.password) },
+      });
+      req.on('upgrade', (_r: IncomingMessage, socket: Socket) => res(socket));
+      req.on('error', rej);
+      req.end();
+    });
+    upgraded.destroy();
+    expect(resolve.mock.calls).toEqual([['site.test']]);
+    expect(siteHeaders.at(-1)?.host).toBe(`site.test:${portOf(site)}`);
+    expect(siteHeaders.at(-1)?.['proxy-authorization']).toBeUndefined();
+  });
+
+  it('does not forward hop-by-hop headers on the plain path, and still forwards a streamed body', async () => {
+    const p = await start();
+    const { port } = new URL(p.server);
+    await new Promise<void>((resolve, reject) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port: Number(port),
+          method: 'GET',
+          path: `http://site.test:${portOf(site)}/hdrs`,
+          headers: {
+            Connection: 'keep-alive, X-Hop',
+            'X-Hop': 'secret',
+            'Keep-Alive': 'timeout=5',
+            TE: 'trailers',
+            Upgrade: 'h2c',
+            'Proxy-Connection': 'keep-alive',
+            'X-Keep': 'yes',
+            'Proxy-Authorization': basic('chat-a', p.password),
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve());
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    const seen = siteHeaders.at(-1)!;
+    for (const name of ['x-hop', 'keep-alive', 'te', 'upgrade', 'proxy-connection', 'proxy-authorization']) expect(seen[name], name).toBeUndefined();
+    expect(seen['x-keep']).toBe('yes');
+    // A chunked request body (Transfer-Encoding is not forwarded; the proxy re-frames it).
+    const echoed = await new Promise<string>((resolve, reject) => {
+      const req = request(
+        { host: '127.0.0.1', port: Number(port), method: 'POST', path: `http://site.test:${portOf(site)}/echo`, headers: { 'Proxy-Authorization': basic('chat-a', p.password) } },
+        (res) => {
+          let body = '';
+          res.on('data', (c: Buffer) => (body += c.toString()));
+          res.on('end', () => resolve(body));
+        }
+      );
+      req.on('error', reject);
+      req.write('hel');
+      setTimeout(() => req.end('lo'), 30);
+    });
+    expect(echoed).toBe('hello');
+  });
+});
+
+describe('upstream sockets are freed when the browser goes away', () => {
+  /** A request line and headers written to a fresh connection to the proxy; the socket comes back unread. */
+  function rawClient(p: EgressProxy, head: string): Socket {
+    const { port } = new URL(p.server);
+    const socket = netConnect({ host: '127.0.0.1', port: Number(port) });
+    socket.on('error', () => undefined);
+    socket.write(head);
+    return socket;
+  }
+
+  /** A lookup the test controls: `asked` settles when it starts, `release()` lets it answer. */
+  function gatedLookup(): { resolve: () => Promise<string[]>; asked: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let asked!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const askedP = new Promise<void>((r) => (asked = r));
+    return {
+      resolve: async () => {
+        asked();
+        await gate;
+        return ['127.0.0.1'];
+      },
+      asked: askedP,
+      release,
+    };
+  }
+
+  it('makes no upstream connection for a CONNECT the client abandoned during the lookup', async () => {
+    const lookup = gatedLookup();
+    const p = await start({ resolve: lookup.resolve });
+    const client = rawClient(p, `CONNECT echo.test:${portOf(echo)} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: ${basic('chat-a', p.password)}\r\n\r\n`);
+    await lookup.asked;
+    client.destroy();
+    await pause(80);
+    lookup.release();
+    await pause(150);
+    expect(echoSockets).toHaveLength(0);
+  });
+
+  it('makes no upstream connection for an upgrade the client abandoned during the lookup', async () => {
+    const lookup = gatedLookup();
+    const p = await start({ resolve: lookup.resolve });
+    const client = rawClient(
+      p,
+      `GET http://site.test:${portOf(site)}/ws HTTP/1.1\r\nHost: site.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nProxy-Authorization: ${basic('chat-a', p.password)}\r\n\r\n`
+    );
+    await lookup.asked;
+    client.destroy();
+    await pause(80);
+    lookup.release();
+    await pause(150);
+    expect(siteHeaders).toEqual([]);
+  });
+
+  it('makes no upstream request for a plain request the client abandoned during the lookup', async () => {
+    const lookup = gatedLookup();
+    const p = await start({ resolve: lookup.resolve });
+    const client = rawClient(p, `GET http://site.test:${portOf(site)}/late HTTP/1.1\r\nHost: site.test\r\nProxy-Authorization: ${basic('chat-a', p.password)}\r\n\r\n`);
+    await lookup.asked;
+    client.destroy();
+    await pause(80);
+    lookup.release();
+    await pause(150);
+    expect(siteHits).toEqual([]);
+  });
+
+  it('makes no upstream connection when close() runs during the lookup', async () => {
+    const lookup = gatedLookup();
+    const p = await start({ resolve: lookup.resolve });
+    const client = rawClient(p, `CONNECT echo.test:${portOf(echo)} HTTP/1.1\r\nHost: x\r\nProxy-Authorization: ${basic('chat-a', p.password)}\r\n\r\n`);
+    await lookup.asked;
+    await p.close();
+    proxy = null;
+    lookup.release();
+    await pause(150);
+    client.destroy();
+    expect(echoSockets).toHaveLength(0);
+  });
+
+  it('closes the upstream socket when the client closes an open tunnel', async () => {
+    const p = await start();
+    const { status, socket } = await connectVia(p, `echo.test:${portOf(echo)}`, basic('chat-a', p.password));
+    expect(status).toBe(200);
+    expect(echoSockets).toHaveLength(1);
+    socket.destroy();
+    expect(await settlesWithin(echoClosed[0]!, 2000)).toBe(true);
+  });
+
+  it('closes the client when the upstream closes an open tunnel', async () => {
+    const p = await start();
+    const { socket } = await connectVia(p, `echo.test:${portOf(echo)}`, basic('chat-a', p.password));
+    const closed = new Promise<void>((r) => socket.on('close', () => r()));
+    echoSockets[0]!.destroy();
+    expect(await settlesWithin(closed, 2000)).toBe(true);
+  });
+
+  it('closes both sides of an open tunnel when the proxy is closed', async () => {
+    const p = await start();
+    const { socket } = await connectVia(p, `echo.test:${portOf(echo)}`, basic('chat-a', p.password));
+    const closed = new Promise<void>((r) => socket.on('close', () => r()));
+    await p.close();
+    proxy = null;
+    expect(await settlesWithin(closed, 2000)).toBe(true);
+    expect(await settlesWithin(echoClosed[0]!, 2000)).toBe(true);
+  });
+
+  it('closes both sides of a tunnel that has been silent for the idle timeout', async () => {
+    const p = await start({ idleTimeoutMs: 100 });
+    const { socket } = await connectVia(p, `echo.test:${portOf(echo)}`, basic('chat-a', p.password));
+    const closed = new Promise<void>((r) => socket.on('close', () => r()));
+    expect(await settlesWithin(closed, 3000)).toBe(true);
+    expect(await settlesWithin(echoClosed[0]!, 3000)).toBe(true);
+  });
+
+  it('keeps a tunnel that is still being used past the idle timeout', async () => {
+    const p = await start({ idleTimeoutMs: 300 });
+    const { socket } = await connectVia(p, `echo.test:${portOf(echo)}`, basic('chat-a', p.password));
+    let closed = false;
+    socket.on('close', () => (closed = true));
+    for (let i = 0; i < 6; i++) {
+      await pause(100);
+      socket.write('x');
+    }
+    expect(closed).toBe(false);
+    socket.destroy();
+  });
+
+  it('destroys the upstream request when the client aborts a streaming (SSE-style) response', async () => {
+    const p = await start();
+    const { port } = new URL(p.server);
+    const req = request({ host: '127.0.0.1', port: Number(port), method: 'GET', path: `http://site.test:${portOf(site)}/sse`, headers: { 'Proxy-Authorization': basic('chat-a', p.password) } });
+    req.on('error', () => undefined);
+    await new Promise<void>((resolve) => {
+      req.on('response', (res) => {
+        res.once('data', () => {
+          req.destroy();
+          resolve();
+        });
+      });
+      req.end();
+    });
+    expect(await settlesWithin(sseClosed, 3000)).toBe(true);
+  });
+
+  it('destroys the upstream request when the client aborts partway through sending a body', async () => {
+    const p = await start();
+    const client = rawClient(
+      p,
+      `POST http://site.test:${portOf(site)}/upload HTTP/1.1\r\nHost: site.test\r\nContent-Length: 100\r\nProxy-Authorization: ${basic('chat-a', p.password)}\r\n\r\nfive!`
+    );
+    for (let i = 0; i < 100 && siteHits.length === 0; i++) await pause(20);
+    expect(siteHits).toEqual(['/upload']);
+    client.destroy();
+    expect(await settlesWithin(uploadClosed, 3000)).toBe(true);
+  });
+
+  it('destroys in-flight plain requests when the proxy is closed', async () => {
+    const p = await start();
+    const { port } = new URL(p.server);
+    const req = request({ host: '127.0.0.1', port: Number(port), method: 'GET', path: `http://site.test:${portOf(site)}/sse`, headers: { 'Proxy-Authorization': basic('chat-a', p.password) } });
+    req.on('error', () => undefined);
+    await new Promise<void>((resolve) => {
+      req.on('response', (res) => res.once('data', () => resolve()));
+      req.end();
+    });
+    await p.close();
+    proxy = null;
+    expect(await settlesWithin(sseClosed, 3000)).toBe(true);
+    req.destroy();
   });
 });

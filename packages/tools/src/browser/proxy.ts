@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
-import { createServer, request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
-import { connect as netConnect, isIP, type AddressInfo } from 'node:net';
+import { createServer, request as httpRequest, type ClientRequest, type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
+import { connect as netConnect, isIP, type AddressInfo, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { browserUrlCheck, isPublicAddress } from '@grunt/core/domain/browser-hosts.js';
 
@@ -32,6 +32,17 @@ export interface EgressProxyOptions {
   resolve?(host: string): Promise<string[]>;
   /** Told about every refused request. */
   onRefused?(user: string, host: string, reason: string): void;
+  /**
+   * Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): 127.0.0.1 may be reached
+   * on these ports. Core's own rules (local names, private and loopback
+   * addresses) are applied by the proxy itself whatever `check` says; this is
+   * the one way through them, and it is off unless set.
+   */
+  allowLoopbackPorts?: readonly number[];
+  /** How long an upstream connection may take to open; default 15 s. */
+  connectTimeoutMs?: number;
+  /** How long a tunnel, or a plain request waiting on its upstream, may sit silent; default 5 minutes. */
+  idleTimeoutMs?: number;
 }
 
 export interface EgressProxy {
@@ -60,13 +71,26 @@ async function defaultResolve(host: string): Promise<string[]> {
  */
 export function checkProxyTarget(
   raw: string,
-  check: (host: string, port: number) => string | null
+  check: (host: string, port: number) => string | null,
+  opts: { allowLoopbackPorts?: readonly number[] } = {}
 ): { site: string | null; port: number | null; denial: string | null } {
-  // Core's policy part is bypassed ({}), only its parsing is used: the profile's
-  // own rules, and the tests-only loopback allowance, come in through `check`.
-  const parsed = browserUrlCheck(raw, {});
+  // `check` carries the profile's rules (its blocklist). Core's own floor
+  // (local names, private and loopback addresses) is applied here as well, so a
+  // mis-wired `check` can't drop it; the loopback allowance only exists when
+  // `opts` sets it.
+  const parsed = browserUrlCheck(raw, {}, { allowLoopbackPorts: opts.allowLoopbackPorts });
   if (parsed.site === null || parsed.port === null) return { site: null, port: null, denial: parsed.denial ?? "Grunt couldn't tell which website this is for." };
-  return { site: parsed.site, port: parsed.port, denial: check(parsed.site, parsed.port) };
+  return { site: parsed.site, port: parsed.port, denial: check(parsed.site, parsed.port) ?? parsed.denial };
+}
+
+/** Headers that belong to one hop, not to the request: never forwarded on the plain path. */
+const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
+
+function withoutHopByHop(headers: IncomingHttpHeaders): OutgoingHttpHeaders {
+  const out: OutgoingHttpHeaders = { ...headers };
+  const named = String(headers.connection ?? '').split(',').map((t) => t.trim().toLowerCase());
+  for (const name of [...HOP_BY_HOP, ...named]) if (name !== '') delete out[name];
+  return out;
 }
 
 /** A resolved address in canonical form (IPv6 compressed, a v4-mapped one as hex words), or null when it isn't an address. */
@@ -81,13 +105,45 @@ function canonicalAddress(ip: string): string | null {
   }
 }
 
+/**
+ * Holds whatever a CONNECT or upgrade client sends before its tunnel is open,
+ * and drops the client if it hangs up first (an HTTP server socket doesn't
+ * notice a hang-up nobody is reading).
+ */
+function watchClient(client: Socket): { release(): Buffer } {
+  const early: Buffer[] = [];
+  let size = 0;
+  const onData = (chunk: Buffer): void => {
+    size += chunk.length;
+    if (size > 64 * 1024) client.destroy();
+    else early.push(chunk);
+  };
+  const onEnd = (): void => {
+    client.destroy();
+  };
+  client.on('data', onData);
+  client.once('end', onEnd);
+  return {
+    release() {
+      client.off('data', onData);
+      client.off('end', onEnd);
+      client.pause();
+      return Buffer.concat(early);
+    },
+  };
+}
+
 type Routed = { ip: string; url: URL; site: string; port: number } | { refused: string; host: string; bad: boolean };
 
 export async function startEgressProxy(options: EgressProxyOptions): Promise<EgressProxy> {
   const password = randomBytes(18).toString('hex');
   const resolveName = options.resolve ?? defaultResolve;
   const addressAllowed = options.addressAllowed ?? ((ip: string) => isPublicAddress(ip));
+  const connectTimeoutMs = options.connectTimeoutMs ?? 15_000;
+  const idleTimeoutMs = options.idleTimeoutMs ?? 5 * 60_000;
+  let closed = false;
   const sockets = new Set<Duplex>();
+  const requests = new Set<ClientRequest>();
   const track = (s: Duplex): void => {
     sockets.add(s);
     s.on('close', () => sockets.delete(s));
@@ -112,7 +168,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
    * then the lookup, then EVERY resolved address must be allowed.
    */
   async function route(user: string, raw: string): Promise<Routed> {
-    const verdict = checkProxyTarget(raw, (host, port) => options.check(user, host, port));
+    const verdict = checkProxyTarget(raw, (host, port) => options.check(user, host, port), { allowLoopbackPorts: options.allowLoopbackPorts });
     if (verdict.site === null || verdict.port === null) return { refused: verdict.denial ?? 'Not a usable address.', host: raw.slice(0, 200), bad: true };
     const { site, port } = verdict;
     if (verdict.denial) return { refused: verdict.denial, host: site, bad: false };
@@ -151,22 +207,50 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     }
   }
 
-  /** Pipes `client` and a new connection to `ip:port`; `onOpen` writes whatever must go first. */
-  function tunnel(client: Duplex, ip: string, port: number, onOpen: (upstream: Duplex) => void): void {
+  /**
+   * Pipes `client` and a new connection to `ip:port`; `onOpen` writes whatever
+   * must go first. Nothing is connected for a client that has already gone
+   * (it left during the lookup), and whichever side ends or goes quiet takes
+   * the other with it.
+   */
+  function tunnel(client: Socket, ip: string, port: number, onOpen: (upstream: Duplex) => void): void {
+    if (closed || client.destroyed) return;
     let open = false;
-    const upstream = netConnect({ host: ip, port }, () => {
+    const upstream = netConnect({ host: ip, port });
+    track(upstream);
+    const connectTimer = setTimeout(() => {
+      upstream.destroy();
+      if (!client.destroyed) client.end(BAD_GATEWAY);
+    }, connectTimeoutMs);
+    const teardown = (): void => {
+      clearTimeout(connectTimer);
+      upstream.destroy();
+      client.destroy();
+    };
+    upstream.once('connect', () => {
+      clearTimeout(connectTimer);
       open = true;
+      upstream.setTimeout(idleTimeoutMs);
+      client.setTimeout(idleTimeoutMs);
       onOpen(upstream);
       upstream.pipe(client);
       client.pipe(upstream);
     });
-    track(upstream);
+    upstream.on('timeout', teardown);
+    client.on('timeout', teardown);
     upstream.on('error', () => {
       if (client.destroyed) return;
       if (open) client.destroy();
       else client.end(BAD_GATEWAY);
     });
-    client.on('close', () => upstream.destroy());
+    upstream.on('close', () => {
+      clearTimeout(connectTimer);
+      if (open) client.destroy();
+    });
+    client.on('close', () => {
+      clearTimeout(connectTimer);
+      upstream.destroy();
+    });
   }
 
   async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -175,31 +259,60 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       res.writeHead(407, { 'Proxy-Authenticate': 'Basic realm="grunt"' }).end();
       return;
     }
+    // The browser going away (or close()) ends the upstream request too, however far along it is.
+    let upstream: ClientRequest | undefined;
+    let gone = false;
+    res.on('close', () => {
+      if (res.writableFinished) return;
+      gone = true;
+      upstream?.destroy();
+    });
     const where = await route(user, req.url ?? '');
     if ('refused' in where) {
       refuse(user, where.host, where.refused);
       res.writeHead(where.bad ? 400 : 403, { 'Content-Type': 'text/plain; charset=utf-8' }).end(where.refused);
       return;
     }
-    const headers: OutgoingHttpHeaders = { ...req.headers, host: where.url.host };
-    delete headers['proxy-authorization'];
-    delete headers['proxy-connection'];
-    const upstream = httpRequest(
-      { host: where.ip, port: where.port, method: req.method, path: `${where.url.pathname}${where.url.search}`, headers, setHost: false, agent: false },
+    if (gone || closed || res.destroyed) return;
+    const request = httpRequest(
+      {
+        host: where.ip,
+        port: where.port,
+        method: req.method,
+        path: `${where.url.pathname}${where.url.search}`,
+        headers: { ...withoutHopByHop(req.headers), host: where.url.host },
+        setHost: false,
+        agent: false,
+      },
       (up) => {
-        res.writeHead(up.statusCode ?? 502, up.headers);
+        res.writeHead(up.statusCode ?? 502, withoutHopByHop(up.headers));
         up.pipe(res);
+        up.on('error', () => res.destroy());
+        up.on('close', () => {
+          if (!up.complete) res.destroy();
+        });
       }
     );
-    upstream.on('socket', track);
-    upstream.on('error', () => {
-      if (!res.headersSent) res.writeHead(502);
+    upstream = request;
+    requests.add(request);
+    request.on('close', () => requests.delete(request));
+    request.on('socket', (socket: Socket) => {
+      track(socket);
+      if (socket.connecting) {
+        const timer = setTimeout(() => request.destroy(), connectTimeoutMs);
+        socket.once('connect', () => clearTimeout(timer));
+        socket.once('close', () => clearTimeout(timer));
+      }
+    });
+    request.setTimeout(idleTimeoutMs, () => request.destroy());
+    request.on('error', () => {
+      if (!res.headersSent && !res.destroyed) res.writeHead(502);
       res.end();
     });
-    req.pipe(upstream);
+    req.pipe(request);
   }
 
-  async function handleConnect(req: IncomingMessage, client: Duplex, head: Buffer): Promise<void> {
+  async function handleConnect(req: IncomingMessage, client: Socket, head: Buffer): Promise<void> {
     track(client);
     client.on('error', () => client.destroy());
     const user = userOf(req);
@@ -217,7 +330,9 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       client.end(BAD_REQUEST);
       return;
     }
+    const watch = watchClient(client);
     const where = await route(user, `http://${authority}/`);
+    const first = Buffer.concat([head, watch.release()]);
     if ('refused' in where) {
       refuse(user, where.host, where.refused);
       client.end(where.bad ? BAD_REQUEST : FORBIDDEN);
@@ -225,11 +340,11 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     }
     tunnel(client, where.ip, where.port, (upstream) => {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (head.length > 0) upstream.write(head);
+      if (first.length > 0) upstream.write(first);
     });
   }
 
-  async function handleUpgrade(req: IncomingMessage, client: Duplex, head: Buffer): Promise<void> {
+  async function handleUpgrade(req: IncomingMessage, client: Socket, head: Buffer): Promise<void> {
     track(client);
     client.on('error', () => client.destroy());
     const user = userOf(req);
@@ -237,7 +352,9 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
       client.end(NEED_AUTH);
       return;
     }
+    const watch = watchClient(client);
     const where = await route(user, req.url ?? '');
+    const first = Buffer.concat([head, watch.release()]);
     if ('refused' in where) {
       refuse(user, where.host, where.refused);
       client.end(where.bad ? BAD_REQUEST : FORBIDDEN);
@@ -251,7 +368,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
         lines.push(`${name}: ${req.rawHeaders[i + 1] ?? ''}`);
       }
       upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
-      if (head.length > 0) upstream.write(head);
+      if (first.length > 0) upstream.write(first);
     });
   }
 
@@ -262,10 +379,10 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     });
   });
   server.on('connection', track);
-  server.on('connect', (req: IncomingMessage, client: Duplex, head: Buffer) => {
+  server.on('connect', (req: IncomingMessage, client: Socket, head: Buffer) => {
     handleConnect(req, client, head).catch(() => client.destroy());
   });
-  server.on('upgrade', (req: IncomingMessage, client: Duplex, head: Buffer) => {
+  server.on('upgrade', (req: IncomingMessage, client: Socket, head: Buffer) => {
     handleUpgrade(req, client, head).catch(() => client.destroy());
   });
   await new Promise<void>((resolve, reject) => {
@@ -280,6 +397,8 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     server: `http://127.0.0.1:${port}`,
     password,
     close: async () => {
+      closed = true;
+      for (const r of requests) r.destroy();
       for (const s of sockets) s.destroy();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
