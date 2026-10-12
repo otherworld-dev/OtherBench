@@ -11,7 +11,11 @@ export function toolContextFor(req: EngineRequest, signal: AbortSignal = req.sig
   return {
     chatId: req.chatId,
     messageId: req.messageId,
-    profileId: req.profile.id,
+    // A sub-agent's calls are scoped to the PARENT reply's profile, not the
+    // one it runs as: otherwise a parent with no grants could pick a profile
+    // that has some and get writes through with no card. This overrides the
+    // spec's per-profile choice for safety (ledgered in progress.md).
+    profileId: req.subagent?.parentProfileId ?? req.profile.id,
     workspaceRoot: req.workspaceRoot,
     ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
     signal,

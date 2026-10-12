@@ -26,8 +26,13 @@ describe('toolContextFor', () => {
   it('carries the call id, the sub-agent host and the sub-agent tag', () => {
     const host: SubagentHost = { run: async () => 'ok' };
     const other = new AbortController().signal;
-    const ctx = toolContextFor(request({ subagents: host, subagent: { callId: 'c1', label: 'Helper' }, folders: [{ root: '/x', access: 'read' }] }), other, 'call-9');
-    expect(ctx).toMatchObject({ toolCallId: 'call-9', subagents: host, subagent: { callId: 'c1', label: 'Helper' }, folders: [{ root: '/x', access: 'read' }], signal: other });
+    const ctx = toolContextFor(request({ subagents: host, subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'profile-1' }, folders: [{ root: '/x', access: 'read' }] }), other, 'call-9');
+    expect(ctx).toMatchObject({ toolCallId: 'call-9', subagents: host, subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'profile-1' }, folders: [{ root: '/x', access: 'read' }], signal: other });
+  });
+
+  it("scopes a sub-agent's calls to the parent reply's profile, not the one it runs as", () => {
+    const ctx = toolContextFor(request({ profile: { id: 'profile-b' } as ResolvedProfile, subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'profile-a', profileName: 'B' } }));
+    expect(ctx.profileId).toBe('profile-a');
   });
 
   it('leaves out an empty folder list', () => {

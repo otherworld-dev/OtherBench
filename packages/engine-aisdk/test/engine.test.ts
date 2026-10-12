@@ -186,8 +186,8 @@ describe('AiSdkChatEngine.stream', () => {
       ),
     });
     const host = { run: async () => 'x' };
-    await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec], subagents: host, subagent: { callId: 'parent-call', label: 'Helper' } })));
-    expect(seen[0]).toMatchObject({ toolCallId: 'call-42', subagents: host, subagent: { callId: 'parent-call', label: 'Helper' }, chatId: 'chat-1', profileId: 'profile-1' });
+    await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec], subagents: host, subagent: { callId: 'parent-call', label: 'Helper', parentProfileId: 'profile-1' } })));
+    expect(seen[0]).toMatchObject({ toolCallId: 'call-42', subagents: host, subagent: { callId: 'parent-call', label: 'Helper', parentProfileId: 'profile-1' }, chatId: 'chat-1', profileId: 'profile-1' });
   });
 
   it('round-trips a tool call: tool-call event, then tool-result event with the real return value, then the follow-up answer', async () => {

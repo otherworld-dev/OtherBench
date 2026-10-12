@@ -287,8 +287,8 @@ describe('MockChatEngine', () => {
     it("gives a sub-agent's read_file the sub-agent tag", async () => {
       const seen: ToolContext[] = [];
       const readFile: ToolSpec = { name: 'read_file', description: '', parameters: {}, risk: 'read', source: 'fs', execute: async (_a, ctx) => { seen.push(ctx); return 'text'; } };
-      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('read #tool a.txt', { tools: [readFile], subagent: { callId: 'c1', label: 'First helper' } })));
-      expect(seen[0]?.subagent).toEqual({ callId: 'c1', label: 'First helper' });
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('read #tool a.txt', { tools: [readFile], subagent: { callId: 'c1', label: 'First helper', parentProfileId: 'p' } })));
+      expect(seen[0]?.subagent).toEqual({ callId: 'c1', label: 'First helper', parentProfileId: 'p' });
     });
   });
 

@@ -610,7 +610,7 @@ export class SubagentRunner implements SubagentHost {
       workspaceRoot,
       ...(folders.length > 0 ? { folders } : {}),
       purpose: 'turn',
-      subagent: { callId, label },
+      subagent: { callId, label, parentProfileId: this.deps.parent.id, ...(chosen.id !== this.deps.parent.id ? { profileName: chosen.name } : {}) },
     };
   }
 }

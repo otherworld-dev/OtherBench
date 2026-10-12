@@ -169,6 +169,8 @@ export interface FakeToolProviderOptions {
   tools?: ToolSpec[];
   /** MCP servers whose tools are offered when the policy enables their id. */
   mcpServers?: FakeMcpServer[];
+  /** The store its `PermissionBroker` reads grants from and writes them to. Defaults to a private `InMemoryStore`. */
+  store?: Store;
 }
 
 /**
@@ -202,7 +204,7 @@ export class FakeToolProvider implements ToolProvider {
   private readonly mcpServers: FakeMcpServer[];
 
   constructor(options: FakeToolProviderOptions = {}) {
-    this.broker = new PermissionBroker(new InMemoryStore());
+    this.broker = new PermissionBroker(options.store ?? new InMemoryStore());
     this.tools = options.tools ?? [
       stubTool('read_file', 'read', 'fs'),
       stubTool('write_file', 'mutate', 'fs'),

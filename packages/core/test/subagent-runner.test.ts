@@ -110,7 +110,9 @@ describe('SubagentRunner', () => {
     expect(req.profile.systemPrompt).toContain('# Working as a sub-agent');
     expect(req.messages.map((m) => m.role)).toEqual(['system', 'user']);
     expect(req.messages[1]!.parts).toEqual([{ type: 'text', text: 'Find the bug.' }]);
-    expect(req).toMatchObject({ chatId: 'chat-1', messageId: 'reply-1', workspaceRoot: '/ws', purpose: 'turn', subagent: { callId: 'call-1', label: 'Look' } });
+    expect(req).toMatchObject({ chatId: 'chat-1', messageId: 'reply-1', workspaceRoot: '/ws', purpose: 'turn' });
+    // Run as the parent's own profile, the tag names no other profile.
+    expect(req.subagent).toEqual({ callId: 'call-1', label: 'Look', parentProfileId: 'p-main' });
     expect(req.subagents).toBeUndefined();
     expect(req.tools.map((t) => t.name)).toEqual(['read_file']);
     expect(sub(h.parts(), 'call-1')).toMatchObject({ status: 'complete', usage: USAGE, parts: [{ type: 'text', text: 'Found it.' }], profileName: 'Main' });
@@ -210,6 +212,7 @@ describe('SubagentRunner', () => {
     const h = harness(engine);
     expect(await h.runner.run({ description: 'A', prompt: 'p', profile: 'cheap' }, h.ctx('call-1'))).toBe('cheap answer');
     expect(engine.requests[0]!.profile).toMatchObject({ id: 'p-cheap' });
+    expect(engine.requests[0]!.subagent).toEqual({ callId: 'call-1', label: 'A', parentProfileId: 'p-main', profileName: 'Cheap' });
     expect(engine.requests[0]!.profile.systemPrompt).toContain('You are Cheap.');
     expect(engine.requests[0]!.profile.systemPrompt).not.toContain('You are Main.');
     expect(h.usage[0]).toMatchObject({ profileId: 'p-cheap', modelId: 'p-cheap-model' });
@@ -368,6 +371,59 @@ describe('SubagentRunner', () => {
     expect(results.slice(1)).toEqual(Array(4).fill('ok'));
     expect(most).toBeLessThanOrEqual(4);
     expect(sub(h.parts(), 'call-0')).toMatchObject({ status: 'error' });
+  });
+
+  describe("grants: a sub-agent's calls are matched and stored under the parent reply's profile", () => {
+    const writeFile: ToolSpec = { name: 'write_file', description: '', parameters: {}, risk: 'mutate', source: 'fs', execute: async () => 'written' };
+    /** Main (the parent) and Cheap may both write, and both always ask. */
+    function writableStore(): InMemoryStore {
+      const store = seeded();
+      for (const id of ['p-main', 'p-cheap']) store.profiles.update(id, { toolPolicy: policy({ fs: 'readwrite', approvalMode: 'always_ask' }) });
+      return store;
+    }
+    function alwaysGrant(store: InMemoryStore, profileId: string): void {
+      store.grants.create({ id: `grant-${profileId}`, chatId: null, profileId, toolName: 'write_file', source: 'fs', scope: 'always', constraint: null, expiresAt: null });
+    }
+    const writer = childEngine(async function* (req) {
+      const tool = req.tools.find((t) => t.name === 'write_file')!;
+      yield { type: 'tool-call', id: 'w1', name: 'write_file', args: { path: 'a.txt', content: 'x' } };
+      const result = await tool.execute({ path: 'a.txt', content: 'x' }, toolContextFor(req, req.signal, 'w1'));
+      yield { type: 'tool-result', id: 'w1', name: 'write_file', result, isError: false };
+      yield* answer(`wrote: ${JSON.stringify(result)}`);
+    });
+
+    it("the profile it runs as having an always grant doesn't let it write without a card", async () => {
+      const store = writableStore();
+      alwaysGrant(store, 'p-cheap');
+      const provider = new FakeToolProvider({ tools: [readFile, writeFile], store });
+      const requests: ApprovalRequest[] = [];
+      provider.onApprovalEvent((e) => {
+        if (e.type === 'request') requests.push(e.request);
+      });
+      const h = harness(writer, { store }, provider);
+      const run = h.runner.run({ description: 'Writer', prompt: 'Write a.txt.', profile: 'Cheap' }, h.ctx('call-1'));
+
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      expect(requests[0]).toMatchObject({ toolName: 'write_file', subagent: { callId: 'call-1', label: 'Writer', parentProfileId: 'p-main', profileName: 'Cheap' } });
+      // An "always" answer is stored under the parent's profile, not Cheap's.
+      provider.resolveApproval(requests[0]!.id, { choice: 'always', constraint: null });
+      expect(await run).toBe('wrote: "written"');
+      const made = store.grants.list().filter((g) => g.id !== 'grant-p-cheap');
+      expect(made).toEqual([expect.objectContaining({ profileId: 'p-main', toolName: 'write_file', scope: 'always' })]);
+    });
+
+    it("a grant under the parent's profile lets the sub-agent's call through", async () => {
+      const store = writableStore();
+      alwaysGrant(store, 'p-main');
+      const provider = new FakeToolProvider({ tools: [readFile, writeFile], store });
+      const requests: ApprovalRequest[] = [];
+      provider.onApprovalEvent((e) => {
+        if (e.type === 'request') requests.push(e.request);
+      });
+      const h = harness(writer, { store }, provider);
+      expect(await h.runner.run({ description: 'Writer', prompt: 'Write a.txt.', profile: 'Cheap' }, h.ctx('call-1'))).toBe('wrote: "written"');
+      expect(requests).toEqual([]);
+    });
   });
 
   it("passes the call's tools narrowing on to the tool list", async () => {

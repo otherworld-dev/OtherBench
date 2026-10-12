@@ -70,7 +70,7 @@ describe('the subagent tool', () => {
   it('is refused by the gate inside a sub-agent', async () => {
     const { provider } = setup();
     const [tool] = await provider.listTools(policy({ subagents: true }));
-    const result = await tool!.execute({ description: 'a', prompt: 'b' }, ctx({ subagent: { callId: 'c', label: 'L' }, subagents: { run: async () => 'nope' } }));
+    const result = await tool!.execute({ description: 'a', prompt: 'b' }, ctx({ subagent: { callId: 'c', label: 'L', parentProfileId: 'p' }, subagents: { run: async () => 'nope' } }));
     expect(result).toMatchObject({ error: true, code: 'permission_denied', message: "A sub-agent can't start another sub-agent." });
   });
 });

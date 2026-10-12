@@ -8,6 +8,14 @@ export interface SubagentTag {
   callId: string;
   /** The label the parent model gave it. */
   label: string;
+  /**
+   * The parent reply's profile id. The sub-agent's tool calls are matched
+   * against, and any grant given on them is stored under, this profile, not
+   * the one it runs as: a sub-agent can never do more than its parent.
+   */
+  parentProfileId: string;
+  /** The profile it runs as, set only when that isn't the parent's own (for its approval cards). */
+  profileName?: string;
 }
 
 /** Runs sub-agents for one reply. The `subagent` tool's `execute` hands its call here. */
@@ -28,7 +36,8 @@ export interface ToolContext {
    * so approving a command while using a locked-down profile also approved
    * it for a permissive one. `PermissionBroker` stamps every grant it
    * creates with this id and refuses to match a grant belonging to a
-   * different profile.
+   * different profile. For a sub-agent's call it is the PARENT reply's
+   * profile (`SubagentTag.parentProfileId`), never the one it runs as.
    */
   profileId: string;
   workspaceRoot: string | null;
