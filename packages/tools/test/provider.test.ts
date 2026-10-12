@@ -4,11 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ApprovalRequest, ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { GruntToolProvider } from '../src/provider.js';
 import type { McpClient } from '../src/mcp/client.js';
 import type { McpServerManager } from '../src/mcp/manager.js';
+import { BrowserManager } from '../src/browser/manager.js';
+import { NO_PAGE } from '../src/browser/tool.js';
+import { FakeFactory, fakeProxy } from './browser/fakes.js';
 
 let ws: string;
 
@@ -718,5 +721,102 @@ describe('non-user denials are honest (approval cleanup round 1)', () => {
     expect(((await readFile.execute({ path: 'x.txt' }, ctx({ signal: dead.signal }))) as Record<string, unknown>).code).toBe('cancelled');
     const spec = { name: 'Read', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => undefined };
     expect(await provider.requestApproval(spec, { file_path: 'x' }, policy(), ctx({ signal: dead.signal }))).toMatchObject({ allowed: false });
+  });
+});
+
+describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
+  function browserProvider(): { provider: GruntToolProvider; store: InMemoryStore; factory: FakeFactory } {
+    const store = new InMemoryStore();
+    const factory = new FakeFactory();
+    const browser = new BrowserManager({ factory, startProxy: fakeProxy().start });
+    return { provider: new GruntToolProvider(store, new PermissionBroker(store), emptyMcp, { browser }), store, factory };
+  }
+  const on = (o: Partial<ToolPolicy> = {}) => policy({ browser: true, ...o });
+  /** Answers every card with `choice` as it is raised; returns the cards seen. */
+  function answerAll(provider: GruntToolProvider, choice: ApprovalChoice = { choice: 'once' }): ApprovalRequest[] {
+    const seen: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type !== 'request') return;
+      seen.push(e.request);
+      provider.resolveApproval(e.request.id, choice);
+    });
+    return seen;
+  }
+  const browserOf = async (provider: GruntToolProvider, p: ToolPolicy) => (await provider.listTools(p)).find((t) => t.name === 'browser');
+
+  it('offers the browser only to a profile that turns it on, and only when the server has one', async () => {
+    const { provider } = browserProvider();
+    expect(await browserOf(provider, on())).toBeDefined();
+    expect(await browserOf(provider, policy())).toBeUndefined();
+    expect(await browserOf(makeProvider().provider, on())).toBeUndefined();
+  });
+
+  it('works out the site before the broker decides, and runs the call with what was approved', async () => {
+    const { provider, factory } = browserProvider();
+    const cards = answerAll(provider);
+    const tool = (await browserOf(provider, on()))!;
+    const result = (await tool.execute({ command: 'open', url: 'Example.com/start', host: 'evil.test' }, ctx())) as Record<string, unknown>;
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ source: 'browser', toolName: 'browser', summary: 'Use example.com: open https://example.com/start', args: { command: 'open', url: 'https://example.com/start', host: 'example.com' } });
+    expect(factory.sessions[0]!.actions).toEqual(['open https://example.com/start']);
+    expect(result).toMatchObject({ url: 'https://example.com/start', about: expect.stringContaining('from example.com.') });
+  });
+
+  it('refuses a call it cannot place with no card, audited as a policy denial', async () => {
+    const { provider, store } = browserProvider();
+    const cards = answerAll(provider);
+    const tool = (await browserOf(provider, on()))!;
+    expect(await tool.execute({ command: 'snapshot' }, ctx())).toEqual({ error: true, code: 'permission_denied', message: NO_PAGE });
+    expect(cards).toEqual([]);
+    expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'browser', grantedBy: 'deny:policy' });
+  });
+
+  it('takes no card to read the page under "ask on mutate", and keeps typed text out of the audit', async () => {
+    const { provider, store } = browserProvider();
+    const cards = answerAll(provider);
+    const tool = (await browserOf(provider, on()))!;
+    await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+    await tool.execute({ command: 'snapshot' }, ctx());
+    expect(cards).toHaveLength(1);
+    await tool.execute({ command: 'type', ref: 'e2', text: 'my secret words' }, ctx());
+    expect(cards).toHaveLength(2);
+    const rows = store.audit.list('chat-1');
+    expect(rows.find((r) => (r.argsRedacted as { command?: string }).command === 'snapshot')).toMatchObject({ grantedBy: 'auto_read' });
+    const typed = rows.find((r) => (r.argsRedacted as { command?: string }).command === 'type')!;
+    expect((typed.argsRedacted as { text?: string }).text).toBe('[redacted]');
+    expect(JSON.stringify(rows)).not.toContain('my secret words');
+  });
+
+  it('an answer "for this chat" covers that site and no other', async () => {
+    const { provider } = browserProvider();
+    const cards = answerAll(provider, { choice: 'chat' });
+    const tool = (await browserOf(provider, on()))!;
+    await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+    await tool.execute({ command: 'open', url: 'https://example.com/other' }, ctx());
+    expect(cards).toHaveLength(1);
+    await tool.execute({ command: 'open', url: 'https://other.test/' }, ctx());
+    expect(cards).toHaveLength(2);
+  });
+
+  it('requestApproval describes the call first and hands back what it approved; the relay is ungated', async () => {
+    const { provider, store } = browserProvider();
+    answerAll(provider);
+    const [spec] = provider.relayGruntTools(on());
+    expect(spec).toMatchObject({ name: 'browser', source: 'browser' });
+    expect(await provider.requestApproval(spec!, { command: 'open', url: 'example.com' }, on(), ctx())).toEqual({
+      allowed: true,
+      grantedBy: 'ask:once',
+      args: { command: 'open', url: 'https://example.com/', host: 'example.com' },
+    });
+    expect(await provider.requestApproval(spec!, { command: 'click', ref: 'e1' }, on(), ctx())).toEqual({ allowed: false, reason: NO_PAGE });
+    expect(store.audit.list('chat-1').find((r) => r.grantedBy === 'deny:policy')).toMatchObject({ toolName: 'browser' });
+    expect(provider.relayGruntTools(policy())).toEqual([]);
+    expect(makeProvider().provider.relayGruntTools(on())).toEqual([]);
+  });
+
+  it('leaves tools without describeCall exactly as they were', async () => {
+    const { provider } = makeProvider();
+    const agent = { name: 'Read', description: '', parameters: {}, risk: 'read' as const, source: 'agent' as const, execute: async () => undefined };
+    expect(await provider.requestApproval(agent, { path: 'a.txt' }, policy(), ctx())).toEqual({ allowed: true, grantedBy: 'auto_read' });
   });
 });
