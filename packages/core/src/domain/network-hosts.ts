@@ -44,7 +44,12 @@ export function canonicalHost(raw: unknown): string | null {
   return host;
 }
 
-/** IPv4 ranges a sandboxed command must never be let at: this machine, the LAN, link-local (cloud metadata) and CGNAT. */
+/**
+ * IPv4 ranges a sandboxed command must never be let at: this machine, the LAN,
+ * link-local (cloud metadata), CGNAT, multicast, the reserved class E block
+ * (with the broadcast address) and the ranges set aside for benchmarking,
+ * documentation and protocol assignments. None of them is a public server.
+ */
 const PRIVATE_IPV4: ReadonlyArray<readonly [base: number, bits: number]> = [
   [ipv4(0, 0, 0, 0), 8],
   [ipv4(10, 0, 0, 0), 8],
@@ -52,8 +57,18 @@ const PRIVATE_IPV4: ReadonlyArray<readonly [base: number, bits: number]> = [
   [ipv4(127, 0, 0, 0), 8],
   [ipv4(169, 254, 0, 0), 16],
   [ipv4(172, 16, 0, 0), 12],
+  [ipv4(192, 0, 0, 0), 24],
+  [ipv4(192, 0, 2, 0), 24],
   [ipv4(192, 168, 0, 0), 16],
+  [ipv4(198, 18, 0, 0), 15],
+  [ipv4(198, 51, 100, 0), 24],
+  [ipv4(203, 0, 113, 0), 24],
+  [ipv4(224, 0, 0, 0), 4],
+  [ipv4(240, 0, 0, 0), 4],
 ];
+
+/** Name suffixes that only ever mean a private network: mDNS, internal DNS, home routers, the default search domain. */
+const LOCAL_SUFFIXES = ['.localhost', '.internal', '.local', '.home.arpa', '.localdomain'];
 
 function ipv4(a: number, b: number, c: number, d: number): number {
   return ((a << 24) | (b << 16) | (c << 8) | d) >>> 0;
@@ -61,11 +76,20 @@ function ipv4(a: number, b: number, c: number, d: number): number {
 
 /**
  * Whether a CANONICAL host (from `canonicalHost`) is this machine or a private
- * network: `localhost`, `*.localhost`, or an IPv4 address in a private range.
- * IPv6 literals never get this far: `canonicalHost` refuses them all.
+ * network, judged by its spelling alone: an IPv4 address in a private or
+ * reserved range (the integer, hex and octal forms are already dotted quads by
+ * now), `localhost` and the names that only resolve on a private network
+ * (`*.internal`, `*.local`, `*.home.arpa`, ...), and any name with no dot at
+ * all (`router`, `nas`: a search-domain name, never a public one). IPv6
+ * literals never get this far: `canonicalHost` refuses them all.
+ *
+ * A public-looking name can still resolve to a private address (DNS rebinding
+ * included). The sandbox agent checks the addresses a name resolves to, and the
+ * sandbox runtime refuses them again at connect time; this is the early refusal.
  */
 export function isLocalOrPrivateHost(host: string): boolean {
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (!host.includes('.')) return true;
+  if (LOCAL_SUFFIXES.some((suffix) => host.endsWith(suffix) || host === suffix.slice(1))) return true;
   const parts = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
   if (!parts) return false;
   const address = ipv4(Number(parts[1]), Number(parts[2]), Number(parts[3]), Number(parts[4]));
