@@ -266,6 +266,62 @@ describe('WslSandbox.run', () => {
     await Promise.all([same, inside]);
   });
 
+  it("holds a cancelled command's folders until its agent has reported it, restore and all", async () => {
+    const { held, onRun } = holding();
+    const { sandbox } = make({}, onRun);
+    const stop = new AbortController();
+    const first = sandbox.run(request({ chatId: 'a', folders: [], signal: stop.signal }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const second = sandbox.run(request({ chatId: 'b', folders: [] }));
+    stop.abort();
+    held[0]!.ch.emit({ type: 'restoring', id: held[0]!.m.id });
+    for (let i = 0; i < 10; i += 1) await tick();
+    expect(held).toHaveLength(1);
+    held[0]!.ch.finish(held[0]!.m.id);
+    await first;
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[1]!.ch.finish(held[1]!.m.id);
+    await second;
+  });
+
+  it("refuses commands that would write a folder an agent couldn't confirm it put back, until release or Repair", async () => {
+    let unguarded = true;
+    const { sandbox, channels } = make({}, (m, ch) => queueMicrotask(() => ch.finish(m.id, 'ran\n', 0, unguarded ? ['/mnt/e/Git/Grunt'] : [])));
+    // The run itself still answers (its note says what failed).
+    expect((await sandbox.run(request({ chatId: 'a', folders: [] }))).exitCode).toBe(0);
+    unguarded = false;
+    const refusal = { code: 'agent_failed', message: expect.stringContaining("The sandbox couldn't confirm it undid changes to protected files in E:\\Git\\Grunt") };
+    await expect(sandbox.run(request({ chatId: 'a', writable: false, folders: [] }))).rejects.toMatchObject(refusal);
+    await expect(sandbox.run(request({ chatId: 'b', folders: [] }))).rejects.toMatchObject(refusal);
+    await expect(sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\Grunt\\packages', folders: [] }))).rejects.toMatchObject(refusal);
+    // Reading it, or writing somewhere else, goes ahead.
+    await expect(sandbox.run(request({ chatId: 'd', writable: false, folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ chatId: 'e', workspaceRoot: 'E:\\Git\\Other', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
+    // Refused before anything was sent to an agent for them.
+    expect(channels.filter((c) => ['b', 'c'].includes(c.chatId))).toEqual([]);
+    await sandbox.release('a');
+    await expect(sandbox.run(request({ chatId: 'b', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ chatId: 'a', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it('treats an agent that died before reporting a command (mid-restore) as having left its folders unguarded', async () => {
+    const { held, onRun } = holding();
+    const { sandbox } = make({ steps: [] }, onRun);
+    const first = sandbox.run(request({ chatId: 'a', folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    held[0]!.ch.emit({ type: 'restoring', id: held[0]!.m.id });
+    held[0]!.ch.emitExit(1, 'wsl shut down');
+    await expect(first).rejects.toMatchObject({ code: 'agent_failed' });
+    await expect(sandbox.run(request({ chatId: 'b', folders: [] }))).rejects.toMatchObject({ message: expect.stringContaining("couldn't confirm") });
+    // Repair starts over.
+    await sandbox.setup();
+    await sandbox.idle();
+    const next = sandbox.run(request({ chatId: 'b', folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    held[1]!.ch.finish(held[1]!.m.id);
+    await expect(next).resolves.toMatchObject({ exitCode: 0 });
+  });
+
   it('a command waiting for another chat to finish writing its folder is dropped when its turn is stopped', async () => {
     const { held, onRun } = holding();
     const { sandbox } = make({}, onRun);

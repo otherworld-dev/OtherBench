@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -128,6 +128,13 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
       else expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
     }
     console.log(`[sandbox-live] protected files: ${r.output.trim()}`);
+    // Rewritten and then made read-only (on a Windows folder, the read-only attribute): put back all the same.
+    const locked = await sandbox.run(req(`echo evil > '.CLAUDE/settings.local.json' && chmod 444 '.CLAUDE/settings.local.json'`));
+    expect(locked.exitCode, locked.output).toBe(0);
+    expect(locked.output).toContain('The sandbox undid changes to .claude/settings.local.json');
+    expect(readFileSync(join(dir, 'ws', EXISTING_PROBE), 'utf8')).toBe(EXISTING_PROBE_CONTENT);
+    expect(statSync(join(dir, 'ws', EXISTING_PROBE)).mode & 0o200).not.toBe(0);
+    console.log(`[sandbox-live] read-only protected file: ${locked.output.trim()}`);
   }, 120_000);
 
   it('reaches an allowlisted host, and asks about one that is not (refused here)', async () => {

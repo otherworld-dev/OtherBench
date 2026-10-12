@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,7 +38,15 @@ type Lookup = (host: string) => Promise<Array<{ address: string }>>;
 
 function harness(
   over: Record<string, unknown> = {},
-  fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm; realpath?: typeof realpath; lookup?: Lookup; lstat?: typeof lstat } = {}
+  fakes: {
+    spawn?: unknown;
+    kill?: (pid: number, signal: string) => void;
+    rm?: typeof rm;
+    realpath?: typeof realpath;
+    lookup?: Lookup;
+    lstat?: typeof lstat;
+    createFile?: (path: string, data: Uint8Array, mode: number) => Promise<unknown>;
+  } = {}
 ) {
   const sent: Sent[] = [];
   const exits: number[] = [];
@@ -84,7 +92,9 @@ function harness(
     lstat: fakes.lstat ?? lstat,
     realpath: fakes.realpath ?? realpath,
     readFile,
-    writeFile,
+    // 'wx': exclusive, as the real one (O_EXCL | O_NOFOLLOW).
+    createFile: fakes.createFile ?? ((path: string, data: Uint8Array, mode: number) => writeFile(path, data, { flag: 'wx', mode })),
+    chmod,
     readdir,
     readlink,
     // A 'junction' needs no privilege on Windows; elsewhere the type is ignored.
@@ -180,7 +190,7 @@ describe('the sandbox agent', () => {
     await h.run(1, 'process.stdout.write("hello "); process.stderr.write("world")');
     expect(h.output(1)).toContain('hello');
     expect(h.output(1)).toContain('world');
-    expect(h.done(1)).toEqual({ type: 'done', id: 1, exitCode: 0, signal: null, timedOut: false, truncated: false, note: '' });
+    expect(h.done(1)).toEqual({ type: 'done', id: 1, exitCode: 0, signal: null, timedOut: false, truncated: false, note: '', unguarded: [] });
     const call = h.runtime.wrapWithSandboxArgv.mock.calls[0]!;
     const tmp = `${h.tmpRoot}/1`;
     expect(call[1]).toBe('bash');
@@ -392,7 +402,7 @@ describe('the sandbox agent, awkward timing', () => {
     wrapping.resolve({ argv: [process.execPath, '-e', 'process.stdout.write("ran")'], env: { ...process.env } });
     await running;
     expect(h.output(1)).toBe('');
-    expect(h.done(1)).toEqual({ type: 'done', id: 1, exitCode: null, signal: 'SIGTERM', timedOut: false, truncated: false, note: '' });
+    expect(h.done(1)).toEqual({ type: 'done', id: 1, exitCode: null, signal: 'SIGTERM', timedOut: false, truncated: false, note: '', unguarded: [] });
     expect(h.runtime.cleanupAfterCommand).toHaveBeenCalledTimes(1);
   });
 
@@ -442,13 +452,13 @@ describe('the sandbox agent, awkward timing', () => {
     });
     await h.init(['pypi.org']);
     await h.run(1, '0', { allowedHosts: ['example.org'] });
-    expect(h.sent.filter((m) => m.id === 1)).toEqual([{ type: 'failed', id: 1, message: 'bad config' }]);
+    expect(h.sent.filter((m) => m.id === 1)).toEqual([{ type: 'failed', id: 1, message: 'bad config', unguarded: [] }]);
     expect(h.runtime.wrapWithSandboxArgv).not.toHaveBeenCalled();
     // The allowlist was not recorded as changed, so the next run changes it again.
     await h.run(2, '0', { allowedHosts: ['example.org'] });
     expect(h.runtime.updateConfig).toHaveBeenCalledTimes(2);
     // And the agent is not stuck on the failed run.
-    expect(h.sent.filter((m) => m.id === 2)).toEqual([{ type: 'failed', id: 2, message: 'bad config' }]);
+    expect(h.sent.filter((m) => m.id === 2)).toEqual([{ type: 'failed', id: 2, message: 'bad config', unguarded: [] }]);
   });
 
   it('never sends more than 100 KB of multi-byte output, and never cuts a character in half', async () => {
@@ -591,7 +601,7 @@ describe('the sandbox agent, input from the host', () => {
     const h = harness({}, { rm: slowRm });
     await h.init();
     const first = h.run(1, '0');
-    await vi.waitFor(() => expect(h.done(1)).toBeDefined());
+    await vi.waitFor(() => expect(h.done(1)).toBeDefined(), { timeout: 5000 });
     // Grunt sends the next run the moment it sees done.
     await h.run(2, '0');
     expect(h.done(2)).toBeDefined();
@@ -692,7 +702,7 @@ describe('the sandbox agent, links in the temp folder', () => {
     await h.init();
     linkTo(outside, `${h.tmpRoot}/1`);
     await h.run(1, '0');
-    expect(h.sent.filter((m) => m.id === 1)).toEqual([{ type: 'failed', id: 1, message: 'The temp folder for this run is already taken.' }]);
+    expect(h.sent.filter((m) => m.id === 1)).toEqual([{ type: 'failed', id: 1, message: 'The temp folder for this run is already taken.', unguarded: [] }]);
     expect(h.runtime.wrapWithSandboxArgv).not.toHaveBeenCalled();
     survives();
   });
@@ -956,9 +966,56 @@ describe('the sandbox agent, protected files', () => {
     await h.init();
     await runIn(h, 1, '0');
     expect(h.sent.filter((m) => m.id === 1)).toEqual([
-      { type: 'failed', id: 1, message: 'bwrap went away\nThe sandbox undid changes to .mcp.json (protected files).' },
+      { type: 'restoring', id: 1 },
+      { type: 'failed', id: 1, message: 'bwrap went away\nThe sandbox undid changes to .mcp.json (protected files).', unguarded: [] },
     ]);
     expect(existsSync(at('.mcp.json'))).toBe(false);
+  });
+
+  it('puts back a protected file the command changed and then made read-only (the Windows read-only attribute)', async () => {
+    put('.git/config', '[core]\n');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".git/config", "[core]\\n\\tfsmonitor = evil\\n");', 'fs.chmodSync(".git/config", 0o444);']));
+    expect(readFileSync(at('.git', 'config'), 'utf8')).toBe('[core]\n');
+    expect(statSync(at('.git', 'config')).mode & 0o200).not.toBe(0);
+    expect(h.done(1)).toMatchObject({ note: 'The sandbox undid changes to .git/config (protected files).', unguarded: [] });
+  });
+
+  it('puts back the mode of a protected file whose bytes the command left alone', async () => {
+    put('.git/config', '[core]\n');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.chmodSync(".git/config", 0o444);']));
+    expect(statSync(at('.git', 'config')).mode & 0o200).not.toBe(0);
+    expect(readFileSync(at('.git', 'config'), 'utf8')).toBe('[core]\n');
+    expect(h.done(1)).toMatchObject({ note: 'The sandbox undid changes to .git/config (protected files).', unguarded: [] });
+  });
+
+  it('never writes through a hard link the command put at a protected path', async () => {
+    put('.git/config', '[core]\n');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync("mine.txt", "mine");', 'fs.rmSync(".git/config");', 'fs.linkSync("mine.txt", ".git/config");']));
+    expect(readFileSync(at('.git', 'config'), 'utf8')).toBe('[core]\n');
+    expect(readFileSync(at('mine.txt'), 'utf8')).toBe('mine');
+  });
+
+  it("says when it couldn't put a file back, and names the folder as unguarded so Grunt stops using it", async () => {
+    put('.git/config', '[core]\n');
+    const h = harness({}, { createFile: async () => Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })) });
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".git/config", "evil");']));
+    const done = h.done(1)!;
+    expect(done['unguarded']).toEqual([ws]);
+    expect(String(done['note'])).toContain("The sandbox couldn't check or undo changes to .git (EACCES: permission denied)");
+  });
+
+  it('tells Grunt the restore has started, once, before it reports the run', async () => {
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, '0');
+    expect(h.sent.filter((m) => m.id === 1).map((m) => m.type)).toEqual(['restoring', 'done']);
   });
 
   it("puts them back only after the runtime has taken away its own placeholders, so those aren't reported", async () => {

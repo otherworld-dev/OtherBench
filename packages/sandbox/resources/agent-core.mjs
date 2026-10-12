@@ -144,10 +144,11 @@ const CLOSE_MARGIN_MS = 500;
  *   send: (message: object) => void,
  *   mkdir: (path: string, options: object) => Promise<unknown>,
  *   rm: (path: string, options: object) => Promise<unknown>,
- *   lstat: (path: string) => Promise<{ isSymbolicLink(): boolean, isDirectory(): boolean, isFile(): boolean, size: number, ino: number, dev: number }>,
+ *   lstat: (path: string) => Promise<{ isSymbolicLink(): boolean, isDirectory(): boolean, isFile(): boolean, size: number, ino: number, dev: number, mode: number }>,
  *   realpath: (path: string) => Promise<string>,
  *   readFile: (path: string) => Promise<Uint8Array>,
- *   writeFile: (path: string, data: Uint8Array) => Promise<unknown>,
+ *   createFile: (path: string, data: Uint8Array, mode: number) => Promise<unknown>,
+ *   chmod: (path: string, mode: number) => Promise<unknown>,
  *   readdir: (path: string) => Promise<string[]>,
  *   readlink: (path: string) => Promise<string>,
  *   symlink: (target: string, path: string) => Promise<unknown>,
@@ -263,7 +264,7 @@ export function isPrivateAddress(address) {
 /** @param {AgentDeps} deps */
 export function createAgent(deps) {
   const { runtime, spawn, send, mkdir, rm, lstat, realpath, kill, exit, env, lookup } = deps;
-  const { readFile, writeFile, readdir, readlink, symlink, chdir, cwd } = deps;
+  const { readFile, createFile, chmod, readdir, readlink, symlink, chdir, cwd } = deps;
   const warn = deps.warn ?? (() => undefined);
   /** new -> initialising -> ready -> closing; dead after a failed init. */
   let phase = 'new';
@@ -429,7 +430,7 @@ export function createAgent(deps) {
       throw err;
     }
     const kind = st.isSymbolicLink() ? 'link' : st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other';
-    return { kind, size: st.size, ino: st.ino, dev: st.dev };
+    return { kind, size: st.size, ino: st.ino, dev: st.dev, mode: st.mode & 0o7777 };
   }
 
   class ProtectError extends Error {}
@@ -442,7 +443,7 @@ export function createAgent(deps) {
       if (state.size > MAX_PROTECTED_FILE_BYTES) throw new ProtectError(`${rel} is over ${MAX_PROTECTED_FILE_BYTES / 1024 / 1024} MB`);
       budget.bytes += state.size;
       if (budget.bytes > MAX_PROTECTED_BYTES) throw new ProtectError(`the protected files come to over ${MAX_PROTECTED_BYTES / 1024 / 1024} MB`);
-      return { kind: 'file', bytes: await readFile(path), children: new Map() };
+      return { kind: 'file', bytes: await readFile(path), mode: state.mode, children: new Map() };
     }
     if (state.kind === 'link') return { kind: 'link', target: await readlink(path), children: new Map() };
     if (state.kind !== 'dir') return { kind: state.kind, children: new Map() };
@@ -527,9 +528,19 @@ export function createAgent(deps) {
         undone.push(rel);
         return;
       case 'file':
-        if (now.kind === 'file' && now.size === before.bytes.length && sameBytes(await readFile(path), before.bytes)) return;
-        if (now.kind !== 'file' && now.kind !== 'absent') await removeAt(path);
-        await writeFile(path, before.bytes);
+        if (now.kind === 'file' && now.size === before.bytes.length && sameBytes(await readFile(path), before.bytes)) {
+          // Same bytes, but a changed mode is a change too (on a Windows folder, 444 is the read-only attribute).
+          if (now.mode !== before.mode) {
+            await chmod(path, before.mode);
+            undone.push(rel);
+          }
+          return;
+        }
+        // Never written in place: the file may have been made read-only (a write would fail and leave its bytes),
+        // or be a hard link to something else. Removed, then made afresh (exclusive, no link followed).
+        if (now.kind !== 'absent') await removeAt(path);
+        await createFile(path, before.bytes, before.mode);
+        await chmod(path, before.mode);
         undone.push(rel);
         return;
       case 'link':
@@ -546,22 +557,30 @@ export function createAgent(deps) {
 
   /**
    * Puts back every protected path of these snapshots. Never throws: what it
-   * couldn't put back is said in the returned note, with what it did ('' for
-   * nothing). `cwdRoot` is named by relative paths, the home as ~.
+   * couldn't put back is said in the note, with what it did ('' for nothing),
+   * and `unguarded` lists the folders where anything failed, for Grunt to stop
+   * using them until someone has looked. `cwdRoot` is named by relative paths,
+   * the home as ~.
+   * @returns {Promise<{ note: string, unguarded: string[] }>}
    */
   async function restoreAll(snapshots, cwdRoot) {
     const undone = [];
     const failed = [];
+    const unguarded = [];
     for (const { root, tree } of snapshots) {
       const shown = (rel) => (root === chat.home ? `~/${rel}` : root === cwdRoot ? rel : `${root}/${rel}`);
+      const fail = (what) => {
+        failed.push(what);
+        if (!unguarded.includes(root)) unguarded.push(root);
+      };
       try {
         // The folder itself went (an unmount): nothing below it can be looked at, and it is never removed.
         if ((await stateOf(root)).kind !== 'dir') {
-          failed.push(`${root} (it is no longer there)`);
+          fail(`${root} (it is no longer there)`);
           continue;
         }
       } catch (err) {
-        failed.push(`${root} (${errorMessage(err)})`);
+        fail(`${root} (${errorMessage(err)})`);
         continue;
       }
       for (const [name, node] of tree.children) {
@@ -569,7 +588,7 @@ export function createAgent(deps) {
         try {
           await restoreAt(`${root}/${name}`, name, node, found);
         } catch (err) {
-          failed.push(`${shown(name)} (${errorMessage(err)})`);
+          fail(`${shown(name)} (${errorMessage(err)})`);
         }
         undone.push(...found.map(shown));
       }
@@ -581,7 +600,7 @@ export function createAgent(deps) {
       lines.push(`The sandbox undid changes to ${named}${more} (protected files).`);
     }
     if (failed.length > 0) lines.push(`The sandbox couldn't check or undo changes to ${failed.join(', ')}; look at them before using the folder on Windows.`);
-    return lines.join('\n');
+    return { note: lines.join('\n'), unguarded };
   }
 
   /** The runtime's own guard on the protected paths, in their usual spelling, under each folder: write denies. */
@@ -757,7 +776,14 @@ export function createAgent(deps) {
       // Before anything runs: a copy of each writable folder's protected paths, put back below whatever happens.
       const snapshots = await snapshotAll(guarded);
       let restoring = null;
-      mine.restore = () => (restoring ??= restoreAll(snapshots, msg.cwd));
+      // Grunt gives a cancel or a close more time once it hears the restore has started.
+      mine.restore = () => {
+        if (!restoring) {
+          send({ type: 'restoring', id });
+          restoring = restoreAll(snapshots, msg.cwd);
+        }
+        return restoring;
+      };
       const denyWrite = [...strings(msg.denyWritePaths), ...(await protectedDenies(guarded))];
       const custom = { filesystem: runFilesystem(strings(msg.readPaths), writePaths, denyWrite, tmp) };
       // The runtime reads this when it wraps, to set the command's own TMPDIR.
@@ -782,9 +808,11 @@ export function createAgent(deps) {
         // best effort
       }
       // After the runtime's clean-up, which takes away the empty files it put where a protected path was missing.
-      const undone = mine.restore ? await mine.restore() : '';
+      const { note: undone, unguarded } = mine.restore ? await mine.restore() : { note: '', unguarded: [] };
       if (undone && reply.type === 'done') reply.note = reply.note ? `${undone}\n${reply.note}` : undone;
       else if (undone) reply.message = `${reply.message}\n${undone}`;
+      // The folders whose protected files couldn't be confirmed put back: Grunt stops using them.
+      reply.unguarded = unguarded;
       send(reply);
       // Grunt sends the next run as soon as it sees done, and clearing a big
       // $TMPDIR (pip and npm caches) can be slow: the agent is free before that.

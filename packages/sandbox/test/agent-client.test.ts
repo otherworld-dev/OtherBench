@@ -15,7 +15,7 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   askHost: async () => false,
   ...over,
 });
-const done = (id: number, over: Record<string, unknown> = {}) => ({ type: 'done' as const, id, exitCode: 0, signal: null, timedOut: false, truncated: false, note: '', ...over });
+const done = (id: number, over: Record<string, unknown> = {}) => ({ type: 'done' as const, id, exitCode: 0, signal: null, timedOut: false, truncated: false, note: '', unguarded: [] as string[], ...over });
 
 describe('AgentClient', () => {
   it("starts the agent for its chat, and is ready when the agent says so", async () => {
@@ -176,7 +176,7 @@ describe('AgentClient', () => {
 
     it('is withdrawn when the command fails', async () => {
       const { channel, running, askSignal } = await pending();
-      channel.emit({ type: 'failed', id: 1, message: 'bad' });
+      channel.emit({ type: 'failed', id: 1, message: 'bad', unguarded: [] });
       await expect(running).rejects.toMatchObject({ code: 'agent_failed' });
       expect(askSignal.aborted).toBe(true);
     });
@@ -247,6 +247,79 @@ describe('AgentClient', () => {
     await running;
     await new Promise((r) => setTimeout(r, 80));
     expect(channel.killed).toBe(false);
+  });
+
+  it("gives a cancelled run's restore its own grace once the agent says it has started, then still stops a wedged one", async () => {
+    const channel = new FakeChannel({ onRun: () => undefined });
+    // Cancel watchdog 30 ms, restore grace 200 ms.
+    const client = new AgentClient(channel, { home: '/h', tmpRoot: '/t', allowedHosts: [] }, Date.now, 1000, 30, 200);
+    const unguarded: string[][] = [];
+    const ac = new AbortController();
+    const running = client.run(run({ signal: ac.signal, onUnguarded: (p) => unguarded.push(p) }));
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+    ac.abort();
+    channel.emit({ type: 'restoring', id: 1 });
+    await new Promise((r) => setTimeout(r, 90));
+    expect(channel.killed).toBe(false);
+    // A slow restore that finishes inside the grace is reported as usual.
+    channel.emit(done(1, { exitCode: null, signal: 'SIGTERM' }));
+    await running;
+    expect(unguarded).toEqual([]);
+
+    const ac2 = new AbortController();
+    const wedged = client.run(run({ signal: ac2.signal, onUnguarded: (p) => unguarded.push(p) }));
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(2));
+    ac2.abort();
+    channel.emit({ type: 'restoring', id: 2 });
+    await expect(wedged).rejects.toMatchObject({ code: 'agent_failed', message: expect.stringContaining('cancelled') });
+    expect(channel.killed).toBe(true);
+    expect(unguarded).toEqual([['/mnt/e/ws']]);
+  });
+
+  it('reports the folders an agent says it could not put back, before the run settles', async () => {
+    const unguarded: string[][] = [];
+    const { client } = scriptedAgent({ onRun: (m, ch) => queueMicrotask(() => ch.finish(m.id, '', 0, ['/mnt/e/ws', '/home/grunt/chats/c1'])) });
+    let seenFirst = false;
+    await client.run(run({ onUnguarded: (p) => unguarded.push(p) })).then(() => (seenFirst = unguarded.length > 0));
+    // Only the run's writable folders (not the chat's home, which isn't on Windows).
+    expect(unguarded).toEqual([['/mnt/e/ws']]);
+    expect(seenFirst).toBe(true);
+  });
+
+  it('counts a run whose agent died before reporting it as unguarded, and one that reported as not', async () => {
+    const unguarded: string[][] = [];
+    const { client, channel } = scriptedAgent({ onRun: () => undefined });
+    const running = client.run(run({ onUnguarded: (p) => unguarded.push(p) }));
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+    channel.emit({ type: 'restoring', id: 1 });
+    channel.emitExit(1, 'wsl shut down');
+    await expect(running).rejects.toMatchObject({ code: 'agent_failed' });
+    expect(unguarded).toEqual([['/mnt/e/ws']]);
+  });
+
+  it("close waits for a run's restore that has started, up to the restore grace, then kills", async () => {
+    const channel = new FakeChannel({ onRun: () => undefined, ignoreClose: true });
+    const client = new AgentClient(channel, { home: '/h', tmpRoot: '/t', allowedHosts: [] }, Date.now, 1000, 30, 150);
+    const unguarded: string[][] = [];
+    const running = client.run(run({ onUnguarded: (p) => unguarded.push(p) }));
+    running.catch(() => undefined);
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+    channel.emit({ type: 'restoring', id: 1 });
+    const started = Date.now();
+    await client.close(20);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+    expect(channel.killed).toBe(true);
+    expect(unguarded).toEqual([['/mnt/e/ws']]);
+  });
+
+  it('close without a restore under way kills after its own grace', async () => {
+    const channel = new FakeChannel({ ignoreClose: true });
+    const client = new AgentClient(channel, { home: '/h', tmpRoot: '/t', allowedHosts: [] }, Date.now, 1000, 30, 10_000);
+    await client.ready;
+    const started = Date.now();
+    await client.close(20);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(channel.killed).toBe(true);
   });
 
   it('stops waiting for an agent that has not started when the turn is stopped', async () => {
@@ -340,7 +413,7 @@ describe('AgentClient', () => {
       onRun: (m, ch) => {
         if (first) {
           first = false;
-          queueMicrotask(() => ch.emit({ type: 'failed', id: m.id, message: 'bad cwd' }));
+          queueMicrotask(() => ch.emit({ type: 'failed', id: m.id, message: 'bad cwd', unguarded: [] }));
         } else queueMicrotask(() => ch.finish(m.id, 'ok\n'));
       },
     });
@@ -362,7 +435,7 @@ describe('AgentClient', () => {
   });
 
   it('reports an agent-side failure of one command without losing the agent', async () => {
-    const { client } = scriptedAgent({ onRun: (m, ch) => queueMicrotask(() => ch.emit({ type: 'failed', id: m.id, message: 'bwrap: execvp bash: No such file' })) });
+    const { client } = scriptedAgent({ onRun: (m, ch) => queueMicrotask(() => ch.emit({ type: 'failed', id: m.id, message: 'bwrap: execvp bash: No such file', unguarded: [] })) });
     await expect(client.run(run())).rejects.toMatchObject({ code: 'agent_failed', message: 'bwrap: execvp bash: No such file' });
     expect(client.alive).toBe(true);
   });

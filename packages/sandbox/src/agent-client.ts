@@ -16,6 +16,14 @@ export const CLOSE_GRACE_MS = 5000;
  * one can't hold a run forever.
  */
 export const CANCEL_WATCHDOG_MS = 5000;
+/**
+ * Once the agent says it is putting a run's protected files back ('restoring'), a cancel or a close waits
+ * up to this long from then instead: each file it removes or rewrites is a round trip to Windows, and an
+ * agent stopped halfway leaves the folder unguarded.
+ */
+export const RESTORE_GRACE_MS = 60_000;
+/** After killing a wedged agent, how long a run waits for it to exit before giving up on it anyway. */
+const KILL_EXIT_WAIT_MS = 5000;
 /** The longest the agent lets a command run, whatever a run asks for. */
 const AGENT_MAX_TIMEOUT_MS = 600_000;
 
@@ -42,6 +50,12 @@ export interface AgentRun {
    * went away): take the network card down then; any answer is ignored.
    */
   askHost(host: string, port: number | undefined, askSignal: AbortSignal): Promise<boolean>;
+  /**
+   * Called (before the run settles) with the writable folders, as Linux paths, whose protected files the
+   * agent couldn't confirm it put back: it said so, or it died or was stopped after the run was sent and
+   * before it reported the run.
+   */
+  onUnguarded?(linuxPaths: string[]): void;
 }
 
 export interface AgentOutcome {
@@ -60,6 +74,12 @@ interface Current {
   truncated: boolean;
   /** Questions about hosts that have been put to the run's askHost and not answered. */
   asks: Set<AbortController>;
+  /** When the agent said it started putting the run's protected files back, or null. */
+  restoringSince: number | null;
+  /** Set when this client killed the agent over this run: the error the run fails with once the agent is gone. */
+  stoppedWith: string | null;
+  /** After the restore starts: a cancel's watchdog starts over with the restore's grace. */
+  rearm(): void;
   abortAsks(): void;
   resolve(outcome: AgentOutcome): void;
   reject(err: Error): void;
@@ -106,7 +126,8 @@ export class AgentClient {
     init: AgentInit,
     private readonly now: () => number = Date.now,
     readyTimeoutMs: number = READY_TIMEOUT_MS,
-    private readonly cancelWatchdogMs: number = CANCEL_WATCHDOG_MS
+    private readonly cancelWatchdogMs: number = CANCEL_WATCHDOG_MS,
+    private readonly restoreGraceMs: number = RESTORE_GRACE_MS
   ) {
     this.lastUsed = now();
     let markExited!: (e: AgentExit) => void;
@@ -132,7 +153,12 @@ export class AgentClient {
         this.isAlive = false;
         const err = new SandboxError('agent_failed', `The sandbox stopped (exit ${String(e.code)})${e.detail.trim() ? `: ${e.detail.trim()}` : '.'}`);
         reject(err);
-        this.current?.reject(err);
+        const cur = this.current;
+        if (cur) {
+          // Gone before reporting the run: whatever its command did to protected files may still be there.
+          this.unguarded(cur, cur.run.writePaths);
+          cur.reject(cur.stoppedWith ? new SandboxError('agent_failed', cur.stoppedWith) : err);
+        }
         markExited(e);
       });
     });
@@ -178,16 +204,31 @@ export class AgentClient {
     // The agent refuses what it was asked, and the command is going away.
     this.current?.abortAsks();
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
+      let timer: NodeJS.Timeout;
+      const expire = (): void => {
+        // Putting a run's protected files back: given up to restoreGraceMs from when that started.
+        const since = this.current?.restoringSince ?? null;
+        const left = since === null ? 0 : since + this.restoreGraceMs - this.now();
+        if (left > 0) {
+          timer = setTimeout(expire, left);
+          return;
+        }
         this.channel.kill();
         resolve();
-      }, graceMs);
+      };
+      timer = setTimeout(expire, graceMs);
       this.channel.onExit(() => {
         clearTimeout(timer);
         resolve();
       });
       this.channel.send({ type: 'close' });
     });
+  }
+
+  /** Tells the run's owner which of its folders are unguarded (once per run, only folders it could write). */
+  private unguarded(cur: Current, linuxPaths: readonly string[]): void {
+    const paths = linuxPaths.filter((p) => cur.run.writePaths.includes(p));
+    if (paths.length > 0) cur.run.onUnguarded?.(paths);
   }
 
   private async start(run: AgentRun, markSent: () => void): Promise<AgentOutcome> {
@@ -205,6 +246,9 @@ export class AgentClient {
         bytes: 0,
         truncated: false,
         asks: new Set(),
+        restoringSince: null,
+        stoppedWith: null,
+        rearm: () => undefined,
         abortAsks: () => {
           for (const ask of cur.asks) ask.abort();
           cur.asks.clear();
@@ -218,14 +262,33 @@ export class AgentClient {
           reject(err);
         },
       };
+      let cancelled = false;
+      // The agent answers a cancel with done; if it doesn't, it is stopped, and the run fails once it is gone
+      // (never sooner: until then it may still be putting protected files back).
+      const stop = (): void => {
+        cur.stoppedWith = "The sandbox didn't stop the command after it was cancelled, so it was stopped.";
+        this.channel.kill();
+        watchdog = setTimeout(() => {
+          this.unguarded(cur, run.writePaths);
+          cur.reject(new SandboxError('agent_failed', cur.stoppedWith ?? ''));
+        }, KILL_EXIT_WAIT_MS);
+      };
+      const armWatchdog = (): void => {
+        clearTimeout(watchdog);
+        // Once the restore has started, it gets up to restoreGraceMs from then.
+        const ms = cur.restoringSince === null ? this.cancelWatchdogMs : Math.max(0, cur.restoringSince + this.restoreGraceMs - this.now());
+        watchdog = setTimeout(stop, ms);
+      };
+      cur.rearm = () => {
+        if (cancelled) armWatchdog();
+      };
       const onAbort = (): void => {
         cur.abortAsks();
         this.channel.send({ type: 'cancel', id });
-        // The agent answers a cancel with done; if it doesn't, it is stopped.
-        watchdog ??= setTimeout(() => {
-          cur.reject(new SandboxError('agent_failed', "The sandbox didn't stop the command after it was cancelled, so it was stopped."));
-          this.channel.kill();
-        }, this.cancelWatchdogMs);
+        if (!cancelled) {
+          cancelled = true;
+          armWatchdog();
+        }
       };
       const settle = (): void => {
         clearTimeout(watchdog);
@@ -270,8 +333,15 @@ export class AgentClient {
         }
         return;
       }
+      case 'restoring':
+        if (cur && m.id === cur.id && cur.restoringSince === null) {
+          cur.restoringSince = this.now();
+          cur.rearm();
+        }
+        return;
       case 'done': {
         if (!cur || m.id !== cur.id) return;
+        this.unguarded(cur, m.unguarded);
         const truncated = cur.truncated || m.truncated;
         let output = cur.output;
         if (truncated) output += `\n\n[... output truncated: combined stdout+stderr exceeded the ${SANDBOX_MAX_OUTPUT_BYTES / 1024}KB cap ...]`;
@@ -281,7 +351,10 @@ export class AgentClient {
         return;
       }
       case 'failed':
-        if (cur && m.id === cur.id) cur.reject(new SandboxError('agent_failed', m.message));
+        if (cur && m.id === cur.id) {
+          this.unguarded(cur, m.unguarded);
+          cur.reject(new SandboxError('agent_failed', m.message));
+        }
         return;
       case 'ask': {
         const askId = m.askId;

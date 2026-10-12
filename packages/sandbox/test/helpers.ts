@@ -190,7 +190,7 @@ export class FakeChannel implements AgentChannel {
     }
     if (m.type === 'run') this.open.add(m.id);
     if (m.type === 'close' && this.script.finishOnClose === true) {
-      for (const id of [...this.open]) this.emit({ type: 'done', id, exitCode: null, signal: 'SIGTERM', timedOut: false, truncated: false, note: '' });
+      for (const id of [...this.open]) this.emit({ type: 'done', id, exitCode: null, signal: 'SIGTERM', timedOut: false, truncated: false, note: '', unguarded: [] });
     }
     if (m.type === 'run') (this.script.onRun ?? ((msg, ch) => queueMicrotask(() => ch.finish(msg.id, 'ok\n'))))(m, this);
     if (m.type === 'close' && this.script.ignoreClose !== true) {
@@ -218,9 +218,9 @@ export class FakeChannel implements AgentChannel {
     for (const cb of this.exitListeners) cb({ code, detail });
   }
   /** The agent finishing run `id`: its output, then done with this exit code. */
-  finish(id: number, output = '', exitCode = 0): void {
+  finish(id: number, output = '', exitCode = 0, unguarded: string[] = []): void {
     if (output) this.emit({ type: 'output', id, chunk: output });
-    this.emit({ type: 'done', id, exitCode, signal: null, timedOut: false, truncated: false, note: '' });
+    this.emit({ type: 'done', id, exitCode, signal: null, timedOut: false, truncated: false, note: '', unguarded });
   }
   runs(): RunMessage[] {
     return this.sent.filter((m): m is RunMessage => m.type === 'run');

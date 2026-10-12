@@ -29,12 +29,20 @@ export type AgentMessage =
   | { type: 'ready' }
   | { type: 'fatal'; message: string }
   | { type: 'output'; id: number; chunk: string }
-  | { type: 'done'; id: number; exitCode: number | null; signal: string | null; timedOut: boolean; truncated: boolean; note: string }
-  | { type: 'failed'; id: number; message: string }
+  /**
+   * `unguarded` (done and failed): the run's writable folders, as Linux paths, whose protected files the
+   * agent couldn't confirm it put back. Absent from an older agent, which counts as none.
+   */
+  | { type: 'done'; id: number; exitCode: number | null; signal: string | null; timedOut: boolean; truncated: boolean; note: string; unguarded: string[] }
+  | { type: 'failed'; id: number; message: string; unguarded: string[] }
+  /** The run's command has ended and the agent is putting its protected files back. */
+  | { type: 'restoring'; id: number }
   | { type: 'ask'; askId: number; host: string; port: number | null };
 
 const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
 const isStr = (v: unknown): v is string => typeof v === 'string';
+/** `unguarded` as sent: absent is none; anything but a list of strings makes the message unreadable. */
+const unguardedOf = (v: unknown): string[] | null => (v === undefined ? [] : Array.isArray(v) && v.every(isStr) ? [...v] : null);
 
 /** One line from the agent as a message, or null for anything that isn't exactly one. */
 export function parseAgentMessage(line: string): AgentMessage | null {
@@ -66,12 +74,16 @@ export function parseAgentMessage(line: string): AgentMessage | null {
       const note = m['note'];
       if (!isInt(id) || !(exitCode === null || isInt(exitCode)) || !(signal === null || isStr(signal))) return null;
       if (typeof timedOut !== 'boolean' || typeof truncated !== 'boolean' || !isStr(note)) return null;
-      return { type: 'done', id, exitCode, signal, timedOut, truncated, note };
+      const unguarded = unguardedOf(m['unguarded']);
+      return unguarded ? { type: 'done', id, exitCode, signal, timedOut, truncated, note, unguarded } : null;
     }
     case 'failed': {
       const message = m['message'];
-      return isInt(id) && isStr(message) ? { type: 'failed', id, message } : null;
+      const unguarded = unguardedOf(m['unguarded']);
+      return isInt(id) && isStr(message) && unguarded ? { type: 'failed', id, message, unguarded } : null;
     }
+    case 'restoring':
+      return isInt(id) ? { type: 'restoring', id } : null;
     case 'ask': {
       const askId = m['askId'];
       const host = m['host'];

@@ -4,7 +4,7 @@
 //   wsl.exe -d grunt-sandbox -u grunt --exec /opt/grunt-sandbox/node/bin/node /opt/grunt-sandbox/agent.mjs
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { createInterface } from 'node:readline';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
@@ -20,7 +20,9 @@ const agent = createAgent({
   realpath,
   // For the protected files the agent puts back: never through a link at the path itself.
   readFile: (path) => readFile(path),
-  writeFile: (path, data) => writeFile(path, data, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, mode: 0o644 }),
+  // A new file only (the old one was removed first): never through a link, never into a hard-linked file.
+  createFile: (path, data, mode) => writeFile(path, data, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode }),
+  chmod: (path, mode) => chmod(path, mode),
   readdir: (path) => readdir(path),
   readlink: (path) => readlink(path),
   symlink: (target, path) => symlink(target, path),

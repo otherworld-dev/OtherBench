@@ -160,6 +160,13 @@ export class WslSandbox implements Sandbox {
   private readonly pool: AgentPool;
   private readonly realpath: (path: string) => string;
   private readonly chats = new Map<string, ChatState>();
+  /**
+   * Chats whose agent couldn't confirm it put a command's protected files back (it said so, or it died or was
+   * stopped before reporting the run), with those writable folders (canonical Windows paths). Commands in
+   * that chat, and commands of any chat that can write those folders, are refused until the chat is released
+   * or the sandbox is set up again (Repair). Kept in memory only.
+   */
+  private readonly unguarded = new Map<string, string[]>();
   /** The writable folders (canonical Windows paths) of each command running now; see writeTurn. */
   private readonly writing = new Set<{ keys: string[]; finished: Promise<void> }>();
   private job: Promise<void> | null = null;
@@ -276,10 +283,15 @@ export class WslSandbox implements Sandbox {
     this.refuseIfBusy();
     if (this.stored().state !== 'ready') throw new SandboxError('not_set_up', `The sandbox isn't set up on ${this.opts.machineName()}. Set it up in Settings > Sandbox.`);
     if (req.signal.aborted) throw new SandboxError('aborted', NOT_STARTED);
-    return this.runIn(req.chatId, this.places(req.workspaceRoot, req.folders, req.writable), req);
+    const places = this.places(req.workspaceRoot, req.folders, req.writable);
+    // Up front too, so a refused command mounts nothing and starts no agent.
+    this.refuseIfUnguarded(req.chatId, places);
+    return this.runIn(req.chatId, places, req);
   }
 
   async release(chatId: string): Promise<void> {
+    // Before the agent closes: one stopped halfway through a restore while closing marks the folders again.
+    this.unguarded.delete(chatId);
     await this.dropChat(chatId);
     if (this.job || this.removal || this.stored().state !== 'ready') return;
     await this.removeChatFolders(chatId);
@@ -347,6 +359,32 @@ export class WslSandbox implements Sandbox {
     }
     this.chats.clear();
     this.mounts.forget();
+    // Setup and Repair start over (Remove takes the distro away): nothing is held against any folder now.
+    this.unguarded.clear();
+  }
+
+  /** Records that a command of `chatId` left these of its writable folders (Linux paths) unguarded. */
+  private markUnguarded(chatId: string, places: Places, linuxPaths: readonly string[]): void {
+    const writable = places.needs.filter((n) => n.writable);
+    const named = writable.filter((n) => linuxPaths.includes(toSandboxPath(n.windowsPath))).map((n) => n.windowsPath);
+    // A path that matches none of them still means something wasn't confirmed: hold all of this command's.
+    const folders = named.length > 0 ? named : writable.map((n) => n.windowsPath);
+    const prior = this.unguarded.get(chatId) ?? [];
+    this.unguarded.set(chatId, [...prior, ...folders.filter((f) => !prior.includes(f))]);
+  }
+
+  /** Refuses a command of a chat with unguarded folders, or one that could write another chat's unguarded folder. */
+  private refuseIfUnguarded(chatId: string, places: Places): void {
+    const mine = this.unguarded.get(chatId);
+    const writes = places.needs.filter((n) => n.writable).map((n) => n.windowsPath);
+    const clash = (folder: string): boolean => writes.some((w) => isSameOrInside(w, folder) || isSameOrInside(folder, w));
+    const held = mine ?? [...this.unguarded.values()].flat().filter(clash);
+    if (mine === undefined && held.length === 0) return;
+    const where = held.length > 0 ? held.join(', ') : "this chat's folders";
+    throw new SandboxError(
+      'agent_failed',
+      `The sandbox couldn't confirm it undid changes to protected files in ${where} (git hooks and config, .vscode, .claude settings and the like); check them, then press Repair in Settings > Sandbox, or delete the chat that ran the command, to use the sandbox there again.`
+    );
   }
 
   /** A chat's agent closed or died. */
@@ -446,6 +484,10 @@ export class WslSandbox implements Sandbox {
       const writing = await this.writeTurn(places, input.signal);
       try {
         this.refuseIfStale(chatId, mine, selfTest);
+        // Checked once the folders are this command's alone: the command that held them may have left them unguarded.
+        this.refuseIfUnguarded(chatId, places);
+        // The hold on the folders lasts until the agent has reported the run (restore included) or is gone:
+        // pool.run settles no sooner, and a run it can't confirm marks them unguarded before it settles.
         outcome = await this.pool.run(chatId, {
           command: input.command,
           cwd: places.cwd,
@@ -456,6 +498,7 @@ export class WslSandbox implements Sandbox {
           allowedHosts: runtimeHosts(input.allowedHosts),
           signal: input.signal,
           askHost: (host, port, askSignal) => (host.length > MAX_HOST_CHARS ? Promise.resolve(false) : input.askHost(host, port, askSignal)),
+          onUnguarded: (linuxPaths) => this.markUnguarded(chatId, places, linuxPaths),
         });
       } finally {
         writing.done();
