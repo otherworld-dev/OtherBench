@@ -2,6 +2,7 @@ import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
 import { eligibleSubagentProfiles, runSubagentTool, SUBAGENT_TOOL_PARAMETERS, subagentToolDescription } from '@grunt/core/domain/subagent.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { ToolPolicy } from '@grunt/core/types/config.js';
 
 /**
  * The `subagent` tool for API engines (spec 2026-10-12-api-subagents-design).
@@ -10,10 +11,10 @@ import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
  * gated on its own. Its description names the profiles it can run as, read
  * fresh each turn.
  */
-export function subagentTool(store: Store): ToolSpec {
+export function subagentTool(store: Store, policy?: ToolPolicy): ToolSpec {
   return {
     name: SUBAGENT_TOOL_NAME,
-    description: subagentToolDescription(eligibleSubagentProfiles(store)),
+    description: subagentToolDescription(eligibleSubagentProfiles(store), policy),
     parameters: SUBAGENT_TOOL_PARAMETERS as unknown as Record<string, unknown>,
     risk: 'read',
     source: 'subagent',

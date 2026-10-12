@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { SUBAGENT_SHELL_LINE } from '@grunt/core/domain/subagent.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, Profile, ToolPolicy } from '@grunt/core/types/config.js';
@@ -49,6 +50,15 @@ describe('the subagent tool', () => {
     const [tool] = await listed(provider, policy({ subagents: true }));
     expect(tool!.description).toContain('"Writer" (p-a-model)');
     for (const name of ['Coder', 'Old one', 'PC Llama']) expect(tool!.description).not.toContain(name);
+  });
+
+  it("tells a parent whose shell runs on this machine that a sandboxed profile's sub-agent has no shell", async () => {
+    const { provider, store } = setup();
+    store.profiles.create(profile('p-box', 'Boxed', 'api', { toolPolicy: policy({ shell: true, shellRuns: 'sandbox' }) }));
+    const described = async (p: ToolPolicy): Promise<string> => (await listed(provider, p)).find((t) => t.name === 'subagent')!.description;
+    expect(await described(policy({ subagents: true, shell: true }))).toContain(SUBAGENT_SHELL_LINE);
+    expect(await described(policy({ subagents: true, shell: true, shellRuns: 'sandbox' }))).not.toContain(SUBAGENT_SHELL_LINE);
+    expect(await described(policy({ subagents: true }))).not.toContain(SUBAGENT_SHELL_LINE);
   });
 
   it('says sub-agents are unavailable when the turn gives no host, audited with no card', async () => {

@@ -255,7 +255,7 @@ export class GruntToolProvider implements ToolProvider {
     // and all three for a model that can't use tools.
     raw.push(...threadTools((ctx, input) => this.askUser(ctx, input)));
     // Sub-agents (spec 2026-10-12-api-subagents-design): off unless the profile turns them on.
-    if (policy.subagents === true) raw.push(subagentTool(this.store));
+    if (policy.subagents === true) raw.push(subagentTool(this.store, policy));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
