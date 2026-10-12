@@ -14,6 +14,7 @@ import {
   parseServeArgs,
   runServe,
   sameScriptPath,
+  SHUTDOWN_WAIT_MS,
 } from '../src/cli.js';
 
 function fakeContainer(): Container {
@@ -193,6 +194,43 @@ describe('runServe desktop mode', () => {
     expect(deps.fakeServerHandle.close).toHaveBeenCalledTimes(1);
     expect(deps.containerClose).toHaveBeenCalledTimes(1);
     expect(io.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("waits for the container's background shutdown (the sandbox's agents and mounts) before exiting", async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    const container = await deps.createContainer();
+    let settle!: () => void;
+    container.settled = () => new Promise<void>((resolve) => (settle = resolve));
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    io.stdin.end();
+    await tick();
+    expect(deps.containerClose).toHaveBeenCalledTimes(1);
+    expect(io.exit).not.toHaveBeenCalled();
+
+    settle();
+    await tick();
+    expect(io.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("exits anyway when the background shutdown takes longer than the desktop shell's grace", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const deps = fakeDeps();
+      const io = fakeStdio();
+      const container = await deps.createContainer();
+      container.settled = () => new Promise<void>(() => undefined);
+      await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+      io.stdin.end();
+      await tick();
+      expect(io.exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SHUTDOWN_WAIT_MS);
+      expect(io.exit).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses --announce without a token and never builds the container', async () => {

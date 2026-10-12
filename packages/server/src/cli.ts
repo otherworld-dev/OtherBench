@@ -11,6 +11,12 @@ import { announceLine, exitOnStdinClose } from './desktop.js';
 /** Arbitrary default port for `grunt serve`; overridable with `--port`. */
 const DEFAULT_PORT = 4747;
 const DEFAULT_HOST = '127.0.0.1';
+/**
+ * How long an announce-mode shutdown waits for the container's background work (the sandbox closing its agents
+ * and taking its folders down in the VM) before exiting anyway. Under the desktop shell's 3 s grace
+ * (desktop/src-tauri/src/sidecar.rs), after which it kills the server.
+ */
+export const SHUTDOWN_WAIT_MS = 2500;
 
 function defaultDbPath(): string {
   return join(homedir(), '.grunt', 'grunt.db');
@@ -244,7 +250,15 @@ export async function runServe(
     stdout.write(announceLine(boundPort));
     exitOnStdinClose(stdin, () => {
       close();
-      exit(0);
+      // Exiting at once would leave the sandbox's folders mounted in the VM (and undeletable on Windows) until WSL stops it.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waited = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, SHUTDOWN_WAIT_MS);
+      });
+      void Promise.race([container.settled?.() ?? Promise.resolve(), waited]).then(() => {
+        clearTimeout(timer);
+        exit(0);
+      });
     });
   }
 

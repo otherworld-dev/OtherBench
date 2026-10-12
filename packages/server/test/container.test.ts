@@ -409,6 +409,29 @@ describe('createContainer and the sandbox', () => {
     }
   });
 
+  it("settles once the sandbox has closed, so a shutdown can wait for its agents and mounts; a failed close still settles", async () => {
+    vi.stubEnv('GRUNT_SANDBOX', 'fake');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+      let finish!: (err?: Error) => void;
+      vi.spyOn(container.sandbox as FakeSandbox, 'close').mockImplementation(() => new Promise<void>((resolve, reject) => (finish = (err) => (err ? reject(err) : resolve()))));
+      container.close();
+      let settled = false;
+      const done = container.settled!().then(() => (settled = true));
+      await new Promise((r) => setImmediate(r));
+      expect(settled).toBe(false);
+      finish(new Error('unmount failed'));
+      await done;
+      expect(settled).toBe(true);
+      expect(error).toHaveBeenCalledWith('[grunt-server] error closing the sandbox:', expect.any(Error));
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('is unsupported off Windows, so a sandboxed profile gets a refusal rather than a host shell', async () => {
     const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
     try {

@@ -108,6 +108,11 @@ export interface Container {
   /** Keepalive and idle limits for streams; unset means the defaults in stream/sse.ts. */
   streamTimings?: StreamTimings;
   close(): void;
+  /**
+   * After close(): settles (never rejects) once the shutdown work close() starts without waiting has finished:
+   * the sandbox closing its agents and unmounting its folders in the VM. Always set by `createContainer`.
+   */
+  settled?(): Promise<void>;
 }
 
 export interface ContainerOptions {
@@ -389,6 +394,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     if (e.type === 'turn-started' || e.type === 'turn-finished') peers.announce('activity', peers.activity());
   });
 
+  // What close() set going without waiting, for settled().
+  let sandboxClosed: Promise<void> = Promise.resolve();
   const container: Container = {
     store,
     events,
@@ -416,8 +423,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       memory.dispose();
       // Claude Code processes kept alive between replies.
       engine.dispose();
-      // The sandbox's agents and mounts. Not awaited, like the tool provider below. Before the store closes: it may still write its state.
-      void sandbox.close().catch((err: unknown) => console.error('[grunt-server] error closing the sandbox:', err));
+      // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.
+      sandboxClosed = sandbox.close().catch((err: unknown) => console.error('[grunt-server] error closing the sandbox:', err));
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting
@@ -443,6 +450,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         void rm(importRoot, { recursive: true, force: true }).catch(() => undefined);
       }
     },
+    settled: () => sandboxClosed,
   };
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).
