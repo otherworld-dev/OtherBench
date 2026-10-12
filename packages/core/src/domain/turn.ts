@@ -733,8 +733,16 @@ export class TurnRunner {
       status = 'cancelled';
     }
 
-    checkpoint(true);
-    this.store.messages.updateStatus(messageId, status, error);
+    // The end is announced even when these writes fail -- above all when the
+    // chat was deleted mid-reply and its messages cascaded away. Listeners
+    // (the stream registry, the schedule service) wait on this event to let
+    // the reply go; without it they would wait until a restart.
+    try {
+      checkpoint(true);
+      this.store.messages.updateStatus(messageId, status, error);
+    } catch (err) {
+      console.error(`[TurnRunner] variant ${messageId} could not record its end:`, err);
+    }
     this.emit({ messageId, type: 'status', status });
 
     // Usage is recorded whenever the engine reported it, regardless of the

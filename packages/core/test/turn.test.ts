@@ -442,6 +442,34 @@ describe('TurnRunner.run', () => {
     expect(usageRows.some((u) => u.messageId === otherId)).toBe(false);
   });
 
+  it("still announces the reply's end when its chat was deleted mid-stream and the final writes throw", async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const backstop = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'Go' }], profiles: [makeResolvedProfile()] });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+    push(messageId, { type: 'text-delta', text: 'Partial' });
+    await flush();
+
+    // DELETE /api/chats/:id: the message cascades away, so writing to it throws (as SQLite's repo does).
+    const gone = (): never => {
+      throw new Error(`message: not found: ${messageId}`);
+    };
+    vi.spyOn(store.messages, 'updateParts').mockImplementation(gone);
+    vi.spyOn(store.messages, 'updateStatus').mockImplementation(gone);
+    runner.cancel(messageId);
+    await flush();
+
+    expect(events.filter((e) => e.type === 'status')).toEqual([{ messageId, type: 'status', status: 'cancelled' }]);
+    expect(backstop.mock.calls.some((call) => String(call[0]).includes('failed outside its own error handling'))).toBe(false);
+    backstop.mockRestore();
+  });
+
   it('a throwing listener does not corrupt the variant or block other listeners from receiving every event', async () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
