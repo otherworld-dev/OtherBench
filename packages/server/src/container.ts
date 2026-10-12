@@ -122,9 +122,22 @@ export function loopbackPortsFromEnv(value: string | undefined): number[] {
     .filter((n) => n >= 1 && n <= 65535);
 }
 
+/**
+ * The loopback ports the model's browser may reach (from
+ * GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS) without Grunt's own: its API and peer
+ * listeners are never a test fixture, and the browser reaching them would be
+ * the model driving Grunt. `dropped` lists what was taken out.
+ */
+export function withoutOwnPorts(ports: readonly number[], own: readonly (number | undefined)[]): { ports: number[]; dropped: number[] } {
+  const mine = new Set(own.filter((p): p is number => p !== undefined && p > 0));
+  return { ports: ports.filter((p) => !mine.has(p)), dropped: ports.filter((p) => mine.has(p)) };
+}
+
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
+  /** The port Grunt's API listens on, when known (0 = any free port): never one the model's browser may reach. */
+  apiPort?: number;
   /** The peer listener's port (default 4748; 0 = any free port). */
   peerPort?: number;
   /** Addresses the peer listener binds (default every interface). */
@@ -296,7 +309,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const aisdkEngine = new AiSdkChatEngine(registry);
 
   // Read once at start; set only by the e2e run (spec 2026-10-12-model-browser-design §5).
-  const allowLoopbackPorts = loopbackPortsFromEnv(process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS']);
+  const loopback = withoutOwnPorts(loopbackPortsFromEnv(process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS']), [options.apiPort, options.peerPort ?? DEFAULT_PEER_PORT]);
+  if (loopback.dropped.length > 0) {
+    console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS names Grunt's own port(s) ${loopback.dropped.join(', ')}; the model's browser may not reach them, so they are left out.`);
+  }
+  const allowLoopbackPorts = loopback.ports;
   if (allowLoopbackPorts.length > 0) {
     console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS is set: the model's browser may reach 127.0.0.1 on port(s) ${allowLoopbackPorts.join(', ')}. This is for tests only.`);
   }
