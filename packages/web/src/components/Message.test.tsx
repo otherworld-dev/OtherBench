@@ -385,6 +385,14 @@ describe('Message thread cards', () => {
     expect(screen.queryByText(/Used \d+ tool/)).toBeNull();
   });
 
+  it('still renders a plan record when the plan call has no result value', () => {
+    render(<Message message={base({ parts: [
+      { type: 'tool-call', id: 'p1', name: 'propose_plan', args: { plan: '1. Paint' } },
+      { type: 'tool-result', id: 'p1', name: 'propose_plan', result: undefined, isError: false },
+    ] })} />);
+    expect(screen.getByTestId('plan-record')).toBeInTheDocument();
+  });
+
   it('renders pending question and plan cards after any approval cards, wired to onAnswerAsk', async () => {
     const onAnswerAsk = vi.fn(async () => {});
     const question = { kind: 'question' as const, toolName: 'ask_user', id: 'a1', chatId: 'c1', messageId: 'm1', questions: [{ question: 'Which?', header: '', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] };

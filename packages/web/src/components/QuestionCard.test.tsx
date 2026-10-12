@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../state/api.js';
 import { QuestionCard } from './QuestionCard.js';
 
 const ask = {
@@ -49,6 +50,15 @@ describe('QuestionCard', () => {
     render(<QuestionCard ask={ask} profileName="Sonnet" onAnswer={onAnswer} />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Skip' }));
     expect(await screen.findByText('Could not send that answer. Please try again.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled();
+  });
+  it("shows the server's reason when it refuses the answer with a 400", async () => {
+    const onAnswer = vi.fn(async () => { throw new ApiError(400, 'An answer can be at most 4000 characters.'); });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<QuestionCard ask={ask} profileName="Sonnet" onAnswer={onAnswer} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Skip' }));
+    expect(await screen.findByText('An answer can be at most 4000 characters.')).toBeInTheDocument();
+    expect(screen.queryByText('Could not send that answer. Please try again.')).toBeNull();
     expect(screen.getByRole('button', { name: 'Skip' })).toBeEnabled();
   });
 });

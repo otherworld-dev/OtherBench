@@ -154,7 +154,7 @@ type ToolResultPart = Extract<Part, { type: 'tool-result' }>;
 
 /** An answered question or a decided plan (spec 2026-10-12-thread-cards-design §7), outside the tool fold like an artifact card. */
 function ThreadRecord({ call, result }: { call: ToolCallPart; result: ToolResultPart }): JSX.Element {
-  const text = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+  const text = typeof result.result === 'string' ? result.result : (JSON.stringify(result.result) ?? '');
   if (isPlanTool(call.name)) {
     const plan = parsePlan(call.args);
     return (

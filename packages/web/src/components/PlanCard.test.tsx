@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../state/api.js';
 import { PlanCard } from './PlanCard.js';
 
 const ask = { kind: 'plan' as const, toolName: 'propose_plan', plan: '1. Write **planned.txt**', id: 'p1', chatId: 'c1', messageId: 'm1' };
@@ -32,5 +33,22 @@ describe('PlanCard', () => {
     expect(screen.getByRole('textbox', { name: 'Changes to the plan' })).toHaveFocus();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('button', { name: 'Ask for changes' })).toHaveFocus();
+  });
+  it('shows the generic error and re-enables the buttons when sending fails', async () => {
+    const onAnswer = vi.fn(async () => { throw new Error('offline'); });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<PlanCard ask={ask} profileName="Sonnet" onAnswer={onAnswer} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Approve plan' }));
+    expect(await screen.findByText('Could not send that answer. Please try again.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve plan' })).toBeEnabled();
+  });
+  it("shows the server's reason when it refuses with a 400", async () => {
+    const onAnswer = vi.fn(async () => { throw new ApiError(400, 'An answer can be at most 4000 characters.'); });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<PlanCard ask={ask} profileName="Sonnet" onAnswer={onAnswer} />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Approve plan' }));
+    expect(await screen.findByText('An answer can be at most 4000 characters.')).toBeInTheDocument();
+    expect(screen.queryByText('Could not send that answer. Please try again.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve plan' })).toBeEnabled();
   });
 });

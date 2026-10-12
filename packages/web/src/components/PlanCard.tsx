@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import { CHANGES_MAX_CHARS } from '@grunt/core/domain/thread-tools.js';
 import type { AskReply, UserAsk } from '@grunt/core/types/thread.js';
+import { ApiError } from '../state/api.js';
 import { MarkdownBody } from './MarkdownBody.js';
 
 export interface PlanCardProps {
@@ -37,7 +38,8 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
     } catch (err) {
       console.error(`[grunt-web] failed to answer plan ${ask.id}:`, err);
       setPending(false);
-      setError('Could not send that answer. Please try again.');
+      // A 400 carries the server's reason (e.g. an answer over the length limit), so show that.
+      setError(err instanceof ApiError && err.status === 400 ? err.message : 'Could not send that answer. Please try again.');
     }
   }
 
