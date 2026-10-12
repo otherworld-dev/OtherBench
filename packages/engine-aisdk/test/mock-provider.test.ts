@@ -381,6 +381,18 @@ describe('MockChatEngine', () => {
       expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browser] }))))).toBe('The page has no heading.');
     });
 
+    it("#browser hands the tool the reply's plan gate, the unattended flag, its call id and a sub-agent's tag, like every other call", async () => {
+      const execute = vi.fn(async () => ({ snapshot: '' }));
+      const browser: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute };
+      const plan = createPlanGate();
+      const subagent = { callId: 'c1', label: 'First helper', parentProfileId: 'p-parent' };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/', { tools: [browser], plan, unattended: true, subagent })));
+      expect(execute).toHaveBeenCalledWith(
+        { command: 'open', url: 'https://example.com/' },
+        expect.objectContaining({ plan, unattended: true, subagent, profileId: 'p-parent', toolCallId: expect.stringMatching(/^mock-browser-/) })
+      );
+    });
+
     it('#browser says so when the tool failed or was not offered', async () => {
       const failing: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => ({ error: true, code: 'approval_denied', message: 'The user denied this tool call.' }) };
       expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/', { tools: [failing] }))))).toBe("The browser didn't work: The user denied this tool call.");
