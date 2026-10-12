@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,6 +17,7 @@ import { AppEventBus } from '../../src/stream/events.js';
 
 interface SyncNode {
   name: string;
+  db: DatabaseSync;
   store: SqliteStore;
   secrets: FakeSecretStore;
   blobs: BlobStore;
@@ -57,6 +59,7 @@ function syncNode(name: string, options: { schemaVersion?: number; fallbackMs?: 
   service.attachSyncer(syncer);
   const node: SyncNode = {
     name,
+    db,
     store,
     secrets,
     blobs,
@@ -180,6 +183,31 @@ describe('syncing two machines over the peer listener', () => {
     writeFileSync(bad.path, 'bytes about to be corrupted');
     await laptop.syncer.pullFrom('node-PC');
     expect(laptop.store.sync.missingBlobs()).toEqual([]);
+  });
+
+  it('offers no file row and serves no blob for a file that is not bound to a message of its own chat', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    pc.store.chats.create({ id: 'other', title: 'Another chat', profileId: 'p1', headMessageId: null, workspace: null, pinned: false, archivedAt: null });
+    const fine = await pc.blobs.put(Buffer.from('sent in its own chat'));
+    const wrong = await pc.blobs.put(Buffer.from('filed under another chat'));
+    const insert = pc.db.prepare('INSERT INTO attachment (id, chat_id, message_id, filename, mime, size, sha256, storage_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)');
+    // Written past the repo (which refuses a mismatch), as a row from an older build would be.
+    insert.run('a-fine', 'chat', 'u1', 'fine.png', 'image/png', fine.size, fine.sha256, fine.path);
+    insert.run('a-wrong', 'other', 'u1', 'wrong.png', 'image/png', wrong.size, wrong.sha256, wrong.path);
+    await pairNodes(pc, laptop);
+
+    await laptop.syncer.pullFrom('node-PC');
+
+    expect(JSON.stringify(await pc.syncer.changesFor(0, 1000))).toContain('a-fine');
+    expect(JSON.stringify(await pc.syncer.changesFor(0, 1000))).not.toContain('a-wrong');
+    expect(laptop.store.attachments.get('a-fine')).not.toBeNull();
+    expect(laptop.store.attachments.get('a-wrong')).toBeNull();
+    expect(await pc.syncer.blob(fine.sha256)).not.toBeNull();
+    expect(await pc.syncer.blob(wrong.sha256)).toBeNull();
+    expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${wrong.sha256}` })).status).toBe(404);
+    expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${'0'.repeat(64)}` })).status).toBe(404);
   });
 
   it('refuses to sync with a machine on a different schema, saying which to update', async () => {

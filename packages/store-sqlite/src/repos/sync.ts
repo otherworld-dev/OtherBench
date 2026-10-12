@@ -3,6 +3,7 @@ import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MA
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
+import { bindHistoryAttachments } from '@grunt/core/domain/attachment-binding.js';
 import { bindToolImageParts } from '@grunt/core/domain/tool-images.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { SyncClock } from './clock.js';
@@ -20,6 +21,18 @@ const LOCAL_COLUMNS: Partial<Record<SyncTable, string[]>> = {
   message: ['search_text'],
 };
 const STAMP_COLUMNS = ['hlc', 'field_hlc'];
+
+/**
+ * THE rule for a file that may travel: an attachment is bound when it was sent
+ * in a message, that message exists, and the message belongs to the attachment's
+ * own chat (which exists). Every path that offers a file row, offers its bytes,
+ * asks for its bytes or accepts its row uses this (SQL here, `isBound` for a row
+ * being applied), so none can disagree about what a file is bound to.
+ */
+const BOUND_ATTACHMENT_SQL = `EXISTS (SELECT 1 FROM message m JOIN chat c ON c.id = m.chat_id WHERE m.id = a.message_id AND m.chat_id = a.chat_id)`;
+
+/** The facts of an attachment that never change once it is sent: a peer can't re-point or swap one. */
+const ATTACHMENT_FIXED_FACTS = ['chat_id', 'sha256', 'mime', 'size'] as const;
 
 /** Each table's key columns; most are keyed on `id`. */
 const KEYS: Partial<Record<SyncTable, string[]>> = {
@@ -95,13 +108,14 @@ export class SqliteSyncRepo implements SyncRepo {
   }
 
   missingBlobs(): { id: string; sha256: string }[] {
-    const rows = this.db.prepare("SELECT id, sha256 FROM attachment WHERE storage_path = '' ORDER BY id").all() as { id: string; sha256: string }[];
+    // Only a file bound to a message of its own chat is ever fetched or given a local blob.
+    const rows = this.db.prepare(`SELECT a.id, a.sha256 FROM attachment a WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`).all() as { id: string; sha256: string }[];
     return rows.filter((r) => isSha256(r.sha256));
   }
 
   isSentBlob(sha256: string): boolean {
     if (!isSha256(sha256)) return false;
-    return this.db.prepare('SELECT 1 FROM attachment WHERE sha256 = ? AND message_id IS NOT NULL LIMIT 1').get(sha256) !== undefined;
+    return this.db.prepare(`SELECT 1 FROM attachment a WHERE a.sha256 = ? AND ${BOUND_ATTACHMENT_SQL} LIMIT 1`).get(sha256) !== undefined;
   }
 
   private columns(tbl: string): string[] {
@@ -119,6 +133,13 @@ export class SqliteSyncRepo implements SyncRepo {
 
   private exists(tbl: SyncTable, id: unknown): boolean {
     return typeof id === 'string' && this.db.prepare(`SELECT 1 FROM ${tbl} WHERE ${keyWhere(tbl)}`).get(id) !== undefined;
+  }
+
+  /** `BOUND_ATTACHMENT_SQL` for a row that is being offered or applied (it may not be in the table yet). */
+  private isBound(chatId: unknown, messageId: unknown): boolean {
+    if (typeof chatId !== 'string' || typeof messageId !== 'string') return false;
+    const message = this.db.prepare('SELECT chat_id FROM message WHERE id = ?').get(messageId) as { chat_id: string } | undefined;
+    return message !== undefined && message.chat_id === chatId && this.exists('chat', chatId);
   }
 
   private tombstone(tbl: SyncTable, id: string): string | null {
@@ -144,7 +165,8 @@ export class SqliteSyncRepo implements SyncRepo {
       if (row) {
         // Not yet: a reply still streaming, or a file not yet sent. Each is logged again when it is.
         if (e.tbl === 'message' && row['status'] === 'streaming') continue;
-        if (e.tbl === 'attachment' && row['message_id'] === null) continue;
+        // Never a file that isn't bound to a message of its own chat: not for a peer to learn of, and not yet sent.
+        if (e.tbl === 'attachment' && !this.isBound(row['chat_id'], row['message_id'])) continue;
         rows.push(this.toUpsert(e.tbl, e.row_id, row));
       } else {
         const hlc = this.tombstone(e.tbl, e.row_id);
@@ -159,6 +181,8 @@ export class SqliteSyncRepo implements SyncRepo {
     const drop = new Set([...STAMP_COLUMNS, ...(LOCAL_COLUMNS[tbl] ?? [])]);
     const row: SyncRow = {};
     for (const [k, v] of Object.entries(raw)) if (!drop.has(k)) row[k] = v;
+    // Offered as it would be accepted: a message's references to files are checked here too, whatever was stored before.
+    if (tbl === 'message') this.bindMessageImages(row, id);
     const change: ChangeRow = { tbl, id, op: 'upsert', hlc: raw['hlc'] as string, row };
     if (tbl === 'chat') change.fieldHlc = JSON.parse((raw['field_hlc'] as string) || '{}') as Record<string, string>;
     return change;
@@ -278,10 +302,20 @@ export class SqliteSyncRepo implements SyncRepo {
     }
     // A file's hash names its blob on disk: anything but a SHA-256 is refused.
     if (u.tbl === 'attachment' && !isSha256(row['sha256'])) return false;
-    // A file stays in the chat and on the message it was sent with: another
-    // machine can't re-point an attachment id it knows at a different chat or
-    // reply, which would make any message's reference to it show that file.
-    if (u.tbl === 'attachment' && local && (local['chat_id'] !== row['chat_id'] || (local['message_id'] != null && local['message_id'] !== row['message_id']))) return false;
+    if (u.tbl === 'attachment') {
+      // A file travels only bound to a message of its own chat.
+      if (!this.isBound(row['chat_id'], row['message_id'])) return false;
+      // A file stays what it was, in the chat and on the message it was sent with:
+      // another machine can't re-point an attachment id it knows at a different chat
+      // or reply, or swap its content or type, which would make any message's
+      // reference to it show that file. (Last-writer-wins applies to its name only.)
+      if (local) {
+        if (ATTACHMENT_FIXED_FACTS.some((k) => local[k] !== row[k])) return false;
+        if (local['message_id'] != null && local['message_id'] !== row['message_id']) return false;
+      }
+      // Delete wins for good: an id that was removed is never made again with a new binding.
+      if (this.tombstone('attachment', u.id) !== null) return false;
+    }
     // Artifact rows reach the model's prompt and the viewer: only what Grunt itself could have made.
     if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
     if (u.tbl === 'artifact_version' && !artifactVersionRowOk(row)) return false;
@@ -291,7 +325,7 @@ export class SqliteSyncRepo implements SyncRepo {
     const tomb = this.tombstone(u.tbl, u.id);
     if (mergeRow((local?.['hlc'] as string | undefined) ?? null, u.hlc, tomb, u.tbl === 'location_path') === 'skip') return false;
     if (!this.parentsPresent(u.tbl, row)) return false;
-    if (u.tbl === 'message') this.bindToolImages(row, u.id);
+    if (u.tbl === 'message') this.bindMessageImages(row, u.id);
     // Columns only this machine sets get their defaults on a new row.
     const insertOnly: Record<string, unknown> = u.tbl === 'attachment' ? { storage_path: '' } : {};
     this.upsert(u.tbl, row, { hlc: u.hlc }, insertOnly);
@@ -306,7 +340,7 @@ export class SqliteSyncRepo implements SyncRepo {
    * reference to a file that hasn't arrived yet stays (files follow their
    * message); every read checks the binding again.
    */
-  private bindToolImages(row: SyncRow, id: string): void {
+  private bindMessageImages(row: SyncRow, id: string): void {
     const chatId = row['chat_id'];
     if (typeof row['parts'] !== 'string' || typeof chatId !== 'string') return;
     let parts: Part[];
@@ -316,7 +350,8 @@ export class SqliteSyncRepo implements SyncRepo {
       return;
     }
     if (!Array.isArray(parts)) return;
-    const bound = bindToolImageParts(
+    // Images a tool result refers to: the file here must be this chat's and this message's.
+    const toolBound = bindToolImageParts(
       parts,
       chatId,
       id,
@@ -326,6 +361,15 @@ export class SqliteSyncRepo implements SyncRepo {
       },
       'keep'
     );
+    // Images and files the user sent: a file that is here must be this chat's (one that has not arrived yet is checked when it is read).
+    const [carrier] = bindHistoryAttachments(
+      [{ id, chatId, parentId: null, role: 'user', parts: toolBound, status: 'complete', error: null, producedBy: null, createdAt: 0 }],
+      (attachmentId) => {
+        const a = this.select('attachment', attachmentId);
+        return a === null || a['chat_id'] === chatId;
+      }
+    );
+    const bound = carrier!.parts;
     if (bound !== parts) row['parts'] = JSON.stringify(bound);
   }
 

@@ -683,3 +683,131 @@ describe('images in synced tool results (security: a reference is only as good a
     expect(b.store.attachments.get('att-a')).toMatchObject({ chatId: 'chat-a', messageId: 'm-a', filename: 'renamed.png' });
   });
 });
+
+describe('every path a file, its reference or its bytes travels is bound the same way', () => {
+  const hlc = '9999999999999-0000-a';
+  const sha = 'b'.repeat(64);
+  const note = { type: 'text', text: "[attachment omitted: it doesn't belong to this chat]" };
+
+  /** A machine with two chats, a message in each, and a file properly sent in chat-a. */
+  function machine(id = 'b'): Node {
+    const n = node(id);
+    seedProfile(n);
+    chat(n, 'chat-a');
+    chat(n, 'chat-b');
+    message(n, 'm-a', 'chat-a', null);
+    message(n, 'm-b', 'chat-b', null);
+    n.store.attachments.create({ id: 'att', chatId: 'chat-a', messageId: 'm-a', filename: 'f.png', mime: 'image/png', size: 1, sha256: sha, storagePath: '', extractedText: null });
+    return n;
+  }
+
+  /** A row written past the repo, as an older build or a bug would leave it. */
+  function raw(n: Node, id: string, chatId: string, messageId: string | null, sha256 = sha): void {
+    n.db.prepare('INSERT INTO attachment (id, chat_id, message_id, filename, mime, size, sha256, storage_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(id, chatId, messageId, `${id}.png`, 'image/png', 1, sha256, '');
+  }
+
+  const upsert = (id: string, over: Record<string, unknown>): ChangeRow => ({
+    tbl: 'attachment', id, op: 'upsert', hlc,
+    row: { id, chat_id: 'chat-a', message_id: 'm-a', filename: `${id}.png`, mime: 'image/png', size: 1, sha256: sha, extracted_text: null, ...over },
+  });
+
+  it('apply: a file row is taken only bound to a message of its own chat', () => {
+    const b = machine();
+    const table: [string, Record<string, unknown>][] = [
+      ['a message of another chat', { chat_id: 'chat-a', message_id: 'm-b' }],
+      ['no message at all', { message_id: null }],
+      ['a message that does not exist', { message_id: 'no-such-message' }],
+      ['a chat that does not exist', { chat_id: 'no-such-chat' }],
+    ];
+    for (const [label, over] of table) {
+      expect(b.store.sync.apply([upsert('new-file', over)]).applied, label).toBe(0);
+      expect(b.store.attachments.get('new-file'), label).toBeNull();
+    }
+    expect(b.store.sync.apply([upsert('new-file', {})]).applied).toBe(1);
+  });
+
+  it("apply, last-writer-wins: a newer row can't re-point a file or swap its content, type or size, only rename it", () => {
+    const b = machine();
+    const table: [string, Record<string, unknown>][] = [
+      ['another chat', { chat_id: 'chat-b', message_id: 'm-b' }],
+      ['another reply of the same chat', { message_id: 'm-a2' }],
+      ['other bytes', { sha256: 'c'.repeat(64) }],
+      ['another type', { mime: 'text/html' }],
+      ['another size', { size: 9_999_999 }],
+    ];
+    message(b, 'm-a2', 'chat-a', null);
+    for (const [label, over] of table) expect(b.store.sync.apply([upsert('att', over)]).applied, label).toBe(0);
+    expect(b.store.attachments.get('att')).toMatchObject({ chatId: 'chat-a', messageId: 'm-a', sha256: sha, mime: 'image/png', size: 1 });
+    expect(b.store.sync.apply([upsert('att', { filename: 'renamed.png' })]).applied).toBe(1);
+  });
+
+  it('apply, delete: a removed file id is never made again, with the old binding or a new one', () => {
+    const b = machine();
+    expect(b.store.sync.apply([{ tbl: 'attachment', id: 'att', op: 'delete', hlc: '9999999999999-0000-b' }]).applied).toBe(1);
+    expect(b.store.attachments.get('att')).toBeNull();
+    for (const over of [{}, { chat_id: 'chat-b', message_id: 'm-b' }]) {
+      expect(b.store.sync.apply([{ ...upsert('att', over), hlc: '9999999999999-0001-c' }]).applied).toBe(0);
+    }
+    expect(b.store.attachments.get('att')).toBeNull();
+  });
+
+  it('pull side: no blob is fetched for a file row that is not bound', () => {
+    const b = machine();
+    raw(b, 'mis-bound', 'chat-b', 'm-a');
+    raw(b, 'unsent', 'chat-a', null);
+    expect(b.store.sync.missingBlobs().map((m) => m.id)).toEqual(['att']);
+  });
+
+  it('push side: a file row, and its bytes, are offered only when bound', () => {
+    const a = machine('a');
+    raw(a, 'mis-bound', 'chat-b', 'm-a', 'c'.repeat(64));
+    raw(a, 'unsent', 'chat-a', null, 'd'.repeat(64));
+    const offered = a.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'attachment').map((r) => r.id);
+    expect(offered).toEqual(['att']);
+    expect(a.store.sync.isSentBlob(sha)).toBe(true);
+    expect(a.store.sync.isSentBlob('c'.repeat(64))).toBe(false); // filed under another chat than its message
+    expect(a.store.sync.isSentBlob('d'.repeat(64))).toBe(false); // never sent
+    expect(a.store.sync.isSentBlob('e'.repeat(64))).toBe(false); // unknown
+    expect(a.store.sync.isSentBlob('../../secrets.json')).toBe(false);
+  });
+
+  it("apply and push, messages: a user's image or file part naming another chat's file is a note, wherever the row is seen", () => {
+    const parts = [
+      { type: 'text', text: 'look' },
+      { type: 'image', attachmentId: 'att', mime: 'image/png' },
+      { type: 'file', attachmentId: 'late', mime: 'application/pdf', filename: 'x.pdf' },
+    ];
+    const rowOf = (): ChangeRow => ({
+      tbl: 'message', id: 'm-evil', op: 'upsert', hlc,
+      row: { id: 'm-evil', chat_id: 'chat-b', parent_id: null, role: 'user', parts: JSON.stringify(parts), status: 'complete', error: null, produced_by: null, created_at: 5 },
+    });
+    // Pull: att is chat-a's, so in chat-b it is a note; a file that has not arrived yet is left for the read-time check.
+    const b = machine();
+    b.store.sync.apply([rowOf()]);
+    expect(b.store.messages.get('m-evil')!.parts).toEqual([parts[0], note, parts[2]]);
+    // Push: a message already stored like that (before this check) is offered with the note, not the reference.
+    const a = machine('a');
+    a.store.messages.create({ id: 'm-old', chatId: 'chat-b', parentId: null, role: 'user', parts: [{ type: 'image', attachmentId: 'att', mime: 'image/png' }] as never, status: 'complete', error: null, producedBy: null });
+    const offered = a.store.sync.changesSince(0, 1000).rows.find((r) => r.tbl === 'message' && r.id === 'm-old');
+    expect(offered && offered.op === 'upsert' ? JSON.parse(offered.row['parts'] as string) : null).toEqual([note]);
+    expect(a.store.messages.get('m-old')!.parts).toEqual([{ type: 'image', attachmentId: 'att', mime: 'image/png' }]);
+  });
+
+  it('the store itself: a file is made and moved only within its own chat, and sent once', () => {
+    const b = machine();
+    const make = (id: string, chatId: string, messageId: string | null) =>
+      b.store.attachments.create({ id, chatId, messageId, filename: 'f.png', mime: 'image/png', size: 1, sha256: sha, storagePath: '', extractedText: null });
+    expect(() => make('x1', 'chat-a', 'm-b')).toThrow(/not a message of chat/);
+    expect(() => make('x2', 'chat-a', 'no-such-message')).toThrow(/not a message of chat/);
+    make('x3', 'chat-a', null);
+    expect(() => b.store.attachments.update('x3', { messageId: 'm-b' })).toThrow(/not a message of chat/);
+    expect(() => b.store.attachments.update('x3', { chatId: 'chat-b' })).toThrow(/another chat/);
+    expect(() => b.store.attachments.update('x3', { sha256: 'c'.repeat(64) })).toThrow(/content/);
+    expect(() => b.store.attachments.update('x3', { mime: 'text/html' })).toThrow(/type/);
+    expect(() => b.store.attachments.update('x3', { size: 2 })).toThrow(/size/);
+    expect(b.store.attachments.update('x3', { messageId: 'm-a' }).messageId).toBe('m-a');
+    message(b, 'm-a2', 'chat-a', null);
+    expect(() => b.store.attachments.update('x3', { messageId: 'm-a2' })).toThrow(/already sent/);
+    expect(b.store.attachments.update('x3', { filename: 'renamed.png' }).filename).toBe('renamed.png');
+  });
+});
