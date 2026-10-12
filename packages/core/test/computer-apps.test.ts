@@ -142,9 +142,9 @@ describe('the app key', () => {
 
 describe('what a card says about an app', () => {
   it('takes the name and the path from the key, and nothing else', () => {
-    expect(describeApp(EXCEL)).toEqual({ name: 'EXCEL.EXE', path: EXCEL, unusual: false });
-    expect(describeApp(DOWNLOADED_EXCEL)).toEqual({ name: 'EXCEL.EXE', path: DOWNLOADED_EXCEL, unusual: false });
-    expect(describeApp('\\\\server\\share\\App.exe')).toEqual({ name: 'App.exe', path: '\\\\server\\share\\App.exe', unusual: false });
+    expect(describeApp(EXCEL)).toEqual({ key: EXCEL, name: 'EXCEL.EXE', path: EXCEL, unusual: false });
+    expect(describeApp(DOWNLOADED_EXCEL)).toEqual({ key: DOWNLOADED_EXCEL, name: 'EXCEL.EXE', path: DOWNLOADED_EXCEL, unusual: false });
+    expect(describeApp('\\\\server\\share\\App.exe')).toEqual({ key: '\\\\server\\share\\App.exe', name: 'App.exe', path: '\\\\server\\share\\App.exe', unusual: false });
     for (const bad of ['EXCEL', 'C:/x.exe', '', null, 42, undefined]) expect(describeApp(bad)).toBeNull();
   });
 
@@ -152,7 +152,7 @@ describe('what a card says about an app', () => {
     // Cyrillic o in "Code.exe"; a no-break space after ".exe".
     expect(describeApp('C:\\Programs\\Microsoft VS Code\\C\u043ede.exe')?.unusual).toBe(true);
     expect(describeApp('C:\\a\\app.exe\u00a0')?.unusual).toBe(true);
-    expect(describeApp('C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe')?.unusual).toBe(false);
+    expect(describeApp('C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe')?.unusual).toBe(true);
   });
 
   it('spells out hidden characters in a path it was handed from elsewhere', () => {
@@ -745,11 +745,9 @@ describe('round 2: file dialogs, shares, look-alike folders and the longer list'
       expect(describeApp(`C:\\Program${space}Files\\App\\app.exe`)?.unusual).toBe(true);
       expect(describeApp(`C:\\${space}App\\app.exe`)?.unusual).toBe(true);
     }
-    // A plain space, and letters that are not ASCII, in a folder are ordinary.
-    for (const key of ['C:\\Program Files\\Fake App\\FakeApp.exe', 'C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe', 'C:\\Users\\\u5c71\u7530\\App\\app.exe']) {
-      expect(describeApp(key)?.unusual, key).toBe(false);
-      expect(app(classifyTarget(target({ path: key, originalName: null }))).risk, key).toBe('normal');
-    }
+    // A plain space in a folder is ordinary.
+    expect(describeApp('C:\\Program Files\\Fake App\\FakeApp.exe')?.unusual).toBe(false);
+    expect(app(classifyTarget(target({ path: 'C:\\Program Files\\Fake App\\FakeApp.exe', originalName: null }))).risk).toBe('normal');
   });
 
   it('holds the remote-help tools, file managers, scriptable editors and automation hosts', () => {
@@ -770,5 +768,94 @@ describe('round 2: file dialogs, shares, look-alike folders and the longer list'
       expect(app(classifyTarget(target({ ...fresh, signer }))).risk, signer).toBe('high');
     }
     expect(app(classifyTarget(target({ ...fresh, signer: 'Some Other Software Ltd' }))).risk).toBe('normal');
+  });
+});
+
+describe('round 2: identity is the path as it stands, and anything outside plain ASCII in it asks every time', () => {
+  // Each of these is a valid key (the shell resolved it), is a different key from its plain look-alike,
+  // and is asked about every time with a warning on the card.
+  const unusual: [string, string][] = [
+    ['an accented letter in a user folder', 'C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe'],
+    ['another script in a user folder', 'C:\\Users\\\u5c71\u7530\\App\\app.exe'],
+    ['a Cyrillic letter that reads as a Latin one, in a folder', 'C:\\Program Files\\Sl\u0430ck\\slack.exe'],
+    ['the same in the file name', 'C:\\Program Files\\Slack\\sl\u0430ck.exe'],
+    ['a Greek letter that reads as a Latin one', 'C:\\Program Files\\\u0391pp\\app.exe'],
+    ['full-width letters', 'C:\\Program Files\\\uff33\uff4c\uff41\uff43\uff4b\\slack.exe'],
+    ['a combining mark', 'C:\\Program Files\\Cafe\u0301\\app.exe'],
+    ['the Kelvin sign', 'C:\\Program Files\\Slac\u212a\\slack.exe'],
+    ['a no-break space at the end of a folder name', 'C:\\Program Files\\Slack\u00a0\\slack.exe'],
+    ['an ideographic space', 'C:\\Program Files\\Slack\u3000App\\slack.exe'],
+    ['an emoji', 'C:\\Tools\\\u{1f600}\\app.exe'],
+  ];
+
+  it('keeps the key byte for byte, flags it, and classifies the app once-only', () => {
+    for (const [what, key] of unusual) {
+      expect(appKey(key), what).toBe(key);
+      const described = describeApp(key);
+      expect(described?.key, what).toBe(key);
+      expect(described?.unusual, what).toBe(true);
+      expect(app(classifyTarget(target({ path: key, originalName: null }))).risk, what).toBe('high');
+      expect(isHighRiskApp({ app: key, appRisk: 'normal' }), what).toBe(true);
+    }
+  });
+
+  it('shows letters as they are and spells out a space that is not the plain one', () => {
+    const nbsp = describeApp('C:\\Program Files\\Slack\u00a0\\slack.exe');
+    expect(nbsp?.path).toBe('C:\\Program Files\\Slack<U+00A0>\\slack.exe');
+    expect(nbsp?.name).toBe('slack.exe');
+    const trailing = describeApp('C:\\a\\app.exe\u00a0');
+    expect(trailing?.name).toBe('app.exe<U+00A0>');
+    expect(trailing?.path).toBe('C:\\a\\app.exe<U+00A0>');
+    expect(trailing?.key).toBe('C:\\a\\app.exe\u00a0');
+    expect(describeApp('C:\\Program Files\\Slack\u3000App\\slack.exe')?.path).toBe('C:\\Program Files\\Slack<U+3000>App\\slack.exe');
+    // A letter from another script is shown as it is: the flag is what warns.
+    expect(describeApp('C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe')?.path).toBe('C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe');
+    expect(describeApp('C:\\Program Files\\Slack\\sl\u0430ck.exe')?.name).toBe('sl\u0430ck.exe');
+    // Nothing is spelled out in a plain path.
+    expect(describeApp(EXCEL)?.path).toBe(EXCEL);
+  });
+
+  it('has no key at all for a path with a hidden, bidi or zero-width character, wherever it is', () => {
+    for (const hidden of ['\u202e', '\u2066', '\u200b', '\u200d', '\ufeff', '\u00ad', '\ufe0f', '\u0000', '\u001b', '\u007f', '\u0085', '\u2028']) {
+      for (const key of [`C:\\Program Files\\Slack${hidden}\\slack.exe`, `C:\\Program Files\\Slack\\slack${hidden}.exe`, `C:\\${hidden}Program Files\\Slack\\slack.exe`]) {
+        expect(appKey(key), hidden.codePointAt(0)?.toString(16)).toBeNull();
+        expect(describeApp(key)).toBeNull();
+      }
+    }
+  });
+
+  it('confirms each rule of the validator and each high-risk rule of the path with one vector', () => {
+    const noKey: [string, string][] = [
+      ['a trailing dot', 'C:\\a\\b.exe.'],
+      ['a trailing space', 'C:\\a\\b.exe '],
+      ['a folder ending in a dot', 'C:\\a.\\b.exe'],
+      ['a folder ending in a space', 'C:\\a \\b.exe'],
+      ['an NTFS stream', 'C:\\a\\b.exe:stream'],
+      ['the default stream', 'C:\\a\\b.exe::$DATA'],
+      ['a verbatim prefix', '\\\\?\\C:\\a\\b.exe'],
+      ['a device prefix', '\\\\.\\C:\\a\\b.exe'],
+      ['an NT object prefix', '\\??\\C:\\a\\b.exe'],
+      ['a verbatim UNC prefix', '\\\\?\\UNC\\s\\sh\\b.exe'],
+      ['a device path', '\\Device\\HarddiskVolume3\\a\\b.exe'],
+      ['a forward slash', 'C:/a/b.exe'],
+      ['mixed separators', 'C:\\a/b.exe'],
+      ['an empty segment', 'C:\\a\\\\b.exe'],
+      ['a dot segment', 'C:\\a\\.\\b.exe'],
+      ['a dot-dot segment', 'C:\\a\\..\\b.exe'],
+      ['a trailing separator', 'C:\\a\\b.exe\\'],
+      ['a drive-relative path', 'C:b.exe'],
+      ['a bare name', 'b.exe'],
+    ];
+    for (const [what, raw] of noKey) expect(appKey(raw), what).toBeNull();
+    const onceOnly: [string, string][] = [
+      ['an 8.3 file name', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE'],
+      ['an 8.3 folder', 'C:\\PROGRA~1\\App\\app.exe'],
+      ['a share', '\\\\server\\share\\App.exe'],
+      ['an administrative share of this machine', '\\\\localhost\\c$\\Windows\\System32\\notepad.exe'],
+    ];
+    for (const [what, key] of onceOnly) {
+      expect(appKey(key), what).toBe(key);
+      expect(isHighRiskApp({ app: key, appRisk: 'normal' }), what).toBe(true);
+    }
   });
 });

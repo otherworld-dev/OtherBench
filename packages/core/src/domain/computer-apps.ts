@@ -114,48 +114,64 @@ export function appKey(raw: unknown): string | null {
  * A space that is not the plain one (U+0020): no-break, en, em, thin, narrow
  * no-break, ideographic and the rest of Unicode's space separators. One of
  * these in a folder or file name reads as a plain space, or as nothing at
- * the end of a name, so a folder named Slack plus a no-break space looks
- * like Slack's own. (Hidden characters never get this far: `appKey` refuses
- * them anywhere in a key.)
+ * the end of a name.
  */
-function hasOddSpace(text: string): boolean {
-  for (const ch of text) {
-    const cp = ch.codePointAt(0) ?? 0;
-    if (cp === 0x00a0 || cp === 0x1680 || (cp >= 0x2000 && cp <= 0x200a) || cp === 0x202f || cp === 0x205f || cp === 0x3000) return true;
-  }
-  return false;
+function isOddSpace(cp: number): boolean {
+  return cp === 0x00a0 || cp === 0x1680 || (cp >= 0x2000 && cp <= 0x200a) || cp === 0x202f || cp === 0x205f || cp === 0x3000;
 }
 
+/**
+ * Part of a key as a person should see it. Letters are shown as they are,
+ * whatever the script (the `unusual` flag is what warns about those); a
+ * space that is not the plain one is spelled out as `<U+00A0>`, since it
+ * can be told from a plain space, or from nothing, in no other way. Display
+ * only: identity is the key itself. (A hidden, control or bidi character
+ * never gets this far: `appKey` refuses it anywhere in a key.)
+ */
+function shown(text: string): string {
+  let out = '';
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    out += isOddSpace(cp) ? `<U+${cp.toString(16).toUpperCase().padStart(4, '0')}>` : ch;
+  }
+  return revealAllHidden(out);
+}
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('\\') + 1);
 }
 
 export interface AppDescription {
-  /** The program's file name with its extension, as it is on disk: `EXCEL.EXE`. */
+  /** The key itself, unchanged: what a grant holds and what is compared. Never show this one. */
+  key: string;
+  /** The program's file name with its extension, as it is on disk, for display: `EXCEL.EXE`. */
   name: string;
-  /** The key itself: the full path. Show all of it, never cut. */
+  /** The full path, for display. Show all of it, never cut. */
   path: string;
   /**
-   * Something in the path can pass for something else, so the card should say
-   * so: the file name has a character outside plain ASCII, or any part of the
-   * path has a space that is not the plain one.
+   * The path has a character outside plain ASCII somewhere: a letter from
+   * another script, a full-width form, a combining mark, an odd space. Such
+   * a path can read exactly like another, so the card must say so, and the
+   * app is asked about every time.
    */
   unusual: boolean;
 }
 
 /**
  * What a card, a summary or a button may call an app: its file name and its
- * full path, both taken from the key and from nothing else. `null` for
- * anything that isn't a valid key. A name the driver or the model supplied
- * (`appName`) is never shown.
+ * full path, both taken from the key and from nothing else, in the form a
+ * person should see (`shown`). `null` for anything that is not a valid key.
+ * A name the driver or the model supplied (`appName`) is never shown.
+ *
+ * Identity never rests on how a path looks: two paths that read alike are
+ * still two keys, compared byte for byte. This only decides what is
+ * displayed, and `unusual` says when the display cannot be trusted to tell
+ * them apart.
  */
 export function describeApp(key: unknown): AppDescription | null {
   const valid = appKey(key);
   if (valid === null) return null;
-  const name = fileNameOf(valid);
-  return { name, path: valid, unusual: !PRINTABLE_ASCII.test(name) || hasOddSpace(valid) };
+  return { key: valid, name: shown(fileNameOf(valid)), path: shown(valid), unusual: !PRINTABLE_ASCII.test(valid) };
 }
-
 /**
  * A path that did NOT come out of `describeApp` (a stored grant's, say), for
  * display: every hidden, control or bidi character spelled out as `<U+202E>`.
@@ -276,9 +292,12 @@ function keyRisk(key: string): Risk {
   if (stem !== null && GRUNT_STEMS.has(stem)) return 'grunt';
   if (stem === null || isListedStem(stem)) return 'high';
   // A short (8.3) segment hides the real name; a share does not pin what a
-  // path names, whatever kind of drive it is said to be on; a space that is
-  // not the plain one makes one folder read as another.
-  if (/~\d/.test(key) || key.startsWith('\\\\') || hasOddSpace(key)) return 'high';
+  // path names, whatever kind of drive it is said to be on; and a character
+  // outside plain ASCII ANYWHERE in the path (a letter from another script,
+  // a full-width form, a combining mark, an odd space) can make one path
+  // read as another. No list of look-alikes is ever complete, so none is
+  // kept: anything that is not plain ASCII asks every time.
+  if (/~\d/.test(key) || key.startsWith('\\\\') || !PRINTABLE_ASCII.test(key)) return 'high';
   return 'normal';
 }
 
@@ -343,7 +362,8 @@ export type ClassifiedTarget = { kind: 'refuse'; reason: string } | ClassifiedAp
  *
  * High risk (asked about every time): a name on the list or in a family, by
  * file name or by the name the program was built with; a name that can't be
- * vouched for; a short (8.3) segment or an odd space anywhere in the path;
+ * vouched for; a short (8.3) segment, or any character outside plain ASCII,
+ * anywhere in the path;
  * a path on a share; a console program; a program not on a fixed disk; an
  * unsigned one, or one signed by a publisher in `HIGH_RISK_SIGNERS`; a file
  * dialog or shell file view (`shellView`), which belongs to an ordinary app's
@@ -359,16 +379,16 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
 
   const key = appKey(t['path']);
   if (key === null) return refuse(COMPUTER_NO_APP_REASON);
-  const name = fileNameOf(key);
-  const shown = cardLine(name, 80);
+  const name = shown(fileNameOf(key));
+  const said = cardLine(name, 80);
   const byKey = keyRisk(key);
   const byOriginalName = t['originalName'] === undefined ? 'high' : originalNameRisk(t['originalName']);
 
   if (t['grunt'] === true || byKey === 'grunt' || byOriginalName === 'grunt') return refuse(COMPUTER_GRUNT_REASON);
   if (t['grunt'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
-  if (t['elevated'] === true) return refuse(`${shown} is running as administrator, so Grunt can't control it.`);
+  if (t['elevated'] === true) return refuse(`${said} is running as administrator, so Grunt can't control it.`);
   if (t['elevated'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
-  if (t['uiAccess'] === true) return refuse(`${shown} can control other apps (UI access), so Grunt doesn't control it.`);
+  if (t['uiAccess'] === true) return refuse(`${said} can control other apps (UI access), so Grunt doesn't control it.`);
   if (t['uiAccess'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
 
   const windowId = t['windowId'];
