@@ -3,6 +3,7 @@ import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MA
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
+import { bindToolImageParts } from '@grunt/core/domain/tool-images.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { SyncClock } from './clock.js';
 import { deriveSearchText } from './messages.js';
@@ -277,6 +278,10 @@ export class SqliteSyncRepo implements SyncRepo {
     }
     // A file's hash names its blob on disk: anything but a SHA-256 is refused.
     if (u.tbl === 'attachment' && !isSha256(row['sha256'])) return false;
+    // A file stays in the chat and on the message it was sent with: another
+    // machine can't re-point an attachment id it knows at a different chat or
+    // reply, which would make any message's reference to it show that file.
+    if (u.tbl === 'attachment' && local && (local['chat_id'] !== row['chat_id'] || (local['message_id'] != null && local['message_id'] !== row['message_id']))) return false;
     // Artifact rows reach the model's prompt and the viewer: only what Grunt itself could have made.
     if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
     if (u.tbl === 'artifact_version' && !artifactVersionRowOk(row)) return false;
@@ -286,11 +291,42 @@ export class SqliteSyncRepo implements SyncRepo {
     const tomb = this.tombstone(u.tbl, u.id);
     if (mergeRow((local?.['hlc'] as string | undefined) ?? null, u.hlc, tomb, u.tbl === 'location_path') === 'skip') return false;
     if (!this.parentsPresent(u.tbl, row)) return false;
+    if (u.tbl === 'message') this.bindToolImages(row, u.id);
     // Columns only this machine sets get their defaults on a new row.
     const insertOnly: Record<string, unknown> = u.tbl === 'attachment' ? { storage_path: '' } : {};
     this.upsert(u.tbl, row, { hlc: u.hlc }, insertOnly);
     if (tomb !== null) this.db.prepare('DELETE FROM tombstone WHERE tbl = ? AND row_id = ?').run(u.tbl, u.id);
     return true;
+  }
+
+  /**
+   * A synced message's tool results can't make a file of another chat appear:
+   * a reference to an attachment that is here but belongs to another chat or
+   * reply, and any image that isn't a reference, becomes a text note. A
+   * reference to a file that hasn't arrived yet stays (files follow their
+   * message); every read checks the binding again.
+   */
+  private bindToolImages(row: SyncRow, id: string): void {
+    const chatId = row['chat_id'];
+    if (typeof row['parts'] !== 'string' || typeof chatId !== 'string') return;
+    let parts: Part[];
+    try {
+      parts = JSON.parse(row['parts']) as Part[];
+    } catch {
+      return;
+    }
+    if (!Array.isArray(parts)) return;
+    const bound = bindToolImageParts(
+      parts,
+      chatId,
+      id,
+      (attachmentId) => {
+        const a = this.select('attachment', attachmentId);
+        return a ? { chatId: String(a['chat_id']), messageId: typeof a['message_id'] === 'string' ? a['message_id'] : null, mime: String(a['mime']) } : null;
+      },
+      'keep'
+    );
+    if (bound !== parts) row['parts'] = JSON.stringify(bound);
   }
 
   private applyChat(u: Extract<ChangeRow, { op: 'upsert' }>, pendingHeads: { chatId: string; head: string; stamp: string }[]): boolean {

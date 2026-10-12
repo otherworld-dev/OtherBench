@@ -5,6 +5,7 @@ import { openDatabase } from '../src/db.js';
 import { MIGRATIONS, runMigrations } from '../src/migrations/index.js';
 import { SqliteStore } from '../src/store.js';
 import { artifactsOnBranch, branchOf } from '@grunt/core/domain/artifacts.js';
+import type { ChangeRow } from '@grunt/core/domain/sync.js';
 
 interface Node {
   id: string;
@@ -597,5 +598,88 @@ describe('sync (Task 50)', () => {
     expect(dump(a, 'SELECT id FROM mcp_server')).toEqual([]);
     expect(dump(b, 'SELECT id FROM mcp_server')).toEqual([{ id: 'mcp' }]);
     expect(log(a).length).toBeGreaterThan(0);
+  });
+});
+
+describe('images in synced tool results (security: a reference is only as good as its attachment row)', () => {
+  const hlc = '9999999999999-0000-a';
+  const imageRef = (attachmentId: string) => ({ type: 'image', attachmentId, mimeType: 'image/png' });
+  const note = { type: 'text', text: '[image omitted: it is not stored with this chat]' };
+  const sha = (c: string) => c.repeat(64);
+
+  function attachment(n: Node, id: string, chatId: string, messageId: string | null): void {
+    n.store.attachments.create({ id, chatId, messageId, filename: `${id}.png`, mime: 'image/png', size: 1, sha256: sha('b'), storagePath: '', extractedText: null });
+  }
+
+  function messageRow(id: string, chatId: string, result: unknown): Extract<ChangeRow, { op: 'upsert' }> {
+    const parts = [{ type: 'tool-call', id: 'call-1', name: 'computer', args: {} }, { type: 'tool-result', id: 'call-1', name: 'computer', result, isError: false }];
+    return {
+      tbl: 'message', id, op: 'upsert', hlc,
+      row: { id, chat_id: chatId, parent_id: null, role: 'assistant', parts: JSON.stringify(parts), status: 'complete', error: null, produced_by: null, created_at: 5 },
+    };
+  }
+
+  function toolResult(n: Node, id: string): unknown {
+    return (n.store.messages.get(id)!.parts.find((p) => p.type === 'tool-result') as { result: unknown }).result;
+  }
+
+  it("strips a reference to a file that is here but belongs to another chat or reply, keeps one whose file hasn't arrived, and drops base64", () => {
+    const b = node('b');
+    seedProfile(b);
+    chat(b, 'chat-a');
+    chat(b, 'chat-b');
+    message(b, 'm-a', 'chat-a', null);
+    message(b, 'm-other', 'chat-b', null);
+    attachment(b, 'att-a', 'chat-a', 'm-a');
+    attachment(b, 'att-b-other', 'chat-b', 'm-other');
+
+    const inline = { type: 'image', data: Buffer.from('not stored').toString('base64'), mimeType: 'image/png' };
+    const result = b.store.sync.apply([messageRow('m-evil', 'chat-b', [imageRef('att-a'), imageRef('att-b-other'), imageRef('att-late'), inline])]);
+
+    expect(result.applied).toBe(1);
+    expect(toolResult(b, 'm-evil')).toEqual([note, note, imageRef('att-late'), { type: 'text', text: '[image not kept]' }]);
+    expect(JSON.stringify(b.store.messages.get('m-evil')!.parts)).not.toContain(inline.data);
+  });
+
+  it('keeps a reference to the very file that was sent with it, through a real sync', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    message(a, 'u', 'c', null);
+    a.store.messages.create({
+      id: 'm2', chatId: 'c', parentId: 'u', role: 'assistant', status: 'complete', error: null, producedBy: null,
+      parts: [{ type: 'tool-call', id: 'k', name: 'computer', args: {} }, { type: 'tool-result', id: 'k', name: 'computer', result: [{ type: 'text', text: 'x' }, imageRef('att-1')], isError: false }],
+    });
+    attachment(a, 'att-1', 'c', 'm2');
+
+    s.both();
+
+    expect(toolResult(b, 'm2')).toEqual([{ type: 'text', text: 'x' }, imageRef('att-1')]);
+    expect(b.store.attachments.get('att-1')).toMatchObject({ chatId: 'c', messageId: 'm2' });
+  });
+
+  it("refuses a change that would move a file to another chat or reply, so no reference can be pointed at someone else's file", () => {
+    const b = node('b');
+    seedProfile(b);
+    chat(b, 'chat-a');
+    chat(b, 'chat-b');
+    message(b, 'm-a', 'chat-a', null);
+    message(b, 'm-a2', 'chat-a', null);
+    message(b, 'm-b', 'chat-b', null);
+    attachment(b, 'att-a', 'chat-a', 'm-a');
+    const row = (over: Record<string, unknown>) => ({
+      tbl: 'attachment' as const, id: 'att-a', op: 'upsert' as const, hlc,
+      row: { id: 'att-a', chat_id: 'chat-a', message_id: 'm-a', filename: 'att-a.png', mime: 'image/png', size: 1, sha256: sha('b'), extracted_text: null, ...over },
+    });
+
+    expect(b.store.sync.apply([row({ chat_id: 'chat-b', message_id: 'm-b' })]).applied).toBe(0);
+    expect(b.store.sync.apply([row({ message_id: 'm-a2' })]).applied).toBe(0);
+    expect(b.store.attachments.get('att-a')).toMatchObject({ chatId: 'chat-a', messageId: 'm-a' });
+
+    // An ordinary update of the same file still goes through.
+    expect(b.store.sync.apply([row({ filename: 'renamed.png' })]).applied).toBe(1);
+    expect(b.store.attachments.get('att-a')).toMatchObject({ chatId: 'chat-a', messageId: 'm-a', filename: 'renamed.png' });
   });
 });
