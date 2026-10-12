@@ -48,6 +48,11 @@ export async function startOAuthEchoServer(opts = {}) {
   /** The Authorization header of each POST /token that `tokenEcho` answered. */
   const tokenAuthHeaders = [];
   let mcpFailure = false;
+  /** Every Authorization header seen on /mcp, in order ('' when none). */
+  const mcpAuthHeaders = [];
+  /** While set, a refresh_token grant waits on it before answering (a refresh "in flight"); `tokenGateWaiting` counts the requests parked there. */
+  let tokenGate = null;
+  let tokenGateWaiting = 0;
 
   /** client_id -> { secret: string | null, redirectUris: string[] | null }; null redirectUris: any 127.0.0.1 /oauth/callback (hand-registered). */
   const clients = new Map();
@@ -192,6 +197,10 @@ export async function startOAuthEchoServer(opts = {}) {
       return sendJson(res, 200, issueTokens(clientId, true));
     }
     if (grant === 'refresh_token') {
+      if (tokenGate) {
+        tokenGateWaiting += 1;
+        await tokenGate;
+      }
       const old = params.get('refresh_token') ?? '';
       if (refreshTokens.get(old) !== clientId) return sendJson(res, 400, { error: 'invalid_grant' });
       if (rotate) refreshTokens.delete(old);
@@ -203,6 +212,7 @@ export async function startOAuthEchoServer(opts = {}) {
   function handleMcp(req, res) {
     mcpRequests += 1;
     const header = req.headers.authorization ?? '';
+    mcpAuthHeaders.push(header);
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
     if (!accessTokens.has(token)) {
       res
@@ -266,6 +276,19 @@ export async function startOAuthEchoServer(opts = {}) {
     setMcpFailure: (value) => {
       mcpFailure = value;
     },
+    mcpAuthHeaders,
+    /** Holds every refresh_token grant until `release()` is called; returns the release function. */
+    holdRefreshes: () => {
+      let release = () => {};
+      tokenGate = new Promise((resolve) => {
+        release = () => {
+          tokenGate = null;
+          resolve(undefined);
+        };
+      });
+      return release;
+    },
+    refreshesParked: () => tokenGateWaiting,
     registerRequests: () => registerRequests,
     mcpRequests: () => mcpRequests,
     expireAccessTokens: () => accessTokens.clear(),

@@ -111,6 +111,37 @@ export class McpServerManager {
    * Connects only if the row still exists and is enabled.
    */
   async restart(serverId: string): Promise<void> {
+    await this.withLock(serverId, () => this.restartLocked(serverId));
+  }
+
+  /**
+   * Changes a server's connection settings safely: stops the live client and
+   * waits for it to close, drops any pending sign-in, forgets OAuth state as
+   * asked, runs `apply` (the caller's row update), forgets once more (a refresh
+   * that was still in flight), then syncs, which reconnects an enabled row from
+   * its new settings. All under the server's lock, so nothing else touches its
+   * sign-in meanwhile.
+   */
+  async reconfigure(serverId: string, opts: { forget: 'none' | 'keepManualClient' | 'all' }, apply: () => void | Promise<void>): Promise<void> {
+    await this.withLock(serverId, async () => {
+      const client = this.clients.get(serverId);
+      if (client) {
+        this.teardown(serverId);
+        await client.disconnect();
+      }
+      this.signIns.forget(serverId);
+      await this.forgetAsked(serverId, opts.forget);
+      await apply();
+      await this.forgetAsked(serverId, opts.forget);
+      await this.sync();
+    });
+  }
+
+  private async forgetAsked(serverId: string, forget: 'none' | 'keepManualClient' | 'all'): Promise<void> {
+    if (forget !== 'none') await this.oauth.forget(serverId, { keepManualClient: forget === 'keepManualClient' });
+  }
+
+  private async restartLocked(serverId: string): Promise<void> {
     const client = this.clients.get(serverId);
     if (client) {
       this.teardown(serverId);
@@ -118,6 +149,23 @@ export class McpServerManager {
     }
     const row = this.store.mcpServers.get(serverId);
     if (row?.enabled) await this.connectServer(row);
+  }
+
+  /** One server's reconfigurations, sign-outs and sign-in completions run one after another. */
+  private readonly locks = new Map<string, Promise<void>>();
+
+  private withLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(serverId) ?? Promise.resolve();
+    const run = previous.then(fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.locks.set(serverId, tail);
+    void tail.then(() => {
+      if (this.locks.get(serverId) === tail) this.locks.delete(serverId);
+    });
+    return run;
   }
 
   /** Starts a browser sign-in for one http server. Throws `SignInError` (404 unknown server, 400/409/502 from `McpSignIns.start`). */
@@ -130,6 +178,13 @@ export class McpServerManager {
 
   /** Finishes a sign-in (the callback, or paste-back with `serverId`), then reconnects the server if it is enabled. */
   async completeSignIn(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string; serverName: string }> {
+    // The flow is found first (and used up) without the lock, to learn which server's lock to take; the token exchange and save run under it.
+    const serverId = this.signIns.serverOf(params.state);
+    if (serverId === null) return this.finishSignIn(params);
+    return this.withLock(serverId, () => this.finishSignIn(params));
+  }
+
+  private async finishSignIn(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string; serverName: string }> {
     const { serverId } = await this.signIns.complete(params);
     const row = this.store.mcpServers.get(serverId);
     if (row?.enabled) await this.refresh(serverId);
@@ -142,15 +197,19 @@ export class McpServerManager {
 
   /** Forgets the tokens and the registered client here (no revocation at the provider), keeps a hand-registered client, and reconnects (which then needs sign-in). */
   async signOut(id: string): Promise<void> {
-    this.signIns.forget(id);
-    await this.oauth.forget(id, { keepManualClient: true });
-    await this.restart(id);
+    await this.withLock(id, async () => {
+      this.signIns.forget(id);
+      await this.oauth.forget(id, { keepManualClient: true });
+      await this.restartLocked(id);
+    });
   }
 
-  /** For edits and deletes: drops any pending flow and forgets the sign-in, without reconnecting. */
+  /** Drops any pending flow and forgets the sign-in, without reconnecting. Edits and deletes use `reconfigure`, which also stops the live client first. */
   async forgetSignIn(id: string, opts: { keepManualClient: boolean }): Promise<void> {
-    this.signIns.forget(id);
-    await this.oauth.forget(id, opts);
+    await this.withLock(id, async () => {
+      this.signIns.forget(id);
+      await this.oauth.forget(id, opts);
+    });
   }
 
   /** Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. A server that needs sign-in isn't `ok`, so it offers no tools. */
@@ -259,7 +318,7 @@ export class McpServerManager {
       transport: 'http',
       url: row.url,
       headers,
-      authProvider: new GruntOAuthProvider(row.id, this.oauth, { kind: 'background' }),
+      authProvider: new GruntOAuthProvider(row.id, this.oauth, { kind: 'background', resource: row.url }),
       secrets: () => this.oauth.cachedSecrets(row.id),
     };
   }

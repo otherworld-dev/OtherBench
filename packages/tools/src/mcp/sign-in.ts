@@ -148,6 +148,7 @@ export class McpSignIns {
       kind: 'sign-in',
       redirectUri,
       state,
+      resource: url, // the URL this flow starts against, not whatever the row says when it finishes
       onAuthorizationUrl: (url) => {
         captured.url = url;
       },
@@ -183,6 +184,11 @@ export class McpSignIns {
     drop({ transport });
     await client.close().catch(() => {});
     throw new SignInError(409, "This server didn't ask for a sign-in.");
+  }
+
+  /** The server a pending flow belongs to, or null (unknown or expired). Does not use the flow up. */
+  serverOf(state: string): string | null {
+    return this.flows.get(state)?.serverId ?? null;
   }
 
   /** Finishes the flow named by `state`. `serverId` (paste-back) must match the flow's server, or the flow is left untouched. */

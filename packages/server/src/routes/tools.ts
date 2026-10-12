@@ -408,30 +408,34 @@ export function toolsRoutes(container: Container): Hono {
       (patch.args !== undefined && JSON.stringify(patch.args) !== JSON.stringify(existing.args)) ||
       patch.envRefs !== undefined ||
       patch.headerRefs !== undefined;
-    if (transportChanged && newTransport === 'stdio') {
-      await container.mcpManager.forgetSignIn(id, { keepManualClient: false });
-      patch.oauth = null;
-    } else if (urlChanged) {
-      // Tokens are bound to the resource; a hand-registered client belongs to the provider, so it stays.
-      await container.mcpManager.forgetSignIn(id, { keepManualClient: true });
+    if (!connectionChanged) {
+      // A rename, an enable/disable or an unchanged save: the live client is not touched.
+      container.store.mcpServers.update(id, patch);
+      await container.mcpManager.sync();
+      return c.json(getMcpServerOrThrow(container, id));
     }
 
-    container.store.mcpServers.update(id, patch);
-    await container.mcpManager.sync();
-    // A server that was on before and still is keeps its old connection through sync(); restart it so the change takes effect.
-    if (connectionChanged && existing.enabled && container.store.mcpServers.get(id)?.enabled) {
-      await container.mcpManager.restart(id);
-    }
+    // The connection changes: stop the old client (and wait for it), forget what
+    // its URL earned, update the row, reconnect -- one step under the server's lock,
+    // so an in-flight refresh can't write tokens back or send them to the new URL.
+    // Tokens are bound to the resource; a hand-registered client belongs to the
+    // provider, so a URL change keeps it. A switch to stdio forgets everything.
+    const toStdio = transportChanged && newTransport === 'stdio';
+    if (toStdio) patch.oauth = null;
+    await container.mcpManager.reconfigure(id, { forget: toStdio ? 'all' : urlChanged ? 'keepManualClient' : 'none' }, () => {
+      container.store.mcpServers.update(id, patch);
+    });
     return c.json(getMcpServerOrThrow(container, id));
   });
 
   app.delete('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
     const existing = getMcpServerOrThrow(container, id);
-    await container.mcpManager.forgetSignIn(id, { keepManualClient: false });
-    await deleteAllMcpSecrets(container, existing);
-    container.store.mcpServers.delete(id);
-    await container.mcpManager.sync();
+    // Stop the client, forget every OAuth secret, delete the row, all under the server's lock; the manager forgets once more after the delete.
+    await container.mcpManager.reconfigure(id, { forget: 'all' }, async () => {
+      await deleteAllMcpSecrets(container, existing);
+      container.store.mcpServers.delete(id);
+    });
     return c.body(null, 204);
   });
 

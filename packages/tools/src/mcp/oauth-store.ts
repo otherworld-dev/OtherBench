@@ -15,6 +15,8 @@ export function oauthRefs(serverId: string): { tokens: string; client: string; c
 export interface StoredTokens {
   tokens: OAuthTokens;
   savedAt: number;
+  /** The server URL these tokens were issued for. They are only ever used while the row's URL is exactly this; an entry without one (older builds) is never used. */
+  resource: string;
 }
 
 /** A dynamic registration, kept with the redirect address it was made for. May hold a client secret, hence SecretStore. */
@@ -55,8 +57,12 @@ export class McpOAuthStore {
     readonly now: () => number = Date.now
   ) {}
 
-  async tokens(serverId: string): Promise<OAuthTokens | undefined> {
-    return (await this.loadTokens(serverId))?.tokens;
+  /** The tokens, only while they are bound to the row's current URL (read synchronously, after the load). */
+  async tokens(serverId: string, resource?: string): Promise<OAuthTokens | undefined> {
+    const entry = this.boundTo(serverId, await this.loadTokens(serverId));
+    // A connection built for another URL than the row's current one (replaced mid-request) gets nothing either.
+    if (entry && resource !== undefined && resource !== entry.resource) return undefined;
+    return entry?.tokens;
   }
 
   /** The token strings held in memory right now, for redacting error text without reading the SecretStore. */
@@ -66,15 +72,29 @@ export class McpOAuthStore {
   }
 
   async lastSavedAt(serverId: string): Promise<number | null> {
-    return (await this.loadTokens(serverId))?.savedAt ?? null;
+    return this.boundTo(serverId, await this.loadTokens(serverId))?.savedAt ?? null;
   }
 
-  async saveTokens(serverId: string, tokens: OAuthTokens, opts: { signIn: boolean }): Promise<void> {
-    if (!this.store.mcpServers.get(serverId)) return; // deleted while a sign-in or refresh was in flight
-    const entry: StoredTokens = { tokens, savedAt: this.now() };
+  /**
+   * `resource` is the URL the caller's connection or sign-in was made against
+   * (defaults to the row's current URL). A save for a URL the row no longer
+   * has is dropped: that connection was replaced while its request was in flight.
+   */
+  async saveTokens(serverId: string, tokens: OAuthTokens, opts: { signIn: boolean; resource?: string }): Promise<void> {
+    const row = this.store.mcpServers.get(serverId);
+    if (!row) return; // deleted while a sign-in or refresh was in flight
+    const resource = opts.resource ?? row.url;
+    if (resource === null || resource !== row.url) return; // the URL changed while a sign-in or refresh was in flight
+    const entry: StoredTokens = { tokens, savedAt: this.now(), resource };
     // Cached before the write, so a request racing this one already sends the new token.
     this.tokenCache.set(serverId, entry);
     await this.secrets.set(oauthRefs(serverId).tokens, JSON.stringify(entry));
+    // The row was deleted or re-pointed while the write was in flight: take the entry back out rather than leave it behind.
+    if (this.store.mcpServers.get(serverId)?.url !== resource) {
+      if (this.tokenCache.get(serverId) === entry) this.tokenCache.set(serverId, null);
+      await this.secrets.delete(oauthRefs(serverId).tokens);
+      return;
+    }
     if (opts.signIn) this.patchSummary(serverId, { account: accountFromIdToken(tokens.id_token), signedInAt: entry.savedAt });
   }
 
@@ -114,6 +134,12 @@ export class McpOAuthStore {
       await this.secrets.delete(oauthRefs(serverId).clientSecret);
       this.patchSummary(serverId, { clientId: null, clientSecretRef: null });
     }
+  }
+
+  private boundTo(serverId: string, entry: StoredTokens | null): StoredTokens | null {
+    if (!entry) return null;
+    const url = this.store.mcpServers.get(serverId)?.url;
+    return typeof entry.resource === 'string' && entry.resource === url ? entry : null;
   }
 
   private async loadTokens(serverId: string): Promise<StoredTokens | null> {

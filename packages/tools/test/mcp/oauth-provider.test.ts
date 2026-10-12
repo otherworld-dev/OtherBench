@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
@@ -207,6 +207,75 @@ describe('McpOAuthStore', () => {
     await oauth.forget('srv-1', { keepManualClient: false });
     expect(await secrets.get(oauthRefs('srv-1').clientSecret)).toBeNull();
     expect(store.mcpServers.get('srv-1')!.oauth).toBeNull();
+  });
+
+  describe('tokens are bound to the URL they were issued for', () => {
+    const OLD_URL = 'https://mcp.example.com/mcp';
+    const NEW_URL = 'https://other.example.com/mcp';
+
+    it('stores the resource with the tokens, and returns them only while the row still has that URL', async () => {
+      const { store, secrets, oauth } = setup();
+      await signInProvider(oauth).saveTokens(TOKENS);
+      expect(JSON.parse((await secrets.get(oauthRefs('srv-1').tokens))!)).toMatchObject({ resource: OLD_URL });
+      expect(await oauth.tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
+
+      store.mcpServers.update('srv-1', { url: NEW_URL });
+      expect(await oauth.tokens('srv-1')).toBeUndefined();
+      expect(await oauth.lastSavedAt('srv-1')).toBeNull();
+
+      // A cold cache (a restart) reads the same stored entry and reaches the same answer.
+      const cold = new McpOAuthStore(store, secrets);
+      expect(await cold.tokens('srv-1')).toBeUndefined();
+      store.mcpServers.update('srv-1', { url: OLD_URL });
+      expect(await cold.tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
+    });
+
+    it('treats an entry with no resource as a mismatch', async () => {
+      const { secrets, store, oauth } = setup();
+      await secrets.set(oauthRefs('srv-1').tokens, JSON.stringify({ tokens: TOKENS, savedAt: 1 }));
+      expect(await new McpOAuthStore(store, secrets).tokens('srv-1')).toBeUndefined();
+      expect(await oauth.tokens('srv-1')).toBeUndefined();
+    });
+
+    it('a background provider built for the old URL gets no tokens once the row has moved, and its late save is dropped', async () => {
+      const { store, secrets, oauth } = setup();
+      const stale = new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: OLD_URL });
+      await stale.saveTokens(TOKENS);
+      store.mcpServers.update('srv-1', { url: NEW_URL });
+      await oauth.forget('srv-1', { keepManualClient: true });
+
+      // The refresh that was in flight finishes after the edit.
+      await stale.saveTokens({ access_token: 'at-late', token_type: 'Bearer', refresh_token: 'rt-late' });
+      expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+      expect(await oauth.tokens('srv-1')).toBeUndefined();
+
+      // Tokens for the new URL are never offered to a provider built for the old one.
+      await new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: NEW_URL }).saveTokens({ access_token: 'at-new', token_type: 'Bearer' });
+      expect(await stale.tokens()).toBeUndefined();
+      expect(await new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: NEW_URL }).tokens()).toMatchObject({ access_token: 'at-new' });
+    });
+
+    it('a sign-in binds its tokens to the URL it started against, not the row at completion', async () => {
+      const { store, secrets, oauth } = setup();
+      const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'sign-in', redirectUri: REDIRECT, state: 's', onAuthorizationUrl: () => {}, resource: OLD_URL });
+      store.mcpServers.update('srv-1', { url: NEW_URL });
+      await provider.saveTokens(TOKENS);
+      expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+      expect(await oauth.tokens('srv-1')).toBeUndefined();
+      expect(store.mcpServers.get('srv-1')!.oauth).toBeNull();
+    });
+
+    it('a save whose write lands after the row was deleted leaves nothing behind', async () => {
+      const { store, secrets, oauth } = setup();
+      const realSet = secrets.set.bind(secrets);
+      vi.spyOn(secrets, 'set').mockImplementation(async (ref, value) => {
+        store.mcpServers.delete('srv-1'); // the delete lands while the write is in flight
+        await realSet(ref, value);
+      });
+      await oauth.saveTokens('srv-1', TOKENS, { signIn: true });
+      expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+      vi.restoreAllMocks();
+    });
   });
 
   it('writes nothing for a server that no longer exists', async () => {

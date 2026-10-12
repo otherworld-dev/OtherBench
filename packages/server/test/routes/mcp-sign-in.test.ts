@@ -379,6 +379,125 @@ describe('editing and deleting a signed-in server', () => {
     for (const ref of Object.values(oauthRefs(id))) expect(await secrets.get(ref)).toBeNull();
   });
 
+  const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const liveUrl = (id: string) => ((mcpManager as unknown as { clients: Map<string, { config: { url: string } }> }).clients.get(id))?.config.url;
+
+  it('a URL change while a refresh against the old URL is in flight never sends the old tokens to the new URL', async () => {
+    const id = await signedIn();
+    const second = await startOAuthEchoServer();
+    try {
+      // A refresh against the first server, parked at its token endpoint.
+      const release = fixture.holdRefreshes();
+      fixture.expireAccessTokens();
+      void mcpManager.refresh(id);
+      await waitFor(() => fixture.refreshesParked() >= 1);
+
+      const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ url: second.url }));
+      expect(res.status).toBe(200);
+      await waitFor(() => healthOf(id).status === 'needs_auth');
+
+      release(); // the old refresh now finishes, after the edit
+      await waitFor(() => fixture.issued.accessTokens.length >= 2);
+      await pause(200);
+
+      expect(second.mcpRequests()).toBeGreaterThan(0);
+      for (const header of second.mcpAuthHeaders) {
+        expect(header).toBe('');
+        for (const token of fixture.issued.accessTokens) expect(header).not.toContain(token);
+      }
+      // Nothing bound to the old URL is left for the new connection to use.
+      expect(await secrets.get(oauthRefs(id).tokens)).toBeNull();
+      expect(store.mcpServers.get(id)).toMatchObject({ url: second.url, oauth: null });
+      expect(healthOf(id)).toMatchObject({ status: 'needs_auth', auth: { state: 'needs_sign_in' } });
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('two PATCHes at once leave the row, the live connection and the sign-in state consistent', async () => {
+    const id = await signedIn();
+    const b = await startOAuthEchoServer();
+    const c = await startOAuthEchoServer();
+    try {
+      const [r1, r2] = await Promise.all([
+        app().request(`/api/mcp-servers/${id}`, patchJson({ url: b.url })),
+        app().request(`/api/mcp-servers/${id}`, patchJson({ url: c.url })),
+      ]);
+      expect([r1.status, r2.status]).toEqual([200, 200]);
+      await waitFor(() => healthOf(id).status === 'needs_auth');
+      await pause(300); // nothing else retries: needs_auth stops the reconnect loop
+
+      const finalUrl = store.mcpServers.get(id)!.url;
+      expect([b.url, c.url]).toContain(finalUrl);
+      expect(liveUrl(id)).toBe(finalUrl);
+      expect(store.mcpServers.get(id)!.oauth).toBeNull();
+      expect(await secrets.get(oauthRefs(id).tokens)).toBeNull();
+      expect(await secrets.get(oauthRefs(id).client)).toBeNull();
+      for (const header of [...b.mcpAuthHeaders, ...c.mcpAuthHeaders]) expect(header).toBe('');
+      // The loser's connection was stopped: only the final URL keeps being asked.
+      const loser = finalUrl === b.url ? c : b;
+      const seen = loser.mcpRequests();
+      await pause(200);
+      expect(loser.mcpRequests()).toBe(seen);
+    } finally {
+      await b.close();
+      await c.close();
+    }
+  });
+
+  it('a hand-registered client survives a URL change, while the tokens and the registered client go', async () => {
+    const manualFx = await startOAuthEchoServer({ dcr: false, staticClients: { 'manual-1': 'manual-secret' }, idTokenEmail: 'alice@example.com' });
+    try {
+      const id = await createServer('Manual', { url: manualFx.url });
+      await secrets.set(oauthRefs(id).clientSecret, 'manual-secret');
+      store.mcpServers.update(id, { oauth: { clientId: 'manual-1', clientSecretRef: oauthRefs(id).clientSecret, account: null, signedInAt: null } });
+      await app().request(callbackPath(await endedOn(await startSignIn(id))));
+      await waitFor(() => healthOf(id).status === 'ok');
+      expect(await secrets.get(oauthRefs(id).tokens)).not.toBeNull();
+
+      const res = await app().request(`/api/mcp-servers/${id}`, patchJson({ url: fixture.url }));
+      expect(res.status).toBe(200);
+      expect(await secrets.get(oauthRefs(id).tokens)).toBeNull();
+      expect(await secrets.get(oauthRefs(id).client)).toBeNull();
+      expect(await secrets.get(oauthRefs(id).clientSecret)).toBe('manual-secret');
+      expect(store.mcpServers.get(id)!.oauth).toEqual({ clientId: 'manual-1', clientSecretRef: oauthRefs(id).clientSecret, account: null, signedInAt: null });
+      await waitFor(() => healthOf(id).status === 'needs_auth');
+    } finally {
+      await manualFx.close();
+    }
+  });
+
+  it('a DELETE racing a sign-in that is saving its tokens waits for it, then leaves no OAuth secret', async () => {
+    const id = await createServer();
+    const ended = await endedOn(await startSignIn(id));
+
+    // Hold the sign-in at the moment it writes its tokens.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let held = false;
+    const realSet = secrets.set.bind(secrets);
+    vi.spyOn(secrets, 'set').mockImplementation(async (ref, value) => {
+      if (ref === oauthRefs(id).tokens) {
+        held = true;
+        await gate;
+      }
+      await realSet(ref, value);
+    });
+
+    const callback = app().request(callbackPath(ended));
+    await waitFor(() => held);
+    const deleted = app().request(`/api/mcp-servers/${id}`, { method: 'DELETE' });
+    await pause(100);
+    expect(store.mcpServers.get(id)).not.toBeNull(); // the delete is queued behind the sign-in
+
+    release();
+    const [cb, del] = await Promise.all([callback, deleted]);
+    expect(cb.status).toBe(200);
+    expect(del.status).toBe(204);
+    expect(store.mcpServers.get(id)).toBeNull();
+    for (const ref of Object.values(oauthRefs(id))) expect(await secrets.get(ref)).toBeNull();
+  });
+
   it('deleting a server mid sign-in removes every OAuth secret and refuses the late callback', async () => {
     const id = await createServer();
     const ended = await endedOn(await startSignIn(id));

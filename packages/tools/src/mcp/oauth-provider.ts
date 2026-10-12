@@ -75,9 +75,15 @@ export function clientMetadataFor(redirectUri: string): OAuthClientMetadata {
   };
 }
 
+/**
+ * `resource` is the server URL the connection (or the sign-in flow, from the
+ * moment it started) was made against: tokens it saves are bound to that URL,
+ * not to whatever the row says by the time the request finishes. Defaults to
+ * the row's current URL.
+ */
 export type GruntOAuthMode =
-  | { kind: 'background' }
-  | { kind: 'sign-in'; redirectUri: string; state: string; onAuthorizationUrl: (url: URL) => void };
+  | { kind: 'background'; resource?: string }
+  | { kind: 'sign-in'; redirectUri: string; state: string; onAuthorizationUrl: (url: URL) => void; resource?: string };
 
 /**
  * The MCP SDK's `OAuthClientProvider` for one server (spec
@@ -131,11 +137,11 @@ export class GruntOAuthProvider implements OAuthClientProvider {
 
   async tokens(): Promise<OAuthTokens | undefined> {
     // A sign-in starts fresh: the first request goes without a token, gets the 401 and starts the flow.
-    return this.mode.kind === 'sign-in' ? undefined : this.oauth.tokens(this.serverId);
+    return this.mode.kind === 'sign-in' ? undefined : this.oauth.tokens(this.serverId, this.mode.resource);
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    await this.oauth.saveTokens(this.serverId, tokens, { signIn: this.mode.kind === 'sign-in' });
+    await this.oauth.saveTokens(this.serverId, tokens, { signIn: this.mode.kind === 'sign-in', resource: this.mode.resource });
   }
 
   async redirectToAuthorization(url: URL): Promise<void> {
