@@ -27,14 +27,14 @@ describe('runMigrations', () => {
     expect([...versions].sort((a, b) => a - b)).toEqual(versions);
     for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
     expect(versions).not.toContain(21);
-    expect(MIGRATIONS.slice(-3).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-mcp-oauth']);
+    expect(MIGRATIONS.slice(-4).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth']);
     const db = freshDb();
     try {
       runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
       expect(userVersion(db)).toBe(20);
       runMigrations(db);
       expect(userVersion(db)).toBe(SCHEMA_VERSION);
-      expect(SCHEMA_VERSION).toBe(24);
+      expect(SCHEMA_VERSION).toBe(25);
     } finally {
       db.close();
     }

@@ -3,6 +3,6 @@
 // SecretStore reference of its secret, "signed in as" and when. Never a
 // token: those stay in SecretStore. `mcp_server` isn't a synced table
 // (migration 013's TRACKED_TABLES), so sign-ins stay on this machine.
-export const MIGRATION_024_MCP_OAUTH = `
+export const MIGRATION_025_MCP_OAUTH = `
 ALTER TABLE mcp_server ADD COLUMN oauth TEXT;
 `;
