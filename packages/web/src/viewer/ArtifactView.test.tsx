@@ -163,7 +163,7 @@ describe('ArtifactView', () => {
     expect(screen.queryByRole('button', { name: 'Save to workspace' })).toBeNull();
   });
 
-  const officeDetail = (kind: 'document' | 'spreadsheet', fileName: string): ArtifactDetail => {
+  const officeDetail = (kind: 'document' | 'spreadsheet' | 'presentation', fileName: string): ArtifactDetail => {
     const each = { title: 'Budget', madeBy: 'model' as const, kind, language: null, fileName };
     return {
       artifact: { id: 'art', chatId: 'c1', slug: 'budget', kind, language: null, createdAt: 1 },
@@ -208,6 +208,14 @@ describe('ArtifactView', () => {
     vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, '# Quarterly memo', 'model', 'document'));
     render(<ArtifactView chatId="c1" item={item} />);
     expect(await screen.findByRole('heading', { name: 'Quarterly memo' })).toBeInTheDocument();
+  });
+
+  it('previews a presentation as slides', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('presentation', 'deck.pptx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, JSON.stringify({ slides: [{ layout: 'title', title: 'Mock review' }] }), 'model', 'presentation'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByText('Mock review')).toBeInTheDocument();
+    expect(screen.getByRole('figure', { name: 'Slide 1' })).toBeInTheDocument();
   });
 
   it('keeps your draft and says why when an edit is refused', async () => {

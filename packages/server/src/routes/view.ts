@@ -49,7 +49,7 @@ export function viewRoutes(container: Container, links: ViewLinks): Hono {
       // Each version is its own kind (a note made into a page).
       const linked = version.kind === 'html' || version.kind === 'svg' || version.kind === 'mermaid';
       const name = version.kind === 'mermaid' ? 'diagram.html' : versionFileName(artifact, version);
-      const kinds: Record<typeof version.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text', document: 'markdown', spreadsheet: 'text' };
+      const kinds: Record<typeof version.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text', document: 'markdown', spreadsheet: 'text', presentation: 'text' };
       const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id })}/${encodeURIComponent(name)}` : null;
       return c.json({ path: '', name, kind: kinds[version.kind], url, size: Buffer.byteLength(version.content, 'utf8') });
     }

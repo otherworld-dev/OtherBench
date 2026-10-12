@@ -88,6 +88,14 @@ describe('PresentationPreview', () => {
     expect(screen.getByTestId('slide-3')).toHaveStyle({ background: '#AA3300' });
   });
 
+  it('numbers the slides but not the title slide, and numbers a section slide in white', () => {
+    render(<PresentationPreview content={DECK} />);
+    expect(within(screen.getByTestId('slide-1')).queryByText('1')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('slide-2')).getByText('2')).toBeInTheDocument();
+    expect(within(screen.getByTestId('slide-2')).getByText('2')).toHaveStyle({ color: '#808080' });
+    expect(within(screen.getByTestId('slide-3')).getByText('3')).toHaveStyle({ color: '#ffffff' });
+  });
+
   it("shows the parse error for a deck it can't read", () => {
     render(<PresentationPreview content={'{"slides":[]}'} />);
     expect(screen.getByRole('alert')).toHaveTextContent('slides: must be a list of 1-200 slides');

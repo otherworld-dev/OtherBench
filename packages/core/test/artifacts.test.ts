@@ -246,9 +246,16 @@ describe('office artifacts', () => {
     expect(versionFileName({ slug: 'budget' }, { kind: 'spreadsheet', language: null })).toBe('budget.xlsx');
   });
 
+  it('checks a presentation, and names it .pptx', () => {
+    const store = setup();
+    expect(run(store, 'a1', { command: 'create', id: 'deck', kind: 'presentation', title: 'Deck', content: '{"slides":[{"layout":"chart","title":"X"}]}' })).toMatchObject({ error: true, code: 'bad_content', message: expect.stringMatching(/^slides\[0\]\.layout: /) });
+    expect(run(store, 'a1', { command: 'create', id: 'deck', kind: 'presentation', title: 'Deck', content: '{"slides":[{"layout":"title","title":"X"}]}' })).toMatchObject({ ok: true, kind: 'presentation' });
+    expect(versionFileName({ slug: 'deck' }, { kind: 'presentation', language: null })).toBe('deck.pptx');
+  });
+
   it('offers the new kinds to the model and tells it their formats', () => {
-    expect(ARTIFACT_TOOL_PARAMETERS.properties.kind.enum).toEqual(expect.arrayContaining(['document', 'spreadsheet']));
+    expect(ARTIFACT_TOOL_PARAMETERS.properties.kind.enum).toEqual(expect.arrayContaining(['document', 'spreadsheet', 'presentation']));
     expect(ARTIFACTS_GUIDANCE).toContain(OFFICE_GUIDANCE);
-    expect(ARTIFACT_TOOL_DESCRIPTION).toMatch(/document and spreadsheet/);
+    expect(ARTIFACT_TOOL_DESCRIPTION).toMatch(/document, spreadsheet and presentation/);
   });
 });

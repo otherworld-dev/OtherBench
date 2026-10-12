@@ -46,6 +46,8 @@ export const OfficePreview = memo(function OfficePreview({ kind, content }: { ki
       return <DocumentPreview content={content} />;
     case 'spreadsheet':
       return <SpreadsheetPreview content={content} />;
+    case 'presentation':
+      return <PresentationPreview content={content} />;
   }
 });
 
@@ -224,7 +226,7 @@ function ColumnBox({ column, style }: { column: SlideColumn; style: CSSPropertie
 }
 
 function SlideTitle({ title, accent }: { title: string; accent: string }): JSX.Element {
-  return <p style={{ ...at(0.5, 0.35, 12.33, 0.9), margin: 0, fontSize: pt(30), fontWeight: 700, color: accent }}>{title}</p>;
+  return <p style={{ ...at(0.5, 0.35, 12.33, 0.9), margin: 0, display: 'flex', alignItems: 'center', fontSize: pt(30), fontWeight: 700, color: accent }}>{title}</p>;
 }
 
 function SlideBody({ slide, accent }: { slide: SlideSpec; accent: string }): JSX.Element {
@@ -309,7 +311,7 @@ export const PresentationPreview = memo(function PresentationPreview({ content }
             style={{ aspectRatio: '16 / 9', containerType: 'inline-size', background: slide.layout === 'section' ? accent : '#ffffff', color: '#1d1b18', fontFamily: 'Calibri, Carlito, sans-serif' }}
           >
             <SlideBody slide={slide} accent={accent} />
-            {slide.layout !== 'title' && <span style={{ ...at(12.4, 6.95, 0.7, 0.35), fontSize: pt(10), color: '#808080', textAlign: 'right' }}>{i + 1}</span>}
+            {slide.layout !== 'title' && <span style={{ ...at(12.4, 6.95, 0.7, 0.35), fontSize: pt(10), color: slide.layout === 'section' ? '#ffffff' : '#808080', textAlign: 'right' }}>{i + 1}</span>}
           </div>
           <figcaption className="mt-1 text-xs text-[var(--text-faint)]">{slide.notes ? `Notes: ${slide.notes}` : `Slide ${i + 1}`}</figcaption>
         </figure>

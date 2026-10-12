@@ -3,14 +3,16 @@
  * Deck #928). A `document` is Markdown, bounded only by the 1 MB cap and the size limits
  * below (characters, lines, table rows and cells, indent, quote depth, marks).
  * A `spreadsheet` is JSON: sheets of rows of cells, where text starting with
- * "=" is a formula. The artifact tool, your edit (PUT) and the server's
+ * "=" is a formula. A `presentation` is JSON too: slides, each in one of a few
+ * layouts (title, section, bullets, two-column, table) with optional speaker
+ * notes. The artifact tool, your edit (PUT) and the server's
  * renderers parse with this, and the web draws its previews from it, so it
  * imports nothing at all: no Node built-ins, and not artifacts.ts (which pulls
  * in the crypto module). Errors name the JSON path, so the model can fix the
  * one place.
  */
 
-export const OFFICE_KINDS = ['document', 'spreadsheet'] as const;
+export const OFFICE_KINDS = ['document', 'spreadsheet', 'presentation'] as const;
 export type OfficeKind = (typeof OFFICE_KINDS)[number];
 
 export function isOfficeKind(kind: string): kind is OfficeKind {
@@ -1016,9 +1018,10 @@ export function checkOfficeContent(kind: string, content: string): string | null
 
 /** Appended to ARTIFACTS_GUIDANCE: fixed text, so it never churns the system prompt. */
 export const OFFICE_GUIDANCE = [
-  'Office files: for a Word document or Excel spreadsheet the user wants as a file, make a "document" or "spreadsheet" artifact. Grunt makes the .docx or .xlsx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
+  'Office files: for a Word document, Excel spreadsheet or PowerPoint deck the user wants as a file, make a "document", "spreadsheet" or "presentation" artifact. Grunt makes the .docx, .xlsx or .pptx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
   '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file. At most 120,000 characters and 6,000 lines: split a bigger one.',
   '- "spreadsheet": JSON, e.g. {"sheets":[{"name":"Costs","columns":[{"width":24},{"width":12}],"freeze":{"rows":1},"rows":[[{"value":"Item","bold":true},{"value":"Cost","bold":true}],["Widgets",12],["Gadgets",30.5],["Total","=SUM(B2:B3)"]]}]}. rows[0] is row 1 and rows[0][0] is A1. A cell is null, text, a number, true/false, or an object with one of "value", "formula" or "date" (YYYY-MM-DD or YYYY-MM-DDTHH:MM) and optional "format" (an Excel number format such as "#,##0.00"), "bold", "italic", "wrap", "align" (left, center, right), "color" and "fill" (#RRGGBB). Text starting with "=" is a formula; {"value":"=..."} is literal text.',
   "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers, '@' and the '#' spill operator aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
+  '- "presentation": JSON, e.g. {"theme":{"accent":"#1F4E79"},"slides":[{"layout":"title","title":"Q3 review"},{"layout":"bullets","title":"Highlights","bullets":["Revenue up 12%",{"text":"Two new clients","level":1}],"notes":"Mention churn."}]}. Layouts: title and section (title, subtitle), bullets (title, bullets), two-column (title, left and right, each {"heading","bullets"}), table (title, table: {"header","rows"}). A bullet is text or {"text","level":0-2}; "notes" are speaker notes. Keep slides to about six short bullets.',
   '- Errors name the place in the JSON to fix.',
 ].join('\n');

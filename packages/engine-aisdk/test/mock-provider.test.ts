@@ -391,6 +391,14 @@ describe('#office trigger', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', args: expect.objectContaining({ id: 'memo', kind: 'document', title: 'Mock memo', content: expect.stringContaining('# Quarterly memo') }) }));
   });
 
+  it('#office presentation makes the deck', async () => {
+    const { tool } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office presentation', { tools: [tool] })));
+    const call = events.find((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call')!;
+    expect(call.args).toMatchObject({ id: 'deck', kind: 'presentation', title: 'Mock deck' });
+    expect(JSON.parse((call.args as { content: string }).content).slides.map((s: { title: string }) => s.title)).toEqual(['Mock review', 'Highlights']);
+  });
+
   it('#office with a kind it has no sample for falls through to the usual reply', async () => {
     const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office banana')));
     expect(events.some((e) => e.type === 'tool-call')).toBe(false);

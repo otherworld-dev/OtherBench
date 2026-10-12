@@ -12,7 +12,7 @@ import { OfficePreview } from './OfficePreview.js';
 import { useArtifactsStamp } from './stamp.js';
 
 const BUTTON = 'btn px-2 py-0.5';
-const SOURCE_LANGUAGE = { html: 'html', markdown: 'md', mermaid: 'plaintext', svg: 'xml', document: 'md', spreadsheet: 'json' } as const;
+const SOURCE_LANGUAGE = { html: 'html', markdown: 'md', mermaid: 'plaintext', svg: 'xml', document: 'md', spreadsheet: 'json', presentation: 'json' } as const;
 
 function failure(err: unknown): string {
   return err instanceof ApiError ? err.message : "Couldn't load this artifact. Please try again.";

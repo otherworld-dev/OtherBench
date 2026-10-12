@@ -596,8 +596,8 @@ export interface SyncRepo {
   observe(hlc: string): void;
 }
 
-/** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, a code file, or (Deck #928) a Word document or Excel spreadsheet made from Markdown or JSON. */
-export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code' | 'document' | 'spreadsheet';
+/** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, a code file, or (Deck #928) a Word document, Excel spreadsheet or PowerPoint deck made from Markdown or JSON. */
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code' | 'document' | 'spreadsheet' | 'presentation';
 
 /** Standalone content the model made in a chat (spec 2026-10-07-artifacts); its content lives in its versions. */
 export interface Artifact {

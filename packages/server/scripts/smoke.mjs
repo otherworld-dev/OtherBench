@@ -107,7 +107,8 @@ async function officeFile(kind, mainPart) {
 }
 await officeFile('document', 'word/document.xml');
 await officeFile('spreadsheet', 'xl/workbook.xml');
-console.log('[smoke] the bundled writers made a .docx and an .xlsx');
+await officeFile('presentation', 'ppt/presentation.xml');
+console.log('[smoke] the bundled writers made a .docx, an .xlsx and a .pptx');
 
 // The packages left out of the bundle, loaded from beside it.
 for (const pkg of ['unpdf', '@anthropic-ai/claude-agent-sdk']) {

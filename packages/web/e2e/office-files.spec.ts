@@ -138,3 +138,17 @@ test('the model makes a document, previewed with its heading', async ({ page, re
   const viewer = page.getByRole('complementary', { name: 'Viewer' });
   await expect(viewer.getByRole('heading', { name: 'Quarterly memo' })).toBeVisible();
 });
+
+test('the model makes a deck, previewed slide by slide', async ({ page, request }) => {
+  const title = await mockChat(request);
+  await page.goto('/');
+  await page.getByRole('button', { name: title }).click();
+  await send(page, '#office presentation');
+  await page.getByRole('button', { name: /Mock deck.*Created v1/ }).click();
+  const viewer = page.getByRole('complementary', { name: 'Viewer' });
+  await expect(viewer.getByText('Mock review')).toBeVisible();
+  await expect(viewer.getByText('Highlights')).toBeVisible();
+  const downloading = page.waitForEvent('download');
+  await viewer.getByRole('button', { name: 'Download' }).click();
+  expect((await downloading).suggestedFilename()).toBe('deck.pptx');
+});

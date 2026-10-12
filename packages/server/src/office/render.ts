@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker, type ResourceLimits } from 'node:worker_threads';
-import { checkOfficeContent, parseSpreadsheet, type OfficeKind } from '@grunt/core/domain/office-spec.js';
+import { checkOfficeContent, parsePresentation, parseSpreadsheet, type OfficeKind } from '@grunt/core/domain/office-spec.js';
 import { renderDocx } from './docx.js';
 import { OfficeRenderError } from './errors.js';
+import { renderPptx } from './pptx.js';
 import { renderXlsx } from './xlsx.js';
 import type { RenderJob, RenderReply } from './render-worker.js';
 
@@ -39,6 +40,11 @@ export async function renderOfficeFileInProcess(kind: OfficeKind, content: strin
         const parsed = parseSpreadsheet(content);
         if (!parsed.ok) throw new OfficeRenderError(parsed.error);
         return await renderXlsx(parsed.spec);
+      }
+      case 'presentation': {
+        const parsed = parsePresentation(content);
+        if (!parsed.ok) throw new OfficeRenderError(parsed.error);
+        return await renderPptx(parsed.spec, title);
       }
       default: {
         const never: never = kind;

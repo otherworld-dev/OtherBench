@@ -431,3 +431,11 @@ describe('renderPptx', () => {
     expect(extractOfficeText(bytes)!).toContain('Slide 1');
   }, 120_000);
 });
+
+describe('renderOfficeFile: presentation', () => {
+  it('makes the .pptx, and refuses a deck that does not parse', async () => {
+    const bytes = await renderOfficeFile('presentation', JSON.stringify({ slides: [{ layout: 'title', title: 'Hello deck' }] }), 'Deck');
+    expect(extractOfficeText(bytes)).toContain('Hello deck');
+    await expect(renderOfficeFile('presentation', '{"slides":[]}', 'Empty')).rejects.toThrow('slides: must be a list of 1-200 slides');
+  });
+});

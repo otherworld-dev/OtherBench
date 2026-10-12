@@ -496,14 +496,12 @@ describe('office-spec helpers', () => {
     expect(checkOfficeContent('markdown', '{')).toBeNull();
     expect(checkOfficeContent('spreadsheet', '{')).toMatch(/isn't valid JSON/);
     expect(checkOfficeContent('spreadsheet', sheet([['x']]))).toBeNull();
-    expect(['document', 'spreadsheet', 'html'].map(isOfficeKind)).toEqual([true, true, false]);
+    expect(['document', 'spreadsheet', 'presentation', 'html'].map(isOfficeKind)).toEqual([true, true, true, false]);
   });
 
-  it('the guidance covers both formats and the refused functions, in under 2 KB and with no heading of its own', () => {
-    expect(OFFICE_GUIDANCE).toContain('"document"');
-    expect(OFFICE_GUIDANCE).toContain('"spreadsheet"');
-    expect(OFFICE_GUIDANCE).toContain('WEBSERVICE');
-    expect(OFFICE_GUIDANCE.length).toBeLessThan(2048);
+  it('the guidance covers the three formats and the refused functions, in about 2 KB and with no heading of its own', () => {
+    for (const kind of ['"document"', '"spreadsheet"', '"presentation"', 'WEBSERVICE', 'two-column']) expect(OFFICE_GUIDANCE).toContain(kind);
+    expect(OFFICE_GUIDANCE.length).toBeLessThan(2304);
     expect(OFFICE_GUIDANCE.split('\n').some((l) => l.startsWith('#'))).toBe(false);
   });
 });

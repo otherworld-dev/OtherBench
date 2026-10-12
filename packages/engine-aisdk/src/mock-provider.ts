@@ -86,6 +86,16 @@ export const OFFICE_SAMPLES: Record<string, { id: string; title: string; content
       ],
     }),
   },
+  presentation: {
+    id: 'deck',
+    title: 'Mock deck',
+    content: JSON.stringify({
+      slides: [
+        { layout: 'title', title: 'Mock review', subtitle: 'From the mock model' },
+        { layout: 'bullets', title: 'Highlights', bullets: ['Revenue up', 'Two new clients'], notes: 'Mention churn.' },
+      ],
+    }),
+  },
 };
 
 /** Crude word-count-as-token-count proxy -- good enough for a mock's "plausible usage". */
@@ -155,7 +165,7 @@ function isToolErrorResult(result: unknown): boolean {
  *
  * Triggers (checked against the prompt text, first match wins, in this
  * order): `#fail` -> a single `rate_limit` error event. `#office
- * <document|spreadsheet>` -> that Office artifact made through the real tool,
+ * <document|spreadsheet|presentation>` -> that Office artifact made through the real tool,
  * then "I made the file.". `#echo-user` -> the latest user message's text
  * parts as the request carries them (an attached file's text included).
  * `#artifact` -> an
