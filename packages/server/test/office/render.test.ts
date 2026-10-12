@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { checkOfficeContent, formulaForFile, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@grunt/core/domain/office-spec.js';
+import type { PresentationSpec } from '@grunt/core/domain/office-spec.js';
 import { listZipEntries, readZipEntry } from '../../src/import/zip.js';
 import { extractOfficeText } from '../../src/office/extract.js';
+import { renderPptx } from '../../src/office/pptx.js';
 import { renderXlsx } from '../../src/office/xlsx.js';
 // renderOfficeFile makes the file in a worker run from the compiled dist/office/render-worker.js: run `npx tsc -b` first.
 import { OFFICE_RENDER_CONCURRENCY, OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess } from '../../src/office/render.js';
@@ -359,5 +361,51 @@ describe('renderOfficeFile: spreadsheet', () => {
     await expect(renderXlsx(spec)).rejects.toBeInstanceOf(OfficeRenderError);
     await expect(renderXlsx(spec)).rejects.toThrow((refused as { error: string }).error);
     await expect(renderXlsx({ sheets: [{ name: 'S', rows: [[{ formula: 'NOSUCHFUNCTION(1)' }]] }] })).rejects.toThrow(/NOSUCHFUNCTION/);
+  });
+});
+
+describe('renderPptx', () => {
+  const DECK: PresentationSpec = {
+    slides: [
+      { layout: 'title', title: 'Q3 review', subtitle: 'October' },
+      { layout: 'bullets', title: 'Highlights', bullets: ['Revenue up 12%', { text: 'Two new clients', level: 1 }], notes: 'Mention churn.' },
+      { layout: 'two-column', title: 'Before and after', left: { heading: 'Before', bullets: ['Manual'] }, right: { bullets: ['Automatic'] } },
+      { layout: 'section', title: 'Results' },
+      { layout: 'table', title: 'Costs', table: { header: ['Item', 'Cost'], rows: [['Widgets', 12]] } },
+    ],
+  };
+
+  it('makes a 16:9 .pptx that reads back slide by slide, each bullet its own paragraph, with notes', async () => {
+    const bytes = await renderPptx(DECK, 'Q3 deck');
+    expect(bytes.subarray(0, 4).toString('latin1')).toBe('PK');
+    expect(part(bytes, 'ppt/presentation.xml')).toContain('cx="12192000"');
+    const paragraphs = part(bytes, 'ppt/slides/slide2.xml').split('</a:p>');
+    const at = (text: string) => paragraphs.findIndex((p) => p.includes(text));
+    expect(at('Revenue up 12%')).toBeGreaterThanOrEqual(0);
+    expect(at('Two new clients')).toBeGreaterThan(at('Revenue up 12%'));
+    const text = extractOfficeText(bytes)!;
+    for (const line of ['Q3 review', 'October', 'Revenue up 12%', 'Two new clients', 'Notes: Mention churn.', 'Before', 'Manual', 'Automatic', 'Results', '| Item | Cost |', '| Widgets | 12 |']) expect(text, line).toContain(line);
+  });
+
+  it('numbers every slide but the title slide, in Calibri, in the accent colour', async () => {
+    const bytes = await renderPptx({ theme: { accent: '#AA3300' }, slides: DECK.slides }, 'Accent');
+    expect(part(bytes, 'ppt/slides/slide1.xml')).not.toContain('type="sldNum"');
+    expect(part(bytes, 'ppt/slides/slide2.xml')).toContain('type="sldNum"');
+    expect(part(bytes, 'ppt/slides/slide2.xml')).toContain('AA3300');
+    expect(part(bytes, 'ppt/slides/slide1.xml')).toContain('Calibri');
+  });
+
+  it('puts no media and no links in the file', async () => {
+    const bytes = await renderPptx(DECK, 'Plain');
+    // pptxgenjs writes empty folder entries (ppt/media/, ppt/embeddings/, ...): only files count.
+    const names = listZipEntries(bytes).map((e) => e.name).filter((n) => !n.endsWith('/'));
+    expect(names.some((n) => n.startsWith('ppt/media/'))).toBe(false);
+    for (const rels of names.filter((n) => n.startsWith('ppt/slides/_rels/'))) expect(part(bytes, rels)).not.toContain('hyperlink');
+  });
+
+  it('strips characters XML cannot hold, and keeps emoji', async () => {
+    const slide1 = part(await renderPptx({ slides: [{ layout: 'title', title: 'Bad  title 😀' }] }, 'T'), 'ppt/slides/slide1.xml');
+    expect(slide1).not.toContain('');
+    expect(slide1).toContain('😀');
   });
 });
