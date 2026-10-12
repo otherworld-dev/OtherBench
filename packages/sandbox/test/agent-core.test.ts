@@ -24,7 +24,7 @@ type Wrapped = { argv: string[]; env: NodeJS.ProcessEnv };
  * agent's environment where the real one reads it: TMPDIR when it starts,
  * CLAUDE_CODE_TMPDIR each time it wraps a command.
  */
-function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void } = {}) {
+function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm } = {}) {
   const sent: Sent[] = [];
   const exits: number[] = [];
   const env: Record<string, string | undefined> = {};
@@ -53,7 +53,7 @@ function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; k
     spawn: (fakes.spawn ?? spawn) as typeof spawn,
     send: (m: Sent) => sent.push(m),
     mkdir,
-    rm,
+    rm: fakes.rm ?? rm,
     kill: fakes.kill ?? ((pid: number, signal: string) => process.kill(Math.abs(pid), signal)),
     exit: (code: number) => exits.push(code),
     env,
@@ -312,8 +312,12 @@ describe('the sandbox agent', () => {
 /** A promise the test settles by hand. */
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 describe('the sandbox agent, awkward timing', () => {
@@ -514,6 +518,38 @@ describe('the sandbox agent, input from the host', () => {
     await first;
     expect(repliesFor(h, 1).filter((m) => m.type === 'done')).toHaveLength(1);
     expect(h.runtime.wrapWithSandboxArgv).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the next run as soon as it has reported done, while the last run's temp folder is still being cleared", async () => {
+    const clearing = deferred();
+    const slowRm = (async (path: string, options: object) => {
+      // Only the first run's folder is slow to clear.
+      if (path.endsWith('/1')) await clearing.promise;
+      return rm(path, options);
+    }) as typeof rm;
+    const h = harness({}, { rm: slowRm });
+    await h.init();
+    const first = h.run(1, '0');
+    await vi.waitFor(() => expect(h.done(1)).toBeDefined());
+    // Grunt sends the next run the moment it sees done.
+    await h.run(2, '0');
+    expect(h.done(2)).toBeDefined();
+    expect(repliesFor(h, 2).filter((m) => m.type === 'failed')).toEqual([]);
+    clearing.resolve();
+    await first;
+    expect(existsSync(`${h.tmpRoot}/1`)).toBe(false);
+  });
+
+  it('a runtime that fails to start after a close already came in does not report fatal as well', async () => {
+    const starting = deferred();
+    const h = harness({ initialize: vi.fn(() => starting.promise) });
+    const initialising = h.init();
+    await vi.waitFor(() => expect(h.runtime.initialize).toHaveBeenCalled());
+    await h.receive({ type: 'close' });
+    starting.reject(new Error('too late'));
+    await initialising;
+    expect(h.sent).toEqual([]);
+    expect(h.exits).toEqual([0]);
   });
 
   it('takes the next run once the last one is done, even with the same id', async () => {

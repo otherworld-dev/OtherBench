@@ -147,6 +147,8 @@ export function createAgent(deps) {
       env.TMPDIR = next.rt;
       await runtime.initialize(config(next, next.allowedHosts), ask);
     } catch (err) {
+      // A close that arrived while the runtime was starting has already exited us.
+      if (phase !== 'initialising') return;
       phase = 'dead';
       send({ type: 'fatal', message: errorMessage(err) });
       exit(1);
@@ -298,9 +300,12 @@ export function createAgent(deps) {
       } catch {
         // best effort
       }
+      // Grunt sends the next run as soon as it sees done, and clearing a big
+      // $TMPDIR (pip and npm caches) can be slow: the agent is free before that.
+      // The next run has another id, so this rm can't touch its folder.
+      active = null;
       // Only this run's folder: the runtime's sockets in rt live as long as the agent.
       await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
-      active = null;
       release();
     }
   }
