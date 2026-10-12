@@ -80,9 +80,19 @@ function clearSessionCookie(c: Context): void {
  * and the streams forwarded from a paired machine) closes when its session
  * ends: cancelling the original body runs `sseStream`'s cleanup.
  */
-function endWithSession(c: Context, sessions: SessionStore, id: string): void {
+function endWithSession(c: Context, remote: RemoteAccess, id: string): void {
+  const sessions: SessionStore = remote.sessions;
   const res = c.res;
   if (!res.body || !(res.headers.get('Content-Type') ?? '').startsWith('text/event-stream')) return;
+  // The session may have ended while the handler was still opening the stream
+  // (a forwarded stream awaits a fetch first); a listener added now would
+  // never fire, so refuse the stream instead.
+  const session = sessions.get(id);
+  if (!session || session.epoch !== remote.passwords.epoch()) {
+    void res.body.cancel().catch(() => {});
+    c.res = c.json({ error: SIGN_IN }, 401);
+    return;
+  }
   const reader = res.body.getReader();
   let unsubscribe: () => void = () => {};
   const body = new ReadableStream<Uint8Array>({
@@ -146,7 +156,7 @@ export function authGate({ token, remote }: AuthOptions): MiddlewareHandler {
       const found = sessionFromCookie(c, remote);
       if (found) {
         await next();
-        endWithSession(c, remote.sessions, found.id);
+        endWithSession(c, remote, found.id);
         return;
       }
       if (getCookie(c, SESSION_COOKIE, 'host') !== undefined && cookieSiteAllowed(c)) clearSessionCookie(c);
@@ -214,7 +224,8 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
       return c.json({ mode: 'token', signedIn: tokenMatches(c.req.header('Authorization'), token) } satisfies AuthStatusBody);
     }
     const bearer = token !== null && tokenMatches(c.req.header('Authorization'), token);
-    const found = bearer ? null : sessionFromCookie(c, remote);
+    // Like the gate: a header present is judged alone, the cookie isn't tried.
+    const found = bearer || c.req.header('Authorization') !== undefined ? null : sessionFromCookie(c, remote);
     const body: AuthStatusBody = { mode: 'login', signedIn: bearer || found !== null, caDownload: remote.tls.mode === 'auto' };
     if (found) body.session = { expiresAt: found.session.expiresAt, remember: found.session.remember };
     if (body.signedIn) body.remote = { publicUrls: remote.publicOrigins, tls: publicTls(remote.tls), trustProxies: remote.trustProxies };

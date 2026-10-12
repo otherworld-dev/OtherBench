@@ -1,7 +1,8 @@
 import { rmSync, writeFileSync } from 'node:fs';
-import type { Hono } from 'hono';
+import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
+import { authGate } from '../../src/remote/auth.js';
 import { PasswordFile } from '../../src/remote/password.js';
 import { SESSION_MS } from '../../src/remote/sessions.js';
 import { FAST, from, makeContainer, PASSWORD, remoteFixture, type RemoteFixture } from './helpers.js';
@@ -182,6 +183,37 @@ describe('sign-in mode', () => {
   });
 });
 
+describe('a stream whose session ends while it is still opening', () => {
+  it('is answered 401 and its body cancelled, not left open for a signed-out device', async () => {
+    const cookie = await signIn();
+    let release!: () => void;
+    const opening = new Promise<void>((resolve) => (release = resolve));
+    let cancelled = false;
+    const slow = new Hono();
+    slow.use('*', authGate({ token: null, remote: fx.remote }));
+    slow.get('/stream', async () => {
+      await opening;
+      return new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } }
+      );
+    });
+
+    const pending = slow.request('/stream', { headers: { Cookie: cookie } }, from('10.0.0.7'));
+    await post('/api/auth/logout', cookie);
+    release();
+    const res = await pending;
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'Sign in to Grunt.' });
+    expect(cancelled).toBe(true);
+  });
+});
+
 describe('sign-in mode when the password file changes under the server', () => {
   it('ends every session within a second of "grunt password", and open streams at the next sweep', async () => {
     const cookie = await signIn();
@@ -224,6 +256,16 @@ describe('GET /api/auth/status', () => {
     const tokenApp = createApp(makeContainer(), { token: 'tok' });
     expect(await (await tokenApp.request('/api/auth/status')).json()).toEqual({ mode: 'token', signedIn: false });
     expect(await (await tokenApp.request('/api/auth/status', { headers: { Authorization: 'Bearer tok' } })).json()).toEqual({ mode: 'token', signedIn: true });
+  });
+
+  it('judges a bearer header alone, like the gate: a wrong one with a valid cookie is signed out', async () => {
+    app = createApp(makeContainer(), { remote: fx.remote, token: 'tok' });
+    const cookie = await signIn();
+
+    const wrong = await get('/api/auth/status', cookie, { Authorization: 'Bearer nope' });
+    expect(await wrong.json()).toEqual({ mode: 'login', signedIn: false, caDownload: false });
+    expect((await get('/api/chats', cookie, { Authorization: 'Bearer nope' })).status).toBe(401);
+    expect(((await (await get('/api/auth/status', undefined, { Authorization: 'Bearer tok' })).json()) as { signedIn: boolean }).signedIn).toBe(true);
   });
 
   it('in sign-in mode says signed out without a session, and gives the session and remote details with one', async () => {
