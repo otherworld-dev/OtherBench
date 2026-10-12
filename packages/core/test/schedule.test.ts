@@ -213,4 +213,15 @@ describe('unattendedWarnings', () => {
     expect(unattendedWarnings(policy({ fs: 'read', subagents: true }), 'claude_code', true)).toEqual([]);
     expect(unattendedWarnings(policy({ approvalMode: 'always_ask', subagents: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
   });
+
+  // Integration with the model's browser: it asks once per website, on both engines, with or without a folder.
+  it('says a new website is refused for a profile with the browser on, on either engine and in a clean chat', () => {
+    const line = "The browser asks before each new website, so using a site is refused unless a grant already covers it (an Always grant, or one for the schedule's own chat).";
+    expect(unattendedWarnings(policy({ browser: true }), 'anthropic', true)).toEqual([line]);
+    expect(unattendedWarnings(policy({ browser: true }), 'claude_code', true)).toEqual([line]);
+    expect(unattendedWarnings(policy({ browser: true }), 'claude_code', false)).toEqual([line]);
+    expect(unattendedWarnings(policy({ browser: false }), 'anthropic', true)).toEqual([]);
+    expect(unattendedWarnings(policy(), 'anthropic', true)).toEqual([]);
+    expect(unattendedWarnings(policy({ approvalMode: 'always_ask', browser: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
+  });
 });

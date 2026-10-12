@@ -193,7 +193,7 @@ export class PermissionBroker {
     // approves this reply's plan, anything that could change something is
     // refused, with no card. This only adds refusals: an allowed call still
     // goes on to its grants or card below.
-    if (ctx.plan && !ctx.plan.approved && !allowedWhilePlanning(tool)) {
+    if (ctx.plan && !ctx.plan.approved && !allowedWhilePlanning(tool, args)) {
       return { kind: 'deny', reason: PLAN_REFUSAL, plan: true };
     }
 
@@ -660,11 +660,21 @@ export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
  * Whether a call may run while its reply's plan is still unapproved (spec
  * 2026-10-12-thread-cards-design §2): Grunt's own thread, artifact and
  * recall tools; read-risk fs and MCP tools; and Claude Code's file-read,
- * web and internal tools. Everything else, including any source added
- * later, is refused: the default is false on purpose.
+ * web and internal tools; and the browser's reads of the page that is already
+ * open. Everything else, including any source added later, is refused: the
+ * default is false on purpose.
  */
-export function allowedWhilePlanning(tool: ToolSpec): boolean {
+export function allowedWhilePlanning(tool: ToolSpec, args?: unknown): boolean {
   switch (tool.source) {
+    // The browser (spec 2026-10-12-model-browser-design): reading the open
+    // page (`snapshot`, `scroll`) and closing the browser change nothing. By
+    // command name, never by declared risk, as the ask-on-mutate read pass
+    // does. Everything that changes a page or sends something to a site is
+    // refused: `click`, `type`, `select`, `press`, `back`, and `open` too (a
+    // request to an address the model chose, which can carry anything in its
+    // query). A call with no command, or one Grunt doesn't know, is refused.
+    case 'browser':
+      return BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '');
     case 'thread':
     case 'artifact':
     case 'recall':

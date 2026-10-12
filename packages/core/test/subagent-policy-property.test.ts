@@ -30,6 +30,8 @@ function rng(seed: number): () => number {
 const SERVERS = ['srv-1', 'srv-2', 'srv-3'];
 const SERVER_NAMES = new Map([['srv-1', 'GitHub'], ['srv-2', 'Notes'], ['srv-3', 'Slack']]);
 const HOST_POOL = ['pypi.org', 'PyPI.org', 'github.com', 'registry.npmjs.org', '*.example.com', 'api.example.com', 'internal.example.com:443', 'files.pythonhosted.org'];
+/** Sites a profile may block for the browser; the browser calls below use the first two and a site nobody blocks. */
+const BLOCK_POOL = ['ads.test', 'Tracker.Example.', 'casino.test', 'social.test'];
 const PARENT = 'p-parent';
 const CHOSEN = 'p-chosen';
 
@@ -46,6 +48,7 @@ function randomPolicy(next: () => number): ToolPolicy {
   };
   const runs = pick([undefined, 'host', 'sandbox', 'sandbox'] as const);
   const hosts = pick([undefined, undefined, 'list', 'empty'] as const);
+  const blocked = pick([undefined, undefined, 'list', 'empty'] as const);
   return {
     fs: pick<FsMode>(['off', 'read', 'readwrite', 'readwrite']),
     shell: next() < 0.7,
@@ -56,6 +59,8 @@ function randomPolicy(next: () => number): ToolPolicy {
     ...optional('artifacts'),
     ...optional('recall'),
     ...optional('subagents'),
+    ...optional('browser'),
+    ...(blocked === undefined ? {} : { browserBlockedHosts: blocked === 'empty' ? [] : subset(BLOCK_POOL) }),
     ...(runs === undefined ? {} : { shellRuns: runs }),
     ...(hosts === undefined ? {} : { sandboxHosts: hosts === 'empty' ? [] : subset(HOST_POOL) }),
   };
@@ -101,6 +106,22 @@ const CALLS: [ToolSpec, unknown][] = [
   [tool('ask_user', 'thread', 'read'), {}],
   [tool('propose_plan', 'thread', 'read'), { plan: 'x' }],
   [tool('update_todos', 'thread', 'read'), { todos: [] }],
+  // The browser, as the provider hands its calls to the broker: described, with the site as `host` and the command's own risk.
+  [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://example.com/', host: 'example.com' }],
+  [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://ads.test/', host: 'ads.test' }],
+  [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://x.tracker.example/', host: 'x.tracker.example' }],
+  [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://other.test/', host: 'other.test' }],
+  [tool('browser', 'browser', 'mutate'), { command: 'click', ref: 'e1', host: 'example.com', nav: 1, gen: 1 }],
+  [tool('browser', 'browser', 'mutate'), { command: 'type', ref: 'e2', text: 'hello', host: 'ads.test', nav: 1, gen: 1 }],
+  [tool('browser', 'browser', 'read'), { command: 'snapshot', host: 'example.com', nav: 1 }],
+  [tool('browser', 'browser', 'read'), { command: 'scroll', direction: 'down', host: 'x.tracker.example', nav: 1 }],
+  [tool('browser', 'browser', 'read'), { command: 'close', host: 'other.test' }],
+  // A read that calls itself a click, and a click that calls itself a read: the command decides, never the declared risk.
+  [tool('browser', 'browser', 'read'), { command: 'click', ref: 'e1', host: 'other.test', nav: 1, gen: 1 }],
+  [tool('browser', 'browser', 'mutate'), { command: 'snapshot', host: 'other.test', nav: 1 }],
+  // No site, and a local one: refused whatever the policy.
+  [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://example.com/' }],
+  [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'http://192.168.1.1/', host: '192.168.1.1' }],
 ];
 
 /** Every grant that could let one of CALLS through with no card, for one profile. */
@@ -126,6 +147,13 @@ function grantsFor(profileId: string, prefix: string): Grant[] {
     always('recall', 'recall', 'recall'),
     always('artifact', 'artifact', 'artifact'),
     always('subagent', 'subagent', 'subagent'),
+    always('browser-example', 'browser', 'browser', { host: 'example.com' }),
+    chat('browser-ads', 'browser', 'browser', { host: 'ads.test' }),
+    always('browser-tracker', 'browser', 'browser', { host: 'x.tracker.example' }),
+    chat('browser-other', 'browser', 'browser', { host: 'other.test' }),
+    // A network grant for a browser site and a browser grant for a sandbox host: neither may count for the other.
+    always('network-for-browser-site', 'sandbox_network', 'network', { host: 'other.test' }),
+    always('browser-for-network-host', 'browser', 'browser', { host: 'pypi.org' }),
   ];
 }
 
@@ -134,6 +162,7 @@ const RANK: Record<Decision['kind'], number> = { deny: 0, ask: 1, allow: 2 };
 const FS: Record<FsMode, number> = { off: 0, read: 1, readwrite: 2 };
 const hostsOf = (p: ToolPolicy): string[] => (p.sandboxHosts ?? [...DEFAULT_SANDBOX_HOSTS]).map((h) => h.trim().toLowerCase());
 const onHost = (p: ToolPolicy): boolean => p.shellRuns !== 'sandbox';
+const siteKey = (h: string): string => h.trim().toLowerCase().replace(/\.$/, '');
 
 /**
  * Field by field: is `sub` no wider than `other`? One check per ToolPolicy
@@ -153,6 +182,9 @@ const WITHIN: Record<keyof typeof SUBAGENT_POLICY_RULES, (sub: Required<ToolPoli
   artifacts: (sub) => sub.artifacts === false,
   recall: (sub, other) => !sub.recall || other.recall !== false,
   subagents: (sub) => sub.subagents === false,
+  browser: (sub, other) => !sub.browser || other.browser === true,
+  // The other way round from an allowlist: every site the other blocks, the sub-agent blocks too.
+  browserBlockedHosts: (sub, other) => (other.browserBlockedHosts ?? []).every((h) => sub.browserBlockedHosts.map(siteKey).includes(siteKey(h))),
 };
 
 /** The context of a sub-agent's call, built the way every engine builds it: under the PARENT's profile, whatever profile it runs as. */
@@ -204,6 +236,7 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
     const next = rng(4747);
     let allowed = 0;
     let checked = 0;
+    const browserAllowed = { grant: 0, read: 0 };
     for (let i = 0; i < CASES; i++) {
       const parent = randomPolicy(next);
       const chosen = randomPolicy(next);
@@ -235,6 +268,7 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
         if (spec.source === 'thread' || spec.source === 'subagent') expect(subKind, context).toBe('deny');
         if (subKind === 'allow') {
           allowed += 1;
+          if (spec.source === 'browser' && asSub.kind === 'allow') browserAllowed[asSub.grantedBy === 'grant' ? 'grant' : 'read'] += 1;
           expect(parentKind, context).toBe('allow');
           // And never on the strength of a grant that belongs to the profile it runs as.
           if (asSub.kind === 'allow' && asSub.grantId !== undefined) expect(asSub.grantId.startsWith('parent-'), context).toBe(true);
@@ -258,14 +292,20 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
     // The cases aren't all refusals: plenty of calls are allowed with no card, so the check above has teeth.
     expect(checked).toBe(CASES * CALLS.length);
     expect(allowed).toBeGreaterThan(CASES);
+    // The browser's calls among them, by a grant for the site and by the ask-on-mutate read pass.
+    expect(browserAllowed.grant).toBeGreaterThan(10);
+    expect(browserAllowed.read).toBeGreaterThan(10);
   });
 
   it('the grants of the profile a sub-agent runs as never count, of any scope or kind; the same grants under the parent do', () => {
-    const open: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [...SERVERS], approvalMode: 'always_ask' };
+    const open: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [...SERVERS], approvalMode: 'always_ask', browser: true };
     const r = subagentPolicy(open, open, {}, SERVER_NAMES);
     if (!r.ok) throw new Error(r.message);
     const ctx = subagentContext(() => 0.5);
-    const gated = CALLS.filter(([spec]) => !['thread', 'subagent', 'artifact', 'agent', 'shell'].includes(spec.source));
+    // A browser call for no site, or for a local one, is refused whatever grants there are.
+    const refusedOutright = (args: unknown): boolean => [undefined, '192.168.1.1'].includes((args as { host?: string }).host);
+    const gated = CALLS.filter(([spec, args]) => !['thread', 'subagent', 'artifact', 'agent', 'shell'].includes(spec.source) && !(spec.source === 'browser' && refusedOutright(args)));
+    expect(gated.filter(([spec]) => spec.source === 'browser').length).toBeGreaterThan(8);
 
     const chosenOnly = new InMemoryStore();
     for (const g of grantsFor(CHOSEN, 'chosen')) chosenOnly.grants.create(g);

@@ -176,7 +176,7 @@ describe('subagentPolicy and the sandbox', () => {
   });
 
   it('writes out every ToolPolicy field, with a rule for each', () => {
-    const fields = ['agentMcp', 'agentWeb', 'approvalMode', 'artifacts', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
+    const fields = ['agentMcp', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
     expect(Object.keys(SUBAGENT_POLICY_RULES).sort()).toEqual(fields);
     for (const [parent, chosen] of [[policy(), policy()], [withShell('sandbox'), withShell('none')], [policy({ fs: 'off', mcpServerIds: [] }), policy({ approvalMode: 'always_ask' })]] as const) {
       const got = narrowed(parent, chosen);
@@ -199,9 +199,9 @@ describe('subagentPolicy and the sandbox', () => {
     expect(narrowed(open, open)).toMatchObject({ agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: true });
     // A locked-down parent gets nothing from a wide-open profile.
     const locked = policy({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', recall: false });
-    expect(narrowed(locked, { ...open, shellRuns: 'sandbox', sandboxHosts: ['evil.example.com'] })).toEqual({
+    expect(narrowed(locked, { ...open, shellRuns: 'sandbox', sandboxHosts: ['evil.example.com'], browser: true })).toEqual({
       fs: 'off', shell: false, shellRuns: 'sandbox', sandboxHosts: [], mcpServerIds: [], approvalMode: 'always_ask',
-      agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: false,
+      agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: false, browser: false, browserBlockedHosts: [],
     });
   });
 
@@ -238,6 +238,56 @@ describe('subagentPolicy and the sandbox', () => {
         expect(effective(a)).toContain(h.toLowerCase());
         expect(effective(b)).toContain(h.toLowerCase());
       }
+    }
+  });
+});
+
+describe('subagentPolicy and the browser', () => {
+  const narrowed = (parent: ToolPolicy, chosen: ToolPolicy): ToolPolicy => {
+    const got = subagentPolicy(parent, chosen);
+    if (!got.ok) throw new Error(got.message);
+    return got.policy;
+  };
+  const browsing = (blocked?: string[]): ToolPolicy => policy({ browser: true, ...(blocked ? { browserBlockedHosts: blocked } : {}) });
+
+  it('gets the browser only when both the parent and the chosen profile have it on', () => {
+    const states: (boolean | undefined)[] = [true, false, undefined];
+    for (const parent of states) for (const chosen of states) {
+      const got = narrowed(policy(parent === undefined ? {} : { browser: parent }), policy(chosen === undefined ? {} : { browser: chosen }));
+      expect(got.browser, `parent ${String(parent)}, chosen ${String(chosen)}`).toBe(parent === true && chosen === true);
+    }
+    // Never from the chosen profile alone, and never from a value that isn't exactly true.
+    expect(narrowed(policy(), browsing()).browser).toBe(false);
+    expect(narrowed(browsing(), policy()).browser).toBe(false);
+    expect(narrowed({ ...browsing(), browser: 'yes' as never }, browsing()).browser).toBe(false);
+    expect(narrowed(browsing(), { ...browsing(), browser: 1 as never }).browser).toBe(false);
+  });
+
+  it('blocks every site either profile blocks: the union, always written out', () => {
+    const blocked = (parent: ToolPolicy, chosen: ToolPolicy): string[] | undefined => narrowed(parent, chosen).browserBlockedHosts;
+    expect(blocked(browsing(['ads.test', 'tracker.example']), browsing(['casino.test', 'ads.test']))).toEqual(['ads.test', 'tracker.example', 'casino.test']);
+    expect(blocked(browsing(['ads.test']), browsing())).toEqual(['ads.test']);
+    expect(blocked(browsing(), browsing(['casino.test']))).toEqual(['casino.test']);
+    expect(blocked(browsing(), browsing())).toEqual([]);
+    // One entry per site, whatever its spelling.
+    expect(blocked(browsing(['Ads.Test.', 'bücher.example']), browsing(['ads.test', 'xn--bcher-kva.example', 'other.test']))).toEqual(['Ads.Test.', 'bücher.example', 'other.test']);
+    // Written out even when the browser is off for the sub-agent, so nothing is left to a default.
+    expect(blocked(policy({ browserBlockedHosts: ['ads.test'] }), browsing(['casino.test']))).toEqual(['ads.test', 'casino.test']);
+  });
+
+  it('is never narrower than either list, for every pair of lists', () => {
+    const lists: (string[] | undefined)[] = [undefined, [], ['ads.test'], ['ads.test', 'casino.test'], ['tracker.example'], ['ADS.test.']];
+    for (const a of lists) for (const b of lists) {
+      const got = (narrowed(browsing(a), browsing(b)).browserBlockedHosts ?? []).map((h) => h.toLowerCase().replace(/\.$/, ''));
+      for (const h of [...(a ?? []), ...(b ?? [])]) expect(got, `${JSON.stringify(a)} + ${JSON.stringify(b)}`).toContain(h.toLowerCase().replace(/\.$/, ''));
+    }
+  });
+
+  it("turns the browser off when either blocked list can't be read: a list that isn't one can't be added to the other", () => {
+    for (const bad of ['ads.test', 42, { 0: 'ads.test' }, ['ads.test', 7]] as unknown[]) {
+      const broken = { ...browsing(), browserBlockedHosts: bad as never };
+      expect(narrowed(broken, browsing(['casino.test'])), JSON.stringify(bad)).toMatchObject({ browser: false, browserBlockedHosts: ['casino.test'] });
+      expect(narrowed(browsing(['casino.test']), broken), JSON.stringify(bad)).toMatchObject({ browser: false, browserBlockedHosts: ['casino.test'] });
     }
   });
 });

@@ -137,6 +137,75 @@ describe('plan mode in the broker', () => {
     expect(b.decide(tool('run_command', 'sandbox', 'execute'), { command: 'touch x' }, sandboxed, asSubagent())).toEqual({ kind: 'allow', grantedBy: 'sandbox' });
   });
 
+  // Integration with the model's browser: a planning reply may read the page
+  // that is already open, and nothing else.
+  it('lets a planning reply read the open page, and refuses opening one and every change to it, with no card and whatever grants there are', () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    const browser = (risk: RiskClass = 'mutate'): ToolSpec => tool('browser', 'browser', risk);
+    const on = (o: Partial<ToolPolicy> = {}): ToolPolicy => policy({ browser: true, ...o });
+    // An Always grant for the site, which would let every call below through with no card.
+    store.grants.create({ id: 'g-site', chatId: null, profileId: 'p1', toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com' }, expiresAt: null });
+    const page = { host: 'example.com', nav: 1 };
+    const changes: Record<string, unknown>[] = [
+      { command: 'open', url: 'https://example.com/?q=secret', host: 'example.com' },
+      { command: 'click', ref: 'e1', gen: 1, ...page },
+      { command: 'click', ref: 'e1', double: true, gen: 1, ...page },
+      { command: 'type', ref: 'e2', text: 'hello', gen: 1, ...page },
+      { command: 'type', ref: 'e2', text: 'hello', submit: true, gen: 1, ...page },
+      { command: 'select', ref: 'e3', values: ['Red'], gen: 1, ...page },
+      { command: 'press', key: 'Enter', ...page },
+      { command: 'back', ...page },
+      // No command, and one Grunt doesn't know: refused too.
+      { ...page },
+      { command: 'download', ...page },
+    ];
+    const reads: Record<string, unknown>[] = [{ command: 'snapshot', ...page }, { command: 'scroll', direction: 'down', ...page }, { command: 'close', host: 'example.com' }];
+    for (const args of changes) expect(allowedWhilePlanning(browser(), args), JSON.stringify(args)).toBe(false);
+    for (const args of reads) expect(allowedWhilePlanning(browser(), args), JSON.stringify(args)).toBe(true);
+    // By command name, never by declared risk: a click that calls itself a read is still refused.
+    expect(allowedWhilePlanning(browser('read'), { command: 'click', ref: 'e1', ...page })).toBe(false);
+    expect(allowedWhilePlanning(browser('read'))).toBe(false);
+
+    for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+      for (const args of changes) {
+        for (const risk of ['mutate', 'read'] as const) {
+          expect(b.decide(browser(risk), args, on({ approvalMode }), planning()), `${approvalMode}, ${JSON.stringify(args)}`).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+        }
+      }
+    }
+    expect(b.pendingCount).toBe(0);
+    // Reads go on to what the browser's own rules decide: no card under "ask on changes", the site's grant under "always ask".
+    for (const args of reads) {
+      expect(b.decide(browser('read'), args, on(), planning()), JSON.stringify(args)).toEqual({ kind: 'allow', grantedBy: 'auto_read' });
+      expect(b.decide(browser('read'), args, on({ approvalMode: 'always_ask' }), planning()), JSON.stringify(args)).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g-site' });
+    }
+    // Plan mode only adds refusals: a blocked or local site and a switched-off browser are still refused as themselves.
+    expect(b.decide(browser('read'), { command: 'snapshot', host: '192.168.1.1', nav: 1 }, on(), planning())).toMatchObject({ kind: 'deny', reason: expect.stringContaining('local or private') });
+    expect(b.decide(browser('read'), { command: 'snapshot', ...page }, on({ browserBlockedHosts: ['example.com'] }), planning())).toMatchObject({ kind: 'deny', reason: 'example.com is blocked for this profile.' });
+    expect(b.decide(browser('read'), { command: 'snapshot', ...page }, policy(), planning())).toEqual({ kind: 'deny', reason: 'The browser is turned off for this profile.' });
+    // A site with no grant: a read under "always ask" raises its card as usual.
+    const ask = b.decide(browser('read'), { command: 'snapshot', host: 'other.test', nav: 1 }, on({ approvalMode: 'always_ask' }), planning());
+    expect(ask.kind).toBe('ask');
+    if (ask.kind === 'ask') b.discard(ask.request.id);
+
+    // Once the plan is approved the changes are back to the site's grant.
+    const gate = createPlanGate();
+    gate.approve();
+    for (const args of changes.slice(0, 8)) {
+      expect(b.decide(browser(), args, on(), ctx({ plan: gate })), JSON.stringify(args)).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g-site' });
+    }
+  });
+
+  it("holds a sub-agent's browser to its parent's plan gate too", () => {
+    const b = new PermissionBroker(new InMemoryStore());
+    const asSubagent = ctx({ plan: createPlanGate(), subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'p1' } });
+    const on = policy({ browser: true });
+    expect(b.decide(tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://example.com/', host: 'example.com' }, on, asSubagent)).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+    expect(b.decide(tool('browser', 'browser', 'read'), { command: 'snapshot', host: 'example.com', nav: 1 }, on, asSubagent)).toEqual({ kind: 'allow', grantedBy: 'auto_read' });
+    expect(b.pendingCount).toBe(0);
+  });
+
   it('fails closed for a source it has never heard of', () => {
     expect(allowedWhilePlanning(tool('teleport', 'teleport' as ToolSource, 'read'))).toBe(false);
   });
