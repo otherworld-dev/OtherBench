@@ -153,6 +153,10 @@ export function profilesRoutes(container: Container): Hono {
     const chatIds = container.store.chats.list().filter((chat) => chat.profileId === id).map((chat) => chat.id);
     container.store.profiles.delete(id);
     clearMemoryProfile(container.store, id);
+    // Best effort, and before the sweep below, which can fail the request on purpose.
+    for (const chatId of chatIds) {
+      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
+    }
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
     // in turn cascades THEIR attachment rows away -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see
@@ -160,9 +164,6 @@ export function profilesRoutes(container: Container): Hono {
     // request; a programming/wiring error is NOT swallowed and surfaces as
     // a 500 on purpose.
     await sweepOrphanedBlobs(container.store, container.blobStore);
-    for (const chatId of chatIds) {
-      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
-    }
     return c.body(null, 204);
   });
 

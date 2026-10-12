@@ -111,14 +111,36 @@ describe('/api/sandbox', () => {
     expect((await ok.json()).packages).toEqual(['ffmpeg', 'pandoc', 'g++']);
     for (const [packages, message] of [
       ['ffmpeg', '"packages" must be an array of strings.'],
-      [['rm -rf /'], `"packages": "rm -rf /" isn't a Debian package name.`],
-      [['-y'], `"packages": "-y" isn't a Debian package name.`],
+      [['rm -rf /'], '"rm -rf /" is not an apt package name.'],
+      [['-y'], '"-y" is not an apt package name.'],
+      [['foo-'], '"foo-" is not an apt package name.'],
+      [['x.deb'], '"x.deb" is not an apt package name.'],
+      [['a:b'], '"a:b" is not an apt package name.'],
       [Array.from({ length: 51 }, (_, i) => `p${i}`), '"packages" may list at most 50 packages.'],
     ] as const) {
       const res = await send(c, 'PUT', '/api/sandbox/packages', { packages });
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: message });
     }
+  });
+
+  it('answers 400, not 500, to a body that is not an object with packages', async () => {
+    const c = makeContainer(new FakeSandbox({ ready: true }));
+    for (const body of [null, [], 'x', 5, {}]) {
+      const res = await send(c, 'PUT', '/api/sandbox/packages', body);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: '"packages" must be an array of strings.' });
+    }
+    const notJson = await createApp(c).request('/api/sandbox/packages', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{nope' });
+    expect(notJson.status).toBe(400);
+  });
+
+  it("answers 400 when the sandbox itself refuses a package name", async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    sandbox.setPackages = () => Promise.reject(new SandboxError('bad_package', '"zz" is not an apt package name.'));
+    const res = await send(makeContainer(sandbox), 'PUT', '/api/sandbox/packages', { packages: ['zz'] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: '"zz" is not an apt package name.' });
   });
 
   it('is 404 when this server has no sandbox', async () => {
@@ -152,6 +174,23 @@ describe('deleting chats releases their sandbox', () => {
     const c = makeContainer(sandbox);
     expect((await send(c, 'DELETE', '/api/profiles/profile-1')).status).toBe(204);
     expect(sandbox.released).toEqual(['chat-1']);
+  });
+
+  it('releases before the orphan-blob sweep, so a sweep that fails the request leaves no sandbox behind', async () => {
+    for (const [path, chats] of [['/api/chats/chat-1', ['chat-1']], ['/api/profiles/profile-1', ['chat-1']]] as const) {
+      const sandbox = new FakeSandbox({ ready: true });
+      const c = makeContainer(sandbox);
+      // A wiring error (no root), which the sweep deliberately lets through as a 500.
+      c.blobStore = {} as never;
+      const err = console.error;
+      console.error = () => undefined;
+      try {
+        expect((await send(c, 'DELETE', path)).status).toBe(500);
+      } finally {
+        console.error = err;
+      }
+      expect(sandbox.released).toEqual(chats);
+    }
   });
 
   it('still deletes when releasing fails', async () => {

@@ -1,22 +1,20 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { isSandboxError, type Sandbox } from '@grunt/core/ports/sandbox.js';
+import { isAptPackageName, notAnAptPackageName } from '@grunt/sandbox/setup.js';
 import type { Container } from '../container.js';
 
 const MAX_PACKAGES = 50;
-/** A Debian package name (Debian policy 5.6.1), optionally with an :arch. */
-const PACKAGE_NAME = /^[a-z0-9][a-z0-9+.-]{0,99}(:[a-z0-9-]+)?$/;
 
-/** `PUT /api/sandbox/packages`'s list: trimmed, de-duplicated, each a package name. */
+/** `PUT /api/sandbox/packages`'s list: trimmed, de-duplicated, each an apt package name by the one rule setup itself applies. */
 export function parsePackages(value: unknown): string[] {
   if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
     throw new HTTPException(400, { message: '"packages" must be an array of strings.' });
   }
   const packages = [...new Set(value.map((v) => v.trim()).filter((v) => v.length > 0))];
   if (packages.length > MAX_PACKAGES) throw new HTTPException(400, { message: `"packages" may list at most ${MAX_PACKAGES} packages.` });
-  for (const p of packages) {
-    if (!PACKAGE_NAME.test(p)) throw new HTTPException(400, { message: `"packages": "${p}" isn't a Debian package name.` });
-  }
+  const bad = packages.find((p) => !isAptPackageName(p));
+  if (bad !== undefined) throw new HTTPException(400, { message: notAnAptPackageName(bad) });
   return packages;
 }
 
@@ -25,12 +23,12 @@ function sandboxOf(container: Container): Sandbox {
   return container.sandbox;
 }
 
-/** A SandboxError (busy, unsupported, ...) is a 409 with its message. */
+/** A SandboxError (busy, unsupported, ...) is a 409 with its message; a bad package name a 400. */
 async function refusing<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (err) {
-    if (isSandboxError(err)) throw new HTTPException(409, { message: err.message });
+    if (isSandboxError(err)) throw new HTTPException(err.code === 'bad_package' ? 400 : 409, { message: err.message });
     throw err;
   }
 }
@@ -63,7 +61,9 @@ export function sandboxRoutes(container: Container): Hono {
   });
 
   app.put('/packages', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { packages?: unknown };
+    // Anything but a JSON object (a bad body, null, an array, a string) has no "packages".
+    const raw: unknown = await c.req.json().catch(() => null);
+    const body = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as { packages?: unknown }) : {};
     const packages = parsePackages(body.packages);
     const sandbox = sandboxOf(container);
     await refusing(() => sandbox.setPackages(packages));
