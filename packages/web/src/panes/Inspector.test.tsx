@@ -554,6 +554,15 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByText(/npm test/)).toBeInTheDocument();
   });
 
+  it('shows which live artifact call a live grant is for', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g4', chatId: 'chat-1', profileId: 'p1', toolName: 'mcp__Live__lookup', source: 'mcp', scope: 'chat', constraint: { live: { artifactId: 'art', callId: 'value', hash: 'h' } }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = await within(grantsSection()).findByTestId('grant-g4');
+    expect(row).toHaveTextContent('this chat · live artifact call value');
+  });
+
   it('shows an honest empty state with no chat selected, and never calls the API', () => {
     render(<Inspector chat={null} profile={null} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(grantsSection()).getByText('No chat selected.')).toBeInTheDocument();
@@ -578,6 +587,13 @@ describe('Inspector audit trail', () => {
     expect(items[0]).toHaveTextContent('run_command');
     expect(items[1]).toHaveTextContent('write_file');
     expect(list).not.toHaveTextContent('[redacted]'); // the redaction happened server-side; this just must not defeat it by rendering raw args
+  });
+
+  it('labels a live artifact call', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'l1', chatId: 'chat-1', messageId: 'm1', toolName: 'mcp__Live__lookup', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'live:3aa2d2fd', createdAt: 1000 }]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    expect(within(within(list).getByTestId('audit-l1')).getByText('live artifact')).toHaveAttribute('title', 'live:3aa2d2fd');
   });
 
   it('shows short labels for how each call was authorised, keeping the raw value in a tooltip', async () => {
