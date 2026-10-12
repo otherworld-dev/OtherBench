@@ -110,17 +110,34 @@ describe('createLiveBridge', () => {
     expect(g.posted).toEqual([]);
   });
 
-  it('drops a result when the frame loaded another document while the call ran, even one that counts as its first', async () => {
+  it("answers a page that asked from its inline script when its own first load fires while the call runs", async () => {
     let finish!: (o: LiveOutcome) => void;
-    // The page asked before its first load event; a replacement document's load then makes the count 1 again.
     const h = harness({ call: () => new Promise<LiveOutcome>((r) => (finish = r)) });
     h.state.loads = 0;
     h.fromPage(ask('r1'));
     h.state.loads = 1;
     finish(OK);
+    await vi.waitFor(() => expect(h.posted).toHaveLength(1));
+    expect(h.posted).toEqual([{ grunt: 'live-result', v: 1, requestId: 'r1', ...OK }]);
+  });
+
+  it('drops a result when a second load follows a request made at the first, or two loads follow one made before any', async () => {
+    let finish!: (o: LiveOutcome) => void;
+    const h = harness({ call: () => new Promise<LiveOutcome>((r) => (finish = r)) });
+    h.fromPage(ask('r1'));
+    h.state.loads = 2;
+    finish(OK);
     await new Promise((r) => setTimeout(r, 0));
     expect(h.posted).toEqual([]);
-    expect(h.onOutcome).toHaveBeenCalledWith('value', OK);
+
+    const g = harness({ call: () => new Promise<LiveOutcome>((r) => (finish = r)) });
+    g.state.loads = 0;
+    g.fromPage(ask('r1'));
+    g.state.loads = 2;
+    finish(OK);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(g.posted).toEqual([]);
+    expect(g.onOutcome).toHaveBeenCalledWith('value', OK);
   });
 
   it('still answers a request made before the first load event when no document has loaded since', async () => {

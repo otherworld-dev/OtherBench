@@ -66,11 +66,16 @@ export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { 
   let outstanding = 0;
   /**
    * Only to the frame that asked, and only while it still shows the page that
-   * asked: no document has loaded since the request (a replacement's load
-   * would otherwise count as a "first" one) and it never went past one.
+   * asked: never after a second document load. A page that asks from its
+   * inline script asks at count 0 and its own first load then fires while the
+   * call runs (0 -> 1), so that still gets its answer; a page that asked at 1
+   * is answered only while the count is still 1. Residual: a page that
+   * navigates itself before its first load event could receive the reply in
+   * the new document, which is within the documented self-navigation residual.
    */
   const reply = (frame: HTMLIFrameElement, loadsAtAsk: number, requestId: string, outcome: LiveOutcome): void => {
-    if (opts.frame() !== frame || opts.loads() !== loadsAtAsk || loadsAtAsk > 1) return;
+    const now = opts.loads();
+    if (opts.frame() !== frame || now > 1 || (loadsAtAsk !== 0 && now !== loadsAtAsk)) return;
     frame.contentWindow?.postMessage({ grunt: 'live-result', v: 1, requestId, ...outcome }, '*');
   };
   return {
