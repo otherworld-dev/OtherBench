@@ -249,6 +249,27 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#run trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+    it('#run calls the offered run_command with the rest of the line, then reports its output', async () => {
+      const execute = vi.fn(async () => ({ command: 'uname -s', exitCode: 0, output: 'Linux\n', sandbox: true, cwd: '/mnt/e/ws' }));
+      const tool: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run uname -s\nthanks', { tools: [tool], workspaceRoot: '/ws' })));
+      expect(execute).toHaveBeenCalledWith({ command: 'uname -s' }, expect.objectContaining({ chatId: 'chat-1', workspaceRoot: '/ws' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'run_command', args: { command: 'uname -s' } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'run_command', isError: false }));
+      expect(text(events)).toBe('I ran it in the sandbox: Linux');
+    });
+
+    it('#run says so when the command did not run, or no run_command was offered', async () => {
+      const refused: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute: async () => ({ error: true, code: 'not_set_up', message: 'nope' }) };
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls', { tools: [refused] }))))).toMatch(/^The command didn't run: /);
+      const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls')));
+      expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'run_command', isError: true }));
+    });
+  });
+
   describe('#slow trigger', () => {
     it('streams exactly 20 chunks at 400ms each', async () => {
       const sleep = fakeSleep();
