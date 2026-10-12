@@ -22,15 +22,16 @@ export function browserCalls(messages: readonly CanonMessage[]): { messageId: st
 export function useBrowserAutoOpen(chatId: string | null, messages: readonly CanonMessage[], viewerOpen: boolean): void {
   const seen = useRef<{ chatId: string | null; ids: Set<string> }>({ chatId: null, ids: new Set() });
   const closedDuring = useRef(new Set<string>());
-  const wasOpen = useRef(viewerOpen);
+  const prev = useRef<{ chatId: string | null; open: boolean }>({ chatId, open: viewerOpen });
 
   useEffect(() => {
-    // The user closed the viewer: every reply running now keeps it closed.
-    if (wasOpen.current && !viewerOpen) {
+    // Switching chats isn't the user closing the viewer: `viewerOpen` is per chat.
+    if (prev.current.chatId === chatId && prev.current.open && !viewerOpen) {
+      // The user closed the viewer: every reply running now keeps it closed.
       for (const m of messages) if (m.status === 'streaming') closedDuring.current.add(m.id);
     }
-    wasOpen.current = viewerOpen;
-  }, [viewerOpen, messages]);
+    prev.current = { chatId, open: viewerOpen };
+  }, [chatId, viewerOpen, messages]);
 
   useEffect(() => {
     if (chatId === null) return;

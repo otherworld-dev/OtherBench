@@ -6,9 +6,9 @@ import { apiUrl } from '../state/transport.js';
 /** A frame is shown only as plain base64 under the fixed inert type below, never anything else. */
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
-/** Control characters, line breaks, and the bidi and zero-width marks that can make text read differently from what it is. */
+/** Control characters, line breaks, and the bidi, zero-width, tag, variation-selector and Hangul-filler marks that can make text read differently from what it is. */
 // eslint-disable-next-line no-control-regex
-const HIDDEN = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]+/g;
+const HIDDEN = /[\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]+/gu;
 
 /** Page-derived text (the title, the address) as one plain line: React escapes it, this strips what escaping can't. */
 function oneLine(text: unknown): string {
@@ -28,7 +28,8 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
   useEffect(() => {
     setState(null);
     setFrame(null);
-    const show = (s: BrowserLiveState): void => {
+    const show = (s: BrowserLiveState | null | undefined): void => {
+      if (!s || typeof s !== 'object') return;
       setState(s);
       if (!s.open) setFrame(null);
     };

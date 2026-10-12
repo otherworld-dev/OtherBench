@@ -24,7 +24,7 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
   const browserUsed = useGruntStore((s) =>
     Object.values(s.messages).some((m) => m.chatId === chat.id && m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser'))
   );
-  const showingItem =viewer.mode === 'item' && current !== undefined;
+  const showingItem = viewer.mode === 'item' && current !== undefined;
 
   function go(): void {
     const value = address.trim();

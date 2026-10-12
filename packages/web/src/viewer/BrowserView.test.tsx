@@ -14,13 +14,19 @@ import { BrowserView } from './BrowserView.js';
 function fakeConnect() {
   let handlers: SseHandlers | null = null;
   const urls: string[] = [];
+  const closedUrls: string[] = [];
   const connect: SseConnect = (url, h) => {
     urls.push(url);
     handlers = h;
-    return { close: () => { handlers = null; } };
+    return {
+      close: () => {
+        closedUrls.push(url);
+        handlers = null;
+      },
+    };
   };
   const emit = (event: string, data: unknown) => act(() => handlers!.onEvent(event, JSON.stringify(data)));
-  return { connect, urls, emit, closed: () => handlers === null };
+  return { connect, urls, closedUrls, emit, closed: () => handlers === null };
 }
 
 afterEach(cleanup);
@@ -77,6 +83,37 @@ describe('BrowserView', () => {
     expect(screen.getByText('https://example.com/path <b>x</b>')).toBeInTheDocument();
     expect(screen.getByText('Paypal Login <i>now</i>')).toBeInTheDocument();
     expect(document.querySelector('b, i')).toBeNull();
+  });
+
+  it('strips tag characters, variation selectors and Hangul fillers from page text', () => {
+    const s = fakeConnect();
+    render(<BrowserView chatId="c1" connect={s.connect} />);
+    const tag = String.fromCodePoint(0xe0041, 0xe0042);
+    s.emit('hello', { open: true, url: `https://example.com/${tag}a\uFE0Fb`, title: `Log\u3164in${tag}` });
+    expect(screen.getByText('https://example.com/ab')).toBeInTheDocument();
+    expect(screen.getByText('Login')).toBeInTheDocument();
+  });
+
+  it('ignores a state event with no state', () => {
+    const s = fakeConnect();
+    render(<BrowserView chatId="c1" connect={s.connect} />);
+    s.emit('hello', { open: false });
+    s.emit('message', { type: 'state' });
+    expect(screen.getByText("The model hasn't opened a page in this chat.")).toBeInTheDocument();
+  });
+
+  it('closes its stream when it unmounts or is pointed at another chat', () => {
+    const s = fakeConnect();
+    const view = render(<BrowserView chatId="c1" connect={s.connect} />);
+    expect(s.closedUrls).toEqual([]);
+    view.rerender(<BrowserView chatId="c2" connect={s.connect} />);
+    expect(s.closedUrls).toHaveLength(1);
+    expect(s.closedUrls[0]).toMatch(/\/chats\/c1\/browser\/live$/);
+    expect(s.urls[1]).toMatch(/\/chats\/c2\/browser\/live$/);
+    view.unmount();
+    expect(s.closedUrls).toHaveLength(2);
+    expect(s.closedUrls[1]).toMatch(/\/chats\/c2\/browser\/live$/);
+    expect(s.closed()).toBe(true);
   });
 
   it('shows an error when closing fails', async () => {
