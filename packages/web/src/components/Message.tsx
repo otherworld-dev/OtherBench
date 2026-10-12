@@ -192,7 +192,7 @@ function renderParts(parts: Part[], ctx: RenderContext = NO_CONTEXT): JSX.Elemen
           replyStreaming={ctx.replyStreaming}
           awaitingApproval={ctx.pendingApprovals.some((r) => r.subagent?.callId === p.callId)}
         >
-          {renderParts(p.parts, ctx)}
+          {renderParts(p.parts ?? [], ctx)}
         </SubagentCard>
       );
       return;

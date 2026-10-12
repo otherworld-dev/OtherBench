@@ -184,6 +184,18 @@ describe('subagent events', () => {
     ]);
   });
 
+  it('ignores a malformed sub-agent event instead of folding it', () => {
+    const live = replayEvents(baseMessage(), emptyExtras, [start]).message;
+    const bad = [
+      { messageId: 'm1', type: 'subagent', callId: 7, event: { type: 'running' } },
+      { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'start', label: 1 } },
+      { messageId: 'm1', type: 'subagent', callId: 'c1', event: 'end' },
+      { messageId: 'm1', type: 'subagent', callId: 'c1' },
+    ] as unknown as TurnEvent[];
+    const { message } = replayEvents(live, emptyExtras, bad);
+    expect(message.parts).toBe(live.parts);
+  });
+
   it('replays a hello buffer of sub-agent events without duplicating the card', () => {
     const live = replayEvents(baseMessage(), emptyExtras, [start, delta]).message;
     const { message } = applyHelloBuffer(live, [start, delta, end], 'complete');

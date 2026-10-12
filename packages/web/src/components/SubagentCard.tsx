@@ -35,7 +35,12 @@ export interface SubagentCardProps {
 export function SubagentCard({ part, replyStreaming, awaitingApproval, children }: SubagentCardProps): JSX.Element {
   const status = subagentDisplayStatus(part.status, replyStreaming);
   const waiting = awaitingApproval && status === 'running';
-  const tokens = part.usage && (status === 'complete' || status === 'error') ? `${part.usage.tokensIn.toLocaleString()} in · ${part.usage.tokensOut.toLocaleString()} out` : null;
+  const usage = part.usage;
+  // A stored card is only as well-formed as the row it came from: show tokens only when both counts are there.
+  const tokens =
+    usage && typeof usage.tokensIn === 'number' && typeof usage.tokensOut === 'number' && (status === 'complete' || status === 'error')
+      ? `${usage.tokensIn.toLocaleString()} in · ${usage.tokensOut.toLocaleString()} out`
+      : null;
   return (
     <details data-testid="subagent-card" data-status={status} className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <summary className="cursor-pointer select-none">

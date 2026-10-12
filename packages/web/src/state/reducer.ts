@@ -2,7 +2,7 @@ import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part } from '@grunt/core/types/messages.js';
 import type { Usage } from '@grunt/core/types/usage.js';
-import { appendDelta, applySubagentEvent } from '@grunt/core/domain/parts.js';
+import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/domain/parts.js';
 
 /** Everything a single message accrues from its `TurnEvent`s that isn't part of `CanonMessage` itself. */
 export interface MessageExtras {
@@ -87,7 +87,9 @@ export function applyEventToMessage(
     case 'subagent':
       // The same fold the server checkpoints with (core domain/parts.ts), so a
       // live card and one rebuilt from the store agree. A hello replay starts
-      // from clean parts (applyHelloBuffer), so it never doubles a card.
+      // from clean parts (applyHelloBuffer), so it never doubles a card. A
+      // malformed event (a bad relay, a newer server) is ignored, not folded.
+      if (typeof event.callId !== 'string' || !isSubagentEvent(event.event)) return { message, extras };
       return { message: { ...message, parts: applySubagentEvent(message.parts, event.callId, event.event) }, extras };
     default:
       return { message, extras };

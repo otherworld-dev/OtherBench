@@ -22,8 +22,13 @@ describe('ApprovalPrompt', () => {
   afterEach(cleanup);
 
   it("names the sub-agent whose tool call is asking", () => {
-    render(<ApprovalPrompt request={request({ subagent: { callId: 'c1', label: 'First helper' } })} onResolve={vi.fn()} />);
-    expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Sub-agent: First helper');
+    render(<ApprovalPrompt request={request({ subagent: { callId: 'c1', label: 'First helper', parentProfileId: 'p-main' } })} onResolve={vi.fn()} />);
+    expect(screen.getByTestId('approval-subagent')).toHaveTextContent(/^Sub-agent: First helper$/);
+  });
+
+  it('says which profile a sub-agent runs as when it is not the reply\'s own', () => {
+    render(<ApprovalPrompt request={request({ subagent: { callId: 'c1', label: 'First helper', parentProfileId: 'p-main', profileName: 'Cheap' } })} onResolve={vi.fn()} />);
+    expect(screen.getByTestId('approval-subagent')).toHaveTextContent('Sub-agent: First helper (runs as Cheap)');
   });
 
   it("shows no sub-agent line for the reply's own call", () => {

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { Usage } from '@grunt/core/types/usage.js';
 import { Message } from './Message.js';
 
 function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
@@ -400,9 +401,17 @@ describe('Message sub-agent cards', () => {
   });
 
   it('says it needs your approval while one of its calls waits on a card', () => {
-    const request: ApprovalRequest = { id: 'r1', chatId: 'c1', messageId: 'm1', toolName: 'read_file', risk: 'read', source: 'fs', args: { path: 'a' }, summary: 'read_file(a)', subagent: { callId: 'call-1', label: 'Check the logs' } };
+    const request: ApprovalRequest = { id: 'r1', chatId: 'c1', messageId: 'm1', toolName: 'read_file', risk: 'read', source: 'fs', args: { path: 'a' }, summary: 'read_file(a)', subagent: { callId: 'call-1', label: 'Check the logs', parentProfileId: 'p' } };
     render(<Message message={base({ status: 'streaming', parts: [card({ status: 'running', usage: undefined })] })} pendingApprovals={[request]} onResolveApproval={vi.fn()} />);
     expect(screen.getByTestId('subagent-card')).toHaveTextContent('needs your approval');
+  });
+
+  it('renders a card with no parts and usage missing its token counts without crashing', () => {
+    const broken = { ...card({ usage: { tokensOut: 5 } as unknown as Usage }), parts: undefined } as unknown as Part;
+    render(<Message message={base({ parts: [broken] })} />);
+    const el = screen.getByTestId('subagent-card');
+    expect(el).toHaveTextContent('done');
+    expect(el).not.toHaveTextContent(/ in · /);
   });
 
   it('shows a failed card with its error, and a refused subagent call with no card in the tool group', () => {

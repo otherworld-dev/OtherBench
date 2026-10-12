@@ -116,6 +116,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
       {request.subagent && (
         <p data-testid="approval-subagent" className="text-xs text-[var(--text-muted)]">
           Sub-agent: {request.subagent.label}
+          {request.subagent.profileName !== undefined && ` (runs as ${request.subagent.profileName})`}
         </p>
       )}
       <div className="flex items-center gap-2">
