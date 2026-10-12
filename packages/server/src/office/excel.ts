@@ -384,6 +384,7 @@ export function readExcel(parts: OfficeParts, out: TextOut): void {
     wrote = true;
     return ok;
   };
+  const read = new Map<string, string>();
   for (const sheet of sheets) {
     const rel = rels.get(sheet.rid);
     if (!rel) {
@@ -394,6 +395,14 @@ export function readExcel(parts: OfficeParts, out: TextOut): void {
       if (!begin() || !out.line(`Sheet "${sheet.name}" is a chart.`)) return;
       continue;
     }
+    // Sheets that name one part are read once: the others say so (thousands of entries for one big part would otherwise be thousands of scans).
+    const key = rel.target.toLowerCase();
+    const first = read.get(key);
+    if (first !== undefined) {
+      if (!begin() || !out.line(`Sheet "${sheet.name.slice(0, 100)}" is the same part as sheet "${first.slice(0, 100)}".`)) return;
+      continue;
+    }
+    read.set(key, sheet.name);
     const xml = parts.text(rel.target);
     if (xml === null) {
       if (parts.stopped) return;

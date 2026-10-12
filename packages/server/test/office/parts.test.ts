@@ -27,18 +27,26 @@ describe('OfficeParts', () => {
     expect(parts.notes[0]).toMatch(/stopped reading/);
   });
 
-  it('counts a part toward the total once, however often and in whatever case it is asked for', () => {
-    const parts = new OfficeParts(
-      makeZip([{ name: 'A.xml', content: 'a'.repeat(600) }, { name: 'b.xml', content: 'b'.repeat(300) }]),
-      { ...OFFICE_LIMITS, maxTotalBytes: 1000 }
-    );
+  it('inflates a part once however often and in whatever case it is asked for', () => {
+    const parts = new OfficeParts(makeZip([{ name: 'A.xml', content: 'a'.repeat(600) }]), OFFICE_LIMITS);
     const first = parts.text('a.xml');
     expect(first).toHaveLength(600);
+    // The same string back, not a new inflation of the part.
     for (const name of ['a.xml', 'A.XML', 'A.xml', 'a.xMl']) expect(parts.text(name)).toBe(first);
-    // 600 + 300 fits; counted twice, 600 + 600 + 300 would not.
-    expect(parts.text('b.xml')).toHaveLength(300);
-    expect(parts.stopped).toBe(false);
     expect(parts.notes).toEqual([]);
+  });
+
+  it('charges a cached part to the total on every call, so repeated reads still reach the cap and stop', () => {
+    const parts = new OfficeParts(makeZip([{ name: 'a.xml', content: 'a'.repeat(300) }, { name: 'b.xml', content: 'b' }]), { ...OFFICE_LIMITS, maxTotalBytes: 1000 });
+    // 300 x 3 = 900 fits; the fourth read would come to 1200.
+    for (let i = 0; i < 3; i++) expect(parts.text(i % 2 ? 'A.XML' : 'a.xml')).toHaveLength(300);
+    expect(parts.stopped).toBe(false);
+    expect(parts.text('a.xml')).toBeNull();
+    expect(parts.stopped).toBe(true);
+    expect(parts.notes).toHaveLength(1);
+    expect(parts.notes[0]).toMatch(/stopped reading/);
+    // Once stopped, even a part not read before is refused.
+    expect(parts.text('b.xml')).toBeNull();
   });
 
   it('notes an over-cap part once, however often and in whatever case it is asked for', () => {

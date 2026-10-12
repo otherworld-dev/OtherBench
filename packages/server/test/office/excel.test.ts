@@ -270,6 +270,21 @@ describe('reading hostile Excel files', () => {
     expect(text.length).toBeLessThanOrEqual(CAP + 100);
   });
 
+  it('reads one multi-MB worksheet with no cells once, however many sheets name it', () => {
+    const count = 5000;
+    const sheets = Array.from({ length: count }, (_, i) => `<sheet name="n${i}" sheetId="${i + 1}" r:id="r${i}"/>`).join('');
+    // The rels spell the target differently (case) and name sheet1 either way.
+    const rels = Array.from({ length: count }, (_, i) => `<Relationship Id="r${i}" Type="x/worksheet" Target="worksheets/${i % 2 ? 'SHEET1' : 'sheet1'}.xml"/>`).join('');
+    const file = makeZip([
+      { name: 'xl/workbook.xml', content: `<workbook xmlns:r="r"><sheets>${sheets}</sheets></workbook>` },
+      { name: 'xl/_rels/workbook.xml.rels', content: `<Relationships>${rels}</Relationships>` },
+      { name: 'xl/worksheets/sheet1.xml', content: `<worksheet><sheetData>${'<a/>'.repeat(1_000_000)}</sheetData></worksheet>` },
+    ]);
+    const text = timed('5000 sheets, one 4 MB cell-free worksheet', () => extractOfficeText(file))!;
+    expect(text.length).toBeLessThanOrEqual(CAP + 100);
+    expect(text).toMatch(/^Sheet "n0" is empty\.\n\nSheet "n1" is the same part as sheet "n0"\./);
+  });
+
   it('reads 100 thousand unclosed cells in linear time', () => {
     const rows = `<row r="1">${'<c r="A1"><v>1'.repeat(100_000)}</row>`;
     expect(timed('unclosed cells', () => extractOfficeText(xlsx({ sheets: [{ name: 'S', rows }] })))).toBe('Sheet "S" is empty.');

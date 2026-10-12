@@ -26,7 +26,7 @@ const MAX_NOTE_CHARS = 300;
 export class OfficeParts {
   private readonly entries = new Map<string, ZipEntry>();
   private total = 0;
-  /** Each part's text (null: skipped), by lower-cased name. A part is inflated and counted toward the total once, however many times and in whatever case of its name it's asked for; what is held adds up to at most the bytes counted. */
+  /** Each part's text (null: over the part cap), by lower-cased name, so a part is inflated once however often and in whatever case of its name it is asked for. What is held is at most the bytes charged to the total. */
   private readonly read = new Map<string, string | null>();
   private readonly noted = new Set<string>();
   private readonly kept: string[] = [];
@@ -58,13 +58,14 @@ export class OfficeParts {
     return this.entries.has(name.toLowerCase());
   }
 
-  /** The part as UTF-8 text, or null when it's missing, over a cap (with a note), or reading has stopped. Read once: asking again, in any case, costs nothing. */
+  /** The part as UTF-8 text, or null when it's missing, over a cap (with a note), or reading has stopped. Every call is charged its size against the total cap, but a part is inflated once. */
   text(name: string): string | null {
     const key = name.toLowerCase();
     const entry = this.entries.get(key);
     if (!entry || this.stopped) return null;
     const cached = this.read.get(key);
-    if (cached !== undefined) return cached;
+    // An over-cap part was never read, so asking again costs nothing.
+    if (cached === null) return null;
     if (entry.size > this.limits.maxPartBytes) {
       this.note(`[Grunt skipped ${entry.name}: it's over the ${mb(this.limits.maxPartBytes)} Grunt reads from one part.]`);
       this.read.set(key, null);
@@ -75,7 +76,9 @@ export class OfficeParts {
       this.note(`[Grunt stopped reading here: this file's parts come to over ${mb(this.limits.maxTotalBytes)}.]`);
       return null;
     }
+    // Every call is charged, a cached part too, so what a reader scans over and over is still bounded by the total cap; only the inflating is saved.
     this.total += entry.size;
+    if (cached !== undefined) return cached;
     const text = readZipEntry(this.zip, entry, this.limits.maxPartBytes).toString('utf8');
     this.read.set(key, text);
     return text;
