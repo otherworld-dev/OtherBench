@@ -5,7 +5,7 @@ import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
 import { checkOfficeContent } from '@grunt/core/domain/office-spec.js';
 import { createPlanGate, PLAN_APPROVED, PLAN_REFUSAL, planChangesText, UNATTENDED_PLAN } from '@grunt/core/domain/thread-tools.js';
-import { MockChatEngine, OFFICE_SAMPLES } from '../src/mock-provider.js';
+import { LISTS_REPLY, MockChatEngine, OFFICE_SAMPLES } from '../src/mock-provider.js';
 
 function makeResolvedProfile(): ResolvedProfile {
   return {
@@ -580,6 +580,17 @@ describe('MockChatEngine', () => {
 
       await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall x', { tools })));
       expect(seen['recall']).toBeUndefined();
+    });
+  });
+
+  describe('#lists', () => {
+    it('replies with Markdown lists, line breaks kept (the word-chunked replies lose them)', async () => {
+      const engine = new MockChatEngine({ sleep: fakeSleep() });
+      const events = await drain(engine.stream(makeRequest('#lists')));
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      expect(text).toBe(LISTS_REPLY);
+      expect(text).toContain('\n3. Third step\n');
+      expect(events.at(-1)?.type).toBe('finish');
     });
   });
 

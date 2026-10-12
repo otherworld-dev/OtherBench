@@ -118,6 +118,29 @@ grunt.live('value', { key: 'b' }).then(
 );
 </script>`;
 
+/** `#lists`: a Markdown reply with its line breaks, which the word-chunked replies lose, for checking how lists render (e2e). */
+export const LISTS_REPLY = [
+  'Steps:',
+  '',
+  '1. First step',
+  '2. Second step',
+  '',
+  'Things:',
+  '',
+  '- Apples',
+  '  - Green ones',
+  '- Pears',
+  '',
+  'Carry on from:',
+  '',
+  '3. Third step',
+  '4. Fourth step',
+  '',
+  '- [ ] A task to do',
+  '- [x] A task done',
+  '',
+].join('\n');
+
 /** Crude word-count-as-token-count proxy -- good enough for a mock's "plausible usage". */
 function estimateTokens(text: string): number {
   return Math.max(1, text.split(/\s+/).filter(Boolean).length);
@@ -234,7 +257,7 @@ function firstHeading(snapshot: string): string | null {
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
- * testing. `#echo-system` -> the request's system prompt text (or "No system
+ * testing. `#lists` -> a Markdown reply of numbered, bulleted and task lists, line breaks kept. `#echo-system` -> the request's system prompt text (or "No system
  * prompt."), so an end-to-end test can check what a turn sent, e.g. project
  * memory. Anything else -> a canned ~30-token markdown reply.
  *
@@ -331,6 +354,17 @@ export class MockChatEngine implements ChatEngine {
 
     if (prompt.includes('#tool')) {
       yield* this.streamToolTurn(req, prompt, tokensIn);
+      return;
+    }
+
+    if (prompt.includes('#lists')) {
+      for (const line of LISTS_REPLY.split(/(?<=\n)/)) {
+        if (req.signal.aborted) return;
+        await this.sleep(10, req.signal);
+        yield { type: 'text-delta', text: line };
+      }
+      if (req.signal.aborted) return;
+      yield finishEvent(tokensIn, estimateTokens(LISTS_REPLY));
       return;
     }
 
