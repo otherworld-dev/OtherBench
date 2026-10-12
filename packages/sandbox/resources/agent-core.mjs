@@ -61,6 +61,9 @@ const CLOSE_MARGIN_MS = 500;
  *   send: (message: object) => void,
  *   mkdir: (path: string, options: object) => Promise<unknown>,
  *   rm: (path: string, options: object) => Promise<unknown>,
+ *   lstat: (path: string) => Promise<{ isSymbolicLink(): boolean, isDirectory(): boolean }>,
+ *   realpath: (path: string) => Promise<string>,
+ *   warn?: (message: string) => void,
  *   kill: (pid: number, signal: string) => void,
  *   exit: (code: number) => void,
  *   env: Record<string, string | undefined>,
@@ -89,10 +92,11 @@ const errorMessage = (err) => (err instanceof Error ? err.message : String(err))
 
 /** @param {AgentDeps} deps */
 export function createAgent(deps) {
-  const { runtime, spawn, send, mkdir, rm, kill, exit, env } = deps;
+  const { runtime, spawn, send, mkdir, rm, lstat, realpath, kill, exit, env } = deps;
+  const warn = deps.warn ?? (() => undefined);
   /** new -> initialising -> ready -> closing; dead after a failed init. */
   let phase = 'new';
-  /** Set once the runtime has started. @type {{ home: string, tmpRoot: string, rt: string, allowedHosts: string[] } | null} */
+  /** Set once the runtime has started; realTmpRoot is tmpRoot with every link resolved. @type {{ home: string, tmpRoot: string, realTmpRoot: string, rt: string, allowedHosts: string[] } | null} */
   let chat = null;
   /** The one command in flight. @type {{ id: number, controller: AbortController, done: Promise<void> } | null} */
   let active = null;
@@ -138,11 +142,18 @@ export function createAgent(deps) {
     }
     phase = 'initialising';
     const tmpRoot = msg.tmpRoot;
-    const next = { home: msg.home, tmpRoot, rt: `${tmpRoot}/rt`, allowedHosts: strings(msg.allowedHosts) };
+    const next = { home: msg.home, tmpRoot, realTmpRoot: tmpRoot, rt: `${tmpRoot}/rt`, allowedHosts: strings(msg.allowedHosts) };
     try {
       await mkdir(next.home, { recursive: true, mode: 0o700 });
       await mkdir(next.tmpRoot, { recursive: true, mode: 0o700 });
       await mkdir(next.rt, { recursive: true, mode: 0o700 });
+      // mkdir -p is happy with a link to a folder; the leaves must be real folders
+      // (this agent deletes below tmpRoot, and commands may write to home).
+      for (const folder of [next.home, next.tmpRoot, next.rt]) {
+        const st = await lstat(folder);
+        if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`${folder} is not a plain folder.`);
+      }
+      next.realTmpRoot = await realpath(next.tmpRoot);
       // Before initialize: the runtime puts its proxy sockets in os.tmpdir().
       env.TMPDIR = next.rt;
       await runtime.initialize(config(next, next.allowedHosts), ask);
@@ -159,6 +170,45 @@ export function createAgent(deps) {
     chat = next;
     phase = 'ready';
     send({ type: 'ready' });
+  }
+
+  /**
+   * Deletes a run's temp folder. The agent runs outside the inner sandbox and the
+   * command could write to that folder, so before deleting anything it checks that
+   * the path is still a real folder (not a link) that resolves to exactly
+   * ${tmpRoot}/${id}. Anything else is left alone and noted, never thrown: the
+   * run's reply must not depend on it. rm -r unlinks a link below the folder
+   * instead of following it; never swap in anything that dereferences.
+   * (A command that outlives its run could still swap the folder between this
+   * check and the delete; the delete then removes the link, not what it points at.)
+   * @param {string} tmp @param {number} id
+   * @returns {Promise<boolean>} false when something is still there
+   */
+  async function removeRunFolder(tmp, id) {
+    try {
+      let st;
+      try {
+        st = await lstat(tmp);
+      } catch (err) {
+        if (err && err.code === 'ENOENT') return true;
+        throw err;
+      }
+      if (st.isSymbolicLink() || !st.isDirectory()) {
+        warn(`Left ${tmp} alone: it is not a plain folder.`);
+        return false;
+      }
+      const real = await realpath(tmp);
+      const root = chat.realTmpRoot;
+      if (!(real.startsWith(root) && (real[root.length] === '/' || real[root.length] === '\\') && real.slice(root.length + 1) === String(id))) {
+        warn(`Left ${tmp} alone: it resolves to ${real}.`);
+        return false;
+      }
+      await rm(tmp, { recursive: true, force: true });
+      return true;
+    } catch (err) {
+      warn(`Could not remove ${tmp}: ${errorMessage(err)}`);
+      return false;
+    }
   }
 
   /** Spawns the wrapped command and collects its output under the cap. */
@@ -277,7 +327,11 @@ export function createAgent(deps) {
         runtime.updateConfig(config(chat, hosts));
         chat.allowedHosts = hosts;
       }
-      await mkdir(tmp, { recursive: true, mode: 0o700 });
+      // A leftover from an earlier agent of this chat goes first. Then mkdir without
+      // recursive, so a link (or anything) still at the path is an error instead of
+      // a folder the command would get write access to somewhere else.
+      if (!(await removeRunFolder(tmp, id))) throw new Error('The temp folder for this run is already taken.');
+      await mkdir(tmp, { mode: 0o700 });
       const custom = { filesystem: runFilesystem(strings(msg.readPaths), strings(msg.writePaths), strings(msg.denyWritePaths), tmp) };
       // The runtime reads this when it wraps, to set the command's own TMPDIR.
       env.CLAUDE_CODE_TMPDIR = tmp;
@@ -305,7 +359,7 @@ export function createAgent(deps) {
       // The next run has another id, so this rm can't touch its folder.
       active = null;
       // Only this run's folder: the runtime's sockets in rt live as long as the agent.
-      await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
+      await removeRunFolder(tmp, id);
       release();
     }
   }

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,9 +24,10 @@ type Wrapped = { argv: string[]; env: NodeJS.ProcessEnv };
  * agent's environment where the real one reads it: TMPDIR when it starts,
  * CLAUDE_CODE_TMPDIR each time it wraps a command.
  */
-function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm } = {}) {
+function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm; realpath?: typeof realpath } = {}) {
   const sent: Sent[] = [];
   const exits: number[] = [];
+  const warnings: string[] = [];
   const env: Record<string, string | undefined> = {};
   const tmpdirAtInitialize: Array<string | undefined> = [];
   const tmpdirAtWrap: Array<string | undefined> = [];
@@ -54,6 +55,9 @@ function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; k
     send: (m: Sent) => sent.push(m),
     mkdir,
     rm: fakes.rm ?? rm,
+    lstat,
+    realpath: fakes.realpath ?? realpath,
+    warn: (m: string) => warnings.push(m),
     kill: fakes.kill ?? ((pid: number, signal: string) => process.kill(Math.abs(pid), signal)),
     exit: (code: number) => exits.push(code),
     env,
@@ -64,6 +68,7 @@ function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; k
   return {
     sent,
     exits,
+    warnings,
     runtime,
     env,
     tmpdirAtInitialize,
@@ -301,7 +306,7 @@ describe('the sandbox agent', () => {
 
   it('ignores lines that are not messages', async () => {
     const h = harness();
-    const agent = createAgent({ runtime: h.runtime, spawn, send: () => undefined, mkdir, rm, kill: () => undefined, exit: () => undefined, env: {} });
+    const agent = createAgent({ runtime: h.runtime, spawn, send: () => undefined, mkdir, rm, lstat, realpath, kill: () => undefined, exit: () => undefined, env: {} });
     await agent.receive('not json');
     await agent.receive('{"type":"bogus"}');
     await agent.receive('42');
@@ -575,5 +580,86 @@ describe('the sandbox agent, input from the host', () => {
     await h.receive({ type: 'cancel', id: 9 });
     await h.receive({ type: 'cancel', id: 'x' });
     expect(h.sent).toEqual([{ type: 'ready' }]);
+  });
+});
+
+describe('the sandbox agent, links in the temp folder', () => {
+  // A command can write to its own temp folder, and the agent (outside the inner
+  // sandbox) deletes that folder afterwards: a link must never carry the delete
+  // anywhere else. (A 'junction' is the unprivileged link on Windows, a plain
+  // symlink elsewhere.)
+  let outside: string;
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), 'grunt-agent-outside-'));
+    writeFileSync(join(outside, 'keep.txt'), 'precious');
+  });
+  afterEach(() => rmSync(outside, { recursive: true, force: true }));
+  const survives = () => expect(readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('precious');
+  const linkTo = (target: string, at: string) => symlinkSync(target, at, 'junction');
+
+  it('deletes the run folder without following a link inside it', async () => {
+    const h = harness();
+    await h.init();
+    await h.run(1, `require("node:fs").symlinkSync(${JSON.stringify(outside)}, process.env.TMPDIR + "/link", "junction")`);
+    expect(h.done(1)).toMatchObject({ exitCode: 0 });
+    expect(existsSync(`${h.tmpRoot}/1`)).toBe(false);
+    survives();
+    expect(h.warnings).toEqual([]);
+  });
+
+  it('leaves alone a run folder the command swapped for a link', async () => {
+    const h = harness();
+    await h.init();
+    await h.run(
+      1,
+      `const fs = require("node:fs"); fs.rmSync(process.env.TMPDIR, { recursive: true }); fs.symlinkSync(${JSON.stringify(outside)}, process.env.TMPDIR, "junction")`
+    );
+    expect(h.done(1)).toMatchObject({ exitCode: 0 });
+    survives();
+    expect(h.warnings).toHaveLength(1);
+    expect(h.warnings[0]).toContain('not a plain folder');
+  });
+
+  it('leaves alone a run folder that resolves anywhere but directly under the temp root', async () => {
+    const h = harness({}, { realpath: (async (p: string) => (p.endsWith('/1') ? outside : realpath(p))) as typeof realpath });
+    await h.init();
+    await h.run(1, '0');
+    expect(h.done(1)).toMatchObject({ exitCode: 0 });
+    expect(existsSync(`${h.tmpRoot}/1`)).toBe(true);
+    survives();
+    expect(h.warnings).toHaveLength(1);
+    expect(h.warnings[0]).toContain('resolves to');
+  });
+
+  it('refuses a run whose folder is already a link, and touches nothing through it', async () => {
+    const h = harness();
+    await h.init();
+    linkTo(outside, `${h.tmpRoot}/1`);
+    await h.run(1, '0');
+    expect(h.sent.filter((m) => m.id === 1)).toEqual([{ type: 'failed', id: 1, message: 'The temp folder for this run is already taken.' }]);
+    expect(h.runtime.wrapWithSandboxArgv).not.toHaveBeenCalled();
+    survives();
+  });
+
+  it("clears a real folder an earlier agent of the chat left under the run's id", async () => {
+    const h = harness();
+    await h.init();
+    mkdirSync(`${h.tmpRoot}/1`);
+    writeFileSync(`${h.tmpRoot}/1/stale.txt`, 'old');
+    // Exits with the number of entries in its temp folder.
+    await h.run(1, 'process.exit(require("node:fs").readdirSync(process.env.TMPDIR).length)');
+    expect(h.done(1)).toMatchObject({ exitCode: 0 });
+    expect(existsSync(`${h.tmpRoot}/1`)).toBe(false);
+  });
+
+  it.each([['tmp'], ['home']])('refuses to start with the %s folder a link', async (which) => {
+    const h = harness();
+    linkTo(outside, join(dir, which));
+    await h.init();
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]).toMatchObject({ type: 'fatal' });
+    expect(h.exits).toEqual([1]);
+    expect(h.runtime.initialize).not.toHaveBeenCalled();
+    survives();
   });
 });
