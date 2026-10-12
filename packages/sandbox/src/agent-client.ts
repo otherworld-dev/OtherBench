@@ -10,6 +10,12 @@ export const READY_TIMEOUT_MS = 60_000;
  * 2 s) and then resets the runtime, so this has to leave it that time.
  */
 export const CLOSE_GRACE_MS = 5000;
+/**
+ * How long a cancelled command gets to report: the agent's SIGTERM, 2 s, SIGKILL
+ * and clean-up, with room to spare. Past it the agent is stopped, so a wedged
+ * one can't hold a run forever.
+ */
+export const CANCEL_WATCHDOG_MS = 5000;
 /** The longest the agent lets a command run, whatever a run asks for. */
 const AGENT_MAX_TIMEOUT_MS = 600_000;
 
@@ -30,7 +36,12 @@ export interface AgentRun {
   denyWritePaths: string[];
   allowedHosts: string[];
   signal: AbortSignal;
-  askHost(host: string, port: number | undefined): Promise<boolean>;
+  /**
+   * Whether the command may reach this host. `askSignal` aborts when the question
+   * stops mattering (the turn was stopped, or the command ended, or the agent
+   * went away): take the network card down then; any answer is ignored.
+   */
+  askHost(host: string, port: number | undefined, askSignal: AbortSignal): Promise<boolean>;
 }
 
 export interface AgentOutcome {
@@ -47,6 +58,9 @@ interface Current {
   output: string;
   bytes: number;
   truncated: boolean;
+  /** Questions about hosts that have been put to the run's askHost and not answered. */
+  asks: Set<AbortController>;
+  abortAsks(): void;
   resolve(outcome: AgentOutcome): void;
   reject(err: Error): void;
 }
@@ -91,7 +105,8 @@ export class AgentClient {
     private readonly channel: AgentChannel,
     init: AgentInit,
     private readonly now: () => number = Date.now,
-    readyTimeoutMs: number = READY_TIMEOUT_MS
+    readyTimeoutMs: number = READY_TIMEOUT_MS,
+    private readonly cancelWatchdogMs: number = CANCEL_WATCHDOG_MS
   ) {
     this.lastUsed = now();
     let markExited!: (e: AgentExit) => void;
@@ -136,9 +151,21 @@ export class AgentClient {
 
   run(run: AgentRun): Promise<AgentOutcome> {
     this.queued += 1;
-    const task = this.chain.then(() => this.start(run));
+    let sent = false;
+    const task = this.chain.then(() => this.start(run, () => (sent = true)));
     this.chain = task.catch(() => undefined);
-    return task.finally(() => {
+    // Until the command is with the agent (where a cancel takes over), a stopped
+    // turn doesn't wait for the agent to start or for the commands ahead of it.
+    let onAbort = (): void => undefined;
+    const waiting = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        if (!sent) reject(new SandboxError('aborted', NOT_STARTED));
+      };
+      if (run.signal.aborted) onAbort();
+      else run.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    return Promise.race([task, waiting]).finally(() => {
+      run.signal.removeEventListener('abort', onAbort);
       this.queued -= 1;
       this.lastUsed = this.now();
     });
@@ -148,6 +175,8 @@ export class AgentClient {
   async close(graceMs: number = CLOSE_GRACE_MS): Promise<void> {
     if (!this.isAlive) return;
     this.closing = true;
+    // The agent refuses what it was asked, and the command is going away.
+    this.current?.abortAsks();
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         this.channel.kill();
@@ -161,25 +190,25 @@ export class AgentClient {
     });
   }
 
-  private async start(run: AgentRun): Promise<AgentOutcome> {
+  private async start(run: AgentRun, markSent: () => void): Promise<AgentOutcome> {
     await this.ready;
-    if (!this.isAlive || this.closing) throw new SandboxError('agent_failed', 'The sandbox stopped before this command could start.');
     if (run.signal.aborted) throw new SandboxError('aborted', NOT_STARTED);
+    if (!this.isAlive || this.closing) throw new SandboxError('agent_failed', 'The sandbox stopped before this command could start.');
     const id = this.nextId;
     this.nextId += 1;
     return new Promise<AgentOutcome>((resolve, reject) => {
-      const onAbort = (): void => this.channel.send({ type: 'cancel', id });
-      run.signal.addEventListener('abort', onAbort, { once: true });
-      const settle = (): void => {
-        run.signal.removeEventListener('abort', onAbort);
-        this.current = null;
-      };
-      this.current = {
+      let watchdog: NodeJS.Timeout | undefined;
+      const cur: Current = {
         id,
         run,
         output: '',
         bytes: 0,
         truncated: false,
+        asks: new Set(),
+        abortAsks: () => {
+          for (const ask of cur.asks) ask.abort();
+          cur.asks.clear();
+        },
         resolve: (outcome) => {
           settle();
           resolve(outcome);
@@ -189,6 +218,24 @@ export class AgentClient {
           reject(err);
         },
       };
+      const onAbort = (): void => {
+        cur.abortAsks();
+        this.channel.send({ type: 'cancel', id });
+        // The agent answers a cancel with done; if it doesn't, it is stopped.
+        watchdog ??= setTimeout(() => {
+          cur.reject(new SandboxError('agent_failed', "The sandbox didn't stop the command after it was cancelled, so it was stopped."));
+          this.channel.kill();
+        }, this.cancelWatchdogMs);
+      };
+      const settle = (): void => {
+        clearTimeout(watchdog);
+        run.signal.removeEventListener('abort', onAbort);
+        cur.abortAsks();
+        this.current = null;
+      };
+      run.signal.addEventListener('abort', onAbort, { once: true });
+      this.current = cur;
+      markSent();
       this.channel.send({
         type: 'run',
         id,
@@ -243,7 +290,21 @@ export class AgentClient {
           answer(false);
           return;
         }
-        cur.run.askHost(m.host, m.port ?? undefined).then(answer, () => answer(false));
+        const question = new AbortController();
+        cur.asks.add(question);
+        // Whatever comes back after the question stopped mattering is not sent: the agent has answered no itself.
+        const respond = (allowed: boolean): void => {
+          cur.asks.delete(question);
+          if (!question.signal.aborted) answer(allowed);
+        };
+        let pending: Promise<boolean>;
+        try {
+          pending = cur.run.askHost(m.host, m.port ?? undefined, question.signal);
+        } catch {
+          respond(false);
+          return;
+        }
+        Promise.resolve(pending).then(respond, () => respond(false));
         return;
       }
       default:

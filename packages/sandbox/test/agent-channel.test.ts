@@ -13,6 +13,21 @@ describe('channelFromProcess', () => {
     expect(f.written()).toBe('{"type":"cancel","id":3}\n');
   });
 
+  it('keeps U+2028 and U+2029 in a message from ending its line, as the agent reads with readline', async () => {
+    const f = fakeChild();
+    // Built from code points so this file holds no line separator itself.
+    const ls = String.fromCharCode(0x2028);
+    const ps = String.fromCharCode(0x2029);
+    const command = `echo a${ls}b${ps}c`;
+    const cwd = `/mnt/e/w${ls}s`;
+    channelFromProcess(f.child).send({ type: 'run', id: 1, command, cwd, timeoutMs: 1000, readPaths: [], writePaths: [], denyWritePaths: [], allowedHosts: [] });
+    await tick();
+    const written = f.written();
+    expect(written.includes(ls) || written.includes(ps)).toBe(false);
+    expect(written.split('\n')).toHaveLength(2);
+    expect(JSON.parse(written)).toMatchObject({ command, cwd });
+  });
+
   it('reads messages split across chunks, CRLF and UTF-8 alike, and ignores lines that are not messages', async () => {
     const f = fakeChild();
     const got: AgentMessage[] = [];

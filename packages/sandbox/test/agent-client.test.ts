@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SANDBOX_MAX_OUTPUT_BYTES } from '@grunt/core/ports/sandbox.js';
 import { AgentClient, CLOSE_GRACE_MS, type AgentRun } from '../src/agent-client.js';
-import { FakeChannel, scriptedAgent } from './helpers.js';
+import { FakeChannel, scriptedAgent, type AgentScript } from './helpers.js';
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   command: 'make',
@@ -130,9 +130,152 @@ describe('AgentClient', () => {
     const { client, channel } = scriptedAgent({ onRun: (_m, ch) => queueMicrotask(() => ch.emit({ type: 'ask', askId: 7, host: 'example.com', port: 443 })) });
     const running = client.run(run({ askHost }));
     await vi.waitFor(() => expect(channel.sent).toContainEqual({ type: 'answer', askId: 7, allowed: true }));
-    expect(askHost).toHaveBeenCalledWith('example.com', 443);
+    expect(askHost).toHaveBeenCalledWith('example.com', 443, expect.any(AbortSignal));
     channel.finish(1);
     await running;
+  });
+
+  describe('a question about a host that stops mattering', () => {
+    /** A run with an unanswered question; resolves with the question's signal. */
+    async function pending(over: { script?: AgentScript; abort?: AbortController } = {}) {
+      let askSignal!: AbortSignal;
+      const askHost = vi.fn((_host: string, _port: number | undefined, signal: AbortSignal) => {
+        askSignal = signal;
+        return new Promise<boolean>(() => undefined);
+      });
+      const { client, channel } = scriptedAgent({ onRun: () => undefined, ...over.script });
+      const running = client.run(run({ askHost, signal: (over.abort ?? new AbortController()).signal }));
+      running.catch(() => undefined);
+      await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+      channel.emit({ type: 'ask', askId: 1, host: 'example.com', port: 443 });
+      await vi.waitFor(() => expect(askHost).toHaveBeenCalled());
+      expect(askSignal.aborted).toBe(false);
+      return { client, channel, running, askSignal };
+    }
+
+    it('is withdrawn when the turn is stopped', async () => {
+      const ac = new AbortController();
+      const { askSignal } = await pending({ abort: ac });
+      ac.abort();
+      expect(askSignal.aborted).toBe(true);
+    });
+
+    it('is withdrawn when the command times out and finishes', async () => {
+      const { channel, running, askSignal } = await pending();
+      channel.emit(done(1, { exitCode: null, signal: 'SIGKILL', timedOut: true }));
+      await running;
+      expect(askSignal.aborted).toBe(true);
+    });
+
+    it('is withdrawn when the command finishes', async () => {
+      const { channel, running, askSignal } = await pending();
+      channel.finish(1);
+      await running;
+      expect(askSignal.aborted).toBe(true);
+    });
+
+    it('is withdrawn when the command fails', async () => {
+      const { channel, running, askSignal } = await pending();
+      channel.emit({ type: 'failed', id: 1, message: 'bad' });
+      await expect(running).rejects.toMatchObject({ code: 'agent_failed' });
+      expect(askSignal.aborted).toBe(true);
+    });
+
+    it('is withdrawn when the agent exits', async () => {
+      const { channel, running, askSignal } = await pending();
+      channel.emitExit(1, 'gone');
+      await expect(running).rejects.toMatchObject({ code: 'agent_failed' });
+      expect(askSignal.aborted).toBe(true);
+    });
+
+    it('is withdrawn when the agent is told to close', async () => {
+      const { client, askSignal } = await pending({ script: { ignoreClose: true } });
+      const closing = client.close(10);
+      expect(askSignal.aborted).toBe(true);
+      await closing;
+    });
+
+    it('is not answered once withdrawn, even if the card answers late', async () => {
+      let answerCard!: (allowed: boolean) => void;
+      const { client, channel } = scriptedAgent({ onRun: () => undefined });
+      const running = client.run(run({ askHost: () => new Promise<boolean>((r) => (answerCard = r)) }));
+      await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+      channel.emit({ type: 'ask', askId: 2, host: 'example.com', port: 443 });
+      await vi.waitFor(() => expect(answerCard).toBeTypeOf('function'));
+      channel.finish(1);
+      await running;
+      answerCard(true);
+      await new Promise((r) => setImmediate(r));
+      expect(channel.sent.filter((m) => m.type === 'answer')).toEqual([]);
+    });
+  });
+
+  it('answers no when askHost throws instead of returning a promise', async () => {
+    const { client, channel } = scriptedAgent({ onRun: (_m, ch) => queueMicrotask(() => ch.emit({ type: 'ask', askId: 6, host: 'example.com', port: 443 })) });
+    const running = client.run(
+      run({
+        askHost: () => {
+          throw new Error('no card');
+        },
+      })
+    );
+    await vi.waitFor(() => expect(channel.sent).toContainEqual({ type: 'answer', askId: 6, allowed: false }));
+    channel.finish(1);
+    await running;
+  });
+
+  it('stops an agent that does not report a cancelled command, and fails the run', async () => {
+    const channel = new FakeChannel({ onRun: () => undefined });
+    const client = new AgentClient(channel, { home: '/h', tmpRoot: '/t', allowedHosts: [] }, Date.now, 1000, 30);
+    const ac = new AbortController();
+    const running = client.run(run({ signal: ac.signal }));
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+    ac.abort();
+    await expect(running).rejects.toMatchObject({ code: 'agent_failed', message: expect.stringContaining('cancelled') });
+    expect(channel.killed).toBe(true);
+    expect(client.alive).toBe(false);
+  });
+
+  it('does not stop an agent that reports the cancelled command in time', async () => {
+    const channel = new FakeChannel({ onRun: () => undefined });
+    const client = new AgentClient(channel, { home: '/h', tmpRoot: '/t', allowedHosts: [] }, Date.now, 1000, 40);
+    const ac = new AbortController();
+    const running = client.run(run({ signal: ac.signal }));
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+    ac.abort();
+    channel.emit(done(1, { exitCode: null, signal: 'SIGTERM' }));
+    await running;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(channel.killed).toBe(false);
+  });
+
+  it('stops waiting for an agent that has not started when the turn is stopped', async () => {
+    const channel = new FakeChannel({ ready: 'silent' });
+    const client = new AgentClient(channel, { home: '/h', tmpRoot: '/t', allowedHosts: [] });
+    const ac = new AbortController();
+    const running = client.run(run({ signal: ac.signal }));
+    ac.abort();
+    await expect(running).rejects.toMatchObject({ code: 'aborted' });
+    expect(client.busy).toBe(false);
+    channel.kill();
+    expect(channel.runs()).toHaveLength(0);
+  });
+
+  it('stops waiting behind another command when the turn is stopped, and never sends it', async () => {
+    const { client, channel } = scriptedAgent({ onRun: () => undefined });
+    const a = client.run(run({ command: 'a' }));
+    const ac = new AbortController();
+    const b = client.run(run({ command: 'b', signal: ac.signal }));
+    await vi.waitFor(() => expect(channel.runs()).toHaveLength(1));
+    ac.abort();
+    await expect(b).rejects.toMatchObject({ code: 'aborted' });
+    expect(client.busy).toBe(true);
+    channel.finish(1);
+    await a;
+    await new Promise((r) => setImmediate(r));
+    expect(channel.runs().map((m) => m.command)).toEqual(['a']);
+    expect(channel.sent.filter((m) => m.type === 'cancel')).toEqual([]);
+    expect(client.busy).toBe(false);
   });
 
   it('refuses an ask when no command is running', async () => {
@@ -185,7 +328,7 @@ describe('AgentClient', () => {
     channel.emit({ type: 'ask', askId: 1, host: 'example.com', port: 443 });
     await vi.waitFor(() => expect(channel.sent).toContainEqual({ type: 'answer', askId: 1, allowed: false }));
     expect(askA).not.toHaveBeenCalled();
-    expect(askB).toHaveBeenCalledWith('example.com', 443);
+    expect(askB).toHaveBeenCalledWith('example.com', 443, expect.any(AbortSignal));
     channel.finish(2);
     await b;
     expect(client.busy).toBe(false);

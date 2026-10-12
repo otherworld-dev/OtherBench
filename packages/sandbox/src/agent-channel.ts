@@ -23,6 +23,15 @@ export interface AgentChannel {
   kill(): void;
 }
 
+/**
+ * The message as one line. JSON leaves U+2028 and U+2029 as they are, and the
+ * agent reads stdin with readline, which ends a line at either: written out
+ * as escapes they parse back to the same characters and never split a line.
+ */
+function oneLine(message: HostMessage): string {
+  return JSON.stringify(message).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+}
+
 /** JSON lines over an agent process started through wsl.exe. */
 export function channelFromProcess(child: ChildProcessWithoutNullStreams): AgentChannel {
   const messageListeners: ((m: AgentMessage) => void)[] = [];
@@ -69,7 +78,7 @@ export function channelFromProcess(child: ChildProcessWithoutNullStreams): Agent
 
   return {
     send: (message) => {
-      if (!exited && child.stdin.writable) child.stdin.write(`${JSON.stringify(message)}\n`);
+      if (!exited && child.stdin.writable) child.stdin.write(`${oneLine(message)}\n`);
     },
     onMessage: (cb) => {
       messageListeners.push(cb);
