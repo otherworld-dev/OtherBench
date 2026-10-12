@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
+import type { ToolSpec } from '../src/ports/tool-provider.js';
 import type { ResolvedProfile } from '../src/types/config.js';
 import { FakeChatEngine, InMemoryStore, FakeSecretStore, FakeToolProvider } from '../src/testing/fakes.js';
 import { runSecretStoreContract } from '../src/testing/secret-store-contract.js';
@@ -144,6 +145,16 @@ describe('FakeSecretStore', () => {
     await secrets.set('ref', 'first');
     await secrets.set('ref', 'second');
     expect(await secrets.get('ref')).toBe('second');
+  });
+});
+
+describe('FakeToolProvider', () => {
+  it('offers its subagent tool only when the policy turns sub-agents on', async () => {
+    const subagent: ToolSpec = { name: 'subagent', description: '', parameters: {}, risk: 'read', source: 'subagent', execute: async () => 'ok' };
+    const provider = new FakeToolProvider({ tools: [subagent] });
+    const base = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+    expect((await provider.listTools(base)).map((t) => t.name)).toEqual([]);
+    expect((await provider.listTools({ ...base, subagents: true })).map((t) => t.name)).toEqual(['subagent']);
   });
 });
 

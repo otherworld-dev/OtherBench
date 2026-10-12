@@ -674,3 +674,39 @@ describe('backstop eviction scope', () => {
     warn.mockRestore();
   });
 });
+
+describe('PermissionBroker and sub-agents', () => {
+  const SUBAGENT = () => makeTool({ name: 'subagent', risk: 'read', source: 'subagent' });
+
+  it('denies the subagent tool while the profile has sub-agents off (the default)', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    expect(broker.decide(SUBAGENT(), {}, makePolicy(), makeCtx())).toEqual({ kind: 'deny', reason: 'Sub-agents are turned off for this profile.' });
+    expect(broker.decide(SUBAGENT(), {}, makePolicy({ subagents: false }), makeCtx())).toMatchObject({ kind: 'deny' });
+  });
+
+  it('allows it by policy with no card when the switch is on, even under always ask and with no workspace', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const policy = makePolicy({ subagents: true, approvalMode: 'always_ask' });
+    expect(broker.decide(SUBAGENT(), { description: 'x', prompt: 'y' }, policy, makeCtx({ workspaceRoot: null }))).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("refuses a subagent call made from inside a sub-agent: one level only", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const decision = broker.decide(SUBAGENT(), {}, makePolicy({ subagents: true }), makeCtx({ subagent: { callId: 'c1', label: 'Helper' } }));
+    expect(decision).toEqual({ kind: 'deny', reason: "A sub-agent can't start another sub-agent." });
+  });
+
+  it("tags the card for a sub-agent's own tool call with its call id and label", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const decision = expectAsk(broker.decide(READ_FILE(), { path: 'a.txt' }, makePolicy({ approvalMode: 'always_ask' }), makeCtx({ subagent: { callId: 'c1', label: 'Helper' } })));
+    expect(decision.request.subagent).toEqual({ callId: 'c1', label: 'Helper' });
+    expect(decision.request.messageId).toBe('msg-1');
+  });
+
+  it("leaves a parent's own card untagged", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const decision = expectAsk(broker.decide(READ_FILE(), { path: 'a.txt' }, makePolicy({ approvalMode: 'always_ask' }), makeCtx()));
+    expect(decision.request).not.toHaveProperty('subagent');
+  });
+});

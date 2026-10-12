@@ -2,7 +2,7 @@ import type { CanonMessage, EngineMeta, SerializedError } from '../types/message
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
-import type { ToolSpec } from './tool-provider.js';
+import type { SubagentHost, SubagentTag, ToolSpec } from './tool-provider.js';
 
 export interface EngineRequest {
   profile: ResolvedProfile;
@@ -63,6 +63,10 @@ export interface EngineRequest {
   autoMode?: boolean;
   /** The chat's effort (`Chat.effort`), read fresh for every turn. Only the Claude Code engine reads it; unset follows the user's Claude Code settings. */
   effort?: ClaudeEffort;
+  /** The reply's sub-agent runner, handed to tools on `ToolContext.subagents`. Absent: the `subagent` tool says sub-agents aren't available. */
+  subagents?: SubagentHost;
+  /** Set on a sub-agent's own request: every tool call it makes carries it. */
+  subagent?: SubagentTag;
 }
 
 export type EngineEvent =

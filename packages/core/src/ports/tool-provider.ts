@@ -2,6 +2,19 @@ import type { Grant } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 
+/** Which sub-agent a tool call or approval card belongs to (spec 2026-10-12-api-subagents-design). */
+export interface SubagentTag {
+  /** The parent's `subagent` tool call id. */
+  callId: string;
+  /** The label the parent model gave it. */
+  label: string;
+}
+
+/** Runs sub-agents for one reply. The `subagent` tool's `execute` hands its call here. */
+export interface SubagentHost {
+  run(input: unknown, ctx: ToolContext): Promise<unknown>;
+}
+
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
 export interface ToolContext {
@@ -26,6 +39,12 @@ export interface ToolContext {
    */
   folders?: ResolvedFolder[];
   signal: AbortSignal;
+  /** The model's id for this tool call, when the engine knows it. */
+  toolCallId?: string;
+  /** The reply's sub-agent runner; set only for a turn that offers the `subagent` tool. */
+  subagents?: SubagentHost;
+  /** Set on every call a sub-agent makes: whose call it is. */
+  subagent?: SubagentTag;
 }
 
 export interface ToolSpec {
@@ -69,6 +88,8 @@ export interface ApprovalRequest {
   source: ToolSpec['source'];
   args: unknown;
   summary: string;
+  /** Set when a sub-agent's tool call raised this card. */
+  subagent?: SubagentTag;
 }
 
 /** The human's answer to a previously-issued `ApprovalRequest`, as `PermissionBroker.resolve()` consumes it. */

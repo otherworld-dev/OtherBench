@@ -48,9 +48,10 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * source as well as name -- a tool merely sharing the shell tool's name must
  * not be able to satisfy, or to mint, a grant meant for the real shell.
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
- * Grunt only gates, never performs.
+ * Grunt only gates, never performs. `'subagent'` is the API engine's
+ * sub-agent tool (spec 2026-10-12-api-subagents-design).
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'subagent';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -73,6 +74,8 @@ export interface ToolPolicy {
   artifacts?: boolean;
   /** Search past chats (spec 2026-10-09-recall-design): the `recall` tool, for both engines. Absent = on. */
   recall?: boolean;
+  /** Sub-agents (spec 2026-10-12-api-subagents-design): the `subagent` tool, API profiles only. Absent = off. */
+  subagents?: boolean;
 }
 
 export interface ModelParams {
