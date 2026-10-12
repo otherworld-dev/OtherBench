@@ -318,9 +318,12 @@ export class SqliteSyncRepo implements SyncRepo {
       // A file stays what it was, in the chat and on the message it was sent with:
       // another machine can't re-point an attachment id it knows at a different chat
       // or reply, or swap its content or type, which would make any message's
-      // reference to it show that file. (Last-writer-wins applies to its name only.)
+      // reference to it show that file. Its extracted text (what a model that can't
+      // take images is sent instead of the file) is set once: it may arrive where there
+      // was none, and is never changed after. (Last-writer-wins applies to its name only.)
       if (local) {
         if (ATTACHMENT_FIXED_FACTS.some((k) => local[k] !== row[k])) return false;
+        if (local['extracted_text'] != null && local['extracted_text'] !== row['extracted_text']) return false;
         if (local['message_id'] != null && local['message_id'] !== row['message_id']) return false;
       }
       // Delete wins for good: an id that was removed is never made again with a new binding.

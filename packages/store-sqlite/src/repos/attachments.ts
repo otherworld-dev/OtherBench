@@ -67,6 +67,9 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
       if (patch.sha256 !== undefined && patch.sha256 !== current.sha256) throw new Error(`Attachment "${id}" cannot change its content.`);
       if (patch.mime !== undefined && patch.mime !== current.mime) throw new Error(`Attachment "${id}" cannot change its type.`);
       if (patch.size !== undefined && patch.size !== current.size) throw new Error(`Attachment "${id}" cannot change its size.`);
+      if (patch.extractedText !== undefined && current.extractedText !== null && patch.extractedText !== current.extractedText) {
+        throw new Error(`Attachment "${id}" already has its extracted text.`);
+      }
       if (patch.messageId !== undefined && patch.messageId !== current.messageId) {
         if (current.messageId !== null) throw new Error(`Attachment "${id}" was already sent with message "${current.messageId}".`);
         this.requireBoundTo(current.chatId, patch.messageId);
