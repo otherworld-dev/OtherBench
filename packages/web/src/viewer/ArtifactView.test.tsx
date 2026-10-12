@@ -5,7 +5,7 @@ import type { ArtifactVersion } from '@grunt/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
-  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn() }, view: { openArtifact: vi.fn() } },
+  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn(), live: { status: vi.fn(), allow: vi.fn(), revoke: vi.fn(), call: vi.fn() } }, view: { openArtifact: vi.fn() } },
 }));
 
 vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
@@ -20,7 +20,7 @@ const version = (id: string, number: number, content: string, madeBy: 'model' | 
 });
 const detail = (kind: 'html' | 'markdown' | 'code' = 'html'): ArtifactDetail => {
   const fileName = kind === 'html' ? 'calc.html' : kind === 'markdown' ? 'calc.md' : 'calc.ts';
-  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName };
+  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName, live: 0 };
   return {
     artifact: { id: 'art', chatId: 'c1', slug: 'calc', kind, language: kind === 'code' ? 'ts' : null, createdAt: 1 },
     fileName,
@@ -124,7 +124,7 @@ describe('ArtifactView', () => {
     await waitFor(() => expect(box).toHaveValue('<p>v2</p>'));
     await user.clear(box);
     await user.type(box, '<p>mine</p>');
-    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html' }] });
+    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html', live: 0 }] });
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(api.artifacts.edit).toHaveBeenCalledWith('c1', 'art', { content: '<p>mine</p>', fromVersionId: 'v2' });
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v4/calc.html'));

@@ -1,8 +1,8 @@
-import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@grunt/core/ports/store.js';
+import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@grunt/core/ports/store.js';
 import type { ScheduleRule } from '@grunt/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, AskReply, LiveCallOutcome, LiveCallStatus } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { ImportPreview, ImportStart, ImportStatus } from '@grunt/core/types/claude-import.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
@@ -94,7 +94,9 @@ export type ViewKind = 'image' | 'video' | 'pdf' | 'html' | 'markdown' | 'text' 
 export interface ViewOpened { path: string; name: string; kind: ViewKind; url: string | null; size: number }
 
 /** One artifact in a chat's list (Deck #896): its current version on the branch the chat shows. */
-export interface ArtifactSummary { id: string; slug: string; kind: ArtifactKind; language: string | null; title: string; versionId: string; number: number; madeBy: 'model' | 'user' }
+export interface ArtifactSummary { id: string; slug: string; kind: ArtifactKind; language: string | null; title: string; versionId: string; number: number; madeBy: 'model' | 'user';
+  /** How many live calls it declares (spec 2026-10-12-live-artifacts); 0 for a plain one. */
+  live: number }
 
 /** One artifact with every version, each marked on or off the chat's branch. */
 export interface ArtifactDetail {
@@ -102,8 +104,23 @@ export interface ArtifactDetail {
   fileName: string;
   currentVersionId: string | null;
   /** Each version is its own kind (a note made into a page), with its own file name. */
-  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean; kind: ArtifactKind; language: string | null; fileName: string }[];
+  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean; kind: ArtifactKind; language: string | null; fileName: string;
+    /** How many live calls it declares (spec 2026-10-12-live-artifacts); 0 for a plain one. */
+    live: number }[];
 }
+
+/** A live page's calls as the viewer shows them (spec 2026-10-12-live-artifacts). */
+export interface LiveStatus {
+  /** The machine the calls run on: the one serving this UI. */
+  machine: { id: string; name: string };
+  /** Set when the chat runs on another machine. */
+  runsOn: { id: string; name: string } | null;
+  profile: { id: string; name: string };
+  calls: (LiveCallStatus & { args: Record<string, unknown>; params: Record<string, LiveParam> })[];
+}
+
+/** What one live call came back as: the server's outcome, or one the viewer gave itself. */
+export type LiveOutcome = LiveCallOutcome | { ok: false; code: 'bad_params' | 'busy'; message: string };
 export interface ViewText { path: string; content: string; truncated: boolean; size: number }
 export interface ViewRoot { path: string; label: string; access: FolderAccess; workspace: boolean }
 export interface ViewEntry { name: string; path: string; type: 'dir' | 'file' }
@@ -514,6 +531,13 @@ export const api = {
     version: (chatId: string, artifactId: string, versionId: string) => request<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}`),
     edit: (chatId: string, artifactId: string, body: { content: string; title?: string; fromVersionId?: string }) => put<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}`, body),
     save: (chatId: string, artifactId: string, body: { versionId: string; path: string; replace?: boolean }) => post<{ path: string }>(`/chats/${chatId}/artifacts/${artifactId}/save`, body),
+    live: {
+      status: (chatId: string, artifactId: string, versionId: string) => request<LiveStatus>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/live`),
+      allow: (chatId: string, artifactId: string, versionId: string) => post<LiveStatus>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/live/allow`, {}),
+      revoke: (chatId: string, artifactId: string) => del(`/chats/${chatId}/artifacts/${artifactId}/live`),
+      call: (chatId: string, artifactId: string, versionId: string, callId: string, body: { params?: Record<string, unknown>; fresh?: boolean }) =>
+        post<LiveOutcome>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/live/calls/${encodeURIComponent(callId)}`, body),
+    },
   },
   view: {
     open: (chatId: string, path: string) => post<ViewOpened>('/view/links', { chatId, path }),
