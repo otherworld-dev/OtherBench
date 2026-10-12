@@ -298,6 +298,15 @@ describe('Sign-in app fields', () => {
     expect(store.mcpServers.get(id)!.transport).toBe('http');
   });
 
+  it('PATCH: removing a secret that is not stored does not restart the connection', async () => {
+    const id = await createServer('Manual', { oauthClientId: 'app-1' });
+    const reconfigure = vi.spyOn(mcpManager, 'reconfigureHeld');
+    const res = await app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ oauthClientSecret: null }) });
+    expect(res.status).toBe(200);
+    expect(reconfigure).not.toHaveBeenCalled();
+    expect(store.mcpServers.get(id)!.oauth).toMatchObject({ clientId: 'app-1', clientSecretRef: null });
+  });
+
   it('PATCH: changing the client ID signs the server out and reconnects; sending the same one changes nothing', async () => {
     await fixture.close();
     fixture = await startOAuthEchoServer({ idTokenEmail: 'alice@example.com', staticClients: { 'app-1': null, 'app-2': null } });

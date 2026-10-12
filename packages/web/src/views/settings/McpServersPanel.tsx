@@ -353,6 +353,9 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
       }
 
       const saved = server ? await api.mcpServers.patch(server.id, body) : await api.mcpServers.create(body);
+      // The form stays mounted after a save: a typed client secret must not linger in state (or be re-sent by the next save).
+      setOauthClientSecret('');
+      setRemoveClientSecret(false);
       onSaved(saved);
     } catch (err) {
       console.error('[grunt-web] failed to save MCP server:', err);

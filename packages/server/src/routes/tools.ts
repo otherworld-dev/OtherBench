@@ -446,7 +446,9 @@ export function toolsRoutes(container: Container): Hono {
       // The Sign-in app: a different client ID, or a secret to set or remove. A different
       // client ID forgets the sign-in (the tokens belong to the old one).
       const clientIdChanged = signInApp.clientId !== undefined && signInApp.clientId !== (existing.oauth?.clientId ?? null);
-      const signInAppChanged = clientIdChanged || signInApp.secret !== undefined;
+      // Removing a secret that isn't stored changes nothing, so it doesn't restart the connection.
+      const secretChanged = typeof signInApp.secret === 'string' || (signInApp.secret === null && Boolean(existing.oauth?.clientSecretRef));
+      const signInAppChanged = clientIdChanged || secretChanged;
       if (!connectionChanged && !signInAppChanged) {
         // A rename, an enable/disable or an unchanged save: the live client is not touched.
         container.store.mcpServers.update(id, patch);

@@ -160,6 +160,35 @@ describe('McpServersPanel', () => {
     expect(body).not.toHaveProperty('oauthClientSecret');
   });
 
+  it('forgets a typed client secret once it is saved, and a later rename-only save does not send it again', async () => {
+    mockedList.mockResolvedValue([makeHealth({ id: 'srv-h', name: 'Hosted', transport: 'http' })]);
+    mockedGet.mockResolvedValue(makeServer({ id: 'srv-h', name: 'Hosted', transport: 'http', command: null, args: [], url: 'https://mcp.example.com/mcp' }));
+    mockedPatch.mockResolvedValue(
+      makeServer({ id: 'srv-h', name: 'Hosted', transport: 'http', command: null, args: [], url: 'https://mcp.example.com/mcp', oauth: { clientId: 'app-1', clientSecretRef: 'mcp:srv-h:oauth:client-secret', account: null, signedInAt: null } })
+    );
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-h'));
+
+    const app = await screen.findByTestId('mcp-sign-in-app');
+    await user.click(within(app).getByText('Sign-in app'));
+    await user.type(within(app).getByLabelText('Client ID'), 'app-1');
+    await user.type(within(app).getByLabelText('Client secret'), 'typed-secret-value');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    expect(mockedPatch.mock.calls[0]![1]).toMatchObject({ oauthClientId: 'app-1', oauthClientSecret: 'typed-secret-value' });
+
+    await waitFor(() => expect(within(app).getByLabelText('Client secret')).toHaveValue(''));
+    expect(await within(app).findByText(/A client secret is set\./)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Name'), ' 2');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(2));
+    const second = mockedPatch.mock.calls[1]![1];
+    expect(second).not.toHaveProperty('oauthClientSecret');
+    expect(second).not.toHaveProperty('oauthClientId');
+  });
+
   it('refuses a client secret with no client ID, without calling the API', async () => {
     const user = userEvent.setup();
     render(<McpServersPanel />);
