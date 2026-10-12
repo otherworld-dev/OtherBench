@@ -198,6 +198,8 @@ const NOT_YET = new Set(NOT_YET_FUNCTIONS);
 const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 /** NOT_XML without the global flag, for finding the first one. */
 const XML_UNSAFE = new RegExp(NOT_XML.source);
+/** What the .xlsx writer takes out besides NOT_XML: XML's discouraged characters (U+007F-U+0084, U+0086-U+009F), U+FFFD and the non-characters. */
+const DISCOURAGED_XML = /[\u007f-\u0084\u0086-\u009f\ufffd\p{Noncharacter_Code_Point}]/u;
 /** Sheet names Excel reads as R1C1 references unless quoted: R, C, RC, R1, C3, R1C1 and so on. */
 const R1C1_LIKE = /^(?:[Rr]\d*(?:[Cc]\d*)?|[Cc]\d*)$/;
 
@@ -674,6 +676,9 @@ function sheetName(name: unknown, path: string): string {
   if (typeof name !== 'string' || name.length < 1 || name.length > MAX_SHEET_NAME) bad(path, `must be 1-${MAX_SHEET_NAME} characters`);
   if (SHEET_NAME_BAD.test(name)) bad(path, `"${name}" has one of \\ / ? * [ ] :, which Excel doesn't allow in a sheet name`);
   if (name.startsWith("'") || name.endsWith("'")) bad(path, `"${name}" starts or ends with ', which Excel doesn't allow`);
+  // The .xlsx writer takes these out of a name (as xmlSafe does the others), so a formula that quotes the name as given would point at a sheet that isn't there.
+  const lost = (DISCOURAGED_XML.exec(name) ?? XML_UNSAFE.exec(name))?.[0];
+  if (lost !== undefined) bad(path, `has the character U+${lost.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}, which a sheet name can't hold`);
   return name;
 }
 

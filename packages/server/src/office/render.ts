@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker, type ResourceLimits } from 'node:worker_threads';
 import { checkOfficeContent, parseSpreadsheet, type OfficeKind } from '@grunt/core/domain/office-spec.js';
 import { renderDocx } from './docx.js';
+import { OfficeRenderError } from './errors.js';
 import { renderXlsx } from './xlsx.js';
 import type { RenderJob, RenderReply } from './render-worker.js';
 
@@ -13,12 +14,7 @@ import type { RenderJob, RenderReply } from './render-worker.js';
  * before a check existed was never checked. Any failure, a writer's own
  * included, is an OfficeRenderError, which the routes answer with a 422.
  */
-export class OfficeRenderError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'OfficeRenderError';
-  }
-}
+export { OfficeRenderError };
 
 /** How long one file may take to make before its worker is stopped. */
 export const OFFICE_RENDER_TIMEOUT_MS = 20_000;

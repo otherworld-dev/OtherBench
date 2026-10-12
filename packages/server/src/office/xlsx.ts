@@ -1,10 +1,11 @@
 import writeXlsxFile, { type Cell as XlsxCell } from 'write-excel-file/node';
+import { OfficeRenderError } from './errors.js';
 import { formulaForFile, parseCellDate, xmlSafe, type Cell, type SpreadsheetSpec } from '@grunt/core/domain/office-spec.js';
 
 /**
  * A `spreadsheet` artifact as an .xlsx (spec 2026-10-12-office-files §4).
- * Formulas are written without their "=" (the library writes `<f>` exactly
- * as given, and OOXML has no "="), with no cached values, and the workbook
+ * Formulas are written without their "=" (OOXML has no "="), with no
+ * cached values, and the workbook
  * asks Excel to calculate everything on open (`fullCalcOnLoad`), so the
  * values are Excel's own. Probe, 2026-10-12: Excel 16 showed computed
  * values for SUM, IF with <, & and quotes, and a reference into a sheet
@@ -66,10 +67,10 @@ interface Context {
   formulas: string[];
 }
 
-/** The one place a formula's file text comes from: core's formulaForFile, which has checked it. A formula it refuses (a version that came by sync, never checked) throws, and renderOfficeFileInProcess makes that an OfficeRenderError. */
+/** The one place a formula's file text comes from: core's formulaForFile, which has checked it. A formula it refuses (a version that came by sync, never checked) is an OfficeRenderError. */
 function formulaCell(formula: string, ctx: Context): { type: 'Formula'; value: string } {
   const written = formulaForFile(formula, ctx.sheetNames);
-  if (!written.ok) throw new Error(written.error);
+  if (!written.ok) throw new OfficeRenderError(written.error);
   ctx.formulas.push(written.text);
   return { type: 'Formula', value: written.text };
 }
@@ -86,17 +87,19 @@ function toCell(cell: Cell, ctx: Context): XlsxCell {
     ...(cell.align ? { align: cell.align } : {}),
     ...(cell.color ? { textColor: cell.color } : {}),
     ...(cell.fill ? { backgroundColor: cell.fill } : {}),
-    ...(cell.format ? { format: xmlSafe(cell.format) } : {}),
   };
-  if (cell.formula !== undefined) return { ...style, ...formulaCell(cell.formula, ctx) };
+  // The library takes a number format only on number, date and formula cells, and "@" (text) on a string cell; any other
+  // combination throws, so a format that means nothing for the cell's type is left out rather than failing the whole file.
+  const format = cell.format ? { format: xmlSafe(cell.format) } : {};
+  if (cell.formula !== undefined) return { ...style, ...format, ...formulaCell(cell.formula, ctx) };
   if (cell.date !== undefined) {
     // Checked by parseSpreadsheet; the library's serial numbers are UTC-based, so the wall-clock time goes in as UTC.
     const date = parseCellDate(cell.date)!;
     return { ...style, type: Date, value: new Date(date.utcMs), format: cell.format ? xmlSafe(cell.format) : date.hasTime ? 'yyyy-mm-dd hh:mm' : 'yyyy-mm-dd' };
   }
   const value = cell.value;
-  if (typeof value === 'string') return { ...style, type: String, value: xmlSafe(value) };
-  if (typeof value === 'number') return { ...style, type: Number, value };
+  if (typeof value === 'string') return { ...style, ...(cell.format === '@' ? format : {}), type: String, value: xmlSafe(value) };
+  if (typeof value === 'number') return { ...style, ...format, type: Number, value };
   if (typeof value === 'boolean') return { ...style, type: Boolean, value };
   return Object.keys(style).length > 0 ? style : null;
 }

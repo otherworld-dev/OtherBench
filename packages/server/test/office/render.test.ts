@@ -272,6 +272,31 @@ describe('renderOfficeFile: spreadsheet', () => {
     expect(text).toContain('Sheet "Blank"');
   }, 30_000);
 
+  // parseSpreadsheet takes a `format` on any cell object, but the library only takes one on number, date and formula cells
+  // (and "@" on text): any other would be a 422 at download with no cell reference, so it's left out there.
+  it('makes the file when a cell has a number format its type cannot use, and the values read back', async () => {
+    const row = (cell: unknown) => ['x', cell];
+    const rows = [
+      row({ value: 'abc', format: '0.00' }),
+      row({ value: 'def', format: '@' }),
+      row({ value: '', format: '0.00' }),
+      row({ value: true, format: '0.00' }),
+      row({ bold: true, format: '0.00' }),
+      row({ value: null, format: '0.00' }),
+      row({ value: 12.5, format: '#,##0.0000' }),
+      row({ date: '2026-10-12', format: 'dd/mm/yyyy' }),
+      row({ formula: 'SUM(1,2)', format: '0.00' }),
+      row({ value: 'bold text', bold: true, align: 'right' }),
+    ];
+    const bytes = await renderOfficeFileInProcess('spreadsheet', JSON.stringify({ sheets: [{ name: 'F', rows }] }), 'F');
+    const text = extractOfficeText(bytes)!;
+    for (const line of ['x,abc', 'x,def', 'x,TRUE', 'x,12.5', 'x,2026-10-12', 'B9: =SUM(1,2)', 'x,bold text']) expect(text, line).toContain(line);
+    const styles = part(bytes, 'xl/styles.xml');
+    for (const format of ['#,##0.0000', 'dd/mm/yyyy']) expect(styles, format).toContain(format);
+    // The same through the worker, which is what Download uses.
+    expect(extractOfficeText(await renderOfficeFile('spreadsheet', JSON.stringify({ sheets: [{ name: 'F', rows }] }), 'F'))).toContain('x,abc');
+  }, 30_000);
+
   // Every formula is written as exactly the text core checked (formulaForFile): no "=", canonical function names with Excel's file
   // prefixes, everything else as given. Read back out of the sheet XML, each <f> is compared with formulaForFile's own text.
   const ROUND_TRIP_FORMULAS = [
@@ -293,7 +318,7 @@ describe('renderOfficeFile: spreadsheet', () => {
     '=TEXTJOIN(", ",TRUE,A1:A9)',
     '=COUNTIF(A1:A9,">5")',
     '=IF(A1,"a\rb\r\nc","d")',
-    '=A1&"\u0085 \u007f \u0090 �"',
+    '=A1&"\u0085 \u007f \u0090 \ufffd"',
   ];
 
   const unescapeXml = (s: string): string =>
@@ -331,6 +356,7 @@ describe('renderOfficeFile: spreadsheet', () => {
     const spec = { sheets: [{ name: 'S', rows: [['=SUM(']] }] };
     const refused = formulaForFile('=SUM(', new Set(['S']));
     expect(refused.ok).toBe(false);
+    await expect(renderXlsx(spec)).rejects.toBeInstanceOf(OfficeRenderError);
     await expect(renderXlsx(spec)).rejects.toThrow((refused as { error: string }).error);
     await expect(renderXlsx({ sheets: [{ name: 'S', rows: [[{ formula: 'NOSUCHFUNCTION(1)' }]] }] })).rejects.toThrow(/NOSUCHFUNCTION/);
   });

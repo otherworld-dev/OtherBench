@@ -324,6 +324,21 @@ describe('formula functions', () => {
     expect(parseSpreadsheet(sheet([['="pair 😀, tab\tand\nline"']]))).toMatchObject({ ok: true });
   });
 
+  it("refuses a sheet name with a character the .xlsx writer would take out, so a formula can't point at a name that isn't there", () => {
+    const named = (name: string) => JSON.stringify({ sheets: [{ name, rows: [] }] });
+    for (const [code, name] of [
+      ['U+0090', 'A' + String.fromCharCode(0x90) + 'B'],
+      ['U+007F', 'A' + String.fromCharCode(0x7f)],
+      ['U+FFFD', String.fromCharCode(0xfffd) + 'A'],
+      ['U+FDD0', 'A' + String.fromCharCode(0xfdd0)],
+      ['U+0001', 'A' + String.fromCharCode(1) + 'B'],
+      ['U+FFFE', 'A' + String.fromCharCode(0xfffe)],
+    ] as const) {
+      expect(errorOf(named(name)), code).toBe(`sheets[0].name: has the character ${code}, which a sheet name can't hold`);
+    }
+    expect(parseSpreadsheet(named('Café 😀 Données'))).toMatchObject({ ok: true });
+  });
+
   it('refuses any function that is not one of Excel built-ins, including lookalike letters', () => {
     expect(errorFor('=FOO(1)')).toMatch(/uses FOO, which isn't one of Excel's built-in functions Grunt allows/);
     for (const f of ['=ＷＥＢＳＥＲＶＩＣＥ("x")', '=WEBSERVICE\u200B("x")', '=WEBSERVIC\u0301E("x")', '=ſum(A1)', '=CUBEVALUE("c","m")', '=PY(1,0)', '=A1(2)']) {
