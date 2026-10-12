@@ -36,13 +36,7 @@ function CallRow({ call }: { call: LiveStatus['calls'][number] }): JSX.Element {
   );
 }
 
-/**
- * Above a live page in the viewer (spec 2026-10-12-live-artifacts): the
- * approval panel while any eligible call needs an OK (or the reasons, when
- * none is eligible), else a one-line strip with when data last came, Refresh,
- * Stop and a line for each call that failed. Everything shown is plain text.
- */
-export function LiveBar(props: {
+type LiveBarProps = {
   status: LiveStatus | null;
   error: string | null;
   hidden: boolean;
@@ -52,8 +46,27 @@ export function LiveBar(props: {
   onNotNow(): void;
   onRefresh(): void;
   onStop(): void;
-}): JSX.Element | null {
-  if (props.error) return <p role="alert" className="border-b border-[var(--border)] px-3 py-1 text-xs text-[var(--danger)]">Live data: {props.error}</p>;
+};
+
+/**
+ * Above a live page in the viewer (spec 2026-10-12-live-artifacts): the
+ * approval panel while any eligible call needs an OK (or the reasons, when
+ * none is eligible), else a one-line strip with when data last came, Refresh,
+ * Stop and a line for each call that failed. An error goes above either, so
+ * their buttons still work. Everything shown is plain text.
+ */
+export function LiveBar(props: LiveBarProps): JSX.Element | null {
+  const controls = <LiveControls {...props} />;
+  if (!props.error) return controls;
+  return (
+    <>
+      <p role="alert" className="border-b border-[var(--border)] px-3 py-1 text-xs text-[var(--danger)]">Live data: {props.error}</p>
+      {controls}
+    </>
+  );
+}
+
+function LiveControls(props: LiveBarProps): JSX.Element | null {
   const status = props.status;
   if (!status) return null;
   const needsOk = status.calls.some((c) => c.state === 'needs_ok');

@@ -85,6 +85,23 @@ describe('LiveBar', () => {
     expect(h.onStop).toHaveBeenCalledOnce();
   });
 
+  it('shows an error above the strip and the panel, keeping their buttons', async () => {
+    const h = handlers();
+    render(<LiveBar status={status('allowed')} error="Couldn't stop live data." hidden={false} latest={null} outcomes={none} {...h} />);
+    expect(screen.getByRole('alert')).toHaveTextContent("Live data: Couldn't stop live data.");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await user.click(screen.getByRole('button', { name: 'Stop live data' }));
+    expect(h.onRefresh).toHaveBeenCalledOnce();
+    expect(h.onStop).toHaveBeenCalledOnce();
+    cleanup();
+
+    render(<LiveBar status={status()} error="Couldn't allow live data." hidden={false} latest={null} outcomes={none} {...h} />);
+    expect(screen.getByRole('alert')).toHaveTextContent("Live data: Couldn't allow live data.");
+    await user.click(screen.getByRole('button', { name: 'Allow live data' }));
+    expect(h.onAllow).toHaveBeenCalledOnce();
+  });
+
   it('shows nothing once hidden, and an error when the status failed', () => {
     const { container } = render(<LiveBar status={status()} error={null} hidden latest={null} outcomes={none} {...handlers()} />);
     expect(container).toBeEmptyDOMElement();
