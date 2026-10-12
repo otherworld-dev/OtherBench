@@ -593,6 +593,13 @@ export const api = {
     /** Not fetched via `request` -- rendered through `AuthedImage`, which adds the token when there is one. */
     contentUrl: (id: string) => apiUrl(`/attachments/${id}/content`),
     /**
+     * An image a tool returned (a screenshot), by the chat and the reply that hold
+     * it -- the server serves it only for that exact pair, and as a 404 otherwise.
+     * Use this, not `contentUrl`, for the images in a tool result.
+     */
+    toolImageUrl: (chatId: string, messageId: string, attachmentId: string) =>
+      apiUrl(`/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/tool-images/${encodeURIComponent(attachmentId)}`),
+    /**
      * True only for the narrow raster-image allowlist that
      * `GET /attachments/:id/content` (packages/server/src/routes/
      * attachments.ts's `INLINE_SAFE_MIME_TYPES`) will actually serve
