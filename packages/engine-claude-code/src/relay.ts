@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { GruntServerTool } from './grunt-server.js';
 import type { ApprovalTickets } from './tickets.js';
@@ -72,6 +73,22 @@ function isToolError(value: unknown): value is { error: true; message: string } 
 }
 
 /**
+ * What each running reply has been given in images so far, so a loop of calls
+ * cannot hand Claude Code more than one reply may show. Keyed by the reply's
+ * executor, which lives exactly as long as the reply.
+ */
+const imageBudgets = new WeakMap<object, ToolImageBudget>();
+
+function budgetFor(run: object): ToolImageBudget {
+  let budget = imageBudgets.get(run);
+  if (!budget) {
+    budget = { images: 0, bytes: 0 };
+    imageBudgets.set(run, budget);
+  }
+  return budget;
+}
+
+/**
  * A relayed tool as Grunt's server lists it: the server's own description and
  * JSON schema. A call runs on the running reply; the executor's MCP content
  * comes back as is, and its error (or a throw, say the server went away)
@@ -88,7 +105,14 @@ export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRe
       try {
         const out = await run(spec, args);
         if (isToolError(out)) return errorResult(out.message);
-        if (Array.isArray(out)) return { content: out as CallToolResult['content'] };
+        if (Array.isArray(out)) {
+          // MCP content goes to Claude Code only after the same screening an API
+          // model's tool result gets: images by their bytes and within the reply's
+          // budget, audio and resource blobs as a note. Nothing from here is stored.
+          const screened = screenToolResult(out, budgetFor(run), LIVE_IMAGE_LIMITS);
+          if (screened.forged) console.warn(`[claude-code relay] a "${spec.name}" result carried a reference to a stored image; removed.`);
+          return { content: screened.result as CallToolResult['content'] };
+        }
         return { content: [{ type: 'text', text: JSON.stringify(out) }] };
       } catch (err) {
         return errorResult(err instanceof Error ? err.message : String(err));

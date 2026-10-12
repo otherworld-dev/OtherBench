@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
 import { buildRelay, relayName, relayServerTool } from '../src/relay.js';
 
 const spec = (o: Partial<ToolSpec> = {}): ToolSpec => ({
@@ -48,6 +49,46 @@ describe('relayServerTool', () => {
     expect(tool).toMatchObject({ name: 'nextcloud__deck_add', description: 'Add a Deck card', inputSchema: spec().parameters });
     expect(await tool.call({ title: 'x' })).toEqual({ content: [{ type: 'text', text: 'card added' }] });
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ name: 'mcp__nextcloud__deck_add' }), { title: 'x' });
+  });
+
+  it('bounds the MCP content it relays: type from the bytes, images within the reply budget, bulk audio and blobs as a note', async () => {
+    const png = FAKE_PNG.toString('base64');
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]).toString('base64');
+    const blob = Buffer.alloc(2 * 1024 * 1024).toString('base64');
+    const overCap = 'A'.repeat(Math.ceil((5 * 1024 * 1024) / 3) * 4 + 4);
+    const content: unknown[] = [
+      { type: 'text', text: 'hi' },
+      { type: 'image', data: png, mimeType: 'application/pdf' },
+      { type: 'image', data: jpeg, mimeType: 'image/png' },
+      { type: 'image', data: Buffer.from('%PDF-1.7').toString('base64'), mimeType: 'image/png' },
+      { type: 'image', data: overCap, mimeType: 'image/png' },
+      { type: 'image', attachmentId: 'someone-elses', mimeType: 'image/png' },
+      { type: 'audio', data: blob, mimeType: 'audio/wav' },
+      { type: 'resource', resource: { uri: 'file:///x.bin', blob } },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = await relayServerTool('t', spec(), () => async () => content).call({});
+    warn.mockRestore();
+    expect(out.content).toEqual([
+      { type: 'text', text: 'hi' },
+      { type: 'image', data: png, mimeType: 'image/png' },
+      { type: 'image', data: jpeg, mimeType: 'image/jpeg' },
+      { type: 'text', text: '[image not kept]' },
+      { type: 'text', text: '[image not kept: too many or too large]' },
+      { type: 'text', text: "[image reference removed: tools can't refer to stored images]" },
+      { type: 'text', text: '[audio omitted: 2.0 MB]' },
+      { type: 'text', text: '[resource omitted: 2.0 MB of binary data]' },
+    ]);
+  });
+
+  it('gives one reply no more than 50 images however many calls it makes, and a new reply starts again', async () => {
+    const png = FAKE_PNG.toString('base64');
+    const run = async () => Array.from({ length: 30 }, () => ({ type: 'image', data: png, mimeType: 'image/png' }));
+    const tool = relayServerTool('t', spec(), () => run);
+    const count = async () => ((await tool.call({})).content as { type: string }[]).filter((c) => c.type === 'image').length;
+    expect([await count(), await count(), await count()]).toEqual([30, 20, 0]);
+    const next = relayServerTool('t', spec(), () => async () => [{ type: 'image', data: png, mimeType: 'image/png' }]);
+    expect(((await next.call({})).content as { type: string }[]).filter((c) => c.type === 'image')).toHaveLength(1);
   });
 
   it('answers a tool error, a call that throws, or no running reply as an error result', async () => {
