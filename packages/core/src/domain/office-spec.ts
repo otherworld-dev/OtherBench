@@ -1,7 +1,7 @@
 /**
  * The sources Office artifacts are made from (spec 2026-10-12-office-files §3,
  * Deck #928). A `document` is Markdown, bounded only by the 1 MB cap and the size limits
- * below (lines, table rows, indent, quote depth).
+ * below (characters, lines, table rows and cells, indent, quote depth, marks).
  * A `spreadsheet` is JSON: sheets of rows of cells, where text starting with
  * "=" is a formula. The artifact tool, your edit (PUT) and the server's
  * renderers parse with this, and the web draws its previews from it, so it
@@ -740,13 +740,18 @@ export function parseSpreadsheet(content: string): Parsed<SpreadsheetSpec> {
 }
 
 // A document's size limits. The Markdown parser and the .docx writer do far
-// more than linear work on tables, deep nesting and very many blocks, and run
-// in the request, so a document is bounded by structure, not only by the 1 MB
-// cap. Measured so a document at every limit at once still makes in about a
-// second.
+// more than linear work on tables, deep nesting and very many blocks, so a
+// document is bounded by structure, not only by the 1 MB cap, which gives the
+// model a clear error naming the limit for an ordinary over-size document.
+// These checks only approximate the parser's cost and can be got round; the
+// guarantee is the server's, which makes every file in a worker with a time
+// and memory limit (packages/server/src/office/render.ts).
 export const MAX_DOCUMENT_CHARS = 120_000;
 export const MAX_DOCUMENT_LINES = 6_000;
+/** Rows of one table: from a line with a `|` to the next blank line, as GFM body rows need no pipe. */
 export const MAX_DOCUMENT_TABLE_ROWS = 1_000;
+/** Cells of one table, counted as its `|` characters, so a wide table is bounded as well as a long one. */
+export const MAX_DOCUMENT_TABLE_CELLS = 10_000;
 export const MAX_DOCUMENT_INDENT = 24;
 export const MAX_DOCUMENT_QUOTE_DEPTH = 8;
 /** Emphasis, strikethrough, code, link, footnote and HTML marks (`*`, `_`, `~`, backtick, `[`, `<`) outside code blocks: the parser's work on them grows fast, so they are counted for the whole document. */
@@ -768,8 +773,9 @@ function fenceOf(line: string): { char: string; length: number; rest: string } |
 
 /**
  * Why a document's Markdown is too big to make into a Word file, or null. One
- * linear pass over the lines, with no Markdown parser. Indentation inside a
- * fenced code block is ordinary code and isn't counted.
+ * linear pass over the lines, with no Markdown parser. Indentation, quotes,
+ * tables and marks inside a fenced code block are ordinary code and aren't
+ * counted.
  */
 function documentProblem(content: string): string | null {
   if (content.length > MAX_DOCUMENT_CHARS) {
@@ -781,6 +787,7 @@ function documentProblem(content: string): string | null {
   }
   let fence: { char: string; length: number } | null = null;
   let tableRows = 0;
+  let tableCells = 0;
   let marks = 0;
   for (let n = 0; n < lines.length; n++) {
     const line = lines[n]!;
@@ -791,7 +798,7 @@ function documentProblem(content: string): string | null {
     }
     if (found && !(found.char === '`' && found.rest.includes('`'))) {
       fence = found;
-      tableRows = 0;
+      tableRows = tableCells = 0;
       continue;
     }
     for (let k = 0; k < line.length; k++) {
@@ -824,12 +831,22 @@ function documentProblem(content: string): string | null {
     if (widest > MAX_DOCUMENT_INDENT) {
       return `Line ${number(n + 1)} of the document is indented ${number(widest)} columns; Grunt makes Word files with indents of at most ${MAX_DOCUMENT_INDENT} columns.`;
     }
-    if (line.includes('|') && line.trim() !== '') {
-      tableRows++;
-      if (tableRows > MAX_DOCUMENT_TABLE_ROWS) {
-        return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_ROWS)} rows (it passes that at line ${number(n + 1)}); Grunt makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_ROWS)} rows. Split the table.`;
-      }
-    } else tableRows = 0;
+    // A table starts at a line with a `|` and, as in GFM, runs to the next blank line: its body rows need no pipe.
+    if (line.trim() === '') {
+      tableRows = tableCells = 0;
+      continue;
+    }
+    let pipes = 0;
+    for (let k = 0; k < line.length; k++) if (line.charCodeAt(k) === 124) pipes++;
+    if (pipes === 0 && tableRows === 0) continue;
+    tableRows++;
+    tableCells += pipes;
+    if (tableRows > MAX_DOCUMENT_TABLE_ROWS) {
+      return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_ROWS)} rows (it passes that at line ${number(n + 1)}); Grunt makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_ROWS)} rows. Split the table.`;
+    }
+    if (tableCells > MAX_DOCUMENT_TABLE_CELLS) {
+      return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_CELLS)} cells (it passes that at line ${number(n + 1)}); Grunt makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_CELLS)} cells. Split the table.`;
+    }
   }
   return null;
 }

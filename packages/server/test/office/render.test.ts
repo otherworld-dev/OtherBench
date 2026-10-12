@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { checkOfficeContent, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_ROWS } from '@grunt/core/domain/office-spec.js';
+import { checkOfficeContent, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_INDENT, MAX_DOCUMENT_LINES, MAX_DOCUMENT_MARKS, MAX_DOCUMENT_QUOTE_DEPTH, MAX_DOCUMENT_TABLE_CELLS, MAX_DOCUMENT_TABLE_ROWS } from '@grunt/core/domain/office-spec.js';
 import { listZipEntries, readZipEntry } from '../../src/import/zip.js';
 import { extractOfficeText } from '../../src/office/extract.js';
-import { OfficeRenderError, renderOfficeFile } from '../../src/office/render.js';
+// renderOfficeFile makes the file in a worker run from the compiled dist/office/render-worker.js: run `npx tsc -b` first.
+import { OfficeRenderError, officeRenderWorkersRunning, renderOfficeFile, renderOfficeFileInProcess } from '../../src/office/render.js';
 
 /** One part of a made file, as text. */
 function part(zip: Buffer, name: string): string {
@@ -46,15 +47,15 @@ describe('renderOfficeFile: document', () => {
     expect(rels).not.toContain('file:///');
     expect(rels).not.toContain('c.png');
     expect(part(bytes, 'docProps/core.xml')).toContain('Memo');
-  });
+  }, 30_000);
 
   it('restarts the numbering for each numbered list', async () => {
-    const doc = part(await renderOfficeFile('document', '1. One\n2. Two\n\nBetween\n\n1. Again', 'N'), 'word/document.xml');
+    const doc = part(await renderOfficeFileInProcess('document', '1. One\n2. Two\n\nBetween\n\n1. Again', 'N'), 'word/document.xml');
     expect(new Set(doc.match(/<w:numId w:val="\d+"\/>/g)).size).toBe(2);
   });
 
   it('is A4 with 2.54 cm margins, in Calibri 11', async () => {
-    const bytes = await renderOfficeFile('document', 'Text', 'Page');
+    const bytes = await renderOfficeFileInProcess('document', 'Text', 'Page');
     const doc = part(bytes, 'word/document.xml');
     expect(doc).toContain('w:w="11906"');
     expect(doc).toContain('w:h="16838"');
@@ -65,7 +66,7 @@ describe('renderOfficeFile: document', () => {
   });
 
   it('strips characters XML cannot hold, and keeps emoji and accents', async () => {
-    const doc = part(await renderOfficeFile('document', 'Bad \u0001 char, Café 😀', 'T\u0002itle'), 'word/document.xml');
+    const doc = part(await renderOfficeFileInProcess('document', 'Bad \u0001 char, Café 😀', 'T\u0002itle'), 'word/document.xml');
     expect(doc).not.toMatch(/[\u0001\u0002]/);
     expect(doc).toContain('Café 😀');
   });
@@ -73,7 +74,7 @@ describe('renderOfficeFile: document', () => {
 
 describe('renderOfficeFile: document links, titles and size limits', () => {
   it('writes javascript: and relative links as plain text, with no relationship', async () => {
-    const bytes = await renderOfficeFile('document', '[js](javascript:alert(1)) [rel](/etc/passwd) [frag](#top) [mail](mailto:a@example.com)', 'L');
+    const bytes = await renderOfficeFileInProcess('document', '[js](javascript:alert(1)) [rel](/etc/passwd) [frag](#top) [mail](mailto:a@example.com)', 'L');
     const doc = part(bytes, 'word/document.xml');
     const rels = part(bytes, 'word/_rels/document.xml.rels');
     expect(extractOfficeText(bytes)).toContain('js rel frag');
@@ -85,7 +86,7 @@ describe('renderOfficeFile: document links, titles and size limits', () => {
   });
 
   it('escapes a title with markup characters in the file properties', async () => {
-    const core = part(await renderOfficeFile('document', 'Text', 'A <b> & "c"'), 'docProps/core.xml');
+    const core = part(await renderOfficeFileInProcess('document', 'Text', 'A <b> & "c"'), 'docProps/core.xml');
     expect(core).toContain('A &lt;b&gt; &amp; &quot;c&quot;');
     expect(core).not.toContain('<b>');
   });
@@ -112,12 +113,13 @@ describe('renderOfficeFile: document links, titles and size limits', () => {
     const bytes = await renderOfficeFile('document', md, 'Big');
     expect(Date.now() - start).toBeLessThan(5000);
     expect(extractOfficeText(bytes)).toContain('Paragraph 499');
-  });
+  }, 30_000);
 
   it.each([
     ['lines', Array.from({ length: MAX_DOCUMENT_LINES + 1 }, () => 'x').join('\n'), /6,001 lines.*at most 6,000 lines/],
     ['characters', 'a'.repeat(MAX_DOCUMENT_CHARS + 1), /characters.*at most 120,000 characters/],
     ['table rows', ['| a |', '|---|', ...Array.from({ length: MAX_DOCUMENT_TABLE_ROWS }, () => '| x |')].join('\n'), /table of more than 1,000 rows/],
+    ['table cells', '|x'.repeat(MAX_DOCUMENT_TABLE_CELLS + 1), /table of more than 10,000 cells/],
     ['indent', `${' '.repeat(MAX_DOCUMENT_INDENT + 1)}- deep`, /indented 25 columns.*at most 24 columns/],
     ['quote depth', `${'>'.repeat(MAX_DOCUMENT_QUOTE_DEPTH + 1)} q`, /quoted 9 levels deep.*at most 8 levels deep/],
     ['marks', '*'.repeat(MAX_DOCUMENT_MARKS + 1), /more than 10,000 formatting marks/],
@@ -140,5 +142,53 @@ describe('renderOfficeFile: document links, titles and size limits', () => {
 
   it('refuses an unknown kind instead of returning nothing', async () => {
     await expect(renderOfficeFile('presentation' as never, 'x', 'T')).rejects.toBeInstanceOf(OfficeRenderError);
-  });
+    await expect(renderOfficeFileInProcess('presentation' as never, 'x', 'T')).rejects.toBeInstanceOf(OfficeRenderError);
+  }, 30_000);
+});
+
+describe('renderOfficeFile: in a worker with a time and memory limit', () => {
+  // Content the size checks pass but the Markdown parser takes far too long on (12 s to over 90 s in the request before).
+  const nestedLists = `${'- '.repeat(20_000)}x`;
+
+  it('stops a document that takes too long, with an OfficeRenderError, and leaves no worker running', async () => {
+    expect(checkOfficeContent('document', nestedLists)).toBeNull();
+    const start = Date.now();
+    const error = await renderOfficeFile('document', nestedLists, 'Slow', { timeoutMs: 1500 }).catch((e: unknown) => e);
+    expect(Date.now() - start).toBeLessThan(5000);
+    expect(error).toBeInstanceOf(OfficeRenderError);
+    expect((error as Error).message).toBe('The document is too large or too complex to make in time: simplify it or split it into more than one artifact.');
+    expect(officeRenderWorkersRunning()).toBe(0);
+  }, 30_000);
+
+  // Lists and quotes nested thousands deep, inline where the size checks don't look: the parser's tree walk runs out of
+  // stack at 3,000 levels and the worker's 512 MB heap at 4,000 (both measured; each takes 4-15 s on a loaded machine).
+  it.each([
+    ['runs out of stack', `${'- > '.repeat(3_000)}x`, /^Maximum call stack size exceeded$/],
+    ['runs out of memory', `${'- > '.repeat(4_000)}x`, /^The document is too large or too complex to make: it needs more memory than Grunt allows\./],
+  ])('gives a worker that %s as an OfficeRenderError, and leaves no worker running', async (_name, md, message) => {
+    expect(checkOfficeContent('document', md)).toBeNull();
+    const error = await renderOfficeFile('document', md, 'Deep', { timeoutMs: 60_000 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OfficeRenderError);
+    expect((error as Error).message).toMatch(message);
+    expect(officeRenderWorkersRunning()).toBe(0);
+  }, 90_000);
+
+  it('gives an error the renderer posts back as an OfficeRenderError', async () => {
+    await expect(renderOfficeFile('spreadsheet', '{"sheets":[]}', 'S')).rejects.toThrow(new OfficeRenderError("Grunt can't make spreadsheets yet."));
+    expect(officeRenderWorkersRunning()).toBe(0);
+  }, 30_000);
+
+  it('keeps the event loop free while a file is made', async () => {
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 50);
+    await renderOfficeFile('document', nestedLists, 'Slow', { timeoutMs: 1500 }).catch(() => undefined);
+    clearInterval(timer);
+    expect(ticks).toBeGreaterThan(10);
+  }, 30_000);
+
+  it('makes several files at once', async () => {
+    const files = await Promise.all(['One', 'Two', 'Three'].map((t) => renderOfficeFile('document', `# ${t}`, t)));
+    files.forEach((f, i) => expect(extractOfficeText(f)).toContain(`# ${['One', 'Two', 'Three'][i]}`));
+    expect(officeRenderWorkersRunning()).toBe(0);
+  }, 30_000);
 });

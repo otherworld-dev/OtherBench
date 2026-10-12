@@ -10,6 +10,7 @@ import {
   MAX_DOCUMENT_LINES,
   MAX_DOCUMENT_MARKS,
   MAX_DOCUMENT_QUOTE_DEPTH,
+  MAX_DOCUMENT_TABLE_CELLS,
   MAX_DOCUMENT_TABLE_ROWS,
   NOT_YET_FUNCTIONS,
   OFFICE_GUIDANCE,
@@ -516,6 +517,27 @@ describe('checkOfficeContent: document size limits', () => {
     expect(doc(bare)).toMatch(/table of more than 1,000 rows/);
     // A blank line starts a new table.
     expect(doc(`${table(MAX_DOCUMENT_TABLE_ROWS)}\n\n${table(MAX_DOCUMENT_TABLE_ROWS)}`)).toBeNull();
+  });
+
+  it('counts a pipe-free line after a table row as a row, as GFM does, until a blank line', () => {
+    // GFM body rows need no pipe: a table runs until a blank line.
+    const alternating = ['| a | b |', '|---|---|', ...Array.from({ length: MAX_DOCUMENT_TABLE_ROWS }, (_, i) => (i % 2 ? 'plain row' : '| x | y |'))].join('\n');
+    expect(doc(alternating)).toMatch(/table of more than 1,000 rows/);
+    expect(doc(['| a |', '|---|', ...Array.from({ length: MAX_DOCUMENT_TABLE_ROWS - 2 }, () => 'no pipe')].join('\n'))).toBeNull();
+    // Pipe-free lines that don't follow a table row aren't counted.
+    expect(doc(lines(MAX_DOCUMENT_LINES, 'prose'))).toBeNull();
+    expect(doc(`${table(MAX_DOCUMENT_TABLE_ROWS)}\n\n${lines(MAX_DOCUMENT_TABLE_ROWS + 1, 'prose')}`)).toBeNull();
+  });
+
+  it('refuses a table of more cells (pipes) than the limit, wide or long, and accepts exactly the limit', () => {
+    const wide = (columns: number, rows: number) => Array.from({ length: rows }, () => '|x'.repeat(columns)).join('\n');
+    expect(doc(wide(MAX_DOCUMENT_TABLE_CELLS / 4, 4))).toBeNull();
+    expect(doc(wide(MAX_DOCUMENT_TABLE_CELLS, 1))).toBeNull();
+    expect(doc(wide(MAX_DOCUMENT_TABLE_CELLS + 1, 1))).toMatch(new RegExp(`table of more than ${MAX_DOCUMENT_TABLE_CELLS.toLocaleString('en-US')} cells \\(it passes that at line 1\\)`));
+    expect(doc(wide(200, 250))).toMatch(/cells \(it passes that at line \d+\)/);
+    expect(doc(wide(20_000, 2))).toMatch(/cells/);
+    // Pipes in separate tables aren't added together.
+    expect(doc(`${wide(MAX_DOCUMENT_TABLE_CELLS, 1)}\n\n${wide(MAX_DOCUMENT_TABLE_CELLS, 1)}`)).toBeNull();
   });
 
   it('refuses indentation past the limit (a tab is 4 columns) and accepts exactly the limit', () => {
