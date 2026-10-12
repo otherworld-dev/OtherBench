@@ -836,3 +836,32 @@ describe('Inspector other folders', () => {
     mockedIsDesktop.mockReturnValue(false);
   });
 });
+
+describe('Inspector Progress', () => {
+  beforeEach(() => {
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+  const todoCall = { type: 'tool-call' as const, id: 't1', name: 'update_todos', args: { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }] } };
+
+  it("lists each running reply's checklist, named by profile in a compare, and hides once none is running", () => {
+    useGruntStore.setState({ messages: {
+      a: makeMessage('a', { parts: [todoCall] }),
+      b: makeMessage('b', { parts: [todoCall], producedBy: { profileId: 'p2', profileName: 'Beta', connectionId: 'c1', modelId: 'm' } }),
+    } });
+    const { rerender } = render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Progress' })).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    expect(screen.getAllByTestId('todo-checklist')).toHaveLength(2);
+    useGruntStore.setState({ messages: { a: makeMessage('a', { parts: [todoCall], status: 'complete' }) } });
+    rerender(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.queryByRole('heading', { name: 'Progress' })).toBeNull();
+  });
+
+  it('words a plan refusal in the audit trail', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'x', chatId: 'chat-1', messageId: 'm', toolName: 'write_file', argsRedacted: {}, resultSummary: 'error: plan_mode', durationMs: 1, grantedBy: 'deny:plan', createdAt: Date.now() }] as never);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(await screen.findByText('refused: no plan approved yet')).toBeInTheDocument();
+  });
+});

@@ -114,6 +114,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const [effortError, setEffortError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
+  const [planSaving, setPlanSaving] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // The message field starts one line high and grows with its text, up to its max height (then it scrolls).
   useLayoutEffect(() => {
@@ -160,6 +162,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const autoUnavailable = showAutoToggle && claudeCodeProfiles.every((p) => !!connections.find((c) => c.id === p.connectionId)?.baseUrl);
   const autoMode = (storedChat ?? chat).autoMode;
   const autoActive = autoMode && !autoUnavailable;
+  const planMode = (storedChat ?? chat).planMode === true;
   const effort = (storedChat ?? chat).effort ?? null;
   const primaryProfile = profiles.find((p) => p.id === selectedProfileIds[0]) ?? null;
   const comparedProfiles = selectedProfileIds.slice(1).map((id) => profiles.find((p) => p.id === id)).filter((p): p is NonNullable<typeof p> => !!p);
@@ -195,6 +198,26 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       setAutoError(err instanceof ApiError ? err.message : "Couldn't change auto mode. Please try again.");
     } finally {
       setAutoSaving(false);
+    }
+  }
+
+  /** Flips the chat's Plan mode optimistically; a failed save reverts only `planMode` and shows why. Applies from the next message. */
+  async function togglePlanMode(): Promise<void> {
+    if (planSaving) return;
+    const previous = planMode;
+    const next = !previous;
+    const latest = (): Chat => useGruntStore.getState().chats.find((c) => c.id === chat.id) ?? storedChat ?? chat;
+    setPlanError(null);
+    setPlanSaving(true);
+    upsertChat({ ...latest(), planMode: next });
+    try {
+      upsertChat(await api.chats.patch(chat.id, { planMode: next }));
+    } catch (err) {
+      const current = useGruntStore.getState().chats.find((c) => c.id === chat.id);
+      if (current) upsertChat({ ...current, planMode: previous });
+      setPlanError(err instanceof ApiError ? err.message : "Couldn't change plan mode. Please try again.");
+    } finally {
+      setPlanSaving(false);
     }
   }
 
@@ -382,6 +405,12 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         </div>
       )}
 
+      {planError && (
+        <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
+          {planError}
+        </div>
+      )}
+
       {effortError && (
         <div role="alert" className="mb-1.5 text-xs text-[var(--danger)]">
           {effortError}
@@ -493,6 +522,20 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               </ul>
             )}
           </div>
+
+          <button
+            type="button"
+            aria-label="Plan mode"
+            aria-pressed={planMode}
+            disabled={planSaving}
+            title="Plan first: the model sets out a plan and waits for your approval before it changes anything (from the next message)"
+            onClick={() => void togglePlanMode()}
+            className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] disabled:opacity-50 ${
+              planMode ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-text)]' : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:bg-[var(--bg-sunken)]'
+            }`}
+          >
+            Plan
+          </button>
 
           {showAutoToggle && (
             <button

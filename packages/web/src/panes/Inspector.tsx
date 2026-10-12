@@ -1,4 +1,5 @@
-import { useEffect, useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
+import { latestTodos } from '@grunt/core/domain/thread-tools.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
@@ -13,6 +14,7 @@ import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
 import { FolderList } from '../components/FolderList.js';
+import { TodoChecklist } from '../components/TodoChecklist.js';
 import { isClaudeCodeProfile } from '../components/Composer.js';
 
 export interface InspectorProps {
@@ -35,6 +37,34 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
 
 function EmptyState({ children }: { children: ReactNode }): JSX.Element {
   return <p className="text-sm text-[var(--text-faint)]">{children}</p>;
+}
+
+/** Running replies' checklists (spec 2026-10-12-thread-cards-design §7); the section exists only while one is running with a checklist. */
+function ProgressSection({ chatId }: { chatId: string }): JSX.Element | null {
+  const messages = useGruntStore((s) => s.messages);
+  const running = useMemo(
+    () =>
+      Object.values(messages)
+        .filter((m) => m.chatId === chatId && m.role === 'assistant' && m.status === 'streaming')
+        .flatMap((m) => {
+          const todos = latestTodos(m.parts);
+          return todos ? [{ id: m.id, profileName: m.producedBy?.profileName ?? 'Assistant', todos }] : [];
+        }),
+    [messages, chatId]
+  );
+  if (running.length === 0) return null;
+  return (
+    <Section title="Progress">
+      <div className="space-y-2">
+        {running.map((r) => (
+          <div key={r.id}>
+            {running.length > 1 && <div className="text-xs text-[var(--text-muted)]">{r.profileName}</div>}
+            <TodoChecklist todos={r.todos} streaming />
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
 }
 
 function formatCost(cost: number): string {
@@ -593,6 +623,7 @@ function grantedByLabel(grantedBy: string): string {
     case 'auto': return 'auto mode';
     case 'deny:cancelled': return 'stopped (not denied)';
     case 'deny:auto': return 'blocked by auto mode';
+    case 'deny:plan': return 'refused: no plan approved yet';
     default: return grantedBy;
   }
 }
@@ -805,6 +836,8 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       <Section title="Project">
         {chat ? <InspectorProject chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
+
+      {chat && <ProgressSection chatId={chat.id} />}
 
       {chat && memoryProject && (
         <Section title="Project memory">
