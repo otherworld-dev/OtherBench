@@ -481,6 +481,12 @@ export const api = {
     version: (chatId: string, artifactId: string, versionId: string) => request<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}`),
     edit: (chatId: string, artifactId: string, body: { content: string; title?: string; fromVersionId?: string }) => put<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}`, body),
     save: (chatId: string, artifactId: string, body: { versionId: string; path: string; replace?: boolean }) => post<{ path: string }>(`/chats/${chatId}/artifacts/${artifactId}/save`, body),
+    /** The version as the file it downloads as (spec 2026-10-12-office-files §4): the made .docx/.xlsx/.pptx, or the text. */
+    file: async (chatId: string, artifactId: string, versionId: string): Promise<Blob> => {
+      const res = await apiFetch(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/file`);
+      if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
+      return res.blob();
+    },
   },
   view: {
     open: (chatId: string, path: string) => post<ViewOpened>('/view/links', { chatId, path }),

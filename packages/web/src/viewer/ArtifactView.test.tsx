@@ -5,7 +5,7 @@ import type { ArtifactVersion } from '@grunt/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
-  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn() }, view: { openArtifact: vi.fn() } },
+  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn(), file: vi.fn() }, view: { openArtifact: vi.fn() } },
 }));
 
 vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
@@ -154,5 +154,66 @@ describe('ArtifactView', () => {
     render(<ArtifactView chatId="c1" item={item} />);
     await screen.findByTitle('calc.html');
     expect(screen.queryByRole('button', { name: 'Save to workspace' })).toBeNull();
+  });
+
+  const officeDetail = (kind: 'document' | 'spreadsheet', fileName: string): ArtifactDetail => {
+    const each = { title: 'Budget', madeBy: 'model' as const, kind, language: null, fileName };
+    return {
+      artifact: { id: 'art', chatId: 'c1', slug: 'budget', kind, language: null, createdAt: 1 },
+      fileName,
+      currentVersionId: 'v2',
+      versions: [{ ...each, id: 'v2', number: 2, createdAt: 2, onBranch: true }],
+    };
+  };
+  const SHEET = JSON.stringify({ sheets: [{ name: 'Budget', rows: [['Items', 'Cost'], ['Total', '=SUM(B2:B3)']] }] });
+
+  it('previews a spreadsheet from its source and downloads the made .xlsx', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    const blob = new Blob(['PK']);
+    vi.mocked(api.artifacts.file).mockReset().mockResolvedValue(blob);
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByText('=SUM(B2:B3)')).toBeInTheDocument();
+    expect(api.view.openArtifact).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(api.artifacts.file).toHaveBeenCalledWith('c1', 'art', 'v2');
+    expect(saveFile).toHaveBeenLastCalledWith(blob, 'budget.xlsx');
+    // Source still shows the JSON.
+    await user.click(screen.getByRole('button', { name: 'Source' }));
+    await waitFor(() => expect(document.querySelector('pre code')?.textContent).toBe(SHEET));
+  });
+
+  it('says why a download failed and keeps the preview', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.file).mockReset().mockRejectedValue(new ApiError(422, "Couldn't make budget.xlsx: sheets[0].rows[0][0]: bad"));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't make budget.xlsx");
+    expect(screen.getByText('=SUM(B2:B3)')).toBeInTheDocument();
+  });
+
+  it('previews a document as a page', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('document', 'memo.docx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, '# Quarterly memo', 'model', 'document'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByRole('heading', { name: 'Quarterly memo' })).toBeInTheDocument();
+  });
+
+  it('keeps your draft and says why when an edit is refused', async () => {
+    vi.mocked(api.artifacts.edit).mockRejectedValue(new ApiError(400, 'sheets: must be a list of 1-50 sheets'));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const box = screen.getByRole('textbox', { name: 'Artifact source' });
+    await waitFor(() => expect(box).toHaveValue('<p>v2</p>'));
+    await user.type(box, '!');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('sheets: must be a list of 1-50 sheets');
+    expect(screen.getByRole('textbox', { name: 'Artifact source' })).toHaveValue('<p>v2</p>!');
   });
 });

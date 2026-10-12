@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { isOfficeKind } from '@grunt/core/domain/office-spec.js';
 import type { ArtifactVersion } from '@grunt/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { saveFile } from '../lib/saveFile.js';
@@ -7,6 +8,7 @@ import { useGruntStore } from '../state/store.js';
 import { serverUrl } from '../state/transport.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
+import { OfficePreview } from './OfficePreview.js';
 import { useArtifactsStamp } from './stamp.js';
 
 const BUTTON = 'btn px-2 py-0.5';
@@ -19,7 +21,8 @@ function failure(err: unknown): string {
 /**
  * An artifact in the viewer (spec 2026-10-07-artifacts): the branch's current
  * version unless one is pinned or picked, rendered by kind (pages and Mermaid
- * in the sandbox, SVG as an image, Markdown by React, code highlighted), with
+ * in the sandbox, SVG as an image, Markdown by React, code highlighted, Word and
+ * Excel files drawn from their source (OfficePreview)), with
  * Source, Edit, Copy, Download and Save to workspace. It reloads when the
  * reply the chat shows changes (a new reply, a branch switch, a part
  * streaming in), so an unpinned artifact follows the branch in the panel
@@ -31,6 +34,8 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const [version, setVersion] = useState<ArtifactVersion | null>(null);
   const [opened, setOpened] = useState<ViewOpened | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** A failed Download or Edit: shown under the toolbar, keeping the view and any draft. */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [source, setSource] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState<{ path: string; exists: string | null; done: string | null } | null>(null);
@@ -89,12 +94,28 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     try {
       const made = await api.artifacts.edit(chatId, item.artifactId, { content: draft, fromVersionId: versionId });
       setDraft(null);
+      setActionError(null);
       // Your edit lands on the branch you're on, so a view that follows the
       // branch shows it by following; a pinned one moves to it.
       if (picked !== null) setPicked(made.id);
       setReload((r) => r + 1);
     } catch (err) {
-      setError(failure(err));
+      setActionError(failure(err));
+    }
+  }
+
+  async function download(): Promise<void> {
+    if (!version || !shown) return;
+    setActionError(null);
+    // Office kinds download as the file the server makes; the rest as their text.
+    if (!isOfficeKind(version.kind)) {
+      saveFile(new Blob([version.content], { type: 'text/plain' }), shown.fileName);
+      return;
+    }
+    try {
+      saveFile(await api.artifacts.file(chatId, item.artifactId, version.id), shown.fileName);
+    } catch (err) {
+      setActionError(failure(err));
     }
   }
 
@@ -124,6 +145,8 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     body = <p className="p-3 text-sm text-[var(--text-faint)]">Loading…</p>;
   } else if (kind === 'code' || source) {
     body = <CodeView text={version.content} language={kind === 'code' ? (shown.language ?? '') : SOURCE_LANGUAGE[kind]} />;
+  } else if (isOfficeKind(kind)) {
+    body = <OfficePreview kind={kind} content={version.content} />;
   } else if (kind === 'markdown') {
     body = <div className="p-4"><MarkdownBody text={version.content} /></div>;
   } else if (!opened?.url) {
@@ -151,18 +174,23 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
           <button type="button" aria-pressed={source} onClick={() => setSource((s) => !s)} className={BUTTON}>Source</button>
         )}
         {draft === null && version && (
-          <button type="button" onClick={() => setDraft(version.content)} className={BUTTON}>Edit</button>
+          <button type="button" onClick={() => { setActionError(null); setDraft(version.content); }} className={BUTTON}>Edit</button>
         )}
         {version && (
           <button type="button" onClick={() => void navigator.clipboard.writeText(version.content).catch(() => setError("Couldn't copy to the clipboard."))} className={BUTTON}>Copy</button>
         )}
         {version && (
-          <button type="button" onClick={() => saveFile(new Blob([version.content], { type: 'text/plain' }), shown.fileName)} className={BUTTON}>Download</button>
+          <button type="button" onClick={() => void download()} className={BUTTON}>Download</button>
         )}
         {workspaceHere && version && (
           <button type="button" onClick={() => setSaving({ path: shown.fileName, exists: null, done: null })} className={BUTTON}>Save to workspace</button>
         )}
       </div>
+      {actionError && (
+        <p role="alert" className="border-b border-[var(--border)] px-3 py-1 text-xs text-[var(--danger)]">
+          {actionError}
+        </p>
+      )}
       {saving && (
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] px-3 py-1 text-xs">
           <input aria-label="Save as" value={saving.path} onChange={(e) => setSaving({ path: e.target.value, exists: null, done: null })} className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-0.5 font-mono" />
