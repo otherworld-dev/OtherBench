@@ -1,5 +1,15 @@
 import { memo, useMemo, useState, type CSSProperties, type JSX } from 'react';
-import { columnName, parseSpreadsheet, type Cell, type OfficeKind, type SheetSpec } from '@grunt/core/domain/office-spec.js';
+import {
+  columnName,
+  parsePresentation,
+  parseSpreadsheet,
+  type Bullet,
+  type Cell,
+  type OfficeKind,
+  type SheetSpec,
+  type SlideColumn,
+  type SlideSpec,
+} from '@grunt/core/domain/office-spec.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 
 /**
@@ -172,3 +182,138 @@ function SpreadsheetPreview({ content }: { content: string }): JSX.Element {
     </div>
   );
 }
+
+const SLIDE_INCHES = { w: 13.33, h: 7.5 };
+const DEFAULT_ACCENT = '#1F4E79';
+
+/** A box on the slide in inches, as a percentage of the card. */
+const at = (x: number, y: number, w: number, h: number): CSSProperties => ({
+  position: 'absolute',
+  left: `${(x / SLIDE_INCHES.w) * 100}%`,
+  top: `${(y / SLIDE_INCHES.h) * 100}%`,
+  width: `${(w / SLIDE_INCHES.w) * 100}%`,
+  height: `${(h / SLIDE_INCHES.h) * 100}%`,
+  overflow: 'hidden',
+});
+/** Points as a share of the card's width, so the text scales with the panel. */
+const pt = (points: number): string => `${((points / 72 / SLIDE_INCHES.w) * 100).toFixed(2)}cqw`;
+
+function BulletList({ bullets, size }: { bullets: Bullet[]; size: number }): JSX.Element {
+  return (
+    <ul style={{ margin: 0, paddingLeft: '1.2em', fontSize: pt(size), lineHeight: 1.25 }}>
+      {bullets.map((b, i) => {
+        const text = typeof b === 'string' ? b : b.text;
+        const level = typeof b === 'string' ? 0 : b.level;
+        return (
+          <li key={i} style={{ marginLeft: `${level * 1.5}em` }}>
+            {text}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ColumnBox({ column, style }: { column: SlideColumn; style: CSSProperties }): JSX.Element {
+  return (
+    <div style={style}>
+      {column.heading && <p style={{ margin: 0, fontWeight: 700, fontSize: pt(22) }}>{column.heading}</p>}
+      <BulletList bullets={column.bullets} size={18} />
+    </div>
+  );
+}
+
+function SlideTitle({ title, accent }: { title: string; accent: string }): JSX.Element {
+  return <p style={{ ...at(0.5, 0.35, 12.33, 0.9), margin: 0, fontSize: pt(30), fontWeight: 700, color: accent }}>{title}</p>;
+}
+
+function SlideBody({ slide, accent }: { slide: SlideSpec; accent: string }): JSX.Element {
+  switch (slide.layout) {
+    case 'title':
+      return (
+        <>
+          <p style={{ ...at(0.75, 2.2, 11.83, 1.4), margin: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: pt(40), fontWeight: 700, color: accent }}>{slide.title}</p>
+          <div style={{ ...at(5.67, 3.75, 2, 0.06), background: accent }} />
+          {slide.subtitle && <p style={{ ...at(0.75, 3.95, 11.83, 1.0), margin: 0, textAlign: 'center', fontSize: pt(24), color: '#595959' }}>{slide.subtitle}</p>}
+        </>
+      );
+    case 'section':
+      return (
+        <>
+          <p style={{ ...at(0.75, 2.6, 11.83, 1.3), margin: 0, display: 'flex', alignItems: 'center', fontSize: pt(36), fontWeight: 700, color: '#ffffff' }}>{slide.title}</p>
+          {slide.subtitle && <p style={{ ...at(0.75, 3.95, 11.83, 0.9), margin: 0, fontSize: pt(20), color: '#ffffff' }}>{slide.subtitle}</p>}
+        </>
+      );
+    case 'bullets':
+      return (
+        <>
+          <SlideTitle title={slide.title} accent={accent} />
+          <div style={at(0.5, 1.45, 12.33, 5.5)}>
+            <BulletList bullets={slide.bullets} size={20} />
+          </div>
+        </>
+      );
+    case 'two-column':
+      return (
+        <>
+          <SlideTitle title={slide.title} accent={accent} />
+          <ColumnBox column={slide.left} style={at(0.5, 1.45, 6.0, 5.5)} />
+          <ColumnBox column={slide.right} style={at(6.83, 1.45, 6.0, 5.5)} />
+        </>
+      );
+    case 'table':
+      return (
+        <>
+          <SlideTitle title={slide.title} accent={accent} />
+          <div style={at(0.5, 1.45, 12.33, 5.5)}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: pt(slide.table.rows.length > 15 ? 12 : 14) }}>
+              <thead>
+                <tr>
+                  {slide.table.header.map((h, i) => (
+                    <th key={i} style={{ background: accent, color: '#ffffff', textAlign: 'left', border: '1px solid #BFBFBF', padding: '0.2em 0.4em' }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {slide.table.rows.map((row, r) => (
+                  <tr key={r}>
+                    {row.map((c, i) => (
+                      <td key={i} style={{ border: '1px solid #BFBFBF', padding: '0.2em 0.4em' }}>
+                        {String(c)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      );
+  }
+}
+
+/** A deck drawn as 16:9 cards, laid out like the .pptx Grunt makes. Memoized on content: a 200-slide deck must not redraw on the viewer's unrelated state changes. */
+export const PresentationPreview = memo(function PresentationPreview({ content }: { content: string }): JSX.Element {
+  const parsed = useMemo(() => parsePresentation(content), [content]);
+  if (!parsed.ok) return <Unreadable error={parsed.error} />;
+  const accent = parsed.spec.theme?.accent ?? DEFAULT_ACCENT;
+  return (
+    <div className="space-y-4 bg-[var(--bg-sunken)] p-4">
+      {parsed.spec.slides.map((slide, i) => (
+        <figure key={i} aria-label={`Slide ${i + 1}`} className="m-0">
+          <div
+            data-testid={`slide-${i + 1}`}
+            className="relative w-full overflow-hidden rounded border border-[var(--border)] shadow-sm"
+            style={{ aspectRatio: '16 / 9', containerType: 'inline-size', background: slide.layout === 'section' ? accent : '#ffffff', color: '#1d1b18', fontFamily: 'Calibri, Carlito, sans-serif' }}
+          >
+            <SlideBody slide={slide} accent={accent} />
+            {slide.layout !== 'title' && <span style={{ ...at(12.4, 6.95, 0.7, 0.35), fontSize: pt(10), color: '#808080', textAlign: 'right' }}>{i + 1}</span>}
+          </div>
+          <figcaption className="mt-1 text-xs text-[var(--text-faint)]">{slide.notes ? `Notes: ${slide.notes}` : `Slide ${i + 1}`}</figcaption>
+        </figure>
+      ))}
+    </div>
+  );
+});

@@ -1,7 +1,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
-import { OfficePreview } from './OfficePreview.js';
+import { OfficePreview, PresentationPreview } from './OfficePreview.js';
 
 afterEach(cleanup);
 
@@ -53,5 +53,43 @@ describe('OfficePreview', () => {
     render(<OfficePreview kind="spreadsheet" content={'{"sheets":'} />);
     expect(screen.getByRole('alert')).toHaveTextContent("The content isn't valid JSON");
     expect(screen.getByRole('alert')).toHaveTextContent('Use Source to see it.');
+  });
+});
+
+describe('PresentationPreview', () => {
+  const DECK = JSON.stringify({
+    theme: { accent: '#AA3300' },
+    slides: [
+      { layout: 'title', title: 'Mock review', subtitle: 'From the mock model' },
+      { layout: 'bullets', title: 'Highlights', bullets: ['Revenue up', { text: 'Two new clients', level: 1 }], notes: 'Mention churn.' },
+      { layout: 'section', title: 'Results' },
+      { layout: 'table', title: 'Costs', table: { header: ['Item', 'Cost'], rows: [['Widgets', 12]] } },
+      { layout: 'two-column', title: 'Then and now', left: { heading: 'Then', bullets: ['Manual'] }, right: { bullets: ['Automatic'] } },
+    ],
+  });
+
+  it('draws each slide as a numbered card with its titles, bullets, table and notes', () => {
+    render(<PresentationPreview content={DECK} />);
+    const slides = screen.getAllByRole('figure');
+    expect(slides).toHaveLength(5);
+    expect(within(slides[0]!).getByText('Mock review')).toBeInTheDocument();
+    expect(within(slides[0]!).getByText('From the mock model')).toBeInTheDocument();
+    expect(within(slides[1]!).getByText('Highlights')).toBeInTheDocument();
+    expect(within(slides[1]!).getByText('Two new clients')).toBeInTheDocument();
+    expect(within(slides[1]!).getByText('Notes: Mention churn.')).toBeInTheDocument();
+    expect(within(slides[3]!).getByRole('cell', { name: 'Widgets' })).toBeInTheDocument();
+    expect(within(slides[4]!).getByText('Then')).toBeInTheDocument();
+    expect(within(slides[4]!).getByText('Automatic')).toBeInTheDocument();
+    expect(slides[1]).toHaveAccessibleName('Slide 2');
+  });
+
+  it('fills a section slide with the accent colour', () => {
+    render(<PresentationPreview content={DECK} />);
+    expect(screen.getByTestId('slide-3')).toHaveStyle({ background: '#AA3300' });
+  });
+
+  it("shows the parse error for a deck it can't read", () => {
+    render(<PresentationPreview content={'{"slides":[]}'} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('slides: must be a list of 1-200 slides');
   });
 });
