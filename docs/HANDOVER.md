@@ -745,6 +745,37 @@ Formulas aren't calculated by Grunt; the workbook asks Excel to calculate on
 open. An attached file's text is the user's, fenced, and may carry
 instructions the model follows: the approval gate is unchanged.
 
+**Live artifacts can read MCP data while a page is open** (spec
+2026-10-12-live-artifacts, Deck #929; schema 24, see "Live artifacts" below).
+An html artifact may declare up to 10 calls to read-only MCP tools
+(`readOnlyHint: true`; a tool that declares nothing is refused), with only
+enum and bounded-integer parameters. You allow them once in the viewer, and
+each approval is a `chat` grant with a `live` constraint bound to the call's
+declaration hash, the MCP server's id, the chat's profile and this machine.
+Changing a call's args asks again, and a model rewrite that leaves the calls alone doesn't. Only
+`PermissionBroker.grantLive` makes those grants, `resolve()` refuses one, an
+ordinary call never matches one, and the broker's live branch never asks and
+never takes the ask-on-mutate read pass. The page has an opaque origin and no
+token. It posts to the app frame, which checks the message came from that
+frame, and the server builds every argument from the stored declaration. Live
+pages are served with no network at all (`default-src 'none'`, `connect-src`,
+`frame-src`, `child-src`, `worker-src`, `object-src` and `manifest-src` all
+`'none'`, no `'unsafe-eval'`, `form-action 'none'`, DNS prefetch off). What
+that can't stop: the page navigating its own frame with data in the address,
+WebRTC to a STUN or TURN host, and DNS lookups that slip past the prefetch
+header. The viewer closes a page that navigates once the new document loads,
+but that guard is a best-effort notice for navigations that commit, not a
+wall: the request has gone by then, a navigation answered with 204 or 205 (or
+a download) never commits so the page is never closed, and a document that
+replaces the page before its first `load` is answered as if it were the page
+(see "Live artifacts" below). That is the same leak HTML artifacts and
+read-only MCP tools under ask-on-mutate already have, and the approval panel
+says so. Calls run on the machine serving the UI, never forwarded, and grants
+don't sync. Every call the broker decides is audited (`live:<grant id>` or
+`deny:policy`), cache hits (30 s, memory only) are not, and a `rate_limited`
+refusal is audited once a minute per artifact with the rest counted onto the
+next row.
+
 **Recall asks once per chat before it reads other chats** (spec
 2026-10-09-recall-design). The `recall` tool searches past chats and projects
 and reads one, through `runRecallCommand` in core for both engines. It has
@@ -1136,6 +1167,33 @@ Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925).
 - **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
 - **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
 
+### Live artifacts
+
+Spec: `docs/superpowers/specs/2026-10-12-live-artifacts-design.md` (Deck #929). An html artifact can declare calls to read-only MCP tools, and its page fetches the results with `grunt.live(callId, params?)` while it is open in the viewer. The point is a dashboard that stays current (tasks, calendar) without the model rewriting it each time. The page must include `<script src="grunt-live.js"></script>` itself, Grunt never rewrites the model's HTML.
+
+- **Where it lives.** Migration `024-artifact-version-live` adds a `live` column to `artifact_version` (JSON or NULL), and it syncs with the row. 022 (chat plan mode) and 023 (schedules) come before it on this branch, and 021 is still reserved. A stored declaration that no longer parses reads as none (`storedLive` in `store-sqlite/src/repos/artifacts.ts`), so the page is then served with the ordinary artifact policy, which is looser than the live one. No tool call is possible from it, as there is no declaration to match.
+- **The declaration.** At most 10 calls and 32 KB in all, `args` at most 4 KB, at most 5 params a call. Params are an enum (1-50 values) or a bounded integer, so there is no free text and no dates. `parseLiveSpec` in core is the one check. `update` keeps the declaration and so does a user edit. A `rewrite` without `live` keeps it as well, one given a new declaration replaces it, and `{"calls":[]}` or a change to a kind other than html drops it.
+- **Approval.** One grant per call, bound to the SHA-256 of `{ tool, args, params }`. `PermissionBroker.decideLive` is the only branch that sees a live call, and it is the first thing `decide()` does. The viewer answers `not_approved` itself for a call that isn't allowed yet, without calling the server.
+- **The live CSP**, as shipped in `livePolicy` (`packages/server/src/routes/view-serve.ts`), with `X-DNS-Prefetch-Control: off` beside it:
+
+  ```
+  sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' <link folder>grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'
+  ```
+
+  The spec had a shorter list that left `connect-src`, `frame-src` and `worker-src` to fall back to `default-src`. A security review asked for them to be written out, and for `script-src` to name the exact helper URL rather than the whole folder. Other versions still get `sandboxPolicy`.
+- **What the tests prove.** `packages/web/e2e/live-exfil.spec.ts` serves a page under the real `livePolicy` that tries about 35 ways of sending a result out (fetch, XHR, WebSocket, forms, images, fonts, workers and so on), and none of them makes a request. A control run with no policy shows the watches do see them. `packages/web/e2e/live-probe.spec.ts` pins what Chromium does with the frame: `event.source` is the page's frame, so the bridge needs no nonce.
+- **Limits.** Per artifact on the server: 4 calls in flight and 30 uncached calls in a rolling minute, else `rate_limited`. The first `rate_limited` in a minute gets an audit row and the rest are only counted, and the count goes on the artifact's next audited row (`error: timeout (+3 rate_limited calls not audited)`), so a page that keeps asking can't grow the audit table without bound. Per frame in the viewer: 4 calls sent at once, as the server allows no more, with the rest queued in order up to 16 outstanding, else `busy`. A dashboard that asks for all its calls together then gets every one rather than having the fifth refused. A queued request whose frame has been replaced, or whose page has gone, is dropped without being sent. Requests over 16 KB of JSON are ignored. Each call times out after 30 s (the helper gives up at 45 s). A result is text and structured JSON only, up to 1 MB, else `too_large`. Results are cached for 30 s in memory, at most 100 entries, and a `fresh` request skips the cache.
+- **Names and server ids.** A live grant is bound to the namespaced tool name (`mcp__<server>__<tool>`) and to the MCP server's id (`constraint.live.serverId`). The provider takes the id from its own lookup of the tool, never from the page. If two servers of the profile share a name, or sanitising makes two names equal, the call is unavailable ("names more than one tool"). A renamed server needs a fresh OK, as its tools' names change. So does a server deleted and added again, or another server renamed to a granted name, as its id differs. Grants made before this have no server id, so they never match and the viewer asks for a fresh OK. "Stop live data" still removes all of an artifact's grants.
+- **What an approval trusts.** It binds to the declaration, not to the page's code, so a rewrite that keeps the same calls keeps the approval and can do anything with the results that the sandbox allows. `readOnlyHint` is the server's own claim, Grunt can't check it. Calls run on the machine serving the UI and grants don't sync, so a paired laptop is approved on its own.
+- **Residual leaks** (spec section 12). All of them are known, and the approval panel says so.
+  - **Navigating its own frame.** The page can put data in the address (`location=`, a meta refresh). The viewer counts `load` events, and a second one closes the page ("This page went to another address, so Grunt closed it."), but the request has already gone. The guard is a best-effort notice for navigations that commit, and there are two cases it doesn't cover.
+  - **A navigation that never commits.** One answered with 204 or 205, or one that turns into a download, leaves the page where it is, so no `load` fires and the page is never closed. The address has still been fetched.
+  - **Navigating before the first load.** Counting loads can't see a navigation made before the page's first `load` event, so the document that replaces it is taken for the page. That document may be a foreign page with full network access, as the live CSP came with the page and not with it, and while the view stays open it is answered as if it were the page: it can make any allowed call with the allowed params, and a call the page made before leaving can have its answer delivered to it (noted in `live-bridge.ts`). What it can reach is no more than the address leak above already gives away, as the page could have put the same results in the address itself.
+  - **Phase 2 idea.** The iframe `csp` attribute (CSP Embedded Enforcement), which Chromium and WebView2 support, would make the frame require the live policy of any document it loads, so a foreign page that won't agree to it isn't shown. It needs checking against how the viewer serves the page before it can be relied on.
+  - **WebRTC** to a STUN or TURN host, which CSP doesn't govern in Chromium.
+  - **DNS** lookups that slip past `X-DNS-Prefetch-Control: off`. `preconnect` and `dns-prefetch` open no socket in Playwright's Chromium even with no policy, so the exfil spec can't speak for them.
+- **Tests.** Unit tests in core (`live-artifacts.test.ts`, `permissions.test.ts`), tools (`live-calls.test.ts`, `provider-live.test.ts`), the viewer's `live-bridge.test.ts`, `LiveBar.test.tsx` and `ArtifactView.test.tsx` in web, and the e2e specs `live-artifacts.spec.ts` (a live page through the Mock model and a fixture MCP server), `live-exfil.spec.ts` and `live-probe.spec.ts`.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
@@ -1285,6 +1343,25 @@ this on startup.
     blockquote lose the quote styling; link targets with spaces aren't
     percent-encoded; the preview loads remote images through `MarkdownBody`
     while the .docx writes `[Image: alt]`.
+- **Live artifacts in the desktop window are unchecked.** The probe
+  (`packages/web/e2e/live-probe.spec.ts`) covers Chromium only; run its
+  checks by hand in WebView2. Phase 2: forward live calls to the chat's *Runs
+  on* machine, a bundled chart library, free-text and date parameters, and the iframe `csp`
+  attribute (CSP Embedded Enforcement) in Chromium and WebView2 so a document
+  that replaces a live page has to take the live policy too. Phase 3: WebView2
+  `FrameNavigationStarting` to stop a live page leaving. Until then the
+  navigation guard only notices navigations that commit: a 204 or 205 answer
+  (or a download) leaves the page open, and a document that replaces the page
+  before its first load is answered as the page while the view is open.
+- **Live grants are bound to the MCP server id.** A grant now needs the
+  tool's name and its server's id to match. A renamed or replaced server
+  needs a fresh OK. Live grants made before this change have no server id,
+  so they need approving again; there is no backfill.
+- **Live artifacts by hand:** a dashboard from the real Nextcloud server
+  (`tasks_list`, `cal_list` with `from: 'today'`, `to: '+7d'`) written from
+  the guidance alone; an `update` that leaves the calls alone keeps the
+  approval and one that changes args asks for that call only; a Claude Code
+  chat making one with relayed tool names; viewing from the paired laptop.
 - **Scheduled tasks phase 2 isn't built.** Schedules don't sync or move between machines, there are no browser or phone notifications, no "every N hours" or cron rules, no per-schedule timeout and no attachments in the prompt. Deleting a chat or project removes its schedules without a mention in the delete dialog.
 
 ## Deviations from the v2 spec and plan

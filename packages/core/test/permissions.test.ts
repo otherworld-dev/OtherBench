@@ -674,3 +674,145 @@ describe('backstop eviction scope', () => {
     warn.mockRestore();
   });
 });
+
+describe('PermissionBroker live calls (spec 2026-10-12-live-artifacts)', () => {
+  const LIVE = { artifactId: 'art-1', callId: 'value', hash: 'h'.repeat(64), serverId: 'srv-1' };
+  const lookup = (risk: RiskClass = 'read', serverId = 'srv-1') => makeTool({ name: 'mcp__s__lookup', risk, source: 'mcp', serverId });
+  const liveCtx = (over: Partial<ToolContext> = {}) => makeCtx({ workspaceRoot: null, live: LIVE, ...over });
+  const allow = (broker: PermissionBroker, tool = lookup(), policy = makePolicy(), serverId = LIVE.serverId) =>
+    broker.grantLive({ chatId: 'chat-1', profileId: 'profile-1', artifactId: LIVE.artifactId, policy, calls: [{ tool, callId: LIVE.callId, hash: LIVE.hash, serverId }] });
+  /** A live grant as one made before grants carried a server id was stored. */
+  const legacyGrant = (store: InMemoryStore) => {
+    const { serverId: _serverId, ...legacy } = LIVE;
+    store.grants.create({ id: 'g-legacy', chatId: 'chat-1', profileId: 'profile-1', toolName: 'mcp__s__lookup', source: 'mcp', scope: 'chat', constraint: { live: legacy as typeof LIVE }, expiresAt: null });
+  };
+  const NOT_APPROVED = { kind: 'deny', code: 'not_approved', reason: "You haven't allowed this live artifact's calls on this machine." };
+
+  it('allows a live call with a matching live grant, as a grant', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const [grant] = allow(broker);
+    expect(broker.decide(lookup(), {}, makePolicy({ approvalMode: 'always_ask' }), liveCtx())).toEqual({ kind: 'allow', grantedBy: 'grant', grantId: grant!.id });
+  });
+
+  it('denies one without a grant as not_approved, even where ask-on-mutate would pass a read, and never asks', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    expect(broker.decide(lookup(), {}, makePolicy({ approvalMode: 'ask_on_mutate' }), liveCtx())).toEqual(NOT_APPROVED);
+    expect(broker.decide(lookup(), {}, makePolicy({ approvalMode: 'always_ask' }), liveCtx())).toEqual(NOT_APPROVED);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("a matching grant doesn't help a mutating tool, a server the profile doesn't enable, or a profile with artifacts off", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    allow(broker);
+    const mutate = broker.decide(lookup('mutate'), {}, makePolicy(), liveCtx());
+    const otherServer = broker.decide(lookup(), {}, makePolicy({ mcpServerIds: ['srv-2'] }), liveCtx());
+    const off = broker.decide(lookup(), {}, makePolicy({ artifacts: false }), liveCtx());
+    expect(mutate).toMatchObject({ kind: 'deny', reason: expect.stringMatching(/can change things/) });
+    expect(otherServer).toMatchObject({ kind: 'deny', reason: expect.stringMatching(/does not enable/) });
+    expect(off).toEqual({ kind: 'deny', reason: 'Artifacts are turned off for this profile.' });
+    for (const d of [mutate, otherServer, off]) expect(d).not.toHaveProperty('code');
+  });
+
+  it('denies a wrong hash, call, artifact, chat or profile', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    allow(broker);
+    const kind = (ctx: ToolContext) => broker.decide(lookup(), {}, makePolicy(), ctx).kind;
+    expect(kind(liveCtx())).toBe('allow');
+    expect(kind(liveCtx({ live: { ...LIVE, hash: 'x'.repeat(64) } }))).toBe('deny');
+    expect(kind(liveCtx({ live: { ...LIVE, callId: 'other' } }))).toBe('deny');
+    expect(kind(liveCtx({ live: { ...LIVE, artifactId: 'art-2' } }))).toBe('deny');
+    expect(kind(liveCtx({ chatId: 'chat-2' }))).toBe('deny');
+    expect(kind(liveCtx({ profileId: 'profile-2' }))).toBe('deny');
+  });
+
+  it("a grant made under one server doesn't allow the same tool name and hash under another server", () => {
+    // A server deleted and re-added, or another one renamed to its name, takes over mcp__s__lookup.
+    const broker = new PermissionBroker(new InMemoryStore());
+    allow(broker);
+    const policy = makePolicy({ mcpServerIds: ['srv-1', 'srv-2'] });
+    const other = { ...LIVE, serverId: 'srv-2' };
+    expect(broker.decide(lookup('read', 'srv-2'), {}, policy, liveCtx({ live: other }))).toEqual(NOT_APPROVED);
+    expect(broker.liveGrant(lookup('read', 'srv-2'), { chatId: 'chat-1', profileId: 'profile-1', live: other })).toBeNull();
+    expect(broker.decide(lookup(), {}, policy, liveCtx()).kind).toBe('allow');
+  });
+
+  it('a live grant made before grants carried a server id never matches, so the call needs a fresh OK', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    legacyGrant(store);
+    expect(broker.decide(lookup(), {}, makePolicy(), liveCtx())).toEqual(NOT_APPROVED);
+    // Allowing it again makes a grant with the server id, beside the old one.
+    expect(allow(broker)).toHaveLength(1);
+    expect(broker.decide(lookup(), {}, makePolicy(), liveCtx()).kind).toBe('allow');
+  });
+
+  it('ignores an ordinary always grant for the same tool', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    store.grants.create({ id: 'g-always', chatId: null, profileId: 'profile-1', toolName: 'mcp__s__lookup', source: 'mcp', scope: 'always', constraint: null, expiresAt: null });
+    expect(broker.decide(lookup(), {}, makePolicy(), liveCtx())).toEqual(NOT_APPROVED);
+  });
+
+  it('an ordinary call never matches a live grant, so it asks', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    allow(broker);
+    expect(broker.decide(lookup(), {}, makePolicy({ approvalMode: 'always_ask' }), makeCtx()).kind).toBe('ask');
+  });
+
+  it('grantLive refuses a set with one ineligible call, makes one chat grant per call, and is idempotent', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const setValue = makeTool({ name: 'mcp__s__set_value', risk: 'mutate', source: 'mcp', serverId: 'srv-1' });
+    const input = (calls: { tool: ToolSpec; callId: string; hash: string; serverId: string }[]) => ({ chatId: 'chat-1', profileId: 'profile-1', artifactId: 'art-1', policy: makePolicy(), calls });
+    expect(() => broker.grantLive(input([{ tool: lookup(), callId: 'a', hash: 'h1', serverId: 'srv-1' }, { tool: setValue, callId: 'b', hash: 'h2', serverId: 'srv-1' }]))).toThrow(/Live call "b"/);
+    expect(store.grants.list()).toEqual([]);
+
+    const pair = [{ tool: lookup(), callId: 'a', hash: 'h1', serverId: 'srv-1' }, { tool: lookup(), callId: 'c', hash: 'h3', serverId: 'srv-1' }];
+    const made = broker.grantLive(input(pair));
+    expect(made).toHaveLength(2);
+    expect(made[0]).toMatchObject({ chatId: 'chat-1', profileId: 'profile-1', toolName: 'mcp__s__lookup', source: 'mcp', scope: 'chat', expiresAt: null });
+    expect(made[0]!.constraint).toEqual({ live: { artifactId: 'art-1', callId: 'a', hash: 'h1', serverId: 'srv-1' } });
+    expect(broker.grantLive(input(pair))).toEqual([]);
+    expect(store.grants.list()).toHaveLength(2);
+  });
+
+  it('grantLive skips a call only when its grant has the same server id too', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const policy = makePolicy({ mcpServerIds: ['srv-1', 'srv-2'] });
+    allow(broker, lookup(), policy);
+    const made = allow(broker, lookup('read', 'srv-2'), policy, 'srv-2');
+    expect(made).toHaveLength(1);
+    expect(made[0]!.constraint?.live?.serverId).toBe('srv-2');
+    expect(allow(broker, lookup('read', 'srv-2'), policy, 'srv-2')).toEqual([]);
+    expect(store.grants.list().map((g) => g.constraint?.live?.serverId).sort()).toEqual(['srv-1', 'srv-2']);
+  });
+
+  it("revokeLive removes only that artifact's live grants in that chat", () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    allow(broker);
+    broker.grantLive({ chatId: 'chat-1', profileId: 'profile-1', artifactId: 'art-2', policy: makePolicy(), calls: [{ tool: lookup(), callId: 'value', hash: 'h2', serverId: 'srv-1' }] });
+    store.grants.create({ id: 'g-chat', chatId: 'chat-1', profileId: 'profile-1', toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
+    // Whatever server it was made under, and one made before grants carried a server id.
+    allow(broker, lookup('read', 'srv-2'), makePolicy({ mcpServerIds: ['srv-1', 'srv-2'] }), 'srv-2');
+    legacyGrant(store);
+    expect(broker.revokeLive('chat-1', 'art-1')).toBe(3);
+    expect(store.grants.list('chat-1').map((g) => g.constraint?.live?.artifactId ?? g.id).sort()).toEqual(['art-2', 'g-chat']);
+  });
+
+  it('resolve() refuses an always answer carrying a live constraint', () => {
+    const store = new InMemoryStore();
+    const broker = new PermissionBroker(store);
+    const ask = expectAsk(broker.decide(lookup(), {}, makePolicy({ approvalMode: 'always_ask' }), makeCtx()));
+    expect(() => broker.resolve(ask.request.id, { choice: 'always', constraint: { live: LIVE } })).toThrow(/live/);
+    expect(store.grants.list()).toEqual([]);
+  });
+
+  it('liveIneligibility says why a tool cannot feed a live artifact', () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    expect(broker.liveIneligibility(lookup(), makePolicy())).toBeNull();
+    expect(broker.liveIneligibility(READ_FILE(), makePolicy())).toBe('Only MCP tools can feed a live artifact.');
+    expect(broker.liveIneligibility(lookup('mutate'), makePolicy())).toBe('"mcp__s__lookup" can change things; live artifacts can only use tools their server marks read-only.');
+  });
+});

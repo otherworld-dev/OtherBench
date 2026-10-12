@@ -552,6 +552,62 @@ describe('ScheduleService: deleted chats and store errors', () => {
     expect(clock.pending()).toEqual([SCHEDULE_CHECK_MAX_MS]);
   });
 
+  describe('a store error when a run times out', () => {
+    const TIMEOUT_AT = NINE + 30 * 60_000;
+
+    /** One slot, s1 running in chat-1, s2 due 15 minutes after s1's timeout in chat-2. */
+    async function startFirstRun(): Promise<string> {
+      service.dispose();
+      service = build({ limits: { maxConcurrent: 1 } });
+      addSchedule('s1');
+      addSchedule('s2', { target: { kind: 'chat', chatId: 'chat-2' }, nextRunAt: NINE + 45 * 60_000 });
+      service.start();
+      clock.advance(HOUR);
+      await settle();
+      await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+      return engine.requests[0]!.messageId;
+    }
+
+    async function expectLaterScheduleStarts(): Promise<void> {
+      expect(service.isRunning('s1')).toBe(false);
+      clock.advance(15 * 60_000);
+      await settle();
+      await vi.waitFor(() => expect(engine.requests).toHaveLength(2));
+      expect(store.schedules.runs('s2')[0]).toMatchObject({ trigger: 'scheduled', dueAt: NINE + 45 * 60_000 });
+    }
+
+    it('is logged, not thrown from the timer: the run is ended as an error, its slot freed, and a later schedule runs', async () => {
+      const messageId = await startFirstRun();
+      const get = store.messages.get.bind(store.messages);
+      vi.spyOn(store.messages, 'get').mockImplementation((id) => {
+        if (clock.now() === TIMEOUT_AT) throw new Error('database is locked');
+        return get(id);
+      });
+
+      expect(() => clock.advance(30 * 60_000)).not.toThrow();
+      expect(logged).toHaveBeenCalledWith(expect.stringContaining('run '), expect.objectContaining({ message: 'database is locked' }));
+      expect(store.schedules.runs('s1')[0]).toMatchObject({ status: 'error', detail: "Grunt couldn't stop this run: database is locked" });
+      expect(scheduleEvents().at(-1)).toMatchObject({ type: 'schedule-run-finished', status: 'error', messageId });
+      await expectLaterScheduleStarts();
+    });
+
+    it('is still contained when the reply cannot be cancelled and the run cannot be recorded either', async () => {
+      await startFirstRun();
+      vi.spyOn(runner, 'cancel').mockImplementation(() => {
+        throw new Error('cancel failed');
+      });
+      const updateRun = store.schedules.updateRun.bind(store.schedules);
+      vi.spyOn(store.schedules, 'updateRun').mockImplementation((id, patch) => {
+        if (clock.now() === TIMEOUT_AT) throw new Error('database is locked');
+        return updateRun(id, patch);
+      });
+
+      expect(() => clock.advance(30 * 60_000)).not.toThrow();
+      expect(logged).toHaveBeenCalledTimes(2);
+      await expectLaterScheduleStarts();
+    });
+  });
+
   it('a run being set up when the service is disposed never starts its turn', async () => {
     addSchedule('s1', { nextRunAt: NINE + 24 * HOUR });
     let release: () => void = () => {};

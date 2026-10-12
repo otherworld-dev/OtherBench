@@ -209,3 +209,15 @@ runStoreContract('InMemoryStore', () => new InMemoryStore());
 
 runSecretStoreContract('FakeSecretStore', () => new FakeSecretStore());
 runToolProviderContract('FakeToolProvider', ({ mcpServers }) => new FakeToolProvider({ mcpServers }));
+
+describe('FakeToolProvider live calls', () => {
+  it('refuses every live call', async () => {
+    const provider = new FakeToolProvider();
+    const call = { id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} };
+    const req = { chatId: 'c', profileId: 'p', policy: { fs: 'off' as const, shell: false, mcpServerIds: ['s'], approvalMode: 'always_ask' as const }, artifactId: 'a', calls: [{ call, hash: 'h' }] };
+    expect(provider.liveStatus(req)).toEqual([expect.objectContaining({ callId: 'value', state: 'unavailable' })]);
+    expect(provider.allowLive(req)[0]!.state).toBe('unavailable');
+    expect(provider.revokeLive()).toBe(0);
+    expect(await provider.runLiveCall({ chatId: 'c', messageId: 'm', profileId: 'p', policy: req.policy, artifactId: 'a', callId: 'value', hash: 'h', toolName: call.tool, args: {}, fresh: false, signal: new AbortController().signal })).toMatchObject({ ok: false, code: 'not_available' });
+  });
+});

@@ -1,11 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ArtifactVersion } from '@grunt/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
-  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn(), file: vi.fn() }, view: { openArtifact: vi.fn() } },
+  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn(), file: vi.fn(), live: { status: vi.fn(), allow: vi.fn(), revoke: vi.fn(), call: vi.fn() } }, view: { openArtifact: vi.fn() } },
 }));
 
 vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
@@ -18,16 +18,16 @@ vi.mock('@grunt/core/domain/office-spec.js', async (importOriginal) => {
 
 import { columnName } from '@grunt/core/domain/office-spec.js';
 import { saveFile } from '../lib/saveFile.js';
-import { ApiError, api, type ArtifactDetail } from '../state/api.js';
+import { ApiError, api, type ArtifactDetail, type LiveStatus } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ArtifactView } from './ArtifactView.js';
 
 const version = (id: string, number: number, content: string, madeBy: 'model' | 'user' = 'model', kind: ArtifactVersion['kind'] = 'html'): ArtifactVersion => ({
-  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
+  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, live: null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
 });
 const detail = (kind: 'html' | 'markdown' | 'code' = 'html'): ArtifactDetail => {
   const fileName = kind === 'html' ? 'calc.html' : kind === 'markdown' ? 'calc.md' : 'calc.ts';
-  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName };
+  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName, live: 0 };
   return {
     artifact: { id: 'art', chatId: 'c1', slug: 'calc', kind, language: kind === 'code' ? 'ts' : null, createdAt: 1 },
     fileName,
@@ -131,7 +131,7 @@ describe('ArtifactView', () => {
     await waitFor(() => expect(box).toHaveValue('<p>v2</p>'));
     await user.clear(box);
     await user.type(box, '<p>mine</p>');
-    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html' }] });
+    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html', live: 0 }] });
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(api.artifacts.edit).toHaveBeenCalledWith('c1', 'art', { content: '<p>mine</p>', fromVersionId: 'v2' });
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v4/calc.html'));
@@ -164,7 +164,7 @@ describe('ArtifactView', () => {
   });
 
   const officeDetail = (kind: 'document' | 'spreadsheet' | 'presentation', fileName: string): ArtifactDetail => {
-    const each = { title: 'Budget', madeBy: 'model' as const, kind, language: null, fileName };
+    const each = { title: 'Budget', madeBy: 'model' as const, kind, language: null, fileName, live: 0 };
     return {
       artifact: { id: 'art', chatId: 'c1', slug: 'budget', kind, language: null, createdAt: 1 },
       fileName,
@@ -356,5 +356,116 @@ describe('ArtifactView', () => {
     await user.click(screen.getByRole('button', { name: 'Download' }));
     await screen.findByRole('alert');
     expect(vi.mocked(columnName).mock.calls.length).toBe(drawn);
+  });
+});
+
+describe('ArtifactView live pages (spec 2026-10-12-live-artifacts)', () => {
+  const liveDetail = (): ArtifactDetail => {
+    const d = detail();
+    return { ...d, versions: d.versions.map((v) => ({ ...v, live: 1 })) };
+  };
+  const liveStatus = (state: 'allowed' | 'needs_ok'): LiveStatus => ({
+    machine: { id: 'n1', name: 'Desk' }, runsOn: null, profile: { id: 'p', name: 'Sonnet' },
+    calls: [{ callId: 'value', tool: 'mcp__Live__lookup', serverName: 'Live', toolName: 'lookup', description: '', state, args: {}, params: {} }],
+  });
+
+  beforeEach(() => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(liveDetail());
+    vi.mocked(api.artifacts.live.status).mockReset().mockResolvedValue(liveStatus('needs_ok'));
+    vi.mocked(api.artifacts.live.allow).mockReset().mockResolvedValue(liveStatus('allowed'));
+    vi.mocked(api.artifacts.live.revoke).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("doesn't load the page until it knows which calls are allowed", async () => {
+    let answer!: (s: LiveStatus) => void;
+    vi.mocked(api.artifacts.live.status).mockReturnValue(new Promise<LiveStatus>((r) => (answer = r)));
+    render(<ArtifactView chatId="c1" item={item} />);
+    await waitFor(() => expect(api.artifacts.live.status).toHaveBeenCalledWith('c1', 'art', 'v2'));
+    expect(screen.queryByTitle('calc.html')).toBeNull();
+    act(() => answer(liveStatus('needs_ok')));
+    expect(await screen.findByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('Allow calls the API, then reloads the frame on a fresh link and shows the strip', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Allow live data' }));
+    expect(api.artifacts.live.allow).toHaveBeenCalledWith('c1', 'art', 'v2');
+    await waitFor(() => expect(api.view.openArtifact).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('button', { name: 'Stop live data' })).toBeInTheDocument();
+  });
+
+  it('Not now hides the panel for this view', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('region', { name: 'Live data' })).toBeNull();
+    expect(screen.getByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('Stop live data revokes, reloads the status and the frame', async () => {
+    vi.mocked(api.artifacts.live.status).mockResolvedValueOnce(liveStatus('allowed')).mockResolvedValue(liveStatus('needs_ok'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Stop live data' }));
+    expect(api.artifacts.live.revoke).toHaveBeenCalledWith('c1', 'art');
+    expect(await screen.findByRole('button', { name: 'Allow live data' })).toBeInTheDocument();
+    await waitFor(() => expect(api.view.openArtifact).toHaveBeenCalledTimes(2));
+  });
+
+  it('closes the page when it loads a second document, and Reopen brings it back', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    const frame = await screen.findByTitle('calc.html');
+    fireEvent.load(frame);
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+    fireEvent.load(frame);
+    expect(await screen.findByText('This page went to another address, so Grunt closed it.')).toBeInTheDocument();
+    expect(screen.queryByTitle('calc.html')).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Reopen' }));
+    const again = await screen.findByTitle('calc.html');
+    expect(again).not.toBe(frame);
+    fireEvent.load(again);
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+  });
+
+  it('switching versions loads a new page without reading it as the page leaving', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    fireEvent.load(await screen.findByTitle('calc.html'));
+    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'Version' }), 'v1');
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
+    fireEvent.load(screen.getByTitle('calc.html'));
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+  });
+
+  it('Refresh mounts a new frame on a fresh link, whose first load is not read as the page leaving', async () => {
+    vi.mocked(api.artifacts.live.status).mockResolvedValue(liveStatus('allowed'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    const frame = await screen.findByTitle('calc.html');
+    fireEvent.load(frame);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(api.view.openArtifact).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTitle('calc.html')).not.toBe(frame));
+    fireEvent.load(screen.getByTitle('calc.html'));
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+    expect(screen.getByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('showing Source and coming back mounts a new frame, whose first load is not read as the page leaving', async () => {
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    fireEvent.load(await screen.findByTitle('calc.html'));
+    await user.click(screen.getByRole('button', { name: 'Source' }));
+    await waitFor(() => expect(screen.queryByTitle('calc.html')).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Source' }));
+    fireEvent.load(await screen.findByTitle('calc.html'));
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+  });
+
+  it('a plain page has no live bar and asks for no status', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(detail());
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    expect(api.artifacts.live.status).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: 'Live data' })).toBeNull();
   });
 });

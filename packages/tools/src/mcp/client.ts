@@ -37,6 +37,14 @@ export const NEEDS_SIGN_IN_CALL_MESSAGE = 'This MCP server needs you to sign in 
 export interface McpCallResult {
   content: unknown;
   isError: boolean;
+  /** The result's `structuredContent`, when the server sent one (live artifacts pass it to the page). */
+  structured?: unknown;
+}
+
+/** Per-call options: the caller's abort signal and a timeout, passed to the SDK's own request options. */
+export interface McpCallOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface McpClientOptions {
@@ -220,21 +228,28 @@ export class McpClient {
     await this.connect();
   }
 
-  async callTool(name: string, args: unknown): Promise<McpCallResult> {
+  async callTool(name: string, args: unknown, opts: McpCallOptions = {}): Promise<McpCallResult> {
     if (this.status === 'needs_auth') throw new Error(NEEDS_SIGN_IN_CALL_MESSAGE);
     if (!this.client || this.status !== 'ok') {
       throw new Error(`MCP server "${this.id}" is not connected (status: ${this.status}).`);
     }
+    const request = {
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    };
     let result: Awaited<ReturnType<Client['callTool']>>;
     try {
-      result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined });
+      result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined }, undefined, request);
     } catch (err) {
-      // The same redaction as `lastError`: the message reaches the model and the chat.
+      // The same redaction as `lastError`: the message reaches the model, the chat and a live page.
       if (this.signInRequired(err)) throw new Error(NEEDS_SIGN_IN_CALL_MESSAGE);
-      throw new Error(this.errorMessage(err));
+      // The SDK's numeric error code (a live call's timeout, -32001) carries no secret, so it stays.
+      const code = (err as { code?: unknown } | null)?.code;
+      throw Object.assign(new Error(this.errorMessage(err)), typeof code === 'number' ? { code } : {});
     }
     const content = 'content' in result ? result.content : result['toolResult'];
-    return { content, isError: 'isError' in result && result.isError === true };
+    const structured = 'structuredContent' in result ? result.structuredContent : undefined;
+    return { content, isError: 'isError' in result && result.isError === true, ...(structured !== undefined ? { structured } : {}) };
   }
 
   private buildTransport(): Transport {

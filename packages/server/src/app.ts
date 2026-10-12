@@ -28,6 +28,7 @@ import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
 import { artifactsRoutes } from './routes/artifacts.js';
+import { liveArtifactsRoutes } from './routes/live-artifacts.js';
 import { claudeRoutes } from './routes/claude.js';
 import { viewRoutes } from './routes/view.js';
 import { viewServeRoutes } from './routes/view-serve.js';
@@ -137,6 +138,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // Artifacts (Deck #896): full paths under /chats/:id/artifacts; chatsRoutes
   // owns /chats/:id itself and nothing under /artifacts.
   authed.route('/', artifactsRoutes(container));
+  // Live artifacts (spec 2026-10-12-live-artifacts): full paths under
+  // /chats/:id/artifacts/:artifactId/.../live, none of which artifactsRoutes owns.
+  authed.route('/', liveArtifactsRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/schedules', schedulesRoutes(container));
   authed.route('/claude', claudeRoutes(container));

@@ -99,6 +99,24 @@ export const OFFICE_SAMPLES: Record<string, { id: string; title: string; content
   },
 };
 
+/** The Mock's live page (spec 2026-10-12-live-artifacts): asks for key "b", shows what came back or why not, records CSP violations, and can leave. */
+const LIVE_PAGE = `<!doctype html>
+<meta charset="utf-8">
+<title>Live dashboard</title>
+<script src="grunt-live.js"></script>
+<p>Value: <span id="out">waiting</span> · n: <span id="n">-</span></p>
+<p>Blocked: <span id="csp"></span></p>
+<button id="leave" type="button">Leave</button>
+<script>
+document.addEventListener('securitypolicyviolation', function (e) { document.getElementById('csp').textContent += e.effectiveDirective + ' '; });
+document.getElementById('leave').addEventListener('click', function () { location.href = 'about:blank'; });
+fetch('https://example.invalid/').catch(function () {});
+grunt.live('value', { key: 'b' }).then(
+  function (r) { document.getElementById('out').textContent = r.json.value; document.getElementById('n').textContent = String(r.json.n); },
+  function (e) { document.getElementById('out').textContent = 'error: ' + e.code; }
+);
+</script>`;
+
 /** Crude word-count-as-token-count proxy -- good enough for a mock's "plausible usage". */
 function estimateTokens(text: string): number {
   return Math.max(1, text.split(/\s+/).filter(Boolean).length);
@@ -173,7 +191,9 @@ function isToolErrorResult(result: unknown): boolean {
  * checklist, 1.5 s apart), then "All done.". `#ask` -> one `ask_user` question
  * ("Which colour?") through the real tool, then the answer back. `#plan` -> a
  * `write_file` that plan mode refuses, then `propose_plan` rounds until
- * approved, then the write again. `#artifact` -> an
+ * approved, then the write again. `#live-artifact <tool>` -> a live html
+ * artifact `dash` whose one call reads `<tool>` (spec 2026-10-12-live-artifacts),
+ * checked before `#artifact`. `#artifact` -> an
  * `artifact` create through the real tool when offered (Deck #896), then
  * "I made the artifact.". `#recall <query>` -> a `recall` search for the
  * rest of that line through the real tool when offered, then the titles of
@@ -240,6 +260,12 @@ export class MockChatEngine implements ChatEngine {
 
     if (prompt.includes('#plan')) {
       yield* this.streamPlanTurn(req, tokensIn);
+      return;
+    }
+
+    const live = /#live-artifact[ \t]+(\S+)/.exec(prompt);
+    if (live) {
+      yield* this.streamLiveArtifactTurn(req, live[1]!, tokensIn);
       return;
     }
 
@@ -338,6 +364,27 @@ export class MockChatEngine implements ChatEngine {
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
     yield* this.answer(req, isError ? `The file didn't work: ${JSON.stringify(result)}` : 'I made the file.', tokensIn);
+  }
+
+  /** `#live-artifact <tool>` (spec 2026-10-12-live-artifacts): one live html artifact through the real tool, so the e2e drives the whole path. */
+  private async *streamLiveArtifactTurn(req: EngineRequest, tool: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-live-artifact-${randomUUID()}`;
+    const declaration = { calls: [{ id: 'value', tool, args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] };
+    const args = { command: 'create', id: 'dash', kind: 'html', title: 'Live dashboard', content: LIVE_PAGE, live: JSON.stringify(declaration) };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'artifact', args };
+    const artifact = req.tools.find((t) => t.name === 'artifact');
+    const result = artifact ? await artifact.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
+    const answer = isError ? `The live artifact didn't work: ${JSON.stringify(result)}` : 'I made the live dashboard.';
+    for (const chunk of splitIntoChunks(answer, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    yield finishEvent(tokensIn, estimateTokens(answer));
   }
 
   /** One call to a tool from `req.tools` (the real, gated one), yielded as a call and its result; returns the result as text. */

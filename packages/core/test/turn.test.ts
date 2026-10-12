@@ -8,6 +8,7 @@ import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type Turn
 import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
 import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
+import { LIVE_ARTIFACTS_GUIDANCE } from '../src/domain/live-artifacts.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -676,6 +677,21 @@ describe('TurnRunner names the tools a turn can use', () => {
     // Artifacts off: neither.
     expect(engine.requests[2]!.profile.systemPrompt ?? '').not.toContain('# Artifacts');
     expect(noteOf(2)).not.toContain('Artifacts on this branch');
+  });
+
+  it('adds the live-artifact guidance only for a profile with MCP servers', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const artifact = { name: 'artifact', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [artifact] }) });
+
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: { ...fs('off'), mcpServerIds: ['srv-1'] } }));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('# Artifacts');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('# Live artifacts');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain(LIVE_ARTIFACTS_GUIDANCE);
   });
 
   it("offers no artifact tool, and says nothing of artifacts, to a model that can't use tools", async () => {

@@ -910,7 +910,7 @@ describe('ClaudeCodeChatEngine artifacts', () => {
   const sig = () => ({ signal: new AbortController().signal });
 
   it("gives Claude Code Grunt's artifact server, under a name no project config can guess, whose tool acts for the reply that's running", async () => {
-    const artifactTool = vi.fn(async (_ctx: { chatId: string; messageId: string }, args: unknown) => ({ ok: true, args }));
+    const artifactTool = vi.fn(async (_ctx: { chatId: string; messageId: string; mcpServerIds: string[] }, args: unknown) => ({ ok: true, args }));
     let tools: { handler: (args: unknown, extra: unknown) => Promise<unknown> }[] = [];
     const mcpServer = vi.fn((name: string, defs: typeof tools) => {
       tools = defs;
@@ -927,8 +927,27 @@ describe('ClaudeCodeChatEngine artifacts', () => {
     const name = serverOf(calls[0]!.options);
     expect(mcpServer).toHaveBeenCalledWith(name, expect.any(Array));
     expect((calls[0]!.options.mcpServers as Record<string, unknown>)[name]).toMatchObject({ type: 'sdk', name });
-    expect(artifactTool).toHaveBeenCalledWith({ chatId: req().chatId, messageId: req().messageId }, { command: 'view', id: 'calc' });
+    expect(artifactTool).toHaveBeenCalledWith({ chatId: req().chatId, messageId: req().messageId, mcpServerIds: [] }, { command: 'view', id: 'calc' });
     expect(JSON.parse((handled as { content: { text: string }[] }).content[0]!.text)).toEqual({ ok: true, args: { command: 'view', id: 'calc' } });
+    e.dispose();
+  });
+
+  it("hands the artifact executor the profile's MCP servers, so a live declaration is checked against them", async () => {
+    const artifactTool = vi.fn(async (_ctx: { chatId: string; messageId: string; mcpServerIds: string[] }, args: unknown) => ({ ok: true, args }));
+    let tools: { name: string; call: (args: unknown) => Promise<unknown> }[] = [];
+    const mcpServer = vi.fn((name: string, defs: typeof tools) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    const { query } = fakeQuery(async function* () {
+      yield init('sess-1');
+      await tools.find((t) => t.name === 'artifact')!.call({ command: 'view', id: 'calc' });
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, artifactTool, mcpServer });
+    const profile = req().profile;
+    await collect(e.stream(req({ profile: { ...profile, toolPolicy: { ...profile.toolPolicy, mcpServerIds: ['srv-1'] } } })));
+    expect(artifactTool).toHaveBeenCalledWith({ chatId: req().chatId, messageId: req().messageId, mcpServerIds: ['srv-1'] }, { command: 'view', id: 'calc' });
     e.dispose();
   });
 

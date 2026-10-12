@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { normaliseLiveToolName } from '@grunt/core/domain/live-artifacts.js';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { gruntServerName, gruntToolName } from '../src/grunt-server.js';
 import { buildRelay, currentRelayed, relayName, relayServerTool } from '../src/relay.js';
 
 const spec = (o: Partial<ToolSpec> = {}): ToolSpec => ({
@@ -26,6 +28,20 @@ describe('relayName', () => {
     expect(relayName(a)).toMatch(/_[0-9a-f]{6}$/);
     expect(relayName(a)).toBe(relayName(a));
     expect(relayName(a)).not.toBe(relayName(b));
+  });
+});
+
+describe('relayed names in a live declaration', () => {
+  it("map back to the tool's own name when the relay name is whole", () => {
+    const name = spec().name;
+    expect(normaliseLiveToolName(gruntToolName(gruntServerName(), relayName(name)))).toBe(name);
+  });
+
+  it("stay as they are, so they're refused as unknown, when the relay name was cut and hashed", () => {
+    const long = `mcp__${'a'.repeat(40)}__${'b'.repeat(40)}`;
+    const seen = gruntToolName(gruntServerName(), relayName(long));
+    expect(normaliseLiveToolName(seen)).not.toBe(long);
+    expect(normaliseLiveToolName(seen)).toBe(`mcp__${relayName(long)}`);
   });
 });
 

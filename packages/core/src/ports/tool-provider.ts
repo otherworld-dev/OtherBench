@@ -1,10 +1,18 @@
-import type { Grant } from './store.js';
+import type { Grant, LiveCall } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
+
+/**
+ * Which declared call of which artifact version a live call is, by its
+ * declaration's hash, and the id of the MCP server its tool comes from now
+ * (spec 2026-10-12-live-artifacts). The server id is always the provider's
+ * own lookup, never anything the page sent.
+ */
+export type LiveCallRef = NonNullable<NonNullable<Grant['constraint']>['live']>;
 
 export interface ToolContext {
   chatId: string;
@@ -43,6 +51,13 @@ export interface ToolContext {
    * take permissions away.
    */
   unattended?: boolean;
+  /**
+   * Set only by `GruntToolProvider.runLiveCall`, never by an engine or
+   * `toolContextFor`: this call is one a live artifact's page asked for (spec
+   * 2026-10-12-live-artifacts). `PermissionBroker.decide` then takes its live
+   * branch, which allows only a live grant for exactly this call.
+   */
+  live?: LiveCallRef;
   signal: AbortSignal;
 }
 
@@ -129,6 +144,53 @@ export interface ApprovalOptions {
   deferAsk?: boolean;
 }
 
+/** One declared call of a live page, as the viewer's panel shows it (spec 2026-10-12-live-artifacts). */
+export interface LiveCallStatus {
+  callId: string;
+  /** The namespaced MCP name, `mcp__<server>__<tool>`. */
+  tool: string;
+  serverName: string;
+  toolName: string;
+  /** The server's description of the tool, at most 300 characters, shown as plain text. */
+  description: string;
+  state: 'allowed' | 'needs_ok' | 'unavailable';
+  /** Why it is unavailable. */
+  reason?: string;
+}
+
+export type LiveCallFailure = 'not_approved' | 'refused' | 'not_available' | 'rate_limited' | 'timeout' | 'tool_error' | 'failed' | 'too_large';
+
+/** What a live call came back as: data for the page, or why not. */
+export type LiveCallOutcome =
+  | { ok: true; text: string; json?: unknown; structured?: unknown; cached: boolean; at: number }
+  | { ok: false; code: LiveCallFailure; message: string };
+
+/** A live page's calls, for its status or to allow them: each declared call with its declaration hash. */
+export interface LiveStatusRequest {
+  chatId: string;
+  profileId: string;
+  policy: ToolPolicy;
+  artifactId: string;
+  calls: { call: LiveCall; hash: string }[];
+}
+
+/** One live call to run. `args` are already built from the stored declaration (never from the page). */
+export interface LiveRunRequest {
+  chatId: string;
+  /** The version's reply: audit rows point at it. */
+  messageId: string;
+  profileId: string;
+  policy: ToolPolicy;
+  artifactId: string;
+  callId: string;
+  hash: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  /** Skip the cache and replace its entry (Refresh). */
+  fresh: boolean;
+  signal: AbortSignal;
+}
+
 export interface ToolProvider {
   listTools(policy: ToolPolicy): Promise<ToolSpec[]>;
   refreshMcp(serverId: string): Promise<void>;
@@ -167,4 +229,12 @@ export interface ToolProvider {
   askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome>;
   /** Answers a pending ask: `'unknown'` for an unknown or settled id, `{ invalid }` for a reply that doesn't fit it. Never throws. */
   answerAsk(askId: string, reply: AskReply): AskAnswerResult;
+  /** Live artifacts (spec 2026-10-12-live-artifacts): each declared call's state for the viewer's panel. */
+  liveStatus(req: LiveStatusRequest): LiveCallStatus[];
+  /** Grants the calls that need an OK (PermissionBroker.grantLive), then returns the status again. */
+  allowLive(req: LiveStatusRequest): LiveCallStatus[];
+  /** Stop live data: removes the chat's live grants for the artifact. Returns how many. */
+  revokeLive(chatId: string, artifactId: string): number;
+  /** Runs one live call through the broker's live branch, the cache and the limits. Never throws. */
+  runLiveCall(req: LiveRunRequest): Promise<LiveCallOutcome>;
 }

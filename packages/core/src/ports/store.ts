@@ -526,10 +526,23 @@ export interface Grant {
    * - `host`: a `sandbox_network` grant's host (exact, case-insensitive, any
    *   port). Every network grant carries one; one without never matches.
    *
+   * - `live`: a live artifact's call (spec 2026-10-12-live-artifacts): only
+   *   `PermissionBroker.grantLive` makes one, only a live call
+   *   (`ToolContext.live`) can match it, and it matches nothing else.
+   *   `serverId` is the MCP server the tool came from when it was allowed,
+   *   so a server renamed or replaced into the tool's name doesn't inherit
+   *   it. Grants stored before it existed have none and never match.
+   *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; host?: string } | null;
+  constraint: {
+    pathPrefix?: string;
+    commandPrefix?: string;
+    commandExact?: string;
+    host?: string;
+    live?: { artifactId: string; callId: string; hash: string; serverId: string };
+  } | null;
   expiresAt: number | null;
 }
 
@@ -633,6 +646,32 @@ export interface SyncRepo {
   observe(hlc: string): void;
 }
 
+/**
+ * A value a live artifact's page may choose for one of its calls (spec
+ * 2026-10-12-live-artifacts): one of a fixed list, or a whole number in a
+ * range. Never free text.
+ */
+export type LiveParam =
+  | { enum: (string | number | boolean)[]; default: string | number | boolean }
+  | { type: 'integer'; minimum: number; maximum: number; default: number };
+
+/**
+ * One data call a live html artifact declares: a read-only MCP tool
+ * (`mcp__<server>__<tool>`) with fixed arguments, where an argument that is
+ * exactly `{ "$param": name }` takes that parameter's value.
+ */
+export interface LiveCall {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  params: Record<string, LiveParam>;
+}
+
+/** The data calls an html artifact version declares; see `parseLiveSpec`. */
+export interface LiveSpec {
+  calls: LiveCall[];
+}
+
 /** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, a code file, or (Deck #928) a Word document, Excel spreadsheet or PowerPoint deck made from Markdown or JSON. */
 export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code' | 'document' | 'spreadsheet' | 'presentation';
 
@@ -660,6 +699,12 @@ export interface ArtifactVersion {
   kind: ArtifactKind;
   /** A code version's language (ts, py), else null. */
   language: string | null;
+  /**
+   * The data calls this version's page may make each time it's opened (spec
+   * 2026-10-12-live-artifacts), or null for a plain version. Only html
+   * versions have one.
+   */
+  live: LiveSpec | null;
   madeBy: 'model' | 'user';
   /** The reply that made it (your edit: the newest message on the branch you were on). Not a foreign key: it may arrive by sync before its message. */
   messageId: string | null;
@@ -670,8 +715,8 @@ export interface ArtifactVersion {
 /** A version without its content: what lists and the branch's current version need. */
 export type ArtifactVersionInfo = Omit<ArtifactVersion, 'content'>;
 
-/** A version to add: everything but its number, with kind and language defaulting to the artifact's. */
-export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language'> & { kind?: ArtifactKind; language?: string | null };
+/** A version to add: everything but its number, with kind and language defaulting to the artifact's and `live` to null. */
+export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language' | 'live'> & { kind?: ArtifactKind; language?: string | null; live?: LiveSpec | null };
 
 export interface ArtifactRepo {
   create(a: Artifact): Artifact;

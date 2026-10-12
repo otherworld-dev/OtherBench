@@ -597,6 +597,7 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
               {g.constraint?.commandExact ? ` · ${g.constraint.commandExact}` : ''}
               {g.constraint?.commandPrefix ? ` · ${g.constraint.commandPrefix} (any arguments)` : ''}
               {g.constraint?.host ? ` · ${g.constraint.host}` : ''}
+              {g.constraint?.live ? ` · live artifact call ${g.constraint.live.callId}` : ''}
             </span>
           </span>
           <button
@@ -625,6 +626,7 @@ function formatAuditTime(createdAt: number): string {
 /** Short, human label for how a gated call was authorised; the raw value stays available as a tooltip. Unknown values pass through. */
 function grantedByLabel(grantedBy: string): string {
   if (grantedBy.startsWith('grant:')) return 'grant';
+  if (grantedBy.startsWith('live:')) return 'live artifact';
   switch (grantedBy) {
     case 'auto_read': return 'auto-read';
     case 'policy': return 'policy';

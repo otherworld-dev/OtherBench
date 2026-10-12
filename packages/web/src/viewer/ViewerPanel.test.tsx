@@ -34,7 +34,7 @@ afterEach(cleanup);
 
 describe('ViewerPanel', () => {
   it("lists the chat's artifacts above the folders, and opens one", async () => {
-    vi.mocked(api.artifacts.list).mockResolvedValue({ artifacts: [{ id: 'art', slug: 'calc', kind: 'html', language: null, title: 'Calc', versionId: 'v2', number: 2, madeBy: 'model' }] });
+    vi.mocked(api.artifacts.list).mockResolvedValue({ artifacts: [{ id: 'art', slug: 'calc', kind: 'html', language: null, title: 'Calc', versionId: 'v2', number: 2, madeBy: 'model', live: 0 }] });
     render(<ViewerPanel chat={chat} />);
     await userEvent.setup().click(await screen.findByRole('button', { name: /Calc/ }));
     expect(viewer()).toMatchObject({ mode: 'item', history: [{ kind: 'artifact', artifactId: 'art', title: 'Calc' }] });

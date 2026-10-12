@@ -12,6 +12,10 @@ import type {
   ApprovalChoice,
   ApprovalOptions,
   ApprovalOutcome,
+  LiveCallOutcome,
+  LiveCallStatus,
+  LiveRunRequest,
+  LiveStatusRequest,
   ToolApprovalEvent,
   ToolContext,
   ToolProvider,
@@ -394,6 +398,23 @@ export class FakeToolProvider implements ToolProvider {
 
   answerAsk(askId: string, reply: AskReply): AskAnswerResult {
     return this.asks.answer(askId, reply);
+  }
+
+  /** The fake runs no live calls (spec 2026-10-12-live-artifacts): every call is unavailable. */
+  liveStatus(req: LiveStatusRequest): LiveCallStatus[] {
+    return req.calls.map(({ call }): LiveCallStatus => ({ callId: call.id, tool: call.tool, serverName: '', toolName: '', description: '', state: 'unavailable', reason: 'The fake tool provider runs no live calls.' }));
+  }
+
+  allowLive(req: LiveStatusRequest): LiveCallStatus[] {
+    return this.liveStatus(req);
+  }
+
+  revokeLive(): number {
+    return 0;
+  }
+
+  async runLiveCall(_req: LiveRunRequest): Promise<LiveCallOutcome> {
+    return { ok: false, code: 'not_available', message: 'The fake tool provider runs no live calls.' };
   }
 
   private gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec {
@@ -1148,7 +1169,7 @@ class InMemoryArtifactRepo implements ArtifactRepo {
     const artifact = this.artifacts.get(v.artifactId);
     if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
     const number = Math.max(0, ...this.versions(v.artifactId).map((x) => x.number)) + 1;
-    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number };
+    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, live: v.live ?? null, number };
     this.versionsById.set(v.id, full);
     return { ...full };
   }
