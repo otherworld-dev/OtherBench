@@ -66,9 +66,17 @@ export interface ComputerExpectation {
 
 /**
  * A phase-1 action that changes something, with coordinates in screenshot
- * pixels. Built by core's `computerActionOf`, never from raw model input: a
- * `key` action's `text` is one combination in core's canonical form
- * (`parseKeys`), which the driver presses as written.
+ * pixels. Built by core's `parseAction`, never from raw model input, and
+ * already inside every cap in `COMPUTER_LIMITS`; the driver checks the caps
+ * again and refuses what is outside them.
+ *
+ * A `key` action's `text` is ONE combination in core's canonical form
+ * (`parseKeys`: `ctrl+shift+s`), which the driver presses and releases as
+ * written. A `type` action's `text` is typed as Unicode characters, never as
+ * virtual-key chords and with no modifier held, so typed text can't make a
+ * shortcut, an Alt+numpad code or a dead-key composition; a line break is
+ * Enter and a tab is Tab. No action holds a key or a button down: each one
+ * presses and releases, and there is no key-down without its key-up.
  */
 export type ComputerAction =
   | { action: 'mouse_move' | 'left_click' | 'right_click' | 'double_click' | 'triple_click'; coordinate: [number, number] }
@@ -102,7 +110,10 @@ export interface ComputerDriver {
    * driver resolves the target again (under the point for an action with a
    * coordinate, the foreground window for `type` and `key`) and refuses
    * unless its path, window, pid and start time all equal `expect`, compared
-   * exactly. It checks again before every chunk of typed text.
+   * exactly (the path byte for byte: the driver has no key rule of its own).
+   * It checks again before every key combination and before every chunk of
+   * at most 20 typed characters, and stops at the first check that fails. A
+   * chat with no control session gets a refusal.
    */
   act(chatId: string, action: ComputerAction, expect: ComputerExpectation): Promise<ComputerAnswer>;
   /**

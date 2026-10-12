@@ -6,7 +6,7 @@ import {
   appKey,
   classifyTarget,
   COMPUTER_ACTIONS,
-  computerActionOf,
+  COMPUTER_LIMITS,
   coordinateOf,
   describeApp,
   expectationOf,
@@ -16,10 +16,10 @@ import {
   isHighRiskApp,
   isHighRiskProgramName,
   isReadAction,
+  parseAction,
   pathForCard,
   READ_ACTIONS,
   typedTextForCard,
-  waitSeconds,
   windowTitleForCard,
   type ClassifiedTarget,
 } from '../src/domain/computer-apps.js';
@@ -425,18 +425,41 @@ describe('computer actions', () => {
     expect(isReadAction('screenshot')).toBe(true);
     expect(isReadAction('left_click')).toBe(false);
     expect(isComputerAction('triple_click')).toBe(true);
-    for (const later of ['left_click_drag', 'zoom', 'middle_click', 'hold_key', 'left_mouse_down', 'left_mouse_up', 'Screenshot', ' screenshot', 'screenshot ', 7, null, ['screenshot'], { action: 'screenshot' }]) {
+    for (const later of ['left_click_drag', 'zoom', 'middle_click', 'hold_key', 'left_mouse_down', 'left_mouse_up', 'key_down', 'key_up', 'Screenshot', ' screenshot', 'screenshot ', 7, null, ['screenshot'], { action: 'screenshot' }]) {
       expect(isComputerAction(later), JSON.stringify(later)).toBe(false);
       expect(isReadAction(later), JSON.stringify(later)).toBe(false);
     }
   });
 
-  it('cannot have its action lists changed by whoever imports them', () => {
+  it('cannot have its action lists or its limits changed by whoever imports them', () => {
     expect(Object.isFrozen(COMPUTER_ACTIONS)).toBe(true);
     expect(Object.isFrozen(READ_ACTIONS)).toBe(true);
+    expect(Object.isFrozen(COMPUTER_LIMITS)).toBe(true);
     expect(() => (READ_ACTIONS as string[]).push('type')).toThrow();
     expect(() => (COMPUTER_ACTIONS as unknown as string[]).push('zoom')).toThrow();
+    expect(() => {
+      (COMPUTER_LIMITS as { typeTextLength: number }).typeTextLength = 1e9;
+    }).toThrow();
     expect(isReadAction('type')).toBe(false);
+  });
+
+  it('states every cap in one place', () => {
+    expect(COMPUTER_LIMITS).toEqual({
+      keyTextLength: 64,
+      keysPerCombo: 4,
+      combosPerKeyAction: 1,
+      typeTextLength: 4000,
+      scrollAmountMin: 1,
+      scrollAmountMax: 10,
+      scrollAmountDefault: 3,
+      waitMax: 10,
+      waitDefault: 1,
+      coordinateMax: 32767,
+      appKeyLength: 1024,
+      windowIdLength: 128,
+      startedAtLength: 64,
+      windowTitleLength: 80,
+    });
   });
 
   it('reads a coordinate only as two finite, non-negative numbers inside the screenshot, as whole pixels', () => {
@@ -460,51 +483,145 @@ describe('computer actions', () => {
       expect(coordinateOf({ coordinate: [1, 1] }, bounds), JSON.stringify(bounds)).toBeNull();
     }
   });
+});
 
-  it('builds the action it will send from validated values only', () => {
-    expect(computerActionOf({ action: 'left_click', coordinate: [512.7, 300.2], extra: 'x' })).toEqual({ action: 'left_click', coordinate: [512, 300] });
-    expect(computerActionOf({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 })).toEqual({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 });
-    expect(computerActionOf({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'up' })).toEqual({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'up', scroll_amount: 3 });
-    expect(computerActionOf({ action: 'type', text: 'hello\nworld' })).toEqual({ action: 'type', text: 'hello\nworld' });
+describe('parsing a whole action', () => {
+  function parsed(args: unknown, options?: Parameters<typeof parseAction>[1]): unknown {
+    const result = parseAction(args, options);
+    return result.ok ? result.action : null;
+  }
+
+  function refused(args: unknown, options?: Parameters<typeof parseAction>[1]): string {
+    const result = parseAction(args, options);
+    if (result.ok) throw new Error(`Expected a refusal for ${JSON.stringify(args)}, got ${JSON.stringify(result.action)}`);
+    return result.reason;
+  }
+
+  it('gives back the one form of an action that is carried out, built from validated values only', () => {
+    expect(parsed({ action: 'screenshot', coordinate: 'ignored', text: 'x' })).toEqual({ action: 'screenshot' });
+    expect(parsed({ action: 'cursor_position' })).toEqual({ action: 'cursor_position' });
+    expect(parsed({ action: 'left_click', coordinate: [512.7, 300.2], extra: 'x', app: 'whatever' })).toEqual({ action: 'left_click', coordinate: [512, 300] });
+    expect(parsed({ action: 'mouse_move', coordinate: [1, 2] })).toEqual({ action: 'mouse_move', coordinate: [1, 2] });
+    expect(parsed({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 })).toEqual({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 });
+    expect(parsed({ action: 'type', text: 'hello\n\tworld' })).toEqual({ action: 'type', text: 'hello\n\tworld' });
     // A key action is sent in the one way core writes it.
-    expect(computerActionOf({ action: 'key', text: 'S+CTRL' })).toEqual({ action: 'key', text: 'ctrl+s' });
-    expect(computerActionOf({ action: 'key', text: 'ctrl+shift+space' }, { reserved: ['Ctrl+Shift+Space'] })).toBeNull();
-    expect(computerActionOf({ action: 'left_click', coordinate: [1366, 10] }, { bounds: { width: 1366, height: 768 } })).toBeNull();
-
-    const bad: unknown[] = [
-      null,
-      {},
-      { action: 'screenshot' },
-      { action: 'zoom', coordinate: [1, 2] },
-      { action: 'left_click' },
-      { action: 'left_click', coordinate: [1e308, 5] },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'sideways' },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'x'.repeat(300) },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: { toString: () => 'down' } },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'down', scroll_amount: 0 },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'down', scroll_amount: 11 },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'down', scroll_amount: 2.5 },
-      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'down', scroll_amount: '3' },
-      { action: 'scroll', scroll_direction: 'down' },
-      { action: 'type' },
-      { action: 'type', text: '' },
-      { action: 'type', text: 42 },
-      { action: 'type', text: 'broken \ud83d' },
-      { action: 'key', text: 'ctrl+Escape' },
-      { action: 'key', text: 'ctrl+a ctrl+c' },
-      { action: 'key', text: 'super+r' },
-      { action: 'key', text: '' },
-      { action: 'key' },
-    ];
-    for (const args of bad) expect(computerActionOf(args), JSON.stringify(args)).toBeNull();
+    expect(parsed({ action: 'key', text: 'S+CTRL' })).toEqual({ action: 'key', text: 'ctrl+s' });
   });
 
-  it('keeps a wait between nothing and ten seconds', () => {
-    expect(waitSeconds(2)).toBe(2);
-    expect(waitSeconds(2.54)).toBe(2.5);
-    expect(waitSeconds(1e9)).toBe(10);
-    expect(waitSeconds(-3)).toBe(0);
-    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, '5', null, undefined]) expect(waitSeconds(bad)).toBe(1);
+  it('refuses anything that is not exactly a known action, without echoing what it was sent', () => {
+    for (const action of [undefined, null, 42, ['screenshot'], { action: 'screenshot' }, 'Screenshot', 'screenshot ', 'zoom', 'left_click_drag', 'hold_key', 'left_mouse_down', 'key_down', '']) {
+      expect(parsed({ action, coordinate: [1, 2], text: 'x' }), JSON.stringify(action)).toBeNull();
+    }
+    for (const notArgs of [null, undefined, 'screenshot', 42, [{ action: 'screenshot' }]]) expect(parsed(notArgs)).toBeNull();
+    expect(refused({ action: 'evil\u202eaction' })).toMatch(/^"evilaction" isn't a computer action Grunt can do\. Use one of: screenshot, /);
+    expect(refused({ action: 'x'.repeat(5000) }).length).toBeLessThan(250);
+  });
+
+  it('holds a coordinate to the screenshot', () => {
+    const shot = { bounds: { width: 1366, height: 768 } };
+    expect(parsed({ action: 'left_click', coordinate: [1365.9, 767.9] }, shot)).toEqual({ action: 'left_click', coordinate: [1365, 767] });
+    expect(refused({ action: 'left_click', coordinate: [1366, 10] }, shot)).toBe('That point is outside the last screenshot. Take a screenshot and use a point inside it.');
+    expect(refused({ action: 'scroll', coordinate: [10, 768], scroll_direction: 'down' }, shot)).toBe('That point is outside the last screenshot. Take a screenshot and use a point inside it.');
+    for (const coordinate of [undefined, [1], [1, 2, 3], ['1', 2], [-1, 5], [Number.NaN, 1], '512,300', [1e308, 5], [2147483648, 0], [32768, 1]]) {
+      for (const action of ['mouse_move', 'left_click', 'right_click', 'double_click', 'triple_click', 'scroll']) {
+        expect(refused({ action, coordinate, scroll_direction: 'down' }, shot), `${action} ${JSON.stringify(coordinate)}`).toBe(
+          `A ${action} action needs "coordinate": [x, y], two numbers in the last screenshot's pixels.`
+        );
+      }
+    }
+  });
+
+  it('holds a scroll to one of four directions and a whole amount from 1 to 10', () => {
+    const scroll = (over: Record<string, unknown>): Record<string, unknown> => ({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', ...over });
+    expect(parsed(scroll({}))).toEqual({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 });
+    for (const scroll_amount of [1, 2, 10]) expect(parsed(scroll({ scroll_amount }))).toMatchObject({ scroll_amount });
+    for (const scroll_direction of ['up', 'down', 'left', 'right']) expect(parsed(scroll({ scroll_direction }))).toMatchObject({ scroll_direction });
+    for (const scroll_amount of [0, 11, -1, 2.5, 1e9, Number.NaN, Number.POSITIVE_INFINITY, '3', [3], {}]) {
+      expect(refused(scroll({ scroll_amount })), JSON.stringify(scroll_amount)).toBe('"scroll_amount" is a whole number from 1 to 10.');
+    }
+    for (const scroll_direction of [undefined, 'sideways', 'Down', 'DOWN', 'down ', 'x'.repeat(300), 42, ['down'], { toString: () => 'down' }]) {
+      expect(refused(scroll({ scroll_direction })), JSON.stringify(scroll_direction)).toBe('A scroll action needs "scroll_direction": up, down, left or right.');
+    }
+  });
+
+  it('holds typed text to 4000 characters, counted as characters', () => {
+    expect(parsed({ action: 'type', text: 'a'.repeat(4000) })).toEqual({ action: 'type', text: 'a'.repeat(4000) });
+    // An emoji is one character though it is two UTF-16 units.
+    expect(parsed({ action: 'type', text: '\u{1f600}'.repeat(4000) })).toMatchObject({ action: 'type' });
+    const tooMuch = 'That is too much to type in one action (at most 4000 characters). Send it in parts.';
+    expect(refused({ action: 'type', text: 'a'.repeat(4001) })).toBe(tooMuch);
+    expect(refused({ action: 'type', text: '\u{1f600}'.repeat(4001) })).toBe(tooMuch);
+    expect(refused({ action: 'type', text: 'a'.repeat(5_000_000) })).toBe(tooMuch);
+    for (const text of [undefined, null, '', 42, ['a'], { text: 'a' }]) {
+      expect(refused({ action: 'type', text }), JSON.stringify(text)).toBe('A type action needs "text": the text to type.');
+    }
+  });
+
+  it('types line breaks and tabs, and no other control character', () => {
+    expect(parsed({ action: 'type', text: 'one\ntwo\tthree' })).toEqual({ action: 'type', text: 'one\ntwo\tthree' });
+    // Text that is not a control character is typed as it is, hidden or not: the card spells it out.
+    expect(parsed({ action: 'type', text: 'caf\u00e9 \u202e\u200b\u2028 \ufffd \u{1f600}' })).toMatchObject({ action: 'type' });
+    const controls = [0x00, 0x01, 0x07, 0x08, 0x0b, 0x0c, 0x0d, 0x1a, 0x1b, 0x1f, 0x7f, 0x80, 0x85, 0x9b, 0x9f];
+    for (const code of controls) {
+      const reason = refused({ action: 'type', text: `ab${String.fromCharCode(code)}cd` });
+      expect(reason, code.toString(16)).toMatch(/control character/);
+      expect(reason.includes(String.fromCharCode(code)), code.toString(16)).toBe(false);
+    }
+    expect(refused({ action: 'type', text: 'line one\r\nline two' })).toMatch(/control character/);
+    for (const text of ['broken \ud83d', '\ude00 broken', 'bro\ud800ken']) {
+      expect(refused({ action: 'type', text }), JSON.stringify(text)).toMatch(/isn't a character/);
+    }
+  });
+
+  it('holds a key action to one canonical combination that stays in the app', () => {
+    expect(parsed({ action: 'key', text: 'Shift+CONTROL+s' })).toEqual({ action: 'key', text: 'ctrl+shift+s' });
+    for (const text of ['ctrl+Escape', 'alt+Tab', 'alt+F4', 'super+r', 'OS+r', 'ctrl+alt+Delete', 'Print', 'shift', 'ctrl+a ctrl+c', 'ctrl+Escape c m d Return', 'XF86Search', 's'.repeat(65), 'a+b+c+d+e', '', undefined, 42]) {
+      expect(parsed({ action: 'key', text }), JSON.stringify(text)).toBeNull();
+    }
+    expect(refused({ action: 'key', text: 'super+r' })).toBe('Key combinations with the Windows key are never sent.');
+    expect(parsed({ action: 'key', text: 'ctrl+shift+space' })).toEqual({ action: 'key', text: 'ctrl+shift+space' });
+    expect(refused({ action: 'key', text: 'ctrl+shift+space' }, { reserved: ['Ctrl+Shift+Space'] })).toMatch(/Grunt's own shortcuts/);
+  });
+
+  it('cuts a wait to ten seconds, and refuses one that is not a length of time', () => {
+    // Left out (or null, as some callers write a missing value), it is one second.
+    expect(parsed({ action: 'wait' })).toEqual({ action: 'wait', duration: 1 });
+    expect(parsed({ action: 'wait', duration: null })).toEqual({ action: 'wait', duration: 1 });
+    expect(parsed({ action: 'wait', duration: 2 })).toEqual({ action: 'wait', duration: 2 });
+    expect(parsed({ action: 'wait', duration: 0 })).toEqual({ action: 'wait', duration: 0 });
+    expect(parsed({ action: 'wait', duration: 2.54 })).toEqual({ action: 'wait', duration: 2.5 });
+    expect(parsed({ action: 'wait', duration: 10 })).toEqual({ action: 'wait', duration: 10 });
+    expect(parsed({ action: 'wait', duration: 10.01 })).toEqual({ action: 'wait', duration: 10 });
+    expect(parsed({ action: 'wait', duration: 1e9 })).toEqual({ action: 'wait', duration: 10 });
+    expect(parsed({ action: 'wait', duration: Number.MAX_VALUE })).toEqual({ action: 'wait', duration: 10 });
+    for (const duration of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, -0.001, '5', [5], {}]) {
+      expect(refused({ action: 'wait', duration }), JSON.stringify(duration)).toBe('A wait needs "duration": a number of seconds from 0 to 10.');
+    }
+  });
+
+  it('never gives back more than it was given the right to: every parsed action is inside every cap', () => {
+    const inputs: unknown[] = [
+      { action: 'wait', duration: 1e308 },
+      { action: 'scroll', coordinate: [32767.9, 32767.9], scroll_direction: 'up', scroll_amount: 10 },
+      { action: 'type', text: 'x'.repeat(4000) },
+      { action: 'key', text: 'ctrl+shift+F12' },
+      { action: 'left_click', coordinate: [32767.99, 0] },
+    ];
+    for (const input of inputs) {
+      const result = parseAction(input);
+      if (!result.ok) throw new Error(`Expected ${JSON.stringify(input)} to parse`);
+      const action = result.action;
+      if (action.action === 'wait') expect(action.duration).toBeLessThanOrEqual(COMPUTER_LIMITS.waitMax);
+      if ('coordinate' in action) for (const n of action.coordinate) expect(n).toBeLessThanOrEqual(COMPUTER_LIMITS.coordinateMax);
+      if (action.action === 'scroll') expect(action.scroll_amount).toBeLessThanOrEqual(COMPUTER_LIMITS.scrollAmountMax);
+      if (action.action === 'type') expect(Array.from(action.text).length).toBeLessThanOrEqual(COMPUTER_LIMITS.typeTextLength);
+      if (action.action === 'key') {
+        expect(action.text.length).toBeLessThanOrEqual(COMPUTER_LIMITS.keyTextLength);
+        expect(action.text.split('+').length).toBeLessThanOrEqual(COMPUTER_LIMITS.keysPerCombo);
+      }
+      // What comes back parses to itself: it is the canonical form.
+      expect(parseAction(action)).toEqual({ ok: true, action });
+    }
   });
 });
 
@@ -519,22 +636,26 @@ describe('the line that says what an action does', () => {
     expect(actionSummary({ action: 'screenshot' })).toBe('take a screenshot');
     expect(actionSummary({ action: 'cursor_position' })).toBe('read the cursor position');
     expect(actionSummary({ action: 'wait', duration: 2 })).toBe('wait 2 s');
+    expect(actionSummary({ action: 'wait' })).toBe('wait 1 s');
   });
 
   it('never holds the text a type action will type, only how much of it there is', () => {
     const payload = `${'a'.repeat(40)}; rm -rf /`;
     expect(actionSummary({ action: 'type', text: payload })).toBe('type 50 characters');
     expect(actionSummary({ action: 'type', text: 'x' })).toBe('type 1 character');
-    expect(actionSummary({ action: 'type', text: 'line one\nline two\r\nline three' })).toBe('type 29 characters (3 lines)');
-    expect(actionSummary({ action: 'type', text: 'hi\u202e\u200b\u0000\u001b[31m"\nsecond' })).toBe('type 18 characters (2 lines)');
+    expect(actionSummary({ action: 'type', text: 'line one\nline two\nline three' })).toBe('type 28 characters (3 lines)');
+    expect(actionSummary({ action: 'type', text: 'hi\u202e\u200b"\nsecond' })).toBe('type 12 characters (2 lines)');
     // An emoji is one character, and the line is never cut through one.
     expect(actionSummary({ action: 'type', text: `${'a'.repeat(39)}\u{1f600}\u{1f600}` })).toBe('type 41 characters');
-    for (const text of [payload, 'hunter2', 'hi\u202e\u200b\u0000\u001b[31m"\nsecond']) {
+    for (const text of [payload, 'hunter2', 'hi\u202e\u200b"\nsecond']) {
       const summary = actionSummary({ action: 'type', text });
       expect(summary).not.toContain('rm -rf');
       expect(summary).not.toContain('hunter2');
       expect(summary).toMatch(/^type \d+ characters?( \(\d+ lines\))?$/);
     }
+    // Text that would not be typed at all has no count either.
+    expect(actionSummary({ action: 'type', text: 'hi\u0000\u001b[31m' })).toBe('type ?');
+    expect(actionSummary({ action: 'type', text: 'a'.repeat(4001) })).toBe('type ?');
   });
 
   it('shows the full typed text, with hidden characters spelled out, only where the card asks for it', () => {
@@ -554,6 +675,7 @@ describe('the line that says what an action does', () => {
     expect(actionSummary({ action: 'key', text: 'Return\nAllowed by policy.\n\u202egnp.exe' })).toBe('press ?');
     expect(actionSummary({ action: 'key', text: 'x'.repeat(300) })).toBe('press ?');
     expect(actionSummary({ action: 'key', text: 'ctrl+Escape' })).toBe('press ?');
+    expect(actionSummary({ action: 'key', text: 'alt+F4' })).toBe('press ?');
     expect(actionSummary({ action: 'key' })).toBe('press ?');
   });
 
@@ -568,9 +690,10 @@ describe('the line that says what an action does', () => {
     expect(actionSummary({ action: 'left_click_drag' })).toBe('?');
     expect(actionSummary({ action: 42 })).toBe('?');
     expect(actionSummary(null)).toBe('?');
-    expect(actionSummary({ action: 'wait', duration: Number.NaN })).toBe('wait 1 s');
+    // A wait longer than the cap says the cap; one that is not a number says nothing.
     expect(actionSummary({ action: 'wait', duration: 1e9 })).toBe('wait 10 s');
-    expect(actionSummary({ action: 'wait', duration: 'forever' })).toBe('wait 1 s');
+    expect(actionSummary({ action: 'wait', duration: Number.NaN })).toBe('wait ?');
+    expect(actionSummary({ action: 'wait', duration: 'forever' })).toBe('wait ?');
     for (const args of [{ action: 'type', text: `${'a'.repeat(39)}\u{1f600}` }, { action: 'key', text: '\ud83d' }, { action: '\ud83d' }]) {
       expect(isWellFormedText(actionSummary(args))).toBe(true);
     }

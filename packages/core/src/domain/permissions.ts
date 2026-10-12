@@ -11,12 +11,12 @@ import {
   COMPUTER_NO_WINDOW_REASON,
   COMPUTER_OFF_REASON,
   COMPUTER_UNATTENDED_REASON,
-  computerActionOf,
   describeApp,
   expectationOf,
   isComputerAction,
   isHighRiskApp,
   isReadAction,
+  parseAction,
 } from './computer-apps.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
@@ -245,18 +245,21 @@ export class PermissionBroker {
       // Exactly one of the known names, as a string: anything else (another
       // case, an array, a missing action) is refused, never treated as a look.
       if (!isComputerAction(action)) return { kind: 'deny', reason: `"${cardLine(action, 40)}" isn't a computer action Grunt can do.` };
-      if (isReadAction(action)) return { kind: 'allow', grantedBy: 'policy' };
+      // The whole action must be one Grunt would carry out, within every cap
+      // (`parseAction`): a readable coordinate, a key combination that stays
+      // in the app, typed text with no control characters, a wait that is a
+      // number. The tool's describeCall refuses these first, with a fuller
+      // reason; this is the backstop, so neither a look nor a grant ever
+      // covers one.
+      const valid = parseAction(args).ok;
+      if (isReadAction(action)) return valid ? { kind: 'allow', grantedBy: 'policy' } : { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
       // The app's key must be valid as it stands. One that isn't is no app.
       if (appKey(rawField(args, 'app')) === null) return { kind: 'deny', reason: COMPUTER_NO_APP_REASON };
       // A card and a grant are about one window of that app: without the
       // window, pid and start time the shell checks before acting, the call
       // could land anywhere, so it is refused.
       if (expectationOf(args) === null) return { kind: 'deny', reason: COMPUTER_NO_WINDOW_REASON };
-      // And the action must be one Grunt would send: a readable coordinate, a
-      // key combination that stays in the app (`parseKeys`), well-formed
-      // text. The tool's describeCall refuses these first, with a fuller
-      // reason; this is the backstop, so no grant ever covers one.
-      if (computerActionOf(args) === null) return { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
+      if (!valid) return { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the

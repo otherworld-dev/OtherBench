@@ -77,6 +77,11 @@ describe('PermissionBroker and computer use', () => {
         expect(broker.decide(COMPUTER, { action, app: null }, policy({ approvalMode }), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
       }
     }
+    // A wait longer than the cap is cut to it; one that is not a length of time is no wait.
+    expect(broker.decide(COMPUTER, { action: 'wait', duration: 1e9 }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    for (const duration of [Number.NaN, Number.POSITIVE_INFINITY, -1, '5', {}]) {
+      expect(broker.decide(COMPUTER, { action: 'wait', duration }, policy(), ctx()), String(duration)).toEqual({ kind: 'deny', reason: "Grunt can't carry out that action as it was sent, so it didn't run it." });
+    }
     // Whatever else the call carries, it is still only a look: the tool runs it by the same name.
     expect(broker.decide(COMPUTER, { action: 'screenshot', coordinate: [1, 2], text: 'x', app: CMD }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
   });
@@ -155,6 +160,12 @@ describe('PermissionBroker and computer use', () => {
       { action: 'key', text: 'ctrl+a ctrl+c' },
       { action: 'key', text: 'ctrl+Escape r u n Return' },
       { action: 'key', text: 'XF86Search' },
+      { action: 'key', text: 'alt+F4' },
+      { action: 'key', text: 'a+b+c+d+e' },
+      { action: 'key', text: 's'.repeat(65) },
+      { action: 'type', text: 'a'.repeat(4001) },
+      { action: 'type', text: `escape ${String.fromCharCode(0x1b)}` },
+      { action: 'type', text: `nul ${String.fromCharCode(0)}` },
       { action: 'key', text: undefined },
       { action: 'type', text: '' },
       { action: 'type', text: 42 },

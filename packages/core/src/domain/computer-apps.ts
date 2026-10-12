@@ -8,17 +8,18 @@
  *   - `classifyTarget` turns the facts the shell reports into "refuse" or an
  *     app with a risk;
  *   - `describeApp` is the only source of the name and path a card shows;
- *   - `computerActionOf` builds the action that is sent, and `actionSummary`
- *     describes exactly that;
+ *   - `parseAction` checks a whole action against every rule and cap and
+ *     builds the one that is carried out, and `actionSummary` describes
+ *     exactly that;
  *   - `expectationOf` is what the shell must still find true when it acts.
  * The shell sends facts and presses what it is told. It has no copy of any
  * of these rules.
  */
 import { cardLine, hasHiddenCharacter, isWellFormedText, revealAllHidden, revealHidden } from './card-text.js';
-import { parseKeys } from './computer-keys.js';
+import { KEY_LIMITS, parseKeys } from './computer-keys.js';
 import type { ComputerAction, ComputerExpectation } from '../ports/computer.js';
 
-export { KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, type ParsedKeys } from './computer-keys.js';
+export { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, type ParsedKeys } from './computer-keys.js';
 export { cardLine } from './card-text.js';
 
 export const COMPUTER_TOOL = 'computer';
@@ -73,6 +74,7 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
 // The app key
 
 const MAX_KEY_LENGTH = 1024;
+const MAX_WINDOW_TITLE = 80;
 /** Characters no file or folder name has. `:` and `?` also rule out streams and the `\\?\` forms. */
 const NOT_IN_A_NAME = /[<>:"/|?*]/;
 
@@ -153,7 +155,7 @@ export function pathForCard(path: unknown): string {
  * the headline, the summary or a button.
  */
 export function windowTitleForCard(title: unknown): string {
-  return cardLine(title, 80);
+  return cardLine(title, MAX_WINDOW_TITLE);
 }
 
 // ---------------------------------------------------------------------------
@@ -389,8 +391,35 @@ export function expectationOf(args: unknown): ComputerExpectation | null {
 // ---------------------------------------------------------------------------
 // Actions
 
-/** Windows' own limit on a screen coordinate; no screenshot is wider. */
-const MAX_COORDINATE = 32767;
+/**
+ * Every cap on a computer action, in one place. `parseAction` enforces all of
+ * them before anything is dispatched; the driver's side enforces them again
+ * (the fake driver does, so a layer that skipped `parseAction` fails a test).
+ */
+export const COMPUTER_LIMITS = Object.freeze({
+  /** A `key` action's text, in UTF-16 units, measured before it is trimmed or split. */
+  keyTextLength: KEY_LIMITS.textLength,
+  /** Names in one key combination: up to three modifiers and one key. */
+  keysPerCombo: KEY_LIMITS.keysPerCombo,
+  /** Key combinations in one `key` action. */
+  combosPerKeyAction: KEY_LIMITS.combosPerAction,
+  /** A `type` action's text, in characters (code points). */
+  typeTextLength: 4000,
+  scrollAmountMin: 1,
+  scrollAmountMax: 10,
+  scrollAmountDefault: 3,
+  /** A `wait`, in seconds: a longer one is cut to this. */
+  waitMax: 10,
+  waitDefault: 1,
+  /** A coordinate, whatever the screenshot's size (Windows' own limit). */
+  coordinateMax: 32767,
+  /** An app key (a program path), in UTF-16 units. */
+  appKeyLength: MAX_KEY_LENGTH,
+  windowIdLength: MAX_WINDOW_ID,
+  startedAtLength: MAX_STARTED_AT,
+  /** A window title on a card, in characters. */
+  windowTitleLength: MAX_WINDOW_TITLE,
+});
 
 /**
  * `args.coordinate` as whole pixels (rounded DOWN, so a point inside the
@@ -407,7 +436,7 @@ export function coordinateOf(args: unknown, bounds?: { width: number; height: nu
   if (typeof rawX !== 'number' || typeof rawY !== 'number' || !Number.isFinite(rawX) || !Number.isFinite(rawY) || rawX < 0 || rawY < 0) return null;
   const x = Math.floor(rawX);
   const y = Math.floor(rawY);
-  if (x > MAX_COORDINATE || y > MAX_COORDINATE) return null;
+  if (x > COMPUTER_LIMITS.coordinateMax || y > COMPUTER_LIMITS.coordinateMax) return null;
   if (bounds !== undefined) {
     const { width, height } = bounds;
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
@@ -416,60 +445,111 @@ export function coordinateOf(args: unknown, bounds?: { width: number; height: nu
   return [x, y];
 }
 
-const MAX_WAIT_S = 10;
-
-/** How long a `wait` waits: its `duration` held between 0 and 10 seconds, to a tenth; 1 when it isn't a finite number. */
-export function waitSeconds(duration: unknown): number {
-  if (typeof duration !== 'number' || !Number.isFinite(duration)) return 1;
-  return Math.round(Math.min(MAX_WAIT_S, Math.max(0, duration)) * 10) / 10;
-}
-
 const SCROLL_DIRECTIONS = ['up', 'down', 'left', 'right'] as const;
-const DEFAULT_SCROLL_AMOUNT = 3;
+
+/** An action that only looks, in the one form it is carried out in. A wait's `duration` (seconds) is already held to the cap. */
+export type ComputerLook = { action: 'screenshot' } | { action: 'cursor_position' } | { action: 'wait'; duration: number };
+
+export type ParsedAction = { ok: true; action: ComputerLook | ComputerAction } | { ok: false; reason: string };
 
 /**
- * The action the driver is sent, built from validated values only, or
- * `null` when the arguments don't make one (the looking actions make none:
- * the driver has its own calls for those).
- *
- *   - a coordinate must pass `coordinateOf` (with `bounds`, when given);
- *   - a scroll needs a direction from the four and a whole amount from 1 to
- *     10 (3 when left out);
- *   - typed text must be non-empty and well-formed (no lone surrogate);
- *   - a key must pass `parseKeys` (with `reserved`), and is sent as the
- *     canonical combination, never as the model wrote it.
+ * Why a `type` action's text can't be typed, or null. Typed text is sent as
+ * characters, so a line break is Enter and a tab is Tab, and both are allowed
+ * (the card shows them, and the summary counts the lines). Every other
+ * control character (C0, DEL, C1: Escape, backspace, NUL...) is refused, and
+ * so is a lone surrogate, which is no character at all.
  */
-export function computerActionOf(args: unknown, options: { bounds?: { width: number; height: number }; reserved?: readonly unknown[] } = {}): ComputerAction | null {
+function typedTextProblem(text: string): string | null {
+  // In UTF-16 units first, so nothing far over the cap is walked through.
+  if (text.length > COMPUTER_LIMITS.typeTextLength * 2) return TOO_MUCH_TO_TYPE;
+  let characters = 0;
+  for (const ch of text) {
+    characters += 1;
+    if (characters > COMPUTER_LIMITS.typeTextLength) return TOO_MUCH_TO_TYPE;
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp >= 0xd800 && cp <= 0xdfff) return "Grunt can't type that text: part of it isn't a character (half of a surrogate pair).";
+    if ((cp < 0x20 && ch !== '\n' && ch !== '\t') || (cp >= 0x7f && cp <= 0x9f)) {
+      return "Grunt can't type that text: it has a control character in it. Only line breaks (\\n) and tabs are typed; use a key action for a key such as Escape or Backspace.";
+    }
+  }
+  return null;
+}
+
+const TOO_MUCH_TO_TYPE = `That is too much to type in one action (at most ${COMPUTER_LIMITS.typeTextLength} characters). Send it in parts.`;
+
+/**
+ * Checks a whole action against every rule and cap, and gives back the one
+ * form of it that is carried out, or why it isn't. This is the only way an
+ * action is built: the tool dispatches exactly what this returns, never the
+ * model's own arguments.
+ *
+ *   - the action is exactly one of `COMPUTER_ACTIONS`;
+ *   - a coordinate passes `coordinateOf` (with `bounds`, the last
+ *     screenshot's size, when given);
+ *   - a scroll has a direction from the four and a whole amount from 1 to 10
+ *     (3 when left out);
+ *   - typed text is 1 to 4000 characters, well-formed, with no control
+ *     character but line breaks and tabs;
+ *   - a key passes `parseKeys` (with `reserved`) and is sent as the canonical
+ *     combination, never as the model wrote it;
+ *   - a wait is a finite number of seconds, zero or more, cut to 10 (1 when
+ *     left out).
+ *
+ * There is no action that holds a key or a button down: every action here
+ * presses and releases.
+ */
+export function parseAction(args: unknown, options: { bounds?: { width: number; height: number }; reserved?: readonly unknown[] } = {}): ParsedAction {
+  const no = (reason: string): ParsedAction => ({ ok: false, reason });
   const a = recordOf(args);
-  if (a === null) return null;
-  const action = a['action'];
+  const action = a?.['action'];
+  if (a === null || !isComputerAction(action)) {
+    return no(`"${cardLine(action, 40)}" isn't a computer action Grunt can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.`);
+  }
   switch (action) {
+    case 'screenshot':
+    case 'cursor_position':
+      return { ok: true, action: { action } };
+    case 'wait': {
+      const duration = a['duration'] ?? COMPUTER_LIMITS.waitDefault;
+      if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) {
+        return no(`A wait needs "duration": a number of seconds from 0 to ${COMPUTER_LIMITS.waitMax}.`);
+      }
+      return { ok: true, action: { action, duration: Math.round(Math.min(duration, COMPUTER_LIMITS.waitMax) * 10) / 10 } };
+    }
     case 'mouse_move':
     case 'left_click':
     case 'right_click':
     case 'double_click':
-    case 'triple_click': {
-      const coordinate = coordinateOf(a, options.bounds);
-      return coordinate ? { action, coordinate } : null;
-    }
+    case 'triple_click':
     case 'scroll': {
       const coordinate = coordinateOf(a, options.bounds);
+      if (coordinate === null) {
+        const inside = options.bounds !== undefined && coordinateOf(a) !== null;
+        return no(
+          inside
+            ? 'That point is outside the last screenshot. Take a screenshot and use a point inside it.'
+            : `A ${action} action needs "coordinate": [x, y], two numbers in the last screenshot's pixels.`
+        );
+      }
+      if (action !== 'scroll') return { ok: true, action: { action, coordinate } };
       const direction = SCROLL_DIRECTIONS.find((d) => d === a['scroll_direction']);
-      const amount = a['scroll_amount'] ?? DEFAULT_SCROLL_AMOUNT;
-      if (!coordinate || direction === undefined) return null;
-      if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 1 || amount > 10) return null;
-      return { action, coordinate, scroll_direction: direction, scroll_amount: amount };
+      if (direction === undefined) return no('A scroll action needs "scroll_direction": up, down, left or right.');
+      const amount = a['scroll_amount'] ?? COMPUTER_LIMITS.scrollAmountDefault;
+      if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < COMPUTER_LIMITS.scrollAmountMin || amount > COMPUTER_LIMITS.scrollAmountMax) {
+        return no(`"scroll_amount" is a whole number from ${COMPUTER_LIMITS.scrollAmountMin} to ${COMPUTER_LIMITS.scrollAmountMax}.`);
+      }
+      return { ok: true, action: { action, coordinate, scroll_direction: direction, scroll_amount: amount } };
     }
     case 'type': {
       const text = a['text'];
-      return isWellFormedText(text) && text.length > 0 ? { action, text } : null;
+      if (typeof text !== 'string' || text.length === 0) return no('A type action needs "text": the text to type.');
+      const problem = typedTextProblem(text);
+      return problem === null ? { ok: true, action: { action, text } } : no(problem);
     }
     case 'key': {
       const parsed = parseKeys(a['text'], options.reserved);
-      return parsed.ok ? { action, text: parsed.text } : null;
+      return parsed.ok ? { ok: true, action: { action, text: parsed.text } } : no(parsed.reason);
     }
-    default:
-      return null;
   }
 }
 
@@ -485,7 +565,10 @@ export function typedTextForCard(args: unknown): string | null {
   return revealHidden(a['text']);
 }
 
-const VERBS: Readonly<Record<Exclude<ComputerActionName, 'screenshot' | 'cursor_position' | 'wait'>, string>> = {
+const VERBS: Readonly<Record<ComputerActionName, string>> = {
+  screenshot: 'take a screenshot',
+  cursor_position: 'read the cursor position',
+  wait: 'wait',
   mouse_move: 'move the mouse',
   left_click: 'click',
   right_click: 'right-click',
@@ -498,30 +581,31 @@ const VERBS: Readonly<Record<Exclude<ComputerActionName, 'screenshot' | 'cursor_
 
 /**
  * One short line saying what an action does, for the card's summary, the
- * banner and the indicator. It is made from the action `computerActionOf`
- * builds, so it says what will be sent and holds no value that wasn't
- * validated: an action that doesn't validate reads `click ?`, and a name
+ * banner and the indicator. It is made from the action `parseAction`
+ * returns, so it says what will be carried out and holds no value that
+ * wasn't validated: an action that doesn't pass reads `click ?`, and a name
  * that isn't an action reads `?`. It never holds typed text, only how much
  * of it there is (`typedTextForCard` is where a card shows the text).
  */
 export function actionSummary(args: unknown): string {
-  const a = recordOf(args);
-  const name = a?.['action'];
-  if (a === null || !isComputerAction(name)) return '?';
-  if (name === 'screenshot') return 'take a screenshot';
-  if (name === 'cursor_position') return 'read the cursor position';
-  if (name === 'wait') return `wait ${waitSeconds(a['duration'])} s`;
-
-  const action = computerActionOf(a);
-  if (action === null) return `${VERBS[name]} ?`;
+  const name = recordOf(args)?.['action'];
+  if (!isComputerAction(name)) return '?';
+  const parsed = parseAction(args);
+  if (!parsed.ok) return `${VERBS[name]} ?`;
+  const action = parsed.action;
   switch (action.action) {
+    case 'screenshot':
+    case 'cursor_position':
+      return VERBS[action.action];
+    case 'wait':
+      return `wait ${action.duration} s`;
     case 'mouse_move':
       return `move the mouse to ${action.coordinate[0]}, ${action.coordinate[1]}`;
     case 'scroll':
       return `scroll ${action.scroll_direction} ${action.scroll_amount} at ${action.coordinate[0]}, ${action.coordinate[1]}`;
     case 'type': {
       const characters = Array.from(action.text).length;
-      const lines = action.text.split(/\r\n|\r|\n/).length;
+      const lines = action.text.split('\n').length;
       return `type ${characters} ${characters === 1 ? 'character' : 'characters'}${lines > 1 ? ` (${lines} lines)` : ''}`;
     }
     case 'key':

@@ -8,6 +8,7 @@ import type {
   ComputerStopReason,
   ComputerTarget,
 } from '../ports/computer.js';
+import { expectationOf, isReadAction, parseAction } from '../domain/computer-apps.js';
 
 /** A 1×1 PNG: every screenshot the fake driver takes. */
 export const FAKE_PNG = Buffer.from(
@@ -43,7 +44,16 @@ export function fakeComputerTarget(over: Partial<ComputerTarget> = {}): Computer
 /** What `act` answers when the window is no longer the one the action was approved for. */
 export const FAKE_WINDOW_CHANGED_REASON = 'The window changed after Grunt asked, so nothing was done.';
 
+/** What `act` answers for a chat that has no control session. */
+export const FAKE_NO_SESSION_REASON = 'Grunt is not controlling this computer for that chat.';
+
 type Acted = { chatId: string; action: ComputerAction; expect: ComputerExpectation };
+
+/** The same fields with the same values, whatever order they were written in. */
+function sameAction(a: object, b: object): boolean {
+  const flat = (o: object): string => JSON.stringify(Object.entries(o).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+  return flat(a) === flat(b);
+}
 
 /**
  * A `ComputerDriver` that touches nothing: it records what it was asked and
@@ -56,6 +66,13 @@ type Acted = { chatId: string; action: ComputerAction; expect: ComputerExpectati
  * window (`foregroundTarget`) for `type` and `key`. A test models "the
  * window changed between the card and the action" by setting those after
  * the call was described.
+ *
+ * It also holds the line the real shell holds, so a layer that forgot fails
+ * a test: `act` THROWS when it is handed an action that isn't exactly what
+ * core's `parseAction` returns (outside a cap in `COMPUTER_LIMITS`, off the
+ * screenshot, a key combination not in canonical form or one of
+ * `reserved`) or an expectation that isn't whole, and refuses a chat that
+ * has no session.
  */
 export class FakeComputerDriver implements ComputerDriver {
   isAvailable = true;
@@ -115,6 +132,22 @@ export class FakeComputerDriver implements ComputerDriver {
   }
 
   async act(chatId: string, action: ComputerAction, expect: ComputerExpectation): Promise<ComputerAnswer> {
+    const parsed = parseAction(action, { bounds: this.screenSize, reserved: this.reserved });
+    const why = !parsed.ok
+      ? parsed.reason
+      : isReadAction(parsed.action.action)
+        ? 'a looking action has its own call'
+        : sameAction(parsed.action, action)
+          ? null
+          : 'it is not in canonical form';
+    if (why !== null) throw new Error(`FakeComputerDriver.act was handed an action core would not send (${why}). Dispatch only what parseAction returns.`);
+    const given = expect as ComputerExpectation | null | undefined;
+    const whole = given ? expectationOf({ app: given.app, appWindow: given.windowId, appPid: given.pid, appStarted: given.startedAt }) : null;
+    if (whole === null) throw new Error('FakeComputerDriver.act was handed an expectation that is not whole. Build it with expectationOf.');
+    if (!this.sessions.has(chatId)) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: FAKE_NO_SESSION_REASON };
+    }
     const now = 'coordinate' in action ? this.pointTarget : this.foregroundTarget;
     if ('refuse' in now) {
       this.refused.push({ chatId, action, expect });
