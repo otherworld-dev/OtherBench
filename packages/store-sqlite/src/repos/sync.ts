@@ -86,6 +86,45 @@ function artifactVersionRowOk(row: SyncRow): boolean {
   );
 }
 
+/** A file row that a batch wrote: its id, and the chat and message its row names. */
+interface ArrivedFile {
+  id: string;
+  chatId: unknown;
+  messageId: unknown;
+}
+
+/**
+ * The attachment ids a stored message is still waiting for: every `pending`
+ * mention in its parts (a user's image or file part, or an image reference in
+ * a tool result). Nothing for parts that do not parse.
+ */
+function pendingMentions(partsJson: string): string[] {
+  let parts: unknown;
+  try {
+    parts = JSON.parse(partsJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parts)) return [];
+  const waitingFor = (item: unknown): string | null => {
+    if (typeof item !== 'object' || item === null) return null;
+    const v = item as { pending?: unknown; attachmentId?: unknown };
+    return v.pending === true && typeof v.attachmentId === 'string' ? v.attachmentId : null;
+  };
+  const ids: string[] = [];
+  for (const part of parts as unknown[]) {
+    const own = waitingFor(part);
+    if (own !== null) ids.push(own);
+    const result = typeof part === 'object' && part !== null ? (part as { type?: unknown; result?: unknown }) : null;
+    if (result?.type !== 'tool-result' || !Array.isArray(result.result)) continue;
+    for (const item of result.result as unknown[]) {
+      const held = waitingFor(item);
+      if (held !== null) ids.push(held);
+    }
+  }
+  return ids;
+}
+
 export class SqliteSyncRepo implements SyncRepo {
   private readonly columnCache = new Map<string, string[]>();
 
@@ -220,7 +259,7 @@ export class SqliteSyncRepo implements SyncRepo {
     this.db.exec('BEGIN');
     try {
       const pendingHeads: { chatId: string; head: string; stamp: string }[] = [];
-      const arrived: unknown[] = [];
+      const arrived: ArrivedFile[] = [];
       for (const u of upserts) {
         const outcome = u.tbl === 'chat' ? this.applyChat(u, pendingHeads) : this.applyRow(u);
         if (outcome) {
@@ -228,16 +267,16 @@ export class SqliteSyncRepo implements SyncRepo {
           result.written.push({ tbl: u.tbl, id: u.id });
           if (u.tbl === 'attachment') {
             result.attachments.push({ id: u.id, sha256: u.row['sha256'] as string });
-            arrived.push(u.row['message_id']);
+            arrived.push({ id: u.id, chatId: u.row['chat_id'], messageId: u.row['message_id'] });
           }
         } else {
           result.skipped++;
         }
       }
       this.resolveHeads(pendingHeads);
-      // Second phase: a message that came in this batch (or earlier) and names a file that has
-      // only now arrived is checked again against it, and verified or turned into a note.
-      for (const messageId of new Set(arrived)) if (typeof messageId === 'string') this.reverifyMessage(messageId);
+      // Second phase: every message that came in this batch (or earlier) and names a file that has
+      // only now arrived (or changed) is checked again against it, and verified or turned into a note.
+      this.reverifyWaiting(arrived);
       for (const d of deletes) {
         if (this.applyDelete(d)) result.applied++;
         else result.skipped++;
@@ -415,6 +454,34 @@ export class SqliteSyncRepo implements SyncRepo {
     if (!Array.isArray(parts)) return;
     const bound = this.boundParts(chatId, id, parts, missing);
     if (bound !== parts) row['parts'] = JSON.stringify(bound);
+  }
+
+  /**
+   * The messages to check again now that `files` have arrived or changed: the
+   * message each file was sent in, and every other message of the file's own
+   * chat that holds a pending mention of it (an edit-and-resend sibling names
+   * the same file, which stays on its first message). One pass per chat over
+   * the messages that hold any pending mark at all (a cheap text test on the
+   * stored parts, then a parse), so the work is bounded by that chat. A
+   * message of another chat is never looked at: no file of this chat can
+   * verify it, and every read turns its reference into a note.
+   */
+  private reverifyWaiting(files: ArrivedFile[]): void {
+    const messages = new Set<string>();
+    const byChat = new Map<string, Set<string>>();
+    for (const file of files) {
+      if (typeof file.messageId === 'string') messages.add(file.messageId);
+      if (typeof file.chatId !== 'string') continue;
+      const ids = byChat.get(file.chatId) ?? new Set<string>();
+      byChat.set(file.chatId, ids.add(file.id));
+    }
+    const waiting = this.db.prepare(`SELECT id, parts FROM message WHERE chat_id = ? AND instr(parts, '"pending"') > 0`);
+    for (const [chatId, ids] of byChat) {
+      for (const row of waiting.all(chatId) as { id: string; parts: string }[]) {
+        if (pendingMentions(row.parts).some((attachmentId) => ids.has(attachmentId))) messages.add(row.id);
+      }
+    }
+    for (const messageId of messages) this.reverifyMessage(messageId);
   }
 
   /** Checks a stored message's files again (a file of its has just arrived). The stamp is untouched: nothing here is a change to send. */

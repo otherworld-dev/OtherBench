@@ -1090,6 +1090,76 @@ describe('a synced reference passes only when its file is here and bound (nothin
     b.store.sync.apply([fileRow('later', 'chat-a', 'u-new')]);
     expect(b.store.messages.get('u-new')!.parts[0]).toEqual(parts[0]);
   });
+
+  describe('a file that arrives is checked against every message of its chat that was waiting for it', () => {
+    const part = { type: 'image', attachmentId: 'shared', mime: 'image/png' };
+    const attachmentNote = { type: 'text', text: "[attachment omitted: it doesn't belong to this chat]" };
+    const userRow = (id: string, chatId: string, createdAt: number): ChangeRow => ({
+      tbl: 'message', id, op: 'upsert', hlc,
+      row: { id, chat_id: chatId, parent_id: null, role: 'user', parts: JSON.stringify([part, { type: 'text', text: id }]), status: 'complete', error: null, produced_by: null, created_at: createdAt },
+    });
+    const first = (n: Node, id: string): unknown => n.store.messages.get(id)!.parts[0];
+    const offered = (n: Node, id: string): unknown[] => {
+      const row = n.store.sync.changesSince(0, 1000).rows.find((r) => r.tbl === 'message' && r.id === id) as Extract<ChangeRow, { op: 'upsert' }>;
+      return JSON.parse(row.row['parts'] as string) as unknown[];
+    };
+    // The same file named by the message it was sent in, by an edit-and-resend sibling in the same chat, and by a message of another chat.
+    const three = [userRow('u-first', 'chat-a', 5), userRow('u-resent', 'chat-a', 6), userRow('u-elsewhere', 'chat-b', 7)];
+
+    function expectSettled(b: Node): void {
+      expect(first(b, 'u-first')).toEqual(part);
+      expect(first(b, 'u-resent')).toEqual(part); // the sibling loses its mark too
+      // Another chat's message never passes on it: it is not verified where it is stored, and a note wherever it is read.
+      expect(first(b, 'u-elsewhere')).toEqual({ ...part, pending: true });
+      expect(offered(b, 'u-elsewhere')[0]).toEqual(attachmentNote);
+      expect(offered(b, 'u-resent')[0]).toEqual(part);
+    }
+
+    it('in a later batch: the sibling message loses its mark, and a message of another chat does not', () => {
+      const b = machine();
+      b.store.sync.apply(three);
+      for (const id of ['u-first', 'u-resent', 'u-elsewhere']) expect(first(b, id), id).toEqual({ ...part, pending: true });
+      expect(offered(b, 'u-resent')[0]).toEqual(attachmentNote); // not an image to anyone while it waits
+
+      expect(b.store.sync.apply([fileRow('shared', 'chat-a', 'u-first')]).applied).toBe(1);
+      expectSettled(b);
+    });
+
+    it('in the same batch, and again when the file row changes (a rename)', () => {
+      const b = machine();
+      b.store.sync.apply([...three, fileRow('shared', 'chat-a', 'u-first')]);
+      expectSettled(b);
+      expect(b.store.sync.apply([{ ...fileRow('shared', 'chat-a', 'u-first', { filename: 'renamed.png' }), hlc: '9999999999999-0001-a' }]).applied).toBe(1);
+      expectSettled(b);
+    });
+
+    it("a tool's image named by another reply of the chat becomes a note there, and is verified only on the reply it was stored for", () => {
+      const b = machine();
+      b.store.sync.apply([messageRow('m-own', 'chat-a', [ref('shot')]), messageRow('m-copy', 'chat-a', [ref('shot')]), messageRow('m-elsewhere', 'chat-b', [ref('shot')])]);
+      for (const id of ['m-own', 'm-copy', 'm-elsewhere']) expect(result(b, id), id).toEqual([{ ...ref('shot'), pending: true }]);
+
+      expect(b.store.sync.apply([fileRow('shot', 'chat-a', 'm-own')]).applied).toBe(1);
+      expect(result(b, 'm-own')).toEqual([ref('shot')]);
+      expect(result(b, 'm-copy')).toEqual([note]); // same chat, another reply: settled as a note
+      expect(result(b, 'm-elsewhere')).toEqual([{ ...ref('shot'), pending: true }]);
+      expect(readAs(b, 'm-elsewhere')).toEqual([note]);
+    });
+
+    it('touches no message that was not waiting for that file', () => {
+      const b = machine();
+      // A stored message that only talks about the id, and one waiting for a different file.
+      b.store.sync.apply([
+        { tbl: 'message', id: 'u-talk', op: 'upsert', hlc, row: { id: 'u-talk', chat_id: 'chat-a', parent_id: null, role: 'user', parts: JSON.stringify([{ type: 'text', text: 'is "pending" about shared?' }]), status: 'complete', error: null, produced_by: null, created_at: 5 } },
+        { tbl: 'message', id: 'u-other', op: 'upsert', hlc, row: { id: 'u-other', chat_id: 'chat-a', parent_id: null, role: 'user', parts: JSON.stringify([{ type: 'image', attachmentId: 'another', mime: 'image/png' }]), status: 'complete', error: null, produced_by: null, created_at: 6 } },
+        userRow('u-first', 'chat-a', 7),
+      ]);
+      const before = b.db.prepare("SELECT id, parts, hlc FROM message WHERE id IN ('u-talk', 'u-other') ORDER BY id").all();
+      b.store.sync.apply([fileRow('shared', 'chat-a', 'u-first')]);
+      expect(b.db.prepare("SELECT id, parts, hlc FROM message WHERE id IN ('u-talk', 'u-other') ORDER BY id").all()).toEqual(before);
+      expect(first(b, 'u-other')).toEqual({ type: 'image', attachmentId: 'another', mime: 'image/png', pending: true });
+      expect(first(b, 'u-first')).toEqual(part);
+    });
+  });
 });
 
 describe('what a synced message and file row may hold (the caps the local path has)', () => {
