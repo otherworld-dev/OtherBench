@@ -25,7 +25,8 @@ interface ScheduleEditorProps {
   onCancel(): void;
 }
 
-const FIELD = 'w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1';
+const FOCUSABLE = 'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])';
+const FIELD ='w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1';
 
 /** New or Edit schedule (spec 2026-10-12-scheduled-tasks-design §5). Esc or Cancel closes it unsaved. */
 export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: ScheduleEditorProps): JSX.Element {
@@ -41,9 +42,15 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   const [saving, setSaving] = useState(false);
   const id = useId();
   const nameRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const opener = document.activeElement;
     nameRef.current?.focus();
+    // Hand focus back to whatever opened the editor (if it is still on the page).
+    return () => {
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
   }, []);
 
   const set = <K extends keyof ScheduleDraft>(key: K, value: ScheduleDraft[K]): void => setDraft((d) => ({ ...d, [key]: value }));
@@ -78,15 +85,39 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (!saving) onCancel();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!saving) onCancel();
+    } else if (e.key === 'Tab') {
+      // Tab wraps between the first and last control so focus never leaves the dialog.
+      const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      const inside = active instanceof Node && dialogRef.current?.contains(active) === true;
+      if (e.shiftKey && (!inside || active === first)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (!inside || active === last)) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   }
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30" onKeyDown={onKeyDown}>
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/30"
+      onKeyDown={onKeyDown}
+      onMouseDown={(e) => {
+        // A press on the backdrop or on text must not move focus to <body>, or Esc/Tab stop reaching us.
+        if (!(e.target instanceof Element && e.target.closest('input, textarea, select, button, label'))) e.preventDefault();
+      }}
+    >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${id}-title`}

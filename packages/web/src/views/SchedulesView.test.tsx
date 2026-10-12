@@ -1,4 +1,5 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { useState, type JSX } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScheduleView } from '@grunt/core/ports/store.js';
@@ -21,7 +22,7 @@ vi.mock('../state/api.js', () => ({
 
 import { api, ApiError } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
-import { SchedulesView } from './SchedulesView.js';
+import { SCHEDULES_POLL_MS, SchedulesView } from './SchedulesView.js';
 
 const list = vi.mocked(api.schedules.list);
 const patch = vi.mocked(api.schedules.patch);
@@ -108,5 +109,82 @@ describe('SchedulesView', () => {
       expect(create).toHaveBeenCalledWith({ name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { chatId: 'c1' }, rule: { cadence: 'daily', time: '09:00' } })
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  describe('the editor dialog', () => {
+    it('still closes on Esc after a press on its non-control area', async () => {
+      list.mockResolvedValue([]);
+      const user = userEvent.setup();
+      render(<SchedulesView onClose={vi.fn()} />);
+      await user.click(await screen.findByRole('button', { name: 'New schedule' }));
+      const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+
+      await user.click(within(dialog).getByRole('heading', { name: 'New schedule' }));
+      expect(document.body).not.toBe(document.activeElement);
+      await user.click(within(dialog).getByText('Name'));
+      await user.pointer({ keys: '[MouseLeft]', target: dialog.parentElement! });
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.getByTestId('schedules-view')).toBeInTheDocument();
+    });
+
+    it('wraps Tab from the last control to the first, and Shift+Tab back', async () => {
+      list.mockResolvedValue([]);
+      const user = userEvent.setup();
+      render(<SchedulesView onClose={vi.fn()} />);
+      await user.click(await screen.findByRole('button', { name: 'New schedule' }));
+      const dialog = await screen.findByRole('dialog', { name: 'New schedule' });
+      const name = within(dialog).getByLabelText('Name');
+      const save = within(dialog).getByRole('button', { name: 'Save' });
+
+      expect(name).toHaveFocus();
+      await user.tab({ shift: true });
+      expect(save).toHaveFocus();
+      await user.tab();
+      expect(name).toHaveFocus();
+    });
+
+    it('hands focus back to the button that opened it', async () => {
+      list.mockResolvedValue([]);
+      const user = userEvent.setup();
+      render(<SchedulesView onClose={vi.fn()} />);
+      const opener = await screen.findByRole('button', { name: 'New schedule' });
+      await user.click(opener);
+      await user.keyboard('{Escape}');
+      expect(opener).toHaveFocus();
+    });
+  });
+
+  describe('the 30 s poll', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('re-reads the list on the interval and stops once the overlay is closed', async () => {
+      vi.useFakeTimers();
+      list.mockResolvedValue([]);
+      function Host(): JSX.Element | null {
+        const [open, setOpen] = useState(true);
+        return open ? <SchedulesView onClose={() => setOpen(false)} /> : null;
+      }
+      render(<Host />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(list).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SCHEDULES_POLL_MS);
+      });
+      expect(list).toHaveBeenCalledTimes(2);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close schedules' }));
+      expect(screen.queryByTestId('schedules-view')).not.toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SCHEDULES_POLL_MS * 3);
+      });
+      expect(list).toHaveBeenCalledTimes(2);
+    });
   });
 });
