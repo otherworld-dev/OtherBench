@@ -4,7 +4,6 @@ import {
   appKey,
   coordinateOf,
   HIGH_RISK_PROGRAMS,
-  isBlockedKeyCombo,
   isComputerAction,
   isHighRiskApp,
   isHighRiskProgram,
@@ -44,11 +43,6 @@ describe('computer apps', () => {
     expect(isHighRiskApp({ app: 'c:\\tools\\x.exe', appRisk: 'normal' })).toBe(false);
     expect(isHighRiskApp({})).toBe(false);
     expect(isHighRiskApp(null)).toBe(false);
-  });
-
-  it('blocks every key combination that uses the Windows key', () => {
-    for (const keys of ['super+r', 'win+r', 'ctrl+super+d', 'Super_L', 'WIN+E', 'ctrl+c super', 'meta+x']) expect(isBlockedKeyCombo(keys)).toBe(true);
-    for (const keys of ['ctrl+s', 'alt+Tab', 'Return', 'ctrl+shift+Escape', 'F5', 'ctrl+a ctrl+c']) expect(isBlockedKeyCombo(keys)).toBe(false);
   });
 
   it('knows the phase-1 actions, and which of them only look', () => {

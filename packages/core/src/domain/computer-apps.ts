@@ -4,6 +4,8 @@
  * app imports this module).
  */
 
+export { KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, type ParsedKeys } from './computer-keys.js';
+
 export const COMPUTER_TOOL = 'computer';
 
 export const COMPUTER_ACTIONS = [
@@ -91,15 +93,6 @@ export function isHighRiskApp(args: unknown): boolean {
   const a = args as Record<string, unknown>;
   if (a['appRisk'] === 'high') return true;
   return typeof a['app'] === 'string' && isHighRiskProgram(a['app']);
-}
-
-const WINDOWS_KEY_NAMES: ReadonlySet<string> = new Set([
-  'super', 'super_l', 'super_r', 'win', 'win_l', 'win_r', 'windows', 'lwin', 'rwin', 'meta', 'meta_l', 'meta_r', 'cmd', 'command', 'hyper', 'hyper_l', 'hyper_r',
-]);
-
-/** True when an xdotool-style key string (`ctrl+s`, `super+r`, `ctrl+a ctrl+c`) uses the Windows key anywhere. */
-export function isBlockedKeyCombo(keys: string): boolean {
-  return keys.split(/[\s+]+/).some((k) => WINDOWS_KEY_NAMES.has(k.trim().toLowerCase()));
 }
 
 /** `args.coordinate` as whole pixels, or null unless it is exactly two finite, non-negative numbers. */
