@@ -252,6 +252,25 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
   const [headerTouched, setHeaderTouched] = useState(false);
   const [headerClear, setHeaderClear] = useState(false);
 
+  const [oauthClientId, setOauthClientId] = useState(server?.oauth?.clientId ?? '');
+  const [oauthClientSecret, setOauthClientSecret] = useState('');
+  const [removeClientSecret, setRemoveClientSecret] = useState(false);
+  const [redirectUri, setRedirectUri] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (transport !== 'http') return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => api.mcpServers.signInRedirectUri())
+      .then((r) => {
+        if (!cancelled) setRedirectUri(r.redirectUri);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [transport]);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -297,6 +316,7 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
       const err = renamedRowError(headerRows, 'header');
       if (err) return err;
     }
+    if (transport === 'http' && oauthClientSecret.length > 0 && oauthClientId.trim().length === 0) return 'Enter the client ID the secret belongs to.';
     return null;
   }
 
@@ -326,6 +346,10 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
         if (headerClear) body.headers = {};
         else if (headerTouched) body.headers = rowsToSecretPatch(headerRows, new Set(Object.keys(server?.headerRefs ?? {})));
         // else: omit -- existing headers (if any) are left untouched.
+        const clientId = oauthClientId.trim();
+        if (clientId !== (server?.oauth?.clientId ?? '')) body.oauthClientId = clientId === '' ? null : clientId;
+        if (oauthClientSecret.length > 0) body.oauthClientSecret = oauthClientSecret;
+        else if (removeClientSecret) body.oauthClientSecret = null;
       }
 
       const saved = server ? await api.mcpServers.patch(server.id, body) : await api.mcpServers.create(body);
@@ -560,6 +584,39 @@ function McpServerForm({ server, health, onSignInChanged, onSaved, onDeleted, on
           ) : (
             <p className="text-xs text-[var(--text-muted)]">Save the server first; then you can sign in.</p>
           )}
+
+          <details data-testid="mcp-sign-in-app" className="rounded border border-[var(--border)] px-2 py-1.5">
+            <summary className="cursor-pointer text-xs font-medium text-[var(--text-muted)]">Sign-in app</summary>
+            <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+              {`Only needed when the server's sign-in provider can't register Grunt itself. Register Grunt there with the redirect address ${redirectUri ?? 'http://127.0.0.1:<port>/oauth/callback'}. The provider must allow any port: the desktop app's port changes each launch.`}
+            </p>
+            <div className="mt-1.5 space-y-1.5">
+              <input
+                aria-label="Client ID"
+                value={oauthClientId}
+                onChange={(e) => setOauthClientId(e.target.value)}
+                placeholder="Client ID"
+                className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm"
+              />
+              {server?.oauth?.clientSecretRef && !removeClientSecret && oauthClientSecret.length === 0 && (
+                <p className="text-xs text-[var(--text-muted)]">
+                  A client secret is set.{' '}
+                  <button type="button" onClick={() => setRemoveClientSecret(true)} className="btn px-1.5 py-0.5">
+                    Remove
+                  </button>
+                </p>
+              )}
+              <input
+                type="password"
+                aria-label="Client secret"
+                value={oauthClientSecret}
+                onChange={(e) => setOauthClientSecret(e.target.value)}
+                placeholder="Client secret (optional)"
+                autoComplete="new-password"
+                className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1 text-sm"
+              />
+            </div>
+          </details>
         </>
       )}
 

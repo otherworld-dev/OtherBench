@@ -305,6 +305,42 @@ describe('one sign-in per server', () => {
     expect(await outcome).toMatchObject({ status: 409 });
     expect(health(manager).auth).toMatchObject({ pending: false });
   });
+
+  it('with no dynamic registration, a hand-registered client ID and secret sign in (the secret checked by the provider)', async () => {
+    const { fixture, store, secrets, manager } = await setup({ dcr: false, staticClients: { 'grunt-manual': 'manual-secret' } });
+    await expect(manager.startSignIn('srv-1', REDIRECT)).rejects.toMatchObject({ status: 502 });
+
+    expect(await manager.setSignInApp('srv-1', 'grunt-manual', 'manual-secret')).toBe(true);
+    expect(store.mcpServers.get('srv-1')!.oauth).toEqual({ clientId: 'grunt-manual', clientSecretRef: oauthRefs('srv-1').clientSecret, account: null, signedInAt: null });
+    expect(await secrets.get(oauthRefs('srv-1').clientSecret)).toBe('manual-secret');
+
+    await signIn(manager);
+    expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in' } });
+    expect(fixture.registrations).toEqual([]);
+  });
+
+  it('a wrong hand-registered secret fails to finish, and changing the client ID forgets the sign-in', async () => {
+    const { secrets, manager } = await setup({ dcr: false, staticClients: { 'grunt-manual': 'manual-secret', 'other-app': null } });
+    await manager.setSignInApp('srv-1', 'grunt-manual', 'wrong-secret');
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    await expect(manager.completeSignIn(await followAuthorization(authorizationUrl))).rejects.toMatchObject({ status: 502 });
+
+    await manager.setSignInApp('srv-1', 'grunt-manual', 'manual-secret');
+    await signIn(manager);
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).not.toBeNull();
+
+    expect(await manager.setSignInApp('srv-1', 'other-app', undefined)).toBe(true);
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+    expect(await manager.setSignInApp('srv-1', 'other-app', undefined)).toBe(false); // nothing changed
+  });
+
+  it('clearing the client ID deletes its secret too', async () => {
+    const { store, secrets, manager } = await setup();
+    await manager.setSignInApp('srv-1', 'app-1', 's3cret');
+    await manager.setSignInApp('srv-1', null, undefined);
+    expect(store.mcpServers.get('srv-1')!.oauth).toBeNull();
+    expect(await secrets.get(oauthRefs('srv-1').clientSecret)).toBeNull();
+  });
 });
 
 describe('keeping codes, verifiers and tokens out of every message', () => {

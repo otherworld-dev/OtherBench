@@ -48,6 +48,10 @@ interface McpServerBody {
    */
   headers?: unknown;
   enabled?: unknown;
+  /** Sign-in app (spec 2026-10-12-mcp-oauth-design §5): a hand-registered client ID; null or '' clears it. http only. */
+  oauthClientId?: unknown;
+  /** Its secret, written to SecretStore only: a string sets it, null clears it, absent keeps it. */
+  oauthClientSecret?: unknown;
 }
 
 function parseTransport(value: unknown): McpServer['transport'] {
@@ -238,6 +242,25 @@ async function claudeDesktopServers(path: string) {
   }
 }
 
+/** Parses the Sign-in app fields: `clientId` undefined = unchanged; `secret` undefined = keep. */
+function parseSignInApp(
+  body: McpServerBody,
+  transport: McpServer['transport'],
+  currentClientId: string | null
+): { clientId: string | null | undefined; secret: string | null | undefined } {
+  const rawId = optionalNullableString(body.oauthClientId, 'oauthClientId');
+  const clientId = rawId === undefined ? undefined : rawId === null || rawId.trim() === '' ? null : rawId.trim();
+  const secret = optionalNullableString(body.oauthClientSecret, 'oauthClientSecret');
+  if (secret === '') throw new HTTPException(400, { message: '"oauthClientSecret" must not be an empty string -- send null to remove it.' });
+  if ((clientId !== undefined || secret !== undefined) && transport !== 'http') {
+    throw new HTTPException(400, { message: 'A sign-in app only applies to an http server.' });
+  }
+  if (typeof secret === 'string' && (clientId === undefined ? currentClientId : clientId) === null) {
+    throw new HTTPException(400, { message: 'Enter the client ID the secret belongs to.' });
+  }
+  return { clientId, secret };
+}
+
 export function toolsRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -330,6 +353,7 @@ export function toolsRoutes(container: Container): Hono {
     const transport = parseTransport(body.transport);
     const env = optionalNonEmptySecretRecord(body.env, 'env');
     const headers = optionalNonEmptySecretRecord(body.headers, 'headers');
+    const signInApp = parseSignInApp(body, transport, null);
     const created = await createMcpServer(container, {
       name,
       transport,
@@ -340,8 +364,11 @@ export function toolsRoutes(container: Container): Hono {
       headers,
       enabled: optionalBoolean(body.enabled, 'enabled', true),
     });
+    if (signInApp.clientId !== undefined || signInApp.secret !== undefined) {
+      await container.mcpManager.setSignInApp(created.id, signInApp.clientId ?? null, signInApp.secret);
+    }
     await container.mcpManager.sync();
-    return c.json(created, 201);
+    return c.json(getMcpServerOrThrow(container, created.id), 201);
   });
 
   app.patch('/mcp-servers/:id', async (c) => {
@@ -381,6 +408,8 @@ export function toolsRoutes(container: Container): Hono {
       // transport switch's cleanup below is supposed to guarantee.
       const newTransport = patch.transport ?? existing.transport;
       const transportChanged = patch.transport !== undefined && patch.transport !== existing.transport;
+      // Checked before anything is written, so a bad sign-in app leaves the row and its secrets alone.
+      const signInApp = parseSignInApp(body, newTransport, existing.oauth?.clientId ?? null);
 
       if (newTransport === 'stdio' && body.env !== undefined) {
         patch.envRefs = await applySecretPatch(container, id, 'env', existing.envRefs, optionalSecretPatchRecord(body.env, 'env'));
@@ -414,22 +443,31 @@ export function toolsRoutes(container: Container): Hono {
         (patch.args !== undefined && JSON.stringify(patch.args) !== JSON.stringify(existing.args)) ||
         patch.envRefs !== undefined ||
         patch.headerRefs !== undefined;
-      if (!connectionChanged) {
+      // The Sign-in app: a different client ID, or a secret to set or remove. A different
+      // client ID forgets the sign-in (the tokens belong to the old one).
+      const clientIdChanged = signInApp.clientId !== undefined && signInApp.clientId !== (existing.oauth?.clientId ?? null);
+      const signInAppChanged = clientIdChanged || signInApp.secret !== undefined;
+      if (!connectionChanged && !signInAppChanged) {
         // A rename, an enable/disable or an unchanged save: the live client is not touched.
         container.store.mcpServers.update(id, patch);
         await container.mcpManager.sync();
         return c.json(getMcpServerOrThrow(container, id));
       }
 
-      // The connection changes: stop the old client (and wait for it), forget what
+      // The connection (or sign-in app) changes: stop the old client (and wait for it), forget what
       // its URL earned, update the row, reconnect -- one step under the server's lock,
       // so an in-flight refresh can't write tokens back or send them to the new URL.
       // Tokens are bound to the resource; a hand-registered client belongs to the
       // provider, so a URL change keeps it. A switch to stdio forgets everything.
       const toStdio = transportChanged && newTransport === 'stdio';
       if (toStdio) patch.oauth = null;
-      await container.mcpManager.reconfigureHeld(id, { forget: toStdio ? 'all' : urlChanged ? 'keepManualClient' : 'none' }, () => {
+      const forget = toStdio ? 'all' : urlChanged || clientIdChanged ? 'keepManualClient' : 'none';
+      await container.mcpManager.reconfigureHeld(id, { forget }, async () => {
         container.store.mcpServers.update(id, patch);
+        if (newTransport === 'http' && signInAppChanged) {
+          const clientId = signInApp.clientId === undefined ? (container.store.mcpServers.get(id)?.oauth?.clientId ?? null) : signInApp.clientId;
+          await container.mcpManager.setSignInAppHeld(id, clientId, signInApp.secret);
+        }
       });
       return c.json(getMcpServerOrThrow(container, id));
     });

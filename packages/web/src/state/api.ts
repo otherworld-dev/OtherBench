@@ -342,6 +342,10 @@ export interface CreateMcpServerBody {
   /** Plaintext header VALUES -- same rules as `env` above, including the PATCH-only `null` ("keep") sentinel. */
   headers?: Record<string, string | null>;
   enabled?: boolean;
+  /** Sign-in app: a hand-registered client ID (null clears it). Only sent when changed. */
+  oauthClientId?: string | null;
+  /** Its secret, write-only like headers: a string sets it, null removes it, absent keeps it. */
+  oauthClientSecret?: string | null;
 }
 
 /**

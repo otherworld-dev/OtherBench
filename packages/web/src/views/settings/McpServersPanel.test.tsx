@@ -124,6 +124,57 @@ describe('McpServersPanel', () => {
     expect(screen.getByText('Save the server first; then you can sign in.')).toBeInTheDocument();
   });
 
+  it('saves a sign-in app with the form, and can remove a stored client secret', async () => {
+    mockedList.mockResolvedValue([makeHealth({ id: 'srv-h', name: 'Hosted', transport: 'http', auth: { state: 'none', account: null, signedInAt: null, pending: false, error: null } })]);
+    mockedGet.mockResolvedValue(
+      makeServer({ id: 'srv-h', name: 'Hosted', transport: 'http', command: null, args: [], url: 'https://mcp.example.com/mcp', oauth: { clientId: 'old-app', clientSecretRef: 'mcp:srv-h:oauth:client-secret', account: null, signedInAt: null } })
+    );
+    mockedPatch.mockResolvedValue(makeServer({ id: 'srv-h', transport: 'http', command: null, url: 'https://mcp.example.com/mcp' }));
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-h'));
+
+    const app = await screen.findByTestId('mcp-sign-in-app');
+    await user.click(within(app).getByText('Sign-in app'));
+    expect(within(app).getByText(/A client secret is set\./)).toBeInTheDocument();
+    expect(await within(app).findByText(/http:\/\/127\.0\.0\.1:4747\/oauth\/callback/)).toBeInTheDocument();
+    await user.clear(within(app).getByLabelText('Client ID'));
+    await user.type(within(app).getByLabelText('Client ID'), 'new-app');
+    await user.click(within(app).getByRole('button', { name: 'Remove' }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('srv-h', expect.objectContaining({ oauthClientId: 'new-app', oauthClientSecret: null })));
+  });
+
+  it('does not send the sign-in app when it is unchanged', async () => {
+    mockedList.mockResolvedValue([makeHealth({ id: 'srv-h', name: 'Hosted', transport: 'http' })]);
+    mockedGet.mockResolvedValue(makeServer({ id: 'srv-h', name: 'Hosted', transport: 'http', command: null, args: [], url: 'https://mcp.example.com/mcp' }));
+    mockedPatch.mockResolvedValue(makeServer({ id: 'srv-h', transport: 'http', command: null, url: 'https://mcp.example.com/mcp' }));
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+    await user.click(await screen.findByTestId('mcp-row-srv-h'));
+    await user.click(await screen.findByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalled());
+    const body = mockedPatch.mock.calls[0]![1];
+    expect(body).not.toHaveProperty('oauthClientId');
+    expect(body).not.toHaveProperty('oauthClientSecret');
+  });
+
+  it('refuses a client secret with no client ID, without calling the API', async () => {
+    const user = userEvent.setup();
+    render(<McpServersPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New MCP server' }));
+    await user.selectOptions(screen.getByLabelText('Transport'), 'http');
+    await user.type(screen.getByLabelText('Name'), 'Hosted');
+    await user.type(screen.getByLabelText('URL'), 'https://mcp.example.com/mcp');
+    await user.click(screen.getByText('Sign-in app'));
+    await user.type(screen.getByLabelText('Client secret'), 'orphan');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText('Enter the client ID the secret belongs to.')).toBeInTheDocument();
+    expect(mockedPatch).not.toHaveBeenCalled();
+    expect(vi.mocked(api.mcpServers.create)).not.toHaveBeenCalled();
+  });
+
   it('shows an honest empty state when no servers are configured', async () => {
     render(<McpServersPanel />);
     expect(await screen.findByText(/no mcp servers yet/i)).toBeInTheDocument();

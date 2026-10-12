@@ -262,6 +262,61 @@ describe('what the browser can see', () => {
   });
 });
 
+describe('Sign-in app fields', () => {
+  it('POST stores the client secret by reference only, and GET never shows it', async () => {
+    const id = await createServer('Manual', { oauthClientId: 'app-1', oauthClientSecret: 'super-secret-client-value' });
+    const row = store.mcpServers.get(id)!;
+    expect(row.oauth).toMatchObject({ clientId: 'app-1', clientSecretRef: oauthRefs(id).clientSecret });
+    expect(await secrets.get(oauthRefs(id).clientSecret)).toBe('super-secret-client-value');
+    const shown = await (await app().request(`/api/mcp-servers/${id}`)).text();
+    expect(shown).not.toContain('super-secret-client-value');
+    expect(shown).toContain(oauthRefs(id).clientSecret);
+    const created = await (await app().request('/api/mcp-servers', json({ name: 'Again', transport: 'http', url: fixture.url, enabled: false, oauthClientId: 'app-2', oauthClientSecret: 'another-secret-value' }))).text();
+    expect(created).not.toContain('another-secret-value');
+  });
+
+  it('PATCH: absent keeps the secret, null removes it, an empty client ID clears both; stdio is refused', async () => {
+    const id = await createServer('Manual', { oauthClientId: 'app-1', oauthClientSecret: 'value-1' });
+    const patch = (body: unknown) => app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+    await patch({ name: 'Renamed' });
+    expect(await secrets.get(oauthRefs(id).clientSecret)).toBe('value-1');
+    await patch({ oauthClientSecret: null });
+    expect(await secrets.get(oauthRefs(id).clientSecret)).toBeNull();
+    expect(store.mcpServers.get(id)!.oauth).toMatchObject({ clientId: 'app-1', clientSecretRef: null });
+    await patch({ oauthClientId: '' });
+    expect(store.mcpServers.get(id)!.oauth).toBeNull();
+
+    const secretWithoutId = await patch({ oauthClientSecret: 'orphan' });
+    expect(secretWithoutId.status).toBe(400);
+    expect(await secrets.get(oauthRefs(id).clientSecret)).toBeNull();
+
+    const stdio = await app().request('/api/mcp-servers', json({ name: 'Local', transport: 'stdio', command: 'x', enabled: false, oauthClientId: 'app-1' }));
+    expect(stdio.status).toBe(400);
+    const stdioPatch = await patch({ transport: 'stdio', command: 'x', oauthClientId: 'app-1' });
+    expect(stdioPatch.status).toBe(400);
+    expect(store.mcpServers.get(id)!.transport).toBe('http');
+  });
+
+  it('PATCH: changing the client ID signs the server out and reconnects; sending the same one changes nothing', async () => {
+    await fixture.close();
+    fixture = await startOAuthEchoServer({ idTokenEmail: 'alice@example.com', staticClients: { 'app-1': null, 'app-2': null } });
+    const id = await createServer('Manual', { oauthClientId: 'app-1' });
+    const patch = (body: unknown) => app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    await app().request(callbackPath(await endedOn(await startSignIn(id))));
+    await waitFor(() => healthOf(id).status === 'ok');
+
+    expect((await patch({ oauthClientId: 'app-1' })).status).toBe(200);
+    expect(healthOf(id)).toMatchObject({ status: 'ok', auth: { state: 'signed_in' } });
+    expect(await secrets.get(oauthRefs(id).tokens)).not.toBeNull();
+
+    expect((await patch({ oauthClientId: 'app-2' })).status).toBe(200);
+    expect(await secrets.get(oauthRefs(id).tokens)).toBeNull();
+    expect(store.mcpServers.get(id)!.oauth).toMatchObject({ clientId: 'app-2', account: null, signedInAt: null });
+    await waitFor(() => healthOf(id).status === 'needs_auth');
+  });
+});
+
 describe('sign-in mode (remote access)', () => {
   let fx: RemoteFixture;
   afterEach(() => fx?.cleanup());

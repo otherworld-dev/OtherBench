@@ -220,6 +220,27 @@ export class McpServerManager {
     });
   }
 
+  /**
+   * Sets the hand-registered client ("Sign-in app"). A changed client ID
+   * forgets the tokens and the registered client, which belong to the old
+   * one. Returns whether anything changed, so the caller knows to restart.
+   */
+  async setSignInApp(id: string, clientId: string | null, secret: string | null | undefined): Promise<boolean> {
+    return this.withLock(id, () => this.setSignInAppHeld(id, clientId, secret));
+  }
+
+  /** `setSignInApp` for a caller that already holds the server's lock (`withServerLock`, or inside `reconfigureHeld`'s `apply`). */
+  async setSignInAppHeld(id: string, clientId: string | null, secret: string | null | undefined): Promise<boolean> {
+    const before = this.store.mcpServers.get(id)?.oauth?.clientId ?? null;
+    await this.oauth.setManualClient(id, clientId, secret);
+    if (before !== clientId) {
+      this.signIns.forget(id);
+      await this.oauth.forgetTokens(id);
+      await this.oauth.forgetRegisteredClient(id);
+    }
+    return before !== clientId || secret !== undefined;
+  }
+
   /** Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. A server that needs sign-in isn't `ok`, so it offers no tools. */
   listFor(serverIds: string[]): { id: string; name: string; client: McpClient }[] {
     const rows = new Map(this.store.mcpServers.list().map((r) => [r.id, r]));

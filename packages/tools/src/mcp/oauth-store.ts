@@ -126,6 +126,20 @@ export class McpOAuthStore {
     return secret ? { client_id: oauth.clientId, client_secret: secret } : { client_id: oauth.clientId };
   }
 
+  /** The Sign-in app. `secret`: undefined keeps the stored one, null deletes it, a string sets it. Clearing the client ID deletes the secret too. */
+  async setManualClient(serverId: string, clientId: string | null, secret: string | null | undefined): Promise<void> {
+    const ref = oauthRefs(serverId).clientSecret;
+    let clientSecretRef = this.store.mcpServers.get(serverId)?.oauth?.clientSecretRef ?? null;
+    if (clientId === null || secret === null) {
+      await this.secrets.delete(ref);
+      clientSecretRef = null;
+    } else if (secret !== undefined) {
+      await this.secrets.set(ref, secret);
+      clientSecretRef = ref;
+    }
+    this.patchSummary(serverId, { clientId, clientSecretRef });
+  }
+
   /** Tokens and registered client, and the hand-registered client too unless kept. */
   async forget(serverId: string, opts: { keepManualClient: boolean }): Promise<void> {
     await this.forgetTokens(serverId);
