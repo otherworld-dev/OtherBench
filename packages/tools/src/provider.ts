@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { artifactTool } from './artifact-tool.js';
+import { artifactTool, liveToolRisks } from './artifact-tool.js';
+import { canonicalJson } from '@grunt/core/domain/live-artifacts.js';
 import { recallTool } from './recall-tool.js';
 import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@grunt/core/domain/permissions.js';
 import { UserAsks } from '@grunt/core/domain/user-asks.js';
@@ -11,6 +12,10 @@ import type {
   AskInput,
   AskOutcome,
   AskReply,
+  LiveCallOutcome,
+  LiveCallStatus,
+  LiveRunRequest,
+  LiveStatusRequest,
   RiskClass,
   ToolApprovalEvent,
   ToolContext,
@@ -20,7 +25,8 @@ import type {
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { fsTools } from './fs-tools.js';
-import type { McpToolDescriptor } from './mcp/client.js';
+import { LiveCallCache, LiveCallLimiter, shapeLiveResult } from './live-calls.js';
+import type { McpCallResult, McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
 import { runCommandTool } from './shell-tool.js';
 import { threadTools } from './thread-tools.js';
@@ -30,6 +36,26 @@ export interface GruntToolProviderOptions {
   generateId?: () => string;
   /** Overridable clock, for deterministic duration assertions in tests. */
   now?: () => number;
+  /** How long a live call may take (spec 2026-10-12-live-artifacts); 30 s. Tests shorten it. */
+  liveTimeoutMs?: number;
+}
+
+const LIVE_TIMEOUT_MS = 30_000;
+/** The MCP SDK's error code for a request that timed out (ErrorCode.RequestTimeout). */
+const MCP_REQUEST_TIMEOUT = -32001;
+
+/** An MCP tool's spec with where it came from: the server and the tool's own (unsanitised) name. */
+interface McpEntry {
+  spec: ToolSpec;
+  origin: { serverId: string; serverName: string; toolName: string };
+}
+
+/** `mcp__<server>__<tool>` as its two parts, for a name no server matches. */
+function splitToolName(name: string): [string, string] {
+  if (!name.startsWith('mcp__')) return [name, ''];
+  const rest = name.slice('mcp__'.length);
+  const at = rest.indexOf('__');
+  return at === -1 ? [rest, ''] : [rest.slice(0, at), rest.slice(at + 2)];
 }
 
 const BUILTIN_FS_TOOLS: ToolSpec[] = fsTools;
@@ -160,6 +186,12 @@ function summarizeMcpContent(content: unknown): string {
  * by `messageId` or chat id, which is what makes concurrent compare-turn
  * variants independent (decision #2's explicit requirement): resolving one
  * variant's request touches only that request's waiter.
+ *
+ * `runLiveCall` (spec 2026-10-12-live-artifacts) is a second entry point
+ * into this file, not a second path: it asks `broker.decide` exactly as
+ * `gate()` and `requestApproval()` do (with `ctx.live` set, so the broker
+ * takes its live branch), audits every decision, and only then calls the
+ * server, through the cache and the per-artifact limits.
  */
 export class GruntToolProvider implements ToolProvider {
   private readonly listeners = new Set<(event: ToolApprovalEvent) => void>();
@@ -168,6 +200,9 @@ export class GruntToolProvider implements ToolProvider {
   private readonly generateId: () => string;
   private readonly now: () => number;
   private readonly asks: UserAsks;
+  private readonly liveTimeoutMs: number;
+  private readonly liveCache: LiveCallCache;
+  private readonly liveLimiter: LiveCallLimiter;
 
   constructor(
     private readonly store: Store,
@@ -178,6 +213,9 @@ export class GruntToolProvider implements ToolProvider {
   ) {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
+    this.liveTimeoutMs = options.liveTimeoutMs ?? LIVE_TIMEOUT_MS;
+    this.liveCache = new LiveCallCache(this.now);
+    this.liveLimiter = new LiveCallLimiter(this.now);
     this.asks = new UserAsks((event) => this.notify(event));
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
@@ -202,8 +240,9 @@ export class GruntToolProvider implements ToolProvider {
     if (policy.fs === 'readwrite') raw.push(...BUILTIN_FS_TOOLS);
     else if (policy.fs === 'read') raw.push(...BUILTIN_FS_TOOLS.filter((t) => t.risk === 'read'));
     if (policy.shell) raw.push(...BUILTIN_SHELL_TOOLS);
-    // Artifacts (Deck #896): on unless the profile turns them off.
-    if (policy.artifacts !== false) raw.push(artifactTool(this.store));
+    // Artifacts (Deck #896): on unless the profile turns them off. A live
+    // declaration may name only this profile's read-only MCP tools.
+    if (policy.artifacts !== false) raw.push(artifactTool(this.store, () => liveToolRisks(this.relayMcpTools(policy.mcpServerIds))));
     // Recall (spec 2026-10-09-recall-design): on unless the profile turns it off.
     if (policy.recall !== false) raw.push(recallTool(this.store));
     // Thread tools (spec 2026-10-12-thread-cards-design): offered to every
@@ -248,40 +287,72 @@ export class GruntToolProvider implements ToolProvider {
   }
 
   private mcpToolSpecs(serverIds: string[]): ToolSpec[] {
-    const specs: ToolSpec[] = [];
+    return this.mcpEntries(serverIds).map((e) => e.spec);
+  }
+
+  /** Each MCP tool's spec with its origin, so a live call can reach the server under the tool's own name. */
+  private mcpEntries(serverIds: string[]): McpEntry[] {
+    const entries: McpEntry[] = [];
     for (const { id, name, client } of this.mcp.listFor(serverIds)) {
       for (const tool of client.tools) {
         const namespacedName = `mcp__${sanitizeNameSegment(name)}__${sanitizeNameSegment(tool.name)}`;
-        specs.push({
-          name: namespacedName,
-          description: tool.description,
-          parameters: tool.inputSchema,
-          risk: mapMcpRisk(tool),
-          source: 'mcp',
-          // The SERVER id, not the display name: `PermissionBroker` checks
-          // this against `ToolPolicy.mcpServerIds` so a tool from a server
-          // this profile never enabled is denied rather than riding on the
-          // fact that some other server is enabled.
-          serverId: id,
-          // Looks the server's client up again at call time rather than
-          // using the one it was listed with: turning a server off and on
-          // replaces its client, and the Claude Code relay keeps these specs
-          // for the life of a process, which can span that.
-          execute: async (args: unknown) => {
-            const live = this.mcp.listFor([id])[0]?.client;
-            if (!live) return toolError('mcp_call_failed', `MCP server "${name}" isn't connected.`);
-            try {
-              const result = await live.callTool(tool.name, args);
-              if (result.isError) return toolError('mcp_tool_error', summarizeMcpContent(result.content));
-              return result.content;
-            } catch (err) {
-              return toolError('mcp_call_failed', err instanceof Error ? err.message : String(err));
-            }
+        entries.push({
+          origin: { serverId: id, serverName: name, toolName: tool.name },
+          spec: {
+            name: namespacedName,
+            description: tool.description,
+            parameters: tool.inputSchema,
+            risk: mapMcpRisk(tool),
+            source: 'mcp',
+            // The SERVER id, not the display name: `PermissionBroker` checks
+            // this against `ToolPolicy.mcpServerIds` so a tool from a server
+            // this profile never enabled is denied rather than riding on the
+            // fact that some other server is enabled.
+            serverId: id,
+            // Looks the server's client up again at call time rather than
+            // using the one it was listed with: turning a server off and on
+            // replaces its client, and the Claude Code relay keeps these specs
+            // for the life of a process, which can span that.
+            execute: async (args: unknown) => {
+              const live = this.mcp.listFor([id])[0]?.client;
+              if (!live) return toolError('mcp_call_failed', `MCP server "${name}" isn't connected.`);
+              try {
+                const result = await live.callTool(tool.name, args);
+                if (result.isError) return toolError('mcp_tool_error', summarizeMcpContent(result.content));
+                return result.content;
+              } catch (err) {
+                return toolError('mcp_call_failed', err instanceof Error ? err.message : String(err));
+              }
+            },
           },
         });
       }
     }
-    return specs;
+    return entries;
+  }
+
+  /** The profile's MCP tool called `name` (as listTools names it), with its origin; null when it has none. */
+  private liveTarget(policy: ToolPolicy, name: string): McpEntry | null {
+    if (policy.mcpServerIds.length === 0) return null;
+    const entries = this.mcpEntries(policy.mcpServerIds);
+    // Deduplicated as listTools does, so a suffixed name means the same tool here.
+    const specs = this.deduplicateNames(entries.map((e) => e.spec));
+    const at = specs.findIndex((s) => s.name === name);
+    return at === -1 ? null : { spec: specs[at]!, origin: entries[at]!.origin };
+  }
+
+  /** Why the profile has no tool called `name`, in words the viewer shows. */
+  private whyUnavailable(policy: ToolPolicy, name: string): string {
+    const rows = this.store.mcpServers.list().filter((r) => name.startsWith(`mcp__${sanitizeNameSegment(r.name)}__`));
+    if (rows.length === 0) return `MCP server "${splitToolName(name)[0]}" isn't set up on this machine.`;
+    const enabled = rows.filter((r) => r.enabled);
+    if (enabled.length === 0) return `MCP server "${rows[0]!.name}" is turned off.`;
+    const inProfile = enabled.filter((r) => policy.mcpServerIds.includes(r.id));
+    if (inProfile.length === 0) return `MCP server "${enabled[0]!.name}" isn't turned on for this chat's profile.`;
+    const connected = this.mcp.listFor(inProfile.map((r) => r.id));
+    if (connected.length === 0) return `MCP server "${inProfile[0]!.name}" isn't connected.`;
+    const server = connected[0]!.name;
+    return `MCP server "${server}" has no tool "${name.slice(`mcp__${sanitizeNameSegment(server)}__`.length)}".`;
   }
 
   /**
@@ -345,6 +416,102 @@ export class GruntToolProvider implements ToolProvider {
     const text = reason.trim().length > 0 ? reason.trim() : 'Blocked by Claude Code auto mode.';
     // redact() truncates a long string exactly as it does audit args.
     this.audit(ctx, toolName, args, null, 0, 'deny:auto', redact(text) as string);
+  }
+
+  liveStatus(req: LiveStatusRequest): LiveCallStatus[] {
+    return req.calls.map(({ call, hash }): LiveCallStatus => {
+      const target = this.liveTarget(req.policy, call.tool);
+      if (!target) {
+        const [serverName, toolName] = splitToolName(call.tool);
+        return { callId: call.id, tool: call.tool, serverName, toolName, description: '', state: 'unavailable', reason: this.whyUnavailable(req.policy, call.tool) };
+      }
+      const base = { callId: call.id, tool: call.tool, serverName: target.origin.serverName, toolName: target.origin.toolName, description: target.spec.description.slice(0, 300) };
+      const why = this.broker.liveIneligibility(target.spec, req.policy);
+      if (why) return { ...base, state: 'unavailable', reason: why };
+      const granted = this.broker.liveGrant(target.spec, { chatId: req.chatId, profileId: req.profileId, live: { artifactId: req.artifactId, callId: call.id, hash } });
+      return { ...base, state: granted ? 'allowed' : 'needs_ok' };
+    });
+  }
+
+  allowLive(req: LiveStatusRequest): LiveCallStatus[] {
+    const before = this.liveStatus(req);
+    const calls = req.calls.flatMap(({ call, hash }, i) => {
+      if (before[i]!.state !== 'needs_ok') return [];
+      const target = this.liveTarget(req.policy, call.tool);
+      return target ? [{ tool: target.spec, callId: call.id, hash }] : [];
+    });
+    if (calls.length > 0) this.broker.grantLive({ chatId: req.chatId, profileId: req.profileId, artifactId: req.artifactId, policy: req.policy, calls });
+    return this.liveStatus(req);
+  }
+
+  revokeLive(chatId: string, artifactId: string): number {
+    return this.broker.revokeLive(chatId, artifactId);
+  }
+
+  async runLiveCall(req: LiveRunRequest): Promise<LiveCallOutcome> {
+    const startedAt = this.now();
+    const target = this.liveTarget(req.policy, req.toolName);
+    if (!target) return { ok: false, code: 'not_available', message: this.whyUnavailable(req.policy, req.toolName) };
+    const ctx: ToolContext = {
+      chatId: req.chatId,
+      messageId: req.messageId,
+      profileId: req.profileId,
+      workspaceRoot: null,
+      signal: req.signal,
+      live: { artifactId: req.artifactId, callId: req.callId, hash: req.hash },
+    };
+    const decision = this.broker.decide(target.spec, req.args, req.policy, ctx);
+    if (decision.kind !== 'allow') {
+      // The live branch never asks; should it ever, drop the request rather than leave a card nobody can see.
+      if (decision.kind === 'ask') this.broker.discard(decision.request.id);
+      const message = decision.kind === 'deny' ? decision.reason : 'A live call was asked about, which never happens; it did not run.';
+      const code = decision.kind === 'deny' && decision.code === 'not_approved' ? 'not_approved' : 'refused';
+      this.audit(ctx, target.spec.name, req.args, toolError(code, message), this.now() - startedAt, 'deny:policy');
+      return { ok: false, code, message };
+    }
+    const grantedBy = `live:${decision.grantId ?? ''}`;
+    // Canonical args last, so the fields before them can't be confused with them.
+    const key = [req.chatId, req.profileId, req.artifactId, req.callId, req.hash, canonicalJson(req.args)].join('|');
+    if (!req.fresh) {
+      const hit = this.liveCache.get(key);
+      // A copy: the cache hands back the stored object itself.
+      if (hit) return { ok: true, ...hit, cached: true };
+    }
+    if (!this.liveLimiter.tryStart(req.artifactId)) {
+      const message = 'This page asked for live data too often. Wait a minute, then refresh it.';
+      this.audit(ctx, target.spec.name, req.args, toolError('rate_limited', message), this.now() - startedAt, grantedBy);
+      return { ok: false, code: 'rate_limited', message };
+    }
+    try {
+      const outcome = await this.callLive(target, req);
+      this.audit(ctx, target.spec.name, req.args, outcome.ok ? outcome : toolError(outcome.code, outcome.message), this.now() - startedAt, grantedBy);
+      if (outcome.ok) {
+        const { ok: _ok, cached: _cached, ...result } = outcome;
+        this.liveCache.set(key, result);
+      }
+      return outcome;
+    } finally {
+      this.liveLimiter.finish(req.artifactId);
+    }
+  }
+
+  /** Calls the server for an allowed live call, within the timeout, and shapes its result for the page. */
+  private async callLive(target: McpEntry, req: LiveRunRequest): Promise<LiveCallOutcome> {
+    const client = this.mcp.listFor([target.origin.serverId])[0]?.client;
+    if (!client) return { ok: false, code: 'not_available', message: `MCP server "${target.origin.serverName}" isn't connected.` };
+    const signal = AbortSignal.any([req.signal, AbortSignal.timeout(this.liveTimeoutMs)]);
+    let result: McpCallResult;
+    try {
+      result = await client.callTool(target.origin.toolName, req.args, { signal, timeoutMs: this.liveTimeoutMs });
+    } catch (err) {
+      const timedOut = !req.signal.aborted && (signal.aborted || (err as { code?: unknown }).code === MCP_REQUEST_TIMEOUT);
+      if (timedOut) return { ok: false, code: 'timeout', message: `"${target.origin.toolName}" didn't answer within ${Math.round(this.liveTimeoutMs / 1000)} seconds.` };
+      return { ok: false, code: 'failed', message: err instanceof Error ? err.message : String(err) };
+    }
+    if (result.isError) return { ok: false, code: 'tool_error', message: summarizeMcpContent(result.content) };
+    const shaped = shapeLiveResult(result.content, result.structured);
+    if (!shaped.ok) return shaped;
+    return { ...shaped, cached: false, at: this.now() };
   }
 
   private authorize(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<Authorization> {
