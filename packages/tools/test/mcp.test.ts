@@ -172,6 +172,8 @@ describe('McpClient call options (live artifacts)', () => {
   it('gives up after timeoutMs, and when the signal aborts, and stays usable', async () => {
     const client = await liveClient();
     await expect(client.callTool('wait', { ms: 5000 }, { timeoutMs: 100 })).rejects.toThrow(/timed out/i);
+    // The redacted error (MCP sign-in) keeps the SDK's numeric code, which is how a live call knows it timed out.
+    await expect(client.callTool('wait', { ms: 5000 }, { timeoutMs: 100 })).rejects.toMatchObject({ code: -32001 });
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 50);
     await expect(client.callTool('wait', { ms: 5000 }, { signal: ac.signal })).rejects.toThrow();
