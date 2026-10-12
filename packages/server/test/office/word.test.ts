@@ -109,7 +109,7 @@ describe('reading hostile Word files', () => {
     expect(text.length).toBeLessThan(200);
   });
 
-  it('reads two million empty paragraphs and a wide run of spaces in linear time', () => {
+  it('reads 300 thousand empty paragraphs and a wide run of spaces in linear time', () => {
     const file = docx('<w:p/>'.repeat(300_000) + p(r('End')) + `<w:p><w:r><w:t xml:space="preserve">${' '.repeat(2_000_000)}</w:t></w:r></w:p>`);
     // Whitespace past the cap is still dropped as text that didn't fit, so the reading stops with a note.
     expect(timed('300k empty paragraphs', () => extractOfficeText(file))).toMatch(/^End\n\n\[Grunt stopped reading here/);
@@ -120,6 +120,28 @@ describe('reading hostile Word files', () => {
     const text = timed('200k table rows', () => extractOfficeText(file, { maxChars: 20_000 }))!;
     // Past the cap by one character, so attachment-text's truncate() adds its marker.
     expect(text.length).toBe(20_001);
+  });
+
+  it.each([
+    ['4 million <w:tr/>', '<w:tr/>'.repeat(4_000_000)],
+    ['1 million <w:tr></w:tr>', '<w:tr></w:tr>'.repeat(1_000_000)],
+  ])('reads %s (rows with no cells) in linear time and cuts the table at the cap', (label, rows) => {
+    const file = docx(`<w:tbl>${rows}</w:tbl>${p(r('After'))}`);
+    const text = timed(label, () => extractOfficeText(file, { maxChars: 20_000 }))!;
+    // The table is cut at the cap with the stop note inside it; the paragraph after the table is never read.
+    expect(text.length).toBeLessThanOrEqual(20_000);
+    expect(text).toMatch(/limit\.\]$/);
+    expect(text).not.toContain('After');
+  });
+
+  it('keeps the stop note inside the cap, so truncate() has nothing to cut', () => {
+    const file = docx(`<w:tbl>${`<w:tr>${cell('x')}</w:tr>`.repeat(2000)}<w:tr>${'<w:tc/>'.repeat(1_000_000)}</w:tr></w:tbl>`);
+    const text = extractOfficeText(file, { maxChars: 20_000 })!;
+    expect(text.length).toBeLessThanOrEqual(20_000);
+    expect(text).toMatch(/limit\.\]$/);
+    const nearCap = extractOfficeText(docx(p(r('x'.repeat(19_990)) ) + p(r(' ')) + `<w:p><w:r><w:t xml:space="preserve">${' '.repeat(50_000)}</w:t></w:r></w:p>`), { maxChars: 20_000 })!;
+    expect(nearCap.length).toBeLessThanOrEqual(20_000);
+    expect(nearCap).toMatch(/limit\.\]$/);
   });
 
   it('reads a table row of a million cells under rows of one cell without building the padded table', () => {

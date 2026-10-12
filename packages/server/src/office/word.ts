@@ -238,7 +238,8 @@ export function readWord(parts: OfficeParts, out: TextOut): void {
             const row = t.row;
             t.row = null;
             // The padded table must still fit; a row that would make it too big is left out.
-            const width = Math.max(t.width, row.length);
+            // At least one column, as markdownTable writes: a row with no cells still costs a line.
+            const width = Math.max(1, t.width, row.length);
             if ((t.rows.length + 1) * width * CELL_CHARS > Math.max(0, out.room) + 1) return tooBig(t);
             t.rows.push(row);
             t.width = width;
