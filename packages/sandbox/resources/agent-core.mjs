@@ -28,6 +28,15 @@
 //  - A path in allowRead that is the PARENT of a path in allowWrite is bound
 //    read-only over it. So tmpRoot itself is never in allowRead (only rt and the
 //    run's own folder are), or the run's folder would come out read-only.
+//
+// Private networks. The runtime always refuses loopback, link-local, this host's
+// own addresses and cloud metadata at connect time, on the address it actually
+// dials (so a name that resolves to one is caught even when it changes between
+// the check and the connect). It refuses the private-use ranges only when told
+// to, which is DENIED_RESOLVED_ADDRESSES in the network config. On top of that
+// ask() resolves a host before bothering Grunt with a card, and answers no when
+// the name can't be resolved or any address is one the sandbox must not reach.
+// That is an early refusal only: the runtime's check is the enforcement.
 
 /** Combined stdout+stderr kept per command, as run_command keeps on the host. */
 export const MAX_OUTPUT_BYTES = 100 * 1024;
@@ -41,6 +50,28 @@ export const MAX_NOTE_BYTES = 4096;
 export const COMMAND_PATH = '/opt/grunt-sandbox/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 /** Unreadable unless a run allows a path below them: other chats' folders, homes and temp files. */
 export const DENY_READ = ['/mnt', '/home', '/tmp'];
+
+/**
+ * Addresses a permitted host name must not resolve to, given to the runtime as
+ * `deniedResolvedAddresses`: the private-use ranges (RFC 1918, CGNAT, unique
+ * local), multicast, the reserved block and benchmarking. Loopback and
+ * link-local are listed too, though the runtime refuses them anyway. Mirrors
+ * isPrivateAddress below and the ranges in core's network-hosts.ts.
+ */
+export const DENIED_RESOLVED_ADDRESSES = [
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '100.64.0.0/10',
+  'fc00::/7',
+  '224.0.0.0/4',
+  '240.0.0.0/4',
+  '198.18.0.0/15',
+  '127.0.0.0/8',
+  '169.254.0.0/16',
+];
+/** The longest ask() waits for a host name to resolve before refusing it. */
+export const LOOKUP_TIMEOUT_MS = 5000;
 
 /** Slack on top of KILL_GRACE_MS that close() waits for a killed command to report. */
 const CLOSE_MARGIN_MS = 500;
@@ -67,6 +98,7 @@ const CLOSE_MARGIN_MS = 500;
  *   kill: (pid: number, signal: string) => void,
  *   exit: (code: number) => void,
  *   env: Record<string, string | undefined>,
+ *   lookup: (host: string) => Promise<Array<{ address: string }>>,
  * }} AgentDeps
  */
 
@@ -90,9 +122,88 @@ const isAbsolute = (value) => typeof value === 'string' && (value.startsWith('/'
 const strings = (value) => (Array.isArray(value) ? value.map(String) : []);
 const errorMessage = (err) => (err instanceof Error ? err.message : String(err));
 
+/** The four numbers of a dotted-decimal IPv4 address, or null for anything else (leading zeros included: they are ambiguous). @param {string} text */
+function parseIpv4(text) {
+  const parts = text.split('.');
+  if (parts.length !== 4) return null;
+  const octets = [];
+  for (const part of parts) {
+    if (!/^(0|[1-9]\d{0,2})$/.test(part) || Number(part) > 255) return null;
+    octets.push(Number(part));
+  }
+  return octets;
+}
+
+/** The eight 16-bit groups of an IPv6 address (brackets and zone dropped, a dotted IPv4 tail allowed), or null. @param {string} text */
+function parseIpv6(text) {
+  let rest = text.replace(/^\[|\]$/g, '');
+  const zone = rest.indexOf('%');
+  if (zone !== -1) rest = rest.slice(0, zone);
+  if (rest.includes('.')) {
+    const tail = rest.lastIndexOf(':');
+    const v4 = parseIpv4(rest.slice(tail + 1));
+    if (!v4) return null;
+    rest = `${rest.slice(0, tail + 1)}${((v4[0] << 8) | v4[1]).toString(16)}:${((v4[2] << 8) | v4[3]).toString(16)}`;
+  }
+  const halves = rest.split('::');
+  if (halves.length > 2) return null;
+  const groups = (part) => (part === '' ? [] : part.split(':'));
+  const head = groups(halves[0]);
+  const back = halves.length === 2 ? groups(halves[1]) : [];
+  const missing = 8 - head.length - back.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
+  const all = [...head, ...Array(halves.length === 2 ? missing : 0).fill('0'), ...back];
+  if (!all.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g))) return null;
+  return all.map((g) => parseInt(g, 16));
+}
+
+/** Whether an IPv4 address (its four numbers) is one the sandbox must not reach: this host, the LAN, link-local, CGNAT, multicast and reserved, benchmarking and documentation. @param {number[]} o */
+function isPrivateIpv4([a, b, c]) {
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113)
+  );
+}
+
+/**
+ * Whether a resolved address is one the sandbox must not reach: loopback,
+ * unspecified, private-use, link-local, multicast, reserved and documentation,
+ * in IPv4 and IPv6, and an IPv4 address carried inside IPv6 (::ffff:a.b.c.d,
+ * the deprecated ::a.b.c.d, and NAT64's 64:ff9b::a.b.c.d). An address that
+ * can't be read counts as private: the answer is no when in doubt.
+ * @param {unknown} address
+ */
+export function isPrivateAddress(address) {
+  if (typeof address !== 'string') return true;
+  const v4 = parseIpv4(address);
+  if (v4) return isPrivateIpv4(v4);
+  const g = parseIpv6(address);
+  if (!g) return true;
+  const embedded = () => isPrivateIpv4([g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff]);
+  if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0 || g[5] === 0xffff)) return embedded();
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return embedded();
+  return (
+    (g[0] & 0xffc0) === 0xfe80 ||
+    (g[0] & 0xffc0) === 0xfec0 ||
+    (g[0] & 0xfe00) === 0xfc00 ||
+    g[0] >> 8 === 0xff ||
+    (g[0] === 0x2001 && g[1] === 0xdb8)
+  );
+}
+
 /** @param {AgentDeps} deps */
 export function createAgent(deps) {
-  const { runtime, spawn, send, mkdir, rm, lstat, realpath, kill, exit, env } = deps;
+  const { runtime, spawn, send, mkdir, rm, lstat, realpath, kill, exit, env, lookup } = deps;
   const warn = deps.warn ?? (() => undefined);
   /** new -> initialising -> ready -> closing; dead after a failed init. */
   let phase = 'new';
@@ -114,13 +225,40 @@ export function createAgent(deps) {
     denyWrite: [...denyWritePaths],
   });
   const config = (c, allowedHosts) => ({
-    network: { allowedDomains: [...allowedHosts], deniedDomains: [], allowLocalBinding: false },
+    network: { allowedDomains: [...allowedHosts], deniedDomains: [], allowLocalBinding: false, deniedResolvedAddresses: DENIED_RESOLVED_ADDRESSES },
     filesystem: baseFilesystem(c),
   });
 
-  /** The runtime's "may this host be reached?" callback: Grunt raises the card and answers. @param {HostPattern} pattern */
-  function ask({ host, port }) {
-    if (phase === 'closing') return Promise.resolve(false);
+  /** Whether a host name resolves, within LOOKUP_TIMEOUT_MS, to public addresses only. Any failure is a no. @param {string} host */
+  async function resolvesToPublicOnly(host) {
+    let timer;
+    try {
+      const addresses = await Promise.race([
+        lookup(host),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('The lookup timed out.')), LOOKUP_TIMEOUT_MS);
+        }),
+      ]);
+      return Array.isArray(addresses) && addresses.length > 0 && addresses.every((entry) => !isPrivateAddress(entry?.address));
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The runtime's "may this host be reached?" callback: Grunt raises the card and
+   * answers. A host that doesn't resolve, or resolves anywhere private, is
+   * refused here without a card, since the runtime would refuse the connection
+   * anyway. @param {HostPattern} pattern
+   */
+  async function ask({ host, port }) {
+    if (phase === 'closing') return false;
+    const during = active;
+    if (!(await resolvesToPublicOnly(String(host)))) return false;
+    // The run (or the agent) may have ended while the name was resolving: nobody is waiting for a card.
+    if (phase === 'closing' || active !== during || during?.controller.signal.aborted) return false;
     const askId = nextAskId++;
     send({ type: 'ask', askId, host: String(host), port: typeof port === 'number' ? port : null });
     return new Promise((resolve) => asks.set(askId, resolve));

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Plain ESM that ships into the VM; vitest loads it as it is.
-import { createAgent, DENY_READ, MAX_OUTPUT_BYTES } from '../resources/agent-core.mjs';
+import { createAgent, DENIED_RESOLVED_ADDRESSES, DENY_READ, isPrivateAddress, LOOKUP_TIMEOUT_MS, MAX_OUTPUT_BYTES } from '../resources/agent-core.mjs';
 
 let dir: string;
 beforeEach(() => {
@@ -24,7 +24,12 @@ type Wrapped = { argv: string[]; env: NodeJS.ProcessEnv };
  * agent's environment where the real one reads it: TMPDIR when it starts,
  * CLAUDE_CODE_TMPDIR each time it wraps a command.
  */
-function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm; realpath?: typeof realpath } = {}) {
+type Lookup = (host: string) => Promise<Array<{ address: string }>>;
+
+function harness(
+  over: Record<string, unknown> = {},
+  fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm; realpath?: typeof realpath; lookup?: Lookup } = {}
+) {
   const sent: Sent[] = [];
   const exits: number[] = [];
   const warnings: string[] = [];
@@ -32,6 +37,12 @@ function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; k
   const tmpdirAtInitialize: Array<string | undefined> = [];
   const tmpdirAtWrap: Array<string | undefined> = [];
   let ask: ((p: HostPattern) => Promise<boolean>) | null = null;
+  // Every name resolves to a public address unless a test says otherwise.
+  const lookedUp: string[] = [];
+  const lookup: Lookup = (host) => {
+    lookedUp.push(host);
+    return fakes.lookup ? fakes.lookup(host) : Promise.resolve([{ address: '93.184.216.34' }]);
+  };
   const runtime = {
     initialize: vi.fn(async (_config: unknown, cb: (p: HostPattern) => Promise<boolean>) => {
       tmpdirAtInitialize.push(env.TMPDIR);
@@ -61,6 +72,7 @@ function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; k
     kill: fakes.kill ?? ((pid: number, signal: string) => process.kill(Math.abs(pid), signal)),
     exit: (code: number) => exits.push(code),
     env,
+    lookup,
   });
   const receive = (m: unknown): Promise<void> => agent.receive(JSON.stringify(m));
   const home = join(dir, 'home');
@@ -73,6 +85,7 @@ function harness(over: Record<string, unknown> = {}, fakes: { spawn?: unknown; k
     env,
     tmpdirAtInitialize,
     tmpdirAtWrap,
+    lookedUp,
     home,
     tmpRoot,
     rt: `${tmpRoot}/rt`,
@@ -110,7 +123,7 @@ describe('the sandbox agent', () => {
     // No per-run temp folder yet, and the temp root itself is never readable (it would turn a run's folder read-only).
     expect(h.runtime.initialize).toHaveBeenCalledWith(
       {
-        network: { allowedDomains: ['pypi.org'], deniedDomains: [], allowLocalBinding: false },
+        network: { allowedDomains: ['pypi.org'], deniedDomains: [], allowLocalBinding: false, deniedResolvedAddresses: DENIED_RESOLVED_ADDRESSES },
         filesystem: { denyRead: DENY_READ, allowRead: [h.home, h.rt], allowWrite: [h.home], denyWrite: [] },
       },
       expect.any(Function)
@@ -240,7 +253,7 @@ describe('the sandbox agent', () => {
     await h.run(2, '0', { allowedHosts: ['pypi.org', 'example.org'] });
     expect(h.runtime.updateConfig).toHaveBeenCalledTimes(1);
     expect(h.runtime.updateConfig.mock.calls[0]![0]).toEqual({
-      network: { allowedDomains: ['pypi.org', 'example.org'], deniedDomains: [], allowLocalBinding: false },
+      network: { allowedDomains: ['pypi.org', 'example.org'], deniedDomains: [], allowLocalBinding: false, deniedResolvedAddresses: DENIED_RESOLVED_ADDRESSES },
       filesystem: { denyRead: DENY_READ, allowRead: [h.home, h.rt], allowWrite: [h.home], denyWrite: [] },
     });
   });
@@ -306,7 +319,19 @@ describe('the sandbox agent', () => {
 
   it('ignores lines that are not messages', async () => {
     const h = harness();
-    const agent = createAgent({ runtime: h.runtime, spawn, send: () => undefined, mkdir, rm, lstat, realpath, kill: () => undefined, exit: () => undefined, env: {} });
+    const agent = createAgent({
+      runtime: h.runtime,
+      spawn,
+      send: () => undefined,
+      mkdir,
+      rm,
+      lstat,
+      realpath,
+      kill: () => undefined,
+      exit: () => undefined,
+      env: {},
+      lookup: async () => [],
+    });
     await agent.receive('not json');
     await agent.receive('{"type":"bogus"}');
     await agent.receive('42');
@@ -661,5 +686,131 @@ describe('the sandbox agent, links in the temp folder', () => {
     expect(h.exits).toEqual([1]);
     expect(h.runtime.initialize).not.toHaveBeenCalled();
     survives();
+  });
+});
+
+describe('the sandbox agent, private destinations', () => {
+  const asksSent = (h: ReturnType<typeof harness>) => h.sent.filter((m) => m.type === 'ask');
+  const resolvingTo =
+    (...addresses: string[]): Lookup =>
+    async () =>
+      addresses.map((address) => ({ address }));
+
+  it('asks the runtime to refuse the private-use, multicast and reserved ranges once a name is resolved', () => {
+    expect(DENIED_RESOLVED_ADDRESSES).toEqual([
+      '10.0.0.0/8',
+      '172.16.0.0/12',
+      '192.168.0.0/16',
+      '100.64.0.0/10',
+      'fc00::/7',
+      '224.0.0.0/4',
+      '240.0.0.0/4',
+      '198.18.0.0/15',
+      '127.0.0.0/8',
+      '169.254.0.0/16',
+    ]);
+  });
+
+  it('resolves the host and goes on to ask Grunt when every address is public', async () => {
+    const h = harness({}, { lookup: resolvingTo('93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946') });
+    await h.init();
+    void h.ask({ host: 'pypi.org', port: 443 });
+    await vi.waitFor(() => expect(asksSent(h)).toEqual([{ type: 'ask', askId: 1, host: 'pypi.org', port: 443 }]));
+    expect(h.lookedUp).toEqual(['pypi.org']);
+  });
+
+  it.each([
+    ['loopback', '127.0.0.1'],
+    ['an IPv4-mapped loopback', '::ffff:127.0.0.1'],
+    ['a private address', '10.1.2.3'],
+    ['the cloud metadata address', '169.254.169.254'],
+    ['IPv6 loopback', '::1'],
+    ['a unique local IPv6 address', 'fd12:3456::1'],
+  ])('refuses a name that resolves to %s, without asking Grunt', async (_name, address) => {
+    const h = harness({}, { lookup: resolvingTo(address) });
+    await h.init();
+    await expect(h.ask({ host: 'rebind.example.com', port: 443 })).resolves.toBe(false);
+    expect(asksSent(h)).toEqual([]);
+  });
+
+  it('refuses a name when any one of its addresses is private', async () => {
+    const h = harness({}, { lookup: resolvingTo('93.184.216.34', '192.168.1.5') });
+    await h.init();
+    await expect(h.ask({ host: 'mixed.example.com', port: 443 })).resolves.toBe(false);
+    expect(asksSent(h)).toEqual([]);
+  });
+
+  it.each([
+    ['fails', async () => Promise.reject(new Error('ENOTFOUND'))],
+    [
+      'throws',
+      () => {
+        throw new Error('boom');
+      },
+    ],
+    ['finds nothing', async () => []],
+  ])('refuses a name whose lookup %s, without asking Grunt', async (_name, lookup) => {
+    const h = harness({}, { lookup: lookup as Lookup });
+    await h.init();
+    await expect(h.ask({ host: 'nowhere.example.com', port: 443 })).resolves.toBe(false);
+    expect(asksSent(h)).toEqual([]);
+  });
+
+  it('refuses a name that takes too long to resolve, without asking Grunt', async () => {
+    const h = harness({}, { lookup: () => new Promise(() => undefined) });
+    await h.init();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const answer = h.ask({ host: 'slow.example.com', port: 443 });
+      await vi.advanceTimersByTimeAsync(LOOKUP_TIMEOUT_MS);
+      await expect(answer).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(asksSent(h)).toEqual([]);
+  });
+
+  it('does not raise a card for a name that finished resolving after its run was cancelled', async () => {
+    const resolving = deferred<Array<{ address: string }>>();
+    const h = harness({}, { lookup: () => resolving.promise });
+    await h.init();
+    let answer: Promise<boolean> | null = null;
+    h.runtime.wrapWithSandboxArgv.mockImplementationOnce(async () => {
+      answer = h.ask({ host: 'late.example.com', port: 443 });
+      await answer;
+      return { argv: [process.execPath, '-e', ''], env: { ...process.env } };
+    });
+    const running = h.run(1, 'ignored');
+    await vi.waitFor(() => expect(h.lookedUp).toEqual(['late.example.com']));
+    await h.receive({ type: 'cancel', id: 1 });
+    resolving.resolve([{ address: '93.184.216.34' }]);
+    await running;
+    await expect(answer).resolves.toBe(false);
+    expect(asksSent(h)).toEqual([]);
+  });
+});
+
+describe('isPrivateAddress', () => {
+  it.each([
+    '0.0.0.0', '0.1.2.3', '10.0.0.1', '10.255.255.255', '100.64.0.1', '100.127.255.255', '127.0.0.1', '127.255.255.255',
+    '169.254.169.254', '172.16.0.1', '172.31.255.255', '192.0.0.8', '192.0.2.1', '192.168.0.1', '198.18.0.1', '198.19.255.255',
+    '198.51.100.1', '203.0.113.9', '224.0.0.1', '239.255.255.255', '240.0.0.1', '255.255.255.255',
+    '::', '::1', 'fe80::1', 'fe80::1%eth0', 'febf::1', 'fec0::1', 'fc00::1', 'fd12:3456:789a::1', 'ff02::1', '2001:db8::1',
+    '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:10.1.2.3', '::ffff:a9fe:a9fe', '::ffff:0:0', '::127.0.0.1', '0:0:0:0:0:ffff:c0a8:101',
+    '64:ff9b::7f00:1', '64:ff9b::10.0.0.1', '[::1]',
+    // Unreadable addresses are refused, not guessed at.
+    '', 'localhost', '1.2.3', '1.2.3.4.5', '256.1.1.1', '010.0.0.1', '1.2.3.-4', '::ffff:1.2.3', '1::2::3', '1:2:3:4:5:6:7:8:9', 'g::1', ':1:2:3:4:5:6:7', 42, null, undefined,
+  ])('refuses %j', (address) => {
+    expect(isPrivateAddress(address)).toBe(true);
+  });
+
+  it.each([
+    '1.1.1.1', '8.8.8.8', '93.184.216.34', '9.255.255.255', '11.0.0.1', '100.63.255.255', '100.128.0.1', '126.255.255.255', '128.0.0.1',
+    '169.253.1.1', '169.255.1.1', '172.15.255.255', '172.32.0.1', '192.0.1.1', '192.0.3.1', '192.167.1.1', '192.169.1.1', '198.17.255.255',
+    '198.20.0.1', '198.51.99.1', '198.51.101.1', '203.0.112.1', '203.0.114.1', '223.255.255.255',
+    '2606:2800:220:1:248:1893:25c8:1946', '2001:4860:4860::8888', '2001:db9::1', '2a00:1450:4009:81f::200e', 'fb00::1', 'fe00::1',
+    '::ffff:8.8.8.8', '::ffff:0808:0808', '64:ff9b::808:808',
+  ])('lets %s through', (address) => {
+    expect(isPrivateAddress(address)).toBe(false);
   });
 });

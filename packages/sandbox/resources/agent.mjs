@@ -4,6 +4,7 @@
 //   wsl.exe -d grunt-sandbox -u grunt --exec /opt/grunt-sandbox/node/bin/node /opt/grunt-sandbox/agent.mjs
 import { spawn } from 'node:child_process';
 import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
+import { lookup } from 'node:dns/promises';
 import { createInterface } from 'node:readline';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
 import { createAgent } from './agent-core.mjs';
@@ -22,6 +23,8 @@ const agent = createAgent({
   exit: (code) => process.exit(code),
   // The core sets TMPDIR and CLAUDE_CODE_TMPDIR here, which the runtime reads.
   env: process.env,
+  // Every address a name resolves to, for the early refusal of private destinations.
+  lookup: (host) => lookup(host, { all: true }),
 });
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
