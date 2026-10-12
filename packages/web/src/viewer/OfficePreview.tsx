@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type JSX } from 'react';
+import { memo, useMemo, useState, type CSSProperties, type JSX } from 'react';
 import { columnName, parseSpreadsheet, type Cell, type OfficeKind, type SheetSpec } from '@grunt/core/domain/office-spec.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 
@@ -29,14 +29,15 @@ const PAPER = {
   '--bg-sunken': '#ece7df',
 } as CSSProperties;
 
-export function OfficePreview({ kind, content }: { kind: OfficeKind; content: string }): JSX.Element {
+/** Memoized on (kind, content): a big sheet is up to ~100k cells, which the viewer's unrelated state changes (typing in Save as, an error toggling) must not redraw. */
+export const OfficePreview = memo(function OfficePreview({ kind, content }: { kind: OfficeKind; content: string }): JSX.Element {
   switch (kind) {
     case 'document':
       return <DocumentPreview content={content} />;
     case 'spreadsheet':
       return <SpreadsheetPreview content={content} />;
   }
-}
+});
 
 function Unreadable({ error }: { error: string }): JSX.Element {
   return (
@@ -77,7 +78,7 @@ function cellView(cell: Cell): { text: string; formula: boolean; style: CSSPrope
   return { text, formula: false, style: typeof value === 'number' && !cell.align ? { textAlign: 'right', ...style } : style };
 }
 
-function SheetTable({ sheet }: { sheet: SheetSpec }): JSX.Element {
+const SheetTable = memo(function SheetTable({ sheet }: { sheet: SheetSpec }): JSX.Element {
   const width = sheet.rows.reduce((w, row) => Math.max(w, row.length), 0);
   const cols = Math.min(width, PREVIEW_MAX_COLUMNS);
   const rows = sheet.rows.slice(0, PREVIEW_MAX_ROWS);
@@ -142,7 +143,7 @@ function SheetTable({ sheet }: { sheet: SheetSpec }): JSX.Element {
       </table>
     </div>
   );
-}
+});
 
 function SpreadsheetPreview({ content }: { content: string }): JSX.Element {
   const parsed = useMemo(() => parseSpreadsheet(content), [content]);

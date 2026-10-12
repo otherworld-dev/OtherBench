@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { isOfficeKind } from '@grunt/core/domain/office-spec.js';
 import type { ArtifactVersion } from '@grunt/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
@@ -47,6 +47,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   useEffect(() => {
     let cancelled = false;
     setError(null);
+    setActionError(null);
     api.artifacts.get(chatId, item.artifactId).then(
       (d) => !cancelled && setDetail(d),
       (err: unknown) => !cancelled && setError(failure(err))
@@ -60,11 +61,17 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   // Each version is its own kind (a note made into a page), with its own file name.
   const shown = detail?.versions.find((v) => v.id === versionId);
   const kind = shown?.kind;
+  // A Download, Edit or Save that fails after you've moved to another version must not show its error against that one.
+  const versionRef = useRef(versionId);
+  useEffect(() => {
+    versionRef.current = versionId;
+  }, [versionId]);
 
   useEffect(() => {
     if (!versionId || !kind) return;
     let cancelled = false;
     setError(null);
+    setActionError(null);
     setVersion(null);
     setOpened(null);
     api.artifacts.version(chatId, item.artifactId, versionId).then(
@@ -89,6 +96,10 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const elsewhere = detail.versions.filter((v) => !v.onBranch);
   const name = opened?.name ?? shown.fileName;
 
+  function failAction(forVersion: string, err: unknown): void {
+    if (versionRef.current === forVersion) setActionError(failure(err));
+  }
+
   async function saveEdit(): Promise<void> {
     if (draft === null || !versionId) return;
     try {
@@ -100,7 +111,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
       if (picked !== null) setPicked(made.id);
       setReload((r) => r + 1);
     } catch (err) {
-      setActionError(failure(err));
+      failAction(versionId, err);
     }
   }
 
@@ -115,7 +126,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     try {
       saveFile(await api.artifacts.file(chatId, item.artifactId, version.id), shown.fileName);
     } catch (err) {
-      setActionError(failure(err));
+      failAction(version.id, err);
     }
   }
 
@@ -126,7 +137,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
       setSaving({ ...saving, exists: null, done: done.path });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) setSaving({ ...saving, exists: err.message, done: null });
-      else setError(failure(err));
+      else failAction(versionId, err);
     }
   }
 
@@ -137,7 +148,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
         <textarea aria-label="Artifact source" value={draft} onChange={(e) => setDraft(e.target.value)} className="min-h-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg)] p-2 font-mono text-xs" />
         <div className="flex gap-2">
           <button type="button" onClick={() => void saveEdit()} className={BUTTON}>Save</button>
-          <button type="button" onClick={() => setDraft(null)} className={BUTTON}>Cancel</button>
+          <button type="button" onClick={() => { setDraft(null); setActionError(null); }} className={BUTTON}>Cancel</button>
         </div>
       </div>
     );
