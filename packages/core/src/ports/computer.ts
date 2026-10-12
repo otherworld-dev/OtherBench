@@ -4,25 +4,72 @@
  * does it on Windows (server/src/computer/desktop-driver.ts); tests and e2e
  * use `FakeComputerDriver` (core/testing/fake-computer.ts). Coordinates are
  * always in the last screenshot's pixels; the driver owns the scale.
+ *
+ * The driver reports FACTS and carries out actions. It decides nothing:
+ * whether a target may be used, how risky it is and what a card calls it are
+ * all worked out in core (`classifyTarget`, domain/computer-apps.ts), in one
+ * place, from what is reported here.
  */
 
-/** The app an action would land on. `path` is the full program path as Windows reports it. */
+/**
+ * The window an action would land on, as the driver found it. Every field is
+ * required: core refuses, or asks every time, when one is missing or of the
+ * wrong type, and never treats such a target as an ordinary app.
+ */
 export interface ComputerTarget {
+  /**
+   * The program's canonical final path, resolved by the driver and by nobody
+   * else: long names (never 8.3), links, junctions and substituted drives
+   * resolved, on-disk letter case, `X:\...` or `\\server\share\...` with no
+   * `\\?\` prefix. It is the app's key as it stands (`appKey` only checks
+   * it), so the driver must report the same string for the same program every
+   * time, and refuse rather than report a path it could not resolve.
+   */
   path: string;
-  /** The program's file name without `.exe`, for cards. */
-  name: string;
-  title: string;
+  /** The image's VERSIONINFO OriginalFilename; `null` only when the image has none. */
+  originalName: string | null;
+  /** The subject of a verified Authenticode signature; `null` when unsigned or not verified. */
+  signer: string | null;
+  /** A console or terminal-host window, or a console-subsystem image. */
+  console: boolean;
+  /** The kind of drive the image is on. Only a fixed disk pins what a path names. */
+  location: 'fixed' | 'network' | 'removable' | 'unknown';
   elevated: boolean;
-  /** The shell's own process (Grunt's windows). */
+  /** The process holds UI access (it can drive other apps' windows). */
+  uiAccess: boolean;
+  /** Any Grunt process, not only the shell's own. */
   grunt: boolean;
-  risk: 'normal' | 'high';
+  /** The window's title, raw. Set by the app: core bounds and cleans it before any card sees it. */
+  title: string;
+  /** The window itself, opaque to core (a window handle as text). */
+  windowId: string;
+  pid: number;
+  /** When that process started, opaque to core: with `pid` it names one run of the program. */
+  startedAt: string;
 }
 
 export interface ComputerRefusal {
   refuse: string;
 }
 
-/** A phase-1 action that changes something, with coordinates in screenshot pixels. */
+/**
+ * What must still be true when an action is carried out: the app (its key),
+ * the window, and the run of the program the card was about. Built by core's
+ * `expectationOf` from the described call; there is no "no expectation".
+ */
+export interface ComputerExpectation {
+  app: string;
+  windowId: string;
+  pid: number;
+  startedAt: string;
+}
+
+/**
+ * A phase-1 action that changes something, with coordinates in screenshot
+ * pixels. Built by core's `computerActionOf`, never from raw model input: a
+ * `key` action's `text` is one combination in core's canonical form
+ * (`parseKeys`), which the driver presses as written.
+ */
 export type ComputerAction =
   | { action: 'mouse_move' | 'left_click' | 'right_click' | 'double_click' | 'triple_click'; coordinate: [number, number] }
   | { action: 'scroll'; coordinate: [number, number]; scroll_direction: 'up' | 'down' | 'left' | 'right'; scroll_amount: number }
@@ -48,10 +95,22 @@ export interface ComputerDriver {
   screenshot(chatId: string): Promise<ComputerScreenshot>;
   /** Where the cursor is, in the last screenshot's pixels. */
   cursorPosition(chatId: string): Promise<{ x: number; y: number }>;
-  /** The app under a point of the last screenshot, or the foreground app. */
+  /** The window under a point of the last screenshot, or the foreground window. */
   target(chatId: string, at: { x: number; y: number } | 'foreground'): Promise<ComputerTarget | ComputerRefusal>;
-  /** Carries out an action, refusing unless the target is still `expectApp` (lower-cased path). */
-  act(chatId: string, action: ComputerAction, expectApp: string | null): Promise<ComputerAnswer>;
+  /**
+   * Carries out an action, but only on the window it was approved for: the
+   * driver resolves the target again (under the point for an action with a
+   * coordinate, the foreground window for `type` and `key`) and refuses
+   * unless its path, window, pid and start time all equal `expect`, compared
+   * exactly. It checks again before every chunk of typed text.
+   */
+  act(chatId: string, action: ComputerAction, expect: ComputerExpectation): Promise<ComputerAnswer>;
+  /**
+   * The global shortcuts the shell has registered (quick chat, the stop
+   * hotkey), as it was given them. `parseKeys` refuses a `key` action that
+   * would press one.
+   */
+  reservedKeys(): readonly string[];
   /** The shell ended a session itself (hotkey, the bar's Stop, idle, quit). Returns the unsubscribe. */
   onStopped(cb: (chatId: string, why: ComputerStopReason) => void): () => void;
 }

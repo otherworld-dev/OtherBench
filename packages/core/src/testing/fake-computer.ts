@@ -2,6 +2,7 @@ import type {
   ComputerAction,
   ComputerAnswer,
   ComputerDriver,
+  ComputerExpectation,
   ComputerRefusal,
   ComputerScreenshot,
   ComputerStopReason,
@@ -14,20 +15,47 @@ export const FAKE_PNG = Buffer.from(
   'base64'
 );
 
-/** What every point and the foreground belong to, unless a test says otherwise. */
-export const FAKE_COMPUTER_APP: ComputerTarget = {
+/**
+ * What every point and the foreground belong to, unless a test says
+ * otherwise: a fully described, signed program on a fixed disk, which core's
+ * `classifyTarget` finds ordinary.
+ */
+export const FAKE_COMPUTER_APP: ComputerTarget = Object.freeze({
   path: 'C:\\Program Files\\Fake App\\FakeApp.exe',
-  name: 'FakeApp',
-  title: 'Fake App',
+  originalName: 'FakeApp.exe',
+  signer: 'Fake Software Ltd',
+  console: false,
+  location: 'fixed',
   elevated: false,
+  uiAccess: false,
   grunt: false,
-  risk: 'normal',
-};
+  title: 'Fake App',
+  windowId: 'hwnd-1',
+  pid: 4242,
+  startedAt: '2026-10-12T09:00:00.000Z',
+});
+
+/** `FAKE_COMPUTER_APP` with some facts changed: another window, another run, another program. */
+export function fakeComputerTarget(over: Partial<ComputerTarget> = {}): ComputerTarget {
+  return { ...FAKE_COMPUTER_APP, ...over };
+}
+
+/** What `act` answers when the window is no longer the one the action was approved for. */
+export const FAKE_WINDOW_CHANGED_REASON = 'The window changed after Grunt asked, so nothing was done.';
+
+type Acted = { chatId: string; action: ComputerAction; expect: ComputerExpectation };
 
 /**
  * A `ComputerDriver` that touches nothing: it records what it was asked and
  * answers with whatever the test set. Also what the server wires for e2e
  * when `GRUNT_COMPUTER_FAKE_DRIVER=1` (container.ts).
+ *
+ * Like the real shell, `act` looks at the target again and does nothing
+ * unless it is still the app, window and run the expectation names: under
+ * the point (`pointTarget`) for an action with a coordinate, the foreground
+ * window (`foregroundTarget`) for `type` and `key`. A test models "the
+ * window changed between the card and the action" by setting those after
+ * the call was described.
  */
 export class FakeComputerDriver implements ComputerDriver {
   isAvailable = true;
@@ -35,12 +63,18 @@ export class FakeComputerDriver implements ComputerDriver {
   startAnswer: ComputerAnswer = { ok: true };
   pointTarget: ComputerTarget | ComputerRefusal = FAKE_COMPUTER_APP;
   foregroundTarget: ComputerTarget | ComputerRefusal = FAKE_COMPUTER_APP;
+  /** What `act` answers for an action it does carry out. */
   actAnswer: ComputerAnswer = { ok: true };
   screenSize = { width: 1366, height: 768 };
   cursor = { x: 0, y: 0 };
+  /** The shell's own global shortcuts (`reservedKeys`). */
+  reserved: string[] = [];
   readonly started: { chatId: string; chatTitle: string }[] = [];
   readonly ended: string[] = [];
-  readonly actions: { chatId: string; action: ComputerAction; expectApp: string | null }[] = [];
+  /** Actions carried out. */
+  readonly actions: Acted[] = [];
+  /** Actions asked for and not carried out, because the target was no longer what `expect` named. */
+  readonly refused: Acted[] = [];
   readonly targets: { chatId: string; at: { x: number; y: number } | 'foreground' }[] = [];
   readonly screenshots: string[] = [];
   private readonly sessions = new Set<string>();
@@ -80,9 +114,27 @@ export class FakeComputerDriver implements ComputerDriver {
     return at === 'foreground' ? this.foregroundTarget : this.pointTarget;
   }
 
-  async act(chatId: string, action: ComputerAction, expectApp: string | null): Promise<ComputerAnswer> {
-    this.actions.push({ chatId, action, expectApp });
+  async act(chatId: string, action: ComputerAction, expect: ComputerExpectation): Promise<ComputerAnswer> {
+    const now = 'coordinate' in action ? this.pointTarget : this.foregroundTarget;
+    if ('refuse' in now) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: now.refuse };
+    }
+    if (now.path !== expect.app || now.windowId !== expect.windowId || now.pid !== expect.pid || now.startedAt !== expect.startedAt) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: FAKE_WINDOW_CHANGED_REASON };
+    }
+    this.actions.push({ chatId, action, expect });
     return this.actAnswer;
+  }
+
+  /** Another window took the keyboard (the person clicked a card, an app raised itself): `type` and `key` now land there. */
+  changeForeground(target: ComputerTarget | ComputerRefusal): void {
+    this.foregroundTarget = target;
+  }
+
+  reservedKeys(): readonly string[] {
+    return this.reserved;
   }
 
   onStopped(cb: (chatId: string, why: ComputerStopReason) => void): () => void {

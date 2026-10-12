@@ -2,16 +2,21 @@ import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
+import { cardLine } from './card-text.js';
 import {
   actionSummary,
   appKey,
+  COMPUTER_BAD_ACTION_REASON,
   COMPUTER_NO_APP_REASON,
+  COMPUTER_NO_WINDOW_REASON,
   COMPUTER_OFF_REASON,
   COMPUTER_UNATTENDED_REASON,
+  computerActionOf,
+  describeApp,
+  expectationOf,
   isComputerAction,
   isHighRiskApp,
   isReadAction,
-  programName,
 } from './computer-apps.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
@@ -124,8 +129,13 @@ function isShellTool(tool: ToolSpec): boolean {
  *
  * Computer use (`source: 'computer'`) is refused outright in an unattended
  * run; its looking actions (`screenshot`, `cursor_position`, `wait`) skip the
- * card in both modes; its grants are always pinned to one `app`, and a
- * high-risk app (a shell, Explorer, Settings...) never gets one.
+ * card in both modes, by exact action name; every other action is about one
+ * app, named by its key (`appKey`: the program path the shell resolved,
+ * compared with `===` and never repaired or folded here), and a call with no
+ * valid key is refused. Its grants are always pinned to one key. An app that
+ * isn't provably ordinary (`isHighRiskApp`: a shell, Explorer, a browser, or
+ * anything unknown) is asked about every time: no grant is stored for it and
+ * none is matched. The card's line names the app from the key alone.
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
@@ -232,9 +242,21 @@ export class PermissionBroker {
     if (tool.source === 'computer') {
       if (ctx.unattended === true) return { kind: 'deny', reason: COMPUTER_UNATTENDED_REASON, unattended: true };
       const action = stringField(args, 'action');
-      if (!isComputerAction(action)) return { kind: 'deny', reason: `"${action ?? ''}" isn't a computer action Grunt can do.` };
+      // Exactly one of the known names, as a string: anything else (another
+      // case, an array, a missing action) is refused, never treated as a look.
+      if (!isComputerAction(action)) return { kind: 'deny', reason: `"${cardLine(action, 40)}" isn't a computer action Grunt can do.` };
       if (isReadAction(action)) return { kind: 'allow', grantedBy: 'policy' };
-      if (stringField(args, 'app') === null) return { kind: 'deny', reason: COMPUTER_NO_APP_REASON };
+      // The app's key must be valid as it stands. One that isn't is no app.
+      if (appKey(rawField(args, 'app')) === null) return { kind: 'deny', reason: COMPUTER_NO_APP_REASON };
+      // A card and a grant are about one window of that app: without the
+      // window, pid and start time the shell checks before acting, the call
+      // could land anywhere, so it is refused.
+      if (expectationOf(args) === null) return { kind: 'deny', reason: COMPUTER_NO_WINDOW_REASON };
+      // And the action must be one Grunt would send: a readable coordinate, a
+      // key combination that stays in the app (`parseKeys`), well-formed
+      // text. The tool's describeCall refuses these first, with a fuller
+      // reason; this is the backstop, so no grant ever covers one.
+      if (computerActionOf(args) === null) return { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
@@ -326,10 +348,16 @@ export class PermissionBroker {
     // such a write either.
     if (isProtectedAgentWrite(pending.tool, pending.args)) return;
 
-    // A high-risk app (a shell, Explorer, Settings...) is only ever allowed
-    // once: 'chat' and 'always' store nothing, and decide() never matches a
-    // grant for one either.
-    if (isHighRiskComputerCall(pending.tool, pending.args)) return;
+    // Computer use of an app that isn't provably ordinary (a shell, Explorer,
+    // a browser, anything unknown) is only ever allowed once. Its card offers
+    // nothing else, so a 'chat' or 'always' answer for one is refused out
+    // loud and stores nothing; decide() never matches a grant for one either.
+    if (pending.tool.source === 'computer') {
+      const app = appForGrant(pending);
+      if (isHighRiskApp(pending.args)) {
+        throw new Error(`Refusing to store a grant for computer use of ${cardLine(describeApp(app)?.name, 80)}: Grunt asks every time for this app.`);
+      }
+    }
 
     if (choice.choice === 'chat') {
       // A 'chat' answer for the shell is NOT a blanket grant for the rest of
@@ -393,7 +421,9 @@ export class PermissionBroker {
 
     // Likewise for computer use: the grant is for the one app the card named
     // (its key, as the tool's describeCall worked it out), never blanket,
-    // never another app, and nothing else the answer carried is stored.
+    // never another app, and nothing else the answer carried is stored. The
+    // answer must carry that exact key: another spelling of the same path is
+    // another key, and one that isn't a valid key is none.
     if (pending.tool.source === 'computer') {
       const app = appForGrant(pending);
       if (!choice.constraint?.app) {
@@ -567,20 +597,25 @@ function isHighRiskComputerCall(tool: ToolSpec, args: unknown): boolean {
   return tool.source === 'computer' && isHighRiskApp(args);
 }
 
-/** The app a computer grant is pinned to (its key). Throws rather than store an unconstrained grant. */
+/** The app a computer grant is pinned to: its key, valid as it stands. Throws rather than store a grant for anything else. */
 function appForGrant(pending: PendingRequest): string {
-  const app = stringField(pending.args, 'app');
-  if (app === null || app.trim() === '') {
-    throw new Error('Refusing to create a grant for computer use: the approved call named no app.');
+  const app = appKey(rawField(pending.args, 'app'));
+  if (app === null) {
+    throw new Error('Refusing to create a grant for computer use: the approved call named no app Grunt could identify.');
   }
-  return appKey(app);
+  return app;
 }
 
-/** `Use EXCEL: click at 512, 300` */
+/**
+ * A computer card's line: `Use EXCEL.EXE: click at 512, 300`. The name is the
+ * file name in the app's key (`describeApp`), the same key a grant would be
+ * pinned to and the shell checks before acting; a name the call carries
+ * (`appName`) or a window title is never used. The rest holds validated
+ * values only, and never typed text (`actionSummary`).
+ */
 function computerSummary(args: unknown): string {
-  const app = stringField(args, 'app');
-  const name = stringField(args, 'appName') ?? (app !== null ? programName(app) : 'the screen');
-  return `Use ${name}: ${actionSummary(args)}`;
+  const name = describeApp(rawField(args, 'app'))?.name;
+  return `Use ${name === undefined ? '?' : cardLine(name, 80)}: ${actionSummary(args)}`;
 }
 
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
@@ -659,10 +694,12 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
     return want !== null && got !== null && want === got;
   }
   if (constraint.app !== undefined) {
-    // Exact on the app's key (its full program path, `appKey`), never the
-    // program's name alone.
-    const app = stringField(args, 'app');
-    return app !== null && appKey(app) === appKey(constraint.app);
+    // Exact on the app's key: both sides must be valid keys as they stand
+    // (`appKey` checks, it never repairs or folds) and the same string. No
+    // prefix, case, short-name or separator matching: the shell canonicalises.
+    const want = appKey(constraint.app);
+    const got = appKey(rawField(args, 'app'));
+    return want !== null && got !== null && want === got;
   }
   return false;
 }
@@ -833,6 +870,11 @@ function browserSummary(args: unknown): string {
     default:
       return `Use ${host}: ${stringField(args, 'command') ?? '?'}`;
   }
+}
+
+/** `args[key]` whatever it is, for a validator that takes `unknown` (`appKey`). */
+function rawField(args: unknown, key: string): unknown {
+  return typeof args === 'object' && args !== null ? (args as Record<string, unknown>)[key] : undefined;
 }
 
 function stringField(args: unknown, key: string): string | null {

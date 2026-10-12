@@ -4,8 +4,12 @@ import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
 
-const EXCEL = 'c:\\program files\\microsoft office\\root\\office16\\excel.exe';
-const CMD = 'c:\\windows\\system32\\cmd.exe';
+// App keys are the paths the shell resolved, compared exactly: on-disk case and all.
+const EXCEL = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE';
+const DOWNLOADED_EXCEL = 'C:\\Users\\Adam\\Downloads\\EXCEL.EXE';
+const NOTEPAD = 'C:\\Windows\\System32\\notepad.exe';
+const CMD = 'C:\\Windows\\System32\\cmd.exe';
+const NO_APP = "Grunt couldn't tell which app this action would use, so it didn't run it.";
 
 const COMPUTER: ToolSpec = { name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute: async () => null };
 
@@ -17,8 +21,10 @@ function ctx(over: Partial<ToolContext> = {}): ToolContext {
   return { chatId: 'chat-1', messageId: 'msg-1', profileId: 'profile-1', workspaceRoot: null, signal: new AbortController().signal, ...over };
 }
 
-function click(app: string | null = EXCEL, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { action: 'left_click', coordinate: [512, 300], ...(app === null ? {} : { app, appName: app === CMD ? 'cmd' : 'EXCEL', appRisk: app === CMD ? 'high' : 'normal' }), ...extra };
+/** A described click: what the tool's describeCall hands the broker. `app: null` leaves the app fields out. */
+function click(app: unknown = EXCEL, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const described = app === null ? {} : { app, appName: 'whatever the caller says', appTitle: 'Book1', appRisk: app === CMD ? 'high' : 'normal', appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' };
+  return { action: 'left_click', coordinate: [512, 300], ...described, ...extra };
 }
 
 function expectAsk(decision: Decision): Extract<Decision, { kind: 'ask' }> {
@@ -30,6 +36,20 @@ describe('PermissionBroker and computer use', () => {
   let store: InMemoryStore;
   let broker: PermissionBroker;
 
+  function grant(app: unknown, over: Record<string, unknown> = {}): void {
+    store.grants.create({
+      id: `g${store.grants.list().length + 1}`,
+      chatId: null,
+      profileId: 'profile-1',
+      toolName: 'computer',
+      source: 'computer',
+      scope: 'always',
+      constraint: { app: app as string },
+      expiresAt: null,
+      ...over,
+    });
+  }
+
   beforeEach(() => {
     store = new InMemoryStore();
     broker = new PermissionBroker(store);
@@ -38,14 +58,17 @@ describe('PermissionBroker and computer use', () => {
   it('refuses every action while the profile has computer use off', () => {
     for (const p of [policy({ computer: false }), policy({ computer: undefined })]) {
       expect(broker.decide(COMPUTER, { action: 'screenshot', app: null }, p, ctx())).toEqual({ kind: 'deny', reason: 'Computer use is turned off for this profile.' });
+      expect(broker.decide(COMPUTER, click(), p, ctx())).toEqual({ kind: 'deny', reason: 'Computer use is turned off for this profile.' });
     }
   });
 
   it('refuses an unattended run, even with an always grant for the app, and even a screenshot', () => {
-    store.grants.create({ id: 'g1', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: EXCEL }, expiresAt: null });
+    grant(EXCEL);
     const reason = 'Computer use needs someone at the machine; it never runs unattended.';
     expect(broker.decide(COMPUTER, click(), policy(), ctx({ unattended: true }))).toEqual({ kind: 'deny', reason, unattended: true });
     expect(broker.decide(COMPUTER, { action: 'screenshot', app: null }, policy(), ctx({ unattended: true }))).toEqual({ kind: 'deny', reason, unattended: true });
+    // The same call with someone there is covered by the grant.
+    expect(broker.decide(COMPUTER, click(), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
   it('lets a screenshot, the cursor position and a wait through with no card, in both approval modes', () => {
@@ -54,34 +77,168 @@ describe('PermissionBroker and computer use', () => {
         expect(broker.decide(COMPUTER, { action, app: null }, policy({ approvalMode }), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
       }
     }
+    // Whatever else the call carries, it is still only a look: the tool runs it by the same name.
+    expect(broker.decide(COMPUTER, { action: 'screenshot', coordinate: [1, 2], text: 'x', app: CMD }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+  });
+
+  it('never lets an action that is not exactly a known name through, with or without a grant', () => {
+    grant(EXCEL);
+    const odd: unknown[] = [
+      undefined,
+      null,
+      42,
+      true,
+      ['screenshot'],
+      { action: 'screenshot' },
+      { toString: () => 'screenshot' },
+      'Screenshot',
+      'SCREENSHOT',
+      ' screenshot',
+      'screenshot ',
+      'screenshot\u0000',
+      'wait\n',
+      'Left_Click',
+      'left_click ',
+      'left_click_drag',
+      'zoom',
+      '',
+    ];
+    for (const action of odd) {
+      for (const args of [{ action, app: null }, click(EXCEL, { action })]) {
+        const decision = broker.decide(COMPUTER, args, policy(), ctx());
+        expect(decision.kind, JSON.stringify(action)).toBe('deny');
+      }
+    }
+    expect(store.grants.list()).toHaveLength(1);
+    // What it says back never carries a hidden character it was sent.
+    const hostile = broker.decide(COMPUTER, { action: 'evil\u202eaction' }, policy(), ctx());
+    expect(hostile).toEqual({ kind: 'deny', reason: '"evilaction" isn\'t a computer action Grunt can do.' });
   });
 
   it('goes by the action name, not the declared risk', () => {
     const lying: ToolSpec = { ...COMPUTER, risk: 'read' };
-    expect(broker.decide(lying, click(), policy(), ctx()).kind).toBe('ask');
+    for (const approvalMode of ['always_ask', 'ask_on_mutate'] as const) {
+      expect(broker.decide(lying, click(), policy({ approvalMode }), ctx()).kind).toBe('ask');
+      expect(broker.decide(lying, click(EXCEL, { action: 'type', text: 'x' }), policy({ approvalMode }), ctx()).kind).toBe('ask');
+    }
   });
 
-  it('refuses an action with no app, and an action it does not know', () => {
-    expect(broker.decide(COMPUTER, click(null), policy(), ctx())).toEqual({ kind: 'deny', reason: "Grunt couldn't tell which app this action would use, so it didn't run it." });
-    expect(broker.decide(COMPUTER, { action: 'left_click_drag', app: EXCEL }, policy(), ctx()).kind).toBe('deny');
+  it('refuses an action whose app it cannot identify, whatever grants are stored', () => {
+    const unidentified: unknown[] = [null, undefined, '', '   ', 42, [EXCEL], 'excel.exe', 'EXCEL', 'C:/Program Files/Microsoft Office/root/Office16/EXCEL.EXE', `${EXCEL}.`, `${EXCEL} `, `${EXCEL}\\`, `\\\\?\\${EXCEL}`, `${EXCEL}::$DATA`, 'C:\\a\\b\u202e.exe'];
+    for (const app of unidentified) {
+      if (typeof app === 'string') grant(app);
+    }
+    store.grants.create({ id: 'blanket', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'always', constraint: null, expiresAt: null });
+    for (const app of unidentified) {
+      expect(broker.decide(COMPUTER, click(EXCEL, { app }), policy(), ctx()), JSON.stringify(app)).toEqual({ kind: 'deny', reason: NO_APP });
+    }
+    expect(broker.decide(COMPUTER, click(null), policy(), ctx())).toEqual({ kind: 'deny', reason: NO_APP });
   });
 
-  it('asks about a click, naming the app; a chat answer stores a grant for that app only', () => {
+  it('refuses a call it cannot bind to one window, whatever grants are stored', () => {
+    grant(EXCEL);
+    const unpinned = "Grunt couldn't pin down which window that is, so it didn't use it.";
+    for (const over of [{ appWindow: undefined }, { appWindow: '' }, { appWindow: 7 }, { appPid: undefined }, { appPid: '4242' }, { appPid: 0 }, { appStarted: undefined }, { appStarted: '' }]) {
+      expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toEqual({ kind: 'deny', reason: unpinned });
+    }
+    expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+  });
+
+  it('refuses an action Grunt would never send, whatever grants are stored: a key combination that leaves the app, a point off the screen', () => {
+    grant(EXCEL);
+    const never = "Grunt can't carry out that action as it was sent, so it didn't run it.";
+    const bad: Record<string, unknown>[] = [
+      { action: 'key', text: 'ctrl+Escape' },
+      { action: 'key', text: 'alt+Tab' },
+      { action: 'key', text: 'super+r' },
+      { action: 'key', text: 'ctrl+alt+Delete' },
+      { action: 'key', text: 'ctrl+a ctrl+c' },
+      { action: 'key', text: 'ctrl+Escape r u n Return' },
+      { action: 'key', text: 'XF86Search' },
+      { action: 'key', text: undefined },
+      { action: 'type', text: '' },
+      { action: 'type', text: 42 },
+      { action: 'type', text: 'broken \ud83d' },
+      { action: 'left_click', coordinate: [1e308, 5] },
+      { action: 'left_click', coordinate: [-1, 5] },
+      { action: 'left_click', coordinate: '512,300' },
+      { action: 'scroll', scroll_direction: 'sideways' },
+      { action: 'scroll', scroll_direction: 'down', scroll_amount: 500 },
+    ];
+    for (const over of bad) {
+      expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toEqual({ kind: 'deny', reason: never });
+    }
+    // The same grant does cover what Grunt would send.
+    for (const over of [{ action: 'key', text: 'ctrl+s' }, { action: 'type', text: 'hello' }, { action: 'scroll', scroll_direction: 'down' }]) {
+      expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    }
+  });
+
+  it('names the app on the card from its key alone, never from a name the call carries', () => {
+    for (const appName of ['EXCEL', 'Notepad', 'Trusted by Grunt policy', 'cmd\u202e', 42, undefined]) {
+      const ask = expectAsk(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL, { appName, appTitle: 'Microsoft Excel (verified)' }), policy(), ctx()));
+      expect(ask.request).toMatchObject({ toolName: 'computer', source: 'computer', summary: 'Use EXCEL.EXE: click at 512, 300' });
+    }
+    expect(expectAsk(broker.decide(COMPUTER, click(NOTEPAD), policy(), ctx())).request.summary).toBe('Use notepad.exe: click at 512, 300');
+    expect(expectAsk(broker.decide(COMPUTER, click('C:\\Apps\\caf\u00e9.exe'), policy(), ctx())).request.summary).toBe('Use caf\u00e9.exe: click at 512, 300');
+    // A very long file name is cut, never wrapped over the card.
+    const long = expectAsk(broker.decide(COMPUTER, click(`C:\\Apps\\${'n'.repeat(200)}.exe`), policy(), ctx())).request.summary;
+    expect(long).toBe(`Use ${'n'.repeat(80)}\u2026: click at 512, 300`);
+  });
+
+  it('a chat answer stores a grant for exactly that app', () => {
     const ask = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
-    expect(ask.request).toMatchObject({ toolName: 'computer', source: 'computer', summary: 'Use EXCEL: click at 512, 300' });
     broker.resolve(ask.request.id, { choice: 'chat' });
-    const [grant] = store.grants.list();
-    expect(grant).toMatchObject({ chatId: 'chat-1', profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'chat', constraint: { app: EXCEL } });
+    const grants = store.grants.list();
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({ chatId: 'chat-1', profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'chat' });
+    expect(grants[0]?.constraint).toEqual({ app: EXCEL });
 
     expect(broker.decide(COMPUTER, click(EXCEL, { coordinate: [10, 10] }), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
-    expect(broker.decide(COMPUTER, click('C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE'), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
-    expect(broker.decide(COMPUTER, click('c:\\users\\adam\\downloads\\excel.exe'), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(EXCEL, { appWindow: 'hwnd-2', appName: 'x' }), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
     expect(broker.decide(COMPUTER, click(), policy(), ctx({ chatId: 'chat-2' })).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(), policy(), ctx({ profileId: 'profile-2' })).kind).toBe('ask');
+  });
+
+  it("never lets one app's grant cover a path that is only nearly the same", () => {
+    grant(EXCEL);
+    grant(EXCEL, { chatId: 'chat-1', scope: 'chat' });
+    const nearly = [
+      DOWNLOADED_EXCEL,
+      EXCEL.toLowerCase(),
+      EXCEL.toUpperCase(),
+      'c:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE.',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE ',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE\\',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\\\EXCEL.EXE',
+      'C:/Program Files/Microsoft Office/root/Office16/EXCEL.EXE',
+      'C:\\PROGRA~1\\MICROS~1\\root\\Office16\\EXCEL.EXE',
+      '\\\\?\\C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+      '\\\\.\\C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+      '\\\\localhost\\c$\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\.\\EXCEL.EXE',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\x\\..\\EXCEL.EXE',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE\u00a0',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE\u200b',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCE\u212a.EXE',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE:stream',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16',
+      'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE\\more.exe',
+      'D:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE',
+    ];
+    for (const app of nearly) {
+      expect(broker.decide(COMPUTER, click(app), policy(), ctx()).kind, JSON.stringify(app)).not.toBe('allow');
+    }
+    expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
   it('needs an app on an always answer', () => {
     const first = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
     expect(() => broker.resolve(first.request.id, { choice: 'always', constraint: null })).toThrow(/computer use/);
+    const empty = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
+    expect(() => broker.resolve(empty.request.id, { choice: 'always', constraint: {} })).toThrow(/computer use/);
     expect(store.grants.list()).toEqual([]);
     const second = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
     broker.resolve(second.request.id, { choice: 'always', constraint: { app: EXCEL } });
@@ -89,55 +246,100 @@ describe('PermissionBroker and computer use', () => {
     expect(broker.decide(COMPUTER, click(), policy(), ctx({ chatId: 'chat-9' }))).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
-  it('refuses an always answer that names another app than the card asked about', () => {
+  it('refuses an always answer that names another app than the card asked about, or the same one spelled another way', () => {
+    for (const other of [DOWNLOADED_EXCEL, EXCEL.toLowerCase(), 'C:/Program Files/Microsoft Office/root/Office16/EXCEL.EXE', `${EXCEL} `, 'EXCEL.EXE', '']) {
+      const ask = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
+      expect(() => broker.resolve(ask.request.id, { choice: 'always', constraint: { app: other } }), JSON.stringify(other)).toThrow(/computer use/);
+    }
     const ask = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
-    expect(() => broker.resolve(ask.request.id, { choice: 'always', constraint: { app: 'c:\\users\\adam\\downloads\\excel.exe' } })).toThrow(
-      "Refusing an \"always\" grant for computer use that doesn't name the app the card asked about (c:\\program files\\microsoft office\\root\\office16\\excel.exe)."
+    expect(() => broker.resolve(ask.request.id, { choice: 'always', constraint: { app: DOWNLOADED_EXCEL } })).toThrow(
+      `Refusing an "always" grant for computer use that doesn't name the app the card asked about (${EXCEL}).`
     );
     expect(store.grants.list()).toEqual([]);
-    expect(broker.decide(COMPUTER, click('c:\\users\\adam\\downloads\\excel.exe'), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL), policy(), ctx()).kind).toBe('ask');
   });
 
   it("stores only the card's app on an always answer, whatever else the answer carries", () => {
     const ask = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
-    broker.resolve(ask.request.id, { choice: 'always', constraint: { app: 'C:/Program Files/Microsoft Office/root/Office16/EXCEL.EXE', commandExact: 'x' } });
+    broker.resolve(ask.request.id, { choice: 'always', constraint: { app: EXCEL, commandExact: 'x', pathPrefix: '/', host: 'example.com' } });
     const grants = store.grants.list();
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({ scope: 'always', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer' });
     expect(grants[0]?.constraint).toEqual({ app: EXCEL });
   });
 
-  it('ignores a computer grant that names no app', () => {
+  it('ignores a stored computer grant that names no app, or an app that is not a valid key', () => {
     store.grants.create({ id: 'blanket', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'always', constraint: null, expiresAt: null });
     store.grants.create({ id: 'other-key', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'always', constraint: { commandExact: 'x' }, expiresAt: null });
+    for (const app of ['', 'EXCEL.EXE', 'C:/Program Files/Microsoft Office/root/Office16/EXCEL.EXE', `${EXCEL}.`, `${EXCEL} `, 42, null, ['x']]) grant(app);
     expect(broker.decide(COMPUTER, click(), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(EXCEL.toLowerCase()), policy(), ctx()).kind).toBe('ask');
   });
 
-  it('stores nothing for a high-risk app, and ignores a grant that exists for one', () => {
-    const chat = expectAsk(broker.decide(COMPUTER, click(CMD), policy(), ctx()));
-    broker.resolve(chat.request.id, { choice: 'chat' });
-    const always = expectAsk(broker.decide(COMPUTER, click(CMD), policy(), ctx()));
-    broker.resolve(always.request.id, { choice: 'always', constraint: { app: CMD } });
-    expect(store.grants.list()).toEqual([]);
-
-    store.grants.create({ id: 'old', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: CMD }, expiresAt: null });
-    expect(broker.decide(COMPUTER, click(CMD), policy(), ctx()).kind).toBe('ask');
-  });
-
-  it('treats an app the tool marked high-risk as high-risk even when its name is not on the list', () => {
-    const odd = 'c:\\tools\\admin-console.exe';
-    const ask = expectAsk(broker.decide(COMPUTER, click(odd, { appRisk: 'high' }), policy(), ctx()));
-    broker.resolve(ask.request.id, { choice: 'chat' });
+  it('refuses to store anything when the call no longer names a valid app by the time it is answered', () => {
+    for (const choice of [{ choice: 'chat' as const }, { choice: 'always' as const, constraint: { app: EXCEL } }, { choice: 'always' as const, constraint: { app: 'excel.exe' } }]) {
+      const args = click();
+      const ask = expectAsk(broker.decide(COMPUTER, args, policy(), ctx()));
+      args['app'] = 'excel.exe';
+      expect(() => broker.resolve(ask.request.id, choice), JSON.stringify(choice)).toThrow(/computer use/);
+    }
     expect(store.grants.list()).toEqual([]);
   });
 
-  it('keeps a long typed text to one short line in the card', () => {
-    const ask = expectAsk(broker.decide(COMPUTER, { action: 'type', text: `${'a'.repeat(45)}\nsecond line`, app: EXCEL, appName: 'EXCEL' }, policy(), ctx()));
-    expect(ask.request.summary).toBe(`Use EXCEL: type "${'a'.repeat(40)}…"`);
+  it('only ever allows a high-risk app once: a chat or always answer is refused and stores nothing', () => {
+    for (const choice of [{ choice: 'chat' as const }, { choice: 'always' as const, constraint: { app: CMD } }]) {
+      const ask = expectAsk(broker.decide(COMPUTER, click(CMD), policy(), ctx()));
+      expect(() => broker.resolve(ask.request.id, choice), choice.choice).toThrow('Refusing to store a grant for computer use of cmd.exe: Grunt asks every time for this app.');
+      expect(broker.hasPending(ask.request.id)).toBe(false);
+    }
+    expect(store.grants.list()).toEqual([]);
+    // Allow once and Deny are ordinary answers.
+    const once = expectAsk(broker.decide(COMPUTER, click(CMD), policy(), ctx()));
+    broker.resolve(once.request.id, { choice: 'once' });
+    const deny = expectAsk(broker.decide(COMPUTER, click(CMD), policy(), ctx()));
+    broker.resolve(deny.request.id, { choice: 'deny' });
+    expect(store.grants.list()).toEqual([]);
+  });
+
+  it('never matches a stored grant for a high-risk app', () => {
+    for (const app of [CMD, 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Users\\a\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe', 'C:\\Python312\\python3.12.exe', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE']) {
+      grant(app);
+      grant(app, { chatId: 'chat-1', scope: 'chat' });
+      // Whatever the call claims about its own risk.
+      for (const appRisk of ['high', 'normal', undefined]) {
+        expect(broker.decide(COMPUTER, click(app, { appRisk }), policy(), ctx()).kind, `${app} ${String(appRisk)}`).toBe('ask');
+      }
+    }
+  });
+
+  it('treats an app as high-risk unless the call is provably ordinary', () => {
+    // The tool marked it high-risk though its name is on no list (a console program, an unsigned one...).
+    // The risk is missing or is not one of the two words.
+    for (const appRisk of ['high', undefined, 'HIGH', 'unknown', null, true]) {
+      const odd = 'C:\\Tools\\admin-console.exe';
+      grant(odd);
+      expect(broker.decide(COMPUTER, click(odd, { appRisk }), policy(), ctx()).kind, String(appRisk)).toBe('ask');
+      for (const choice of [{ choice: 'chat' as const }, { choice: 'always' as const, constraint: { app: odd } }]) {
+        const ask = expectAsk(broker.decide(COMPUTER, click(odd, { appRisk }), policy(), ctx()));
+        expect(() => broker.resolve(ask.request.id, choice)).toThrow(/asks every time/);
+      }
+    }
+    expect(store.grants.list().every((g) => g.id.startsWith('g'))).toBe(true);
+    expect(store.grants.list()).toHaveLength(6);
+  });
+
+  it('never puts typed text in the card line: only how much of it there is', () => {
+    const text = `${'a'.repeat(45)}\nhunter2`;
+    const ask = expectAsk(broker.decide(COMPUTER, click(EXCEL, { action: 'type', text }), policy(), ctx()));
+    expect(ask.request.summary).toBe('Use EXCEL.EXE: type 53 characters (2 lines)');
+    expect(ask.request.summary).not.toContain('hunter2');
+    const key = expectAsk(broker.decide(COMPUTER, click(EXCEL, { action: 'key', text: 'S+CTRL' }), policy(), ctx()));
+    expect(key.request.summary).toBe('Use EXCEL.EXE: press ctrl+s');
   });
 
   it("never lets another source's grant stand in for computer use", () => {
     store.grants.create({ id: 'mcp', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'mcp', scope: 'always', constraint: { app: EXCEL }, expiresAt: null });
+    store.grants.create({ id: 'browser', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'browser', scope: 'always', constraint: { host: 'example.com', app: EXCEL }, expiresAt: null });
     expect(broker.decide(COMPUTER, click(), policy(), ctx()).kind).toBe('ask');
   });
 });
