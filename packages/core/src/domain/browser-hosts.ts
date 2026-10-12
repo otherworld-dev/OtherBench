@@ -192,7 +192,8 @@ export const V4_NOT_PUBLIC: readonly (readonly [number, number, number, number, 
 
 /**
  * Blocks of global unicast (2000::/3) that are not the public internet either:
- * [first word, second word, prefix length], the prefix 3..32 (only the first two words are compared; browser-hosts.test.ts enforces it). 6to4
+ * [first word, second word, prefix length]. Only the first two words are
+ * compared, so the prefix is 3..32 (browser-hosts.test.ts enforces it). 6to4
  * (2002::/16) isn't one of them: it is judged by the IPv4 address it carries.
  */
 export const V6_GLOBAL_NOT_PUBLIC: readonly (readonly [number, number, number])[] = [

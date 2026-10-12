@@ -12,7 +12,7 @@ import { sandboxResourcesDir } from '../src/resources.js';
 import { EXISTING_PROBE, EXISTING_PROBE_CONTENT, otherSpelling, PROTECTED_PROBES } from '../src/selftest.js';
 import { AGENT_ARGV, WslSandbox } from '../src/wsl-sandbox.js';
 import { createWslRunner } from '../src/wsl.js';
-import { addressSample } from './address-sample.js';
+import { addressSample, carriesV4 } from './address-sample.js';
 
 /**
  * The real sandbox on this Windows machine (spec 2026-10-12-sandbox-design §6,
@@ -252,9 +252,10 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
     expect(result.letThrough).toEqual([]);
     expect(result.refusedByRanges).toEqual([]);
     expect(result.privateRefusedByRanges).toBeGreaterThan(10_000);
-    // The only public address the runtime refuses on its own is its cloud-metadata one, so the set can't grow unnoticed.
+    // The only public address the runtime refuses on its own is its cloud-metadata one (168.63.129.16), in whatever spelling
+    // the sample gives it (plain, v4-mapped, NAT64, 6to4), so the set can't grow unnoticed.
     // This case depends on the pinned @anthropic-ai/sandbox-runtime (resources/package.json): re-run it whenever that version is bumped.
-    expect(result.refusedByRuntimeAnyway.filter((a) => a !== '168.63.129.16')).toEqual([]);
+    expect(result.refusedByRuntimeAnyway.filter((a) => !carriesV4(a, '168.63.129.16'))).toEqual([]);
     for (const host of DEFAULT_SANDBOX_HOSTS) {
       const found = result.hosts[host];
       expect(Array.isArray(found) && found.length > 0, `${host}: ${JSON.stringify(found)}`).toBe(true);

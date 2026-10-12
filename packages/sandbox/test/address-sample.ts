@@ -236,3 +236,48 @@ export function* almostAddresses(): Generator<string> {
     }
   }
 }
+
+/** The eight 16-bit words of an IPv6 address in any spelling (`::`, a dotted IPv4 tail), or null. */
+function wordsOfV6(text: string): number[] | null {
+  let s = text;
+  let tail: number[] = [];
+  const dotted = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (dotted) {
+    const o = [dotted[2], dotted[3], dotted[4], dotted[5]].map(Number);
+    if (o.some((n) => n > 255)) return null;
+    tail = [(o[0]! << 8) | o[1]!, (o[2]! << 8) | o[3]!];
+    s = dotted[1]!.endsWith('::') ? dotted[1]! : dotted[1]!.slice(0, -1);
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const words = (part: string): number[] | null => {
+    if (part === '') return [];
+    const out = part.split(':').map((w) => (/^[0-9a-f]{1,4}$/i.test(w) ? parseInt(w, 16) : NaN));
+    return out.some(Number.isNaN) ? null : out;
+  };
+  const head = words(halves[0]!);
+  const rest = halves.length === 2 ? words(halves[1]!) : [];
+  if (!head || !rest) return null;
+  const fill = 8 - tail.length - head.length - rest.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return null;
+  return [...head, ...new Array<number>(fill).fill(0), ...rest, ...tail];
+}
+
+/**
+ * Whether `text` is `v4` itself or an IPv6 address that carries it: v4-mapped
+ * (`::ffff:a.b.c.d`, dotted or hex), NAT64 (`64:ff9b::/96`) or 6to4 (`2002:ab:cd::/48`).
+ * Strict: anything else, or text that isn't an address, is false.
+ */
+export function carriesV4(text: string, v4: string): boolean {
+  const octets = v4.split('.').map(Number);
+  const hi = (octets[0]! << 8) | octets[1]!;
+  const lo = (octets[2]! << 8) | octets[3]!;
+  if (text === v4) return true;
+  const w = wordsOfV6(text);
+  if (!w) return false;
+  const zeros = (from: number, to: number) => w.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 5) && w[5] === 0xffff) return w[6] === hi && w[7] === lo;
+  if (w[0] === 0x64 && w[1] === 0xff9b && zeros(2, 6)) return w[6] === hi && w[7] === lo;
+  if (w[0] === 0x2002) return w[1] === hi && w[2] === lo;
+  return false;
+}
