@@ -36,7 +36,8 @@ function heading(slide: Slide, title: string, accent: string): void {
 function addSlide(pptx: PptxGenJS, s: SlideSpec, accent: string): void {
   const slide = pptx.addSlide();
   const box = { fontFace: FONT, fit: 'shrink' as const };
-  if (s.layout !== 'title') slide.slideNumber = { x: 12.4, y: 6.95, w: 0.7, h: 0.35, fontFace: FONT, fontSize: 10, color: '808080' };
+  // White on a section slide's accent background; grey elsewhere.
+  if (s.layout !== 'title') slide.slideNumber = { x: 12.4, y: 6.95, w: 0.7, h: 0.35, fontFace: FONT, fontSize: 10, color: s.layout === 'section' ? 'FFFFFF' : '808080' };
   switch (s.layout) {
     case 'title':
       slide.addText(xmlSafe(s.title), { ...box, x: 0.75, y: 2.2, w: 11.83, h: 1.4, fontSize: 40, bold: true, color: accent, align: 'center', valign: 'middle' });
@@ -77,6 +78,7 @@ export async function renderPptx(spec: PresentationSpec, title: string): Promise
   pptx.author = 'Grunt';
   const accent = (spec.theme?.accent ?? `#${DEFAULT_ACCENT}`).slice(1).toUpperCase();
   for (const s of spec.slides) addSlide(pptx, s, accent);
-  // With outputType 'nodebuffer' the union pptxgenjs declares is a Buffer.
-  return (await pptx.write({ outputType: 'nodebuffer' })) as Buffer;
+  // stream() is the only pptxgenjs 4.0.1 path that deflates: write() with any other outputType
+  // stores the parts uncompressed (a 200-slide table deck came out at 100+ MB). It yields a Buffer on Node.
+  return (await pptx.stream({ compression: true })) as Buffer;
 }

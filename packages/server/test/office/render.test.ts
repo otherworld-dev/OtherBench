@@ -377,7 +377,7 @@ describe('renderPptx', () => {
 
   it('makes a 16:9 .pptx that reads back slide by slide, each bullet its own paragraph, with notes', async () => {
     const bytes = await renderPptx(DECK, 'Q3 deck');
-    expect(bytes.subarray(0, 4).toString('latin1')).toBe('PK');
+    expect(bytes.subarray(0, 4).toString('latin1')).toBe('PK\x03\x04');
     expect(part(bytes, 'ppt/presentation.xml')).toContain('cx="12192000"');
     const paragraphs = part(bytes, 'ppt/slides/slide2.xml').split('</a:p>');
     const at = (text: string) => paragraphs.findIndex((p) => p.includes(text));
@@ -404,8 +404,30 @@ describe('renderPptx', () => {
   });
 
   it('strips characters XML cannot hold, and keeps emoji', async () => {
-    const slide1 = part(await renderPptx({ slides: [{ layout: 'title', title: 'Bad  title 😀' }] }, 'T'), 'ppt/slides/slide1.xml');
-    expect(slide1).not.toContain('');
+    const slide1 = part(await renderPptx({ slides: [{ layout: 'title', title: 'Bad \u0001 title 😀' }] }, 'T\u0002'), 'ppt/slides/slide1.xml');
+    expect(slide1).not.toContain('\u0001');
     expect(slide1).toContain('😀');
   });
+
+  it('writes a clean presentation title into the file properties', async () => {
+    const core = part(await renderPptx({ slides: [{ layout: 'title', title: 'Plain' }] }, 'Q3\u0002 deck'), 'docProps/core.xml');
+    expect(core).not.toContain('\u0002');
+    expect(core).toContain('Q3 deck');
+  });
+
+  it('compresses the file: the biggest repetitive deck comes out small and still reads back', async () => {
+    const cell = 'x'.repeat(20);
+    const row = Array.from({ length: 10 }, () => cell);
+    const slides: PresentationSpec['slides'] = Array.from({ length: 200 }, (_, i) => ({
+      layout: 'table' as const,
+      title: `Slide ${i + 1}`,
+      table: { header: Array.from({ length: 10 }, (_, c) => `H${c}`), rows: Array.from({ length: 30 }, () => row) },
+    }));
+    const bytes = await renderPptx({ slides }, 'Big');
+    expect(bytes.length).toBeLessThan(5 * 1024 * 1024);
+    expect(part(bytes, 'ppt/slides/slide200.xml')).toContain(cell);
+    expect(part(bytes, 'ppt/slides/slide200.xml')).toContain('Slide 200');
+    // The reader caps how much text it returns, so only the start of a deck this size shows.
+    expect(extractOfficeText(bytes)!).toContain('Slide 1');
+  }, 120_000);
 });
