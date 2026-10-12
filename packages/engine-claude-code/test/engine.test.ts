@@ -11,6 +11,7 @@ import { liveKey } from '../src/live.js';
 import type { GruntServerTool } from '../src/grunt-server.js';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
+import { UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
 import { FakeToolProvider } from '@grunt/core/testing/fakes.js';
 
 let ws: string;
@@ -1005,6 +1006,32 @@ describe('ClaudeCodeChatEngine plan mode', () => {
     const e = new ClaudeCodeChatEngine({ query, approvals: provider, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, mcpServer: (name) => ({ type: 'sdk', name, instance: {} }) as never });
     await collect(e.stream(req({ plan: createPlanGate() })));
     expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: PLAN_REFUSAL } });
+    e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine unattended turns', () => {
+  it('denies a tool call that would need a card, from the hook and canUseTool, with the unattended reason, in default mode', async () => {
+    const tools = new FakeToolProvider();
+    let hookOut: unknown;
+    let canUse: unknown;
+    const { query, calls } = fakeQuery(async function* ({ options }) {
+      yield init();
+      hookOut = await options.hooks!.PreToolUse![0]!.hooks[0]!(
+        { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_use_id: 't1' } as never,
+        't1',
+        { signal: new AbortController().signal }
+      );
+      canUse = await options.canUseTool!('Bash', { command: 'npm test' }, { signal: new AbortController().signal, toolUseID: 't2' } as never);
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: tools, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' } });
+
+    await collect(e.stream(req({ unattended: true, autoMode: false })));
+
+    expect(calls[0]!.options.permissionMode).toBe('default');
+    expect(hookOut).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: UNATTENDED_REASON } });
+    expect(canUse).toEqual({ behavior: 'deny', message: UNATTENDED_REASON });
     e.dispose();
   });
 });
