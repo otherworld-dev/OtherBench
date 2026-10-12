@@ -638,6 +638,8 @@ describe('parseApprovalChoice: sandbox network grants', () => {
   it('still takes a single path or command key, and an empty constraint as none', () => {
     expect(parseApprovalChoice({ choice: 'always', constraint: { commandExact: 'ls' } })).toMatchObject({ constraint: { commandExact: 'ls' } });
     expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toMatchObject({ choice: 'always', constraint: null });
+  });
+});
 
 describe('Ask routes', () => {
   const post = (path: string, body: unknown) => app().request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
