@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -66,10 +66,7 @@ const request = (over: Partial<SandboxRunRequest> = {}): SandboxRunRequest => ({
   command: 'make test',
   timeoutMs: 120_000,
   workspaceRoot: 'E:\\Git\\Grunt',
-  folders: [
-    { root: 'D:\\Refs', access: 'read' },
-    { root: 'E:\\Git\\Grunt\\vendor', access: 'read' },
-  ],
+  folders: [{ root: 'D:\\Refs', access: 'read' }],
   writable: true,
   allowedHosts: ['pypi.org'],
   signal: new AbortController().signal,
@@ -94,10 +91,9 @@ describe('WslSandbox.run', () => {
       command: 'make test',
       cwd: '/mnt/e/Git/Grunt',
       timeoutMs: 120_000,
-      readPaths: ['/mnt/e/Git/Grunt', '/mnt/d/Refs', '/mnt/e/Git/Grunt/vendor'],
+      readPaths: ['/mnt/e/Git/Grunt', '/mnt/d/Refs'],
       writePaths: ['/mnt/e/Git/Grunt'],
-      // vendor is read-only although it sits inside the read-write mount: the runtime keeps it so.
-      denyWritePaths: ['/mnt/d/Refs', '/mnt/e/Git/Grunt/vendor'],
+      denyWritePaths: ['/mnt/d/Refs'],
       allowedHosts: ['pypi.org'],
     });
     expect(result).toEqual({ command: 'make test', exitCode: 0, signal: null, timedOut: false, truncated: false, output: 'ran\n', timeoutMsUsed: 120_000, sandbox: true, cwd: '/mnt/e/Git/Grunt' });
@@ -136,6 +132,34 @@ describe('WslSandbox.run', () => {
     expect(channels).toEqual([]);
     expect((await sandbox.run(request({ chatId: 'other', folders: [] }))).exitCode).toBe(0);
     expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
+  });
+
+  it('refuses a read-only folder inside a writable one (in any spelling, or the same folder), mounting nothing and starting nothing', async () => {
+    const { sandbox, mounts, channels } = make();
+    for (const folders of [
+      [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' as const }],
+      [{ root: 'e:\\git\\grunt\\Vendor\\lib', access: 'read' as const }],
+      [{ root: 'E:\\GIT\\GRUNT', access: 'read' as const }],
+      // Inside a writable extra folder, not only the workspace.
+      [
+        { root: 'D:\\Data', access: 'readwrite' as const },
+        { root: 'D:\\Data\\raw', access: 'read' as const },
+      ],
+    ]) {
+      await expect(sandbox.run(request({ folders }))).rejects.toMatchObject({ code: 'bad_folder', message: expect.stringContaining("is read-only but sits inside the writable") });
+    }
+    await expect(sandbox.run(request({ folders: [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' }] }))).rejects.toThrow(
+      "E:\\Git\\Grunt\\vendor is read-only but sits inside the writable E:\\Git\\Grunt; the sandbox can't keep it read-only. Make it a separate folder, or make the parent read-only."
+    );
+    expect(mounts).toEqual([]);
+    expect(channels).toEqual([]);
+  });
+
+  it('allows a read-only folder inside another read-only one, a sibling with a shared prefix, and a writable folder inside a read-only one', async () => {
+    const { sandbox } = make();
+    await expect(sandbox.run(request({ writable: false, folders: [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ chatId: 'b', folders: [{ root: 'E:\\Git\\Grunt-refs', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ chatId: 'c', folders: [{ root: 'E:\\Git', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
   });
 
   it("uses each folder's real path, so another spelling of the same folder lands in the same place", async () => {
@@ -201,6 +225,48 @@ describe('WslSandbox.run', () => {
     await vi.waitFor(() => expect(held).toHaveLength(1));
     const stop = new AbortController();
     const second = sandbox.run(request({ folders: [], signal: stop.signal }));
+    stop.abort();
+    await expect(second).rejects.toMatchObject({ code: 'aborted' });
+    held[0]!.ch.finish(held[0]!.m.id);
+    await first;
+    expect(held).toHaveLength(1);
+  });
+
+  it("runs another chat's command that can write the same folder (or one inside it) only after the running one, and others alongside", async () => {
+    const { held, onRun } = holding();
+    const { sandbox } = make({}, onRun);
+    const first = sandbox.run(request({ chatId: 'a', folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const same = sandbox.run(request({ chatId: 'b', workspaceRoot: 'e:\\git\\grunt', folders: [] }));
+    const inside = sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\Grunt\\packages', folders: [] }));
+    // Reading the folder, or writing another one, doesn't wait.
+    const reading = sandbox.run(request({ chatId: 'd', writable: false, folders: [] }));
+    const elsewhere = sandbox.run(request({ chatId: 'e', workspaceRoot: 'E:\\Git\\Other', folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(3));
+    for (let i = 0; i < 5; i += 1) await tick();
+    expect(held).toHaveLength(3);
+    for (const h of held.splice(1)) h.ch.finish(h.m.id);
+    await Promise.all([reading, elsewhere]);
+    held[0]!.ch.finish(held[0]!.m.id);
+    await first;
+    // Then the two waiting ones, one after the other.
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    for (let i = 0; i < 5; i += 1) await tick();
+    expect(held).toHaveLength(2);
+    held[1]!.ch.finish(held[1]!.m.id);
+    await vi.waitFor(() => expect(held).toHaveLength(3));
+    held[2]!.ch.finish(held[2]!.m.id);
+    await Promise.all([same, inside]);
+  });
+
+  it('a command waiting for another chat to finish writing its folder is dropped when its turn is stopped', async () => {
+    const { held, onRun } = holding();
+    const { sandbox } = make({}, onRun);
+    const first = sandbox.run(request({ chatId: 'a', folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const stop = new AbortController();
+    const second = sandbox.run(request({ chatId: 'b', folders: [], signal: stop.signal }));
+    for (let i = 0; i < 5; i += 1) await tick();
     stop.abort();
     await expect(second).rejects.toMatchObject({ code: 'aborted' });
     held[0]!.ch.finish(held[0]!.m.id);
@@ -516,18 +582,28 @@ describe('WslSandbox setup and status', () => {
   });
 
   it.skipIf(process.platform !== 'win32')('passes the self-test when the sandbox blocks what it should, then lets its agent go', async () => {
-    const works = /grunt-sandbox-ok|hello\.txt|written\.txt|registry\.npmjs\.org|^test -d /;
+    const works = /grunt-sandbox-ok|hello\.txt|written\.txt|registry\.npmjs\.org|^test ! -e /;
+    const undone = 'The sandbox undid changes to .git/hooks/x, .claude/settings.local.json, .vscode/tasks.json (protected files).';
     const { sandbox, channels, mounts } = make(
       { steps: [SELF_TEST_STEP] },
-      (m, ch) => queueMicrotask(() => (works.test(m.command) ? ch.finish(m.id, '', 0) : ch.finish(m.id, 'bash: Read-only file system\nhttp_code=000', 1))),
+      (m, ch) =>
+        queueMicrotask(() => {
+          if (m.command.includes('/.GIT/hooks/x')) ch.finish(m.id, `\n\n${undone}`, 0);
+          else if (works.test(m.command)) ch.finish(m.id, '', 0);
+          else ch.finish(m.id, 'bash: Read-only file system\nhttp_code=000', 1);
+        }),
       null
     );
     await sandbox.setup();
     expect((await sandbox.status()).state).toBe('ready');
     expect(channels[0]!.chatId).toBe('__selftest__');
     const first = channels[0]!.channel.runs()[0]!;
-    expect(first.denyWritePaths).toHaveLength(2);
-    expect(first.denyWritePaths[1]).toMatch(/\/rw\/locked$/);
+    // The read-only folder sits beside the workspace, never inside it.
+    expect(first.denyWritePaths).toHaveLength(1);
+    expect(first.denyWritePaths[0]).toMatch(/\/selftest\/ro$/);
+    expect(first.writePaths[0]).toMatch(/\/selftest\/rw$/);
+    // The folders of the protected files it writes are there, so a refusal is the sandbox's doing.
+    for (const folder of ['.git/hooks', '.claude', '.vscode']) expect(existsSync(join(tmp, 'selftest', 'rw', folder))).toBe(true);
     expect(channels[0]!.channel.sent.at(-1)).toEqual({ type: 'close' });
     expect(mounts.filter((m) => m.startsWith('unmount'))).toHaveLength(mounts.filter((m) => m.startsWith('mount')).length);
   });

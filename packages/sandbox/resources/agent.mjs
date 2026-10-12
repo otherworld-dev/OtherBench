@@ -3,7 +3,8 @@
 // stdin/stdout. Grunt starts it in the distro as the grunt user:
 //   wsl.exe -d grunt-sandbox -u grunt --exec /opt/grunt-sandbox/node/bin/node /opt/grunt-sandbox/agent.mjs
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { lookup } from 'node:dns/promises';
 import { createInterface } from 'node:readline';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
@@ -17,6 +18,15 @@ const agent = createAgent({
   rm,
   lstat,
   realpath,
+  // For the protected files the agent puts back: never through a link at the path itself.
+  readFile: (path) => readFile(path),
+  writeFile: (path, data) => writeFile(path, data, { flag: constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, mode: 0o644 }),
+  readdir: (path) => readdir(path),
+  readlink: (path) => readlink(path),
+  symlink: (target, path) => symlink(target, path),
+  // The runtime guards the protected files of its own working folder, so the agent moves into the command's while it wraps it.
+  chdir: (path) => process.chdir(path),
+  cwd: () => process.cwd(),
   // stdout is the protocol; notes about skipped clean-ups go to stderr.
   warn: (message) => process.stderr.write(`${message}\n`),
   kill: (pid, signal) => process.kill(pid, signal),

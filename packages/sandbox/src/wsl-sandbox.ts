@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { normaliseWindowsPath, SandboxPathError, toSandboxPath, type MountNeed } from '@grunt/core/domain/sandbox-paths.js';
@@ -9,7 +9,7 @@ import { channelFromProcess } from './agent-channel.js';
 import { AgentClient, type AgentOutcome } from './agent-client.js';
 import { AgentPool, type AgentPoolOptions } from './agent-pool.js';
 import { MountManager, wslMountRunner, type MountRunner } from './mounts.js';
-import { runSelfTest, selfTestCases } from './selftest.js';
+import { PROTECTED_PROBES, runSelfTest, selfTestCases } from './selftest.js';
 import { distroNames, INSTALL_DIR, installExtraPackages, isAptPackageName, notAnAptPackageName, runSetup, SETUP_STEPS, type SetupStep } from './setup.js';
 import { DISTRO, type WslRunner } from './wsl.js';
 
@@ -86,6 +86,13 @@ function unionOf(a: readonly MountNeed[], b: readonly MountNeed[]): MountNeed[] 
   return [...merged.values()];
 }
 
+/** Whether canonical Windows path `inner` is `outer` or lies inside it, compared as Windows does (without case). */
+function isSameOrInside(inner: string, outer: string): boolean {
+  const i = inner.toLowerCase();
+  const o = outer.toLowerCase();
+  return i === o || i.startsWith(o.endsWith('\\') ? o : `${o}\\`);
+}
+
 /** Resolves when `previous` has, or rejects as not started when the turn is stopped first. */
 function untilTurn(previous: Promise<void>, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(new SandboxError('aborted', NOT_STARTED));
@@ -142,6 +149,8 @@ export class WslSandbox implements Sandbox {
   private readonly pool: AgentPool;
   private readonly realpath: (path: string) => string;
   private readonly chats = new Map<string, ChatState>();
+  /** The writable folders (canonical Windows paths) of each command running now; see writeTurn. */
+  private readonly writing = new Set<{ keys: string[]; finished: Promise<void> }>();
   private job: Promise<void> | null = null;
   private jobLog: string[] = [];
   private removal: Promise<void> | null = null;
@@ -366,26 +375,37 @@ export class WslSandbox implements Sandbox {
   /**
    * The workspace first (the command's cwd), then each extra folder, as canonical Windows paths (real path,
    * then tidied) and their Linux paths. A folder that can't be mounted refuses this command before anything
-   * is mounted. A read-only folder inside a writable one stays read-only (denyWrite; the self-test checks
-   * it), but a writable folder inside a read-only one ends up read-only: the runtime binds the read-only
-   * parent over the writable child.
+   * is mounted. So does a read-only folder inside a writable one (or the same folder): the runtime's
+   * read-only bind sits on its exact spelling, and Windows folders in the VM ignore case, so `RO/x` would
+   * reach it through the writable parent. A writable folder inside a read-only one ends up read-only (the
+   * runtime binds the read-only parent over the writable child), which is narrower, not wider.
    */
   private places(workspaceRoot: string, folders: readonly ResolvedFolder[], writable: boolean): Places {
     const entries = [{ root: workspaceRoot, writable }, ...folders.map((f) => ({ root: f.root, writable: writable && f.access === 'readwrite' }))];
     const places: Places = { cwd: '', needs: [], read: [], write: [], denyWrite: [] };
-    entries.forEach((entry, i) => {
-      let windowsPath: string;
-      let linux: string;
+    const resolved = entries.map((entry) => {
       try {
-        windowsPath = normaliseWindowsPath(this.realpath(entry.root));
-        linux = toSandboxPath(windowsPath);
+        const windowsPath = normaliseWindowsPath(this.realpath(entry.root));
+        return { ...entry, windowsPath, linux: toSandboxPath(windowsPath) };
       } catch (err) {
         throw new SandboxError('bad_folder', `${entry.root} can't be used in the sandbox: ${err instanceof SandboxPathError ? err.reason : messageOf(err)}`);
       }
-      if (i === 0) places.cwd = linux;
-      places.needs.push({ windowsPath, writable: entry.writable });
-      places.read.push(linux);
-      (entry.writable ? places.write : places.denyWrite).push(linux);
+    });
+    for (const inner of resolved) {
+      if (inner.writable) continue;
+      const outer = resolved.find((o) => o.writable && isSameOrInside(inner.windowsPath, o.windowsPath));
+      if (outer) {
+        throw new SandboxError(
+          'bad_folder',
+          `${inner.root} is read-only but sits inside the writable ${outer.root}; the sandbox can't keep it read-only. Make it a separate folder, or make the parent read-only.`
+        );
+      }
+    }
+    resolved.forEach((entry, i) => {
+      if (i === 0) places.cwd = entry.linux;
+      places.needs.push({ windowsPath: entry.windowsPath, writable: entry.writable });
+      places.read.push(entry.linux);
+      (entry.writable ? places.write : places.denyWrite).push(entry.linux);
     });
     return places;
   }
@@ -412,17 +432,23 @@ export class WslSandbox implements Sandbox {
       // The agent went while mounting: the next one starts from this command's folders alone.
       mine.granted = mine.epoch === epoch ? needs : places.needs;
       this.refuseIfStale(chatId, mine, selfTest);
-      outcome = await this.pool.run(chatId, {
-        command: input.command,
-        cwd: places.cwd,
-        timeoutMs: input.timeoutMs,
-        readPaths: places.read,
-        writePaths: places.write,
-        denyWritePaths: places.denyWrite,
-        allowedHosts: input.allowedHosts,
-        signal: input.signal,
-        askHost: (host, port, askSignal) => (host.length > MAX_HOST_CHARS ? Promise.resolve(false) : input.askHost(host, port, askSignal)),
-      });
+      const writing = await this.writeTurn(places, input.signal);
+      try {
+        this.refuseIfStale(chatId, mine, selfTest);
+        outcome = await this.pool.run(chatId, {
+          command: input.command,
+          cwd: places.cwd,
+          timeoutMs: input.timeoutMs,
+          readPaths: places.read,
+          writePaths: places.write,
+          denyWritePaths: places.denyWrite,
+          allowedHosts: input.allowedHosts,
+          signal: input.signal,
+          askHost: (host, port, askSignal) => (host.length > MAX_HOST_CHARS ? Promise.resolve(false) : input.askHost(host, port, askSignal)),
+        });
+      } finally {
+        writing.done();
+      }
     } finally {
       finished();
       mine.active -= 1;
@@ -433,24 +459,53 @@ export class WslSandbox implements Sandbox {
     return { command: input.command, ...outcome, timeoutMsUsed: input.timeoutMs, sandbox: true, cwd: places.cwd };
   }
 
+  /**
+   * Waits until no other command that can write any of this command's writable folders (the same folder, or
+   * one inside the other) is running, then holds them until `done()`. Each chat's agent copies the protected
+   * files of the folders its command can write and puts them back afterwards; two commands in the same
+   * folder at once would each copy what the other planted and put it back. Rejects as not started when the
+   * turn is stopped while waiting.
+   */
+  private async writeTurn(places: Places, signal: AbortSignal): Promise<{ done: () => void }> {
+    const keys = places.needs.filter((n) => n.writable).map((n) => n.windowsPath);
+    if (keys.length === 0) return { done: () => undefined };
+    const clashes = (): Promise<void>[] =>
+      [...this.writing].filter((w) => w.keys.some((a) => keys.some((b) => isSameOrInside(a, b) || isSameOrInside(b, a)))).map((w) => w.finished);
+    for (let busy = clashes(); busy.length > 0; busy = clashes()) await untilTurn(Promise.all(busy).then(() => undefined), signal);
+    let done!: () => void;
+    const entry = { keys, finished: new Promise<void>((resolve) => (done = resolve)) };
+    this.writing.add(entry);
+    return {
+      done: () => {
+        this.writing.delete(entry);
+        done();
+      },
+    };
+  }
+
   /** The self-test (spec §4) through the real agent and mounts, as a chat of its own. */
   private async selfTest(log: (line: string) => void): Promise<void> {
     const dir = this.opts.selfTestDir;
     const ro = join(dir, 'ro');
     const rw = join(dir, 'rw');
-    const locked = join(rw, 'locked');
     await mkdir(ro, { recursive: true });
-    await mkdir(locked, { recursive: true });
     await writeFile(join(ro, 'hello.txt'), 'hello from Grunt\n');
+    // The folders of the protected files the self-test writes (so a write is refused by the sandbox, not by a
+    // missing folder), with nothing an earlier self-test may have left in them.
+    for (const rel of PROTECTED_PROBES) {
+      await mkdir(join(rw, rel, '..'), { recursive: true });
+      await rm(join(rw, rel), { recursive: true, force: true });
+    }
+    await rm(join(ro, 'nope.txt'), { force: true });
     const route = await this.opts.runner.exec('root', ['/usr/sbin/ip', 'route', 'show', 'default'], { timeoutMs: 30_000 });
     const gateway = /default via (\S+)/.exec(route.stdout)?.[1] ?? null;
     const gruntPort = this.opts.gruntPort();
     if (gateway === null || gruntPort === null) {
       log(`(skipping the check on Grunt's own port: ${gateway === null ? 'the distro has no default route' : "Grunt's port isn't known"})`);
     }
-    const places = this.places(rw, [{ root: ro, access: 'read' }, { root: locked, access: 'read' }], true);
-    const [rwLinux, roLinux, lockedLinux] = places.read as [string, string, string];
-    const cases = selfTestCases({ rwLinux, roLinux, lockedLinux, gateway, gruntPort });
+    const places = this.places(rw, [{ root: ro, access: 'read' }], true);
+    const [rwLinux, roLinux] = places.read as [string, string];
+    const cases = selfTestCases({ rwLinux, roLinux, gateway, gruntPort });
     try {
       await runSelfTest(
         cases,

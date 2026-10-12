@@ -1,12 +1,22 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, realpath, rm } from 'node:fs/promises';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstat, mkdir, readdir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Plain ESM that ships into the VM; vitest loads it as it is.
-import { createAgent, DENIED_RESOLVED_ADDRESSES, DENY_READ, isPrivateAddress, LOOKUP_TIMEOUT_MS, MAX_OUTPUT_BYTES } from '../resources/agent-core.mjs';
+import {
+  createAgent,
+  DENIED_RESOLVED_ADDRESSES,
+  DENY_READ,
+  isPrivateAddress,
+  LOOKUP_TIMEOUT_MS,
+  MAX_OUTPUT_BYTES,
+  MAX_PROTECTED_BYTES,
+  MAX_PROTECTED_FILE_BYTES,
+  PROTECTED_PATHS,
+} from '../resources/agent-core.mjs';
 
 let dir: string;
 beforeEach(() => {
@@ -28,7 +38,7 @@ type Lookup = (host: string) => Promise<Array<{ address: string }>>;
 
 function harness(
   over: Record<string, unknown> = {},
-  fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm; realpath?: typeof realpath; lookup?: Lookup } = {}
+  fakes: { spawn?: unknown; kill?: (pid: number, signal: string) => void; rm?: typeof rm; realpath?: typeof realpath; lookup?: Lookup; lstat?: typeof lstat } = {}
 ) {
   const sent: Sent[] = [];
   const exits: number[] = [];
@@ -36,6 +46,10 @@ function harness(
   const env: Record<string, string | undefined> = {};
   const tmpdirAtInitialize: Array<string | undefined> = [];
   const tmpdirAtWrap: Array<string | undefined> = [];
+  // The agent's working folder, as the fake process has it: the runtime reads it when it wraps.
+  let workingFolder = '/agent-start';
+  const chdirs: string[] = [];
+  const cwdAtWrap: string[] = [];
   let ask: ((p: HostPattern) => Promise<boolean>) | null = null;
   // Every name resolves to a public address unless a test says otherwise.
   const lookedUp: string[] = [];
@@ -52,6 +66,7 @@ function harness(
     wrapWithSandboxArgv: vi.fn(
       async (command: string, _shell: string, _custom: unknown, _signal: AbortSignal, _cwd: string, _options: unknown): Promise<Wrapped> => {
         tmpdirAtWrap.push(env.CLAUDE_CODE_TMPDIR);
+        cwdAtWrap.push(workingFolder);
         return { argv: [process.execPath, '-e', command], env: { ...process.env } };
       }
     ),
@@ -66,8 +81,19 @@ function harness(
     send: (m: Sent) => sent.push(m),
     mkdir,
     rm: fakes.rm ?? rm,
-    lstat,
+    lstat: fakes.lstat ?? lstat,
     realpath: fakes.realpath ?? realpath,
+    readFile,
+    writeFile,
+    readdir,
+    readlink,
+    // A 'junction' needs no privilege on Windows; elsewhere the type is ignored.
+    symlink: (target: string, path: string) => symlink(target, path, 'junction'),
+    chdir: (path: string) => {
+      chdirs.push(path);
+      workingFolder = path;
+    },
+    cwd: () => workingFolder,
     warn: (m: string) => warnings.push(m),
     kill: fakes.kill ?? ((pid: number, signal: string) => process.kill(Math.abs(pid), signal)),
     exit: (code: number) => exits.push(code),
@@ -85,6 +111,9 @@ function harness(
     env,
     tmpdirAtInitialize,
     tmpdirAtWrap,
+    chdirs,
+    cwdAtWrap,
+    cwd: () => workingFolder,
     lookedUp,
     home,
     tmpRoot,
@@ -160,7 +189,9 @@ describe('the sandbox agent', () => {
         denyRead: DENY_READ,
         allowRead: ['/mnt/e/ws', h.home, h.rt, tmp],
         allowWrite: ['/mnt/e/ws', h.home, tmp],
-        denyWrite: ['/mnt/e/ws/vendor'],
+        // The host's denies, then the protected paths of each writable folder that is there (here only the home,
+        // which has no .git folder, so none of the .git ones).
+        denyWrite: ['/mnt/e/ws/vendor', ...PROTECTED_PATHS.filter((p) => !p.startsWith('.git/')).map((p) => `${h.home}/${p}`)],
       },
     });
     expect(call[4]).toBe(dir);
@@ -686,6 +717,286 @@ describe('the sandbox agent, links in the temp folder', () => {
     expect(h.exits).toEqual([1]);
     expect(h.runtime.initialize).not.toHaveBeenCalled();
     survives();
+  });
+});
+
+describe('the sandbox agent, protected files', () => {
+  // The agent copies the protected paths of every folder a command can write before it runs and puts them back
+  // after. The host's temp folder is NTFS, which ignores case the way the VM's Windows folders (drvfs) do, so a
+  // write to `.GIT/hooks/x` here lands in .git/hooks just as it does there.
+  let ws: string;
+  const at = (...parts: string[]) => join(ws, ...parts);
+  const put = (rel: string, text: string) => {
+    mkdirSync(join(ws, rel, '..'), { recursive: true });
+    writeFileSync(at(rel), text);
+  };
+  /** A command (JavaScript, run in `cwd`) that does these file operations. */
+  const doing = (lines: string[]) => ['const fs = require("node:fs");', ...lines].join('\n');
+  const runIn = (h: ReturnType<typeof harness>, id: number, command: string, extra: Record<string, unknown> = {}) =>
+    h.run(id, command, { cwd: ws, readPaths: [ws], writePaths: [ws], denyWritePaths: [], ...extra });
+  const noteOf = (h: ReturnType<typeof harness>, id: number) => String(h.done(id)?.['note'] ?? '');
+  beforeEach(() => {
+    ws = join(dir, 'ws');
+    mkdirSync(ws);
+  });
+
+  it("moves into the command's folder while the runtime wraps it, and back afterwards", async () => {
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, '0');
+    expect(h.cwdAtWrap).toEqual([ws]);
+    expect(h.chdirs).toEqual([ws, '/agent-start']);
+    expect(h.cwd()).toBe('/agent-start');
+  });
+
+  it('gives the runtime a write deny for each protected path of every writable folder, the .git ones only in a repository', async () => {
+    const other = join(dir, 'other');
+    mkdirSync(other);
+    mkdirSync(at('.git'));
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, '0', { writePaths: [ws, other] });
+    const denyWrite = (h.runtime.wrapWithSandboxArgv.mock.calls[0]![2] as { filesystem: { denyWrite: string[] } }).filesystem.denyWrite;
+    expect(denyWrite).toEqual([
+      ...PROTECTED_PATHS.map((p) => `${ws}/${p}`),
+      ...PROTECTED_PATHS.filter((p) => !p.startsWith('.git/')).map((p) => `${other}/${p}`),
+      ...PROTECTED_PATHS.filter((p) => !p.startsWith('.git/')).map((p) => `${h.home}/${p}`),
+    ]);
+  });
+
+  it('undoes changes to protected files made in any spelling, says so, and leaves everything else alone', async () => {
+    put('.git/hooks/pre-commit.sample', 'sample hook');
+    put('.git/config', '[core]\n');
+    put('.vscode/settings.json', '{}');
+    mkdirSync(at('.claude'));
+    const h = harness();
+    await h.init();
+    await runIn(
+      h,
+      1,
+      doing([
+        'fs.writeFileSync(".GIT/hooks/pre-commit", "evil");',
+        'fs.appendFileSync(".Git/CONFIG", "[core]\\n\\tfsmonitor = evil\\n");',
+        'fs.writeFileSync(".Claude/settings.local.json", "{\\"hooks\\":{}}");',
+        'fs.writeFileSync(".VSCode/tasks.json", "{}");',
+        'fs.writeFileSync(".VSCODE/settings.json", "{\\"evil\\":1}");',
+        'fs.writeFileSync(".BashRC", "evil");',
+        'fs.writeFileSync(".mcp.json", "{}");',
+        'fs.writeFileSync("notes.txt", "kept");',
+        'fs.mkdirSync(".git/objects");',
+      ])
+    );
+    expect(h.done(1)).toMatchObject({ exitCode: 0 });
+    expect(readdirSync(at('.git', 'hooks'))).toEqual(['pre-commit.sample']);
+    expect(readFileSync(at('.git', 'config'), 'utf8')).toBe('[core]\n');
+    expect(readdirSync(at('.claude'))).toEqual([]);
+    expect(readdirSync(at('.vscode'))).toEqual(['settings.json']);
+    expect(readFileSync(at('.vscode', 'settings.json'), 'utf8')).toBe('{}');
+    expect(existsSync(at('.bashrc'))).toBe(false);
+    expect(existsSync(at('.mcp.json'))).toBe(false);
+    // Not protected: what the command was there to do.
+    expect(readFileSync(at('notes.txt'), 'utf8')).toBe('kept');
+    expect(existsSync(at('.git', 'objects'))).toBe(true);
+    const note = noteOf(h, 1);
+    expect(note).toMatch(/^The sandbox undid changes to .* \(protected files\)\.$/);
+    for (const path of ['.git/hooks/pre-commit', '.git/config', '.bashrc', '.mcp.json', '.vscode/settings.json', '.vscode/tasks.json', '.claude/settings.local.json']) {
+      expect(note).toContain(path);
+    }
+  });
+
+  it('says nothing when the protected files are as they were', async () => {
+    put('.git/config', '[core]\n');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.readFileSync(".git/config");', 'fs.writeFileSync("out.txt", "x");']));
+    expect(h.done(1)).toMatchObject({ exitCode: 0, note: '' });
+  });
+
+  it('puts back a protected file the command deleted, but not a protected folder it removed whole', async () => {
+    put('.git/hooks/pre-commit.sample', 'sample hook');
+    put('.claude/settings.json', '{}');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.rmSync(".git/hooks/pre-commit.sample");', 'fs.rmSync(".claude", { recursive: true });']));
+    expect(readFileSync(at('.git', 'hooks', 'pre-commit.sample'), 'utf8')).toBe('sample hook');
+    expect(existsSync(at('.claude'))).toBe(false);
+    expect(noteOf(h, 1)).toBe('The sandbox undid changes to .git/hooks/pre-commit.sample (protected files).');
+  });
+
+  it('keeps a protected file the command rewrote under another spelling as the same file, with its old bytes', async () => {
+    put('.vscode/tasks.json', 'mine');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".vscode/TASKS.JSON", "evil");']));
+    expect(readdirSync(at('.vscode'))).toHaveLength(1);
+    expect(readFileSync(at('.vscode', 'tasks.json'), 'utf8')).toBe('mine');
+  });
+
+  it("takes away a new repository's hooks and config, and keeps the rest of it", async () => {
+    const h = harness();
+    await h.init();
+    await runIn(
+      h,
+      1,
+      doing([
+        'fs.mkdirSync(".git/hooks", { recursive: true });',
+        'fs.mkdirSync(".git/objects");',
+        'fs.writeFileSync(".git/HEAD", "ref: refs/heads/main\\n");',
+        'fs.writeFileSync(".git/config", "[core]\\n\\thooksPath = x\\n");',
+        'fs.writeFileSync(".git/hooks/post-checkout", "evil");',
+      ])
+    );
+    expect(existsSync(at('.git', 'HEAD'))).toBe(true);
+    expect(existsSync(at('.git', 'objects'))).toBe(true);
+    expect(existsSync(at('.git', 'config'))).toBe(false);
+    expect(existsSync(at('.git', 'hooks'))).toBe(false);
+    expect(noteOf(h, 1)).toBe('The sandbox undid changes to .git/hooks, .git/config (protected files).');
+  });
+
+  it('puts back a .git file (a worktree) the command pointed elsewhere', async () => {
+    put('.git', 'gitdir: E:/repo/.git/worktrees/ws\n');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".git", "gitdir: evil\\n");', 'fs.mkdirSync("evil/hooks", { recursive: true });']));
+    expect(readFileSync(at('.git'), 'utf8')).toBe('gitdir: E:/repo/.git/worktrees/ws\n');
+    expect(noteOf(h, 1)).toBe('The sandbox undid changes to .git (protected files).');
+  });
+
+  it('never follows a link: a protected folder swapped for one is taken away, and nothing is written where it led', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'grunt-agent-outside-'));
+    try {
+      writeFileSync(join(outside, 'settings.json'), 'theirs');
+      put('.claude/settings.json', 'mine');
+      put('.vscode/settings.json', 'mine');
+      const h = harness();
+      await h.init();
+      await runIn(
+        h,
+        1,
+        doing([
+          'fs.renameSync(".claude", "claude-old");',
+          `fs.symlinkSync(${JSON.stringify(outside)}, ".claude", "junction");`,
+          'fs.rmSync(".vscode", { recursive: true });',
+          `fs.symlinkSync(${JSON.stringify(outside)}, ".vscode", "junction");`,
+        ])
+      );
+      expect(existsSync(at('.claude'))).toBe(false);
+      expect(existsSync(at('.vscode'))).toBe(false);
+      expect(readdirSync(outside)).toEqual(['settings.json']);
+      expect(readFileSync(join(outside, 'settings.json'), 'utf8')).toBe('theirs');
+      expect(noteOf(h, 1)).toBe('The sandbox undid changes to .vscode, .claude (protected files).');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('puts back a link that was there, if the command replaced it', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'grunt-agent-outside-'));
+    try {
+      symlinkSync(outside, at('.idea'), 'junction');
+      const h = harness();
+      await h.init();
+      await runIn(h, 1, doing(['fs.rmSync(".idea");', 'fs.mkdirSync(".idea");', 'fs.writeFileSync(".idea/workspace.xml", "evil");']));
+      expect(lstatSync(at('.idea')).isSymbolicLink()).toBe(true);
+      expect(readdirSync(outside)).toEqual([]);
+      expect(noteOf(h, 1)).toBe('The sandbox undid changes to .idea (protected files).');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps only the top of .idea: new entries go, changes deeper down stay', async () => {
+    put('.idea/workspace.xml', 'mine');
+    put('.idea/shelf/patch.diff', 'old');
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".idea/workspace.xml", "evil");', 'fs.writeFileSync(".idea/shelf/patch.diff", "new");', 'fs.writeFileSync(".idea/new.xml", "x");']));
+    expect(readFileSync(at('.idea', 'workspace.xml'), 'utf8')).toBe('mine');
+    expect(readFileSync(at('.idea', 'shelf', 'patch.diff'), 'utf8')).toBe('new');
+    expect(existsSync(at('.idea', 'new.xml'))).toBe(false);
+  });
+
+  it("names the home's protected files with ~ and another folder's by their full path", async () => {
+    const other = join(dir, 'other');
+    mkdirSync(other);
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing([`fs.writeFileSync(${JSON.stringify(join(other, '.bashrc'))}, "x");`, `fs.writeFileSync(${JSON.stringify(join(h.home, '.gitconfig'))}, "x");`]), {
+      writePaths: [ws, other],
+    });
+    expect(existsSync(join(other, '.bashrc'))).toBe(false);
+    expect(existsSync(join(h.home, '.gitconfig'))).toBe(false);
+    expect(noteOf(h, 1)).toBe(`The sandbox undid changes to ${other}/.bashrc, ~/.gitconfig (protected files).`);
+  });
+
+  it("doesn't guard a folder the command can only read", async () => {
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".bashrc", "x");']), { writePaths: [] });
+    expect(existsSync(at('.bashrc'))).toBe(true);
+    expect(noteOf(h, 1)).toBe('');
+  });
+
+  it('puts them back after a timeout too', async () => {
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".bashrc", "x");', 'setTimeout(() => {}, 60_000);']), { timeoutMs: 1500 });
+    expect(h.done(1)).toMatchObject({ timedOut: true, note: 'The sandbox undid changes to .bashrc (protected files).' });
+    expect(existsSync(at('.bashrc'))).toBe(false);
+  });
+
+  it('puts them back after a run that failed, and says so in the failure', async () => {
+    const h = harness({
+      wrapWithSandboxArgv: vi.fn(async () => {
+        // Something of the chat's wrote there while the run was being set up.
+        writeFileSync(at('.mcp.json'), '{}');
+        throw new Error('bwrap went away');
+      }),
+    });
+    await h.init();
+    await runIn(h, 1, '0');
+    expect(h.sent.filter((m) => m.id === 1)).toEqual([
+      { type: 'failed', id: 1, message: 'bwrap went away\nThe sandbox undid changes to .mcp.json (protected files).' },
+    ]);
+    expect(existsSync(at('.mcp.json'))).toBe(false);
+  });
+
+  it("puts them back only after the runtime has taken away its own placeholders, so those aren't reported", async () => {
+    const order: string[] = [];
+    const h = harness({ cleanupAfterCommand: vi.fn(() => order.push(`cleanup:${existsSync(at('.bashrc'))}`)) });
+    await h.init();
+    await runIn(h, 1, doing(['fs.writeFileSync(".bashrc", "x");']));
+    order.push(`after:${existsSync(at('.bashrc'))}`);
+    expect(order).toEqual(['cleanup:true', 'after:false']);
+  });
+
+  it('close puts them back before the agent exits, even when the command never reports', async () => {
+    // A kill that reaches nothing: the command outlives the grace close gives it.
+    const h = harness({}, { kill: () => undefined });
+    await h.init();
+    const running = runIn(h, 1, doing(['fs.writeFileSync(".bashrc", "x");', 'setTimeout(() => {}, 4000);']));
+    for (let i = 0; i < 300 && !existsSync(at('.bashrc')); i += 1) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(at('.bashrc'))).toBe(true);
+    await h.receive({ type: 'close' });
+    expect(h.exits).toEqual([0]);
+    expect(existsSync(at('.bashrc'))).toBe(false);
+    await running;
+  }, 15_000);
+
+  it('refuses a run with a protected file over 1 MB, or over 8 MB of them, without running it', async () => {
+    put('.vscode/big.bin', 'x'.repeat(MAX_PROTECTED_FILE_BYTES + 1));
+    const h = harness();
+    await h.init();
+    await runIn(h, 1, '0');
+    const message = String(h.sent.find((m) => m.id === 1 && m.type === 'failed')?.['message']);
+    expect(message).toContain(`The command was not run: the sandbox keeps a copy of files like .git/hooks and .vscode in ${ws}`);
+    expect(message).toContain('.vscode/big.bin is over 1 MB');
+    rmSync(at('.vscode', 'big.bin'));
+    const chunk = 'x'.repeat(MAX_PROTECTED_FILE_BYTES);
+    for (let i = 0; i <= MAX_PROTECTED_BYTES / MAX_PROTECTED_FILE_BYTES; i += 1) put(`.claude/skills/s${i}.md`, chunk);
+    await runIn(h, 2, '0');
+    expect(String(h.sent.find((m) => m.id === 2 && m.type === 'failed')?.['message'])).toContain('the protected files come to over 8 MB');
+    expect(h.runtime.wrapWithSandboxArgv).not.toHaveBeenCalled();
   });
 });
 

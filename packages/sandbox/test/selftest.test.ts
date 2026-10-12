@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { SandboxRunResult } from '@grunt/core/ports/sandbox.js';
-import { runSelfTest, selfTestCases, shellQuote, type SelfTestCase } from '../src/selftest.js';
+import { otherSpelling, PROTECTED_PROBES, runSelfTest, selfTestCases, shellQuote, type SelfTestCase } from '../src/selftest.js';
 
-const places = { rwLinux: "/mnt/c/Users/O'Brien/rw", roLinux: '/mnt/c/st/ro', lockedLinux: "/mnt/c/Users/O'Brien/rw/locked", gateway: '172.20.48.1', gruntPort: 4747 };
+const places = { rwLinux: "/mnt/c/Users/O'Brien/rw", roLinux: '/mnt/c/st/ro', gateway: '172.20.48.1', gruntPort: 4747 };
 const result = (exitCode: number | null, output = ''): SandboxRunResult => ({ command: '', exitCode, signal: null, timedOut: false, truncated: false, timeoutMsUsed: 60_000, output, sandbox: true, cwd: '/' });
 
 describe('selfTestCases', () => {
@@ -14,7 +14,10 @@ describe('selfTestCases', () => {
         'ls /mnt/c/Windows',
         'cat /home/grunt/.bashrc',
         `echo no > ${shellQuote('/mnt/c/st/ro/nope.txt')}`,
-        `echo no > ${shellQuote("/mnt/c/Users/O'Brien/rw/locked/nope.txt")}`,
+        `echo no > ${shellQuote('/mnt/c/st/RO/nope.txt')}`,
+        `echo no > ${shellQuote("/mnt/c/Users/O'Brien/rw/.git/hooks/x")}`,
+        `echo no > ${shellQuote("/mnt/c/Users/O'Brien/rw/.claude/settings.local.json")}`,
+        `echo no > ${shellQuote("/mnt/c/Users/O'Brien/rw/.vscode/tasks.json")}`,
         'cmd.exe /c echo hi',
         '/mnt/c/Windows/System32/cmd.exe /c echo hi',
         'cat /etc/shadow',
@@ -31,12 +34,46 @@ describe('selfTestCases', () => {
     expect(ok).toEqual(expect.arrayContaining(['echo ok > "$HOME/written.txt"', 'echo ok > "$TMPDIR/written.txt"']));
   });
 
-  it('has a positive control for the nested read-only folder, and wants a refusal (not a missing path) from the write cases', () => {
+  it('wants a refusal (not a missing path) from the write cases spelt as on disk', () => {
     const cases = selfTestCases(places);
-    expect(cases.find((c) => c.expect === 'ok' && c.command === `test -d ${shellQuote(places.lockedLinux)}`)).toBeDefined();
-    const write = cases.find((c) => c.command.includes('locked/nope.txt'));
-    expect(write?.expectOutput?.test('bash: x: Read-only file system')).toBe(true);
-    expect(write?.expectOutput?.test('bash: x: No such file or directory')).toBe(false);
+    const writes = cases.filter((c) => c.expect === 'blocked' && c.command.startsWith('echo no > ') && !c.command.includes('/RO/'));
+    expect(writes).toHaveLength(1 + PROTECTED_PROBES.length);
+    for (const write of writes) {
+      expect(write.expectOutput?.test('bash: x: Read-only file system')).toBe(true);
+      expect(write.expectOutput?.test('bash: x: No such file or directory')).toBe(false);
+    }
+  });
+
+  it('tries the read-only folder in another spelling, and then checks that nothing landed in it', () => {
+    const cases = selfTestCases(places);
+    const i = cases.findIndex((c) => c.command === `echo no > ${shellQuote('/mnt/c/st/RO/nope.txt')}`);
+    expect(cases[i]).toMatchObject({ expect: 'blocked' });
+    // In the command's view that spelling is no folder at all, which is a refusal too.
+    expect(cases[i]?.expectOutput?.test('bash: x: No such file or directory')).toBe(true);
+    expect(cases[i + 1]).toMatchObject({ expect: 'ok', command: `test ! -e ${shellQuote('/mnt/c/st/ro/nope.txt')}` });
+  });
+
+  it('writes protected files in another spelling, wants the agent to say it undid each, then checks they are gone', () => {
+    const cases = selfTestCases(places);
+    const i = cases.findIndex((c) => c.name === 'protected files written in another spelling are undone');
+    const rw = "'/mnt/c/Users/O'\\''Brien/rw";
+    expect(cases[i]).toMatchObject({
+      expect: 'ok',
+      command: `echo no > ${rw}/.GIT/hooks/x' && echo no > ${rw}/.CLAUDE/settings.local.json' && echo no > ${rw}/.VSCODE/tasks.json'`,
+    });
+    const said = cases[i]!.expectOutput!;
+    expect(said.test('The sandbox undid changes to .vscode/tasks.json, .git/hooks/x, .claude/settings.local.json (protected files).')).toBe(true);
+    expect(said.test('The sandbox undid changes to .git/hooks/x, .vscode/tasks.json (protected files).')).toBe(false);
+    expect(said.test('')).toBe(false);
+    expect(cases[i + 1]).toMatchObject({
+      expect: 'ok',
+      command: `test ! -e ${rw}/.git/hooks/x' && test ! -e ${rw}/.claude/settings.local.json' && test ! -e ${rw}/.vscode/tasks.json'`,
+    });
+  });
+
+  it('spells a name the other way round', () => {
+    expect(otherSpelling('/mnt/c/st/ro')).toBe('/mnt/c/st/RO');
+    expect(otherSpelling('.Git')).toBe('.gIT');
   });
 
   it("decides the Grunt-port check on the connection failing with no HTTP status, not on what Grunt answers", () => {
@@ -76,6 +113,13 @@ describe('runSelfTest', () => {
     await expect(runSelfTest(guarded, async () => result(1, 'bash: /x: No such file or directory'), () => {})).rejects.toThrow(/"write refused" failed, but not the way a block does.*No such file/);
     await expect(runSelfTest(guarded, async () => result(1, 'bash: /x: Read-only file system'), () => {})).resolves.toBeUndefined();
     await expect(runSelfTest(guarded, async () => result(0, ''), () => {})).rejects.toThrow(/was not blocked/);
+  });
+
+  it("throws when a case that should work runs but its output doesn't show what it should", async () => {
+    const said: SelfTestCase[] = [{ name: 'undone', command: 'echo no > .GIT/x', expect: 'ok', allowedHosts: [], expectOutput: /undid changes/ }];
+    await expect(runSelfTest(said, async () => result(0, ''), () => {})).rejects.toThrow(/"undone" ran, but its output doesn't show what it should/);
+    await expect(runSelfTest(said, async () => result(0, 'The sandbox undid changes to .git/x (protected files).'), () => {})).resolves.toBeUndefined();
+    await expect(runSelfTest(said, async () => result(1, 'undid changes'), () => {})).rejects.toThrow(/"undone" failed/);
   });
 
   it('throws when a case that should work fails, and counts a timeout as a failure', async () => {

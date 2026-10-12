@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toSandboxPath } from '@grunt/core/domain/sandbox-paths.js';
 import type { SandboxRunRequest, StoredSandboxState } from '@grunt/core/ports/sandbox.js';
 import { sandboxResourcesDir } from '../src/resources.js';
+import { otherSpelling, PROTECTED_PROBES } from '../src/selftest.js';
 import { WslSandbox } from '../src/wsl-sandbox.js';
 import { createWslRunner } from '../src/wsl.js';
 
@@ -25,6 +26,8 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
   beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'grunt-sandbox-live-'));
     mkdirSync(join(dir, 'ws'));
+    // The folders of the protected files the live checks write: a refusal is then the sandbox's, not a missing folder's.
+    for (const rel of PROTECTED_PROBES) mkdirSync(join(dir, 'ws', rel, '..'), { recursive: true });
     mkdirSync(join(dir, 'refs'));
     writeFileSync(join(dir, 'refs', 'note.txt'), 'read me\n');
     sandbox = new WslSandbox({
@@ -89,6 +92,35 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
     const write = await sandbox.run(req(`echo no > '${refs()}/nope.txt'`));
     expect(write.exitCode).not.toBe(0);
     expect(existsSync(join(dir, 'refs', 'nope.txt'))).toBe(false);
+  }, 120_000);
+
+  it("keeps the read-only folder read-only in another spelling too, and refuses one inside the writable folder", async () => {
+    const write = await sandbox.run(req(`echo no > '${otherSpelling(refs())}/nope-case.txt'`));
+    expect(write.exitCode).not.toBe(0);
+    expect(existsSync(join(dir, 'refs', 'nope-case.txt'))).toBe(false);
+    mkdirSync(join(dir, 'ws', 'inner'), { recursive: true });
+    await expect(sandbox.run(req('true', { folders: [{ root: join(dir, 'ws', 'inner'), access: 'read' }] }))).rejects.toMatchObject({
+      code: 'bad_folder',
+      message: expect.stringContaining("is read-only but sits inside the writable"),
+    });
+  }, 120_000);
+
+  it('refuses writes to protected files in the workspace as spelt, and undoes them (saying so) in another spelling', async () => {
+    for (const rel of PROTECTED_PROBES) {
+      const r = await sandbox.run(req(`echo no > '${rel}'`));
+      expect(r.exitCode, `${rel}: ${r.output}`).not.toBe(0);
+      expect(r.output, rel).toMatch(/Read-only file system|Permission denied/);
+      expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
+    }
+    const respelt = PROTECTED_PROBES.map((rel) => rel.replace(/^[^/]+/, (first) => otherSpelling(first)));
+    const r = await sandbox.run(req(respelt.map((rel) => `echo no > '${rel}'`).join(' && ')));
+    expect(r.exitCode, r.output).toBe(0);
+    expect(r.output).toContain('The sandbox undid changes to');
+    for (const rel of PROTECTED_PROBES) {
+      expect(r.output, rel).toContain(rel);
+      expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
+    }
+    console.log(`[sandbox-live] protected files: ${r.output.trim()}`);
   }, 120_000);
 
   it('reaches an allowlisted host, and asks about one that is not (refused here)', async () => {

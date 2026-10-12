@@ -8,8 +8,8 @@ export interface SelfTestCase {
   expect: 'ok' | 'blocked';
   allowedHosts: string[];
   /**
-   * 'blocked' cases only: the output must also match, so a command that fails for another reason
-   * (a missing folder, a typo) doesn't count as the sandbox blocking it.
+   * The output must also match: for a 'blocked' case, so a command that fails for another reason (a missing
+   * folder, a typo) doesn't count as the sandbox blocking it; for an 'ok' case, to see what the sandbox said.
    */
   expectOutput?: RegExp;
 }
@@ -17,19 +17,37 @@ export interface SelfTestCase {
 /** What bash prints when a write is refused because the place is read-only or not ours. */
 const WRITE_REFUSED = /Read-only file system|Permission denied/;
 
+/** What bash prints when a path doesn't resolve: another spelling of a read-only folder can't reach it. */
+const WRITE_REFUSED_OR_MISSING = /Read-only file system|Permission denied|No such file or directory/;
+
+/** Protected files (the agent's PROTECTED_PATHS) the self-test tries to write in the workspace; their folders are there. */
+export const PROTECTED_PROBES = ['.git/hooks/x', '.claude/settings.local.json', '.vscode/tasks.json'];
+
 /** Where the self-test's folders are in the sandbox, and how to reach Grunt from the VM. */
 export interface SelfTestPlaces {
-  /** The self-test chat's workspace, mounted read-write. */
+  /** The self-test chat's workspace, mounted read-write, with .git/hooks, .claude and .vscode folders in it. */
   rwLinux: string;
-  /** A read-only folder with hello.txt in it. */
+  /** A read-only folder beside it (never inside it: the sandbox refuses that), with hello.txt in it. */
   roLinux: string;
-  /** A read-only folder inside the read-write one (mounted under it read-write; only the runtime keeps it read-only). */
-  lockedLinux: string;
   /** The Windows host as the VM sees it (the default route), or null. */
   gateway: string | null;
   /** Grunt's port, or null when not known yet. */
   gruntPort: number | null;
 }
+
+/** The path with the case of its last name's letters flipped (`/mnt/c/st/ro` to `/mnt/c/st/RO`): the same Windows folder. */
+export function otherSpelling(path: string): string {
+  const cut = path.lastIndexOf('/') + 1;
+  const flip = (ch: string): string => (ch === ch.toLowerCase() ? ch.toUpperCase() : ch.toLowerCase());
+  return path.slice(0, cut) + [...path.slice(cut)].map(flip).join('');
+}
+
+/** A protected file's path in the workspace with its first name in another spelling (`.GIT/hooks/x`). */
+const respelt = (rel: string): string => {
+  const [first = '', ...rest] = rel.split('/');
+  return [otherSpelling(first), ...rest].join('/');
+};
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** A word for bash: single-quoted, apostrophes included. */
 export function shellQuote(s: string): string {
@@ -49,15 +67,39 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     { name: 'an allowlisted host is reachable', command: 'curl -sS -m 30 -o /dev/null https://registry.npmjs.org/', expect: 'ok', allowedHosts: ['registry.npmjs.org'] },
     { name: "a path outside the chat's folders is unreadable", command: 'ls /mnt/c/Windows', expect: 'blocked', allowedHosts: none },
     { name: 'the rest of /home is unreadable', command: 'cat /home/grunt/.bashrc', expect: 'blocked', allowedHosts: none },
-    // A positive control for the case below: the folder is there, so a refused write is the sandbox's doing and not a missing path.
-    { name: 'the read-only folder inside the writable one is there', command: `test -d ${shellQuote(p.lockedLinux)}`, expect: 'ok', allowedHosts: none },
     { name: "the read-only folder can't be written", command: `echo no > ${shellQuote(`${p.roLinux}/nope.txt`)}`, expect: 'blocked', allowedHosts: none, expectOutput: WRITE_REFUSED },
+    // Windows folders in the VM ignore case: another spelling of the read-only folder must not reach it either.
     {
-      name: "a read-only folder inside a writable one can't be written",
-      command: `echo no > ${shellQuote(`${p.lockedLinux}/nope.txt`)}`,
+      name: "the read-only folder can't be written in another spelling",
+      command: `echo no > ${shellQuote(`${otherSpelling(p.roLinux)}/nope.txt`)}`,
       expect: 'blocked',
       allowedHosts: none,
-      expectOutput: WRITE_REFUSED,
+      expectOutput: WRITE_REFUSED_OR_MISSING,
+    },
+    { name: 'nothing landed in the read-only folder', command: `test ! -e ${shellQuote(`${p.roLinux}/nope.txt`)}`, expect: 'ok', allowedHosts: none },
+    // Files that would run code on Windows: in their usual spelling the runtime refuses the write...
+    ...PROTECTED_PROBES.map(
+      (rel): SelfTestCase => ({
+        name: `${rel} in the workspace can't be written`,
+        command: `echo no > ${shellQuote(`${p.rwLinux}/${rel}`)}`,
+        expect: 'blocked',
+        allowedHosts: none,
+        expectOutput: WRITE_REFUSED,
+      })
+    ),
+    // ...and in another spelling the write lands, but the agent undoes it once the command ends, and says so.
+    {
+      name: 'protected files written in another spelling are undone',
+      command: PROTECTED_PROBES.map((rel) => `echo no > ${shellQuote(`${p.rwLinux}/${respelt(rel)}`)}`).join(' && '),
+      expect: 'ok',
+      allowedHosts: none,
+      expectOutput: new RegExp(`The sandbox undid changes to ${PROTECTED_PROBES.map((rel) => `(?=[^\\n]*${escapeRegExp(rel)})`).join('')}`),
+    },
+    {
+      name: 'the protected files are gone again',
+      command: PROTECTED_PROBES.map((rel) => `test ! -e ${shellQuote(`${p.rwLinux}/${rel}`)}`).join(' && '),
+      expect: 'ok',
+      allowedHosts: none,
     },
     { name: "cmd.exe isn't there", command: 'cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
     { name: "Windows programs by path aren't there", command: '/mnt/c/Windows/System32/cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
@@ -84,11 +126,19 @@ export async function runSelfTest(cases: SelfTestCase[], run: (c: SelfTestCase) 
   for (const c of cases) {
     const r = await run(c);
     const succeeded = r.exitCode === 0 && !r.timedOut;
-    const wrongWay = c.expect === 'blocked' && !succeeded && c.expectOutput !== undefined && !c.expectOutput.test(r.output);
-    const passed = c.expect === 'ok' ? succeeded : !succeeded && !wrongWay;
+    const unexpected = c.expectOutput !== undefined && !c.expectOutput.test(r.output);
+    const wrongWay = c.expect === 'blocked' && !succeeded && unexpected;
+    const passed = c.expect === 'ok' ? succeeded && !unexpected : !succeeded && !wrongWay;
     log(`${passed ? '✔' : '✖'} ${c.name}`);
     if (!passed) {
-      const what = c.expect === 'ok' ? 'failed' : wrongWay ? `failed, but not the way a block does (expected ${String(c.expectOutput)})` : 'was not blocked';
+      const what =
+        c.expect === 'ok'
+          ? succeeded
+            ? `ran, but its output doesn't show what it should (expected ${String(c.expectOutput)})`
+            : 'failed'
+          : wrongWay
+            ? `failed, but not the way a block does (expected ${String(c.expectOutput)})`
+            : 'was not blocked';
       throw new Error(`Self-test "${c.name}" ${what} (exit ${String(r.exitCode)}): ${r.output.trim().slice(-500)}`);
     }
   }
