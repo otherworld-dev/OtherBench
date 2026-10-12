@@ -8,7 +8,7 @@ import type {
   ComputerStopReason,
   ComputerTarget,
 } from '../ports/computer.js';
-import { expectationOf, isReadAction, parseAction } from '../domain/computer-apps.js';
+import { expectationOf, isReadAction, KEY_MODIFIERS, parseAction } from '../domain/computer-apps.js';
 
 /** A 1×1 PNG: every screenshot the fake driver takes. */
 export const FAKE_PNG = Buffer.from(
@@ -45,6 +45,12 @@ export function fakeComputerTarget(over: Partial<ComputerTarget> = {}): Computer
 /** What `act` answers when the window is no longer the one the action was approved for. */
 export const FAKE_WINDOW_CHANGED_REASON = 'The window changed after Grunt asked, so nothing was done.';
 
+/** What `act` answers while any modifier key is down. */
+export const FAKE_MODIFIER_HELD_REASON = 'A modifier key is held; nothing was done.';
+
+/** What `act` answers while the state of the keyboard cannot be read. */
+export const FAKE_KEYBOARD_UNKNOWN_REASON = "Grunt couldn't read the keyboard's state; nothing was done.";
+
 /** What every call but `ensureSession` answers (or rejects with) for a chat that has no control session. */
 export const FAKE_NO_SESSION_REASON = 'Grunt is not controlling this computer for that chat.';
 
@@ -76,6 +82,15 @@ function sameAction(a: object, b: object): boolean {
  * `ensureSession` refuses a chat that has no session: `screenshot` and
  * `cursorPosition` reject, `target` answers a refusal, `act` does nothing.
  * So a layer that forgot to start the session fails its test.
+ *
+ * And it models the keyboard as the shell must treat it. `held` is the
+ * modifier keys that are down right now, as the machine reports them (the
+ * person holding Ctrl, or a key something left down): while any is down,
+ * or while `keyboardKnown` is false, `act` does nothing. It never releases
+ * a key it did not press in order to carry on. A `key` action holds its own
+ * modifiers only inside the call and lets go on every way out, a throw
+ * included (`midAction` runs half-way, to look or to throw); stopping or
+ * ending a session lets go of everything.
  */
 export class FakeComputerDriver implements ComputerDriver {
   isAvailable = true;
@@ -87,6 +102,12 @@ export class FakeComputerDriver implements ComputerDriver {
   actAnswer: ComputerAnswer = { ok: true };
   screenSize = { width: 1366, height: 768 };
   cursor = { x: 0, y: 0 };
+  /** Modifier keys that are down right now, as the machine reports them. A test sets this to model a held or stuck key. */
+  held: string[] = [];
+  /** False when the state of the keyboard cannot be read: then nothing is done. */
+  keyboardKnown = true;
+  /** Runs half-way through every action that is carried out, with the modifiers down at that moment. May throw. */
+  midAction: ((held: readonly string[]) => void) | null = null;
   /** The shell's own global shortcuts (`reservedKeys`); `null` for a shell that has not reported any list. */
   reserved: string[] | null = [];
   readonly started: { chatId: string; chatTitle: string }[] = [];
@@ -113,6 +134,7 @@ export class FakeComputerDriver implements ComputerDriver {
   }
 
   async endSession(chatId: string): Promise<void> {
+    this.held = [];
     if (this.sessions.delete(chatId)) this.ended.push(chatId);
   }
 
@@ -154,6 +176,15 @@ export class FakeComputerDriver implements ComputerDriver {
       this.refused.push({ chatId, action, expect });
       return { ok: false, reason: FAKE_NO_SESSION_REASON };
     }
+    // The real state of the keyboard, read now, never remembered: unreadable or any modifier down, and nothing is done.
+    if (!this.keyboardKnown) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: FAKE_KEYBOARD_UNKNOWN_REASON };
+    }
+    if (this.held.length > 0) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: FAKE_MODIFIER_HELD_REASON };
+    }
     const now = 'coordinate' in action ? this.pointTarget : this.foregroundTarget;
     if ('refuse' in now) {
       this.refused.push({ chatId, action, expect });
@@ -165,8 +196,16 @@ export class FakeComputerDriver implements ComputerDriver {
       this.refused.push({ chatId, action, expect });
       return { ok: false, reason: FAKE_WINDOW_CHANGED_REASON };
     }
-    this.actions.push({ chatId, action, expect });
-    return this.actAnswer;
+    // Its own modifiers go down for the length of this one action and come up on every way out of it.
+    const modifiers = action.action === 'key' ? action.text.split('+').filter((name) => KEY_MODIFIERS.includes(name)) : [];
+    this.held = modifiers;
+    try {
+      this.midAction?.(this.held);
+      this.actions.push({ chatId, action, expect });
+      return this.actAnswer;
+    } finally {
+      this.held = [];
+    }
   }
 
   /** Another window took the keyboard (the person clicked a card, an app raised itself): `type` and `key` now land there. */
@@ -187,6 +226,7 @@ export class FakeComputerDriver implements ComputerDriver {
 
   /** As if the person pressed Stop: the session ends and listeners hear why. */
   stop(chatId: string, why: ComputerStopReason = 'button'): void {
+    this.held = [];
     this.sessions.delete(chatId);
     for (const cb of this.stopListeners) cb(chatId, why);
   }

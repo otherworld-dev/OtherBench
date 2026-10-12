@@ -3,6 +3,8 @@ import { appArgs, classifyTarget, expectationOf } from '../src/domain/computer-a
 import type { ComputerAction, ComputerExpectation } from '../src/ports/computer.js';
 import {
   FAKE_COMPUTER_APP,
+  FAKE_KEYBOARD_UNKNOWN_REASON,
+  FAKE_MODIFIER_HELD_REASON,
   FAKE_NO_SESSION_REASON,
   FAKE_PNG,
   FAKE_WINDOW_CHANGED_REASON,
@@ -266,6 +268,84 @@ describe('FakeComputerDriver', () => {
       await expect(driver.act('c1', click, expectation as ComputerExpectation), JSON.stringify(expectation)).rejects.toThrow(/not whole/);
     }
     expect(driver.actions).toEqual([]);
+  });
+
+  it('does nothing while a modifier key is down, whoever is holding it', async () => {
+    const driver = await started();
+    const each: ComputerAction[] = [
+      { action: 'key', text: 'ctrl+s' },
+      { action: 'key', text: 'return' },
+      { action: 'type', text: 'hello' },
+      { action: 'left_click', coordinate: [5, 5] },
+      { action: 'scroll', coordinate: [5, 5], scroll_direction: 'down', scroll_amount: 1 },
+    ];
+    for (const held of [['ctrl'], ['shift'], ['alt'], ['win'], ['ctrl', 'alt']]) {
+      driver.held = held;
+      for (const action of each) expect(await driver.act('c1', action, EXPECT), `${held.join('+')} ${action.action}`).toEqual({ ok: false, reason: FAKE_MODIFIER_HELD_REASON });
+    }
+    expect(driver.actions).toEqual([]);
+    expect(driver.refused).toHaveLength(25);
+    // It does not release what it did not press and then carry on: it refuses until the key is up.
+    expect(driver.held).toEqual(['ctrl', 'alt']);
+    driver.held = [];
+    for (const action of each) expect(await driver.act('c1', action, EXPECT)).toEqual({ ok: true });
+  });
+
+  it('does nothing while it cannot read the state of the keyboard', async () => {
+    const driver = await started();
+    driver.keyboardKnown = false;
+    expect(await driver.act('c1', { action: 'key', text: 'ctrl+s' }, EXPECT)).toEqual({ ok: false, reason: FAKE_KEYBOARD_UNKNOWN_REASON });
+    expect(await driver.act('c1', { action: 'type', text: 'x' }, EXPECT)).toEqual({ ok: false, reason: FAKE_KEYBOARD_UNKNOWN_REASON });
+    expect(await driver.act('c1', { action: 'left_click', coordinate: [1, 1] }, EXPECT)).toEqual({ ok: false, reason: FAKE_KEYBOARD_UNKNOWN_REASON });
+    expect(driver.actions).toEqual([]);
+    driver.keyboardKnown = true;
+    expect(await driver.act('c1', { action: 'key', text: 'ctrl+s' }, EXPECT)).toEqual({ ok: true });
+  });
+
+  it('holds a modifier only inside one key action, and lets go on every way out of it', async () => {
+    const driver = await started();
+    // Mid-combination the modifiers are down...
+    const seen: string[][] = [];
+    driver.midAction = (held) => seen.push([...held]);
+    expect(await driver.act('c1', { action: 'key', text: 'ctrl+shift+s' }, EXPECT)).toEqual({ ok: true });
+    expect(seen).toEqual([['ctrl', 'shift']]);
+    // ...and up again afterwards.
+    expect(driver.held).toEqual([]);
+
+    // The action fails half-way: nothing is left down, and the next action is not refused for it.
+    driver.midAction = () => {
+      throw new Error('the shell fell over mid-combination');
+    };
+    await expect(driver.act('c1', { action: 'key', text: 'ctrl+shift+z' }, EXPECT)).rejects.toThrow('the shell fell over mid-combination');
+    expect(driver.held).toEqual([]);
+    driver.midAction = null;
+    expect(await driver.act('c1', { action: 'key', text: 'return' }, EXPECT)).toEqual({ ok: true });
+
+    // Typed text and clicks hold nothing at any point.
+    const during: string[][] = [];
+    driver.midAction = (held) => during.push([...held]);
+    await driver.act('c1', { action: 'type', text: 'Hello' }, EXPECT);
+    await driver.act('c1', { action: 'left_click', coordinate: [1, 1] }, EXPECT);
+    await driver.act('c1', { action: 'key', text: 'f5' }, EXPECT);
+    expect(during).toEqual([[], [], []]);
+  });
+
+  it('lets go of everything when the session stops or ends', async () => {
+    const driver = await started();
+    driver.held = ['ctrl', 'shift'];
+    driver.stop('c1', 'hotkey');
+    expect(driver.held).toEqual([]);
+
+    await driver.ensureSession('c1', 'Chat one');
+    driver.held = ['alt'];
+    await driver.endSession('c1');
+    expect(driver.held).toEqual([]);
+  });
+
+  it('has no call that presses without releasing', () => {
+    const calls = Object.getOwnPropertyNames(FakeComputerDriver.prototype);
+    expect(calls).toContain('act');
+    for (const call of calls) expect(call, call).not.toMatch(/hold|keyDown|keyUp|mouseDown|mouseUp|press|release/i);
   });
 
   it("answers the shell's own shortcuts", () => {

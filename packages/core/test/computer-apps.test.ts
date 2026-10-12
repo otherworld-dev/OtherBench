@@ -946,3 +946,36 @@ describe('round 2: one described target for the card, the grant, the risk and th
     expect(isHighRiskApp({ app: NOTEPAD, appRisk: 'normal' })).toBe(true);
   });
 });
+
+describe('round 2: nothing can hold a key or a button down', () => {
+  it('has no action that presses without releasing, by any name', () => {
+    for (const name of COMPUTER_ACTIONS) expect(name, name).not.toMatch(/hold|down|_up$|press|release|drag/);
+    const held = [
+      'hold_key', 'key_down', 'key_up', 'keydown', 'keyup', 'press', 'release', 'press_key', 'release_key', 'left_mouse_down', 'left_mouse_up',
+      'mouse_down', 'mouse_up', 'right_mouse_down', 'left_click_drag', 'drag', 'hold',
+    ];
+    for (const action of held) {
+      const result = parseAction({ action, text: 'shift', coordinate: [1, 2], duration: 5 });
+      expect(result.ok, action).toBe(false);
+      expect(actionSummary({ action, text: 'shift' }), action).toBe('?');
+    }
+  });
+
+  it('gives every action that changes something as a whole thing: no field asks to hold, and none lasts', () => {
+    const whole: Record<string, string[]> = {
+      left_click: ['action', 'coordinate'],
+      right_click: ['action', 'coordinate'],
+      double_click: ['action', 'coordinate'],
+      triple_click: ['action', 'coordinate'],
+      mouse_move: ['action', 'coordinate'],
+      scroll: ['action', 'coordinate', 'scroll_amount', 'scroll_direction'],
+      type: ['action', 'text'],
+      key: ['action', 'text'],
+    };
+    for (const [action, fields] of Object.entries(whole)) {
+      const result = parseAction({ action, coordinate: [1, 2], scroll_direction: 'down', text: action === 'key' ? 'ctrl+s' : 'x', duration: 5, hold: true, down: true, release: false });
+      if (!result.ok) throw new Error(`Expected ${action} to parse`);
+      expect(Object.keys(result.action).sort(), action).toEqual(fields);
+    }
+  });
+});

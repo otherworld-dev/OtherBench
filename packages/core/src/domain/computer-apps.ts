@@ -591,6 +591,16 @@ function typedTextProblem(text: string): string | null {
 const TOO_MUCH_TO_TYPE = `That is too much to type in one action (at most ${COMPUTER_LIMITS.typeTextLength} characters). Send it in parts.`;
 
 /**
+ * Compile-time: every action the driver can be sent (`ComputerAction`) is one
+ * of the phase-1 names. A hold, press or release added to the port by
+ * accident, with no name in `COMPUTER_ACTIONS` and no case in `parseAction`,
+ * fails the build here.
+ */
+export type NoActionOutsideTheList = [Exclude<ComputerAction['action'], ComputerActionName>] extends [never] ? true : never;
+const NO_ACTION_OUTSIDE_THE_LIST: NoActionOutsideTheList = true;
+void NO_ACTION_OUTSIDE_THE_LIST;
+
+/**
  * Checks a whole action against every rule and cap, and gives back the one
  * form of it that is carried out, or why it isn't. This is the only way an
  * action is built: the tool dispatches exactly what this returns, never the

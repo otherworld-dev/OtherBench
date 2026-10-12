@@ -186,3 +186,45 @@ describe('computer keys', () => {
     }
   });
 });
+
+describe('a key combination stands on its own', () => {
+  it('is always exactly one key with its modifiers, pressed and released as one thing', () => {
+    for (const text of ['ctrl+s', 'Return', 'shift+Tab', 'ctrl+shift+F12', 'a', 'alt+Left', 'S+CTRL+SHIFT']) {
+      const parsed = parseKeys(text);
+      if (!parsed.ok) throw new Error(`Expected ${text} to parse`);
+      expect(parsed.combos, text).toHaveLength(1);
+      const combo = parsed.combos[0] ?? [];
+      const key = combo[combo.length - 1];
+      expect(KEY_NAMES, text).toContain(key);
+      for (const modifier of combo.slice(0, -1)) expect(KEY_MODIFIERS, text).toContain(modifier);
+      // Nothing in the result says to hold, press or release: there is only the combination.
+      expect(Object.keys(parsed).sort(), text).toEqual(['combos', 'ok', 'text']);
+    }
+  });
+
+  it('remembers nothing from one call to the next: no modifier carries over', () => {
+    // A refused modifier on its own, then a key: the key is not sent with it.
+    expect(parseKeys('shift').ok).toBe(false);
+    expect(parseKeys('ctrl').ok).toBe(false);
+    expect(parseKeys('a')).toEqual({ ok: true, combos: [['a']], text: 'a' });
+    // A combination, then a key on its own, then the same combination again: each is read alone.
+    expect(parseKeys('ctrl+shift+s')).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
+    expect(parseKeys('s')).toEqual({ ok: true, combos: [['s']], text: 's' });
+    expect(parseKeys('escape')).toEqual({ ok: true, combos: [['escape']], text: 'escape' });
+    expect(parseKeys('ctrl+shift+s')).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
+    // What it gives back is a fresh value each time: changing one result changes no later one.
+    const first = parseKeys('ctrl+s');
+    if (first.ok) first.combos[0]?.push('alt', 'tab');
+    expect(parseKeys('ctrl+s')).toEqual({ ok: true, combos: [['ctrl', 's']], text: 'ctrl+s' });
+  });
+
+  it('has no way to hold a key down or let one go', () => {
+    for (const text of ['keydown ctrl', 'keyup ctrl', 'hold+ctrl', 'ctrl+down+s', 'press+a', 'release+a', 'ctrl_down', 'shift_up', 'ctrl+', '+ctrl']) {
+      const parsed = parseKeys(text);
+      // `down` is the arrow key and nothing else: ctrl+down+s is two keys, which is refused.
+      expect(parsed.ok, text).toBe(false);
+    }
+    expect(parseKeys('ctrl+down')).toEqual({ ok: true, combos: [['ctrl', 'down']], text: 'ctrl+down' });
+    expect(parseKeys('up')).toEqual({ ok: true, combos: [['up']], text: 'up' });
+  });
+});

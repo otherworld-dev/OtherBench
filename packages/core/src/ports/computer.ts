@@ -130,10 +130,18 @@ export interface ComputerDriver {
    * coordinate, the foreground window for `type` and `key`) and refuses
    * unless its path, file-view fact, window, pid and start time all equal
    * `expect`, compared exactly (the path byte for byte: the driver has no key
-   * rule of its own).
-   * It checks again before every key combination and before every chunk of
-   * at most 20 typed characters, and stops at the first check that fails. A
-   * chat with no control session gets a refusal.
+   * rule of its own). It checks again before every key combination, before
+   * every chunk of at most 20 typed characters, and before each button event
+   * of a click or notch of a scroll, and stops at the first check that fails.
+   * A chat with no control session gets a refusal.
+   *
+   * The keyboard: nothing here rests on what the driver remembers. Before
+   * every action it reads the real modifier state and refuses while any
+   * modifier is down or the state can't be read ("A modifier key is held;
+   * nothing was done."); it never releases a key it did not press in order
+   * to carry on. Modifiers it presses itself go down and come up inside the
+   * one call, on every way out of it (success, error, abort, stop, session
+   * end, a crash), and it reports a failure if it can't release one.
    */
   act(chatId: string, action: ComputerAction, expect: ComputerExpectation): Promise<ComputerAnswer>;
   /**
