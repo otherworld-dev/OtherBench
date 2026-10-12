@@ -1,26 +1,10 @@
+import { HIDDEN_RANGES, revealHidden } from '@grunt/core/domain/card-text.js';
+
 /**
- * Control characters, line breaks, and the bidi, zero-width, tag, variation-selector
- * and Hangul-filler marks that can make text read differently from what it is.
- * Written as code point ranges so no invisible character sits in this source.
+ * The hidden-character table and `revealHidden` live in core (domain/card-text.ts):
+ * one table for every card, the browser's and computer use's alike.
  */
-const HIDDEN_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x0000, 0x001f],
-  [0x007f, 0x009f],
-  [0x00ad, 0x00ad],
-  [0x034f, 0x034f],
-  [0x061c, 0x061c],
-  [0x115f, 0x1160],
-  [0x180e, 0x180e],
-  [0x200b, 0x200f],
-  [0x2028, 0x202e],
-  [0x2060, 0x206f],
-  [0x3164, 0x3164],
-  [0xfe00, 0xfe0f],
-  [0xfeff, 0xfeff],
-  [0xffa0, 0xffa0],
-  [0xe0000, 0xe007f],
-  [0xe0100, 0xe01ef],
-];
+export { HIDDEN_RANGES, revealHidden };
 
 const hex = (n: number): string => `\\u{${n.toString(16)}}`;
 const HIDDEN = new RegExp(`[${HIDDEN_RANGES.map(([a, b]) => (a === b ? hex(a) : `${hex(a)}-${hex(b)}`)).join('')}]+`, 'gu');
@@ -43,23 +27,6 @@ export function displayLines(text: unknown): string {
     .split(LINE_BREAK)
     .map((line) => line.replace(HIDDEN, (m) => (m.includes('\t') ? ' ' : '')).trimEnd())
     .join('\n');
-}
-
-/**
- * Text the model will type, shown in full: line breaks and tabs stay, every other
- * hidden or bidi character is spelled out as `<U+202E>` so the card says what will
- * really be typed rather than hiding it or letting it reorder the text.
- */
-export function revealHidden(text: string): string {
-  return text.replace(HIDDEN, (run) =>
-    Array.from(run)
-      .map((ch) => {
-        if (ch === '\n' || ch === '\t') return ch;
-        const cp = ch.codePointAt(0) ?? 0;
-        return `<U+${cp.toString(16).toUpperCase().padStart(4, '0')}>`;
-      })
-      .join('')
-  );
 }
 
 /** How the thread shows a `browser` call (spec 2026-10-12-model-browser-design §6): `open https://…`, `click e12`, ... */
