@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalHost, isLocalOrPrivateHost } from '../src/domain/network-hosts.js';
+import { canonicalHost, isLocalOrPrivateHost, sandboxHostProblem } from '../src/domain/network-hosts.js';
 
 /** What the sandbox_network card does with a raw host: refused when it isn't a host name, or is local. */
 const refused = (raw: string): boolean => {
@@ -51,5 +51,32 @@ describe('canonicalHost', () => {
   it('drops one trailing dot and refuses IPv6 literals', () => {
     expect(canonicalHost('PyPI.org.')).toBe('pypi.org');
     expect(canonicalHost('[::1]')).toBeNull();
+  });
+});
+
+describe('sandboxHostProblem', () => {
+  it.each(['pypi.org', '*.example.com', 'api.example.com:8443', 'registry.npmjs.org', 'xn--bcher-kva.example'])('takes %s', (entry) => {
+    expect(sandboxHostProblem(entry)).toBeNull();
+  });
+
+  it.each([
+    ['127.0.0.1', 'is an IP address'],
+    ['10.0.0.1:8080', 'is an IP address'],
+    ['192.168.1.1', 'is an IP address'],
+    ['*.1.2.3', 'is an IP address'],
+    ['[::1]', 'is an IP address'],
+    ['[::1]:443', 'is an IP address'],
+    ['::1', 'is an IP address'],
+    ['fe80::1', 'is an IP address'],
+    ['localhost', 'is this machine'],
+    ['localhost:8080', 'is this machine'],
+    ['api.localhost', 'is this machine'],
+    ['*.localhost', 'is this machine'],
+    ['pypi', 'must be a full host name'],
+    ['pypi.org:0', 'has a port outside'],
+    ['bad_name.org', "isn't a host name pattern"],
+    [`${'a'.repeat(250)}.org`, 'is longer than 253'],
+  ])('refuses %s (%s)', (entry, why) => {
+    expect(sandboxHostProblem(entry)).toContain(why);
   });
 });

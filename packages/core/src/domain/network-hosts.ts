@@ -18,6 +18,38 @@
  */
 const NOT_A_HOST = /[\s\u0000-\u001f\u007f/\\?#@:%[\]]/;
 
+/** One label of a host name pattern: letters, digits and hyphens, not starting or ending with a hyphen. */
+const HOST_PATTERN_LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+
+/**
+ * Why `entry` (already trimmed and lower-cased) isn't an allowlist entry the
+ * sandbox takes: `pypi.org`, `*.example.com`, optionally `:port`; no IP
+ * literals (v4 or v6, bracketed or not, with or without a port), no
+ * `localhost` or `*.localhost`. Null when it is fine. The profile routes
+ * refuse a bad entry with this; the sandbox drops one again before every run,
+ * since a profile synced from a peer never went through the routes, and the
+ * runtime lets an allowlisted IP literal through without its own checks on
+ * where a name resolves.
+ */
+export function sandboxHostProblem(entry: string): string | null {
+  if (entry.length > 253) return 'is longer than 253 characters';
+  let host = entry;
+  const withPort = /^(.*):(\d{1,5})$/.exec(entry);
+  if (withPort) {
+    const port = Number(withPort[2]);
+    if (port < 1 || port > 65535 || withPort[2]!.startsWith('0')) return 'has a port outside 1-65535';
+    host = withPort[1]!;
+  }
+  if (host.includes('[') || host.includes(':')) return 'is an IP address; name the host instead';
+  const bare = host.startsWith('*.') ? host.slice(2) : host;
+  const labels = bare.split('.');
+  if (labels.every((l) => /^\d+$/.test(l))) return 'is an IP address; name the host instead';
+  if (labels[labels.length - 1] === 'localhost') return 'is this machine, which the sandbox never reaches';
+  if (labels.length < 2) return 'must be a full host name like pypi.org';
+  if (!labels.every((l) => HOST_PATTERN_LABEL.test(l))) return "isn't a host name pattern (letters, digits, hyphens and dots, optionally starting with *.)";
+  return null;
+}
+
 /** Dot-separated labels of `[a-z0-9-]`, none empty: what `URL` leaves for a valid ASCII or punycode name or an IPv4 address. */
 const HOST_LABELS = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*$/;
 

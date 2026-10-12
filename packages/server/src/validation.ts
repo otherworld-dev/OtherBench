@@ -1,4 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
+import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
 
 /** Small, dependency-free request-body validators shared by the route modules. Each throws a 400 `HTTPException` (Hono's built-in error type, which the app's default error handling already converts to a proper JSON response) on a bad value. */
 
@@ -179,31 +180,8 @@ export function optionalWorkspaceRoot(value: unknown, field: string): string | n
 
 /** Most hosts a profile's sandbox allowlist may name (spec 2026-10-12-sandbox-design). */
 export const MAX_SANDBOX_HOSTS = 200;
-const HOST_LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
-
-/**
- * Why `entry` (already trimmed and lower-cased) isn't a host pattern the
- * sandbox runtime takes the way Grunt allows: `pypi.org`, `*.example.com`,
- * optionally `:port`; no IP literals, no localhost. Null when it is fine.
- */
-export function sandboxHostProblem(entry: string): string | null {
-  if (entry.length > 253) return 'is longer than 253 characters';
-  let host = entry;
-  const withPort = /^(.*):(\d{1,5})$/.exec(entry);
-  if (withPort) {
-    const port = Number(withPort[2]);
-    if (port < 1 || port > 65535 || withPort[2]!.startsWith('0')) return 'has a port outside 1-65535';
-    host = withPort[1]!;
-  }
-  if (host.includes('[') || host.includes(':')) return 'is an IP address; name the host instead';
-  const bare = host.startsWith('*.') ? host.slice(2) : host;
-  const labels = bare.split('.');
-  if (labels.every((l) => /^\d+$/.test(l))) return 'is an IP address; name the host instead';
-  if (labels[labels.length - 1] === 'localhost') return 'is this machine, which the sandbox never reaches';
-  if (labels.length < 2) return 'must be a full host name like pypi.org';
-  if (!labels.every((l) => HOST_LABEL.test(l))) return "isn't a host name pattern (letters, digits, hyphens and dots, optionally starting with *.)";
-  return null;
-}
+/** Re-exported: the rule lives in core, where the sandbox applies it again on every run. */
+export { sandboxHostProblem };
 
 /** `toolPolicy.sandboxHosts`: trimmed, lower-cased, de-duplicated and checked. */
 export function parseSandboxHosts(value: unknown): string[] {
