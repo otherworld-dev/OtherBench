@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import type { ApprovalChoice, ToolApprovalEvent, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, AskInput, ToolApprovalEvent, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { ToolPolicy } from '../types/config.js';
 
 /** An MCP server the contract needs the provider under test to expose as connected. */
@@ -167,6 +167,28 @@ export function runToolProviderContract(
 
     it('shutdown resolves', async () => {
       await expect(provider.shutdown()).resolves.toBeUndefined();
+    });
+
+    it('askUser raises an ask and waits for answerAsk, which refuses a wrong-kind reply and an unknown id', async () => {
+      const events: ToolApprovalEvent[] = [];
+      provider.onApprovalEvent((e) => events.push(e));
+      const input: AskInput = { kind: 'plan', toolName: 'propose_plan', plan: '1. Do it' };
+      const outcome = provider.askUser(ctx(), input);
+      const ask = events.find((e) => e.type === 'ask');
+      if (ask?.type !== 'ask') throw new Error('no ask event');
+      expect(ask.ask).toMatchObject({ ...input, chatId: 'chat-1', messageId: 'msg-1' });
+      expect(provider.answerAsk('no-such-ask', { approve: true })).toBe('unknown');
+      expect(provider.answerAsk(ask.ask.id, { answers: ['x'] })).toEqual({ invalid: expect.any(String) });
+      expect(provider.answerAsk(ask.ask.id, { approve: true })).toBe('answered');
+      expect(await outcome).toEqual({ reply: { approve: true } });
+      expect(events.some((e) => e.type === 'ask-resolved' && e.askId === ask.ask.id)).toBe(true);
+    });
+
+    it('askUser in an unattended run answers at once with no event', async () => {
+      const events: ToolApprovalEvent[] = [];
+      provider.onApprovalEvent((e) => events.push(e));
+      expect(await provider.askUser(ctx({ unattended: true }), { kind: 'plan', toolName: 'propose_plan', plan: '1. x' })).toEqual({ unattended: true });
+      expect(events).toEqual([]);
     });
 
     it('onApprovalEvent returns an unsubscribe function that is safe to call twice', () => {

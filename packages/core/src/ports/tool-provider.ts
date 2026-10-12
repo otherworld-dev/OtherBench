@@ -1,7 +1,7 @@
 import type { Grant } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
-import type { PlanGate } from '../types/thread.js';
+import type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
@@ -103,7 +103,11 @@ export type ApprovalChoice =
  */
 export type ToolApprovalEvent =
   | { type: 'request'; request: ApprovalRequest }
-  | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] };
+  | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] }
+  /** A question or plan card for the user (spec 2026-10-12-thread-cards-design), tied to `ask.messageId`. */
+  | { type: 'ask'; ask: UserAsk }
+  /** That ask ended, however: answered, the turn stopped, or the backstop dropped it. */
+  | { type: 'ask-resolved'; askId: string; messageId: string };
 
 /** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
 export type ApprovalOutcome =
@@ -150,4 +154,13 @@ export interface ToolProvider {
    * classifier's reason as the summary. Changes no decision. Never throws.
    */
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void;
+  /**
+   * Puts a question or a plan to the user and waits (spec
+   * 2026-10-12-thread-cards-design): raises an `ask` event, then settles on
+   * `answerAsk`, on the turn's signal, or at once with `{ unattended: true }`
+   * when `ctx.unattended` is set (no event at all then).
+   */
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome>;
+  /** Answers a pending ask: `'unknown'` for an unknown or settled id, `{ invalid }` for a reply that doesn't fit it. Never throws. */
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult;
 }

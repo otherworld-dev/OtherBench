@@ -2,10 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { artifactTool } from './artifact-tool.js';
 import { recallTool } from './recall-tool.js';
 import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
+import { UserAsks } from '@grunt/core/domain/user-asks.js';
 import type {
   ApprovalChoice,
   ApprovalOptions,
   ApprovalOutcome,
+  AskAnswerResult,
+  AskInput,
+  AskOutcome,
+  AskReply,
   RiskClass,
   ToolApprovalEvent,
   ToolContext,
@@ -161,6 +166,7 @@ export class GruntToolProvider implements ToolProvider {
   private readonly waiters = new Map<string, (choice: ApprovalChoice, cause: SettleCause, decidedOnNode?: string) => void>();
   private readonly generateId: () => string;
   private readonly now: () => number;
+  private readonly asks: UserAsks;
 
   constructor(
     private readonly store: Store,
@@ -171,6 +177,7 @@ export class GruntToolProvider implements ToolProvider {
   ) {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
+    this.asks = new UserAsks((event) => this.notify(event));
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
     // knowing it): settle it as a denial, which also emits `resolved` so the
@@ -318,6 +325,15 @@ export class GruntToolProvider implements ToolProvider {
     }
     this.audit(ctx, tool.name, args, null, this.now() - startedAt, auth.grantedBy, 'delegated to Claude Code', auth.decidedOnNode);
     return { allowed: true, grantedBy: auth.grantedBy };
+  }
+
+  /** Questions and plans for the user (spec 2026-10-12-thread-cards-design): raised on the same event channel as approval cards. */
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome> {
+    return this.asks.ask(ctx, input);
+  }
+
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult {
+    return this.asks.answer(askId, reply);
   }
 
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void {

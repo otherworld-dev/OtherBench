@@ -60,6 +60,8 @@ import type {
 } from '../ports/store.js';
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
+import { UserAsks } from '../domain/user-asks.js';
+import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
 import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
 import { compareProjects } from '../domain/projects.js';
@@ -200,6 +202,8 @@ export class FakeToolProvider implements ToolProvider {
   private readonly broker: PermissionBroker;
   private readonly tools: ToolSpec[];
   private readonly mcpServers: FakeMcpServer[];
+  /** The real ask bookkeeping, so the fake behaves exactly as GruntToolProvider does. */
+  private readonly asks = new UserAsks((event) => this.notify(event));
 
   constructor(options: FakeToolProviderOptions = {}) {
     this.broker = new PermissionBroker(new InMemoryStore());
@@ -274,6 +278,14 @@ export class FakeToolProvider implements ToolProvider {
 
   recordAgentDenial(_ctx: ToolContext, toolName: string, _args: unknown, reason: string): void {
     this.denials.push({ toolName, reason });
+  }
+
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome> {
+    return this.asks.ask(ctx, input);
+  }
+
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult {
+    return this.asks.answer(askId, reply);
   }
 
   private gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec {

@@ -5,6 +5,7 @@ import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config
 import type { CanonMessage, Part } from '../src/types/messages.js';
 import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
 
 // ---------------------------------------------------------------------------
@@ -1884,5 +1885,43 @@ describe('TurnRunner.regenerate', () => {
       id: 'orphan', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null,
     });
     await expect(runner.regenerate({ chatId: 'chat-1', messageId: orphan.id, profile })).rejects.toMatchObject({ code: 'no_parent' });
+  });
+});
+
+describe('TurnRunner relays asks', () => {
+  it("relays a tool's ask and its end as TurnEvents tagged with the reply", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const provider = new FakeToolProvider();
+    const engine: ChatEngine = {
+      async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+        const outcome = await provider.askUser(toolContextFor(req), {
+          kind: 'question',
+          toolName: 'ask_user',
+          questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }],
+        });
+        yield { type: 'text-delta', text: JSON.stringify(outcome) };
+        yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+      },
+      async listModels() {
+        return [];
+      },
+      async testConnection() {
+        return { ok: true, message: 'ok', latencyMs: 0 };
+      },
+    };
+    const runner = new TurnRunner(store, engine, { toolProvider: provider });
+    const events: TurnEvent[] = [];
+    runner.on((e) => {
+      events.push(e);
+      if (e.type === 'ask-request') provider.answerAsk(e.ask.id, { answers: ['Blue'] });
+    });
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'ask me' }], profiles: [makeResolvedProfile()] });
+    const id = assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    const request = events.find((e) => e.type === 'ask-request') as Extract<TurnEvent, { type: 'ask-request' }>;
+    expect(request).toMatchObject({ messageId: id, ask: { kind: 'question', chatId: 'chat-1', messageId: id } });
+    expect(events).toContainEqual({ messageId: id, type: 'ask-resolved', askId: request.ask.id });
+    expect(store.messages.get(id)!.parts).toEqual([{ type: 'text', text: JSON.stringify({ reply: { answers: ['Blue'] } }) }]);
   });
 });

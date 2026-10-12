@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import type { ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
@@ -36,6 +36,9 @@ export type TurnEvent = { messageId: string } & (
   | { type: 'status'; status: MessageStatus }
   | { type: 'approval-request'; request: ApprovalRequest }
   | { type: 'approval-resolved'; requestId: string; choice: ApprovalChoice['choice'] }
+  /** A question or plan card raised by this reply's tool call (spec 2026-10-12-thread-cards-design), relayed like approvals. */
+  | { type: 'ask-request'; ask: UserAsk }
+  | { type: 'ask-resolved'; askId: string }
   /**
    * The capability-fallback disclosure (task 21 decision #3), synthesised by
    * `runVariant` itself -- like `approval-request`/`approval-resolved`, this
@@ -247,10 +250,19 @@ export class TurnRunner {
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
     this.toolProvider?.onApprovalEvent((event) => {
-      if (event.type === 'request') {
-        this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
-      } else {
-        this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+      switch (event.type) {
+        case 'request':
+          this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
+          break;
+        case 'resolved':
+          this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+          break;
+        case 'ask':
+          this.emit({ messageId: event.ask.messageId, type: 'ask-request', ask: event.ask });
+          break;
+        case 'ask-resolved':
+          this.emit({ messageId: event.messageId, type: 'ask-resolved', askId: event.askId });
+          break;
       }
     });
   }
