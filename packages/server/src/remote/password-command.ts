@@ -32,7 +32,10 @@ function readFirstLine(stdin: NodeJS.ReadableStream): Promise<string | null> {
     const onError = (err: Error): void => {
       if (done) return;
       done = true;
-      reject(err);
+      stdin.removeListener('data', onData);
+      stdin.removeListener('end', onEnd);
+      stdin.removeListener('error', onError);
+      reject(new PasswordCommandError(`Could not read the password: ${err.message}`));
     };
     stdin.setEncoding('utf8');
     stdin.on('data', onData);
@@ -42,33 +45,63 @@ function readFirstLine(stdin: NodeJS.ReadableStream): Promise<string | null> {
   });
 }
 
-/** One line typed on a terminal in raw mode, never echoed. Backspace works; Ctrl+C cancels. */
+/**
+ * One line typed on a terminal in raw mode, never echoed. Backspace works;
+ * Ctrl+C cancels; other control characters and escape sequences (arrow keys,
+ * Delete) are ignored; the stream ending or failing mid-prompt is an error.
+ */
 function readHidden(io: PasswordCommandIo, prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     io.stdout.write(prompt);
     let value = '';
+    let done = false;
+    // 0: plain input; 1: just after ESC; 2: inside a `[`/`O` sequence, up to its final byte.
+    let escape: 0 | 1 | 2 = 0;
     const finish = (err: Error | null): void => {
+      if (done) return;
+      done = true;
       io.stdin.removeListener('data', onData);
+      io.stdin.removeListener('end', onClosed);
+      io.stdin.removeListener('close', onClosed);
+      io.stdin.removeListener('error', onError);
       io.stdin.setRawMode?.(false);
       io.stdin.pause();
       io.stdout.write('\n');
       if (err) reject(err);
       else resolve(value);
     };
+    const onClosed = (): void => finish(new PasswordCommandError('Input closed. Nothing was changed.'));
+    const onError = (err: Error): void => finish(new PasswordCommandError(`Could not read the password: ${err.message}`));
     const onData = (chunk: string | Buffer): void => {
       for (const ch of chunk.toString()) {
+        if (escape === 1) {
+          escape = ch === '[' || ch === 'O' ? 2 : 0;
+          continue;
+        }
+        if (escape === 2) {
+          if (ch >= '@' && ch <= '~') escape = 0;
+          continue;
+        }
         if (ch === '\r' || ch === '\n') return finish(null);
         if (ch === '\u0003') return finish(new PasswordCommandError('Cancelled. Nothing was changed.'));
+        if (ch === '\u001b') {
+          escape = 1;
+          continue;
+        }
         if (ch === '\u007f' || ch === '\b') {
           value = [...value].slice(0, -1).join('');
           continue;
         }
+        if (ch < ' ') continue;
         value += ch;
       }
     };
     io.stdin.setEncoding('utf8');
     io.stdin.setRawMode?.(true);
     io.stdin.on('data', onData);
+    io.stdin.on('end', onClosed);
+    io.stdin.on('close', onClosed);
+    io.stdin.on('error', onError);
     io.stdin.resume();
   });
 }

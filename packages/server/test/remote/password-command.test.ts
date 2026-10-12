@@ -71,6 +71,94 @@ describe('grunt password', () => {
     await expect(refused).rejects.toThrow("The passwords don't match.");
   });
 
+  describe('on a terminal', () => {
+    const terminal = () => {
+      const stdin = Object.assign(new PassThrough(), { setRawMode: vi.fn() });
+      const out: string[] = [];
+      return { stdin, out, io: { stdin, stdout: { write: (s: string) => out.push(s) }, isTTY: true } };
+    };
+    const tick = () => new Promise((r) => setImmediate(r));
+    const noListeners = (stdin: PassThrough) => {
+      for (const event of ['data', 'end', 'close', 'error']) expect(stdin.listenerCount(event), event).toBe(0);
+    };
+
+    it('cancels on Ctrl+C, leaving raw mode off and no listeners, and writes nothing', async () => {
+      const path = join(dir, 'login.json');
+      const t = terminal();
+      const run = runPasswordCommand(path, t.io, FAST);
+      t.stdin.write('half typed\u0003');
+
+      await expect(run).rejects.toThrow('Cancelled. Nothing was changed.');
+      expect(t.stdin.setRawMode).toHaveBeenLastCalledWith(false);
+      noListeners(t.stdin);
+      expect(new PasswordFile(path).read()).toBeNull();
+    });
+
+    it('lets backspace delete a character, which then is not in the stored password', async () => {
+      const path = join(dir, 'login.json');
+      const t = terminal();
+      const run = runPasswordCommand(path, t.io, FAST);
+      t.stdin.write('typed passwordX\u007f1\r');
+      await tick();
+      t.stdin.write('typed password1\r');
+      await run;
+
+      const record = new PasswordFile(path).read()!;
+      expect(await verifyPassword('typed password1', record)).toBe(true);
+      expect(await verifyPassword('typed passwordX1', record)).toBe(false);
+    });
+
+    it('ignores arrow keys, Delete and control characters, even when an escape sequence is split across chunks', async () => {
+      const path = join(dir, 'login.json');
+      const t = terminal();
+      const run = runPasswordCommand(path, t.io, FAST);
+      t.stdin.write('typed\u001b[A pass\u001b[3~\u0004word1\u001b');
+      await tick();
+      t.stdin.write('[D\ttyped\r');
+      await tick();
+      t.stdin.write('typed pass\u001bOCword1typed\r');
+      await run;
+
+      expect(await verifyPassword('typed password1typed', new PasswordFile(path).read()!)).toBe(true);
+    });
+
+    it('rejects when stdin ends mid-prompt, with raw mode off and no listeners', async () => {
+      const path = join(dir, 'login.json');
+      const t = terminal();
+      const run = runPasswordCommand(path, t.io, FAST);
+      t.stdin.write('half typed');
+      await tick();
+      t.stdin.end();
+
+      await expect(run).rejects.toThrow(PasswordCommandError);
+      await expect(run).rejects.toThrow('Input closed. Nothing was changed.');
+      expect(t.stdin.setRawMode).toHaveBeenLastCalledWith(false);
+      noListeners(t.stdin);
+      expect(new PasswordFile(path).read()).toBeNull();
+    });
+
+    it('rejects, rather than crashing, when stdin errors mid-prompt', async () => {
+      const t = terminal();
+      const run = runPasswordCommand(join(dir, 'login.json'), t.io, FAST);
+      await tick();
+      t.stdin.emit('error', new Error('boom'));
+
+      await expect(run).rejects.toThrow(PasswordCommandError);
+      expect(t.stdin.setRawMode).toHaveBeenLastCalledWith(false);
+      noListeners(t.stdin);
+    });
+  });
+
+  it('turns a piped stdin error into a PasswordCommandError and removes its listeners', async () => {
+    const stdin = new PassThrough();
+    const run = runPasswordCommand(join(dir, 'login.json'), { stdin, stdout: { write: () => {} }, isTTY: false }, FAST);
+    await new Promise((r) => setImmediate(r));
+    stdin.emit('error', new Error('boom'));
+
+    await expect(run).rejects.toThrow(PasswordCommandError);
+    for (const event of ['data', 'end', 'error']) expect(stdin.listenerCount(event), event).toBe(0);
+  });
+
   it('is wired into main() beside the database, and a live PasswordFile sees the change', async () => {
     const db = join(dir, 'grunt.db');
     let now = 1_000_000;
