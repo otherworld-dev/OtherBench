@@ -98,6 +98,8 @@ export class BrowserManager {
   private readonly opening = new Map<string, Promise<OpenBrowser>>();
   private readonly watchers = new Map<string, Set<Watcher>>();
   private proxy: Promise<EgressProxy> | null = null;
+  /** A shutdown in progress; starting a browser waits for it. */
+  private stopping: Promise<void> | null = null;
   private browserTimer: ReturnType<typeof setTimeout> | undefined;
   private uses = 0;
   private frames = 0;
@@ -113,7 +115,7 @@ export class BrowserManager {
   }
 
   /** The chat's browser for this reply, started if need be. Throws BrowserBusyError when another live reply holds it. */
-  async acquire(chatId: string, messageId: string, signal: AbortSignal, blockedHosts: readonly string[] = []): Promise<ChatBrowser> {
+  async acquire(chatId: string, messageId: string, signal: AbortSignal, blockedHosts: readonly string[]): Promise<ChatBrowser> {
     let entry = this.open.get(chatId);
     if (entry) {
       this.claim(entry, messageId, signal);
@@ -160,7 +162,10 @@ export class BrowserManager {
   }
 
   async close(chatId: string): Promise<void> {
-    await this.opening.get(chatId)?.catch(() => undefined);
+    // Only wait when the browser is still starting: an open one must be detached
+    // in this same tick, so nothing can claim it once it is being closed.
+    const starting = this.opening.get(chatId);
+    if (starting) await starting.catch(() => undefined);
     const entry = this.open.get(chatId);
     if (!entry) return;
     this.open.delete(chatId);
@@ -183,16 +188,24 @@ export class BrowserManager {
 
   private async start(chatId: string): Promise<OpenBrowser> {
     clearTimeout(this.browserTimer);
-    await this.makeRoom(chatId);
-    const proxy = await this.startProxy();
-    const user = randomBytes(12).toString('hex');
-    const session = await this.options.factory.open({ server: proxy.server, username: user, password: proxy.password });
-    const entry = new OpenBrowser(chatId, session, user);
-    this.open.set(chatId, entry);
-    this.byUser.set(user, entry);
-    entry.stopNavigate = session.onNavigate(() => this.navigated(entry));
-    if ((this.watchers.get(chatId)?.size ?? 0) > 0) this.startScreencast(entry);
-    return entry;
+    try {
+      // A shutdown already under way finishes first: its proxy and Chromium are going away.
+      while (this.stopping) await this.stopping;
+      await this.makeRoom(chatId);
+      const proxy = await this.startProxy();
+      const user = randomBytes(12).toString('hex');
+      const session = await this.options.factory.open({ server: proxy.server, username: user, password: proxy.password });
+      const entry = new OpenBrowser(chatId, session, user);
+      this.open.set(chatId, entry);
+      this.byUser.set(user, entry);
+      entry.stopNavigate = session.onNavigate(() => this.navigated(entry));
+      if ((this.watchers.get(chatId)?.size ?? 0) > 0) this.startScreencast(entry);
+      return entry;
+    } catch (err) {
+      // A failed start may have left the proxy or Chromium running; with nothing else open they still get their turn to close.
+      if (this.open.size === 0) this.scheduleShutdown();
+      throw err;
+    }
   }
 
   private async makeRoom(chatId: string): Promise<void> {
@@ -228,7 +241,9 @@ export class BrowserManager {
   private touch(entry: OpenBrowser): void {
     entry.lastUsed = ++this.uses;
     clearTimeout(entry.idleTimer);
-    entry.idleTimer = setTimeout(() => void this.close(entry.chatId), this.options.chatIdleMs ?? CHAT_IDLE_MS);
+    entry.idleTimer = setTimeout(() => {
+      this.close(entry.chatId).catch((err: unknown) => console.warn(`[browser] closing idle chat ${entry.chatId}'s browser failed:`, err));
+    }, this.options.chatIdleMs ?? CHAT_IDLE_MS);
     entry.idleTimer.unref?.();
   }
 
@@ -309,15 +324,30 @@ export class BrowserManager {
     clearTimeout(this.browserTimer);
     this.browserTimer = setTimeout(() => {
       if (this.open.size > 0 || this.opening.size > 0) return;
-      void this.shutdown();
+      this.shutdown().catch((err: unknown) => console.warn('[browser] stopping the browser failed:', err));
     }, this.options.browserIdleMs ?? BROWSER_IDLE_MS);
     this.browserTimer.unref?.();
   }
 
-  private async shutdown(): Promise<void> {
-    await this.options.factory.shutdown().catch((err: unknown) => console.warn('[browser] stopping the browser failed:', err));
+  /**
+   * Stops Chromium and the proxy. The proxy is detached here, in this tick, so a
+   * browser started meanwhile gets a new one (it also waits for `stopping`
+   * before starting anything). Never rejects.
+   */
+  private shutdown(): Promise<void> {
     const proxy = this.proxy;
     this.proxy = null;
-    if (proxy) await (await proxy.catch(() => null))?.close();
+    const previous = this.stopping;
+    const stop = async (): Promise<void> => {
+      await this.options.factory.shutdown().catch((err: unknown) => console.warn('[browser] stopping the browser failed:', err));
+      const started = proxy ? await proxy.catch(() => null) : null;
+      await started?.close().catch((err: unknown) => console.warn('[browser] stopping the proxy failed:', err));
+    };
+    const running = previous ? previous.then(stop) : stop();
+    const tracked: Promise<void> = running.finally(() => {
+      if (this.stopping === tracked) this.stopping = null;
+    });
+    this.stopping = tracked;
+    return tracked;
   }
 }

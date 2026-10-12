@@ -38,13 +38,23 @@ export class FakeSession implements BrowserSession {
     this.notes = [];
     return notes;
   }
-  async startScreencast(onFrame: (jpeg: Buffer) => void): Promise<void> { this.onFrame = onFrame; }
+  /** How many times the screencast was started. */
+  screencastStarts = 0;
+  /** Set to hold close() until it settles. */
+  closeGate: Promise<void> | null = null;
+  async startScreencast(onFrame: (jpeg: Buffer) => void): Promise<void> {
+    this.screencastStarts += 1;
+    this.onFrame = onFrame;
+  }
   async stopScreencast(): Promise<void> { this.onFrame = null; }
   onNavigate(cb: () => void): () => void {
     this.nav.add(cb);
     return () => { this.nav.delete(cb); };
   }
-  async close(): Promise<void> { this.closed = true; }
+  async close(): Promise<void> {
+    await this.closeGate;
+    this.closed = true;
+  }
 
   navigate(url: string, title = ''): void {
     this.current = url;
@@ -61,23 +71,49 @@ export class FakeSession implements BrowserSession {
 export class FakeFactory implements SessionFactory {
   readonly sessions: FakeSession[] = [];
   shutdowns = 0;
+  /** Set to hold shutdown() until it settles, as a slow Chromium exit would. */
+  shutdownGate: Promise<void> | null = null;
+  /** Set to hold open() until it settles. */
+  openGate: Promise<void> | null = null;
+  /** Set to make the next open() fail. */
+  failNextOpen: Error | null = null;
   async open(proxy: ProxyCredentials): Promise<BrowserSession> {
+    await this.openGate;
+    if (this.failNextOpen) {
+      const err = this.failNextOpen;
+      this.failNextOpen = null;
+      throw err;
+    }
     const session = new FakeSession(proxy);
     this.sessions.push(session);
     return session;
   }
-  async shutdown(): Promise<void> { this.shutdowns += 1; }
+  async shutdown(): Promise<void> {
+    this.shutdowns += 1;
+    await this.shutdownGate;
+  }
+}
+
+/** A promise you settle by hand. */
+export function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => { open = resolve; });
+  return { promise, open };
 }
 
 /** A stand-in for startEgressProxy that keeps the options the manager gave it. */
-export function fakeProxy(): { start: (o: EgressProxyOptions) => Promise<EgressProxy>; options: () => EgressProxyOptions; closes: () => number } {
+export function fakeProxy(): { start: (o: EgressProxyOptions) => Promise<EgressProxy>; options: () => EgressProxyOptions; closes: () => number; starts: () => number } {
   let given: EgressProxyOptions | null = null;
   let closes = 0;
+  let starts = 0;
   return {
+    // Each start gets its own address (the first is :9), so a session can be traced to its proxy.
     start: async (o) => {
       given = o;
-      return { server: 'http://127.0.0.1:9', password: 'pw', close: async () => { closes += 1; } };
+      starts += 1;
+      return { server: `http://127.0.0.1:${8 + starts}`, password: 'pw', close: async () => { closes += 1; } };
     },
+    starts: () => starts,
     options: () => {
       if (!given) throw new Error('The proxy was never started.');
       return given;
