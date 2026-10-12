@@ -43,7 +43,14 @@ function overlaps(a: string, b: string): boolean {
  * from the ceiling and still be allowed).
  */
 function narrowed(plan: PlannedMount[], ceiling: PlannedMount[]): PlannedMount[] {
-  const allowed = (m: PlannedMount): boolean => ceiling.some((c) => c.mode === 'rw' && (c.linuxPath === m.linuxPath || m.linuxPath.startsWith(`${c.linuxPath}/`)));
+  // Windows compares paths without case, as planMounts does.
+  const allowed = (m: PlannedMount): boolean => {
+    const path = m.linuxPath.toLowerCase();
+    return ceiling.some((c) => {
+      const parent = c.linuxPath.toLowerCase();
+      return c.mode === 'rw' && (path === parent || path.startsWith(`${parent}/`));
+    });
+  };
   return plan.map((m): PlannedMount => (m.mode === 'rw' && !allowed(m) ? { ...m, mode: 'ro' } : m));
 }
 

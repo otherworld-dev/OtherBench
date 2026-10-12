@@ -30,6 +30,25 @@ describe('toSandboxPath', () => {
     expect(() => toSandboxPath(win)).toThrow(reason);
   });
 
+  it.each([
+    ['a comma', 'E:\\a,b'],
+    ['a semicolon', 'E:\\a;uid=0'],
+  ])('refuses %s with a plain reason', (_name, win) => {
+    expect(() => toSandboxPath(win)).toThrow(/commas and semicolons can't be mounted/);
+  });
+
+  it('refuses a lone surrogate, but not a surrogate pair', () => {
+    expect(() => toSandboxPath('E:\\a\ud800b')).toThrow(/lone surrogate/);
+    expect(() => toSandboxPath('E:\\a\udc00')).toThrow(/lone surrogate/);
+    expect(() => normaliseWindowsPath('E:/a\ud800')).toThrow(/lone surrogate/);
+    expect(toSandboxPath('E:\\a\u{1F4C1}b')).toBe('/mnt/e/a\u{1F4C1}b');
+  });
+
+  it('treats U+2028 and U+2029 as ordinary name characters', () => {
+    expect(toSandboxPath('D:\\a\u2028b\\c\u2029d')).toBe('/mnt/d/a\u2028b/c\u2029d');
+    expect(normaliseWindowsPath('d:/a\u2028b/')).toBe('D:\\a\u2028b');
+  });
+
   it('counts the length in UTF-8 bytes', () => {
     expect(toSandboxPath(`E:\\${'a'.repeat(1020)}`)).toBe(`/mnt/e/${'a'.repeat(1020)}`);
     expect(() => toSandboxPath(`E:\\${'é'.repeat(512)}`)).toThrow(/longer than 1024 bytes/);

@@ -54,7 +54,7 @@ esac
 # packages/core/src/domain/sandbox-paths.ts (test/fixtures/sandbox-path-vectors.json
 # runs against both): X:\ then segments separated by single backslashes, no trailing
 # one; a segment is not empty, not . or .., has no control character and none of
-# < > : " / \ | ? *, and doesn't end in a dot or a space; every byte >= 0x80 (UTF-8)
+# < > : " / \ | ? * , ;, and doesn't end in a dot or a space; every byte >= 0x80 (UTF-8)
 # is fine; at most 1024 bytes (LC_ALL=C, so ${#win} counts bytes).
 for arg in "$action" "$win" "$target" "$mode"; do
   [[ "$arg" != -* ]] || die "an argument starts with '-': $arg"
@@ -78,6 +78,8 @@ if [ -n "$rest" ]; then
     [[ -n "$part" && "$part" != '.' && "$part" != '..' ]] || die "bad path segment in $win"
     [[ ! "$part" =~ $forbidden ]] || die "a character Windows doesn't allow in a name, in $win"
     [[ ! "$part" =~ $trailing ]] || die "a name ends in a dot or a space, in $win"
+    # drvfs's mount option string can't carry these (and they would let a name add options).
+    [[ "$part" != *[,\;]* ]] || die "commas and semicolons can't be mounted in the sandbox, in $win"
   done
 fi
 

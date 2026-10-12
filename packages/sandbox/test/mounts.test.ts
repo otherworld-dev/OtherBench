@@ -284,6 +284,15 @@ describe('MountManager', () => {
       expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
     });
 
+    it("keeps another chat's read-write folder read-write when the parent is spelled in another case", async () => {
+      const r = recordingRunner({ mount: (x) => x.linuxPath.toLowerCase() === '/mnt/e/git' });
+      const m = new MountManager(r, () => {});
+      await m.set('chat-a', [rw('E:\\Git\\Grunt')]);
+      r.log.length = 0;
+      await expect(m.set('chat-b', [rw('e:\\git')])).rejects.toMatchObject({ code: 'mount_failed' });
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
+    });
+
     it('refuses a chat when a read-write mount over its folders will not come off', async () => {
       const r = recordingRunner({ unmount: (x) => x.linuxPath === '/mnt/e/Git' });
       const warn = vi.fn();

@@ -22,6 +22,8 @@ export class SandboxPathError extends Error {
 const CONTROL = /[\u0000-\u001f\u007f]/;
 /** Characters Windows doesn't allow in a name (the separators are handled by splitting). */
 const FORBIDDEN_IN_NAME = /[<>:"|?*/]/;
+/** A UTF-16 surrogate with no partner: it would reach the distro as U+FFFD. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 /** The whole path, in UTF-8 bytes. Matches MAX_PATH_BYTES in packages/sandbox/resources/mount.sh. */
 const MAX_PATH_BYTES = 1024;
 
@@ -31,15 +33,17 @@ const MAX_PATH_BYTES = 1024;
  * packages/sandbox/test/fixtures/sandbox-path-vectors.json run against both):
  * `X:\` then segments separated by single backslashes, no trailing one. A
  * segment is not empty, not `.` or `..`, has no control character and none of
- * `< > : " / \ | ? *`, and doesn't end in a dot or space. Anything else
- * (non-ASCII included) is allowed. At most 1024 bytes in all.
+ * `< > : " / \ | ? * , ;` (drvfs's option string can't carry the last two),
+ * and doesn't end in a dot or space. Anything else (non-ASCII included, but
+ * no lone surrogate) is allowed. At most 1024 bytes in all.
  */
 function parseMountable(path: string): { drive: string; segments: string[] } {
   if (CONTROL.test(path)) throw new SandboxPathError(path, 'it contains control characters.');
   if (/^[\\/]{2}[?.][\\/]/.test(path)) throw new SandboxPathError(path, "device and \\\\?\\ paths can't be mounted.");
   if (/^[\\/]{2}/.test(path)) throw new SandboxPathError(path, "network (UNC) paths can't be mounted; use a folder on a local drive.");
   if (new TextEncoder().encode(path).length > MAX_PATH_BYTES) throw new SandboxPathError(path, `it is longer than ${String(MAX_PATH_BYTES)} bytes.`);
-  const match = /^([A-Za-z]):\\(.*)$/.exec(path);
+  if (LONE_SURROGATE.test(path)) throw new SandboxPathError(path, 'it contains a character that is not valid text (a lone surrogate).');
+  const match = /^([A-Za-z]):\\([\s\S]*)$/.exec(path);
   if (!match) throw new SandboxPathError(path, 'only absolute paths on a drive letter (like C:\\Users\\you\\project) can be mounted.');
   const rest = match[2] ?? '';
   const segments = rest === '' ? [] : rest.split('\\');
@@ -47,6 +51,7 @@ function parseMountable(path: string): { drive: string; segments: string[] } {
     if (s === '') throw new SandboxPathError(path, 'it has an empty segment or a trailing separator.');
     if (s === '.' || s === '..') throw new SandboxPathError(path, 'it contains . or .. segments.');
     if (FORBIDDEN_IN_NAME.test(s)) throw new SandboxPathError(path, 'a name in it has a character Windows does not allow (one of < > : " / | ? *).');
+    if (/[,;]/.test(s)) throw new SandboxPathError(path, "commas and semicolons can't be mounted in the sandbox (a name in it has one).");
     if (/[. ]$/.test(s)) throw new SandboxPathError(path, 'a name in it ends in a dot or a space.');
   }
   return { drive: match[1] ?? '', segments };
@@ -62,7 +67,7 @@ export function normaliseWindowsPath(path: string): string {
   if (CONTROL.test(path)) throw new SandboxPathError(path, 'it contains control characters.');
   if (/^[\\/]{2}[?.][\\/]/.test(path)) throw new SandboxPathError(path, "device and \\\\?\\ paths can't be mounted.");
   if (/^[\\/]{2}/.test(path)) throw new SandboxPathError(path, "network (UNC) paths can't be mounted; use a folder on a local drive.");
-  const match = /^([A-Za-z]):[\\/](.*)$/.exec(path);
+  const match = /^([A-Za-z]):[\\/]([\s\S]*)$/.exec(path);
   if (!match) throw new SandboxPathError(path, 'only absolute paths on a drive letter (like C:\\Users\\you\\project) can be mounted.');
   const segments = (match[2] ?? '').split(/[\\/]+/).filter((s) => s.length > 0);
   const tidy = `${(match[1] ?? '').toUpperCase()}:\\${segments.join('\\')}`;
