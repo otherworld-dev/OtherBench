@@ -516,7 +516,8 @@ export function runToolProviderContract(
         const tools = (await provider.listTools(policy({ shell: true, shellRuns }))).filter((t) => t.name === 'run_command');
         expect(tools.map((t) => t.source)).toEqual([source]);
       }
-      expect(await provider.listTools(policy({ shell: false, shellRuns: 'sandbox' }))).toEqual([]);
+      // Thread tools are offered to every profile; no shell of either kind is.
+      expect((await provider.listTools(policy({ shell: false, shellRuns: 'sandbox' }))).filter((t) => t.source !== 'thread')).toEqual([]);
     });
 
     it('a sandboxed command runs with no card under ask_on_mutate, and asks under always_ask', async () => {
