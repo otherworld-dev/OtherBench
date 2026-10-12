@@ -73,6 +73,19 @@ describe('PermissionBroker and computer use', () => {
     expect(broker.decide(COMPUTER, click(), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
+  it('counts anything but a plain false or nothing as unattended', () => {
+    grant(EXCEL);
+    const reason = 'Computer use needs someone at the machine; it never runs unattended.';
+    for (const unattended of ['true', 'false', 1, 0, {}, [], null, 'yes']) {
+      const odd = ctx({ unattended: unattended as unknown as boolean });
+      expect(broker.decide(COMPUTER, click(), policy(), odd), JSON.stringify(unattended)).toEqual({ kind: 'deny', reason, unattended: true });
+      expect(broker.decide(COMPUTER, { action: 'screenshot' }, policy(), odd), JSON.stringify(unattended)).toEqual({ kind: 'deny', reason, unattended: true });
+    }
+    for (const attended of [undefined, false]) {
+      expect(broker.decide(COMPUTER, click(), policy(), ctx({ unattended: attended }))).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    }
+  });
+
   it('lets a screenshot, the cursor position and a wait through with no card, in both approval modes', () => {
     for (const approvalMode of ['always_ask', 'ask_on_mutate'] as const) {
       for (const action of ['screenshot', 'cursor_position', 'wait']) {

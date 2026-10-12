@@ -240,7 +240,9 @@ export class PermissionBroker {
     // else needs a grant for the app the tool's describeCall resolved, or a
     // card; with no app at all it is refused (fail closed).
     if (tool.source === 'computer') {
-      if (ctx.unattended === true) return { kind: 'deny', reason: COMPUTER_UNATTENDED_REASON, unattended: true };
+      // Fail closed: only a plain `false`, or nothing at all, says someone is
+      // there. Any other value (a string, a number, null) counts as unattended.
+      if (ctx.unattended !== undefined && ctx.unattended !== false) return { kind: 'deny', reason: COMPUTER_UNATTENDED_REASON, unattended: true };
       const action = stringField(args, 'action');
       // Exactly one of the known names, as a string: anything else (another
       // case, an array, a missing action) is refused, never treated as a look.

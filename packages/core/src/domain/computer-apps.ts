@@ -532,15 +532,17 @@ const TOO_MUCH_TO_TYPE = `That is too much to type in one action (at most ${COMP
  *     (3 when left out);
  *   - typed text is 1 to 4000 characters, well-formed, with no control
  *     character but line breaks and tabs;
- *   - a key passes `parseKeys` (with `reserved`) and is sent as the canonical
- *     combination, never as the model wrote it;
+ *   - a key passes `parseKeys` (with `reserved`; `null` when the shell has
+ *     not reported its shortcuts, which holds back every combination with a
+ *     modifier) and is sent as the canonical combination, never as the model
+ *     wrote it;
  *   - a wait is a finite number of seconds, zero or more, cut to 10 (1 when
  *     left out).
  *
  * There is no action that holds a key or a button down: every action here
  * presses and releases.
  */
-export function parseAction(args: unknown, options: { bounds?: { width: number; height: number }; reserved?: readonly unknown[] } = {}): ParsedAction {
+export function parseAction(args: unknown, options: { bounds?: { width: number; height: number }; reserved?: readonly unknown[] | null } = {}): ParsedAction {
   const no = (reason: string): ParsedAction => ({ ok: false, reason });
   const a = recordOf(args);
   const action = a?.['action'];

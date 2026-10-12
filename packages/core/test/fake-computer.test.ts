@@ -89,6 +89,26 @@ describe('FakeComputerDriver', () => {
     expect(refusedStart.actions).toEqual([]);
   });
 
+  it('shows and tells nothing to a chat that has no control session', async () => {
+    const driver = new FakeComputerDriver();
+    await expect(driver.screenshot('c1')).rejects.toThrow(FAKE_NO_SESSION_REASON);
+    await expect(driver.cursorPosition('c1')).rejects.toThrow(FAKE_NO_SESSION_REASON);
+    expect(await driver.target('c1', { x: 1, y: 2 })).toEqual({ refuse: FAKE_NO_SESSION_REASON });
+    expect(await driver.target('c1', 'foreground')).toEqual({ refuse: FAKE_NO_SESSION_REASON });
+    expect(driver.screenshots).toEqual([]);
+    expect(driver.targets).toEqual([]);
+
+    await driver.ensureSession('c1', 'Chat one');
+    expect(await driver.screenshot('c1')).toMatchObject({ width: 1366, height: 768 });
+    expect(await driver.cursorPosition('c1')).toEqual({ x: 0, y: 0 });
+    expect(await driver.target('c1', 'foreground')).toEqual(FAKE_COMPUTER_APP);
+    // Another chat's session is not this chat's, and a stopped session is none.
+    await expect(driver.screenshot('c2')).rejects.toThrow(FAKE_NO_SESSION_REASON);
+    driver.stop('c1');
+    await expect(driver.screenshot('c1')).rejects.toThrow(FAKE_NO_SESSION_REASON);
+    expect(await driver.target('c1', 'foreground')).toEqual({ refuse: FAKE_NO_SESSION_REASON });
+  });
+
   it('gives a target core finds ordinary, whose described arguments carry the full expectation', () => {
     const classified = classifyTarget(FAKE_COMPUTER_APP);
     expect(classified).toMatchObject({ kind: 'app', key: FAKE_COMPUTER_APP.path, name: 'FakeApp.exe', risk: 'normal' });
@@ -223,5 +243,17 @@ describe('FakeComputerDriver', () => {
     expect(driver.reservedKeys()).toEqual([]);
     driver.reserved = ['Ctrl+Alt+G', 'Ctrl+Alt+Backspace'];
     expect(driver.reservedKeys()).toEqual(['Ctrl+Alt+G', 'Ctrl+Alt+Backspace']);
+    // A shell that has not said what its shortcuts are.
+    driver.reserved = null;
+    expect(driver.reservedKeys()).toBeNull();
+  });
+
+  it('sends no combination with a modifier while the shortcuts are not known', async () => {
+    const driver = await started();
+    driver.reserved = null;
+    await expect(driver.act('c1', { action: 'key', text: 'ctrl+s' }, EXPECT)).rejects.toThrow(/core would not send/);
+    await expect(driver.act('c1', { action: 'key', text: 'shift+tab' }, EXPECT)).rejects.toThrow(/core would not send/);
+    expect(await driver.act('c1', { action: 'key', text: 'return' }, EXPECT)).toEqual({ ok: true });
+    expect(await driver.act('c1', { action: 'type', text: 'hello' }, EXPECT)).toEqual({ ok: true });
   });
 });

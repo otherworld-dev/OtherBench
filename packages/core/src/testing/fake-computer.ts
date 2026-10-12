@@ -45,7 +45,7 @@ export function fakeComputerTarget(over: Partial<ComputerTarget> = {}): Computer
 /** What `act` answers when the window is no longer the one the action was approved for. */
 export const FAKE_WINDOW_CHANGED_REASON = 'The window changed after Grunt asked, so nothing was done.';
 
-/** What `act` answers for a chat that has no control session. */
+/** What every call but `ensureSession` answers (or rejects with) for a chat that has no control session. */
 export const FAKE_NO_SESSION_REASON = 'Grunt is not controlling this computer for that chat.';
 
 type Acted = { chatId: string; action: ComputerAction; expect: ComputerExpectation };
@@ -72,8 +72,10 @@ function sameAction(a: object, b: object): boolean {
  * a test: `act` THROWS when it is handed an action that isn't exactly what
  * core's `parseAction` returns (outside a cap in `COMPUTER_LIMITS`, off the
  * screenshot, a key combination not in canonical form or one of
- * `reserved`) or an expectation that isn't whole, and refuses a chat that
- * has no session.
+ * `reserved`) or an expectation that isn't whole. And every call but
+ * `ensureSession` refuses a chat that has no session: `screenshot` and
+ * `cursorPosition` reject, `target` answers a refusal, `act` does nothing.
+ * So a layer that forgot to start the session fails its test.
  */
 export class FakeComputerDriver implements ComputerDriver {
   isAvailable = true;
@@ -85,8 +87,8 @@ export class FakeComputerDriver implements ComputerDriver {
   actAnswer: ComputerAnswer = { ok: true };
   screenSize = { width: 1366, height: 768 };
   cursor = { x: 0, y: 0 };
-  /** The shell's own global shortcuts (`reservedKeys`). */
-  reserved: string[] = [];
+  /** The shell's own global shortcuts (`reservedKeys`); `null` for a shell that has not reported any list. */
+  reserved: string[] | null = [];
   readonly started: { chatId: string; chatTitle: string }[] = [];
   readonly ended: string[] = [];
   /** Actions carried out. */
@@ -119,15 +121,18 @@ export class FakeComputerDriver implements ComputerDriver {
   }
 
   async screenshot(chatId: string): Promise<ComputerScreenshot> {
+    if (!this.sessions.has(chatId)) throw new Error(FAKE_NO_SESSION_REASON);
     this.screenshots.push(chatId);
     return { png: FAKE_PNG, ...this.screenSize };
   }
 
-  async cursorPosition(): Promise<{ x: number; y: number }> {
+  async cursorPosition(chatId: string): Promise<{ x: number; y: number }> {
+    if (!this.sessions.has(chatId)) throw new Error(FAKE_NO_SESSION_REASON);
     return { ...this.cursor };
   }
 
   async target(chatId: string, at: { x: number; y: number } | 'foreground'): Promise<ComputerTarget | ComputerRefusal> {
+    if (!this.sessions.has(chatId)) return { refuse: FAKE_NO_SESSION_REASON };
     this.targets.push({ chatId, at });
     return at === 'foreground' ? this.foregroundTarget : this.pointTarget;
   }
@@ -167,7 +172,7 @@ export class FakeComputerDriver implements ComputerDriver {
     this.foregroundTarget = target;
   }
 
-  reservedKeys(): readonly string[] {
+  reservedKeys(): readonly string[] | null {
     return this.reserved;
   }
 

@@ -169,9 +169,13 @@ function reservedCombo(entry: unknown): string | null | undefined {
  * Reads the text of a `key` action. `reserved` is Grunt's own global
  * shortcuts as the shell registered them (`ComputerDriver.reservedKeys()`):
  * the model may not press them. While one of them can't be read, no
- * combination is sent at all.
+ * combination is sent at all. `null` means the shell has not said what they
+ * are: until it does, no combination with a modifier is sent (every global
+ * shortcut has one), and a key on its own still is. Leaving `reserved` out
+ * means there are none to hold back (the broker and the summary, which only
+ * ever run after the tool has checked against the real list).
  */
-export function parseKeys(text: unknown, reserved: readonly unknown[] = []): ParsedKeys {
+export function parseKeys(text: unknown, reserved: readonly unknown[] | null = []): ParsedKeys {
   if (typeof text !== 'string') return refuse(NO_TEXT_REASON);
   // The length first, on the text as it came: nothing longer is trimmed, split or searched.
   if (text.length > KEY_LIMITS.textLength) return refuse(`That is too long to be one key combination (at most ${KEY_LIMITS.textLength} characters).`);
@@ -213,6 +217,12 @@ export function parseKeys(text: unknown, reserved: readonly unknown[] = []): Par
     return refuse(`Grunt never sends ${canonical}: it leaves the app this action was approved for.`);
   }
 
+  if (reserved === null) {
+    if (combo.modifiers.size > 0) {
+      return refuse("Grunt doesn't know its own shortcuts yet, so it sends no key combination with a modifier. A single key such as Return still works.");
+    }
+    return { ok: true, combos: [[...combo.keys]], text: canonical };
+  }
   for (const entry of reserved) {
     const held = reservedCombo(entry);
     if (held === undefined) {

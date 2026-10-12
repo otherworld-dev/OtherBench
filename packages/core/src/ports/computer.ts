@@ -107,7 +107,11 @@ export interface ComputerScreenshot {
 export interface ComputerDriver {
   /** True only when the tool can be offered: the desktop shell on Windows said hello with computer use on. */
   available(): boolean;
-  /** Starts (or continues) the chat's control session. The shell shows its native dialog the first time. */
+  /**
+   * Starts (or continues) the chat's control session. The shell shows its
+   * native dialog the first time. Every other call below needs the session:
+   * without one the driver shows, tells and does nothing.
+   */
   ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer>;
   endSession(chatId: string): Promise<void>;
   screenshot(chatId: string): Promise<ComputerScreenshot>;
@@ -128,10 +132,14 @@ export interface ComputerDriver {
   act(chatId: string, action: ComputerAction, expect: ComputerExpectation): Promise<ComputerAnswer>;
   /**
    * The global shortcuts the shell has registered (quick chat, the stop
-   * hotkey), as it was given them. `parseKeys` refuses a `key` action that
-   * would press one.
+   * hotkey), as it reported them in its hello and in every change since.
+   * `parseKeys` refuses a `key` action that would press one. `null` when the
+   * shell has not reported a list: never an empty list standing in for one,
+   * so that no combination with a modifier is sent until the list is known.
+   * The shell is the source of truth for its own shortcuts and refuses them
+   * itself when it acts; this list lets the tool say so before a card.
    */
-  reservedKeys(): readonly string[];
+  reservedKeys(): readonly string[] | null;
   /** The shell ended a session itself (hotkey, the bar's Stop, idle, quit). Returns the unsubscribe. */
   onStopped(cb: (chatId: string, why: ComputerStopReason) => void): () => void;
 }

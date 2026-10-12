@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, parseKeys } from '../src/domain/computer-keys.js';
 
-function canonical(text: unknown, reserved?: readonly unknown[]): string | null {
+function canonical(text: unknown, reserved?: readonly unknown[] | null): string | null {
   const parsed = parseKeys(text, reserved);
   return parsed.ok ? parsed.text : null;
 }
 
-function reason(text: unknown, reserved?: readonly unknown[]): string {
+function reason(text: unknown, reserved?: readonly unknown[] | null): string {
   const parsed = parseKeys(text, reserved);
   if (parsed.ok) throw new Error(`Expected a refusal for ${JSON.stringify(text)}, got ${parsed.text}`);
   return parsed.reason;
@@ -125,6 +125,22 @@ describe('computer keys', () => {
     expect(canonical('ctrl+s', ['Ctrl+Shift+Space'])).toBe('ctrl+s');
     // A shortcut the model could never press anyway (Windows key, Print Screen) or none at all reserves nothing.
     expect(canonical('ctrl+s', ['Super+Space', 'PrintScreen', '', '  '])).toBe('ctrl+s');
+  });
+
+  it('sends no combination with a modifier while it has not been told what the shortcuts are', () => {
+    const unknown = "Grunt doesn't know its own shortcuts yet, so it sends no key combination with a modifier. A single key such as Return still works.";
+    for (const keys of ['ctrl+s', 'shift+Tab', 'alt+Left', 'ctrl+shift+s', 'Shift_R+F10', 's+CONTROL']) expect(reason(keys, null), keys).toBe(unknown);
+    // A key on its own can be nobody's global shortcut that Grunt registered: those all have a modifier.
+    for (const [keys, want] of Object.entries({ Return: 'return', F5: 'f5', Escape: 'escape', a: 'a', Tab: 'tab', Delete: 'delete' })) {
+      expect(canonical(keys, null), keys).toBe(want);
+    }
+    // What is refused anyway is refused for its own reason.
+    expect(reason('super+r', null)).toBe('Key combinations with the Windows key are never sent.');
+    expect(canonical('Print', null)).toBeNull();
+    expect(canonical('shift', null)).toBeNull();
+    // Leaving the list out is not the same as not knowing it: that is the caller saying there are none.
+    expect(canonical('ctrl+s')).toBe('ctrl+s');
+    expect(canonical('ctrl+s', [])).toBe('ctrl+s');
   });
 
   it('sends no keys at all while it cannot read one of its own shortcuts', () => {

@@ -582,6 +582,10 @@ describe('parsing a whole action', () => {
     expect(refused({ action: 'key', text: 'super+r' })).toBe('Key combinations with the Windows key are never sent.');
     expect(parsed({ action: 'key', text: 'ctrl+shift+space' })).toEqual({ action: 'key', text: 'ctrl+shift+space' });
     expect(refused({ action: 'key', text: 'ctrl+shift+space' }, { reserved: ['Ctrl+Shift+Space'] })).toMatch(/Grunt's own shortcuts/);
+    // The shell has not said what its shortcuts are: nothing with a modifier goes out.
+    expect(refused({ action: 'key', text: 'ctrl+s' }, { reserved: null })).toMatch(/doesn't know its own shortcuts yet/);
+    expect(parsed({ action: 'key', text: 'Return' }, { reserved: null })).toEqual({ action: 'key', text: 'return' });
+    expect(parsed({ action: 'type', text: 'x' }, { reserved: null })).toEqual({ action: 'type', text: 'x' });
   });
 
   it('cuts a wait to ten seconds, and refuses one that is not a length of time', () => {
