@@ -646,6 +646,19 @@ describe('GET /api/chats/:id/messages', () => {
     });
   });
 
+  it("keeps a reply's own cost in the usage map: a sub-agent's row never replaces it", async () => {
+    const chatId = (await createChat())['id'] as string;
+    container.store.messages.create({ id: 'u-1', chatId, parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    container.store.messages.create({ id: 'a-1', chatId, parentId: 'u-1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const pricingSnapshot = { priceInPer1m: 3, priceOutPer1m: 15, priceCachedPer1m: null, currency: 'USD' };
+    const row = { chatId, messageId: 'a-1', profileId: 'profile-1', connectionId: 'conn-1', modelId: 'model-1', tokensCached: 0, tokensReasoning: 0, costEstimate: null, pricingSnapshot, latencyMs: 5 };
+    container.store.usage.create({ ...row, id: 'own', tokensIn: 100, tokensOut: 50 });
+    container.store.usage.create({ ...row, id: 'sub', tokensIn: 9, tokensOut: 9, subagentCallId: 'call-1' });
+
+    const body = (await json(await app().request(`/api/chats/${chatId}/messages`))) as { usage: Record<string, { tokensIn: number }> };
+    expect(body.usage['a-1']?.tokensIn).toBe(100);
+  });
+
   it('404s for an unknown chat', async () => {
     const res = await app().request('/api/chats/nope/messages');
     expect(res.status).toBe(404);

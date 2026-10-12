@@ -54,7 +54,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'subagents'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
@@ -74,6 +74,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : base.agentMcp !== undefined ? { agentMcp: base.agentMcp } : {}),
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
+    ...(typeof v['subagents'] === 'boolean' ? { subagents: v['subagents'] } : base.subagents !== undefined ? { subagents: base.subagents } : {}),
   };
 }
 

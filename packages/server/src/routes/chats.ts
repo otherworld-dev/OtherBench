@@ -271,6 +271,8 @@ export function chatsRoutes(container: Container): Hono {
     // reload too (#819). One row per message; a later one would win.
     const usage: Record<string, RecordedUsage> = {};
     for (const u of container.store.usage.list(chat.id)) {
+      // A sub-agent's row hangs off the same reply; the compare tabs show the reply's own cost.
+      if (u.subagentCallId) continue;
       usage[u.messageId] = {
         tokensIn: u.tokensIn,
         tokensOut: u.tokensOut,

@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import { Hono, type Context, type Next } from 'hono';
 import { encodeHlc } from '@grunt/core/domain/hlc.js';
 import type { ChangeRow, SyncRow } from '@grunt/core/domain/sync.js';
-import { appendDelta } from '@grunt/core/domain/turn.js';
+import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/domain/parts.js';
 import type { Part, ProducedBy, SerializedError } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { parseApprovalChoice } from '../routes/tools.js';
@@ -88,7 +88,7 @@ function cutOff(peerName: string): SerializedError {
 }
 
 /** A reply's parts with one more of its relayed events folded in, as the machine writing it stores them. */
-function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
+export function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
   switch (e['type']) {
     case 'notice':
       return isString(e['text']) ? [...parts, { type: 'notice', text: e['text'] }] : parts;
@@ -102,6 +102,9 @@ function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
       return isString(e['id']) && isString(e['name'])
         ? [...parts, { type: 'tool-result', id: e['id'], name: e['name'], result: e['result'], isError: e['isError'] === true }]
         : parts;
+    case 'subagent':
+      // A relayed sub-agent card, so a reply kept after its machine went away keeps it.
+      return isString(e['callId']) && isSubagentEvent(e['event']) ? applySubagentEvent(parts, e['callId'], e['event']) : parts;
     default:
       return parts;
   }
