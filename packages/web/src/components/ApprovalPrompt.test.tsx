@@ -21,6 +21,16 @@ function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
 describe('ApprovalPrompt', () => {
   afterEach(cleanup);
 
+  it("names the sub-agent whose tool call is asking", () => {
+    render(<ApprovalPrompt request={request({ subagent: { callId: 'c1', label: 'First helper' } })} onResolve={vi.fn()} />);
+    expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Sub-agent: First helper');
+  });
+
+  it("shows no sub-agent line for the reply's own call", () => {
+    render(<ApprovalPrompt request={request()} onResolve={vi.fn()} />);
+    expect(screen.queryByText(/Sub-agent:/)).not.toBeInTheDocument();
+  });
+
   it('renders the tool name, risk, and summary', () => {
     render(<ApprovalPrompt request={request()} onResolve={vi.fn()} />);
     expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('write_file');

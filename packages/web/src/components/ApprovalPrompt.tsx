@@ -113,6 +113,11 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
       data-testid={`approval-prompt-${request.id}`}
       className="my-1 space-y-2 rounded-sm border border-l-[3px] border-[var(--warn)] bg-[var(--bg-raised)] px-3 py-2 text-sm"
     >
+      {request.subagent && (
+        <p data-testid="approval-subagent" className="text-xs text-[var(--text-muted)]">
+          Sub-agent: {request.subagent.label}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <span aria-hidden="true">🔒</span>
         <span>
