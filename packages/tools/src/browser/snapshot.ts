@@ -5,11 +5,18 @@ export const MAX_TARGET_CHARS = 200;
 export const MAX_NOTE_CHARS = 300;
 const CUT_NOTE = '[The rest of the page was cut: its snapshot is longer than 40,000 characters.]';
 
-/** The snapshot, cut at the last line break before 40,000 characters, with a note saying so. */
+/**
+ * The snapshot, cut at the last line break before 40,000 characters (or, with
+ * none, at 40,000 itself, never between the two halves of a surrogate pair),
+ * with a note saying so.
+ */
 export function cutSnapshot(snapshot: string): { snapshot: string; truncated: boolean } {
   if (snapshot.length <= MAX_SNAPSHOT_CHARS) return { snapshot, truncated: false };
   const cut = snapshot.lastIndexOf('\n', MAX_SNAPSHOT_CHARS);
-  return { snapshot: `${snapshot.slice(0, cut > 0 ? cut : MAX_SNAPSHOT_CHARS)}\n${CUT_NOTE}`, truncated: true };
+  let end = cut > 0 ? cut : MAX_SNAPSHOT_CHARS;
+  const last = snapshot.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return { snapshot: `${snapshot.slice(0, end)}\n${CUT_NOTE}`, truncated: true };
 }
 
 /** Any whitespace, line and paragraph separators and NEL: a single space in page text shown outside the snapshot. */

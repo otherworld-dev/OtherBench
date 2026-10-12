@@ -34,8 +34,11 @@ describe('acting only on the page that was approved', () => {
     await s.call({ command: 'open', url: 'https://example.com/' });
     const none = { error: true, code: 'bad_call', message: 'Grunt has no approval for this call.' };
     expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1 }, s.ctx())).toEqual(none);
-    expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1, nav: { id: 'x', url: 'https://example.com/' } }, s.ctx())).toEqual(none);
-    expect(await s.tool.execute({ command: 'snapshot', host: 'example.com', nav: { id: s.session().navigationId(), url: 'https://other.test/' } }, s.ctx())).toEqual(none);
+    expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1, nav: 'x' }, s.ctx())).toEqual(none);
+    expect(await s.tool.execute({ command: 'click', ref: 'e3', host: 'example.com', gen: 1, nav: { id: s.session().navigationId(), url: 'https://example.com/' } }, s.ctx())).toEqual(none);
+    // `host` is what the call was approved for: described on example.com, it never acts on other.test.
+    s.session().navigate('https://other.test/');
+    expect(await s.tool.execute({ command: 'snapshot', host: 'example.com', nav: s.session().navigationId() }, s.ctx())).toEqual(MOVED_OTHER);
     expect(s.session().actions).toEqual(OPENED);
   });
 
@@ -114,12 +117,34 @@ describe('acting only on the page that was approved', () => {
     expect(JSON.stringify(result)).not.toContain('Secret');
   });
 
-  it('forgets the refs once a call was refused for a move, so the next ref fails fast', async () => {
+  it('forgets the refs once a call was refused for a move, so the next ref fails fast, before any card', async () => {
     const s = setup();
     await s.call({ command: 'open', url: 'https://example.com/' });
     const args = await s.described({ command: 'click', ref: 'e3' });
     s.session().navigate('https://other.test/');
     await s.tool.execute(args, s.ctx());
-    expect(await s.call({ command: 'click', ref: 'e3' })).toMatchObject({ code: 'stale_ref' });
+    expect(await s.call({ command: 'click', ref: 'e3' })).toEqual({ refused: "e3 isn't on the page any more: take a new snapshot." });
+  });
+
+  it('refuses at describe time a ref the latest snapshot never had (no card for it)', async () => {
+    const s = setup();
+    await s.call({ command: 'open', url: 'https://example.com/' });
+    for (const c of [{ command: 'click', ref: 'e999' }, { command: 'type', ref: 'e999', text: 'x' }, { command: 'select', ref: 'e999', values: ['a'] }, { command: 'scroll', ref: 'e999' }]) {
+      expect(await s.tool.describeCall!(c, s.ctx()), c.command).toEqual({ refuse: "e999 isn't on the page any more: take a new snapshot." });
+    }
+    expect(s.session().actions).toEqual(OPENED);
+  });
+
+  it('passes on none of a scroll whose page moved to another site while it was read', async () => {
+    const s = setup();
+    await s.call({ command: 'open', url: 'https://example.com/' });
+    const args = await s.described({ command: 'scroll', direction: 'down' });
+    s.session().snapshot = async () => {
+      s.session().navigate('https://other.test/');
+      return '- heading "Secret" [ref=e1]';
+    };
+    const result = await s.tool.execute(args, s.ctx());
+    expect(result).toEqual(MOVED_OTHER);
+    expect(JSON.stringify(result)).not.toContain('Secret');
   });
 });

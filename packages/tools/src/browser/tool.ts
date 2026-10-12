@@ -168,19 +168,20 @@ async function describe(manager: BrowserManager, raw: unknown, ctx: ToolContext)
   if (!chat || url === null || host === null) return { refuse: NO_PAGE };
   // `host` is the committed URL's site (never a title, a link or the model's word); `target` is the element as the page describes it, cleaned.
   const line = call.ref !== undefined ? chat.refs.get(call.ref) : undefined;
+  // A ref that isn't in the latest snapshot fails now, before any card: approving it could only end in "take a new snapshot".
+  if (call.ref !== undefined && line === undefined) return { refuse: new StaleRefError(call.ref).message };
   const target = line !== undefined ? pageText(line, MAX_TARGET_CHARS) : undefined;
-  // What this approval is for, besides the site: the page it was described on (its navigation and address) and, for a ref, the snapshot
-  // the ref came from. Internal fields: callArgs only carries the call's own, so nothing the model sent can stand in for them.
-  const bound = call.command === 'close' ? {} : { nav: { id: chat.session.navigationId(), url }, ...(call.ref !== undefined ? { gen: chat.refsGen } : {}) };
+  // What this approval is for, besides the site: the navigation it was described on and, for a ref, the snapshot the ref came from.
+  // Internal fields: callArgs only carries the call's own, so nothing the model sent can stand in for them. The page's address isn't
+  // kept (it would carry its query string into the audit): `host` already names its site.
+  const bound = call.command === 'close' ? {} : { nav: chat.session.navigationId(), ...(call.ref !== undefined ? { gen: chat.refsGen } : {}) };
   return { args: { ...callArgs(call), host, ...bound, ...(target !== undefined ? { target } : {}) }, risk };
 }
 
-/** The navigation a call was described on, from its (internal) `nav` field; null when it has none. */
-function describedNav(args: unknown): { id: number; url: string } | null {
+/** The navigation id a call was described on, from its (internal) `nav` field; null when it has none. */
+function describedNav(args: unknown): number | null {
   const nav = (args as { nav?: unknown } | null)?.nav;
-  if (typeof nav !== 'object' || nav === null) return null;
-  const { id, url } = nav as { id?: unknown; url?: unknown };
-  return typeof id === 'number' && Number.isSafeInteger(id) && typeof url === 'string' ? { id, url } : null;
+  return typeof nav === 'number' && Number.isSafeInteger(nav) ? nav : null;
 }
 
 function setRefs(chat: ChatBrowser, refs: Map<string, string>): void {
@@ -236,10 +237,12 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
   // What the approval was given for (describeCall's `nav`): every call on a page carries the navigation it was described on. Reads (a
   // snapshot, a scroll) only need the page to still be on the approved site; everything that changes the page needs the same navigation.
   let guard: ActionGuard = { site: host };
+  const reads = call.command === 'snapshot' || call.command === 'scroll';
   if (call.command !== 'open' && call.command !== 'close') {
+    // `host` is the site of the page the call was described on (describeCall read it from the committed URL).
     const nav = describedNav(args);
-    if (nav === null || siteOf(nav.url) !== host) return failure('bad_call', NO_APPROVAL);
-    guard = call.command === 'snapshot' || call.command === 'scroll' ? { site: host } : { site: host, navId: nav.id };
+    if (nav === null) return failure('bad_call', NO_APPROVAL);
+    guard = reads ? { site: host } : { site: host, navId: nav };
   }
   if (call.command === 'open') {
     // Go to the address Grunt judged, and only if it is on the website the call was approved for.
@@ -280,8 +283,8 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
   try {
     await act(chat, call, guard);
     await chat.session.settle();
-    const result = await pageResult(chat, call.command === 'snapshot' ? guard : undefined);
-    if (call.command === 'snapshot') {
+    const result = await pageResult(chat, reads ? guard : undefined);
+    if (reads) {
       // The page moved while it was being read: what was read is from a site nobody approved, so none of it is passed on.
       const site = siteOf(chat.session.url());
       if (site !== guard.site) {

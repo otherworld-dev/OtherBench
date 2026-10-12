@@ -75,10 +75,10 @@ describe('browser tool: describeCall', () => {
   it("names the open page's site and the ref's line from the last snapshot, and binds the call to that page", async () => {
     const { tool, ctx, call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
-    const nav = { id: session().navigationId(), url: 'https://example.com/' };
-    expect(nav.id).toBeGreaterThan(0);
-    // `nav` and `gen` are Grunt's: whatever the model sends under those names is gone.
-    expect(await tool.describeCall!({ command: 'click', ref: 'e3', host: 'evil.test', target: 'lie', nav: { id: 1, url: 'https://evil.test/' }, gen: 99 }, ctx())).toEqual({
+    const nav = session().navigationId();
+    expect(nav).toBeGreaterThan(0);
+    // `nav` and `gen` are Grunt's: whatever the model sends under those names is gone. The page's address isn't kept (only its site).
+    expect(await tool.describeCall!({ command: 'click', ref: 'e3', host: 'evil.test', target: 'lie', nav: 1, gen: 99 }, ctx())).toEqual({
       args: { command: 'click', ref: 'e3', host: 'example.com', nav, gen: 1, target: 'button "Go" [ref=e3]' },
       risk: 'mutate',
     });
@@ -92,7 +92,7 @@ describe('browser tool: describeCall', () => {
     await call({ command: 'open', url: 'https://example.com/' });
     session().navigate('HTTPS://EXAMPLE.COM.:443/Page');
     expect(await tool.describeCall!({ command: 'snapshot' }, ctx())).toEqual({
-      args: { command: 'snapshot', host: 'example.com', nav: { id: session().navigationId(), url: 'HTTPS://EXAMPLE.COM.:443/Page' } },
+      args: { command: 'snapshot', host: 'example.com', nav: session().navigationId() },
       risk: 'read',
     });
   });
@@ -178,10 +178,10 @@ describe('browser tool: execute', () => {
     expect(await call({ command: 'snapshot' }, second)).toMatchObject({ about: ABOUT });
   });
 
-  it('answers a ref from an older snapshot at once, without acting', async () => {
+  it('answers a ref that is not in the latest snapshot at once, before any card, without acting', async () => {
     const { call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
-    expect(await call({ command: 'click', ref: 'e99' })).toEqual({ error: true, code: 'stale_ref', message: "e99 isn't on the page any more: take a new snapshot." });
+    expect(await call({ command: 'click', ref: 'e99' })).toEqual({ refused: "e99 isn't on the page any more: take a new snapshot." });
     expect(session().actions).toEqual(['open https://example.com/']);
   });
 
@@ -287,7 +287,7 @@ describe('browser tool: fix round 1', () => {
     session().fail = new Error('boom');
     expect(await call({ command: 'click', ref: 'e3' })).toMatchObject({ code: 'browser_error' });
     session().fail = null;
-    expect(await call({ command: 'click', ref: 'e3' })).toEqual({ error: true, code: 'stale_ref', message: "e3 isn't on the page any more: take a new snapshot." });
+    expect(await call({ command: 'click', ref: 'e3' })).toEqual({ refused: "e3 isn't on the page any more: take a new snapshot." });
     expect(session().actions).toEqual(['open https://example.com/']);
   });
 });
@@ -304,7 +304,7 @@ describe('browser tool: fix round 2 (page text on cards)', () => {
     expect(result['about']).toBe(ABOUT);
     expect(result['url']).toBe('https://example.com/');
     expect(await tool.describeCall!({ command: 'click', ref: 'e2', host: 'bank.example' }, ctx())).toEqual({
-      args: { command: 'click', ref: 'e2', host: 'example.com', nav: expect.any(Object), gen: expect.any(Number), target: 'link "Go to https://bank.example" [ref=e2]' },
+      args: { command: 'click', ref: 'e2', host: 'example.com', nav: expect.any(Number), gen: expect.any(Number), target: 'link "Go to https://bank.example" [ref=e2]' },
       risk: 'mutate',
     });
   });
@@ -322,16 +322,12 @@ describe('browser tool: fix round 2 (page text on cards)', () => {
     expect(target).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u206f\ufeff]/);
   });
 
-  it('gives a ref no target at all when a raw line break splits its line', async () => {
+  it('gives no card at all for a ref whose line a raw line break splits (it never became a ref)', async () => {
     const { tool, ctx, call, session } = setup();
     await call({ command: 'open', url: 'https://example.com/' });
     session().snap = `- button "${HOSTILE}" [ref=e4]`;
     await call({ command: 'snapshot' });
-    expect(await tool.describeCall!({ command: 'click', ref: 'e4' }, ctx())).toEqual({
-      args: { command: 'click', ref: 'e4', host: 'example.com', nav: expect.any(Object), gen: expect.any(Number) },
-      risk: 'mutate',
-    });
-    expect(await call({ command: 'click', ref: 'e4' })).toMatchObject({ code: 'stale_ref' });
+    expect(await tool.describeCall!({ command: 'click', ref: 'e4' }, ctx())).toEqual({ refuse: "e4 isn't on the page any more: take a new snapshot." });
   });
 
   it('cleans the title and the notes the same way, and caps them', async () => {
@@ -380,6 +376,16 @@ describe('pageText', () => {
 describe('cutSnapshot', () => {
   it('leaves a short snapshot alone', () => {
     expect(cutSnapshot('- text: hi')).toEqual({ snapshot: '- text: hi', truncated: false });
+  });
+
+  it('cuts a snapshot with no line break at the limit, never between the halves of a surrogate pair', () => {
+    const emoji = String.fromCodePoint(0x1f600); // two UTF-16 units
+    const raw = `${'a'.repeat(MAX_SNAPSHOT_CHARS - 1)}${emoji}${'b'.repeat(10)}`; // the pair straddles the limit
+    const { snapshot, truncated } = cutSnapshot(raw);
+    expect(truncated).toBe(true);
+    const kept = snapshot.slice(0, snapshot.indexOf('\n'));
+    expect(kept).toBe('a'.repeat(MAX_SNAPSHOT_CHARS - 1));
+    expect(/[\ud800-\udbff]$/.test(kept)).toBe(false);
   });
 });
 
