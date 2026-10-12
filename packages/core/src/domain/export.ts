@@ -88,6 +88,14 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
       return `**${part.isError ? 'Tool error' : 'Tool result'}:** \`${part.name}\`\n\n${fenced(cut(asText(part.result)))}`;
     case 'notice':
       return `*${part.text}*`;
+    case 'subagent': {
+      const text = part.parts
+        .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n\n');
+      const body = [`**Prompt:**\n\n${fenced(cut(part.prompt))}`, text].filter((s) => s.length > 0).join('\n\n');
+      return `<details>\n<summary>Sub-agent: ${part.label} (${part.profileName}, ${part.modelId}), ${part.status}</summary>\n\n${body}\n\n</details>`;
+    }
   }
 }
 

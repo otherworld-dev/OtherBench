@@ -18,6 +18,10 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
+import { appendDelta } from './parts.js';
+
+// `appendDelta` lives in parts.ts now (the web folds with it too); kept exported here for peer/forward.ts.
+export { appendDelta } from './parts.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -182,23 +186,6 @@ class WorkspaceUnresolvedError extends Error {
  * why zero, rather than an estimate, is the honest answer here.
  */
 const ZERO_USAGE: Usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
-
-/**
- * Appends streamed text (or reasoning) onto `parts`, merging into the
- * trailing part when it is already the same kind (the common case -- a
- * run of `text-delta` events building up one paragraph) rather than
- * fragmenting one logical span of text into one `Part` per network chunk.
- * A different kind arriving (e.g. a tool-call between two text spans, or
- * the very first delta) starts a new part instead.
- */
-export function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): Part[] {
-  const last = parts.at(-1);
-  if (last && last.type === kind) {
-    const merged = { ...last, text: last.text + text } as Part;
-    return [...parts.slice(0, -1), merged];
-  }
-  return [...parts, { type: kind, text } as Part];
-}
 
 /**
  * The honest, human-readable disclosure text for `degradeImagesForVision`'s
