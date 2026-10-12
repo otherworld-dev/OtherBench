@@ -4,7 +4,8 @@ import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
-import { GruntOAuthProvider, hasAuthorizationHeader } from './oauth-provider.js';
+import { fetchWithServerHeaders } from './client.js';
+import { GruntOAuthProvider, hasAuthorizationHeader, type HeldRegistration } from './oauth-provider.js';
 import type { McpOAuthStore } from './oauth-store.js';
 import { redactMessage } from './redact.js';
 
@@ -24,7 +25,7 @@ export class SignInError extends Error {
 const DEFAULT_SIGN_IN_TIMEOUT_MS = 600_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const REPLACED_MESSAGE = 'This sign-in was replaced or cancelled before it was ready. Start it again from Grunt.';
-const LOOPBACK_HOSTS =new Set(['127.0.0.1', 'localhost', '[::1]']);
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 /** A provider's error code, reduced to [A-Za-z0-9_.-] and 64 characters before it is shown or stored. */
 export function sanitiseErrorCode(code: string): string {
@@ -98,6 +99,8 @@ export class McpSignIns {
   private startCounter = 0;
   /** Each server's starts run one after another, so two never register a client at once and clobber each other's registration. */
   private readonly startChains = new Map<string, Promise<void>>();
+  /** Each server's registration made by a start whose sign-in hasn't completed (see `HeldRegistration`). Memory only. */
+  private readonly held = new Map<string, HeldRegistration>();
   private readonly now: () => number;
   private readonly signInTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -152,11 +155,12 @@ export class McpSignIns {
       onAuthorizationUrl: (url) => {
         captured.url = url;
       },
+      held: this.heldFor(row.id),
     });
+    // The row's headers go only to the MCP server's own origin, never to an authorization server elsewhere (not through `requestInit`, which the SDK's auth() merges into every request).
     const transport = new StreamableHTTPClientTransport(new URL(url), {
       authProvider: provider,
-      requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
-      fetch: fetchWithTimeout(this.requestTimeoutMs),
+      fetch: fetchWithServerHeaders(url, headers, fetchWithTimeout(this.requestTimeoutMs)),
     });
     const client = new Client({ name: 'grunt', version: '1.0.0' }, { capabilities: {} });
     try {
@@ -227,10 +231,11 @@ export class McpSignIns {
     }
   }
 
-  /** `cancel`, and the last error goes too: for sign-out, edits and deletes. */
+  /** `cancel`, and the last error and any held registration go too: for sign-out, edits and deletes. */
   forget(serverId: string): void {
     this.cancel(serverId);
     this.errors.delete(serverId);
+    this.held.delete(serverId);
   }
 
   pending(serverId: string): boolean {
@@ -245,8 +250,18 @@ export class McpSignIns {
 
   dropAll(): void {
     this.latestStart.clear();
+    this.held.clear();
     for (const flow of this.flows.values()) drop(flow);
     this.flows.clear();
+  }
+
+  private heldFor(serverId: string): HeldRegistration {
+    let box = this.held.get(serverId);
+    if (!box) {
+      box = { current: null };
+      this.held.set(serverId, box);
+    }
+    return box;
   }
 
   private sweep(): void {
@@ -264,13 +279,17 @@ export class McpSignIns {
     try {
       const manual = await this.oauth.manualClient(serverId);
       const registered = await this.oauth.registeredClient(serverId);
+      const held = this.held.get(serverId)?.current ?? null;
       const tokens = await this.oauth.tokens(serverId);
-      const registeredSecret = registered?.info && 'client_secret' in registered.info ? (registered.info.client_secret ?? null) : null;
-      out.push(manual?.client_secret ?? null, registeredSecret, tokens?.access_token ?? null, tokens?.refresh_token ?? null, tokens?.id_token ?? null);
+      const secretOf = (entry: typeof registered) => (entry?.info && 'client_secret' in entry.info ? (entry.info.client_secret ?? null) : null);
+      const registeredSecret = secretOf(registered);
+      const heldSecret = secretOf(held);
+      out.push(manual?.client_secret ?? null, registeredSecret, heldSecret, tokens?.access_token ?? null, tokens?.refresh_token ?? null, tokens?.id_token ?? null);
       // The Basic header carries base64(client_id:client_secret), plain or form-encoded (RFC 6749 2.3.1).
       for (const [id, secret] of [
         [manual?.client_id, manual?.client_secret],
         [registered?.info.client_id, registeredSecret],
+        [held?.info.client_id, heldSecret],
       ] as const) {
         if (!id || !secret) continue;
         out.push(`${id}:${secret}`, `${encodeURIComponent(id)}:${encodeURIComponent(secret)}`);

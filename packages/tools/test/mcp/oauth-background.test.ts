@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
@@ -36,13 +37,20 @@ async function oauthFixture() {
   return fixture;
 }
 
+/** A plain (no sign-in) echo MCP server; returns its URL. */
+async function plainServer(): Promise<string> {
+  const httpServer = await serveHttp(0);
+  cleanups.push(() => new Promise<void>((resolve) => { httpServer.closeAllConnections(); httpServer.close(() => resolve()); }));
+  return `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}/mcp`;
+}
+
 function managerFor(store: InMemoryStore, secrets = new FakeSecretStore()): McpServerManager {
   const manager = new McpServerManager(store, secrets, { initialBackoffMs: 50, maxBackoffMs: 100 });
   cleanups.push(() => manager.shutdown());
   return manager;
 }
 
-describe('connections that need sign-in', () => {
+describe('connections that need sign-in', { timeout: 20_000 }, () => {
   it('a server that answers 401 and holds no sign-in ends in needs_auth, retries nothing and registers nothing', async () => {
     const fixture = await oauthFixture();
     const store = new InMemoryStore();
@@ -109,6 +117,68 @@ describe('connections that need sign-in', () => {
     await manager.restart('srv-1');
     await waitFor(() => manager.health()[0]?.status === 'needs_auth');
     expect(fixture.mcpRequests()).toBeGreaterThan(0);
+  });
+
+  it('a sync for another server while one is mid-reconfigure leaves it alone; the reconfigure connects it from its new row', async () => {
+    const plainUrl = await plainServer();
+    const fixture = await oauthFixture();
+    const store = new InMemoryStore();
+    store.mcpServers.create(row({ id: 'srv-1', url: plainUrl }));
+    store.mcpServers.create(row({ id: 'srv-2', name: 'Other', url: plainUrl }));
+    const manager = managerFor(store);
+    await manager.sync();
+    await waitFor(() => manager.health().every((h) => h.status === 'ok'));
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reconfiguring = manager.reconfigure('srv-1', { forget: 'none' }, async () => {
+      await gate;
+      store.mcpServers.update('srv-1', { url: fixture.url });
+    });
+    await sleep(50); // srv-1's old client is down; its apply is waiting
+    await manager.sync(); // what a PATCH to srv-2 does
+    expect(manager.listFor(['srv-1'])).toEqual([]);
+
+    release();
+    await reconfiguring;
+    await waitFor(() => manager.health().find((h) => h.id === 'srv-1')?.status === 'needs_auth'); // the new URL, not the old one
+  });
+
+  it('a reconfigure whose apply throws still reconnects the server from its row', async () => {
+    const plainUrl = await plainServer();
+    const fixture = await oauthFixture();
+    const store = new InMemoryStore();
+    store.mcpServers.create(row({ url: plainUrl }));
+    const manager = managerFor(store);
+    await manager.sync();
+    await waitFor(() => manager.health()[0]?.status === 'ok');
+
+    await expect(
+      manager.reconfigure('srv-1', { forget: 'none' }, () => {
+        store.mcpServers.update('srv-1', { url: fixture.url });
+        throw new Error('apply failed');
+      })
+    ).rejects.toThrow('apply failed');
+    await waitFor(() => manager.health()[0]?.status === 'needs_auth');
+  });
+
+  it('lastError hides configured values that look secret, and keeps ordinary ones and exit codes', async () => {
+    const echoing = createServer((req, res) => {
+      res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`exit code: 127; mode ${String(req.headers['x-mode'])}; key ${String(req.headers['x-api-key'])}`);
+    });
+    await new Promise<void>((resolve) => echoing.listen(0, '127.0.0.1', () => resolve()));
+    cleanups.push(() => new Promise<void>((resolve) => { echoing.closeAllConnections(); echoing.close(() => resolve()); }));
+    const url = `http://127.0.0.1:${(echoing.address() as AddressInfo).port}/mcp`;
+    const client = new McpClient('srv-1', { transport: 'http', url, headers: { 'X-Mode': 'production', 'X-Api-Key': 'k3y-1234567890' } }, { initialBackoffMs: 60_000 });
+    cleanups.push(() => client.disconnect());
+
+    await client.connect();
+    expect(client.status).toBe('error');
+    expect(client.lastError).toContain('exit code: 127');
+    expect(client.lastError).toContain('mode production');
+    expect(client.lastError).not.toContain('k3y-1234567890');
   });
 
   it('callTool on a client that needs sign-in says so', async () => {

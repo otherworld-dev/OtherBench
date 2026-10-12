@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { UnauthorizedError, type OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
-import type { McpOAuthStore } from './oauth-store.js';
+import type { McpOAuthStore, RegisteredClient } from './oauth-store.js';
 
 /**
  * Background mode's redirect address. Never sent anywhere: refresh doesn't
@@ -75,6 +75,22 @@ export function clientMetadataFor(redirectUri: string): OAuthClientMetadata {
   };
 }
 
+/** The authorization server a discovery found: its metadata's issuer, else the URL the SDK settled on. */
+export function issuerOf(state: OAuthDiscoveryState | undefined): string | undefined {
+  return state?.authorizationServerMetadata?.issuer ?? state?.authorizationServerUrl;
+}
+
+/**
+ * A registration made by a sign-in that hasn't completed, held in memory
+ * per server (by `McpSignIns`) so the next start can reuse it rather than
+ * register again. It replaces the stored registration only when a sign-in
+ * that used it completes: until then the stored one is what the live tokens
+ * were issued to, and a refresh needs it.
+ */
+export interface HeldRegistration {
+  current: RegisteredClient | null;
+}
+
 /**
  * `resource` is the server URL the connection (or the sign-in flow, from the
  * moment it started) was made against: tokens it saves are bound to that URL,
@@ -83,7 +99,7 @@ export function clientMetadataFor(redirectUri: string): OAuthClientMetadata {
  */
 export type GruntOAuthMode =
   | { kind: 'background'; resource?: string }
-  | { kind: 'sign-in'; redirectUri: string; state: string; onAuthorizationUrl: (url: URL) => void; resource?: string };
+  | { kind: 'sign-in'; redirectUri: string; state: string; onAuthorizationUrl: (url: URL) => void; resource?: string; held?: HeldRegistration };
 
 /**
  * The MCP SDK's `OAuthClientProvider` for one server (spec
@@ -91,20 +107,33 @@ export type GruntOAuthMode =
  * stored tokens and refreshes them, never registers and never starts a
  * browser flow. `sign-in`: one per pending browser flow, starts fresh.
  *
- * Relies on the order inside SDK 1.30.0's `auth()`: `clientInformation()`
- * before `tokens()`, then a refresh, then `redirectToAuthorization`; and on
- * `InvalidGrantError` it calls `invalidateCredentials('tokens')` and retries
- * once. That is why `packages/tools` pins the SDK exactly.
+ * Relies on the order inside SDK 1.30.0's `auth()`: discovery, then
+ * `clientInformation()`, then `tokens()`, then a refresh, then
+ * `redirectToAuthorization`; and on `InvalidGrantError` it calls
+ * `invalidateCredentials('tokens')` and retries once. That is why
+ * `packages/tools` pins the SDK exactly.
+ *
+ * A background provider captures its server's token generation when it is
+ * built (`McpOAuthStore`): its saves and forgets carry it, so once the server
+ * is signed out or signed in again they are dropped. The manager builds a new
+ * connection (and provider) after each of those.
  */
 export class GruntOAuthProvider implements OAuthClientProvider {
   private verifier: string | null = null;
   private discovery: OAuthDiscoveryState | undefined;
+  private readonly generation: number;
+  /** Sign-in: the registration this flow uses, and whether it is the stored one. */
+  private flowClient: { entry: RegisteredClient; stored: boolean } | null = null;
+  /** Sign-in: the provider refused the stored registration; register again. */
+  private skipStored = false;
 
   constructor(
     private readonly serverId: string,
     private readonly oauth: McpOAuthStore,
     private readonly mode: GruntOAuthMode
-  ) {}
+  ) {
+    this.generation = oauth.generation(serverId);
+  }
 
   get redirectUrl(): string {
     return this.mode.kind === 'sign-in' ? this.mode.redirectUri : BACKGROUND_REDIRECT_URI;
@@ -121,18 +150,37 @@ export class GruntOAuthProvider implements OAuthClientProvider {
   async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
     const manual = await this.oauth.manualClient(this.serverId);
     if (manual) return manual;
-    const registered = await this.oauth.registeredClient(this.serverId);
-    if (this.mode.kind === 'sign-in') {
+    // The SDK runs discovery first, so the authorization server is known here. A registration made with another one is never sent to this one.
+    const issuer = issuerOf(this.discovery);
+    const mode = this.mode;
+    if (mode.kind === 'sign-in') {
+      if (this.flowClient) return this.flowClient.entry.info;
       // A registration made for another redirect address (the desktop app's port changes every launch) can't be used: register again.
-      return registered && registered.redirectUri === this.mode.redirectUri ? registered.info : undefined;
+      const usable = (entry: RegisteredClient | null | undefined): entry is RegisteredClient =>
+        !!entry && issuer !== undefined && entry.issuer === issuer && entry.redirectUri === mode.redirectUri;
+      const stored = this.skipStored ? null : await this.oauth.registeredClient(this.serverId);
+      if (usable(stored)) {
+        this.flowClient = { entry: stored, stored: true };
+        return stored.info;
+      }
+      const held = mode.held?.current;
+      if (usable(held)) {
+        this.flowClient = { entry: held, stored: false };
+        return held.info;
+      }
+      return undefined;
     }
-    if (registered) return registered.info;
+    const registered = await this.oauth.registeredClient(this.serverId);
+    if (registered && issuer !== undefined && registered.issuer === issuer) return registered.info;
     throw new McpSignInRequiredError();
   }
 
+  /** Sign-in: holds the new registration on the flow (and for the next start). It is saved only when this sign-in completes. */
   async saveClientInformation(info: OAuthClientInformationMixed): Promise<void> {
     if (this.mode.kind !== 'sign-in') throw new McpSignInRequiredError();
-    await this.oauth.saveRegisteredClient(this.serverId, this.mode.redirectUri, info);
+    const entry: RegisteredClient = { redirectUri: this.mode.redirectUri, issuer: issuerOf(this.discovery) ?? '', info };
+    this.flowClient = { entry, stored: false };
+    if (this.mode.held) this.mode.held.current = entry;
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
@@ -141,7 +189,19 @@ export class GruntOAuthProvider implements OAuthClientProvider {
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    await this.oauth.saveTokens(this.serverId, tokens, { signIn: this.mode.kind === 'sign-in', resource: this.mode.resource });
+    if (this.mode.kind === 'background') {
+      // A refresh: dropped if the server was signed out or signed in again since this provider was built.
+      await this.oauth.saveTokens(this.serverId, tokens, { signIn: false, resource: this.mode.resource, generation: this.generation });
+      return;
+    }
+    const saved = await this.oauth.saveTokens(this.serverId, tokens, { signIn: true, resource: this.mode.resource });
+    // The tokens were issued to this flow's client: a new registration becomes the stored one now, not before.
+    const client = this.flowClient;
+    if (saved && client && !client.stored) {
+      await this.oauth.saveRegisteredClient(this.serverId, client.entry);
+      if (this.mode.held?.current === client.entry) this.mode.held.current = null;
+      this.flowClient = { entry: client.entry, stored: true };
+    }
   }
 
   async redirectToAuthorization(url: URL): Promise<void> {
@@ -153,7 +213,7 @@ export class GruntOAuthProvider implements OAuthClientProvider {
     const held = await this.oauth.tokens(this.serverId);
     // Still holding a refresh token means the refresh failed for a reason other than invalid_grant (provider down): transient.
     if (held?.refresh_token) throw new Error("Couldn't refresh the sign-in; will retry.");
-    await this.oauth.forgetTokens(this.serverId);
+    await this.oauth.forgetTokens(this.serverId, { generation: this.generation });
     throw new McpSignInRequiredError();
   }
 
@@ -172,17 +232,27 @@ export class GruntOAuthProvider implements OAuthClientProvider {
       return;
     }
     if (scope === 'verifier') return;
-    if (scope === 'all' || scope === 'client') await this.oauth.forgetRegisteredClient(this.serverId); // never the hand-registered one
-    if (this.mode.kind === 'sign-in') return; // a sign-in holds no tokens to forget
+    if (this.mode.kind === 'sign-in') {
+      // The provider refused this flow's client: drop it and register again. The stored registration stays, since live tokens may use it; a sign-in holds no tokens to forget.
+      if (scope === 'all' || scope === 'client') {
+        if (this.mode.held && this.mode.held.current === this.flowClient?.entry) this.mode.held.current = null;
+        this.flowClient = null;
+        this.skipStored = true;
+      }
+      return;
+    }
+    // Background: every forget carries this provider's generation, so a stale connection's invalidation can't wipe a newer sign-in.
+    const generation = this.generation;
+    if (scope === 'all' || scope === 'client') await this.oauth.forgetRegisteredClient(this.serverId, { generation }); // never the hand-registered one
     if (scope === 'all') {
-      await this.oauth.forgetTokens(this.serverId);
+      await this.oauth.forgetTokens(this.serverId, { generation });
       return;
     }
     if (scope === 'tokens') {
       // Two requests refreshing at once with a rotating refresh token: the loser gets invalid_grant. Ignore it if we just saved new tokens; the SDK retries with them.
       const savedAt = await this.oauth.lastSavedAt(this.serverId);
       if (savedAt !== null && this.oauth.now() - savedAt < REFRESH_GRACE_MS) return;
-      await this.oauth.forgetTokens(this.serverId);
+      await this.oauth.forgetTokens(this.serverId, { generation });
     }
   }
 

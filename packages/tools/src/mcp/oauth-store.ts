@@ -19,10 +19,22 @@ export interface StoredTokens {
   resource: string;
 }
 
-/** A dynamic registration, kept with the redirect address it was made for. May hold a client secret, hence SecretStore. */
+/**
+ * A dynamic registration, kept with the redirect address it was made for and
+ * the authorization server (its issuer) it was made with: one made with
+ * another issuer is never sent anywhere. May hold a client secret, hence SecretStore.
+ */
 export interface RegisteredClient {
   redirectUri: string;
+  issuer: string;
   info: OAuthClientInformationMixed;
+}
+
+function isRegisteredClient(value: unknown): value is RegisteredClient {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  const info = v['info'] as Record<string, unknown> | null | undefined;
+  return typeof v['redirectUri'] === 'string' && typeof v['issuer'] === 'string' && typeof info === 'object' && info !== null && typeof info['client_id'] === 'string';
 }
 
 export interface ManualClient {
@@ -47,9 +59,21 @@ function parseJson<T>(raw: string | null): T | null {
  * secret go to SecretStore; the row's `oauth` column only ever holds the
  * non-secret summary. Tokens are cached per server because `tokens()` runs
  * on every MCP request; every write goes through here, so the cache can't go stale.
+ *
+ * Each server has a token generation, bumped by every forget and every
+ * sign-in save. A background provider captures it when it is built and
+ * passes it with its writes; a write from an older generation is dropped.
+ * That is what stops a refresh still in flight from bringing tokens back
+ * after a sign-out (the SDK's `transport.close()` doesn't abort a request
+ * inside `auth()`), from overwriting a newer sign-in's tokens, or from
+ * forgetting them. A refresh's own save advances nothing. Token and
+ * registration writes for one server run one at a time, so a check and the
+ * write it guards can't interleave with another write.
  */
 export class McpOAuthStore {
   private readonly tokenCache = new Map<string, StoredTokens | null>();
+  private readonly generations = new Map<string, number>();
+  private readonly writeChains = new Map<string, Promise<void>>();
 
   constructor(
     private readonly store: Store,
@@ -75,47 +99,71 @@ export class McpOAuthStore {
     return this.boundTo(serverId, await this.loadTokens(serverId))?.savedAt ?? null;
   }
 
+  /** This server's token generation (see the class comment). */
+  generation(serverId: string): number {
+    return this.generations.get(serverId) ?? 0;
+  }
+
   /**
    * `resource` is the URL the caller's connection or sign-in was made against
    * (defaults to the row's current URL). A save for a URL the row no longer
    * has is dropped: that connection was replaced while its request was in flight.
+   * `generation` (background providers): a save from an older generation is
+   * dropped too. A sign-in save starts a new generation. True when saved.
    */
-  async saveTokens(serverId: string, tokens: OAuthTokens, opts: { signIn: boolean; resource?: string }): Promise<void> {
-    const row = this.store.mcpServers.get(serverId);
-    if (!row) return; // deleted while a sign-in or refresh was in flight
-    const resource = opts.resource ?? row.url;
-    if (resource === null || resource !== row.url) return; // the URL changed while a sign-in or refresh was in flight
-    const entry: StoredTokens = { tokens, savedAt: this.now(), resource };
-    // Cached before the write, so a request racing this one already sends the new token.
-    this.tokenCache.set(serverId, entry);
-    await this.secrets.set(oauthRefs(serverId).tokens, JSON.stringify(entry));
-    // The row was deleted or re-pointed while the write was in flight: take the entry back out rather than leave it behind.
-    if (this.store.mcpServers.get(serverId)?.url !== resource) {
-      if (this.tokenCache.get(serverId) === entry) this.tokenCache.set(serverId, null);
+  saveTokens(serverId: string, tokens: OAuthTokens, opts: { signIn: boolean; resource?: string; generation?: number }): Promise<boolean> {
+    return this.serial(serverId, async () => {
+      const row = this.store.mcpServers.get(serverId);
+      if (!row) return false; // deleted while a sign-in or refresh was in flight
+      if (opts.generation !== undefined && opts.generation !== this.generation(serverId)) return false; // signed out, or signed in again, since
+      const resource = opts.resource ?? row.url;
+      if (resource === null || resource !== row.url) return false; // the URL changed while a sign-in or refresh was in flight
+      const entry: StoredTokens = { tokens, savedAt: this.now(), resource };
+      if (opts.signIn) this.bump(serverId);
+      // Cached before the write, so a request racing this one already sends the new token.
+      this.tokenCache.set(serverId, entry);
+      await this.secrets.set(oauthRefs(serverId).tokens, JSON.stringify(entry));
+      // The row was deleted or re-pointed while the write was in flight: take the entry back out rather than leave it behind.
+      if (this.store.mcpServers.get(serverId)?.url !== resource) {
+        if (this.tokenCache.get(serverId) === entry) this.tokenCache.set(serverId, null);
+        await this.secrets.delete(oauthRefs(serverId).tokens);
+        return false;
+      }
+      if (opts.signIn) this.patchSummary(serverId, { account: accountFromIdToken(tokens.id_token), signedInAt: entry.savedAt });
+      return true;
+    });
+  }
+
+  /** Starts a new generation and forgets the tokens. `generation` (background providers): dropped if older than the current one. */
+  forgetTokens(serverId: string, opts: { generation?: number } = {}): Promise<void> {
+    return this.serial(serverId, async () => {
+      if (opts.generation !== undefined && opts.generation !== this.generation(serverId)) return;
+      this.bump(serverId);
+      this.tokenCache.set(serverId, null);
       await this.secrets.delete(oauthRefs(serverId).tokens);
-      return;
-    }
-    if (opts.signIn) this.patchSummary(serverId, { account: accountFromIdToken(tokens.id_token), signedInAt: entry.savedAt });
+      this.patchSummary(serverId, { account: null, signedInAt: null });
+    });
   }
 
-  async forgetTokens(serverId: string): Promise<void> {
-    this.tokenCache.set(serverId, null);
-    await this.secrets.delete(oauthRefs(serverId).tokens);
-    this.patchSummary(serverId, { account: null, signedInAt: null });
-  }
-
+  /** The stored registration, or null (none, or one stored without an issuer by an earlier build). */
   async registeredClient(serverId: string): Promise<RegisteredClient | null> {
-    return parseJson<RegisteredClient>(await this.secrets.get(oauthRefs(serverId).client));
+    const parsed = parseJson<unknown>(await this.secrets.get(oauthRefs(serverId).client));
+    return isRegisteredClient(parsed) ? parsed : null;
   }
 
-  async saveRegisteredClient(serverId: string, redirectUri: string, info: OAuthClientInformationMixed): Promise<void> {
-    if (!this.store.mcpServers.get(serverId)) return;
-    const entry: RegisteredClient = { redirectUri, info };
-    await this.secrets.set(oauthRefs(serverId).client, JSON.stringify(entry));
+  saveRegisteredClient(serverId: string, entry: RegisteredClient): Promise<void> {
+    return this.serial(serverId, async () => {
+      if (!this.store.mcpServers.get(serverId)) return;
+      await this.secrets.set(oauthRefs(serverId).client, JSON.stringify(entry));
+    });
   }
 
-  async forgetRegisteredClient(serverId: string): Promise<void> {
-    await this.secrets.delete(oauthRefs(serverId).client);
+  /** `generation` (background providers): dropped if older than the current one. */
+  forgetRegisteredClient(serverId: string, opts: { generation?: number } = {}): Promise<void> {
+    return this.serial(serverId, async () => {
+      if (opts.generation !== undefined && opts.generation !== this.generation(serverId)) return;
+      await this.secrets.delete(oauthRefs(serverId).client);
+    });
   }
 
   /** The hand-registered client ("Sign-in app"), or null when Grunt registers itself. */
@@ -148,6 +196,25 @@ export class McpOAuthStore {
       await this.secrets.delete(oauthRefs(serverId).clientSecret);
       this.patchSummary(serverId, { clientId: null, clientSecretRef: null });
     }
+  }
+
+  private bump(serverId: string): void {
+    this.generations.set(serverId, this.generation(serverId) + 1);
+  }
+
+  /** Runs one server's token and registration writes one after another. */
+  private serial<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.writeChains.get(serverId) ?? Promise.resolve();
+    const run = previous.then(fn);
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.writeChains.set(serverId, tail);
+    void tail.then(() => {
+      if (this.writeChains.get(serverId) === tail) this.writeChains.delete(serverId);
+    });
+    return run;
   }
 
   private boundTo(serverId: string, entry: StoredTokens | null): StoredTokens | null {

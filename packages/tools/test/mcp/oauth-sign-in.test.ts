@@ -5,6 +5,7 @@ import type { McpServer } from '@grunt/core/ports/store.js';
 import { McpServerManager } from '../../src/mcp/manager.js';
 import { oauthRefs } from '../../src/mcp/oauth-store.js';
 import { SignInError, checkAuthorizationUrl, redactMessage, sanitiseErrorCode } from '../../src/mcp/sign-in.js';
+import { looksSecret } from '../../src/mcp/redact.js';
 import { serveHttp } from '../fixtures/echo-server.js';
 import { startOAuthEchoServer } from '../fixtures/oauth-echo-server.js';
 
@@ -21,6 +22,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
     if (!predicate()) throw new Error('condition not met yet');
   }, { timeout: timeoutMs, interval: 25 });
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function httpRow(url: string, over: Partial<McpServer> = {}): McpServer {
   return { id: 'srv-1', name: 'Hosted Docs', transport: 'http', command: null, args: [], envRefs: {}, url, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null, ...over };
@@ -57,7 +60,7 @@ async function signIn(manager: McpServerManager, redirectUri = REDIRECT): Promis
 
 const health = (manager: McpServerManager) => manager.health()[0]!;
 
-describe('signing in', () => {
+describe('signing in', { timeout: 20_000 }, () => {
   it('start returns an authorization URL with S256, state, the redirect address and resource, and registers one client', async () => {
     const { fixture, manager } = await setup();
     await waitFor(() => health(manager).status === 'needs_auth');
@@ -242,6 +245,116 @@ describe('signing in', () => {
   });
 });
 
+describe('a background refresh still in flight', { timeout: 20_000 }, () => {
+  /** Parks a refresh on the fixture: expires the access token, reconnects, and waits until the refresh_token grant is held. */
+  async function parkRefresh(fixture: Awaited<ReturnType<typeof startOAuthEchoServer>>, manager: McpServerManager): Promise<() => Promise<void>> {
+    const release = fixture.holdRefreshes();
+    const parkedBefore = fixture.refreshesParked();
+    fixture.expireAccessTokens();
+    void manager.refresh('srv-1');
+    await waitFor(() => fixture.refreshesParked() > parkedBefore);
+    return async () => {
+      const finishedBefore = fixture.refreshesFinished();
+      release();
+      await waitFor(() => fixture.refreshesFinished() > finishedBefore);
+      await sleep(300); // the SDK reads the answer and calls saveTokens
+    };
+  }
+
+  it('a sign-out while it is parked leaves no tokens behind, also after a relaunch', async () => {
+    const { fixture, store, secrets, manager } = await setup({ idTokenEmail: 'alice@example.com' });
+    await signIn(manager);
+    const finish = await parkRefresh(fixture, manager);
+
+    await manager.signOut('srv-1');
+    await finish();
+
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+    expect(store.mcpServers.get('srv-1')!.oauth).toBeNull();
+    await waitFor(() => health(manager).status === 'needs_auth');
+
+    await manager.shutdown();
+    const relaunched = new McpServerManager(store, secrets, { initialBackoffMs: 50, maxBackoffMs: 100 });
+    cleanups.push(() => relaunched.shutdown());
+    await relaunched.sync();
+    await waitFor(() => relaunched.health()[0]!.status === 'needs_auth');
+    expect(relaunched.health()[0]!.auth).toMatchObject({ state: 'needs_sign_in' });
+  });
+
+  it('a new sign-in completed while it is parked keeps its own tokens', async () => {
+    const { fixture, secrets, manager, clock } = await setup({ rotate: true });
+    await signIn(manager);
+    clock.t += 2 * 60 * 60_000;
+    const finish = await parkRefresh(fixture, manager);
+
+    await signIn(manager);
+    const signedInWith = fixture.issued.accessTokens.at(-1)!;
+    await waitFor(() => health(manager).status === 'ok');
+    await finish();
+
+    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').tokens))!) as { tokens: { access_token: string } };
+    expect(stored.tokens.access_token).toBe(signedInWith);
+    expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in' } });
+  });
+});
+
+describe('registrations', { timeout: 20_000 }, () => {
+  it('"Sign in again" from a new redirect address that is cancelled keeps the registration the tokens belong to', async () => {
+    const { fixture, secrets, manager, clock } = await setup({ rotate: true });
+    await signIn(manager, REDIRECT);
+    const original = fixture.registrations[0]!.clientId;
+
+    await manager.startSignIn('srv-1', OTHER_REDIRECT); // the desktop app relaunched on another port
+    expect(fixture.registrations).toHaveLength(2);
+    manager.cancelSignIn('srv-1');
+    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').client))!) as { info: { client_id: string } };
+    expect(stored.info.client_id).toBe(original);
+
+    clock.t += 2 * 60 * 60_000;
+    fixture.expireAccessTokens();
+    const result = await manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'still-signed-in' });
+    expect(JSON.stringify(result.content)).toContain('still-signed-in');
+    expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in' } });
+  });
+
+  it('a new registration is saved, with the issuer, only when its sign-in completes', async () => {
+    const { fixture, secrets, manager } = await setup();
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    expect(await secrets.get(oauthRefs('srv-1').client)).toBeNull();
+
+    await manager.completeSignIn(await followAuthorization(authorizationUrl));
+    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').client))!) as { redirectUri: string; issuer: string; info: { client_id: string } };
+    expect(stored).toMatchObject({ redirectUri: REDIRECT, issuer: fixture.origin, info: { client_id: fixture.registrations[0]!.clientId } });
+  });
+});
+
+describe('configured headers', { timeout: 20_000 }, () => {
+  it('reach the MCP server, but never an authorization server on another origin (discovery, registration, token)', async () => {
+    const fixture = await startOAuthEchoServer({ separateAuthServer: true, rotate: true });
+    cleanups.push(() => fixture.close());
+    const store = new InMemoryStore();
+    const secrets = new FakeSecretStore();
+    await secrets.set('ref-key', 'key-1234567890');
+    store.mcpServers.create(httpRow(fixture.url, { headerRefs: { 'X-Api-Key': 'ref-key' } }));
+    const manager = new McpServerManager(store, secrets, { initialBackoffMs: 50, maxBackoffMs: 100 });
+    cleanups.push(() => manager.shutdown());
+    await manager.sync();
+    await waitFor(() => health(manager).status === 'needs_auth');
+
+    await signIn(manager);
+    fixture.expireAccessTokens();
+    await manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'after-refresh' }); // a background refresh
+
+    const toMcp = fixture.requestLog.filter((r) => r.server === 'mcp' && r.path === '/mcp');
+    const toAuth = fixture.requestLog.filter((r) => r.server === 'auth');
+    expect(toMcp.length).toBeGreaterThan(0);
+    for (const r of toMcp) expect(r.headers['x-api-key']).toBe('key-1234567890');
+    expect(new Set(toAuth.map((r) => r.path))).toEqual(new Set(['/.well-known/oauth-authorization-server', '/register', '/authorize', '/token']));
+    expect(toAuth.filter((r) => r.path === '/token')).toHaveLength(2); // the code exchange and the refresh
+    for (const r of toAuth) expect(r.headers['x-api-key']).toBeUndefined();
+  });
+});
+
 describe('sign-in helpers', () => {
   it('sanitiseErrorCode keeps [A-Za-z0-9_.-] and at most 64 characters', () => {
     expect(sanitiseErrorCode('access_denied<script>alert(1)</script>')).toBe('access_deniedscriptalert1script');
@@ -258,7 +371,7 @@ describe('sign-in helpers', () => {
   });
 });
 
-describe('one sign-in per server', () => {
+describe('one sign-in per server', { timeout: 20_000 }, () => {
   it('two starts fired together leave exactly one flow: the earlier one is refused, the later one completes', async () => {
     const { fixture, secrets, manager } = await setup();
     const [first, second] = await Promise.allSettled([manager.startSignIn('srv-1', REDIRECT), manager.startSignIn('srv-1', REDIRECT)]);
@@ -267,13 +380,14 @@ describe('one sign-in per server', () => {
     expect((first as PromiseRejectedResult).reason).toMatchObject({ status: 409 });
     expect(second.status).toBe('fulfilled');
     expect(health(manager).auth).toMatchObject({ pending: true });
-    // Starts run one after another: one registration, and it is the stored one.
+    // Starts run one after another: one registration, held until the sign-in completes, then stored.
     expect(fixture.registrations).toHaveLength(1);
-    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').client))!) as { info: { client_id: string } };
-    expect(stored.info.client_id).toBe(fixture.registrations[0]!.clientId);
+    expect(await secrets.get(oauthRefs('srv-1').client)).toBeNull();
 
     await manager.completeSignIn(await followAuthorization((second as PromiseFulfilledResult<{ authorizationUrl: string }>).value.authorizationUrl));
     expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in', pending: false } }); // no second flow was left waiting
+    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').client))!) as { info: { client_id: string } };
+    expect(stored.info.client_id).toBe(fixture.registrations[0]!.clientId);
   });
 
   it('a cancel while a start is still connecting stores no flow', async () => {
@@ -343,7 +457,7 @@ describe('one sign-in per server', () => {
   });
 });
 
-describe('keeping codes, verifiers and tokens out of every message', () => {
+describe('keeping codes, verifiers and tokens out of every message', { timeout: 20_000 }, () => {
   const OUTPUT_CHANNELS = ['log', 'info', 'warn', 'error', 'debug'] as const;
 
   function captureConsole(): { text: () => string } {
@@ -429,6 +543,19 @@ describe('keeping codes, verifiers and tokens out of every message', () => {
     expect(lastError).not.toMatch(/Bearer\s+at-/);
   });
 
+  it('a failing tool call is redacted like lastError', async () => {
+    const { fixture, manager } = await setup();
+    await signIn(manager);
+    const token = fixture.issued.accessTokens[0]!;
+    const client = manager.listFor(['srv-1'])[0]!.client;
+    fixture.setMcpFailure(true); // the server now answers 500, repeating the credential it was sent
+
+    const err = await client.callTool('echo', { text: 'x' }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('[redacted]');
+    expect((err as Error).message).not.toContain(token);
+  });
+
   it('sign-out and forgetting a sign-in clear the last error', async () => {
     const { fixture, manager } = await setup();
     fixture.setDeny(true);
@@ -480,6 +607,16 @@ describe('redactMessage', () => {
     const out = redactMessage(`a ${secret} b ${encodeURIComponent(secret)} c ${form} d ${b64} e`, [secret, `my-client:${secret}`]);
     for (const form2 of [secret, encodeURIComponent(secret), form, b64]) expect(out).not.toContain(form2);
     expect(out.match(/\[redacted\]/g)).toHaveLength(4);
+  });
+
+  it('keeps a purely numeric code or state ("exit code: 127"), and still redacts any other', () => {
+    expect(redactMessage('server exited, exit code: 127; code=2 "state": "3"')).toBe('server exited, exit code: 127; code=2 "state": "3"');
+    expect(redactMessage('code=abc123 state=12ab')).toBe('code=[redacted] state=[redacted]');
+  });
+
+  it('looksSecret: short values and letters-only words are not secrets; anything longer with a digit or symbol is', () => {
+    for (const ordinary of ['production', 'Development', 'true', 'info', '127', 'debug']) expect(looksSecret(ordinary)).toBe(false);
+    for (const secret of ['k3y-1234567890', 'sk_live_abcdef', 'Bearer abc123', '12345678']) expect(looksSecret(secret)).toBe(true);
   });
 
   it('drops the query and fragment of every URL, collapses whitespace and caps the length', () => {

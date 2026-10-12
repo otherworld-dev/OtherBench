@@ -32,7 +32,10 @@ function sendJson(res, status, body) {
 }
 
 /**
- * @param {{ port?: number, dcr?: boolean, rotate?: boolean, idTokenEmail?: string | null, staticClients?: Record<string, string | null>, tokenEcho?: boolean, registerError?: string | null, registerGate?: Promise<void> | null }} [opts]
+ * `separateAuthServer`: the authorization server (discovery, /register, /authorize, /token) is
+ * advertised on a second loopback port, so it is another origin than the MCP server.
+ *
+ * @param {{ port?: number, dcr?: boolean, rotate?: boolean, idTokenEmail?: string | null, staticClients?: Record<string, string | null>, tokenEcho?: boolean, registerError?: string | null, registerGate?: Promise<void> | null, separateAuthServer?: boolean }} [opts]
  */
 export async function startOAuthEchoServer(opts = {}) {
   const dcr = opts.dcr ?? true;
@@ -53,6 +56,10 @@ export async function startOAuthEchoServer(opts = {}) {
   /** While set, a refresh_token grant waits on it before answering (a refresh "in flight"); `tokenGateWaiting` counts the requests parked there. */
   let tokenGate = null;
   let tokenGateWaiting = 0;
+  /** refresh_token grants answered after waiting at the gate. */
+  let tokenGateDone = 0;
+  /** Every request either port received: which one ('mcp' or 'auth'), method, path and headers. */
+  const requestLog = [];
 
   /** client_id -> { secret: string | null, redirectUris: string[] | null }; null redirectUris: any 127.0.0.1 /oauth/callback (hand-registered). */
   const clients = new Map();
@@ -68,6 +75,8 @@ export async function startOAuthEchoServer(opts = {}) {
   let tokenDown = false;
   let mcpRequests = 0;
   let origin = '';
+  /** The authorization server's origin: `origin` unless `separateAuthServer`. */
+  let authOrigin = '';
 
   const redirectAllowed = (client, redirectUri) =>
     client.redirectUris === null ? /^http:\/\/127\.0\.0\.1(:\d+)?\/oauth\/callback$/.test(redirectUri) : client.redirectUris.includes(redirectUri);
@@ -101,19 +110,19 @@ export async function startOAuthEchoServer(opts = {}) {
       body.refresh_token = refresh;
     }
     if (idTokenEmail) {
-      const idToken = `${b64urlJson({ alg: 'none', typ: 'JWT' })}.${b64urlJson({ iss: origin, sub: 'fixture-user', aud: clientId, email: idTokenEmail })}.fixture`;
+      const idToken = `${b64urlJson({ alg: 'none', typ: 'JWT' })}.${b64urlJson({ iss: authOrigin, sub: 'fixture-user', aud: clientId, email: idTokenEmail })}.fixture`;
       issued.idTokens.push(idToken);
       body.id_token = idToken;
     }
     return body;
   }
 
-  const protectedResource = () => ({ resource: `${origin}/mcp`, authorization_servers: [origin] });
+  const protectedResource = () => ({ resource: `${origin}/mcp`, authorization_servers: [authOrigin] });
   const authorizationServer = () => ({
-    issuer: origin,
-    authorization_endpoint: `${origin}/authorize`,
-    token_endpoint: `${origin}/token`,
-    ...(dcr ? { registration_endpoint: `${origin}/register` } : {}),
+    issuer: authOrigin,
+    authorization_endpoint: `${authOrigin}/authorize`,
+    token_endpoint: `${authOrigin}/token`,
+    ...(dcr ? { registration_endpoint: `${authOrigin}/register` } : {}),
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
@@ -197,14 +206,19 @@ export async function startOAuthEchoServer(opts = {}) {
       return sendJson(res, 200, issueTokens(clientId, true));
     }
     if (grant === 'refresh_token') {
+      const gated = tokenGate !== null;
       if (tokenGate) {
         tokenGateWaiting += 1;
         await tokenGate;
       }
-      const old = params.get('refresh_token') ?? '';
-      if (refreshTokens.get(old) !== clientId) return sendJson(res, 400, { error: 'invalid_grant' });
-      if (rotate) refreshTokens.delete(old);
-      return sendJson(res, 200, issueTokens(clientId, rotate));
+      try {
+        const old = params.get('refresh_token') ?? '';
+        if (refreshTokens.get(old) !== clientId) return sendJson(res, 400, { error: 'invalid_grant' });
+        if (rotate) refreshTokens.delete(old);
+        return sendJson(res, 200, issueTokens(clientId, rotate));
+      } finally {
+        if (gated) tokenGateDone += 1;
+      }
     }
     return sendJson(res, 400, { error: 'unsupported_grant_type' });
   }
@@ -248,8 +262,10 @@ export async function startOAuthEchoServer(opts = {}) {
     res.end(`Internal error: ${err instanceof Error ? err.message : String(err)}`);
   };
 
-  const httpServer = createServer((req, res) => {
-    const url = new URL(req.url ?? '/', origin);
+  /** Both ports serve every route; only the metadata says which origin is which. */
+  const handler = (which) => (req, res) => {
+    const url = new URL(req.url ?? '/', which === 'auth' ? authOrigin : origin);
+    requestLog.push({ server: which, method: req.method, path: url.pathname, headers: { ...req.headers } });
     const route = `${req.method} ${url.pathname}`;
     if (url.pathname === '/mcp') return handleMcp(req, res);
     if (route === 'GET /.well-known/oauth-protected-resource' || route === 'GET /.well-known/oauth-protected-resource/mcp') return sendJson(res, 200, protectedResource());
@@ -258,17 +274,33 @@ export async function startOAuthEchoServer(opts = {}) {
     if (route === 'GET /authorize') return handleAuthorize(url, res);
     if (route === 'POST /token') return void handleToken(req, res).catch(fail(res));
     res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
-  });
+  };
 
-  await new Promise((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(opts.port ?? 0, '127.0.0.1', () => resolve(undefined));
-  });
+  const listen = (server, port) =>
+    new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, '127.0.0.1', () => resolve(undefined));
+    });
+  const httpServer = createServer(handler('mcp'));
+  await listen(httpServer, opts.port ?? 0);
   origin = `http://127.0.0.1:${httpServer.address().port}`;
+  authOrigin = origin;
+  const authServer = opts.separateAuthServer ? createServer(handler('auth')) : null;
+  if (authServer) {
+    await listen(authServer, 0);
+    authOrigin = `http://127.0.0.1:${authServer.address().port}`;
+  }
+  const closeServer = (server) =>
+    new Promise((resolve) => {
+      server.closeAllConnections();
+      server.close(() => resolve(undefined));
+    });
 
   return {
     origin,
+    authOrigin,
     url: `${origin}/mcp`,
+    requestLog,
     registrations,
     issued,
     tokenRequests,
@@ -289,6 +321,8 @@ export async function startOAuthEchoServer(opts = {}) {
       return release;
     },
     refreshesParked: () => tokenGateWaiting,
+    /** How many parked refresh_token grants have been answered since. */
+    refreshesFinished: () => tokenGateDone,
     registerRequests: () => registerRequests,
     mcpRequests: () => mcpRequests,
     expireAccessTokens: () => accessTokens.clear(),
@@ -299,11 +333,10 @@ export async function startOAuthEchoServer(opts = {}) {
     setTokenDown: (value) => {
       tokenDown = value;
     },
-    close: () =>
-      new Promise((resolve) => {
-        httpServer.closeAllConnections();
-        httpServer.close(() => resolve(undefined));
-      }),
+    close: async () => {
+      await closeServer(httpServer);
+      if (authServer) await closeServer(authServer);
+    },
   };
 }
 

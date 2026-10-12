@@ -64,6 +64,13 @@ export class McpServerManager {
   private readonly unsubscribes = new Map<string, () => void>();
   private readonly oauth: McpOAuthStore;
   private readonly signIns: McpSignIns;
+  /**
+   * Servers whose connection is being replaced under their lock (reconfigure,
+   * restart, sign-out, sign-in completion). `sync()` leaves them alone: a sync
+   * for another server's change must not rebuild one from a row that is about
+   * to change, or connect it twice. The owner connects it itself.
+   */
+  private readonly busy = new Set<string>();
 
   constructor(
     private readonly store: Store,
@@ -79,12 +86,14 @@ export class McpServerManager {
     });
   }
 
+  /** Takes no lock, so a caller holding a server's lock may call it; servers being reconfigured (`busy`) are skipped. */
   async sync(): Promise<void> {
     const rows = this.store.mcpServers.list();
     const rowById = new Map(rows.map((r) => [r.id, r]));
 
     const disconnecting: Promise<void>[] = [];
     for (const [id, client] of [...this.clients]) {
+      if (this.busy.has(id)) continue;
       const row = rowById.get(id);
       if (!row || !row.enabled) {
         this.teardown(id);
@@ -93,8 +102,10 @@ export class McpServerManager {
     }
     await Promise.all(disconnecting);
 
-    for (const row of rows) {
-      if (!row.enabled || this.clients.has(row.id)) continue;
+    for (const { id } of rows) {
+      // Read again: an earlier connect awaited, and the row may have changed since the list.
+      const row = this.store.mcpServers.get(id);
+      if (!row?.enabled || this.clients.has(id) || this.busy.has(id)) continue;
       await this.connectServer(row);
     }
   }
@@ -133,30 +144,52 @@ export class McpServerManager {
 
   /** `reconfigure` for a caller that already holds the lock through `withServerLock`, so it can read the row and decide inside it. */
   async reconfigureHeld(serverId: string, opts: { forget: 'none' | 'keepManualClient' | 'all' }, apply: () => void | Promise<void>): Promise<void> {
-    const client = this.clients.get(serverId);
-    if (client) {
-      this.teardown(serverId);
-      await client.disconnect();
+    this.busy.add(serverId);
+    try {
+      await this.stopClient(serverId);
+      this.signIns.forget(serverId);
+      await this.forgetAsked(serverId, opts.forget);
+      await apply();
+      await this.forgetAsked(serverId, opts.forget);
+    } finally {
+      // Also when apply threw: the server reconnects from whatever its row now says.
+      this.busy.delete(serverId);
+      await this.sync();
     }
-    this.signIns.forget(serverId);
-    await this.forgetAsked(serverId, opts.forget);
-    await apply();
-    await this.forgetAsked(serverId, opts.forget);
-    await this.sync();
   }
 
   private async forgetAsked(serverId: string, forget: 'none' | 'keepManualClient' | 'all'): Promise<void> {
     if (forget !== 'none') await this.oauth.forget(serverId, { keepManualClient: forget === 'keepManualClient' });
   }
 
-  private async restartLocked(serverId: string): Promise<void> {
-    const client = this.clients.get(serverId);
-    if (client) {
-      this.teardown(serverId);
-      await client.disconnect();
+  private async restartLocked(serverId: string, opts: { waitForConnect?: boolean } = {}): Promise<void> {
+    await this.replaceClient(serverId, async () => {}, opts);
+  }
+
+  /**
+   * Stops the server's client and waits for it to close, runs `between`, then
+   * connects again from the current row if it is enabled. `sync()` keeps off
+   * the server meanwhile. A new connection gets a new background provider,
+   * which captures the token generation as `between` left it. `waitForConnect`:
+   * returns once the first connect attempt has settled.
+   */
+  private async replaceClient(serverId: string, between: () => Promise<void>, opts: { waitForConnect?: boolean } = {}): Promise<void> {
+    this.busy.add(serverId);
+    try {
+      await this.stopClient(serverId);
+      await between();
+      const row = this.store.mcpServers.get(serverId);
+      if (row?.enabled) await this.connectServer(row, { owner: true, waitForConnect: opts.waitForConnect });
+    } finally {
+      this.busy.delete(serverId);
     }
-    const row = this.store.mcpServers.get(serverId);
-    if (row?.enabled) await this.connectServer(row);
+  }
+
+  private async stopClient(serverId: string): Promise<void> {
+    const client = this.clients.get(serverId);
+    if (!client) return;
+    this.teardown(serverId);
+    await client.disconnect();
   }
 
   /** One server's reconfigurations, sign-outs and sign-in completions run one after another. */
@@ -194,21 +227,26 @@ export class McpServerManager {
 
   private async finishSignIn(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string; serverName: string }> {
     const { serverId } = await this.signIns.complete(params);
-    const row = this.store.mcpServers.get(serverId);
-    if (row?.enabled) await this.refresh(serverId);
-    return { serverId, serverName: row?.name ?? 'the server' };
+    // A new connection, not a refresh of the old one: the old one's provider belongs to the previous sign-in, and a refresh it still has in flight must not land.
+    await this.restartLocked(serverId, { waitForConnect: true });
+    return { serverId, serverName: this.store.mcpServers.get(serverId)?.name ?? 'the server' };
   }
 
   cancelSignIn(id: string): void {
     this.signIns.cancel(id);
   }
 
-  /** Forgets the tokens and the registered client here (no revocation at the provider), keeps a hand-registered client, and reconnects (which then needs sign-in). */
+  /**
+   * Forgets the tokens and the registered client here (no revocation at the
+   * provider), keeps a hand-registered client, and reconnects (which then needs
+   * sign-in). The client is stopped first and the forget comes after; a refresh
+   * the old connection still has in flight then finds an older token generation
+   * and its save is dropped.
+   */
   async signOut(id: string): Promise<void> {
     await this.withLock(id, async () => {
       this.signIns.forget(id);
-      await this.oauth.forget(id, { keepManualClient: true });
-      await this.restartLocked(id);
+      await this.replaceClient(id, () => this.oauth.forget(id, { keepManualClient: true }));
     });
   }
 
@@ -291,7 +329,8 @@ export class McpServerManager {
     };
   }
 
-  private async connectServer(row: McpServer): Promise<void> {
+  /** `owner`: the caller marked the server busy and is replacing its client; anyone else backs off from a busy server. */
+  private async connectServer(row: McpServer, opts: { owner?: boolean; waitForConnect?: boolean } = {}): Promise<void> {
     let config: McpTransportConfig;
     try {
       config = await this.resolveTransportConfig(row);
@@ -300,6 +339,8 @@ export class McpServerManager {
       console.error(`[McpServerManager] "${row.name}" (${row.id}) is misconfigured, not connecting:`, err);
       return;
     }
+    // While the secrets were read, someone else connected it, or a reconfigure took it over.
+    if (this.clients.has(row.id) || (!opts.owner && this.busy.has(row.id))) return;
 
     const client = new McpClient(row.id, config, this.clientOptions);
     this.clients.set(row.id, client);
@@ -310,7 +351,8 @@ export class McpServerManager {
       });
     });
     this.unsubscribes.set(row.id, unsubscribe);
-    void client.connect();
+    const connecting = client.connect();
+    if (opts.waitForConnect) await connecting;
   }
 
   private teardown(id: string): void {

@@ -1,10 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, type StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { FetchLike, Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js';
-import { redactMessage } from './redact.js';
+import { looksSecret, redactMessage } from './redact.js';
 import { resolveExecutable } from './spawn.js';
 
 export type McpTransportConfig =
@@ -54,6 +54,25 @@ const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30_000;
 const DEFAULT_INITIAL_BACKOFF_MS = 1_000;
 const DEFAULT_MAX_BACKOFF_MS = 60_000;
 
+/**
+ * A fetch that adds an http server's configured headers only to requests for
+ * the MCP server's own origin. They are not passed as the transport's
+ * `requestInit`, because the SDK's `auth()` merges those into discovery,
+ * registration and token requests, which go to whatever authorization server
+ * the server's metadata names: a configured `X-Api-Key` must not follow them
+ * there. A configured header replaces the SDK's own of the same name, as
+ * `requestInit` did.
+ */
+export function fetchWithServerHeaders(serverUrl: string, headers: Record<string, string>, base: FetchLike = (url, init) => fetch(url, init)): FetchLike {
+  if (Object.keys(headers).length === 0) return base;
+  const origin = new URL(serverUrl).origin;
+  return (url, init) => {
+    if (new URL(url).origin !== origin) return base(url, init);
+    const merged = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(headers)) merged.set(name, value);
+    return base(url, { ...init, headers: merged });
+  };
+}
 
 interface RawListedTool {
   name: string;
@@ -130,14 +149,16 @@ export class McpClient {
   }
 
   /**
-   * An error's text as `lastError` (and so the Inspector) may show it. A response
-   * body or header an SDK error embeds can carry a token or a fixed credential,
-   * so configured header and env values and the provider's tokens are redacted.
+   * An error's text as `lastError` (and so the Inspector) or a failed tool call
+   * may show it. A response body or header an SDK error embeds can carry a token
+   * or a fixed credential, so the provider's tokens and every configured header
+   * and env value that looks like a secret (`looksSecret`) are redacted.
    */
   private errorMessage(err: unknown): string {
     const message = err instanceof Error ? err.message : String(err);
-    const configured = this.config.transport === 'http' ? [...Object.values(this.config.headers), ...(this.config.secrets?.() ?? [])] : Object.values(this.config.env);
-    return redactMessage(message, configured);
+    const configured = Object.values(this.config.transport === 'http' ? this.config.headers : this.config.env).filter(looksSecret);
+    const held = this.config.transport === 'http' ? (this.config.secrets?.() ?? []) : [];
+    return redactMessage(message, [...configured, ...held]);
   }
 
   /** Subscribes to status transitions ('connecting' | 'ok' | 'error' | 'needs_auth'). Returns an unsubscribe function. */
@@ -203,7 +224,14 @@ export class McpClient {
     if (!this.client || this.status !== 'ok') {
       throw new Error(`MCP server "${this.id}" is not connected (status: ${this.status}).`);
     }
-    const result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined });
+    let result: Awaited<ReturnType<Client['callTool']>>;
+    try {
+      result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined });
+    } catch (err) {
+      // The same redaction as `lastError`: the message reaches the model and the chat.
+      if (this.signInRequired(err)) throw new Error(NEEDS_SIGN_IN_CALL_MESSAGE);
+      throw new Error(this.errorMessage(err));
+    }
     const content = 'content' in result ? result.content : result['toolResult'];
     return { content, isError: 'isError' in result && result.isError === true };
   }
@@ -224,8 +252,9 @@ export class McpClient {
       return new StdioClientTransport(params);
     }
     const headers = this.config.headers;
+    // No timeout of our own here: the background transport keeps the SDK's defaults.
     return new StreamableHTTPClientTransport(new URL(this.config.url), {
-      requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
+      fetch: Object.keys(headers).length > 0 ? fetchWithServerHeaders(this.config.url, headers) : undefined,
       authProvider: this.config.authProvider,
     });
   }

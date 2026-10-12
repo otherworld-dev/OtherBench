@@ -3,7 +3,20 @@ const MIN_SECRET_LENGTH = 4;
 
 /** `key=value`, `key: value` and `"key":"value"` for the usual OAuth secrets. */
 const SENSITIVE_PAIR =
-  /\b(code|code_verifier|authorization_code|state|token|access_token|refresh_token|id_token|client_secret|client_assertion|assertion|password)(["']?\s*[=:]\s*["']?)[^\s&"',}]+/gi;
+  /\b(code|code_verifier|authorization_code|state|token|access_token|refresh_token|id_token|client_secret|client_assertion|assertion|password)(["']?\s*[=:]\s*["']?)([^\s&"',}]+)/gi;
+/** `code` and `state` also name ordinary things ("exit code: 127"); a purely numeric value for them is no OAuth secret. */
+const NUMERIC_OK = new Set(['code', 'state']);
+
+/**
+ * Whether a configured env or header value counts as a secret when an error
+ * message is redacted: at least 8 characters and not letters only. So
+ * `production`, `debug`, `true` or `1` stay readable, while an API key, token
+ * or password-like value (digits, symbols, mixed) is removed wherever it appears.
+ */
+export function looksSecret(value: string): boolean {
+  return value.length >= 8 && !/^[A-Za-z]+$/.test(value);
+}
+
 /** `Bearer abc` / `Basic abc` as it appears in an echoed Authorization header. */
 const AUTH_SCHEME = /\b(Bearer|Basic)\s+[\w.~+/=-]+/gi;
 const URL_PATTERN = /https?:\/\/[^\s"'<>)]+/gi;
@@ -28,7 +41,11 @@ function formsOf(secret: string): Set<string> {
  * token.
  */
 export function redactMessage(text: string, secrets: Iterable<string | null | undefined> = []): string {
-  let out = text.replace(AUTH_SCHEME, '$1 [redacted]').replace(SENSITIVE_PAIR, '$1$2[redacted]');
+  let out = text
+    .replace(AUTH_SCHEME, '$1 [redacted]')
+    .replace(SENSITIVE_PAIR, (match: string, key: string, sep: string, value: string) =>
+      NUMERIC_OK.has(key.toLowerCase()) && /^\d+[^\w]*$/.test(value) ? match : `${key}${sep}[redacted]` // digits, then at most punctuation ("127;")
+    );
   for (const secret of secrets) {
     if (!secret || secret.length < MIN_SECRET_LENGTH) continue;
     for (const form of formsOf(secret)) if (form.length >= MIN_SECRET_LENGTH) out = out.split(form).join('[redacted]');
