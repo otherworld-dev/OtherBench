@@ -172,6 +172,40 @@ describe('GruntToolProvider live calls', () => {
     }
   });
 
+  it('audits the first rate_limited refusal a minute per artifact and counts the rest onto its next audited row', async () => {
+    let t = 1_000_000;
+    provider = new GruntToolProvider(store, new PermissionBroker(store), manager, { liveTimeoutMs: 300, now: () => t });
+    provider.allowLive(statusReq([waitCall, lookupCall]));
+    // Four calls in flight fill the artifact's slots, so every lookup is rate_limited.
+    const waits = Array.from({ length: 4 }, () => run(waitCall, { ms: 2000 }, { fresh: true }));
+    for (let i = 0; i < 5; i += 1) expect(await run(lookupCall, { key: 'a' }, { fresh: true })).toMatchObject({ ok: false, code: 'rate_limited' });
+    t += 61_000;
+    for (let i = 0; i < 3; i += 1) expect(await run(lookupCall, { key: 'a' }, { fresh: true })).toMatchObject({ ok: false, code: 'rate_limited' });
+    // A refused call (set_value isn't read-only) is still audited, and carries the count.
+    expect(await run(setCall, { key: 'a', value: 'b' })).toMatchObject({ ok: false });
+    for (const outcome of await Promise.all(waits)) expect(outcome).toMatchObject({ ok: false, code: 'timeout' });
+    expect(store.audit.list('chat-1').map((a) => [a.grantedBy.split(':')[0], a.resultSummary])).toEqual([
+      ['live', 'error: rate_limited'],
+      ['live', 'error: rate_limited (+4 rate_limited calls not audited)'],
+      ['deny', 'error: refused (+2 rate_limited calls not audited)'],
+      ['live', 'error: timeout'],
+      ['live', 'error: timeout'],
+      ['live', 'error: timeout'],
+      ['live', 'error: timeout'],
+    ]);
+  });
+
+  it('counts one artifact apart from another', async () => {
+    provider.allowLive(statusReq([waitCall, lookupCall]));
+    provider.allowLive(statusReq([lookupCall], { artifactId: 'art-2' }));
+    const waits = Array.from({ length: 4 }, () => run(waitCall, { ms: 2000 }, { fresh: true }));
+    for (let i = 0; i < 3; i += 1) expect(await run(lookupCall, { key: 'a' }, { fresh: true })).toMatchObject({ code: 'rate_limited' });
+    expect(await run(lookupCall, { key: 'a' }, { artifactId: 'art-2' })).toMatchObject({ ok: true });
+    await Promise.all(waits);
+    const summaries = store.audit.list('chat-1').map((a) => a.resultSummary);
+    expect(summaries.filter((s) => s.includes('rate_limited'))).toEqual(['error: rate_limited', 'error: timeout (+2 rate_limited calls not audited)']);
+  });
+
   it('an aborted call frees its slot too', async () => {
     provider.allowLive(statusReq([waitCall]));
     for (let i = 0; i < 5; i += 1) {

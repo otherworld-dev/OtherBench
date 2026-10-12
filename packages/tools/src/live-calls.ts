@@ -86,6 +86,40 @@ export class LiveCallLimiter {
 }
 
 /**
+ * Per key (an artifact): which `rate_limited` refusals get an audit row. The
+ * first in a minute does and the rest are only counted, so a page that keeps
+ * asking can't grow the audit table without bound; the count goes on the
+ * key's next audited row, whatever that row is.
+ */
+export class LiveRefusalAudit {
+  private readonly windows = new Map<string, { since: number; unaudited: number }>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** A rate_limited refusal: null when it's only counted, else the unaudited count its row should carry. */
+  rateLimited(key: string): number | null {
+    const t = this.now();
+    const window = this.windows.get(key);
+    if (window && t - window.since < MINUTE_MS) {
+      window.unaudited += 1;
+      return null;
+    }
+    this.windows.set(key, { since: t, unaudited: 0 });
+    return window?.unaudited ?? 0;
+  }
+
+  /** Any other audited live call: the unaudited count its row should carry, which it takes. */
+  take(key: string): number {
+    const window = this.windows.get(key);
+    if (!window) return 0;
+    const unaudited = window.unaudited;
+    if (this.now() - window.since >= MINUTE_MS) this.windows.delete(key);
+    else window.unaudited = 0;
+    return unaudited;
+  }
+}
+
+/**
  * A tool's MCP result as the page gets it: its text blocks joined with
  * newlines, `json` when the whole text parses as JSON, and `structured` when
  * the server sent `structuredContent`. Images and resources are dropped.

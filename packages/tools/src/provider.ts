@@ -25,7 +25,7 @@ import type {
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { fsTools } from './fs-tools.js';
-import { LiveCallCache, LiveCallLimiter, shapeLiveResult } from './live-calls.js';
+import { LiveCallCache, LiveCallLimiter, LiveRefusalAudit, shapeLiveResult } from './live-calls.js';
 import type { McpCallResult, McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
 import { runCommandTool } from './shell-tool.js';
@@ -208,6 +208,7 @@ export class GruntToolProvider implements ToolProvider {
   private readonly liveTimeoutMs: number;
   private readonly liveCache: LiveCallCache;
   private readonly liveLimiter: LiveCallLimiter;
+  private readonly liveRefusals: LiveRefusalAudit;
 
   constructor(
     private readonly store: Store,
@@ -221,6 +222,7 @@ export class GruntToolProvider implements ToolProvider {
     this.liveTimeoutMs = options.liveTimeoutMs ?? LIVE_TIMEOUT_MS;
     this.liveCache = new LiveCallCache(this.now);
     this.liveLimiter = new LiveCallLimiter(this.now);
+    this.liveRefusals = new LiveRefusalAudit(this.now);
     this.asks = new UserAsks((event) => this.notify(event));
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
@@ -502,7 +504,7 @@ export class GruntToolProvider implements ToolProvider {
       if (decision.kind === 'ask') this.broker.discard(decision.request.id);
       const message = decision.kind === 'deny' ? decision.reason : 'A live call was asked about, which never happens; it did not run.';
       const code = decision.kind === 'deny' && decision.code === 'not_approved' ? 'not_approved' : 'refused';
-      this.audit(ctx, target.spec.name, req.args, toolError(code, message), this.now() - startedAt, 'deny:policy');
+      this.auditLive(this.liveRefusals.take(req.artifactId), ctx, target.spec.name, req.args, toolError(code, message), this.now() - startedAt, 'deny:policy');
       return { ok: false, code, message };
     }
     const grantedBy = `live:${decision.grantId ?? ''}`;
@@ -515,12 +517,14 @@ export class GruntToolProvider implements ToolProvider {
     }
     if (!this.liveLimiter.tryStart(req.artifactId)) {
       const message = 'This page asked for live data too often. Wait a minute, then refresh it.';
-      this.audit(ctx, target.spec.name, req.args, toolError('rate_limited', message), this.now() - startedAt, grantedBy);
+      const unaudited = this.liveRefusals.rateLimited(req.artifactId);
+      if (unaudited !== null) this.auditLive(unaudited, ctx, target.spec.name, req.args, toolError('rate_limited', message), this.now() - startedAt, grantedBy);
       return { ok: false, code: 'rate_limited', message };
     }
     try {
       const outcome = await this.callLive(target, req);
-      this.audit(ctx, target.spec.name, req.args, outcome.ok ? outcome : toolError(outcome.code, outcome.message), this.now() - startedAt, grantedBy);
+      const audited = outcome.ok ? outcome : toolError(outcome.code, outcome.message);
+      this.auditLive(this.liveRefusals.take(req.artifactId), ctx, target.spec.name, req.args, audited, this.now() - startedAt, grantedBy);
       if (outcome.ok) {
         const { ok: _ok, cached: _cached, ...result } = outcome;
         this.liveCache.set(key, result);
@@ -529,6 +533,12 @@ export class GruntToolProvider implements ToolProvider {
     } finally {
       this.liveLimiter.finish(req.artifactId);
     }
+  }
+
+  /** A live call's audit row, noting the artifact's rate_limited refusals that weren't given one of their own. */
+  private auditLive(unaudited: number, ctx: ToolContext, toolName: string, args: unknown, result: unknown, durationMs: number, grantedBy: string): void {
+    const note = unaudited > 0 ? ` (+${unaudited} rate_limited call${unaudited === 1 ? '' : 's'} not audited)` : '';
+    this.audit(ctx, toolName, args, result, durationMs, grantedBy, `${summarizeResult(result)}${note}`);
   }
 
   /** Calls the server for an allowed live call, within the timeout, and shapes its result for the page. */
