@@ -581,14 +581,14 @@ describe('Inspector audit trail', () => {
   });
 
   it('shows short labels for how each call was authorised, keeping the raw value in a tooltip', async () => {
-    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'deny:cancelled', 'auto', 'deny:auto', 'weird:thing'];
+    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'deny:cancelled', 'auto', 'deny:auto', 'deny:unattended', 'weird:thing'];
     mockedAuditList.mockResolvedValue(
       raws.map((grantedBy, i) => ({ id: `g${i}`, chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy, createdAt: 1000 + i })),
     );
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     const list = await within(auditSection()).findByTestId('audit-trail');
-    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (12)' }));
-    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'weird:thing'];
+    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (13)' }));
+    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'refused: nobody to approve (scheduled run)', 'weird:thing'];
     raws.forEach((raw, i) => {
       const label = within(within(list).getByTestId(`audit-g${i}`)).getByText(labels[i]!);
       expect(label).toHaveAttribute('title', raw);

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppEvent } from '@grunt/core/types/events.js';
 import { DEFAULT_NOTIFY_PREFS, loadNotifyPrefs, Notifier, NOTIFY_STORAGE_KEY, saveNotifyPrefs, type NotifyPrefs } from './notify.js';
 
 function setup(over: { focused?: boolean; prefs?: NotifyPrefs } = {}) {
@@ -65,12 +66,12 @@ describe('Notifier', () => {
   });
 
   it('respects the per-type toggles', async () => {
-    const { notifier, show, setPrefs } = setup({ prefs: { replies: false, approvals: true } });
+    const { notifier, show, setPrefs } = setup({ prefs: { replies: false, approvals: true, scheduled: true } });
     await notifier.handle(finished('m1'));
     expect(show).not.toHaveBeenCalled();
     await notifier.handle(approval('r1'));
     expect(show).toHaveBeenCalledTimes(1);
-    setPrefs({ replies: true, approvals: false });
+    setPrefs({ replies: true, approvals: false, scheduled: true });
     await notifier.handle(approval('r2'));
     expect(show).toHaveBeenCalledTimes(1);
   });
@@ -85,16 +86,61 @@ describe('Notifier', () => {
   });
 });
 
+const runStarted = (messageId: string): AppEvent => ({ type: 'schedule-run-started', scheduleId: 's1', scheduleName: 'Weekly report', runId: 'r1', chatId: 'c1', messageId });
+const runFinished = (over: Partial<Extract<AppEvent, { type: 'schedule-run-finished' }>> = {}): AppEvent => ({
+  type: 'schedule-run-finished', scheduleId: 's1', scheduleName: 'Weekly report', runId: 'r1', chatId: 'c1', messageId: 'm1', status: 'complete', detail: null, ...over,
+});
+
+describe('Notifier and scheduled runs', () => {
+  it('shows a finished scheduled run titled with the schedule, even while the window is focused, once per run', async () => {
+    const { notifier, show } = setup({ focused: true });
+    await notifier.handle(runStarted('m1'));
+    await notifier.handle(runFinished());
+    await notifier.handle(runFinished());
+    expect(show.mock.calls).toEqual([['Weekly report', 'Finished', 'c1']]);
+  });
+
+  it('words each outcome, and opens just Grunt when there is no chat', async () => {
+    const { notifier, show } = setup();
+    await notifier.handle(runFinished({ runId: 'r1', status: 'error', detail: 'Rate limited.' }));
+    await notifier.handle(runFinished({ runId: 'r2', status: 'timed_out', detail: 'Stopped after 30 minutes.' }));
+    await notifier.handle(runFinished({ runId: 'r3', status: 'cancelled' }));
+    await notifier.handle(runFinished({ runId: 'r4', status: 'not_started', detail: "The project's folder is missing.", chatId: null, messageId: null }));
+    expect(show.mock.calls).toEqual([
+      ['Weekly report', 'Failed: Rate limited.', 'c1'],
+      ['Weekly report', 'Timed out', 'c1'],
+      ['Weekly report', 'Stopped', 'c1'],
+      ['Weekly report', "Didn't run: The project's folder is missing.", null],
+    ]);
+  });
+
+  it("skips the run's own reply-finished notification", async () => {
+    const { notifier, show } = setup();
+    await notifier.handle(runStarted('m1'));
+    await notifier.handle(finished('m1'));
+    await notifier.handle(finished('m2'));
+    expect(show.mock.calls).toEqual([['Trip plans', 'Reply finished', 'c1']]);
+  });
+
+  it('respects the Scheduled runs toggle', async () => {
+    const { notifier, show } = setup({ prefs: { replies: true, approvals: true, scheduled: false } });
+    await notifier.handle(runStarted('m1'));
+    await notifier.handle(runFinished());
+    await notifier.handle(finished('m1'));
+    expect(show).not.toHaveBeenCalled();
+  });
+});
+
 describe('notification prefs', () => {
   beforeEach(() => window.localStorage.clear());
 
   it('default to both on, round-trip through storage, and ignore malformed values', () => {
-    expect(loadNotifyPrefs()).toEqual({ replies: true, approvals: true });
-    saveNotifyPrefs({ replies: false, approvals: true });
-    expect(loadNotifyPrefs()).toEqual({ replies: false, approvals: true });
+    expect(loadNotifyPrefs()).toEqual({ replies: true, approvals: true, scheduled: true });
+    saveNotifyPrefs({ replies: false, approvals: true, scheduled: true });
+    expect(loadNotifyPrefs()).toEqual({ replies: false, approvals: true, scheduled: true });
     window.localStorage.setItem(NOTIFY_STORAGE_KEY, '{"replies":"no"');
-    expect(loadNotifyPrefs()).toEqual({ replies: true, approvals: true });
+    expect(loadNotifyPrefs()).toEqual({ replies: true, approvals: true, scheduled: true });
     window.localStorage.setItem(NOTIFY_STORAGE_KEY, '{"replies":"no","approvals":false}');
-    expect(loadNotifyPrefs()).toEqual({ replies: true, approvals: false });
+    expect(loadNotifyPrefs()).toEqual({ replies: true, approvals: false, scheduled: true });
   });
 });

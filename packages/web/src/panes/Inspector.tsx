@@ -624,6 +624,7 @@ function grantedByLabel(grantedBy: string): string {
     case 'deny:cancelled': return 'stopped (not denied)';
     case 'deny:auto': return 'blocked by auto mode';
     case 'deny:plan': return 'refused: no plan approved yet';
+    case 'deny:unattended': return 'refused: nobody to approve (scheduled run)';
     default: return grantedBy;
   }
 }
