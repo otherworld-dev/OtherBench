@@ -34,6 +34,8 @@ export function parseLiveRequest(data: unknown): LiveRequest | null {
   if (typeof call !== 'string' || !CALL_ID.test(call)) return null;
   const params = d['params'] === undefined ? {} : d['params'];
   if (typeof params !== 'object' || params === null || Array.isArray(params)) return null;
+  const proto: unknown = Object.getPrototypeOf(params);
+  if (proto !== Object.prototype && proto !== null) return null;
   let size: number;
   try {
     size = new TextEncoder().encode(JSON.stringify(data)).length;
@@ -62,25 +64,30 @@ const BUSY: LiveOutcome = { ok: false, code: 'busy', message: 'The page has too 
 
 export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { source: unknown; data: unknown }): void } {
   let outstanding = 0;
-  /** Only to the frame that asked, and only while it still shows the page that asked. */
-  const reply = (frame: HTMLIFrameElement, requestId: string, outcome: LiveOutcome): void => {
-    if (opts.frame() !== frame || opts.loads() > 1) return;
+  /**
+   * Only to the frame that asked, and only while it still shows the page that
+   * asked: no document has loaded since the request (a replacement's load
+   * would otherwise count as a "first" one) and it never went past one.
+   */
+  const reply = (frame: HTMLIFrameElement, loadsAtAsk: number, requestId: string, outcome: LiveOutcome): void => {
+    if (opts.frame() !== frame || opts.loads() !== loadsAtAsk || loadsAtAsk > 1) return;
     frame.contentWindow?.postMessage({ grunt: 'live-result', v: 1, requestId, ...outcome }, '*');
   };
   return {
     onMessage(event) {
       const frame = opts.frame();
       const win = frame?.contentWindow;
-      if (!frame || !win || event.source !== win || opts.loads() > 1) return;
+      const loadsAtAsk = opts.loads();
+      if (!frame || !win || event.source !== win || loadsAtAsk > 1) return;
       const req = parseLiveRequest(event.data);
       if (!req) return;
       if (!opts.allowed().has(req.call)) {
         opts.onOutcome(req.call, NOT_APPROVED);
-        reply(frame, req.requestId, NOT_APPROVED);
+        reply(frame, loadsAtAsk, req.requestId, NOT_APPROVED);
         return;
       }
       if (outstanding >= MAX_OUTSTANDING) {
-        reply(frame, req.requestId, BUSY);
+        reply(frame, loadsAtAsk, req.requestId, BUSY);
         return;
       }
       const key = `${req.call}|${JSON.stringify(req.params)}`;
@@ -96,7 +103,7 @@ export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { 
         .then((outcome) => {
           outstanding -= 1;
           opts.onOutcome(req.call, outcome);
-          reply(frame, req.requestId, outcome);
+          reply(frame, loadsAtAsk, req.requestId, outcome);
         });
     },
   };

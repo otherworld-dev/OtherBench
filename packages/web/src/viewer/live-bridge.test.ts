@@ -38,6 +38,13 @@ describe('parseLiveRequest', () => {
     expect(parseLiveRequest(ask('r1', 'value', [1]))).toBeNull();
     expect(parseLiveRequest(ask('r1', 'value', { big: 'x'.repeat(17 * 1024) }))).toBeNull();
   });
+
+  it('takes params only when they are a plain object', () => {
+    expect(parseLiveRequest(ask('r1', 'value', Object.create(null)))).toEqual({ requestId: 'r1', call: 'value', params: {} });
+    expect(parseLiveRequest(ask('r1', 'value', new Date()))).toBeNull();
+    expect(parseLiveRequest(ask('r1', 'value', new Map()))).toBeNull();
+    expect(parseLiveRequest(ask('r1', 'value', new (class Param {})()))).toBeNull();
+  });
 });
 
 describe('createLiveBridge', () => {
@@ -101,6 +108,26 @@ describe('createLiveBridge', () => {
     finish(OK);
     await new Promise((r) => setTimeout(r, 0));
     expect(g.posted).toEqual([]);
+  });
+
+  it('drops a result when the frame loaded another document while the call ran, even one that counts as its first', async () => {
+    let finish!: (o: LiveOutcome) => void;
+    // The page asked before its first load event; a replacement document's load then makes the count 1 again.
+    const h = harness({ call: () => new Promise<LiveOutcome>((r) => (finish = r)) });
+    h.state.loads = 0;
+    h.fromPage(ask('r1'));
+    h.state.loads = 1;
+    finish(OK);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.posted).toEqual([]);
+    expect(h.onOutcome).toHaveBeenCalledWith('value', OK);
+  });
+
+  it('still answers a request made before the first load event when no document has loaded since', async () => {
+    const h = harness();
+    h.state.loads = 0;
+    h.fromPage(ask());
+    await vi.waitFor(() => expect(h.posted).toHaveLength(1));
   });
 
   it('turns a failed request into a failed outcome', async () => {
