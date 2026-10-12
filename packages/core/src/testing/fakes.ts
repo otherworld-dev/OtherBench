@@ -66,7 +66,7 @@ import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
-import { toSandboxPath } from '../domain/sandbox-paths.js';
+import { normaliseWindowsPath, toSandboxPath } from '../domain/sandbox-paths.js';
 import type { ModelInfo, Profile } from '../types/config.js';
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 
@@ -163,7 +163,7 @@ export const FAKE_SANDBOX_VERSIONS: SandboxVersions = { distro: 'Fake Linux 1.0'
 
 function fakeSandboxCwd(root: string): string {
   try {
-    return toSandboxPath(root);
+    return toSandboxPath(normaliseWindowsPath(root));
   } catch {
     return root;
   }

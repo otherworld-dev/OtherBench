@@ -1,4 +1,4 @@
-import { planMounts, toSandboxPath, type MountNeed, type PlannedMount } from '@grunt/core/domain/sandbox-paths.js';
+import { normaliseWindowsPath, planMounts, toSandboxPath, type MountNeed, type PlannedMount } from '@grunt/core/domain/sandbox-paths.js';
 import { SandboxError } from '@grunt/core/ports/sandbox.js';
 import type { WslRunner } from './wsl.js';
 
@@ -36,9 +36,15 @@ function overlaps(a: string, b: string): boolean {
   return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
 }
 
-/** A plan with every read-write mount the `ceiling` plan doesn't also have read-write made read-only. */
+/**
+ * A plan with every read-write mount made read-only unless the `ceiling` plan has
+ * read-write at that path or at a parent of it (a parent mounted read-write
+ * covers the folders inside it, which is how another chat's folder can be absent
+ * from the ceiling and still be allowed).
+ */
 function narrowed(plan: PlannedMount[], ceiling: PlannedMount[]): PlannedMount[] {
-  return plan.map((m): PlannedMount => (m.mode === 'rw' && !ceiling.some((c) => c.linuxPath === m.linuxPath && c.mode === 'rw') ? { ...m, mode: 'ro' } : m));
+  const allowed = (m: PlannedMount): boolean => ceiling.some((c) => c.mode === 'rw' && (c.linuxPath === m.linuxPath || m.linuxPath.startsWith(`${c.linuxPath}/`)));
+  return plan.map((m): PlannedMount => (m.mode === 'rw' && !allowed(m) ? { ...m, mode: 'ro' } : m));
 }
 
 interface ApplyOptions {
@@ -83,16 +89,19 @@ export class MountManager {
       const previous = this.needs.get(chatId);
       this.needs.set(chatId, needs);
       try {
-        await this.apply(true, { mine: needs.map((n) => toSandboxPath(n.windowsPath)) });
+        await this.apply(true, { mine: needs.map((n) => toSandboxPath(normaliseWindowsPath(n.windowsPath))) });
       } catch (err) {
         // This chat gets no run, so its new folders must not be mounted for the sake of other changes.
         const attempted = this.plan();
         if (previous) this.needs.set(chatId, previous);
         else this.needs.delete(chatId);
-        try {
-          await this.apply(false, { ceiling: attempted });
-        } catch (again) {
-          this.warn(`couldn't restore the mounts after a refused change: ${messageOf(again)}`);
+        // A plan that can't be made (a bad path) failed before anything was touched: nothing to put back.
+        if (attempted) {
+          try {
+            await this.apply(false, { ceiling: attempted });
+          } catch (again) {
+            this.warn(`couldn't restore the mounts after a refused change: ${messageOf(again)}`);
+          }
         }
         throw err;
       }
@@ -130,12 +139,12 @@ export class MountManager {
     return next;
   }
 
-  /** The plan for every chat's needs, or nothing at all if it can't be made. */
-  private plan(): PlannedMount[] {
+  /** The plan for every chat's needs, or undefined if it can't be made. */
+  private plan(): PlannedMount[] | undefined {
     try {
       return planMounts([...this.needs.values()]);
     } catch {
-      return [];
+      return undefined;
     }
   }
 

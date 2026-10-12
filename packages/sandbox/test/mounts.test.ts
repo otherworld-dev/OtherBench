@@ -262,6 +262,28 @@ describe('MountManager', () => {
       expect(r.log).toEqual(['mount rw /mnt/d/Refs', 'unmount /mnt/d/Refs']);
     });
 
+    it("leaves another chat's read-write folder alone when a chat's request is a bad path", async () => {
+      const r = recordingRunner();
+      const m = new MountManager(r, () => {});
+      await m.set('chat-a', [rw('D:\\Work')]);
+      r.log.length = 0;
+      await expect(m.set('chat-b', [ro('\\\\nas\\share\\x')])).rejects.toMatchObject({ name: 'SandboxPathError' });
+      // The plan couldn't be made, so nothing was touched and nothing needs putting back.
+      expect(r.log).toEqual([]);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/d/Work']);
+    });
+
+    it("keeps another chat's read-write folder read-write when a parent mount for a chat fails", async () => {
+      const r = recordingRunner({ mount: (x) => x.linuxPath === '/mnt/e/Git' });
+      const m = new MountManager(r, () => {});
+      await m.set('chat-a', [rw('E:\\Git\\Grunt')]);
+      r.log.length = 0;
+      // chat-b's rw E:\Git covers E:\Git\Grunt, so the attempt takes chat-a's mount off; it comes back as it was.
+      await expect(m.set('chat-b', [rw('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
+      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount rw /mnt/e/Git/Grunt']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
+    });
+
     it('refuses a chat when a read-write mount over its folders will not come off', async () => {
       const r = recordingRunner({ unmount: (x) => x.linuxPath === '/mnt/e/Git' });
       const warn = vi.fn();

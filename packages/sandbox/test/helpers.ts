@@ -1,6 +1,9 @@
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import type { WslResult, WslRunner, WslUser } from '../src/wsl.js';
 
 export interface FakeChild {
@@ -74,4 +77,42 @@ export class FakeWsl implements WslRunner {
     this.calls.push(call);
     return { code: 0, stdout: '', stderr: '', timedOut: false, ...this.answer(call) };
   }
+}
+
+const MOUNT_SH = join(dirname(fileURLToPath(import.meta.url)), '..', 'resources', 'mount.sh');
+/** Git Bash on Windows (never System32\bash.exe, which would run in a WSL distro); /bin/bash elsewhere. */
+const BASH = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/bash';
+export const hasBash = existsSync(BASH);
+
+export interface ScriptResult {
+  code: number | null;
+  out: string;
+  err: string;
+}
+
+/**
+ * mount.sh in dry-run mode. `mounted` pretends the target is already mounted in that mode
+ * (GRUNT_MOUNT_DRY_RUN_MOUNTED); `sim` sets the other GRUNT_MOUNT_DRY_RUN_* variables that
+ * simulate the filesystem (SYMLINK, GRUNT_OWNED, WRITABLE, READONLY).
+ */
+export function runMountScript(args: string[], mounted?: string, sim: Record<string, string> = {}): ScriptResult {
+  const env: NodeJS.ProcessEnv = { ...process.env, GRUNT_MOUNT_DRY_RUN: '1' };
+  for (const key of Object.keys(env)) if (key.startsWith('GRUNT_MOUNT_DRY_RUN_')) delete env[key];
+  if (mounted) env['GRUNT_MOUNT_DRY_RUN_MOUNTED'] = mounted;
+  for (const [key, value] of Object.entries(sim)) env[`GRUNT_MOUNT_DRY_RUN_${key}`] = value;
+  const r = spawnSync(BASH, [MOUNT_SH, ...args], { env, encoding: 'utf8' });
+  return { code: r.status, out: r.stdout, err: r.stderr };
+}
+
+/**
+ * Like runMountScript() for `mount`, but the paths travel in the environment: Git Bash on Windows
+ * re-parses a command-line argument (it splits one at a newline and drops apostrophes), the
+ * real caller (wsl.exe --exec) doesn't.
+ */
+export function runMountScriptWithEnvPaths(win: string, target: string, mode = 'ro'): ScriptResult {
+  const env: NodeJS.ProcessEnv = { ...process.env, GRUNT_MOUNT_DRY_RUN: '1', TEST_WIN: win, TEST_TARGET: target, TEST_MODE: mode, TEST_SCRIPT: MOUNT_SH };
+  for (const key of Object.keys(env)) if (key.startsWith('GRUNT_MOUNT_DRY_RUN_')) delete env[key];
+  // exec "$BASH": a bare `bash` would be found through PATH, and on Windows that can be System32\bash.exe (WSL).
+  const r = spawnSync(BASH, ['-c', 'exec "$BASH" "$TEST_SCRIPT" mount "$TEST_WIN" "$TEST_TARGET" "$TEST_MODE"'], { env, encoding: 'utf8' });
+  return { code: r.status, out: r.stdout, err: r.stderr };
 }

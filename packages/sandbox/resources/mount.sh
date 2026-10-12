@@ -16,7 +16,8 @@
 # Because it runs as root while the sandboxed `grunt` user can write to parts
 # of the filesystem, it also walks every folder from /mnt down to the target
 # before touching anything, and refuses a symbolic link or a folder grunt could
-# swap for one: each must be root-owned, or sit on a read-only mount (a child
+# swap for one: each must be root-owned and not group- or other-writable, or sit
+# on a read-only mount (a child
 # folder can be mounted rw inside a read-only drvfs parent, planMounts does
 # that, and drvfs files there are owned by uid 1000 = grunt but can't be
 # changed). Missing folders are created here, as root, one level at a time.
@@ -27,7 +28,8 @@
 #                                              (anything but ro/rw: mode unreadable)
 #   GRUNT_MOUNT_DRY_RUN_SYMLINK=<path>         that folder exists and is a symlink
 #   GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED=<path>     that folder exists, owned by grunt
-#   GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED_RO=1       ... and lies on a read-only mount
+#   GRUNT_MOUNT_DRY_RUN_WRITABLE=<path>        that folder exists, root-owned but group/other-writable
+#   GRUNT_MOUNT_DRY_RUN_READONLY=1             ... and those two lie on a read-only mount
 set -euo pipefail
 export LC_ALL=C
 
@@ -48,8 +50,19 @@ case "$action" in
   *) die "unknown action: $action" ;;
 esac
 
-cntrl='[[:cntrl:]]'
+# The rules for the Windows path, the same as parseMountable() in
+# packages/core/src/domain/sandbox-paths.ts (test/fixtures/sandbox-path-vectors.json
+# runs against both): X:\ then segments separated by single backslashes, no trailing
+# one; a segment is not empty, not . or .., has no control character and none of
+# < > : " / \ | ? *, and doesn't end in a dot or a space; every byte >= 0x80 (UTF-8)
+# is fine; at most 1024 bytes (LC_ALL=C, so ${#win} counts bytes).
+for arg in "$action" "$win" "$target" "$mode"; do
+  [[ "$arg" != -* ]] || die "an argument starts with '-': $arg"
+done
+# Spelled out: [[:cntrl:]] also matches 0x80-0x9f in some C locales (Cygwin's), and those are UTF-8 bytes.
+cntrl=$'[\001-\037\177]'
 if [[ "$win" =~ $cntrl || "$target" =~ $cntrl ]]; then die 'a path contains control characters'; fi
+[ "${#win}" -le 1024 ] || die 'the Windows path is longer than 1024 bytes'
 
 drive_re='^[A-Za-z]:\\'
 [[ "$win" =~ $drive_re ]] || die "not a drive-letter path: $win"
@@ -57,10 +70,14 @@ drive_re='^[A-Za-z]:\\'
 
 rest=${win:3}
 [[ "$rest" != *'\' ]] || die "trailing separator: $win"
+forbidden='[<>:"|?*]'
+trailing='[. ]$'
 if [ -n "$rest" ]; then
   IFS='\' read -r -a parts <<< "$rest"
   for part in "${parts[@]}"; do
     [[ -n "$part" && "$part" != '.' && "$part" != '..' ]] || die "bad path segment in $win"
+    [[ ! "$part" =~ $forbidden ]] || die "a character Windows doesn't allow in a name, in $win"
+    [[ ! "$part" =~ $trailing ]] || die "a name ends in a dot or a space, in $win"
   done
 fi
 
@@ -91,7 +108,8 @@ mounted_mode() {
 c_exists() {
   if dry; then
     [ "$1" = /mnt ] || [ -n "${GRUNT_MOUNT_DRY_RUN_MOUNTED:-}" ] || [ "$action" = unmount ] \
-      || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_SYMLINK:-}" ] || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED:-}" ]
+      || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_SYMLINK:-}" ] || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED:-}" ] \
+      || [ "$1" = "${GRUNT_MOUNT_DRY_RUN_WRITABLE:-}" ]
   else
     [ -e "$1" ] || [ -L "$1" ]
   fi
@@ -103,17 +121,26 @@ c_folder() {
   if dry; then return 0; fi
   [ -d "$1" ]
 }
-# True if the sandbox user can't change this folder: root owns it, or it lies on a read-only mount.
-c_trusted() {
-  if dry; then
-    [ "$1" != "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED:-}" ] || [ "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED_RO:-}" = 1 ]
-    return
-  fi
-  local owner options
-  owner=$(stat -c %u -- "$1")
-  if [ "$owner" = 0 ]; then return 0; fi
+c_on_readonly_mount() {
+  if dry; then [ "${GRUNT_MOUNT_DRY_RUN_READONLY:-}" = 1 ]; return; fi
+  local options
   options=$(findmnt -n -o OPTIONS --target "$1" || true)
   [ "${options%%,*}" = ro ]
+}
+# True if the sandbox user can't change this folder: root owns it and neither its group nor
+# everyone else can write to it, or it lies on a read-only mount.
+c_trusted() {
+  if dry; then
+    if [ "$1" != "${GRUNT_MOUNT_DRY_RUN_GRUNT_OWNED:-}" ] && [ "$1" != "${GRUNT_MOUNT_DRY_RUN_WRITABLE:-}" ]; then return 0; fi
+    c_on_readonly_mount "$1"
+    return
+  fi
+  local owner perms
+  owner=$(stat -c %u -- "$1")
+  perms=$(stat -c %a -- "$1")
+  perms="0000$perms"
+  if [ "$owner" = 0 ] && (( (8#${perms: -2:1} & 2) == 0 && (8#${perms: -1} & 2) == 0 )); then return 0; fi
+  c_on_readonly_mount "$1"
 }
 
 # Walks /mnt, /mnt/x, ... down to the target. Missing folders are created (mount only),
@@ -129,7 +156,7 @@ check_path() {
     p="$p/$seg"
     if ! c_exists "$p"; then
       if [ "$action" != mount ]; then absent=1; return 0; fi
-      run mkdir -m 0755 "$p"
+      run mkdir -m 0755 -- "$p"
     fi
     if c_symlink "$p"; then die "$p is a symbolic link"; fi
     c_folder "$p" || die "$p is not a folder"
@@ -165,12 +192,12 @@ if [ "$action" = mount ]; then
   fi
   # Mounted in the other mode, or in a mode we can't tell: take it off first, and
   # give up if it won't go (never stack a mount on it, never leave it wider than asked).
-  if [ -n "$current" ]; then run umount "$target"; fi
-  run mount -t drvfs "$win" "$target" -o "$mode,uid=$uid,gid=$gid"
+  if [ -n "$current" ]; then run umount -- "$target"; fi
+  run mount -t drvfs -o "$mode,uid=$uid,gid=$gid" -- "$win" "$target"
 else
   check_path
   [ "$absent" = 0 ] || exit 0
   check_resolved
   if ! dry && ! is_mounted; then exit 0; fi
-  run umount "$target"
+  run umount -- "$target"
 fi

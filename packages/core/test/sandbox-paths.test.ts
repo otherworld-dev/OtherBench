@@ -4,13 +4,39 @@ import { normaliseWindowsPath, planMounts, SandboxPathError, sandboxFoldersPromp
 describe('toSandboxPath', () => {
   it.each([
     ['E:\\Git\\Grunt', '/mnt/e/Git/Grunt'],
-    ['e:\\Git\\Grunt\\', '/mnt/e/Git/Grunt'],
-    ['E:/Git//Grunt/', '/mnt/e/Git/Grunt'],
+    ['e:\\Git\\Grunt', '/mnt/e/Git/Grunt'],
     ['C:\\', '/mnt/c'],
-    ['C:/', '/mnt/c'],
     ["C:\\Users\\Zoë O'Brien\\My Project (old)", "/mnt/c/Users/Zoë O'Brien/My Project (old)"],
   ])('%s -> %s', (win, linux) => {
     expect(toSandboxPath(win)).toBe(linux);
+  });
+
+  it.each([
+    ['a trailing separator', 'e:\\Git\\Grunt\\', /empty segment or a trailing/],
+    ['forward slashes', 'E:/Git/Grunt', /drive letter/],
+    ['a repeated separator', 'E:\\Git\\\\Grunt', /empty segment/],
+    ['a colon in a name', 'E:\\a:b', /character Windows does not allow/],
+    ['a < in a name', 'E:\\a<b', /character Windows does not allow/],
+    ['a > in a name', 'E:\\a>b', /character Windows does not allow/],
+    ['a quote in a name', 'E:\\a"b', /character Windows does not allow/],
+    ['a | in a name', 'E:\\a|b', /character Windows does not allow/],
+    ['a ? in a name', 'E:\\a?b', /character Windows does not allow/],
+    ['a * in a name', 'E:\\a*b', /character Windows does not allow/],
+    ['a trailing dot', 'E:\\a.', /ends in a dot or a space/],
+    ['a trailing space', 'E:\\a \\b', /ends in a dot or a space/],
+    ['a path over 1024 bytes', `E:\\${'a'.repeat(1030)}`, /longer than 1024 bytes/],
+  ])('refuses %s', (_name, win, reason) => {
+    expect(() => toSandboxPath(win)).toThrow(SandboxPathError);
+    expect(() => toSandboxPath(win)).toThrow(reason);
+  });
+
+  it('counts the length in UTF-8 bytes', () => {
+    expect(toSandboxPath(`E:\\${'a'.repeat(1020)}`)).toBe(`/mnt/e/${'a'.repeat(1020)}`);
+    expect(() => toSandboxPath(`E:\\${'é'.repeat(512)}`)).toThrow(/longer than 1024 bytes/);
+  });
+
+  it('allows what the plan needs: spaces, apostrophes, accents, CJK and ordinary punctuation', () => {
+    expect(toSandboxPath("D:\\My Docs\\O'Brien (2) & #1 $x! 100%~\\日本語\\café")).toBe("/mnt/d/My Docs/O'Brien (2) & #1 $x! 100%~/日本語/café");
   });
 
   it.each([
@@ -22,6 +48,7 @@ describe('toSandboxPath', () => {
     ['/home/adam/project', /drive letter/],
     ['E:', /drive letter/],
     ['E:Git', /drive letter/],
+    ['-E:\\a', /drive letter/],
     ['E:\\Git\\..\\Windows', /\.\./],
     ['E:\\Git\nGrunt', /control/],
   ])('refuses %s', (win, reason) => {
@@ -34,6 +61,12 @@ describe('normaliseWindowsPath', () => {
   it('upper-cases the drive, uses backslashes and drops trailing and repeated separators', () => {
     expect(normaliseWindowsPath('e:/Git//Grunt/')).toBe('E:\\Git\\Grunt');
     expect(normaliseWindowsPath('c:\\')).toBe('C:\\');
+    expect(normaliseWindowsPath('C:/')).toBe('C:\\');
+  });
+
+  it('checks the tidied path by the same rules as toSandboxPath, so a path it returns always maps', () => {
+    for (const bad of ['E:/a:b', 'E:\\a<b', 'E:/a./b', 'E:/a /b', `E:/${'a'.repeat(1030)}`]) expect(() => normaliseWindowsPath(bad)).toThrow(SandboxPathError);
+    expect(toSandboxPath(normaliseWindowsPath('e:/Git//Grunt/'))).toBe('/mnt/e/Git/Grunt');
   });
 });
 

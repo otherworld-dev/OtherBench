@@ -20,8 +20,44 @@ export class SandboxPathError extends Error {
 }
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
+/** Characters Windows doesn't allow in a name (the separators are handled by splitting). */
+const FORBIDDEN_IN_NAME = /[<>:"|?*/]/;
+/** The whole path, in UTF-8 bytes. Matches MAX_PATH_BYTES in packages/sandbox/resources/mount.sh. */
+const MAX_PATH_BYTES = 1024;
 
-/** A drive-letter path tidied: upper-case drive, backslashes, no repeated or trailing separators (`C:\` keeps its one). */
+/**
+ * The one rule set for a path that may be mounted, shared with mount.sh (which
+ * is the strict gate and applies it to what we hand it; the shared vectors in
+ * packages/sandbox/test/fixtures/sandbox-path-vectors.json run against both):
+ * `X:\` then segments separated by single backslashes, no trailing one. A
+ * segment is not empty, not `.` or `..`, has no control character and none of
+ * `< > : " / \ | ? *`, and doesn't end in a dot or space. Anything else
+ * (non-ASCII included) is allowed. At most 1024 bytes in all.
+ */
+function parseMountable(path: string): { drive: string; segments: string[] } {
+  if (CONTROL.test(path)) throw new SandboxPathError(path, 'it contains control characters.');
+  if (/^[\\/]{2}[?.][\\/]/.test(path)) throw new SandboxPathError(path, "device and \\\\?\\ paths can't be mounted.");
+  if (/^[\\/]{2}/.test(path)) throw new SandboxPathError(path, "network (UNC) paths can't be mounted; use a folder on a local drive.");
+  if (new TextEncoder().encode(path).length > MAX_PATH_BYTES) throw new SandboxPathError(path, `it is longer than ${String(MAX_PATH_BYTES)} bytes.`);
+  const match = /^([A-Za-z]):\\(.*)$/.exec(path);
+  if (!match) throw new SandboxPathError(path, 'only absolute paths on a drive letter (like C:\\Users\\you\\project) can be mounted.');
+  const rest = match[2] ?? '';
+  const segments = rest === '' ? [] : rest.split('\\');
+  for (const s of segments) {
+    if (s === '') throw new SandboxPathError(path, 'it has an empty segment or a trailing separator.');
+    if (s === '.' || s === '..') throw new SandboxPathError(path, 'it contains . or .. segments.');
+    if (FORBIDDEN_IN_NAME.test(s)) throw new SandboxPathError(path, 'a name in it has a character Windows does not allow (one of < > : " / | ? *).');
+    if (/[. ]$/.test(s)) throw new SandboxPathError(path, 'a name in it ends in a dot or a space.');
+  }
+  return { drive: match[1] ?? '', segments };
+}
+
+/**
+ * A drive-letter path tidied: upper-case drive, backslashes, no repeated or
+ * trailing separators (`C:\` keeps its one). Forward slashes and repeated or
+ * trailing separators are accepted here and only here; the result is checked
+ * by the same rules as toSandboxPath.
+ */
 export function normaliseWindowsPath(path: string): string {
   if (CONTROL.test(path)) throw new SandboxPathError(path, 'it contains control characters.');
   if (/^[\\/]{2}[?.][\\/]/.test(path)) throw new SandboxPathError(path, "device and \\\\?\\ paths can't be mounted.");
@@ -29,16 +65,20 @@ export function normaliseWindowsPath(path: string): string {
   const match = /^([A-Za-z]):[\\/](.*)$/.exec(path);
   if (!match) throw new SandboxPathError(path, 'only absolute paths on a drive letter (like C:\\Users\\you\\project) can be mounted.');
   const segments = (match[2] ?? '').split(/[\\/]+/).filter((s) => s.length > 0);
-  if (segments.some((s) => s === '.' || s === '..')) throw new SandboxPathError(path, 'it contains . or .. segments.');
-  return `${(match[1] ?? '').toUpperCase()}:\\${segments.join('\\')}`;
+  const tidy = `${(match[1] ?? '').toUpperCase()}:\\${segments.join('\\')}`;
+  parseMountable(tidy);
+  return tidy;
 }
 
-/** Where a Windows folder appears in the sandbox: `E:\Git\Grunt` -> `/mnt/e/Git/Grunt`. Throws SandboxPathError. */
+/**
+ * Where a Windows folder appears in the sandbox: `E:\Git\Grunt` -> `/mnt/e/Git/Grunt`.
+ * Strict: the path must already be in the form mount.sh accepts (backslashes,
+ * no repeated or trailing separators); use normaliseWindowsPath first for a path
+ * from outside. Throws SandboxPathError.
+ */
 export function toSandboxPath(windowsPath: string): string {
-  const tidy = normaliseWindowsPath(windowsPath);
-  const drive = tidy.charAt(0).toLowerCase();
-  const rest = tidy.slice(3).split('\\').filter((s) => s.length > 0);
-  return rest.length === 0 ? `/mnt/${drive}` : `/mnt/${drive}/${rest.join('/')}`;
+  const { drive, segments } = parseMountable(windowsPath);
+  return segments.length === 0 ? `/mnt/${drive.toLowerCase()}` : `/mnt/${drive.toLowerCase()}/${segments.join('/')}`;
 }
 
 /** One folder a chat with a running agent needs in the VM. */
@@ -93,7 +133,7 @@ export function planMounts(chats: readonly (readonly MountNeed[])[]): PlannedMou
 export function sandboxFoldersPrompt(workspaceRoot: string, folders: readonly ResolvedFolder[]): string {
   const where = (root: string): string => {
     try {
-      return `is ${toSandboxPath(root)} in the sandbox`;
+      return `is ${toSandboxPath(normaliseWindowsPath(root))} in the sandbox`;
     } catch (err) {
       return `is not available in the sandbox (${err instanceof SandboxPathError ? err.reason : String(err)})`;
     }
