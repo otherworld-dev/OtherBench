@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,7 @@ import {
 import {
   InsecurePublicUrlError,
   InvalidTrustProxyError,
+  LoginFileError,
   NoPasswordError,
   RemoteNeedsHttpsError,
   RemoteWithAnnounceError,
@@ -432,6 +433,18 @@ describe('runServe in sign-in mode', () => {
     const deps = fakeDeps();
 
     await expect(runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {})).rejects.toThrow(NoPasswordError);
+    expect(deps.createContainer).not.toHaveBeenCalled();
+  });
+
+  it('refuses with a plain LoginFileError, not a raw I/O error, when login.json cannot be read', async () => {
+    const deps = fakeDeps();
+    // A directory where the file should be: reading it fails with EISDIR, not ENOENT.
+    mkdirSync(join(dir, 'login.json'));
+
+    const run = runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {});
+
+    await expect(run).rejects.toThrow(LoginFileError);
+    await expect(run).rejects.toThrow(/login\.json is not a usable password file \(couldn't read it: /);
     expect(deps.createContainer).not.toHaveBeenCalled();
   });
 

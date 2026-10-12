@@ -1,5 +1,5 @@
 import { dirname, join } from 'node:path';
-import { NoPasswordError } from './errors.js';
+import { LoginFileError, NoPasswordError, RemoteStartError } from './errors.js';
 import { createRemoteAccess, type RemoteAccess, type RemoteTls } from './index.js';
 import { PasswordFile } from './password.js';
 import { parsePublicUrl } from './public-url.js';
@@ -36,7 +36,16 @@ export interface SignInCheck {
  */
 export function checkSignIn(o: SignInOptions, secretsPath: string): SignInCheck {
   const loginPath = loginPathFor(secretsPath);
-  if (new PasswordFile(loginPath).read() === null) throw new NoPasswordError(loginPath);
+  let record;
+  try {
+    record = new PasswordFile(loginPath).read();
+  } catch (err) {
+    // `read` already names a broken file; anything else (EACCES, EISDIR) is an
+    // I/O error that would print as a stack trace, so it gets the same refusal.
+    if (err instanceof RemoteStartError) throw err;
+    throw new LoginFileError(loginPath, `couldn't read it: ${(err as Error).message}`);
+  }
+  if (record === null) throw new NoPasswordError(loginPath);
   const hostnames = o.publicUrls.map((u) => parsePublicUrl(u).hostname);
   const files = o.tlsCert !== null && o.tlsKey !== null ? loadTlsFiles(o.tlsCert, o.tlsKey, hostnames) : null;
   const notes: string[] = [];
