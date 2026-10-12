@@ -290,11 +290,11 @@ Spec: `docs/superpowers/specs/2026-10-12-model-browser-design.md`; plan: `docs/s
 - Tests: unit tests per module, `packages/tools/test/browser/browser.integration.test.ts` (real Chromium against a loopback fixture; skipped with a logged reason when none starts, but a failure when `CI` is set; `GRUNT_BROWSER_PATH` runs it against another build), `packages/web/e2e/browser.spec.ts` (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS` lets the e2e server reach its fixture site on `GRUNT_E2E_SITE_PORT`, default 4797; Grunt's own API and peer ports are taken out of that list with a warning). No test browses the internet. CI installs `chromium-headless-shell`.
 - **Accepted as they are:** a ref past the 40,000-character cut is still accepted (the model never saw it, so it cannot ask for it knowingly); an element whose name Playwright writes unquoted as `/regex/` gets no ref and cannot be acted on; parallel calls described on one snapshot fail with `stale_ref` after the first, as each result replaces the snapshot; `select` values and the query string of an `open` URL go to the local audit unredacted (typed text is redacted).
 - **Beside the other features (integration, feat/cowork-parity-all):**
-  - **One `host` grant constraint, with the sandbox's network cards.** A browser grant and a `sandbox_network` grant are stored and matched by the same broker rules: `alwaysConstraintFor` (an "Always" answer must carry exactly `{ host }`, the card's own, and is stored canonical), every-key matching, and no match for a grant with no constraint. The grant's source is part of the match, so a browser grant for `pypi.org` never lets the sandbox reach it and a network grant never lets the browser open it. The route's `parseConstraint` takes one key of 1-253 characters for both, and the card's "Always" sends exactly that.
-  - **One set of host rules.** The sandbox's `canonicalHost` is `normaliseHost` plus the sandbox's own limits, its IPv4 ranges are `isPublicAddress`'s and the local-name suffixes are one list (`LOCAL_NAME_SUFFIXES`). So the sandbox now also refuses `*.lan` and 192.88.99.0/24, and the browser `*.localdomain`. `packages/core/src/testing/shared-host-vectors.ts` is run against both and pins where they differ on purpose: the sandbox takes no IPv6 literal, no name without a dot, no percent-escape, no underscore and no name over 253 characters; the tests-only loopback allowance is the browser's alone. The same file holds resolved addresses for the browser's proxy and the sandbox agent in the VM (`agent-core.mjs` can't import core and keeps its own ranges): the agent lets through 192.88.99.0/24 and the IPv6 special ranges the browser refuses (6to4, Teredo, the RFC 9637 documentation range, discard-only, v4-compatible, and anything outside 2000::/3 that isn't on its list). Pinned, not changed.
+  - **One `host` grant constraint, with the sandbox's network cards.** A browser grant and a `sandbox_network` grant are stored and matched by the same broker rules: `alwaysConstraintFor` (an "Always" answer must carry exactly `{ host }`, the card's own, and is stored canonical), every-key matching, and no match for a grant with no constraint. The grant's source is part of the match, so a browser grant for `pypi.org` never lets the sandbox reach it and a network grant never lets the browser open it. The route's `parseConstraint` takes one key of 1-253 characters for both, and the card's "Always" sends exactly that. When the broker refuses to store an answer as a grant (any card: an "Always" naming another site, a shell answer with no command to pin), the person still said yes to that call, so it runs once, and the audit row and the `resolved` event say `once`, not `always`.
+  - **One set of host rules.** The sandbox's `canonicalHost` is `normaliseHost` plus the sandbox's own limits, its IPv4 ranges are `isPublicAddress`'s and the local names are one rule (`isLocalNetworkName`: the suffixes in `LOCAL_NAME_SUFFIXES`, and any name with no dot). So the sandbox now also refuses `*.lan` and 192.88.99.0/24, and the browser `*.localdomain` and a name with no dot (`router`, `intranet`: a different machine on every network, so a grant for one would mean a different site wherever Grunt runs). `packages/core/src/testing/shared-host-vectors.ts` is run against both and pins where they differ on purpose: the sandbox takes no IPv6 literal, no percent-escape, no underscore and no name over 253 characters; the tests-only loopback allowance is the browser's alone (it is for the address 127.0.0.1, never a name). The same file holds resolved addresses for the browser's proxy and the sandbox agent in the VM (`agent-core.mjs` can't import core and keeps its own ranges): the agent lets through 192.88.99.0/24 and the IPv6 special ranges the browser refuses (6to4, Teredo, the RFC 9637 documentation range, discard-only, v4-compatible, and anything outside 2000::/3 that isn't on its list). Pinned, not changed.
   - **Plan mode.** Until the plan is approved a reply may read the page that is already open (`snapshot`, `scroll`, `close`, by command name) and nothing else: `open`, `click`, `type`, `select`, `press` and `back` are refused with the plan refusal, no card, whatever grants the site has. `open` is refused too, so a planning reply can't start browsing: it is a request to an address the model chose.
-  - **Scheduled runs.** A browser call that would raise a card is refused with the shared reason (`approval_unavailable`, audited `deny:unattended`). A site with an Always grant (or a grant for the schedule's own chat) works, and reads of the open page need no card under "Ask on changes". The schedule editor says so for a profile with the browser on.
-  - **Sub-agents.** A sub-agent gets the browser only when its parent's profile and the one it runs as both have it on, and may use no site either blocks (the union of the two lists, which also goes to the proxy). Its grants are the parent profile's, like every sub-agent call. It uses the chat's one browser, as the reply that started it does: the same page and the same holder, so sub-agents running at once share a page and trip over each other's refs (`stale_ref`). A sub-agent's browser calls show inside its card and don't open the viewer by themselves.
+  - **Scheduled runs.** A browser call that would raise a card is refused with the shared reason (`approval_unavailable`, audited `deny:unattended`). A site with an Always grant (or a grant for the schedule's own chat) works, and reads of the open page need no card under "Ask on changes". So a scheduled run can read, but not act on, a page that an approved site linked or redirected to on another site. The refusal's text and the schedule editor both say what the browser needs.
+  - **Sub-agents.** A sub-agent gets the browser only when its parent's profile and the one it runs as both have it on, and may use no site either blocks (the union of the two lists, which also goes to the proxy; the proxy keeps every list the holding reply's calls bring, so the parent calling at the same moment can't lift what the sub-agent's profile blocks, and starts again when another reply takes the browser). Its grants are the parent profile's, like every sub-agent call. It uses the chat's one browser, as the reply that started it does: the same page and the same holder, so sub-agents running at once share a page and trip over each other's refs (`stale_ref`). A sub-agent's browser calls show inside its card and don't open the viewer by themselves.
   - **Claude Code.** `relayTools(policy)` carries the sandboxed `run_command`, the browser and the MCP tools on the one Grunt server; `relayMcpTools` stays MCP only (what a live artifact may name). A relayed call runs with the current reply's spec and only if it is still the kind of tool the gate approved (`currentRelayed`, fail closed; the browser branch's fall-back to the process's old spec is gone), and the browser then runs only with its ticket. Questions and plan cards go through the same gate untouched.
   - **Remote access.** The state, the live view and the close are under `/api`, so sign-in mode, the Host check and the cross-site write check cover them; none is on the peer listener (`packages/server/test/routes/browser-remote.test.ts`).
   - **Not built:** the sandbox-VM phase. The browser still runs on the host, not in the sandbox, and nothing it loads lands in a chat's folders (no downloads).
@@ -1502,6 +1502,8 @@ stopped:
     own. Don't use it on a database already at 25: the runner would then try
     to create `schedule` again.
 - **Fine as it is:**
+  - From `feat/remote-access-build` with the model's browser: the browser
+    added no migration, so such a database is the remote-access case above.
   - From `dev`, `feat/cowork-parity` (the sandbox) or
     `feat/office-files-build` before sub-agents (up to 91a0af4): 20, or 21
     with chat-unread.
@@ -1509,6 +1511,44 @@ stopped:
   - From `feat/thread-cards-build`: 23 if migrated before b55da3e, or 24 from
     b55da3e on (that commit added `024-artifact-version-live`). Those numbers
     mean the same here, and it runs the rest.
+
+### Follow-ups from the integration
+
+Left as they are on purpose; each is written down so it isn't found again by
+surprise.
+
+- **The sandbox agent's address list is looser than core's.** The agent in
+  the VM (`packages/sandbox/resources/agent-core.mjs`) can't import core, so
+  `isPrivateAddress` and `DENIED_RESOLVED_ADDRESSES` are its own copy of the
+  ranges. Core's are `isPublicAddress` in `browser-hosts.ts`, which the
+  browser's proxy and the sandbox's card both use. The agent lets through
+  192.88.99.0/24, 6to4 (`2002::/16`, a private IPv4 address inside it
+  included), Teredo and the rest of `2001::/23`, `3fff::/20`, `100::/64`, a
+  public IPv4 address in the deprecated `::a.b.c.d` form, and any IPv6
+  address outside `2000::/3` that isn't on its list. To do: make both allow
+  only what `isPublicAddress` allows. The rows are pinned in
+  `packages/core/src/testing/shared-host-vectors.ts` (`SHARED_ADDRESS_VECTORS`,
+  the ones with `differs`), run against the agent by
+  `packages/sandbox/test/shared-address-vectors.test.ts`: change the agent
+  and those rows together.
+- **A scheduled run can read a page it couldn't open.** Under "Ask on
+  changes" the browser's reads (`snapshot`, `scroll`) need no card, on any
+  site. A page on a site with an Always grant can link or redirect to
+  another site, and the run can then read that page, though every action on
+  it and every `open` on its site is refused. The same holds for an attended
+  reply (it reads without a card and asks before acting); the difference in
+  a scheduled run is only that nobody sees it happen. Page text is untrusted
+  wherever it comes from. To close it, a read would have to need the site's
+  grant in an unattended run.
+- **`open` is refused while planning.** In Plan mode a reply may read the
+  page that is already open and nothing else, so it can't start browsing
+  until its plan is approved. This is the fail-closed choice: `open` is a
+  request to an address the model chose. Claude Code's own WebFetch is
+  allowed while planning, so allowing `open` on a site that already has a
+  grant would be consistent; it wasn't done.
+- **Sub-agents share the chat's one browser page** (see the browser section).
+  A browser per sub-agent would need `BrowserManager` keyed on more than the
+  chat.
 
 ## Deviations from the v2 spec and plan
 
