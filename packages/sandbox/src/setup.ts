@@ -211,6 +211,34 @@ const configureDistro: SetupStep = {
         throw new SetupError(this.name, `Couldn't confirm that Windows interop is off in the distro (${entry}: ${interop.timedOut ? 'timed out' : `exit ${String(interop.code)}`}): ${textOf(interop)}`);
       }
     }
+    // The distro's first start (before wsl.conf turned automount off) left a folder per drive, /mnt/c and so on,
+    // root's but writable by everyone (0777, found live). mount.sh refuses to mount below a folder the grunt user
+    // could change, so they are closed here. Only real folders directly under /mnt (root's own 0755 folder, so
+    // grunt can't swap one for a link meanwhile), only root's, and only the write bits for group and others.
+    const drives = await must(ctx, this.name, "Closing WSL's drive folders under /mnt", [
+      '/usr/bin/find',
+      '/mnt',
+      '-mindepth',
+      '1',
+      '-maxdepth',
+      '1',
+      '-regex',
+      '/mnt/[a-z]',
+      '-type',
+      'd',
+      '-user',
+      'root',
+      '-perm',
+      '/022',
+      '-print',
+      '-exec',
+      '/bin/chmod',
+      'go-w',
+      '{}',
+      '+',
+    ]);
+    const closed = drives.stdout.split(/\r?\n/).filter((line) => line.trim() !== '');
+    if (closed.length > 0) ctx.log(`Made ${closed.join(', ')} writable by root only (left by WSL's first start).`);
   },
 };
 

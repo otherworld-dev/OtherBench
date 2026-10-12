@@ -118,6 +118,25 @@ describe('runSetup', () => {
     expect(outcome).toMatchObject({ ok: false, step: 'Check WSL', message: expect.stringContaining('2.3.26 is too old') });
   });
 
+  it("closes the drive folders WSL's first start left writable under /mnt, after the restart and without chown", async () => {
+    const DRIVES = 'root: /usr/bin/find /mnt -mindepth 1 -maxdepth 1 -regex /mnt/[a-z] -type d -user root -perm /022 -print -exec /bin/chmod go-w {} +';
+    const wsl = happyWsl({ override: (c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === '/mnt' ? { stdout: '/mnt/c\n/mnt/e\n' } : undefined) });
+    const { outcome, log } = await setUp(wsl);
+    expect(outcome.ok).toBe(true);
+    const at = wsl.commands.indexOf(DRIVES);
+    expect(at).toBeGreaterThan(wsl.commands.lastIndexOf('root: /usr/bin/test -e /proc/sys/fs/binfmt_misc/WSLInterop-late'));
+    expect(at).toBeLessThan(wsl.commands.findIndex((line) => line.includes('apt-get update')));
+    expect(log).toContain("Made /mnt/c, /mnt/e writable by root only (left by WSL's first start).");
+    // Nothing to close: nothing said.
+    const quiet = await setUp(happyWsl());
+    expect(quiet.log.some((line) => line.startsWith('Made '))).toBe(false);
+  });
+
+  it('stops at "Configure the distro" when the drive folders under /mnt cannot be closed', async () => {
+    const { outcome } = await failing((c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === '/mnt' ? { code: 1, stderr: 'chmod: Operation not permitted' } : undefined));
+    expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('Operation not permitted') });
+  });
+
   it('stops when Windows interop is still on after the restart', async () => {
     const { outcome } = await failing((c) => (isProgram(c, '/usr/bin/test') ? { code: 0 } : undefined));
     expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('interop') });
