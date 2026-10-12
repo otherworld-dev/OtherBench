@@ -19,6 +19,8 @@ import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 import { appendDelta } from './parts.js';
+import type { SubagentEvent } from './parts.js';
+import { SubagentRunner } from './subagent.js';
 
 // `appendDelta` lives in parts.ts now (the web folds with it too); kept exported here for peer/forward.ts.
 export { appendDelta } from './parts.js';
@@ -53,6 +55,8 @@ export type TurnEvent = { messageId: string } & (
    * the first token, rather than only after its next full reload.
    */
   | { type: 'notice'; text: string }
+  /** A sub-agent's progress (spec 2026-10-12-api-subagents-design), folded into the reply's parts with `applySubagentEvent`. */
+  | { type: 'subagent'; callId: string; event: SubagentEvent }
 );
 
 export interface TurnInput {
@@ -127,6 +131,12 @@ export interface TurnRunnerOptions {
   generateId?: () => string;
   /** How often (ms) a streaming variant's partial parts may be re-checkpointed to the store. */
   checkpointIntervalMs?: number;
+  /**
+   * Resolves a profile by id for a sub-agent that runs as another profile
+   * (the server passes profile-resolution.ts's `resolveProfile`). Without
+   * it, a sub-agent can only run as the reply's own profile.
+   */
+  resolveProfile?: (id: string) => Promise<ResolvedProfile>;
   /**
    * Supplies the tools a variant's `EngineRequest.tools` is populated with
    * (task 26). Omitted (the default) preserves the pre-task-26 behaviour of
@@ -248,6 +258,7 @@ export class TurnRunner {
   private readonly generateId: () => string;
   private readonly checkpointIntervalMs: number;
   private readonly toolProvider?: ToolProvider;
+  private readonly resolveProfile?: (id: string) => Promise<ResolvedProfile>;
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly pathExists: (path: string) => boolean;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
@@ -264,6 +275,7 @@ export class TurnRunner {
     this.generateId = options.generateId ?? randomUUID;
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
+    this.resolveProfile = options.resolveProfile;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
     this.toolProvider?.onApprovalEvent((event) => {
@@ -524,6 +536,8 @@ export class TurnRunner {
     // teardown abort below -- that one must not turn a clean finish into a
     // cancellation.
     let cancelled = false;
+    // This reply's sub-agent runner, when it offers the subagent tool.
+    let subagents: SubagentRunner | null = null;
 
     const checkpoint = (force: boolean): void => {
       const nowTs = this.now();
@@ -566,10 +580,12 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      // Artifacts and recall are on by default, so a model that can't use
-      // tools (as its model row says) isn't sent a tool it would refuse the
-      // whole request over.
-      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall') : listed;
+      // Artifacts, recall and sub-agents are offered by the profile's switches,
+      // so a model that can't use tools (as its model row says) isn't sent a
+      // tool it would refuse the whole request over.
+      const usable = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'subagent') : listed;
+      // Claude Code runs its own sub-agents (Task/Agent); Grunt's tool is for API profiles only.
+      const tools = profile.connection.kind === 'claude_code' ? usable.filter((t) => t.source !== 'subagent') : usable;
       const canRecall = tools.some((t) => t.source === 'recall');
       const requestProfile = this.withRecall(
         this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), tools), tools),
@@ -614,6 +630,29 @@ export class TurnRunner {
         checkpoint(true);
       }
 
+      if (this.toolProvider && tools.some((t) => t.source === 'subagent')) {
+        subagents = new SubagentRunner({
+          store: this.store,
+          engine: this.engine,
+          toolProvider: this.toolProvider,
+          ...(this.resolveProfile ? { resolveProfile: this.resolveProfile } : {}),
+          now: this.now,
+          generateId: this.generateId,
+          chatId,
+          messageId,
+          parent: profile,
+          workspaceRoot,
+          folders,
+          signal: controller.signal,
+          emit: (callId, event) => this.emit({ messageId, type: 'subagent', callId, event }),
+          updateParts: (fn, force) => {
+            parts = fn(parts);
+            checkpoint(force);
+          },
+          writeUsage: (subProfile, subUsage, latencyMs, callId) => this.writeUsage(chatId, messageId, subProfile, subUsage, latencyMs, callId),
+        });
+      }
+
       const request: EngineRequest = {
         profile: requestProfile,
         messages: requestMessages,
@@ -623,6 +662,7 @@ export class TurnRunner {
         messageId,
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
+        ...(subagents ? { subagents } : {}),
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
         autoMode,
@@ -716,6 +756,12 @@ export class TurnRunner {
       // variant's own controller: siblings have their own.
       controller.abort();
     }
+
+    // Every sub-agent was told to stop by the abort above (or finished
+    // before the stream did). Wait for each to send its `end` and write its
+    // usage, so the stored parts never keep a running sub-agent and every
+    // `end` goes out before this reply's terminal status.
+    if (subagents) await subagents.settled();
 
     // The engine can end a stream cleanly on abort (no `error` event at
     // all -- MockChatEngine and this package's own `FakeChatEngine` both
@@ -1016,7 +1062,8 @@ export class TurnRunner {
     messageId: string,
     profile: ResolvedProfile,
     usage: Usage,
-    latencyMs: number
+    latencyMs: number,
+    subagentCallId?: string
   ): void {
     const currentModel = profile.model ? this.store.models.get(profile.model.id) : null;
     const pricingSnapshot: PricingSnapshot = currentModel
@@ -1042,6 +1089,7 @@ export class TurnRunner {
       costEstimate: estimateCost(usage, pricingSnapshot),
       pricingSnapshot,
       latencyMs,
+      ...(subagentCallId ? { subagentCallId } : {}),
     });
   }
 }

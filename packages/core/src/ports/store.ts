@@ -409,6 +409,12 @@ export interface UsageRecord {
   costEstimate: number | null;
   pricingSnapshot: PricingSnapshot;
   latencyMs: number;
+  /**
+   * Set on a sub-agent's own usage row (spec 2026-10-12-api-subagents-design):
+   * the parent's `subagent` tool call id. The row hangs off the parent reply
+   * (`messageId`) but carries the sub-agent's profile, connection and model.
+   */
+  subagentCallId?: string;
 }
 
 export interface UsageRepo {
