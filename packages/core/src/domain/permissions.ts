@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
+import { canonicalHost, isLocalOrPrivateHost } from './network-hosts.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -84,13 +85,26 @@ function isShellTool(tool: ToolSpec): boolean {
  *      `ask_on_mutate` it needs no card (`grantedBy: 'sandbox'`); under
  *      `always_ask` it is grant- or ask-gated exactly like the host shell.
  *      A host outside the allowlist is `source: 'network'` and always asks:
- *      its grants are pinned to one host.
+ *      its grants are pinned to one host. Hosts are compared in one canonical
+ *      spelling (`canonicalHost`, network-hosts.ts: IDNA, lowercase, IPv4
+ *      normalised, no trailing dot), and a host that has none, or is
+ *      `localhost` or a private/link-local address, is denied before any
+ *      grant or card.
  *   3. Everything else consults stored grants (`chat` or `always` scope,
  *      constrained by path/command prefix where set) before falling back to
  *      `ask`.
  *
- * Two properties of grant handling are load-bearing enough to state here:
+ * Three properties of grant handling are load-bearing enough to state here:
  *
+ *   - A constraint is checked against the tool when it is stored and when it
+ *     is matched. `resolve()` stores only what `alwaysConstraintFor` derives
+ *     (a shell tool: exactly one command key; the network: exactly the
+ *     card's own host; anything else: a `pathPrefix` or nothing) and throws
+ *     on anything else. Matching needs EVERY key present to match, a `host`
+ *     key matches only a network call, and a shell or network call never
+ *     matches a constraint-less grant. Matching on the first key present let
+ *     `{commandExact: 'ls', pathPrefix: '.'}` approve any command with a
+ *     `path` argument.
  *   - A `pathPrefix` constraint is matched against the RESOLVED path, using
  *     the very same `containPath()` the fs tool itself will call, not
  *     against the raw model-supplied argument string. Matching the raw
@@ -165,6 +179,14 @@ export class PermissionBroker {
         kind: 'deny',
         reason: `"${tool.name}" requires a workspace root, and none is configured for this chat.`,
       };
+    }
+
+    // The sandbox never reaches this machine or the local network, whatever
+    // a grant says, and a host with no canonical spelling can't be compared
+    // with one: both are refused before the grants are looked at.
+    if (tool.source === 'network') {
+      const refusal = networkHostRefusal(args);
+      if (refusal) return { kind: 'deny', reason: refusal };
     }
 
     // A write into one of the chat's read-only extra folders is refused here,
@@ -322,17 +344,9 @@ export class PermissionBroker {
     // calls itself `run_command` must not be able to mint the very grant the
     // real shell tool is forbidden from having (see SHELL_TOOL_NAMES).
     // A network grant is for one host, like a shell grant is for one command:
-    // "always let the sandbox reach anything" is never one click.
-    if (pending.tool.source === 'network' && !choice.constraint?.host?.trim()) {
-      throw new Error('Refusing to create an "always" grant for the sandbox network that does not name a host.');
-    }
-
-    if (isShellTool(pending.tool) && !choice.constraint?.commandPrefix && !choice.constraint?.commandExact) {
-      throw new Error(
-        `Refusing to create an unconstrained "always" grant for shell tool "${pending.tool.name}": ` +
-          'every always-scope grant for a shell tool must carry a commandPrefix or commandExact constraint.'
-      );
-    }
+    // "always let the sandbox reach anything" is never one click. Neither
+    // constraint is stored as sent: see alwaysConstraintFor.
+    const constraint = alwaysConstraintFor(pending, choice.constraint);
 
     this.store.grants.create({
       id: randomUUID(),
@@ -341,7 +355,7 @@ export class PermissionBroker {
       toolName: pending.tool.name,
       source: pending.tool.source,
       scope: 'always',
-      constraint: choice.constraint,
+      constraint,
       expiresAt: null,
     });
   }
@@ -431,8 +445,6 @@ export class PermissionBroker {
       // then matched in a different chat -- exactly the blanket always-grant
       // the shell guard in resolve() exists to prevent, through a side door.
       if (grant.source !== tool.source) continue;
-      // A network grant without a host would let every host through.
-      if (tool.source === 'network' && !grant.constraint?.host) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
       // null chatId = a global ('always') grant; a non-null chatId must
       // match this exact chat ('chat'-scope grants, or a scoped 'once').
@@ -443,7 +455,7 @@ export class PermissionBroker {
       // the same chat is re-run under a permissive one. null = a grant that
       // was never profile-stamped (see Grant.profileId) and matches any.
       if (grant.profileId !== null && grant.profileId !== ctx.profileId) continue;
-      if (!grantConstraintMatches(grant, args, ctx)) continue;
+      if (!grantConstraintMatches(grant, tool, args, ctx)) continue;
       return grant;
     }
     return null;
@@ -531,14 +543,55 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
   }
 }
 
-function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): boolean {
-  const constraint = grant.constraint;
-  if (!constraint) return true;
-  if (constraint.host !== undefined) {
-    const host = stringField(args, 'host');
-    return host !== null && host.trim().toLowerCase() === constraint.host.trim().toLowerCase();
+type ConstraintKey = 'pathPrefix' | 'commandPrefix' | 'commandExact' | 'host';
+const CONSTRAINT_KEYS: readonly ConstraintKey[] = ['pathPrefix', 'commandPrefix', 'commandExact', 'host'];
+
+/**
+ * The keys a constraint actually sets. A key holding `undefined` is absent
+ * (the server's parser spells "not given" that way). Returns `null` when the
+ * constraint carries a key Grunt doesn't know: such a grant can't be read,
+ * so it neither matches nor gets stored.
+ */
+function constraintKeys(constraint: object): ConstraintKey[] | null {
+  const keys: ConstraintKey[] = [];
+  for (const [key, value] of Object.entries(constraint)) {
+    if (value === undefined) continue;
+    if (!(CONSTRAINT_KEYS as readonly string[]).includes(key)) return null;
+    keys.push(key as ConstraintKey);
   }
-  if (constraint.pathPrefix !== undefined) {
+  return keys;
+}
+
+/**
+ * Whether a stored grant's constraint covers this call. EVERY key the
+ * constraint sets must match (an earlier version stopped at the first key it
+ * found, so `{commandExact: 'ls', pathPrefix: '.'}` matched any command with
+ * an in-workspace `path`). A `host` key matches only a network call, and a
+ * network call needs one; a shell call needs a command key. A grant with no
+ * constraint never covers a shell or network call, and one with no key Grunt
+ * knows covers nothing. A key whose stored value isn't a string never matches
+ * (and never throws).
+ */
+function grantConstraintMatches(grant: Grant, tool: ToolSpec, args: unknown, ctx: ToolContext): boolean {
+  const shell = isShellTool(tool);
+  const network = tool.source === 'network';
+  const constraint = grant.constraint;
+  if (!constraint) return !shell && !network;
+  const keys = constraintKeys(constraint);
+  if (keys === null || keys.length === 0) return false;
+  if (network !== keys.includes('host')) return false;
+  if (shell && !keys.includes('commandExact') && !keys.includes('commandPrefix')) return false;
+  return keys.every((key) => constraintKeyMatches(key, constraint[key], args, ctx));
+}
+
+function constraintKeyMatches(key: ConstraintKey, wanted: unknown, args: unknown, ctx: ToolContext): boolean {
+  if (key === 'host') {
+    // canonicalHost is null for a non-string, so a corrupt row can't throw here.
+    const granted = canonicalHost(wanted);
+    return granted !== null && granted === canonicalHost(stringField(args, 'host'));
+  }
+  if (typeof wanted !== 'string') return false;
+  if (key === 'pathPrefix') {
     const path = stringField(args, 'path');
     if (path === null) return false;
     // BOTH sides are resolved through the same gate the tool will use, so
@@ -547,18 +600,86 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
     // unreadable ancestor) means "cannot confirm this is inside the grant"
     // and therefore no match -- fail closed, ask the human.
     const candidate = resolveForGrantMatch(ctx, path);
-    const prefix = resolveForGrantMatch(ctx, constraint.pathPrefix);
+    const prefix = resolveForGrantMatch(ctx, wanted);
     return candidate !== null && prefix !== null && pathPrefixMatches(prefix, candidate);
   }
-  if (constraint.commandExact !== undefined) {
-    const command = stringField(args, 'command');
-    return command !== null && command.trim() === constraint.commandExact.trim();
+  const command = stringField(args, 'command');
+  if (command === null) return false;
+  return key === 'commandExact' ? command.trim() === wanted.trim() : commandPrefixMatches(wanted, command);
+}
+
+/**
+ * The constraint an `'always'` answer is stored with, derived from what the
+ * client sent and checked against the pending card's tool; throws (and so
+ * stores nothing) for anything else. Never the client's object as sent:
+ *
+ *   - the network: exactly `{host}`, naming the card's OWN host in any
+ *     spelling, stored canonical -- answering a `pypi.org` card with
+ *     `{host: 'evil.com'}` must not mint a grant for evil.com;
+ *   - a shell tool (`isShellTool`, which covers the sandboxed `run_command`):
+ *     exactly one of `commandExact`/`commandPrefix`, non-empty, trimmed;
+ *   - anything else: a `pathPrefix`, or nothing (an unconstrained grant, as
+ *     before). No `host` and no command keys.
+ */
+function alwaysConstraintFor(pending: PendingRequest, sent: Grant['constraint']): Grant['constraint'] {
+  const tool = pending.tool;
+  const keys = sent === null || sent === undefined ? [] : constraintKeys(sent);
+  if (keys === null) {
+    throw new Error(`Refusing to create an "always" grant for "${tool.name}": its constraint has a key Grunt doesn't know.`);
   }
-  if (constraint.commandPrefix !== undefined) {
-    const command = stringField(args, 'command');
-    return command !== null && commandPrefixMatches(constraint.commandPrefix, command);
+  const value = (key: ConstraintKey): string => {
+    const v = sent?.[key];
+    if (typeof v !== 'string' || v.trim() === '') {
+      throw new Error(`Refusing to create an "always" grant for "${tool.name}": constraint.${key} must be a non-empty string.`);
+    }
+    return v.trim();
+  };
+
+  if (tool.source === 'network') {
+    if (keys.length !== 1 || keys[0] !== 'host') {
+      throw new Error('Refusing to create an "always" grant for the sandbox network that does not name exactly one host, and nothing else.');
+    }
+    const own = hostForGrant(pending);
+    if (canonicalHost(value('host')) !== own) {
+      throw new Error(`Refusing to create an "always" grant for the sandbox network: it must name the card's own host (${own}).`);
+    }
+    return { host: own };
   }
-  return false;
+
+  if (isShellTool(tool)) {
+    const command = keys.filter((k) => k === 'commandExact' || k === 'commandPrefix');
+    if (command.length === 0) {
+      throw new Error(
+        `Refusing to create an unconstrained "always" grant for shell tool "${tool.name}": ` +
+          'every always-scope grant for a shell tool must carry a commandPrefix or commandExact constraint.'
+      );
+    }
+    const [key] = command;
+    if (keys.length !== 1 || key === undefined) {
+      throw new Error(
+        `Refusing to create an "always" grant for shell tool "${tool.name}": it may carry exactly one of commandExact or commandPrefix, and nothing else.`
+      );
+    }
+    return key === 'commandExact' ? { commandExact: value(key) } : { commandPrefix: value(key) };
+  }
+
+  if (keys.some((k) => k !== 'pathPrefix')) {
+    throw new Error(`Refusing to create an "always" grant for "${tool.name}": only a pathPrefix constraint applies to it.`);
+  }
+  if (keys.length === 0) {
+    // An object setting no keys is malformed rather than a request for a
+    // blanket grant: before this check it was stored and matched nothing.
+    if (sent !== null && sent !== undefined) {
+      throw new Error(`Refusing to create an "always" grant for "${tool.name}": its constraint sets no keys.`);
+    }
+    return null;
+  }
+  // As sent (existing behaviour): a path is resolved through containPath when matched.
+  const pathPrefix = sent?.pathPrefix;
+  if (typeof pathPrefix !== 'string') {
+    throw new Error(`Refusing to create an "always" grant for "${tool.name}": constraint.pathPrefix must be a string.`);
+  }
+  return { pathPrefix };
 }
 
 /**
@@ -687,18 +808,31 @@ function exactCommandForGrant(pending: PendingRequest): string {
   return command.trim();
 }
 
-/** The host a 'chat'-scope network grant is pinned to; throws (no grant) when the call had none. */
+/** The canonical host a network grant is pinned to; throws (no grant) when the call named none. */
 function hostForGrant(pending: PendingRequest): string {
-  const host = stringField(pending.args, 'host');
-  if (host === null || host.trim() === '') {
-    throw new Error('Refusing to create a "chat"-scope grant for the sandbox network: the approved call named no host.');
+  const host = canonicalHost(stringField(pending.args, 'host'));
+  if (host === null) {
+    throw new Error('Refusing to create a grant for the sandbox network: the approved call named no valid host.');
   }
-  return host.trim().toLowerCase();
+  return host;
 }
 
-/** A network card's summary: the host, and its port when known. */
+/**
+ * Why a network call is refused outright, or null when it may go on to the
+ * grants and a card: its host has no canonical spelling, or is this machine
+ * or a private, link-local or CGNAT address.
+ */
+function networkHostRefusal(args: unknown): string | null {
+  const raw = typeof args === 'object' && args !== null ? (args as Record<string, unknown>)['host'] : undefined;
+  const host = canonicalHost(raw);
+  if (host === null) return `The sandbox can't reach ${JSON.stringify(raw ?? null)}: it isn't a valid host name.`;
+  if (isLocalOrPrivateHost(host)) return `The sandbox can't reach ${host}: it's this machine or a private network address.`;
+  return null;
+}
+
+/** A network card's summary: the canonical host, and its port when known. */
 function networkSummary(args: unknown): string {
-  const host = stringField(args, 'host') ?? '?';
+  const host = canonicalHost(stringField(args, 'host')) ?? '?';
   const port = typeof args === 'object' && args !== null ? (args as Record<string, unknown>)['port'] : undefined;
   return `sandbox_network: ${host}${typeof port === 'number' ? `:${port}` : ''}`;
 }
