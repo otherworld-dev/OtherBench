@@ -32,12 +32,19 @@ function sendJson(res, status, body) {
 }
 
 /**
- * @param {{ port?: number, dcr?: boolean, rotate?: boolean, idTokenEmail?: string | null, staticClients?: Record<string, string | null> }} [opts]
+ * @param {{ port?: number, dcr?: boolean, rotate?: boolean, idTokenEmail?: string | null, staticClients?: Record<string, string | null>, tokenEcho?: boolean, registerError?: string | null, registerGate?: Promise<void> | null }} [opts]
  */
 export async function startOAuthEchoServer(opts = {}) {
   const dcr = opts.dcr ?? true;
   const rotate = opts.rotate ?? false;
   const idTokenEmail = opts.idTokenEmail ?? null;
+  const tokenEcho = opts.tokenEcho ?? false;
+  const registerError = opts.registerError ?? null;
+  /** A promise registration waits on before answering, so a test can act while a sign-in start is still connecting. */
+  const registerGate = opts.registerGate ?? null;
+  let registerRequests = 0;
+  /** Every POST /token body as a plain object (so a test can look up the PKCE verifier the client sent). */
+  const tokenRequests = [];
 
   /** client_id -> { secret: string | null, redirectUris: string[] | null }; null redirectUris: any 127.0.0.1 /oauth/callback (hand-registered). */
   const clients = new Map();
@@ -107,6 +114,12 @@ export async function startOAuthEchoServer(opts = {}) {
 
   async function handleRegister(req, res) {
     if (!dcr) return sendJson(res, 404, { error: 'not_found' });
+    registerRequests += 1;
+    if (registerGate) await registerGate;
+    if (registerError) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' }).end(registerError);
+      return;
+    }
     let body;
     try {
       body = JSON.parse(await readBody(req));
@@ -150,7 +163,16 @@ export async function startOAuthEchoServer(opts = {}) {
       res.writeHead(503, { 'Content-Type': 'text/plain' }).end('Service unavailable');
       return;
     }
-    const params = new URLSearchParams(await readBody(req));
+    const rawBody = await readBody(req);
+    const params = new URLSearchParams(rawBody);
+    tokenRequests.push(Object.fromEntries(params));
+    if (tokenEcho) {
+      // A careless provider that answers an error by repeating the request (body, and Basic credentials decoded) back.
+      const header = req.headers.authorization ?? '';
+      const basic = header.startsWith('Basic ') ? Buffer.from(header.slice(6), 'base64').toString('utf8') : '';
+      res.writeHead(400, { 'Content-Type': 'text/plain' }).end(`bad request: ${rawBody} ${header} ${basic}`);
+      return;
+    }
     const clientId = authenticateClient(req, params);
     if (!clientId) return sendJson(res, 401, { error: 'invalid_client' });
     const grant = params.get('grant_type');
@@ -229,6 +251,8 @@ export async function startOAuthEchoServer(opts = {}) {
     url: `${origin}/mcp`,
     registrations,
     issued,
+    tokenRequests,
+    registerRequests: () => registerRequests,
     mcpRequests: () => mcpRequests,
     expireAccessTokens: () => accessTokens.clear(),
     revokeRefreshTokens: () => refreshTokens.clear(),

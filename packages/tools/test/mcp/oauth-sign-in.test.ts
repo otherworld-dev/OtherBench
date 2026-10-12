@@ -4,7 +4,7 @@ import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
 import { McpServerManager } from '../../src/mcp/manager.js';
 import { oauthRefs } from '../../src/mcp/oauth-store.js';
-import { SignInError, checkAuthorizationUrl, sanitiseErrorCode } from '../../src/mcp/sign-in.js';
+import { SignInError, checkAuthorizationUrl, redactMessage, sanitiseErrorCode } from '../../src/mcp/sign-in.js';
 import { serveHttp } from '../fixtures/echo-server.js';
 import { startOAuthEchoServer } from '../fixtures/oauth-echo-server.js';
 
@@ -255,5 +255,152 @@ describe('sign-in helpers', () => {
     expect(() => checkAuthorizationUrl(new URL('http://[::1]:9000/authorize'))).not.toThrow();
     expect(() => checkAuthorizationUrl(new URL('http://auth.example.com/authorize'))).toThrow(SignInError);
     expect(() => checkAuthorizationUrl(new URL('javascript:alert(1)'))).toThrow(SignInError);
+  });
+});
+
+describe('one sign-in per server', () => {
+  it('two starts fired together leave exactly one flow: the earlier one is refused, the later one completes', async () => {
+    const { manager } = await setup();
+    const [first, second] = await Promise.allSettled([manager.startSignIn('srv-1', REDIRECT), manager.startSignIn('srv-1', REDIRECT)]);
+
+    expect(first.status).toBe('rejected');
+    expect((first as PromiseRejectedResult).reason).toMatchObject({ status: 409 });
+    expect(second.status).toBe('fulfilled');
+    expect(health(manager).auth).toMatchObject({ pending: true });
+
+    await manager.completeSignIn(await followAuthorization((second as PromiseFulfilledResult<{ authorizationUrl: string }>).value.authorizationUrl));
+    expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in', pending: false } }); // no second flow was left waiting
+  });
+
+  it('a cancel while a start is still connecting stores no flow', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { fixture, manager } = await setup({ registerGate: gate });
+    const outcome = manager.startSignIn('srv-1', REDIRECT).then(() => null, (err: unknown) => err);
+    await waitFor(() => fixture.registerRequests() > 0); // the start is now waiting on the provider
+    manager.cancelSignIn('srv-1');
+    release();
+
+    expect(await outcome).toMatchObject({ status: 409 });
+    expect(health(manager).auth).toMatchObject({ pending: false });
+  });
+
+  it('a sign-out while a start is still connecting stores no flow either', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { fixture, manager } = await setup({ registerGate: gate });
+    const outcome = manager.startSignIn('srv-1', REDIRECT).then(() => null, (err: unknown) => err);
+    await waitFor(() => fixture.registerRequests() > 0);
+    await manager.signOut('srv-1');
+    release();
+
+    expect(await outcome).toMatchObject({ status: 409 });
+    expect(health(manager).auth).toMatchObject({ pending: false });
+  });
+});
+
+describe('keeping codes, verifiers and tokens out of every message', () => {
+  const OUTPUT_CHANNELS = ['log', 'info', 'warn', 'error', 'debug'] as const;
+
+  function captureConsole(): { text: () => string } {
+    const lines: string[] = [];
+    for (const channel of OUTPUT_CHANNELS) {
+      vi.spyOn(console, channel).mockImplementation((...args: unknown[]) => {
+        lines.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+      });
+    }
+    return { text: () => lines.join('\n') };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a token endpoint that repeats the request back leaks nothing into the error, the health or the console', async () => {
+    const MANUAL_SECRET = 'manual-secret-value';
+    const { fixture, secrets, manager } = await setup(
+      { tokenEcho: true, staticClients: { 'manual-id': MANUAL_SECRET } },
+      { oauth: { clientId: 'manual-id', clientSecretRef: 'ref-manual-secret', account: null, signedInAt: null } }
+    );
+    await secrets.set('ref-manual-secret', MANUAL_SECRET);
+    const output = captureConsole();
+
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    const back = await followAuthorization(authorizationUrl);
+    const err = await manager.completeSignIn(back).then(() => null, (e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SignInError);
+    const verifier = fixture.tokenRequests.at(-1)!.code_verifier!;
+    expect(verifier.length).toBeGreaterThan(20);
+    const shown = [(err as SignInError).message, health(manager).auth?.error ?? '', output.text()];
+    expect((err as SignInError).message).toContain('[redacted]'); // the provider's echo did reach the SDK's error, and was cleaned
+    for (const text of shown) {
+      for (const secret of [back.code!, back.state, verifier, MANUAL_SECRET]) expect(text).not.toContain(secret);
+    }
+    expect((err as SignInError).message.length).toBeLessThan(400);
+  });
+
+  it('a whole successful sign-in and refresh writes no code, state, verifier or token to the console', async () => {
+    const { fixture, manager } = await setup({ rotate: true, idTokenEmail: 'alice@example.com' });
+    const output = captureConsole();
+
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    const back = await followAuthorization(authorizationUrl);
+    await manager.completeSignIn(back);
+    fixture.expireAccessTokens();
+    await manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'x' });
+
+    const verifier = fixture.tokenRequests[0]!.code_verifier!;
+    const everything = [...fixture.issued.accessTokens, ...fixture.issued.refreshTokens, ...fixture.issued.idTokens, back.code!, back.state, verifier];
+    expect(fixture.issued.accessTokens.length).toBeGreaterThan(1);
+    for (const secret of everything) expect(output.text()).not.toContain(secret);
+  });
+
+  it('a start failure whose message holds a URL with a query shows the URL without it', async () => {
+    const { manager } = await setup({ registerError: 'upstream failed at http://127.0.0.1:9/cb?code=abc123xyz&token=tok-999#frag-777 sorry' });
+    const err = await manager.startSignIn('srv-1', REDIRECT).then(() => null, (e: unknown) => e);
+
+    expect(err).toMatchObject({ status: 502 });
+    const message = (err as SignInError).message;
+    expect(message).toContain('http://127.0.0.1:9/cb');
+    for (const leaked of ['abc123xyz', 'tok-999', 'frag-777', '?code']) expect(message).not.toContain(leaked);
+  });
+
+  it('sign-out and forgetting a sign-in clear the last error', async () => {
+    const { fixture, manager } = await setup();
+    fixture.setDeny(true);
+    const failed = async () => {
+      const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+      await manager.completeSignIn(await followAuthorization(authorizationUrl)).catch(() => {});
+    };
+    await failed();
+    expect(health(manager).auth?.error).not.toBeNull();
+    await manager.signOut('srv-1');
+    expect(health(manager).auth?.error).toBeNull();
+
+    await failed();
+    expect(health(manager).auth?.error).not.toBeNull();
+    await manager.forgetSignIn('srv-1', { keepManualClient: true });
+    expect(health(manager).auth?.error).toBeNull();
+  });
+});
+
+describe('redactMessage', () => {
+  it('replaces known secrets (also URL-encoded), key=value pairs and JSON pairs', () => {
+    const out = redactMessage('bad: code=abc.def&state=xyz and {"access_token":"tok-1","refresh_token": "rt-2"} verifier verifier-value-123 enc a%20b%26c tiny', ['verifier-value-123', 'a b&c', 'tin']);
+    expect(out).not.toMatch(/abc\.def|xyz|tok-1|rt-2|verifier-value-123|a%20b%26c/);
+    expect(out).toContain('[redacted]');
+    expect(out).toContain('tiny'); // too short to count as a secret: left alone
+  });
+
+  it('drops the query and fragment of every URL, collapses whitespace and caps the length', () => {
+    expect(redactMessage('see https://a.example/x/y?z=1#f and\n\n  http://b.example/?q=2')).toBe('see https://a.example/x/y and http://b.example/');
+    const long = redactMessage('x'.repeat(1000));
+    expect(long.length).toBeLessThanOrEqual(303);
+    expect(long.endsWith('...')).toBe(true);
   });
 });

@@ -142,14 +142,14 @@ export class McpServerManager {
 
   /** Forgets the tokens and the registered client here (no revocation at the provider), keeps a hand-registered client, and reconnects (which then needs sign-in). */
   async signOut(id: string): Promise<void> {
-    this.signIns.cancel(id);
+    this.signIns.forget(id);
     await this.oauth.forget(id, { keepManualClient: true });
     await this.restart(id);
   }
 
   /** For edits and deletes: drops any pending flow and forgets the sign-in, without reconnecting. */
   async forgetSignIn(id: string, opts: { keepManualClient: boolean }): Promise<void> {
-    this.signIns.cancel(id);
+    this.signIns.forget(id);
     await this.oauth.forget(id, opts);
   }
 

@@ -43,18 +43,57 @@ function fetchWithTimeout(ms: number): FetchLike {
   };
 }
 
-function startFailureMessage(err: unknown, redirectUri: string): string {
+const MAX_MESSAGE_LENGTH = 300;
+const MIN_SECRET_LENGTH = 4;
+const SENSITIVE_PAIR = /\b(code|code_verifier|state|access_token|refresh_token|id_token|client_secret|assertion)(["']?\s*[=:]\s*["']?)[^\s&"',}]+/gi;
+
+/**
+ * Makes text safe to leave this module (an HTTP error, `health().auth.error`,
+ * a log line): every known secret the flow holds becomes `[redacted]`, so do
+ * `key=value` / `"key":"value"` pairs for the usual OAuth secrets, URLs lose
+ * their query and fragment, whitespace collapses, and it is cut to 300
+ * characters. SDK and fetch errors can embed request URLs and response
+ * bodies, which can carry the code, the verifier or a token.
+ */
+export function redactMessage(text: string, secrets: Iterable<string | null | undefined> = []): string {
+  let out = text;
+  for (const secret of secrets) {
+    if (!secret || secret.length < MIN_SECRET_LENGTH) continue;
+    for (const form of new Set([secret, encodeURIComponent(secret)])) out = out.split(form).join('[redacted]');
+  }
+  out = out.replace(SENSITIVE_PAIR, '$1$2[redacted]');
+  out = out.replace(/https?:\/\/[^\s"'<>)]+/gi, (url) => url.split(/[?#]/)[0] ?? '');
+  out = out.replace(/\s+/g, ' ').trim();
+  return out.length > MAX_MESSAGE_LENGTH ? `${out.slice(0, MAX_MESSAGE_LENGTH)}...` : out;
+}
+
+function startFailureMessage(err: unknown, redirectUri: string, secrets: Iterable<string | null | undefined>): string {
   const message = err instanceof Error ? err.message : String(err);
   if (/does not support dynamic client registration/i.test(message)) {
     return `This server's sign-in provider doesn't let apps register themselves. Register Grunt with it (redirect address: ${redirectUri}) and enter the client ID under Sign-in app.`;
   }
-  return `Couldn't start the sign-in: ${message}`;
+  return `Couldn't start the sign-in: ${redactMessage(message, secrets)}`;
 }
 
 interface PendingFlow {
   serverId: string;
+  provider: GruntOAuthProvider;
   transport: StreamableHTTPClientTransport;
   expiresAt: number;
+}
+
+/** Closes a dropped flow's transport itself, rather than relying on SDK internals to let go of it. */
+function drop(flow: Pick<PendingFlow, 'transport'>): void {
+  void flow.transport.close().catch(() => {});
+}
+
+/** The verifier a provider is holding, if it has one yet. */
+function verifierOf(provider: GruntOAuthProvider): string | null {
+  try {
+    return provider.codeVerifier();
+  } catch {
+    return null;
+  }
 }
 
 export interface McpSignInsOptions {
@@ -74,6 +113,9 @@ export interface McpSignInsOptions {
 export class McpSignIns {
   private readonly flows = new Map<string, PendingFlow>();
   private readonly errors = new Map<string, string>();
+  /** The start that currently owns each server: a start that finds it changed (replaced, cancelled, dropped) while it was connecting must not store its flow. */
+  private readonly latestStart = new Map<string, number>();
+  private startCounter = 0;
   private readonly now: () => number;
   private readonly signInTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -96,6 +138,8 @@ export class McpSignIns {
     this.sweep();
     this.cancel(row.id);
     this.errors.delete(row.id);
+    const startId = ++this.startCounter;
+    this.latestStart.set(row.id, startId);
 
     const state = randomBytes(32).toString('base64url');
     const captured: { url: URL | null } = { url: null };
@@ -117,13 +161,25 @@ export class McpSignIns {
       await client.connect(transport);
     } catch (err) {
       if (err instanceof UnauthorizedError && captured.url) {
-        checkAuthorizationUrl(captured.url);
-        this.flows.set(state, { serverId: row.id, transport, expiresAt: this.now() + this.signInTimeoutMs });
+        if (this.latestStart.get(row.id) !== startId) {
+          // Another start, a cancel, a sign-out or a shutdown came in while this one was connecting.
+          drop({ transport });
+          throw new SignInError(409, 'This sign-in was replaced or cancelled before it was ready. Start it again from Grunt.');
+        }
+        try {
+          checkAuthorizationUrl(captured.url);
+        } catch (urlErr) {
+          drop({ transport });
+          throw urlErr;
+        }
+        this.flows.set(state, { serverId: row.id, provider, transport, expiresAt: this.now() + this.signInTimeoutMs });
         return { authorizationUrl: captured.url.href };
       }
+      drop({ transport });
       console.warn(`[McpSignIns] couldn't start the sign-in for MCP server ${row.id}.`);
-      throw new SignInError(502, startFailureMessage(err, redirectUri));
+      throw new SignInError(502, startFailureMessage(err, redirectUri, await this.knownSecrets(row.id, [state, verifierOf(provider)])));
     }
+    drop({ transport });
     await client.close().catch(() => {});
     throw new SignInError(409, "This server didn't ask for a sign-in.");
   }
@@ -137,19 +193,37 @@ export class McpSignIns {
       throw new SignInError(400, 'That address belongs to a sign-in for another server.');
     }
     this.flows.delete(params.state); // single use, before any network call
-    if (params.error !== undefined) return this.fail(flow.serverId, 400, `The sign-in provider said: ${sanitiseErrorCode(params.error) || 'unknown_error'}`);
-    if (!params.code) return this.fail(flow.serverId, 400, "The sign-in provider didn't send a code back.");
     try {
-      await flow.transport.finishAuth(params.code);
-    } catch (err) {
-      return this.fail(flow.serverId, 502, `Couldn't finish the sign-in: ${err instanceof Error ? err.message : String(err)}`);
+      if (params.error !== undefined) return this.fail(flow.serverId, 400, `The sign-in provider said: ${sanitiseErrorCode(params.error) || 'unknown_error'}`);
+      if (!params.code) return this.fail(flow.serverId, 400, "The sign-in provider didn't send a code back.");
+      try {
+        await flow.transport.finishAuth(params.code);
+      } catch (err) {
+        const secrets = await this.knownSecrets(flow.serverId, [params.code, params.state, verifierOf(flow.provider)]);
+        const detail = redactMessage(err instanceof Error ? err.message : String(err), secrets);
+        return this.fail(flow.serverId, 502, `Couldn't finish the sign-in: ${detail}`);
+      }
+      this.errors.delete(flow.serverId);
+      return { serverId: flow.serverId };
+    } finally {
+      drop(flow); // success or failure, the verifier and the transport go with the flow
     }
-    this.errors.delete(flow.serverId);
-    return { serverId: flow.serverId };
   }
 
+  /** Drops this server's pending flow, and any start still connecting. The last error stays until the next start. */
   cancel(serverId: string): void {
-    for (const [state, flow] of this.flows) if (flow.serverId === serverId) this.flows.delete(state);
+    this.latestStart.delete(serverId);
+    for (const [state, flow] of this.flows) {
+      if (flow.serverId !== serverId) continue;
+      this.flows.delete(state);
+      drop(flow);
+    }
+  }
+
+  /** `cancel`, and the last error goes too: for sign-out, edits and deletes. */
+  forget(serverId: string): void {
+    this.cancel(serverId);
+    this.errors.delete(serverId);
   }
 
   pending(serverId: string): boolean {
@@ -163,12 +237,38 @@ export class McpSignIns {
   }
 
   dropAll(): void {
+    this.latestStart.clear();
+    for (const flow of this.flows.values()) drop(flow);
     this.flows.clear();
   }
 
   private sweep(): void {
     const now = this.now();
-    for (const [state, flow] of this.flows) if (flow.expiresAt <= now) this.flows.delete(state);
+    for (const [state, flow] of this.flows) {
+      if (flow.expiresAt > now) continue;
+      this.flows.delete(state);
+      drop(flow);
+    }
+  }
+
+  /** Every secret this server's sign-in holds (a hand-registered or registered client's secret, stored tokens) plus the flow's own values, for `redactMessage`. */
+  private async knownSecrets(serverId: string, own: (string | null | undefined)[]): Promise<(string | null)[]> {
+    const out: (string | null)[] = own.map((v) => v ?? null);
+    try {
+      const manual = await this.oauth.manualClient(serverId);
+      const registered = await this.oauth.registeredClient(serverId);
+      const tokens = await this.oauth.tokens(serverId);
+      out.push(
+        manual?.client_secret ?? null,
+        registered?.info && 'client_secret' in registered.info ? (registered.info.client_secret ?? null) : null,
+        tokens?.access_token ?? null,
+        tokens?.refresh_token ?? null,
+        tokens?.id_token ?? null
+      );
+    } catch {
+      // Redaction still has the flow's own values and the key=value patterns.
+    }
+    return out;
   }
 
   private fail(serverId: string, status: SignInStatus, message: string): never {
