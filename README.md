@@ -211,6 +211,11 @@ pass the original `Host` (or `127.0.0.1:<port>`) and set `X-Forwarded-For`:
 - **Tailscale:** `tailscale serve --bg http://127.0.0.1:4747`, with
   `--public-url https://<box>.<tailnet>.ts.net --trust-proxy 127.0.0.1`.
 
+The proxy has to add bare IP addresses to `X-Forwarded-For`, with no port on
+them. If the public name points at both an IPv4 and an IPv6 address, a viewer
+link can say it has expired when the browser switches from one to the other;
+open the file again.
+
 **What a signed-in browser can do is everything the local UI can:** approve
 shell commands, browse folders anywhere on the box, attach a file by path.
 Use a long password you use nowhere else, and prefer a LAN or a tailnet to
