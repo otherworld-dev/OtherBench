@@ -255,6 +255,16 @@ of work landed after that plan closed out:
   (`open_chat`); `Esc` hides the window, keeping the chat. Settings →
   Desktop changes the hotkey (stored per device); a key another app holds is
   reported there and the previous one put back.
+- **Sandboxed shell** (spec `docs/superpowers/specs/2026-10-12-sandbox-design.md`):
+  a profile's "Shell runs" can be "in the sandbox", a Grunt-owned WSL2 distro
+  (`grunt-sandbox`) where each command runs under `@anthropic-ai/sandbox-runtime`
+  0.0.79, sees only its chat's folders (read-only ones read-only) and reaches
+  only allowlisted hosts; any other host is a `sandbox_network` card. Under
+  "ask on mutate" sandboxed commands need no card. Both engines: API profiles
+  get the sandboxed `run_command`, Claude Code gets it through Grunt's relay in
+  place of Bash. Settings > Sandbox sets it up, repairs and removes it; nothing
+  is set up until you press Set up. `@grunt/sandbox` holds the backend; the
+  in-VM agent is `packages/sandbox/resources/agent.mjs`.
 
 ## Settings UI
 
@@ -484,12 +494,16 @@ still needs an approval or a grant on the machine running it); every
 approval audited with the machine it came from. Pairing codes are
 single-use, last ten minutes, and are cancelled after five wrong guesses.
 
-**The shell tool (`run_command`) is unsandboxed by design.** It executes
+**The host shell tool (`run_command` with `shellRuns` absent or `host`) is unsandboxed by design.** It executes
 whatever command string the model produces on the real OS with the real
 user's privileges; there is no seccomp, no container, no restricted PATH.
 The *only* control on it is the approval gate — every call needs a human
 decision unless a grant already covers it — so the gate has to be right,
 because it's the entire defense, not one layer of several.
+
+**The sandboxed shell has two walls, and a break-out of the inner one reaches more than its own chat.** With `shellRuns: 'sandbox'`, `run_command` runs in the `grunt-sandbox` WSL2 distro (interop and automount off) under the sandbox runtime (bubblewrap, a filtering proxy). The runtime keeps a command to its chat's folders, its home `/home/grunt/chats/<chat>` and its own temp folder, and off the network except allowlisted hosts. A command that broke out of the runtime would reach everything in the distro, every folder mounted for any chat with a running agent (read-write where some chat has it writable), and the VM's network; with WSL's `networkingMode=mirrored` that includes services on this machine that only listen locally, Grunt's own API among them, which is why Settings > Sandbox warns about it. A break-out of the VM reaches Windows (Hyper-V's boundary, as with Cowork). drvfs mounts carry the Windows user's own rights, so read-only is enforced by the runtime (`denyWrite`) and, when no running chat needs a folder writable, by a read-only mount as well. The runtime is beta (0.0.x) and pinned; setup's self-test runs again on every Repair and any surprise marks the sandbox failed. Antivirus can't see inside the VM.
+
+The temp folders are part of the inner wall. `/tmp` is unreadable inside a command, so each run gets its own folder under `/tmp/grunt-chats/<chat>/<run>`, and the runtime's sockets live in `/tmp/grunt-chats/<chat>/rt`. The runtime sets `TMPDIR` itself inside bubblewrap from `CLAUDE_CODE_TMPDIR`, which is why the agent points that at the per-run folder before each wrap (a `TMPDIR` in the spawn environment is ignored, and with `/tmp` denied and the sockets left in it every connection fails).
 
 **Project memory is a persistent cross-chat channel for model-written
 text.** Whatever the summariser distils from one chat is injected into the
@@ -914,6 +928,24 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
   - Each Claude Code process gets its own relay, but the real servers run once in Grunt's manager, so a stateful server's state is shared between chats (as it already was for API profiles).
   - A relayed call's result isn't added to the audit trail; only its approval is ("delegated to Claude Code").
   - The import is one-off: changes to Claude Desktop's config later aren't followed.
+
+### The sandbox (spec 2026-10-12-sandbox-design)
+
+- **Policy.** `ToolPolicy.shellRuns` (`host` | `sandbox`, absent = host) and `sandboxHosts` (absent = `DEFAULT_SANDBOX_HOSTS`). The provider lists one `run_command` or the other, never both; the sandboxed one has source `sandbox`. Broker: `sandbox` is allowed with no card under ask on mutate (`grantedBy: 'sandbox'`) and asks under always ask (chat grants pinned to the exact command); `network` (`sandbox_network`) always asks, its grants pinned to one host; `shell` is denied when the shell runs in the sandbox, and so are Claude Code's Bash, PowerShell, BashOutput, KillShell and Monitor.
+- **Backend.** `packages/sandbox`: `wsl.ts` runs everything as `wsl.exe -d grunt-sandbox -u <user> --exec ...` (never `--`, which mangles Windows paths); `mounts.ts` mounts only the folders of chats with a running agent, through the root-only `mount.sh`; `agent-pool.ts` keeps one agent per chat (15 minutes idle, at most 6, 30 s wait when all are busy); `agent-client.ts` runs one command at a time per chat so a network question always belongs to the command that is running; `setup.ts` creates or repairs the distro (Node v24.21.0 by SHA-256, the runtime by `npm ci` from a committed lockfile) and runs the self-test.
+- **Network.** An allowlist plus cards. A host that isn't on the profile's list raises a `sandbox_network` card, but the broker refuses local, private, reserved and single-label hosts (`localhost`, `*.local`, `*.internal`, `*.home.arpa`, IP literals in those ranges) before any card is shown, so there is nothing to approve. That check only sees the name, so a second guard works on the resolved address at connect time: the runtime always denies loopback, link-local and cloud metadata addresses, and Grunt adds RFC 1918, CGNAT, ULA, multicast and the reserved ranges through the runtime's `deniedResolvedAddresses` (`agent-core.mjs`). The result is that a LAN or intranet host can't be reached from the sandbox even when it is on the allowlist; a package mirror on the local network would need that changed deliberately.
+- **Root-side hardening.** Two scripts run as root in the distro and nothing they touch may be trusted. `mount.sh` validates paths exactly as `toSandboxPath` does (both sides are tested against the same vectors) and walks the mount path, refusing symlinks and any component that is neither root-owned nor on a read-only mount. Setup builds `/opt/grunt-sandbox` in a root-only staging directory under `/opt` on every setup and repair, verifies it (`npm ci --ignore-scripts`, then an ownership and permission check) and only then swaps it in, so nothing in an existing tree is trusted and nothing the `grunt` user can write is ever `chown`ed. If the runtime ever needs an install script, setup will fail at that step.
+- **State.** `app_setting` key `sandbox`, machine-local (`SettingsRepo.getValue/setValue`), never synced; profiles sync with their new fields as before.
+- **Test switch.** `GRUNT_SANDBOX=fake` swaps in `FakeSandbox` and exists for the e2e tests only (`packages/web/playwright.config.ts`). Nothing is isolated and nothing is run, and the server says so loudly at startup. Never set it outside tests.
+- **Known limitations.**
+  - A writable folder nested inside a read-only folder is read-only in the sandbox, because the runtime binds read paths after write paths. The other way round (a read-only folder inside a writable one) works.
+  - Folder names containing `,` or `;` can't be mounted (drvfs rejects them), so both validators refuse them.
+  - A command whose agent dies mid-run fails; the next command for that chat gets a new agent.
+  - Switching a folder from read-only to read-write while another chat still has it mounted can fail with "target is busy". It fails closed, so the command reports a mount failure.
+  - The folder block in the system prompt maps paths without `realpath`, so a workspace configured in a different case from the one on disk is announced at the wrong `/mnt` path. The `cwd` in the result is right.
+  - Under ask on mutate a sandboxed command runs with no card even when the profile's file access is off or read-only, and the default allowlist includes write-capable hosts (`github.com`, `registry.npmjs.org`). A command can therefore push data out to an account the attacker controls. This was agreed in the spec, and it is worth revisiting if the default list changes.
+  - The host-name check can't see DNS that points a public name at a private address (`127.0.0.1.nip.io`, rebinding). The connect-time guard covers that, but whether it also covers a literal-IP dial hasn't been checked on a live runtime.
+- **Not built.** Background processes in the sandbox; a Linux backend (phase 2); macOS; scheduled tasks, which will set `ToolContext.unattended` (the provider already refuses a card on an unattended run).
 
 ## Encryption at rest
 
