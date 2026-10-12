@@ -672,13 +672,19 @@ function cell(c: unknown, path: string, sheetNames: ReadonlySet<string>): Cell {
   return out;
 }
 
+/** The first character in `text` that a writer would take out or that XML 1.0 can't hold, as "U+XXXX", or undefined. One scan, no backtracking. */
+function lostCharacter(text: string): string | undefined {
+  const lost = (DISCOURAGED_XML.exec(text) ?? XML_UNSAFE.exec(text))?.[0];
+  return lost === undefined ? undefined : `U+${lost.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
 function sheetName(name: unknown, path: string): string {
   if (typeof name !== 'string' || name.length < 1 || name.length > MAX_SHEET_NAME) bad(path, `must be 1-${MAX_SHEET_NAME} characters`);
   if (SHEET_NAME_BAD.test(name)) bad(path, `"${name}" has one of \\ / ? * [ ] :, which Excel doesn't allow in a sheet name`);
   if (name.startsWith("'") || name.endsWith("'")) bad(path, `"${name}" starts or ends with ', which Excel doesn't allow`);
   // The .xlsx writer takes these out of a name (as xmlSafe does the others), so a formula that quotes the name as given would point at a sheet that isn't there.
-  const lost = (DISCOURAGED_XML.exec(name) ?? XML_UNSAFE.exec(name))?.[0];
-  if (lost !== undefined) bad(path, `has the character U+${lost.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}, which a sheet name can't hold`);
+  const lost = lostCharacter(name);
+  if (lost !== undefined) bad(path, `has the character ${lost}, which a sheet name can't hold`);
   return name;
 }
 
@@ -742,6 +748,144 @@ function spreadsheet(value: unknown): SpreadsheetSpec {
 
 export function parseSpreadsheet(content: string): Parsed<SpreadsheetSpec> {
   return guard(() => spreadsheet(json(content)));
+}
+
+export const MAX_SLIDES = 200;
+export const MAX_BULLETS = 20;
+export const MAX_TABLE_COLUMNS = 10;
+export const MAX_TABLE_ROWS = 30;
+
+/** 1-500 characters; levels 0-2. */
+export type Bullet = string | { text: string; level: 0 | 1 | 2 };
+
+export interface SlideColumn {
+  heading?: string;
+  bullets: Bullet[];
+}
+
+export type SlideSpec =
+  | { layout: 'title'; title: string; subtitle?: string; notes?: string }
+  | { layout: 'section'; title: string; subtitle?: string; notes?: string }
+  | { layout: 'bullets'; title: string; bullets: Bullet[]; notes?: string }
+  | { layout: 'two-column'; title: string; left: SlideColumn; right: SlideColumn; notes?: string }
+  | { layout: 'table'; title: string; table: { header: string[]; rows: (string | number)[][] }; notes?: string };
+
+/** A deck: 16:9, Calibri, one accent colour (#RRGGBB). */
+export interface PresentationSpec {
+  theme?: { accent?: string };
+  slides: SlideSpec[];
+}
+
+const LAYOUT_KEYS: Record<SlideSpec['layout'], readonly string[]> = {
+  title: ['layout', 'title', 'subtitle', 'notes'],
+  section: ['layout', 'title', 'subtitle', 'notes'],
+  bullets: ['layout', 'title', 'bullets', 'notes'],
+  'two-column': ['layout', 'title', 'left', 'right', 'notes'],
+  table: ['layout', 'title', 'table', 'notes'],
+};
+
+/**
+ * Slide text: a string within `max` characters (non-blank when `required`)
+ * holding nothing the .pptx writer would take out or XML 1.0 can't hold, so
+ * what's validated is what's written.
+ */
+function slideText(value: unknown, path: string, max: number, required: boolean): string {
+  if (typeof value !== 'string' || value.length > max || (required && value.trim() === '')) {
+    bad(path, required ? `must be text of 1-${max} characters` : `must be text of at most ${max} characters`);
+  }
+  const lost = lostCharacter(value);
+  if (lost !== undefined) bad(path, `has the character ${lost}, which slide text can't hold`);
+  return value;
+}
+
+function bulletList(value: unknown, path: string): Bullet[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_BULLETS) bad(path, `must be a list of 1-${MAX_BULLETS} bullets`);
+  return value.map((b: unknown, i): Bullet => {
+    const bp = `${path}[${i}]`;
+    if (typeof b === 'string') return slideText(b, bp, 500, true);
+    if (!isObject(b)) bad(bp, 'must be text or {"text": "...", "level": 0-2}');
+    onlyKeys(b, bp, ['text', 'level']);
+    const level = b['level'];
+    if (level !== 0 && level !== 1 && level !== 2) bad(`${bp}.level`, 'must be 0, 1 or 2');
+    return { text: slideText(b['text'], `${bp}.text`, 500, true), level };
+  });
+}
+
+function slideColumn(value: unknown, path: string): SlideColumn {
+  if (!isObject(value)) bad(path, 'must be an object with "bullets" and an optional "heading"');
+  onlyKeys(value, path, ['heading', 'bullets']);
+  return {
+    ...(value['heading'] !== undefined ? { heading: slideText(value['heading'], `${path}.heading`, 300, false) } : {}),
+    bullets: bulletList(value['bullets'], `${path}.bullets`),
+  };
+}
+
+function slideTable(value: unknown, path: string): { header: string[]; rows: (string | number)[][] } {
+  if (!isObject(value)) bad(path, 'must be an object with "header" and "rows"');
+  onlyKeys(value, path, ['header', 'rows']);
+  const header = value['header'];
+  if (!Array.isArray(header) || header.length < 1 || header.length > MAX_TABLE_COLUMNS) bad(`${path}.header`, `must be a list of 1-${MAX_TABLE_COLUMNS} column names`);
+  const head = header.map((h: unknown, i) => slideText(h, `${path}.header[${i}]`, 200, false));
+  const rows = value['rows'];
+  if (!Array.isArray(rows) || rows.length > MAX_TABLE_ROWS) bad(`${path}.rows`, `must be a list of at most ${MAX_TABLE_ROWS} rows`);
+  return {
+    header: head,
+    rows: rows.map((row: unknown, r) => {
+      const rp = `${path}.rows[${r}]`;
+      if (!Array.isArray(row) || row.length !== head.length) bad(rp, `must have ${head.length} cells, one for each header`);
+      return row.map((c: unknown, i): string | number => {
+        const cp = `${rp}[${i}]`;
+        if (typeof c === 'number') {
+          if (!Number.isFinite(c)) bad(cp, 'numbers must be finite');
+          return c;
+        }
+        return slideText(c, cp, 200, false);
+      });
+    }),
+  };
+}
+
+function slide(value: unknown, path: string): SlideSpec {
+  if (!isObject(value)) bad(path, 'must be an object with "layout" and "title"');
+  const layout = value['layout'];
+  if (typeof layout !== 'string' || !Object.hasOwn(LAYOUT_KEYS, layout)) bad(`${path}.layout`, `must be one of: ${Object.keys(LAYOUT_KEYS).join(', ')}`);
+  const kind = layout as SlideSpec['layout'];
+  onlyKeys(value, path, LAYOUT_KEYS[kind]);
+  const title = slideText(value['title'], `${path}.title`, 200, true);
+  const notes = value['notes'] === undefined ? {} : { notes: slideText(value['notes'], `${path}.notes`, 5000, false) };
+  switch (kind) {
+    case 'title':
+    case 'section':
+      return { layout: kind, title, ...(value['subtitle'] !== undefined ? { subtitle: slideText(value['subtitle'], `${path}.subtitle`, 300, false) } : {}), ...notes };
+    case 'bullets':
+      return { layout: kind, title, bullets: bulletList(value['bullets'], `${path}.bullets`), ...notes };
+    case 'two-column':
+      return { layout: kind, title, left: slideColumn(value['left'], `${path}.left`), right: slideColumn(value['right'], `${path}.right`), ...notes };
+    case 'table':
+      return { layout: kind, title, table: slideTable(value['table'], `${path}.table`), ...notes };
+  }
+}
+
+function presentation(value: unknown): PresentationSpec {
+  if (!isObject(value)) throw new SpecError('The content must be a JSON object: {"slides": [...]}.');
+  onlyKeys(value, '(top level)', ['theme', 'slides']);
+  const out: PresentationSpec = { slides: [] };
+  const theme = value['theme'];
+  if (theme !== undefined) {
+    if (!isObject(theme)) bad('theme', 'must be an object such as {"accent": "#1F4E79"}');
+    onlyKeys(theme, 'theme', ['accent']);
+    const accent = theme['accent'];
+    if (accent !== undefined && (typeof accent !== 'string' || !HEX.test(accent))) bad('theme.accent', 'must be a colour as #RRGGBB');
+    out.theme = typeof accent === 'string' ? { accent } : {};
+  }
+  const slides = value['slides'];
+  if (!Array.isArray(slides) || slides.length < 1 || slides.length > MAX_SLIDES) bad('slides', `must be a list of 1-${MAX_SLIDES} slides`);
+  out.slides = slides.map((s: unknown, i) => slide(s, `slides[${i}]`));
+  return out;
+}
+
+export function parsePresentation(content: string): Parsed<PresentationSpec> {
+  return guard(() => presentation(json(content)));
 }
 
 // A document's size limits. The Markdown parser and the .docx writer do far
@@ -856,13 +1000,17 @@ function documentProblem(content: string): string | null {
   return null;
 }
 
-/** Why `content` can't be an artifact of `kind`, or null. A spreadsheet is parsed; a document's size is bounded. */
+/** Why `content` can't be an artifact of `kind`, or null. A spreadsheet or presentation is parsed; a document's size is bounded. */
 export function checkOfficeContent(kind: string, content: string): string | null {
   if (kind === 'spreadsheet') {
     const parsed = parseSpreadsheet(content);
     return parsed.ok ? null : parsed.error;
   }
   if (kind === 'document') return documentProblem(content);
+  if (kind === 'presentation') {
+    const parsed = parsePresentation(content);
+    return parsed.ok ? null : parsed.error;
+  }
   return null;
 }
 

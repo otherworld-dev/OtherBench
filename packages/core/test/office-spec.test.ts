@@ -12,12 +12,18 @@ import {
   MAX_DOCUMENT_QUOTE_DEPTH,
   MAX_DOCUMENT_TABLE_CELLS,
   MAX_DOCUMENT_TABLE_ROWS,
+  MAX_BULLETS,
+  MAX_SLIDES,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
   NOT_YET_FUNCTIONS,
   OFFICE_GUIDANCE,
   parseCellDate,
+  parsePresentation,
   parseSpreadsheet,
   REFUSED_FUNCTIONS,
   xmlSafe,
+  type PresentationSpec,
   type SpreadsheetSpec,
 } from '../src/domain/office-spec.js';
 
@@ -599,5 +605,108 @@ describe('checkOfficeContent: document size limits', () => {
 
   it('is only for documents', () => {
     expect(checkOfficeContent('markdown', lines(MAX_DOCUMENT_LINES + 1))).toBeNull();
+  });
+});
+
+describe('parsePresentation', () => {
+  const deck = (slides: unknown[], extra: Record<string, unknown> = {}) => JSON.stringify({ slides, ...extra });
+  function deckError(content: string): string {
+    const parsed = parsePresentation(content);
+    if (parsed.ok) throw new Error(`expected an error for ${content.slice(0, 80)}`);
+    return parsed.error;
+  }
+
+  it('parses each layout as given', () => {
+    const spec: PresentationSpec = {
+      theme: { accent: '#1F4E79' },
+      slides: [
+        { layout: 'title', title: 'Q3 review', subtitle: 'October' },
+        { layout: 'section', title: 'Results' },
+        { layout: 'bullets', title: 'Highlights', bullets: ['Revenue up 12%', { text: 'Two new clients', level: 1 }], notes: 'Mention churn.' },
+        { layout: 'two-column', title: 'Before and after', left: { heading: 'Before', bullets: ['Manual'] }, right: { bullets: ['Automatic'] } },
+        { layout: 'table', title: 'Costs', table: { header: ['Item', 'Cost'], rows: [['Widgets', 12]] } },
+      ],
+    };
+    expect(parsePresentation(JSON.stringify(spec))).toEqual({ ok: true, spec });
+  });
+
+  it('names the JSON path of each problem', () => {
+    expect(deckError(deck([]))).toBe('slides: must be a list of 1-200 slides');
+    expect(deckError(deck([{ layout: 'chart', title: 'X' }]))).toBe('slides[0].layout: must be one of: title, section, bullets, two-column, table');
+    expect(deckError(deck([{ layout: 'bullets', title: 'X', bulets: ['a'] }]))).toBe('slides[0]: unknown key "bulets". Allowed: layout, title, bullets, notes.');
+    expect(deckError(deck([{ layout: 'bullets', title: 'X', bullets: Array.from({ length: 21 }, () => 'b') }]))).toBe('slides[0].bullets: must be a list of 1-20 bullets');
+    expect(deckError(deck([{ layout: 'bullets', title: 'X', bullets: [{ text: 'a', level: 3 }] }]))).toBe('slides[0].bullets[0].level: must be 0, 1 or 2');
+    expect(deckError(deck([{ layout: 'table', title: 'X', table: { header: ['A', 'B'], rows: [['only one']] } }]))).toBe('slides[0].table.rows[0]: must have 2 cells, one for each header');
+    expect(deckError(deck([{ layout: 'title', title: ' ' }]))).toBe('slides[0].title: must be text of 1-200 characters');
+    expect(deckError(deck([{ layout: 'title', title: 'X' }], { theme: { accent: 'blue' } }))).toBe('theme.accent: must be a colour as #RRGGBB');
+  });
+
+  it('is what checkOfficeContent runs for a presentation', () => {
+    expect(checkOfficeContent('presentation', '{')).toMatch(/isn't valid JSON/);
+    expect(checkOfficeContent('presentation', deck([{ layout: 'title', title: 'X' }]))).toBeNull();
+  });
+
+  it('holds each limit and refuses one more', () => {
+    const title = { layout: 'title', title: 'X' };
+    expect(parsePresentation(deck(Array.from({ length: MAX_SLIDES }, () => title)))).toMatchObject({ ok: true });
+    expect(deckError(deck(Array.from({ length: MAX_SLIDES + 1 }, () => title)))).toBe('slides: must be a list of 1-200 slides');
+    const bullets = (n: number) => [{ layout: 'bullets', title: 'X', bullets: Array.from({ length: n }, () => 'b') }];
+    expect(parsePresentation(deck(bullets(MAX_BULLETS)))).toMatchObject({ ok: true });
+    expect(deckError(deck([{ layout: 'two-column', title: 'X', left: { bullets: ['a'] }, right: { bullets: [] } }]))).toBe('slides[0].right.bullets: must be a list of 1-20 bullets');
+    const table = (header: unknown[], rows: unknown[][]) => [{ layout: 'table', title: 'X', table: { header, rows } }];
+    const wide = Array.from({ length: MAX_TABLE_COLUMNS }, (_, i) => `C${i}`);
+    expect(parsePresentation(deck(table(wide, [])))).toMatchObject({ ok: true });
+    expect(deckError(deck(table([...wide, 'extra'], [])))).toBe('slides[0].table.header: must be a list of 1-10 column names');
+    expect(parsePresentation(deck(table(['A'], Array.from({ length: MAX_TABLE_ROWS }, () => ['x']))))).toMatchObject({ ok: true });
+    expect(deckError(deck(table(['A'], Array.from({ length: MAX_TABLE_ROWS + 1 }, () => ['x']))))).toBe('slides[0].table.rows: must be a list of at most 30 rows');
+    expect(deckError(deck([{ layout: 'title', title: 'x'.repeat(201) }]))).toBe('slides[0].title: must be text of 1-200 characters');
+    expect(deckError(deck([{ layout: 'title', title: 'X', subtitle: 'x'.repeat(301) }]))).toBe('slides[0].subtitle: must be text of at most 300 characters');
+    expect(deckError(deck([{ layout: 'title', title: 'X', notes: 'x'.repeat(5001) }]))).toBe('slides[0].notes: must be text of at most 5000 characters');
+  });
+
+  it('refuses the wrong shape at each level', () => {
+    expect(deckError('[]')).toBe('The content must be a JSON object: {"slides": [...]}.');
+    expect(deckError(deck(['x']))).toBe('slides[0]: must be an object with "layout" and "title"');
+    expect(deckError(deck([{ layout: 'constructor', title: 'X' }]))).toMatch(/^slides\[0\]\.layout: must be one of/);
+    expect(deckError(deck([{ layout: 'bullets', title: 'X', bullets: [5] }]))).toBe('slides[0].bullets[0]: must be text or {"text": "...", "level": 0-2}');
+    expect(deckError(deck([{ layout: 'bullets', title: 'X', bullets: ['  '] }]))).toBe('slides[0].bullets[0]: must be text of 1-500 characters');
+    expect(deckError(deck([{ layout: 'bullets', title: 'X', bullets: [{ text: 'a', level: 0, extra: 1 }] }]))).toBe('slides[0].bullets[0]: unknown key "extra". Allowed: text, level.');
+    expect(deckError(deck([{ layout: 'table', title: 'X', table: { header: ['A'], rows: [[true]] } }]))).toBe('slides[0].table.rows[0][0]: must be text of at most 200 characters');
+    expect(deckError(deck([{ layout: 'title', title: 'X' }], { theme: { accent: '#12345' } }))).toBe('theme.accent: must be a colour as #RRGGBB');
+    expect(deckError(deck([{ layout: 'title', title: 'X' }], { theme: { colour: '#123456' } }))).toBe('theme: unknown key "colour". Allowed: accent.');
+  });
+
+  it('refuses text the .pptx could not hold or would silently lose, naming the path', () => {
+    const code = (cp: number) => `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`;
+    const places: [string, (text: string) => unknown][] = [
+      ['slides[0].title', (t) => ({ layout: 'title', title: t })],
+      ['slides[0].subtitle', (t) => ({ layout: 'section', title: 'X', subtitle: t })],
+      ['slides[0].notes', (t) => ({ layout: 'title', title: 'X', notes: t })],
+      ['slides[0].bullets[0]', (t) => ({ layout: 'bullets', title: 'X', bullets: [t] })],
+      ['slides[0].bullets[1].text', (t) => ({ layout: 'bullets', title: 'X', bullets: ['ok', { text: t, level: 2 }] })],
+      ['slides[0].left.heading', (t) => ({ layout: 'two-column', title: 'X', left: { heading: t, bullets: ['a'] }, right: { bullets: ['b'] } })],
+      ['slides[0].right.bullets[0]', (t) => ({ layout: 'two-column', title: 'X', left: { bullets: ['a'] }, right: { bullets: [t] } })],
+      ['slides[0].table.header[1]', (t) => ({ layout: 'table', title: 'X', table: { header: ['A', t], rows: [] } })],
+      ['slides[0].table.rows[1][0]', (t) => ({ layout: 'table', title: 'X', table: { header: ['A'], rows: [['ok'], [t]] } })],
+    ];
+    for (const cp of [0x01, 0x0b, 0x1f, 0x7f, 0x84, 0x90, 0x9f, 0xd800, 0xdc00, 0xfdd0, 0xfffd, 0xfffe, 0xffff]) {
+      for (const [path, make] of places) {
+        // JSON.stringify writes a lone surrogate as an escape, which JSON.parse reads back.
+        expect(deckError(deck([make(`a${String.fromCharCode(cp)}b`)])), `${code(cp)} in ${path}`).toBe(`${path}: has the character ${code(cp)}, which slide text can't hold`);
+      }
+    }
+    expect(deckError(deck([{ layout: 'title', title: `a${String.fromCodePoint(0x1fffe)}` }]))).toBe("slides[0].title: has the character U+1FFFE, which slide text can't hold");
+    // Tab, line feed, carriage return, U+0085, a surrogate pair and ordinary text are fine.
+    const fine = 'Café 😀 tab\tline\nreturn\rnext\u0085   ﻿';
+    expect(parsePresentation(deck([{ layout: 'bullets', title: fine, bullets: [fine], notes: fine }]))).toMatchObject({ ok: true });
+  });
+
+  it('reads a full deck in a fraction of a second', () => {
+    const text = 'a '.repeat(250);
+    const slides = Array.from({ length: MAX_SLIDES }, () => ({ layout: 'bullets', title: 'X', bullets: Array.from({ length: MAX_BULLETS }, () => text), notes: text.repeat(10) }));
+    const content = deck(slides);
+    const start = performance.now();
+    for (let i = 0; i < 5; i++) parsePresentation(content);
+    expect((performance.now() - start) / 5).toBeLessThan(250);
   });
 });
