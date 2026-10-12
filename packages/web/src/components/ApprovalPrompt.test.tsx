@@ -1,8 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
+import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 
 function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
@@ -271,6 +274,42 @@ describe('ApprovalPrompt', () => {
     it('shows no element line when the call names none', () => {
       render(<ApprovalPrompt request={browserRequest({ command: 'open', url: 'https://example.com/' }, 'Use example.com: open')} onResolve={vi.fn()} />);
       expect(screen.queryByTestId('approval-browser-target')).toBeNull();
+    });
+
+    it('"Always" names exactly the card\'s own site in its canonical spelling and nothing else, as a network card does', async () => {
+      for (const [host, canonical] of [['EXAMPLE.com.', 'example.com'], ['bücher.example', 'xn--bcher-kva.example'], ['[2606:4700:4700::1111]', '2606:4700:4700::1111']] as const) {
+        const onResolve = vi.fn().mockResolvedValue(undefined);
+        // A `path` and a `command` in the args must not turn into a second key.
+        const { unmount } = render(<ApprovalPrompt request={browserRequest({ command: 'open', url: `https://${host}/`, host, path: 'a.txt' }, 'x')} onResolve={onResolve} />);
+        await userEvent.setup().click(screen.getByTestId('approval-always'));
+        expect(onResolve, host).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { host: canonical } });
+        unmount();
+      }
+    });
+  });
+
+  describe('a host card and the broker', () => {
+    const tool = (name: string, source: 'network' | 'browser'): ToolSpec => ({ name, description: '', parameters: {}, risk: 'mutate', source, execute: async () => null });
+    const policy: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'always_ask', browser: true };
+    const ctx: ToolContext = { chatId: 'chat-1', messageId: 'msg-1', profileId: 'profile-1', workspaceRoot: null, signal: new AbortController().signal };
+
+    it.each([
+      ['a network card', tool('sandbox_network', 'network'), { host: 'PyPI.org.', port: 443 }, 'pypi.org'],
+      ['a browser card', tool('browser', 'browser'), { command: 'open', url: 'https://PyPI.org./', host: 'PyPI.org.' }, 'pypi.org'],
+    ] as const)('%s\'s "Always" is an answer the broker takes, stored for that one host', async (_name, spec, args, canonical) => {
+      const store = new InMemoryStore();
+      const broker = new PermissionBroker(store);
+      const decision = broker.decide(spec, args, policy, ctx);
+      if (decision.kind !== 'ask') throw new Error(`expected a card, got ${decision.kind}`);
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={decision.request} onResolve={onResolve} />);
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      const [id, choice] = onResolve.mock.calls[0] as [string, ApprovalChoice];
+      broker.resolve(id, choice);
+      expect(store.grants.list()).toEqual([expect.objectContaining({ toolName: spec.name, source: spec.source, scope: 'always', constraint: { host: canonical } })]);
+      // The other source's call for the same host still asks.
+      const other = spec.source === 'network' ? tool('browser', 'browser') : tool('sandbox_network', 'network');
+      expect(broker.decide(other, { command: 'open', url: 'https://pypi.org/', host: 'pypi.org' }, policy, ctx).kind).toBe('ask');
     });
   });
 });

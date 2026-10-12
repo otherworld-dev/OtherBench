@@ -648,6 +648,50 @@ describe('Approval routes', () => {
     expect(grants[0]).toMatchObject({ toolName: 'browser', scope: 'always', constraint: { host: 'example.com' } });
   });
 
+  it("a browser card's 'always' answer is held to the sandbox network's rules: one key, the card's own host, stored canonical", async () => {
+    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
+    const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
+    const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
+    container.toolProvider = provider;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const tool = (await provider.listTools(policy)).find((t) => t.name === 'browser')!;
+    const open = async (constraint: unknown): Promise<number> => {
+      const before = requests.length;
+      const run = tool.execute(
+        { command: 'open', url: 'https://example.com/page' },
+        { chatId: 'chat-b', messageId: 'msg-b', profileId: 'profile-b', workspaceRoot: '/x', signal: new AbortController().signal }
+      );
+      for (let i = 0; i < 20 && requests.length === before; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(requests).toHaveLength(before + 1);
+      const id = requests[before]!.id;
+      const post = (body: unknown) => app().request(`/api/approvals/${id}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await post({ choice: 'always', constraint });
+      // A refused body leaves the card waiting; take it down so the call ends.
+      if (res.status !== 200) expect((await post({ choice: 'deny' })).status).toBe(200);
+      await run.catch(() => {});
+      return res.status;
+    };
+    const browserGrants = () => store.grants.list().filter((g) => g.source === 'browser');
+
+    // The route refuses a second key and a key it doesn't know, as it does for a network card.
+    expect(await open({ host: 'example.com', pathPrefix: '.' })).toBe(400);
+    expect(await open({ host: 'example.com', site: 'example.com' })).toBe(400);
+    // The broker refuses another site, a subdomain and no site at all: the call was approved once, and nothing is stored.
+    expect(await open({ host: 'evil.test' })).toBe(200);
+    expect(await open({ host: 'www.example.com' })).toBe(200);
+    expect(await open(null)).toBe(200);
+    expect(browserGrants()).toEqual([]);
+    // The card's own host, in another spelling: stored canonical.
+    expect(await open({ host: 'EXAMPLE.com.' })).toBe(200);
+    expect(browserGrants()).toEqual([expect.objectContaining({ toolName: 'browser', scope: 'always', chatId: null, constraint: { host: 'example.com' } })]);
+    // And a network call for the same host gets nothing from it.
+    expect(store.grants.list().filter((g) => g.source === 'network')).toEqual([]);
+  });
+
   it('rejects a malformed choice with 400', async () => {
     const res = await app().request('/api/approvals/whatever/resolve', {
       method: 'POST',
