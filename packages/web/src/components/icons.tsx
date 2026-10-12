@@ -62,3 +62,13 @@ export function ChartIcon({ className }: IconProps): JSX.Element {
     </Svg>
   );
 }
+
+/** A clock face: scheduled tasks. */
+export function ClockIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M8 4.75V8l2.25 1.5" />
+    </Svg>
+  );
+}
