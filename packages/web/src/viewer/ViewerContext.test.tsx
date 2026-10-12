@@ -10,7 +10,7 @@ import { openInBrowser, openSite } from '../desktop/bridge.js';
 import { useViewerStore, viewerFor } from './state.js';
 import { ViewerContext, viewerActionsFor } from './ViewerContext.js';
 
-const shown = (chatId: string) => viewerFor(useViewerStore.getState().viewers, chatId).history.map((i) => (i.kind === 'file' ? i.path : i.artifactId));
+const shown = (chatId: string) => viewerFor(useViewerStore.getState().viewers, chatId).history.map((i) => (i.kind === 'file' ? i.path : i.kind === 'artifact' ? i.artifactId : i.kind));
 
 beforeEach(() => useViewerStore.setState({ viewers: {} }));
 afterEach(cleanup);

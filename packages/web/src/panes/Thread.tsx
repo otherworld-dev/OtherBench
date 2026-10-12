@@ -14,6 +14,7 @@ import { useGruntStore } from '../state/store.js';
 import { DEFAULT_VIEWER, useViewerStore, viewerFor } from '../viewer/state.js';
 import { ViewerContext, viewerActionsFor } from '../viewer/ViewerContext.js';
 import { ViewerPanel } from '../viewer/ViewerPanel.js';
+import { useBrowserAutoOpen } from '../viewer/useBrowserAutoOpen.js';
 import { ConversationStrip } from './ConversationStrip.js';
 import { Splitter } from './Splitter.js';
 
@@ -79,6 +80,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     () => (chatId ? Object.values(messages).filter((m) => m.chatId === chatId) : []),
     [messages, chatId]
   );
+  useBrowserAutoOpen(chatId, chatMessages, viewer.open);
   const path = useMemo(() => {
     if (!chat?.headMessageId) return [];
     try {

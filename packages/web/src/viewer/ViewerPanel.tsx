@@ -20,7 +20,11 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
   const openTab = useGruntStore((s) => s.openTab);
   const [address, setAddress] = useState('');
   const current = viewer.index >= 0 ? viewer.history[viewer.index] : undefined;
-  const showingItem = viewer.mode === 'item' && current !== undefined;
+  // The viewer bar's Browser button: shown once the model has used the browser in this chat (spec §6).
+  const browserUsed = useGruntStore((s) =>
+    Object.values(s.messages).some((m) => m.chatId === chat.id && m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser'))
+  );
+  const showingItem =viewer.mode === 'item' && current !== undefined;
 
   function go(): void {
     const value = address.trim();
@@ -42,6 +46,11 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
         <button type="button" aria-pressed={viewer.mode === 'files'} onClick={() => setMode(chat.id, viewer.mode === 'files' && current ? 'item' : 'files')} className={BAR_BUTTON}>
           Files
         </button>
+        {browserUsed && (
+          <button type="button" aria-pressed={current?.kind === 'browser' && viewer.mode === 'item'} onClick={() => openItem(chat.id, { kind: 'browser' })} className={BAR_BUTTON}>
+            Browser
+          </button>
+        )}
         <form
           className="min-w-0 flex-1"
           onSubmit={(e) => {
@@ -51,7 +60,7 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
         >
           <input
             aria-label="Open a path or web address"
-            placeholder={current?.kind === 'file' ? current.path : (current?.title ?? 'Path, or https://…')}
+            placeholder={current?.kind === 'file' ? current.path : current?.kind === 'artifact' ? current.title : 'Path, or https://…'}
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             className="w-full rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-0.5 font-mono text-xs"

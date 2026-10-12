@@ -101,6 +101,16 @@ export interface ArtifactDetail {
 export interface ViewText { path: string; content: string; truncated: boolean; size: number }
 export interface ViewRoot { path: string; label: string; access: FolderAccess; workspace: boolean }
 export interface ViewEntry { name: string; path: string; type: 'dir' | 'file' }
+/** A chat's browser as the server reports it (spec 2026-10-12-model-browser-design §5); `elsewhere` names the machine running it. */
+export interface BrowserLiveState {
+  open: boolean;
+  url?: string | null;
+  title?: string | null;
+  host?: string | null;
+  holder?: string | null;
+  elsewhere?: string;
+}
+export type BrowserLiveEvent = { type: 'state'; state: BrowserLiveState } | { type: 'frame'; seq: number; jpeg: string };
 
 export interface CreateConnectionBody {
   name: string;
@@ -514,6 +524,10 @@ export const api = {
     text: (chatId: string, path: string) => request<ViewText>(`/view/text?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),
     roots: (chatId: string) => request<{ roots: ViewRoot[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}`),
     dir: (chatId: string, path: string) => request<{ path: string; entries: ViewEntry[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),
+  },
+  browser: {
+    state: (chatId: string) => request<BrowserLiveState>(`/chats/${chatId}/browser`),
+    close: (chatId: string) => del(`/chats/${chatId}/browser`),
   },
 
   turns: {
