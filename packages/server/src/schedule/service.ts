@@ -375,19 +375,49 @@ export class ScheduleService {
   /** Watches the run's reply: arms the timeout and announces the start. A reply that already ended (a fast model) is ended here. */
   private track(schedule: Schedule, run: ScheduleRun, chatId: string, messageId: string): void {
     const entry: ActiveRun = { runId: run.id, schedule, chatId, messageId, timer: null, timedOut: false };
-    entry.timer = this.scheduler.setTimeout(() => {
+    entry.timer = this.scheduler.setTimeout(() => this.onTimeout(entry), this.limits.timeoutMs);
+    this.active.set(messageId, entry);
+    this.emit({ type: 'schedule-run-started', scheduleId: schedule.id, scheduleName: schedule.name, runId: run.id, chatId, messageId });
+    const status = this.store.messages.get(messageId)?.status;
+    if (status !== undefined && status !== 'streaming') this.end(entry, status);
+  }
+
+  /**
+   * The run's time is up. Runs in a timer, so nothing may escape it: a store
+   * error here (a locked database) would be an uncaught exception that takes
+   * the server down. On one the run is given up on: ended as an error if the
+   * store allows, its slot freed, and a check poked so waiting schedules go.
+   */
+  private onTimeout(entry: ActiveRun): void {
+    try {
       if (this.chatDeleted(entry)) {
         this.endDeleted(entry);
         this.poke();
         return;
       }
       entry.timedOut = true;
-      this.turnRunner.cancel(messageId);
-    }, this.limits.timeoutMs);
-    this.active.set(messageId, entry);
-    this.emit({ type: 'schedule-run-started', scheduleId: schedule.id, scheduleName: schedule.name, runId: run.id, chatId, messageId });
-    const status = this.store.messages.get(messageId)?.status;
-    if (status !== undefined && status !== 'streaming') this.end(entry, status);
+      this.turnRunner.cancel(entry.messageId);
+    } catch (err) {
+      console.error(`[grunt-server] schedule ${entry.schedule.id} run ${entry.runId} could not be stopped at its timeout:`, err);
+      this.giveUp(entry, err);
+      this.poke();
+    }
+  }
+
+  /** Best effort, never throws: frees the run's slot and records it as an error. The reply, if it is still going, finishes unrecorded. */
+  private giveUp(entry: ActiveRun, cause: unknown): void {
+    this.active.delete(entry.messageId);
+    try {
+      this.scheduler.clearTimeout(entry.timer);
+      const run = this.store.schedules.updateRun(entry.runId, {
+        status: 'error',
+        detail: `Grunt couldn't stop this run: ${errorMessage(cause)}`,
+        finishedAt: this.now(),
+      });
+      if (run) this.announceFinished(entry.schedule, run, entry.chatId);
+    } catch (err) {
+      console.error(`[grunt-server] schedule ${entry.schedule.id} run ${entry.runId} could not be recorded as stopped:`, err);
+    }
   }
 
   private onTurnEvent(e: TurnEvent): void {
