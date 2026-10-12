@@ -4,6 +4,7 @@ import {
   artifactsOnBranch,
   artifactsListNote,
   ARTIFACTS_GUIDANCE,
+  ARTIFACT_TOOL_PARAMETERS,
   branchOf,
   currentVersion,
   MAX_ARTIFACT_BYTES,
@@ -11,6 +12,7 @@ import {
   slugify,
 } from '../src/domain/artifacts.js';
 import type { ArtifactVersion } from '../src/ports/store.js';
+import type { RiskClass } from '../src/ports/tool-provider.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
 
 /** A chat with a root user message u1 and two sibling replies a1 and a2 (two branches). */
@@ -200,5 +202,71 @@ describe('artifact helpers', () => {
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: 'py' })).toBe('lib.py');
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: null })).toBe('lib.txt');
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: '../evil' })).toBe('lib.txt');
+  });
+});
+
+describe('live artifacts in the executor (spec 2026-10-12-live-artifacts)', () => {
+  const LIVE = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] };
+  const TOOLS = new Map<string, RiskClass>([['mcp__s__lookup', 'read'], ['mcp__s__set_value', 'mutate']]);
+  const runLive = (store: InMemoryStore, messageId: string, args: unknown, tools: ReadonlyMap<string, RiskClass> = TOOLS) =>
+    runArtifactCommand(store, { chatId: 'c1', messageId, liveTools: () => tools }, args, () => 1000);
+
+  it('stores a declaration on create, as JSON text or an object, and says the user allows it in the viewer', () => {
+    const store = setup();
+    const made = runLive(store, 'a1', { command: 'create', id: 'dash', kind: 'html', title: 'Dash', content: '<p></p>', live: JSON.stringify(LIVE) });
+    expect(made).toMatchObject({ ok: true, live: { calls: ['value'], note: 'The user allows these calls in the viewer before the page gets data.' } });
+    expect(store.artifacts.getVersion((made as { versionId: string }).versionId)!.live).toEqual(LIVE);
+    expect(runLive(store, 'a1', { command: 'create', id: 'dash2', kind: 'html', title: 'Dash', content: '', live: LIVE })).toMatchObject({ ok: true, live: { calls: ['value'] } });
+    // Not given (absent, null or ''): a plain page, with no live summary.
+    const plain = runLive(store, 'a1', { command: 'create', id: 'plain', kind: 'html', title: 'Plain', content: '', live: null });
+    expect(plain).toMatchObject({ ok: true });
+    expect(plain).not.toHaveProperty('live');
+  });
+
+  it('refuses live on a kind other than html, and a broken declaration with its rule', () => {
+    const store = setup();
+    expect(runLive(store, 'a1', { command: 'create', kind: 'markdown', title: 'N', content: '', live: LIVE })).toEqual({ error: true, code: 'bad_args', message: '"live" only works on html artifacts.' });
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: '{"calls":[{"id":"x","tool":"read_file"}]}' })).toMatchObject({ error: true, code: 'bad_live', message: expect.stringMatching(/live call "x"/) });
+  });
+
+  it("with the profile's tools to hand, refuses an unknown tool and one that can change things", () => {
+    const store = setup();
+    const unknown = { calls: [{ id: 'x', tool: 'mcp__s__nope', args: {} }] };
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: unknown })).toMatchObject({ error: true, code: 'unknown_tool', message: expect.stringContaining('mcp__s__lookup') });
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: unknown }, new Map())).toMatchObject({ code: 'unknown_tool', message: expect.stringContaining('This profile has no MCP tools') });
+    const mutating = { calls: [{ id: 'x', tool: 'mcp__s__set_value', args: {} }] };
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: mutating })).toEqual({
+      error: true,
+      code: 'not_read_only',
+      message: '"mcp__s__set_value" can change things, and a live artifact can only use read-only tools (its server must mark them read-only).',
+    });
+  });
+
+  it('keeps the declaration through update and a rewrite without live; {"calls":[]} clears it, and so does a new kind', () => {
+    const store = setup();
+    runLive(store, 'a1', { command: 'create', id: 'dash', kind: 'html', title: 'Dash', content: '<p>1</p>', live: LIVE });
+    expect(runLive(store, 'a3', { command: 'update', id: 'dash', find: '1', replace: '2' })).toMatchObject({ ok: true, live: { calls: ['value'] } });
+    expect(runLive(store, 'a3', { command: 'rewrite', id: 'dash', content: '<p>3</p>' })).toMatchObject({ ok: true, live: { calls: ['value'] } });
+    expect(run(store, 'a3', { command: 'view', id: 'dash' })).toMatchObject({ live: LIVE });
+
+    const plain = runLive(store, 'a3', { command: 'rewrite', id: 'dash', content: '<p>4</p>', live: '{"calls":[]}' });
+    expect(plain).toMatchObject({ ok: true });
+    expect(plain).not.toHaveProperty('live');
+    expect(run(store, 'a3', { command: 'view', id: 'dash' })).toMatchObject({ live: null });
+
+    runLive(store, 'a3', { command: 'rewrite', id: 'dash', content: '<p>5</p>', live: LIVE });
+    runLive(store, 'a3', { command: 'rewrite', id: 'dash', kind: 'markdown', content: '# five' });
+    expect(run(store, 'a3', { command: 'view', id: 'dash' })).toMatchObject({ kind: 'markdown', live: null });
+    expect(runLive(store, 'a3', { command: 'rewrite', id: 'dash', kind: 'svg', content: '<svg/>', live: LIVE })).toMatchObject({ error: true, code: 'bad_args' });
+  });
+
+  it('lists a live version with its call count', () => {
+    const store = setup();
+    runLive(store, 'a1', { command: 'create', id: 'dash', kind: 'html', title: 'Dash', content: '', live: LIVE });
+    expect(artifactsListNote(artifactsOnBranch(store, 'c1', branchOf(store, 'a1')))).toContain('- dash: "Dash" (html, v1, live: 1 calls)');
+  });
+
+  it('declares live as a string in the tool schema, so every provider takes it', () => {
+    expect(ARTIFACT_TOOL_PARAMETERS.properties.live.type).toBe('string');
   });
 });

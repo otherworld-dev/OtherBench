@@ -17,6 +17,7 @@ import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
+import { LIVE_ARTIFACTS_GUIDANCE } from './live-artifacts.js';
 import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
@@ -904,12 +905,15 @@ export class TurnRunner {
 
   /**
    * The artifacts guidance (Deck #896) in the system prompt of a turn that
-   * can make artifacts, for either engine. It never changes; the branch's
-   * artifacts go with the user's message (withArtifactsList).
+   * can make artifacts, for either engine, plus the live-artifact part (spec
+   * 2026-10-12-live-artifacts) for a profile with MCP servers. Both are fixed
+   * text, so the prompt stays the same per profile; the branch's artifacts go
+   * with the user's message (withArtifactsList).
    */
   private withArtifacts(profile: ResolvedProfile, tools: readonly ToolSpec[]): ResolvedProfile {
     if (!tools.some((t) => t.source === 'artifact')) return profile;
-    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${ARTIFACTS_GUIDANCE}` : ARTIFACTS_GUIDANCE };
+    const guidance = profile.toolPolicy.mcpServerIds.length > 0 ? `${ARTIFACTS_GUIDANCE}\n\n${LIVE_ARTIFACTS_GUIDANCE}` : ARTIFACTS_GUIDANCE;
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${guidance}` : guidance };
   }
 
   /** When to use the recall tool (spec 2026-10-09-recall-design), for a turn that offers it. Fixed text, so it never churns the prompt. */
