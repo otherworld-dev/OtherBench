@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
@@ -73,6 +74,11 @@ function ToolResultBlock({ name, result, isError }: { name: string; result: unkn
   return (
     <div className={`my-1 rounded border px-2 py-1 text-xs ${isError ? 'border-[var(--danger)]' : 'border-[var(--border)]'} bg-[var(--bg-sunken)]`}>
       <span className="font-medium">{isError ? '⚠️' : '↳'} {name} result</span>
+      {isSandboxResult(result) && (
+        <span data-testid="sandbox-tag" title="Ran in Grunt's sandbox" className="ml-2 rounded-sm border border-[var(--border)] px-1 text-[10px] tracking-wide text-[var(--text-muted)] uppercase">
+          sandbox
+        </span>
+      )}
       <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>
     </div>
   );

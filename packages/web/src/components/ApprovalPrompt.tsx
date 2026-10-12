@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
+import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -17,6 +18,23 @@ const RISK_LABEL: Record<ApprovalRequest['risk'], string> = {
 /** A Claude Code shell-category tool (Bash, PowerShell, ...) -- grants are scoped like Grunt's own shell tool. */
 function isAgentShell(request: ApprovalRequest): boolean {
   return request.source === 'agent' && classifyAgentTool(request.toolName).category === 'shell';
+}
+
+/**
+ * A sandbox_network card's host and port (spec 2026-10-12-sandbox-design,
+ * "Cards and audit"), or null for any other card. The host is shown, and
+ * granted, in its canonical form (lower-case, punycode for an IDN): a
+ * look-alike name must not read as pypi.org on the card, and the broker only
+ * accepts a grant naming the card's own canonical host. A name with no
+ * canonical form never reaches a card (the broker refuses it first); its raw
+ * spelling is shown as-is.
+ */
+function networkTarget(request: ApprovalRequest): { host: string; port: number | null } | null {
+  if (request.source !== 'network') return null;
+  const args = request.args as Record<string, unknown> | null;
+  const raw = args && typeof args['host'] === 'string' ? args['host'] : null;
+  if (raw === null) return null;
+  return { host: canonicalHost(raw) ?? raw, port: args && typeof args['port'] === 'number' ? args['port'] : null };
 }
 
 /**
@@ -45,8 +63,11 @@ function deriveAlwaysConstraint(
   request: ApprovalRequest,
   allowAnyArgs: boolean
 ): Extract<ApprovalChoice, { choice: 'always' }>['constraint'] {
+  // A network grant is for one host, any port: "always reach anything" is never one click.
+  const network = networkTarget(request);
+  if (network) return { host: network.host };
   const args = request.args as Record<string, unknown> | null;
-  if ((request.source === 'shell' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
+  if ((request.source === 'shell' || request.source === 'sandbox' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
     return allowAnyArgs ? { commandPrefix: args['command'] } : { commandExact: args['command'] };
   }
   if ((request.source === 'fs' || isAgentFileTool(request)) && args && typeof args['path'] === 'string') {
@@ -69,7 +90,7 @@ function isAgentFileTool(request: ApprovalRequest): boolean {
 /** True when this request's args carry a shell `command` string -- the only case `deriveAlwaysConstraint` has a prefix/exact choice to make at all. */
 function isShellCommandRequest(request: ApprovalRequest): boolean {
   const args = request.args as Record<string, unknown> | null;
-  return (request.source === 'shell' || isAgentShell(request)) && !!args && typeof args['command'] === 'string';
+  return (request.source === 'shell' || request.source === 'sandbox' || isAgentShell(request)) && !!args && typeof args['command'] === 'string';
 }
 
 /**
@@ -90,6 +111,8 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
   // meaningless (and hidden) otherwise.
   const [allowAnyArgs, setAllowAnyArgs] = useState(false);
   const isShellCommand = isShellCommandRequest(request);
+  const network = networkTarget(request);
+  const labels = network ? { once: 'Once', chat: 'This chat', always: 'Always' } : { once: 'Allow once', chat: 'Allow for this chat', always: 'Always allow' };
 
   async function choose(choice: ApprovalChoice): Promise<void> {
     setPending(true);
@@ -115,12 +138,20 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
     >
       <div className="flex items-center gap-2">
         <span aria-hidden="true">🔒</span>
-        <span>
-          Wants to run <strong>{request.toolName}</strong>
-          <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
-        </span>
+        {network ? (
+          <span data-testid="approval-network-question">
+            Let the sandbox reach <strong>{network.host}</strong>
+            {network.port !== null ? ` (port ${network.port})` : ''}?
+          </span>
+        ) : (
+          <span>
+            Wants to run <strong>{request.toolName}</strong>
+            {request.source === 'sandbox' ? ' in the sandbox' : ''}
+            <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
+          </span>
+        )}
       </div>
-      <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{request.summary}</p>
+      {!network && <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{request.summary}</p>}
       {isShellCommand && (
         <div className="space-y-1">
           <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
@@ -158,7 +189,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'once' })}
           className="btn btn-primary px-2 py-1"
         >
-          Allow once
+          {labels.once}
         </button>
         <button
           type="button"
@@ -167,7 +198,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'chat' })}
           className="btn px-2 py-1"
         >
-          Allow for this chat
+          {labels.chat}
         </button>
         <button
           type="button"
@@ -176,7 +207,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
           className="btn px-2 py-1"
         >
-          Always allow
+          {labels.always}
         </button>
       </div>
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}

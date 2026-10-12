@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 
 function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
@@ -131,5 +132,74 @@ describe('ApprovalPrompt', () => {
     render(<ApprovalPrompt request={agentRequest} onResolve={onResolve} />);
     await userEvent.setup().click(screen.getByTestId('approval-always'));
     expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { pathPrefix: 'src/a.ts' } });
+  });
+
+  describe('the sandbox', () => {
+    const network = (args: Record<string, unknown> = { host: 'pypi.org', port: 443 }) =>
+      request({ toolName: 'sandbox_network', source: 'network', risk: 'mutate', args, summary: 'sandbox_network: pypi.org:443' });
+    const sandboxed = (command = 'npm test') =>
+      request({ toolName: 'run_command', source: 'sandbox', risk: 'execute', args: { command }, summary: `run_command: ${command}` });
+
+    it('asks to let the sandbox reach a host, with Once / This chat / Always', () => {
+      render(<ApprovalPrompt request={network()} onResolve={vi.fn()} />);
+      expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Let the sandbox reach pypi.org (port 443)?');
+      expect(screen.getByTestId('approval-once')).toHaveTextContent('Once');
+      expect(screen.getByTestId('approval-chat')).toHaveTextContent('This chat');
+      expect(screen.getByTestId('approval-always')).toHaveTextContent('Always');
+      expect(screen.getByTestId('approval-deny')).toHaveTextContent('Deny');
+      expect(screen.queryByTestId('approval-allow-any-args-toggle')).toBeNull();
+    });
+
+    it('leaves the port out when it is not known', () => {
+      render(<ApprovalPrompt request={network({ host: 'pypi.org' })} onResolve={vi.fn()} />);
+      expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Let the sandbox reach pypi.org?');
+    });
+
+    it('"Always" grants that host only', async () => {
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={network()} onResolve={onResolve} />);
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { host: 'pypi.org' } });
+    });
+
+    it('shows the host in its canonical form, so a homoglyph name cannot pass for pypi.org, and grants that spelling', async () => {
+      const lookalike = 'p\u0443pi.org'; // Cyrillic u
+      const canonical = canonicalHost(lookalike)!;
+      expect(canonical).toMatch(/^xn--/);
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={network({ host: lookalike, port: 443 })} onResolve={onResolve} />);
+      const card = screen.getByTestId('approval-prompt-req-1');
+      expect(card).toHaveTextContent(`Let the sandbox reach ${canonical} (port 443)?`);
+      expect(card).not.toHaveTextContent(lookalike);
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { host: canonical } });
+    });
+
+    it('lower-cases the host it shows and grants', async () => {
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={network({ host: 'PyPI.org.', port: 443 })} onResolve={onResolve} />);
+      expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Let the sandbox reach pypi.org (port 443)?');
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { host: 'pypi.org' } });
+    });
+
+    it('a sandboxed command says so, and "Always" is pinned to the exact command', async () => {
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={sandboxed()} onResolve={onResolve} />);
+      expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Wants to run run_command in the sandbox');
+      expect(screen.getByTestId('approval-allow-any-args-toggle')).toBeInTheDocument();
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { commandExact: 'npm test' } });
+    });
+
+    it('a sandboxed command gets a commandPrefix grant only through the warned opt-in', async () => {
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={sandboxed()} onResolve={onResolve} />);
+      const user = userEvent.setup();
+      await user.click(screen.getByTestId('approval-allow-any-args-toggle'));
+      expect(screen.getByTestId('approval-any-args-warning')).toBeInTheDocument();
+      await user.click(screen.getByTestId('approval-always'));
+      expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { commandPrefix: 'npm test' } });
+    });
   });
 });

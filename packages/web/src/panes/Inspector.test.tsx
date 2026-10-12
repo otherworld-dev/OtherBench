@@ -554,6 +554,17 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByText(/npm test/)).toBeInTheDocument();
   });
 
+  it('shows the host of a network grant, so it can be seen and revoked', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g4', chatId: null, profileId: null, toolName: 'sandbox_network', source: 'network', scope: 'always', constraint: { host: 'pypi.org' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = await within(grantsSection()).findByTestId('grant-g4');
+    expect(row).toHaveTextContent('pypi.org');
+    await userEvent.setup().click(within(row).getByRole('button', { name: 'Revoke grant for sandbox_network' }));
+    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g4');
+  });
+
   it('shows an honest empty state with no chat selected, and never calls the API', () => {
     render(<Inspector chat={null} profile={null} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(grantsSection()).getByText('No chat selected.')).toBeInTheDocument();
@@ -581,14 +592,14 @@ describe('Inspector audit trail', () => {
   });
 
   it('shows short labels for how each call was authorised, keeping the raw value in a tooltip', async () => {
-    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'deny:cancelled', 'auto', 'deny:auto', 'weird:thing'];
+    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'deny:cancelled', 'auto', 'deny:auto', 'deny:unattended', 'weird:thing'];
     mockedAuditList.mockResolvedValue(
       raws.map((grantedBy, i) => ({ id: `g${i}`, chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy, createdAt: 1000 + i })),
     );
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     const list = await within(auditSection()).findByTestId('audit-trail');
-    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (12)' }));
-    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'weird:thing'];
+    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (13)' }));
+    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'refused (nobody watching)', 'weird:thing'];
     raws.forEach((raw, i) => {
       const label = within(within(list).getByTestId(`audit-g${i}`)).getByText(labels[i]!);
       expect(label).toHaveAttribute('title', raw);

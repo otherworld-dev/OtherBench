@@ -554,6 +554,7 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
               {g.constraint?.pathPrefix ? ` · ${g.constraint.pathPrefix}` : ''}
               {g.constraint?.commandExact ? ` · ${g.constraint.commandExact}` : ''}
               {g.constraint?.commandPrefix ? ` · ${g.constraint.commandPrefix} (any arguments)` : ''}
+              {g.constraint?.host ? ` · ${g.constraint.host}` : ''}
             </span>
           </span>
           <button
@@ -593,6 +594,7 @@ function grantedByLabel(grantedBy: string): string {
     case 'auto': return 'auto mode';
     case 'deny:cancelled': return 'stopped (not denied)';
     case 'deny:auto': return 'blocked by auto mode';
+    case 'deny:unattended': return 'refused (nobody watching)';
     default: return grantedBy;
   }
 }

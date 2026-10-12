@@ -196,6 +196,17 @@ describe('Message', () => {
       expect(screen.getByText('out-1')).toBeVisible();
     });
 
+    it('tags a sandboxed run_command result "sandbox", and not a host one', () => {
+      const parts = [
+        { type: 'tool-call' as const, id: 's', name: 'run_command', args: { command: 'uname' } },
+        { type: 'tool-result' as const, id: 's', name: 'run_command', result: '{"exitCode":0,"output":"Linux","sandbox":true}', isError: false },
+        { type: 'tool-call' as const, id: 'h', name: 'run_command', args: { command: 'ver' } },
+        { type: 'tool-result' as const, id: 'h', name: 'run_command', result: { exitCode: 0, output: 'Windows' }, isError: false },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getAllByTestId('sandbox-tag')).toHaveLength(1);
+    });
+
     it('prefixes the summary with a warning when any result is an error', () => {
       render(<Message message={base({ parts: [call('1', 'Bash'), result('1', 'Bash', true)] })} />);
       expect(screen.getByText('⚠ Used 1 tool: Bash')).toBeInTheDocument();
