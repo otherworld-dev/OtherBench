@@ -40,13 +40,41 @@ export function authHeaders(): Record<string, string> {
   return config.token ? { Authorization: `Bearer ${config.token}` } : {};
 }
 
+const unauthorizedListeners = new Set<() => void>();
+
+/**
+ * Sign-in mode (spec 2026-10-12-remote-access §5): told whenever the server
+ * answers 401, so the sign-in gate can show the login page. Returns the
+ * unsubscribe. Nothing listens in the desktop app or in open mode.
+ */
+export function onUnauthorized(cb: () => void): () => void {
+  unauthorizedListeners.add(cb);
+  return () => {
+    unauthorizedListeners.delete(cb);
+  };
+}
+
+/** Tells every `onUnauthorized` listener. Called by `apiFetch` and the SSE connect on a 401. */
+export function reportUnauthorized(): void {
+  for (const cb of [...unauthorizedListeners]) cb();
+}
+
 /**
  * `fetch` against `/api${path}` with the auth header added. `init.headers`
  * must be a plain object -- every caller in this client builds one -- so
- * the merge stays a simple spread.
+ * the merge stays a simple spread. A 401 is reported to `onUnauthorized`.
+ * Same-origin fetches already carry the sign-in cookie.
  */
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const auth = authHeaders();
-  if (Object.keys(auth).length === 0) return init === undefined ? fetch(apiUrl(path)) : fetch(apiUrl(path), init);
-  return fetch(apiUrl(path), { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...auth } });
+  const sent =
+    Object.keys(auth).length === 0
+      ? init === undefined
+        ? fetch(apiUrl(path))
+        : fetch(apiUrl(path), init)
+      : fetch(apiUrl(path), { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...auth } });
+  return sent.then((res) => {
+    if (res.status === 401) reportUnauthorized();
+    return res;
+  });
 }

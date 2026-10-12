@@ -12,6 +12,20 @@ import type { PublicPeer } from '@grunt/core/types/peer.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
+/** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
+export interface AuthStatus {
+  mode: 'open' | 'token' | 'login';
+  signedIn: boolean;
+  /** Sign-in with Grunt's own certificate: the login page offers it. */
+  caDownload?: boolean;
+  session?: { expiresAt: number; remember: boolean };
+  remote?: {
+    publicUrls: string[];
+    tls: { mode: 'auto' | 'files' | 'proxy'; notAfter?: number; caFingerprint?: string; names?: string[] };
+    trustProxies: string[];
+  };
+}
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -339,6 +353,14 @@ export interface CreateMcpServerBody {
 export const api = {
   /** `platform` is the SERVER's `process.platform` (e.g. "win32"), not the browser's -- see routes/health.ts. Used to validate a chat's workspace root against the OS that will actually resolve it. */
   health: () => request<{ status: string; time: string; platform: string }>('/health'),
+  /** Sign-in (spec 2026-10-12-remote-access §3). Asked only in a browser, never in the desktop app. */
+  auth: {
+    status: () => request<AuthStatus>('/auth/status'),
+    login: (password: string, remember: boolean) => post<{ expiresAt: number }>('/auth/login', { password, remember }),
+    logout: () => post<void>('/auth/logout'),
+    logoutAll: () => post<void>('/auth/logout-all'),
+    changePassword: (current: string, next: string) => post<{ expiresAt: number }>('/auth/password', { current, next }),
+  },
 
   connections: {
     list: () => request<Connection[]>('/connections'),

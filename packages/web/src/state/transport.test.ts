@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch, apiUrl, authHeaders, configureTransport, hasToken } from './transport.js';
+import { apiFetch, apiUrl, authHeaders, configureTransport, hasToken, onUnauthorized } from './transport.js';
 
 afterEach(() => {
   configureTransport({ baseUrl: '', token: null });
@@ -46,5 +46,32 @@ describe('transport', () => {
     await apiFetch('/chats', { headers: { 'Content-Type': 'application/json' } });
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/chats', { headers: { 'Content-Type': 'application/json' } });
+  });
+});
+
+describe('the 401 hook', () => {
+  it('tells listeners when an API call comes back 401, until they unsubscribe', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+    const seen = vi.fn();
+    const off = onUnauthorized(seen);
+
+    const res = await apiFetch('/chats');
+    expect(res.status).toBe(401);
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    off();
+    await apiFetch('/chats');
+    expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays quiet for other answers', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403 })));
+    const seen = vi.fn();
+    const off = onUnauthorized(seen);
+
+    await apiFetch('/chats');
+
+    expect(seen).not.toHaveBeenCalled();
+    off();
   });
 });
