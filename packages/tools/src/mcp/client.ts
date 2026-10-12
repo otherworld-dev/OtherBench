@@ -22,6 +22,14 @@ export type McpStatus = 'connecting' | 'ok' | 'error';
 export interface McpCallResult {
   content: unknown;
   isError: boolean;
+  /** The result's `structuredContent`, when the server sent one (live artifacts pass it to the page). */
+  structured?: unknown;
+}
+
+/** Per-call options: the caller's abort signal and a timeout, passed to the SDK's own request options. */
+export interface McpCallOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface McpClientOptions {
@@ -172,13 +180,18 @@ export class McpClient {
     await this.connect();
   }
 
-  async callTool(name: string, args: unknown): Promise<McpCallResult> {
+  async callTool(name: string, args: unknown, opts: McpCallOptions = {}): Promise<McpCallResult> {
     if (!this.client || this.status !== 'ok') {
       throw new Error(`MCP server "${this.id}" is not connected (status: ${this.status}).`);
     }
-    const result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined });
+    const request = {
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    };
+    const result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined }, undefined, request);
     const content = 'content' in result ? result.content : result['toolResult'];
-    return { content, isError: 'isError' in result && result.isError === true };
+    const structured = 'structuredContent' in result ? result.structuredContent : undefined;
+    return { content, isError: 'isError' in result && result.isError === true, ...(structured !== undefined ? { structured } : {}) };
   }
 
   private buildTransport(): Transport {

@@ -9,6 +9,8 @@ import { serveHttp } from './fixtures/echo-server.js';
 
 const FIXTURE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'echo-server.js');
 
+const LIVE_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'live-server.js');
+
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -145,4 +147,34 @@ describe('McpClient over Streamable HTTP', () => {
     expect(JSON.stringify(ra.content)).toContain('from-a');
     expect(JSON.stringify(rb.content)).toContain('from-b');
   });
+});
+
+describe('McpClient call options (live artifacts)', () => {
+  async function liveClient(): Promise<McpClient> {
+    const client = new McpClient('live', { transport: 'stdio', command: process.execPath, args: [LIVE_FIXTURE], env: {} });
+    cleanups.push(() => client.disconnect());
+    await client.connect();
+    expect(client.status).toBe('ok');
+    return client;
+  }
+
+  it('passes structuredContent through as structured, and reads which tools are read-only', async () => {
+    const client = await liveClient();
+    expect(client.tools.map((t) => [t.name, t.readOnlyHint === true])).toEqual([['lookup', true], ['set_value', false], ['wait', true]]);
+    const result = await client.callTool('lookup', { key: 'b' });
+    expect(result.isError).toBe(false);
+    expect(result.structured).toEqual({ key: 'b', value: 'value-of-b', n: 1 });
+    expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toEqual({ key: 'b', value: 'value-of-b', n: 1 });
+    // A tool with no structured content has none.
+    expect('structured' in (await client.callTool('set_value', { key: 'a', value: 'b' }))).toBe(false);
+  });
+
+  it('gives up after timeoutMs, and when the signal aborts, and stays usable', async () => {
+    const client = await liveClient();
+    await expect(client.callTool('wait', { ms: 5000 }, { timeoutMs: 100 })).rejects.toThrow(/timed out/i);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 50);
+    await expect(client.callTool('wait', { ms: 5000 }, { signal: ac.signal })).rejects.toThrow();
+    expect((await client.callTool('lookup', { key: 'a' })).isError).toBe(false);
+  }, 15_000);
 });
