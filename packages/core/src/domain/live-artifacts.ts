@@ -36,8 +36,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /**
  * The MCP tool's own name for one Claude Code sees relayed
  * (`mcp__grunt_<16 hex>__<server>__<tool>` becomes `mcp__<server>__<tool>`).
- * A relay name cut and hashed for length doesn't map back; it stays as it
- * is and is refused later as an unknown tool.
+ * A relay name cut and hashed for length doesn't map back: it comes out as
+ * `mcp__<cut name>`, which no tool has, and is refused later as unknown.
  */
 export function normaliseLiveToolName(name: string): string {
   const m = RELAYED.exec(name);
