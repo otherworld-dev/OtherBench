@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
 import { normaliseWindowsPath, SandboxPathError, toSandboxPath, type MountNeed } from '@grunt/core/domain/sandbox-paths.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@grunt/core/ports/sandbox.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
@@ -84,6 +85,16 @@ function unionOf(a: readonly MountNeed[], b: readonly MountNeed[]): MountNeed[] 
     merged.set(key, { windowsPath: prior?.windowsPath ?? need.windowsPath, writable: (prior?.writable ?? false) || need.writable });
   }
   return [...merged.values()];
+}
+
+/**
+ * The allowlist as the runtime gets it: trimmed, lower-cased, and only entries core's rule takes. A profile
+ * synced from a peer never went through the routes' checks, and the runtime lets an allowlisted IP literal
+ * (or localhost) through without judging where it leads, so one of those is dropped here, not handed over.
+ */
+export function runtimeHosts(hosts: readonly string[]): string[] {
+  const names = hosts.map((h) => h.trim().toLowerCase()).filter((h) => h !== '' && sandboxHostProblem(h) === null);
+  return [...new Set(names)];
 }
 
 /** Whether canonical Windows path `inner` is `outer` or lies inside it, compared as Windows does (without case). */
@@ -442,7 +453,7 @@ export class WslSandbox implements Sandbox {
           readPaths: places.read,
           writePaths: places.write,
           denyWritePaths: places.denyWrite,
-          allowedHosts: input.allowedHosts,
+          allowedHosts: runtimeHosts(input.allowedHosts),
           signal: input.signal,
           askHost: (host, port, askSignal) => (host.length > MAX_HOST_CHARS ? Promise.resolve(false) : input.askHost(host, port, askSignal)),
         });

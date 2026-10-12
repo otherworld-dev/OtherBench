@@ -99,6 +99,13 @@ describe('WslSandbox.run', () => {
     expect(result).toEqual({ command: 'make test', exitCode: 0, signal: null, timedOut: false, truncated: false, output: 'ran\n', timeoutMsUsed: 120_000, sandbox: true, cwd: '/mnt/e/Git/Grunt' });
   });
 
+  it('hands the runtime only host names from the allowlist: IP literals and localhost (a synced profile skips the routes) are dropped', async () => {
+    const { sandbox, channels } = make();
+    const allowedHosts = ['pypi.org', '127.0.0.1', '10.0.0.1:8080', '[::1]:443', '::1', 'localhost', 'api.localhost', ' PyPI.org ', '*.example.com:8443', '192.168.1.1', ''];
+    await sandbox.run(request({ allowedHosts }));
+    expect(channels[0]!.channel.runs()[0]!.allowedHosts).toEqual(['pypi.org', '*.example.com:8443']);
+  });
+
   it('with the profile reading files only, nothing is writable and the workspace is mounted read-only', async () => {
     const { sandbox, channels, mounts } = make();
     await sandbox.run(request({ writable: false, folders: [] }));
