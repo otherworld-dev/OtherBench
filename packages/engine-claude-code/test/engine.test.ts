@@ -4,10 +4,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
+import type { Connection, ResolvedProfile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '../src/engine.js';
+import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { liveKey } from '../src/live.js';
+import { buildRelay } from '../src/relay.js';
 import type { GruntServerTool } from '../src/grunt-server.js';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
 
@@ -714,6 +716,108 @@ describe('ClaudeCodeChatEngine live processes', () => {
     expect(starts).toHaveLength(2);
     e.dispose();
   });
+
+  describe('a relayed run_command', () => {
+    const sandboxSpec = (over: Partial<ToolSpec> & { onRun?: (tag: string) => void } = {}): ToolSpec => {
+      const { onRun, ...rest } = over;
+      return {
+        name: 'run_command',
+        description: 'bash in a Linux sandbox',
+        parameters: {},
+        risk: 'execute',
+        source: 'sandbox',
+        execute: async () => {
+          onRun?.('ran');
+          return { sandbox: true };
+        },
+        ...rest,
+      };
+    };
+    const sandboxProfile = (shellRuns: 'sandbox' | 'host', hosts: string[] = []) =>
+      profile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns, sandboxHosts: hosts, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+
+    it("runs a relayed command with the current reply's allowlist, without restarting the process", async () => {
+      const ran: string[][] = [];
+      const spec = (hosts: string[]): ToolSpec => sandboxSpec({ execute: async () => { ran.push(hosts); return { sandbox: true }; } });
+      let tools: GruntServerTool[] = [];
+      const mcpServer = vi.fn((name: string, defs: GruntServerTool[]) => {
+        tools = defs;
+        return { type: 'sdk', name, instance: {} } as never;
+      });
+      const { query, starts } = liveQuery(async function* () {
+        yield init('sess-1');
+        await tools.find((t) => t.name === 'run_command')!.call({ command: 'pip install x' });
+        yield success();
+      });
+      const e = new ClaudeCodeChatEngine({
+        query,
+        approvals,
+        listEndpointModels: async () => [],
+        baseEnv: { PATH: '/bin' },
+        mcpServer,
+        relayTools: (p) => (p.shellRuns === 'sandbox' ? [spec(p.sandboxHosts ?? [])] : []),
+      });
+      await collect(e.stream(req({ profile: sandboxProfile('sandbox', ['pypi.org']) })));
+      await collect(e.stream(followUp({ profile: sandboxProfile('sandbox', ['pypi.org', 'files.pythonhosted.org']) })));
+      expect(starts).toHaveLength(1);
+      expect(ran).toEqual([['pypi.org'], ['pypi.org', 'files.pythonhosted.org']]);
+      e.dispose();
+    });
+
+    it('switching shellRuns between replies starts a new process: Bash and the relay come and go with it', async () => {
+      const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+      const { query, starts } = liveQuery(async function* () { yield init('sess-1'); yield success(); });
+      const e = new ClaudeCodeChatEngine({
+        query,
+        approvals,
+        listEndpointModels: async () => [],
+        baseEnv: { PATH: '/bin' },
+        mcpServer,
+        relayTools: (p) => (p.shellRuns === 'sandbox' ? [sandboxSpec()] : []),
+      });
+      await collect(e.stream(req({ profile: sandboxProfile('sandbox') })));
+      await collect(e.stream(followUp({ profile: sandboxProfile('host') })));
+      expect(starts).toHaveLength(2);
+      expect(starts[0]!.stopped()).toBe(true);
+      expect(starts[0]!.options.disallowedTools).toContain('Bash');
+      expect(starts[0]!.options.mcpServers).toBeDefined();
+      expect(starts[1]!.options.disallowedTools).not.toContain('Bash');
+      expect(starts[1]!.options.mcpServers).toBeUndefined();
+      e.dispose();
+    });
+
+    it("refuses a relayed call whose current spec is a different kind of tool than the one the gate approved, and does not run it", async () => {
+      const ran = vi.fn();
+      let gen = 0;
+      let tools: GruntServerTool[] = [];
+      const mcpServer = vi.fn((name: string, defs: GruntServerTool[]) => {
+        tools = defs;
+        return { type: 'sdk', name, instance: {} } as never;
+      });
+      const results: unknown[] = [];
+      const { query, starts } = liveQuery(async function* () {
+        yield init('sess-1');
+        results.push(await tools.find((t) => t.name === 'run_command')!.call({ command: 'id' }));
+        yield success();
+      });
+      const e = new ClaudeCodeChatEngine({
+        query,
+        approvals,
+        listEndpointModels: async () => [],
+        baseEnv: { PATH: '/bin' },
+        mcpServer,
+        // Same name, risk, description and schema, so the same process; only its source differs.
+        relayTools: () => [sandboxSpec(++gen === 1 ? {} : { source: 'mcp', onRun: ran })],
+      });
+      await collect(e.stream(req({ profile: sandboxProfile('sandbox') })));
+      await collect(e.stream(followUp({ profile: sandboxProfile('sandbox') })));
+      expect(starts).toHaveLength(1);
+      expect(ran).not.toHaveBeenCalled();
+      expect(results[0]).toEqual({ content: [{ type: 'text', text: JSON.stringify({ sandbox: true }) }] });
+      expect(results[1]).toMatchObject({ isError: true, content: [{ type: 'text', text: expect.stringContaining('changed since it was approved') }] });
+      e.dispose();
+    });
+  });
 });
 
 describe('ClaudeCodeChatEngine relayed MCP tools', () => {
@@ -751,7 +855,7 @@ describe('ClaudeCodeChatEngine relayed MCP tools', () => {
       });
       const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools, mcpServer });
       await collect(e.stream(req({ profile: withServers(['s1']), ...(where === 'a clean chat' ? { workspaceRoot: null } : {}) })));
-      expect(relayTools).toHaveBeenCalledWith(['s1']);
+      expect(relayTools).toHaveBeenCalledWith(expect.objectContaining({ mcpServerIds: ['s1'] }));
       expect(tools.find((t) => t.name === 'nextcloud__deck_add')!.inputSchema).toEqual(deckAdd(execute).parameters);
       expect(a.requestApproval.mock.calls[0]![0]).toMatchObject({ name: 'mcp__nextcloud__deck_add', source: 'mcp', serverId: 's1' });
       expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
@@ -939,5 +1043,73 @@ describe('ClaudeCodeChatEngine recall', () => {
     ]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'recall' }));
     e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine and the sandboxed shell', () => {
+  const sig = () => ({ signal: new AbortController().signal });
+  const sandboxed = (o: Partial<ToolPolicy> = {}) => profile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o } });
+  const runCommandSpec = (execute: ToolSpec['execute']): ToolSpec => ({
+    name: 'run_command',
+    description: 'bash in a Linux sandbox',
+    parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+    risk: 'execute',
+    source: 'sandbox',
+    execute,
+  });
+
+  it('hides Bash and its kin, relays run_command, approves it as source "sandbox" and reports it as run_command', async () => {
+    const execute = vi.fn(async () => ({ exitCode: 0, output: 'Linux\n', sandbox: true }));
+    const relayTools = vi.fn((p: ToolPolicy) => (p.shellRuns === 'sandbox' ? [runCommandSpec(execute)] : []));
+    const a = { requestApproval: vi.fn(async (..._args: unknown[]) => ({ allowed: true as const, grantedBy: 'sandbox' })), recordAgentDenial: vi.fn() };
+    let tools: GruntServerTool[] = [];
+    const mcpServer = vi.fn((name: string, defs: GruntServerTool[]) => {
+      tools = defs;
+      return { type: 'sdk', name, instance: {} } as never;
+    });
+    let decision: unknown = null;
+    let result: unknown = null;
+    const { query, calls } = fakeQuery(async function* ({ options }) {
+      const server = Object.keys(options.mcpServers ?? {})[0]!;
+      yield init('sess-1');
+      const pre = options.hooks!.PreToolUse![0]!.hooks[0]!;
+      decision = await pre({ hook_event_name: 'PreToolUse', tool_name: `mcp__${server}__run_command`, tool_input: { command: 'uname -s' }, tool_use_id: 't1' } as never, 't1', sig());
+      result = await tools.find((t) => t.name === 'run_command')!.call({ command: 'uname -s' });
+      yield { type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: `mcp__${server}__run_command`, input: { command: 'uname -s' } }] } } as unknown as SDKMessage;
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals: a, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools, mcpServer });
+    const events = await collect(e.stream(req({ profile: sandboxed() })));
+    expect(calls[0]!.options.disallowedTools).toEqual(expect.arrayContaining(['Bash', 'PowerShell', 'BashOutput', 'KillShell', 'Monitor']));
+    expect(relayTools).toHaveBeenCalledWith(expect.objectContaining({ shellRuns: 'sandbox' }));
+    expect(a.requestApproval.mock.calls[0]![0]).toMatchObject({ name: 'run_command', source: 'sandbox' });
+    expect(a.requestApproval.mock.calls[0]![1]).toEqual({ command: 'uname -s' });
+    expect(decision).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    expect(execute).toHaveBeenCalledWith({ command: 'uname -s' }, expect.objectContaining({ chatId: 'chat', messageId: 'm1', workspaceRoot: ws }));
+    expect(result).toEqual({ content: [{ type: 'text', text: JSON.stringify({ exitCode: 0, output: 'Linux\n', sandbox: true }) }] });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'run_command' }));
+    e.dispose();
+  });
+
+  it("gives a clean chat (no folder) no run_command: there is nowhere for it to run", async () => {
+    const mcpServer = vi.fn((name: string) => ({ type: 'sdk', name, instance: {} }) as never);
+    const { query, calls } = fakeQuery(async function* () {
+      yield init('sess-1');
+      yield success();
+    });
+    const e = new ClaudeCodeChatEngine({ query, approvals, listEndpointModels: async () => [], baseEnv: { PATH: '/bin' }, relayTools: () => [runCommandSpec(async () => ({}))], mcpServer });
+    await collect(e.stream(req({ profile: sandboxed(), workspaceRoot: null })));
+    expect(calls[0]!.options.mcpServers).toBeUndefined();
+    e.dispose();
+  });
+
+  it('switching shellRuns gives a different live-process key', () => {
+    const connection = { backend: 'claude', token: null };
+    const sandboxPolicy: ToolPolicy = { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
+    const hostPolicy: ToolPolicy = { ...sandboxPolicy, shellRuns: 'host' };
+    const relayHash = buildRelay([runCommandSpec(async () => ({}))]).hash;
+    expect(liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(sandboxPolicy) }, connection, { artifacts: false, recall: false, relay: relayHash })).not.toBe(
+      liveKey({ cwd: 'x', disallowedTools: agentDisallowedTools(hostPolicy) }, connection, { artifacts: false, recall: false, relay: '' })
+    );
   });
 });

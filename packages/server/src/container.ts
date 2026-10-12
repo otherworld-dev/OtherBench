@@ -289,9 +289,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Artifacts (Deck #896) and recall: the same executors as the API engines' tools.
       artifactTool: async (ctx, args) => runArtifactCommand(store, ctx, args),
       recallTool: async (ctx, args) => runRecallCommand(store, ctx, args),
-      // Clean chats, and the profile's MCP servers relayed through Grunt's own server.
+      // Clean chats; the profile's MCP servers and its sandboxed run_command, relayed through Grunt's own server.
       scratchRoot: claudeScratchRoot,
-      relayTools: (serverIds) => toolProvider.relayMcpTools(serverIds),
+      relayTools: (policy) => toolProvider.relayTools(policy),
     })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections

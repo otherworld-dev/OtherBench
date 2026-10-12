@@ -44,6 +44,22 @@ export function buildRelay(specs: ToolSpec[]): Relay {
   return { tools, hash: createHash('sha256').update(JSON.stringify(shape)).digest('hex') };
 }
 
+/**
+ * The spec to run for a relayed call the gate approved as `approved` (the spec
+ * the process started with). It is this reply's own spec for that tool, so an
+ * edit that leaves the tool's shape alone (the sandbox allowlist) applies
+ * without a new process. Fail closed: a tool this reply doesn't relay is
+ * refused rather than run from the old spec, and so is one whose source or
+ * risk differs from what the gate approved (a card for one kind of tool must
+ * never run another).
+ */
+export function currentRelayed(relay: Relay, approved: ToolSpec): ToolSpec {
+  const current = relay.tools.get(relayName(approved.name));
+  if (!current) throw new Error(`"${approved.name}" is not relayed for this reply.`);
+  if (current.source !== approved.source || current.risk !== approved.risk) throw new Error(`"${approved.name}" changed since it was approved, so it was not run.`);
+  return current;
+}
+
 /** The running reply's relay executor, or undefined when no Grunt reply is running. */
 type CurrentRelay = () => ((spec: ToolSpec, args: unknown) => Promise<unknown>) | undefined;
 

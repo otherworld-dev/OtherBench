@@ -203,17 +203,6 @@ export class GruntToolProvider implements ToolProvider {
   }
 
   /**
-   * The given MCP servers' tools as `listTools` names and describes them,
-   * but UNGATED: for the Claude Code relay only (spec
-   * 2026-10-11-claude-code-clean-chat-and-mcp-design §2), whose gate approves
-   * each call through `requestApproval` with the very same spec before it
-   * calls `execute`. Never hand these to a model directly.
-   */
-  relayMcpTools(serverIds: string[]): ToolSpec[] {
-    return serverIds.length === 0 ? [] : this.deduplicateNames(this.mcpToolSpecs(serverIds));
-  }
-
-  /**
    * Everything the Claude Code engine relays through its per-process Grunt
    * server for this policy, ungated (the engine's gate approves each call
    * with the very same spec first): the allowlisted MCP servers' tools, and

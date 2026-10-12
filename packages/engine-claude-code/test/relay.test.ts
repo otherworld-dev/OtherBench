@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import { buildRelay, relayName, relayServerTool } from '../src/relay.js';
+import { buildRelay, currentRelayed, relayName, relayServerTool } from '../src/relay.js';
 
 const spec = (o: Partial<ToolSpec> = {}): ToolSpec => ({
   name: 'mcp__nextcloud__deck_add',
@@ -59,5 +59,24 @@ describe('relayServerTool', () => {
     expect(await thrown.call({})).toEqual({ content: [{ type: 'text', text: 'server went away' }], isError: true });
     const idle = await relayServerTool('t', spec(), () => undefined).call({});
     expect(idle.isError).toBe(true);
+  });
+});
+
+describe('currentRelayed', () => {
+  const approved = spec({ name: 'run_command', source: 'sandbox', risk: 'execute' });
+
+  it("returns this reply's own spec for the tool", () => {
+    const current = spec({ name: 'run_command', source: 'sandbox', risk: 'execute', description: 'newer' });
+    expect(currentRelayed(buildRelay([current]), approved)).toBe(current);
+  });
+
+  it('refuses a tool this reply does not relay, rather than running the old spec', () => {
+    expect(() => currentRelayed(buildRelay([]), approved)).toThrow('"run_command" is not relayed for this reply.');
+    expect(() => currentRelayed(buildRelay([spec()]), approved)).toThrow('is not relayed');
+  });
+
+  it('refuses a spec whose source or risk is not what the gate approved', () => {
+    expect(() => currentRelayed(buildRelay([spec({ name: 'run_command', source: 'mcp', risk: 'execute' })]), approved)).toThrow('changed since it was approved');
+    expect(() => currentRelayed(buildRelay([spec({ name: 'run_command', source: 'sandbox', risk: 'read' })]), approved)).toThrow('changed since it was approved');
   });
 });
