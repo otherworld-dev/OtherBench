@@ -132,3 +132,20 @@ describe('extractAttachmentText: Office files', () => {
     expect(text).toMatch(/\[\.\.\.truncated at 100000 characters\]$/);
   });
 });
+
+describe('extractAttachmentText: what the file really is decides', () => {
+  const workbook = () =>
+    makeZip([
+      { name: 'xl/workbook.xml', content: '<workbook xmlns:r="r"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', content: '<Relationships><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/></Relationships>' },
+      { name: 'xl/worksheets/sheet1.xml', content: '<worksheet><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>' },
+    ]);
+
+  it('reads an .xlsx sent as application/octet-stream', async () => {
+    expect(await extractAttachmentText(workbook(), 'application/octet-stream', 'book.xlsx')).toBe('Sheet "S" (A1:A1) as CSV:\n7');
+  });
+
+  it('reads a .docx that is really a workbook as a workbook', async () => {
+    expect(await extractAttachmentText(workbook(), DOCX_MIME, 'misnamed.docx')).toBe('Sheet "S" (A1:A1) as CSV:\n7');
+  });
+});

@@ -1,3 +1,4 @@
+import { readExcel } from './excel.js';
 import { OFFICE_LIMITS, OfficeParts, TextOut, type OfficeLimits } from './parts.js';
 import { readWord } from './word.js';
 
@@ -14,6 +15,7 @@ export function extractOfficeText(data: Buffer, limits: Partial<OfficeLimits> = 
   const parts = new OfficeParts(data, caps);
   const out = new TextOut(caps.maxChars);
   if (parts.has('word/document.xml')) readWord(parts, out);
+  else if (parts.has('xl/workbook.xml')) readExcel(parts, out);
   else return null;
   let body = out.toString();
   const stopNotes: string[] = [];
