@@ -78,7 +78,8 @@ export function agentPolicyDenial(name: string, policy: ToolPolicy): string | nu
     case 'file-write':
       return policy.fs === 'readwrite' ? null : `"${name}" changes files, but policy only permits ${policy.fs === 'off' ? 'no' : 'read'} file access.`;
     case 'shell':
-      return policy.shell ? null : 'Shell (Bash) is disabled by policy.';
+      if (!policy.shell) return 'Shell (Bash) is disabled by policy.';
+      return policy.shellRuns === 'sandbox' ? "This profile runs shell commands in Grunt's sandbox: use the run_command tool instead." : null;
     case 'web':
       return policy.agentWeb === false ? 'Web tools are disabled by policy.' : null;
     case 'mcp':
@@ -100,7 +101,8 @@ export function agentDisallowedTools(policy: ToolPolicy): string[] {
   const out = [...ALWAYS_DISALLOWED];
   if (policy.fs !== 'readwrite') out.push(...FILE_WRITE);
   if (policy.fs === 'off') out.push(...FILE_READ);
-  if (!policy.shell) out.push(...SHELL);
+  // Under the sandbox, Grunt's sandboxed run_command (relayed) is the shell.
+  if (!policy.shell || policy.shellRuns === 'sandbox') out.push(...SHELL);
   if (policy.agentWeb === false) out.push(...WEB);
   if (policy.agentMcp === false) out.push(...MCP_RESOURCE);
   return out;

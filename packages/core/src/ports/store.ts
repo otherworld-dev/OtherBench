@@ -488,11 +488,13 @@ export interface Grant {
    * - `commandExact`: the command must equal this string exactly (modulo
    *   surrounding whitespace). What a `'chat'`-scope shell approval is
    *   stored as.
+   * - `host`: a `sandbox_network` grant's host (exact, case-insensitive, any
+   *   port). Every network grant carries one; one without never matches.
    *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string } | null;
+  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; host?: string } | null;
   expiresAt: number | null;
 }
 

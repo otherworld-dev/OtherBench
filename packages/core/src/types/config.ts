@@ -49,8 +49,12 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * not be able to satisfy, or to mint, a grant meant for the real shell.
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
  * Grunt only gates, never performs.
+ * `'sandbox'` is the sandboxed `run_command` (spec 2026-10-12-sandbox-design)
+ * and `'network'` the `sandbox_network` approval a sandboxed command raises
+ * for a host that isn't on its allowlist: new sources rather than flags, so
+ * nothing but Grunt's own sandbox tool can claim to be sandboxed.
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'sandbox' | 'network';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;

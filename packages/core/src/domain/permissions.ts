@@ -4,12 +4,12 @@ import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedA
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
-import type { ToolPolicy } from '../types/config.js';
+import { runsShellInSandbox, type ToolPolicy } from '../types/config.js';
 
 export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
 
 export type Decision =
-  | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant'; grantId?: string }
+  | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox'; grantId?: string }
   | { kind: 'deny'; reason: string }
   | { kind: 'ask'; request: ApprovalRequest };
 
@@ -78,6 +78,13 @@ function isShellTool(tool: ToolSpec): boolean {
  *      class, precisely so a mis-declared shell `ToolSpec` (risk `'read'`
  *      instead of `'execute'`) still can't slip through auto-approval --
  *      shell is unsandboxed and must always be at least grant- or ask-gated.
+ *      The shell now has a sandboxed sibling (spec 2026-10-12-sandbox-design):
+ *      `source: 'sandbox'` is `run_command` running in Grunt's WSL sandbox,
+ *      which reaches only the chat's folders and allowlisted hosts. Under
+ *      `ask_on_mutate` it needs no card (`grantedBy: 'sandbox'`); under
+ *      `always_ask` it is grant- or ask-gated exactly like the host shell.
+ *      A host outside the allowlist is `source: 'network'` and always asks:
+ *      its grants are pinned to one host.
  *   3. Everything else consults stored grants (`chat` or `always` scope,
  *      constrained by path/command prefix where set) before falling back to
  *      `ask`.
@@ -149,7 +156,10 @@ export class PermissionBroker {
     // Code's web tools, which reach nothing local: a clean Claude Code chat
     // (spec 2026-10-11-claude-code-clean-chat-and-mcp-design) may use them.
     const needsWorkspace =
-      tool.source === 'fs' || tool.source === 'shell' || (tool.source === 'agent' && classifyAgentTool(tool.name).category !== 'web');
+      tool.source === 'fs' ||
+      tool.source === 'shell' ||
+      tool.source === 'sandbox' ||
+      (tool.source === 'agent' && classifyAgentTool(tool.name).category !== 'web');
     if (needsWorkspace && !ctx.workspaceRoot) {
       return {
         kind: 'deny',
@@ -181,6 +191,15 @@ export class PermissionBroker {
     // (the Claude Code engine marks its own server's call itself).
     if (tool.source === 'artifact') {
       return { kind: 'allow', grantedBy: 'policy' };
+    }
+
+    // A sandboxed command (spec 2026-10-12-sandbox-design) can reach only the
+    // chat's folders and allowlisted hosts, so under ask-on-changes it needs
+    // no card, which is what lets unattended runs use the shell. Under
+    // always-ask it falls through to the grants and a card like the host
+    // shell. Its network requests (source 'network') never take this pass.
+    if (tool.source === 'sandbox' && policy.approvalMode === 'ask_on_mutate') {
+      return { kind: 'allow', grantedBy: 'sandbox' };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
@@ -222,7 +241,7 @@ export class PermissionBroker {
       risk: tool.risk,
       source: tool.source,
       args,
-      summary: tool.source === 'recall' ? this.recallSummary(args) : summarize(tool, args),
+      summary: tool.source === 'recall' ? this.recallSummary(args) : tool.source === 'network' ? networkSummary(args) : summarize(tool, args),
     };
     this.enforceBound(ctx.messageId);
     this.pending.set(request.id, { tool, ctx, args });
@@ -275,7 +294,9 @@ export class PermissionBroker {
       // approved; anything else asks again.
       const constraint = isShellTool(pending.tool)
         ? { commandExact: exactCommandForGrant(pending) }
-        : null;
+        : pending.tool.source === 'network'
+          ? { host: hostForGrant(pending) }
+          : null;
       this.store.grants.create({
         id: randomUUID(),
         chatId: pending.ctx.chatId,
@@ -300,6 +321,12 @@ export class PermissionBroker {
     // `isShellTool` rather than `source === 'shell'`: a tool that merely
     // calls itself `run_command` must not be able to mint the very grant the
     // real shell tool is forbidden from having (see SHELL_TOOL_NAMES).
+    // A network grant is for one host, like a shell grant is for one command:
+    // "always let the sandbox reach anything" is never one click.
+    if (pending.tool.source === 'network' && !choice.constraint?.host?.trim()) {
+      throw new Error('Refusing to create an "always" grant for the sandbox network that does not name a host.');
+    }
+
     if (isShellTool(pending.tool) && !choice.constraint?.commandPrefix && !choice.constraint?.commandExact) {
       throw new Error(
         `Refusing to create an unconstrained "always" grant for shell tool "${pending.tool.name}": ` +
@@ -404,6 +431,8 @@ export class PermissionBroker {
       // then matched in a different chat -- exactly the blanket always-grant
       // the shell guard in resolve() exists to prevent, through a side door.
       if (grant.source !== tool.source) continue;
+      // A network grant without a host would let every host through.
+      if (tool.source === 'network' && !grant.constraint?.host) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
       // null chatId = a global ('always') grant; a non-null chatId must
       // match this exact chat ('chat'-scope grants, or a scoped 'once').
@@ -467,7 +496,11 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return null;
     case 'shell':
       if (!policy.shell) return 'Shell execution is disabled by policy.';
+      if (policy.shellRuns === 'sandbox') return 'This profile runs shell commands in the sandbox, not on this machine.';
       return null;
+    case 'sandbox':
+    case 'network':
+      return runsShellInSandbox(policy) ? null : "This profile doesn't run shell commands in the sandbox.";
     case 'mcp': {
       if (policy.mcpServerIds.length === 0) return 'No MCP servers are enabled by policy.';
       // "Some server is enabled" is not "THIS tool's server is enabled".
@@ -501,6 +534,10 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
 function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): boolean {
   const constraint = grant.constraint;
   if (!constraint) return true;
+  if (constraint.host !== undefined) {
+    const host = stringField(args, 'host');
+    return host !== null && host.trim().toLowerCase() === constraint.host.trim().toLowerCase();
+  }
   if (constraint.pathPrefix !== undefined) {
     const path = stringField(args, 'path');
     if (path === null) return false;
@@ -648,6 +685,22 @@ function exactCommandForGrant(pending: PendingRequest): string {
     );
   }
   return command.trim();
+}
+
+/** The host a 'chat'-scope network grant is pinned to; throws (no grant) when the call had none. */
+function hostForGrant(pending: PendingRequest): string {
+  const host = stringField(pending.args, 'host');
+  if (host === null || host.trim() === '') {
+    throw new Error('Refusing to create a "chat"-scope grant for the sandbox network: the approved call named no host.');
+  }
+  return host.trim().toLowerCase();
+}
+
+/** A network card's summary: the host, and its port when known. */
+function networkSummary(args: unknown): string {
+  const host = stringField(args, 'host') ?? '?';
+  const port = typeof args === 'object' && args !== null ? (args as Record<string, unknown>)['port'] : undefined;
+  return `sandbox_network: ${host}${typeof port === 'number' ? `:${port}` : ''}`;
 }
 
 function stringField(args: unknown, key: string): string | null {
