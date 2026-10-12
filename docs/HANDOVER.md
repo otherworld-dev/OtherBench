@@ -364,7 +364,9 @@ Ollama instance.
   still get PDFs as PDFs, Claude Code gets their text. A file with no text
   becomes a placeholder and a notice on the reply. Attachments uploaded
   before this change have no text and get the placeholder: attach them
-  again. Not read: headers, footers, footnotes, comments, charts, masters.
+  again. Until then such an attachment re-triggers the "couldn't read"
+  notice on every later turn of its chat, since `filesForModel` runs over the
+  whole history. Not read: headers, footers, footnotes, comments, charts, masters.
 
 The review for this merge found two Criticals in the first cut (the
 sent-attachment delete guard was never actually armed in production; the
@@ -1072,12 +1074,20 @@ this on startup.
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
-- **Office files (Deck #928) have not been opened in Office.** Nothing here
-  was checked in Word, Excel or PowerPoint; the tests read the files back as
-  XML. By hand, once: ask a Claude Code profile and an API profile for a
+- **Office files (Deck #928): the final writers' output hasn't been opened
+  in Office.** The tests read the files back as XML. An early probe on
+  2026-10-12, with throwaway files and not the final writers, had Excel 16
+  compute SUM, IF with `<`, `&` and quotes, and a reference into a sheet name
+  with a space; Word showed Heading 1 and a table; PowerPoint opened a deck.
+  The spreadsheet writes formulas with no cached values and asks Excel to
+  calculate on open, so a downloaded file opens in Protected View, where Excel
+  doesn't recalculate, and viewers that don't calculate (Outlook, Explorer or
+  Finder preview panes, phone viewers, Drive previews) show formula cells
+  empty or 0. By hand, once: ask a Claude Code profile and an API profile for a
   one-page memo, a budget with a formula on a second sheet that refers to the
   first, and a five-slide deck; download each and open it.
-  - Excel: no repair prompt; formulas show values, not `#NAME?` or `#REF!`,
+  - Excel: click Enable Editing first; before that, formula cells may look
+    empty or 0 (note what a preview pane shows). No repair prompt; formulas show values, not `#NAME?` or `#REF!`,
     including newer functions (XLOOKUP, FILTER, SORT and the ten whose
     `_xlfn.` prefix was set from memory, not Microsoft's list: XMATCH,
     VALUETOTEXT, ARRAYTOTEXT, PERCENTOF, TRIMRANGE, REGEXTEST, REGEXEXTRACT,
@@ -1088,8 +1098,8 @@ this on startup.
   - Word: Heading 1/2 are Word's own styles; numbered lists restart; tables
     and links look right.
   - PowerPoint: 16:9; slide numbers (none on title slides); notes; a table of
-    20 or more rows (the layout sets no row height, so it may run off the
-    slide); section slide colours.
+    at the 30-row cap (`MAX_TABLE_ROWS`; the layout sets no row height, so
+    it may run off the slide); section slide colours.
   - Attach a real Word file, Excel workbook (with dates and formulas) and
     deck on each profile and ask questions only their contents answer.
   - Known limits meanwhile: no charts or images in made files, no templates,
@@ -1097,6 +1107,11 @@ this on startup.
     in the workspace, no argument-count check on formulas (`=ROUND(1)` is
     accepted and may make Excel complain), and a hostile near-cap part in an
     uploaded file can hold the upload request for a few seconds.
+  - Word fidelity gaps: an ordered list's start number is ignored; a
+    reference-style link loses its URL; lists, tables and headings inside a
+    blockquote lose the quote styling; link targets with spaces aren't
+    percent-encoded; the preview loads remote images through `MarkdownBody`
+    while the .docx writes `[Image: alt]`.
 
 ## Deviations from the v2 spec and plan
 
