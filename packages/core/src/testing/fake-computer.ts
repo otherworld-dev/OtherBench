@@ -148,7 +148,7 @@ export class FakeComputerDriver implements ComputerDriver {
           : 'it is not in canonical form';
     if (why !== null) throw new Error(`FakeComputerDriver.act was handed an action core would not send (${why}). Dispatch only what parseAction returns.`);
     const given = expect as ComputerExpectation | null | undefined;
-    const whole = given ? expectationOf({ app: given.app, appWindow: given.windowId, appPid: given.pid, appStarted: given.startedAt }) : null;
+    const whole = given ? expectationOf({ app: given.app, appShellView: given.shellView, appWindow: given.windowId, appPid: given.pid, appStarted: given.startedAt }) : null;
     if (whole === null) throw new Error('FakeComputerDriver.act was handed an expectation that is not whole. Build it with expectationOf.');
     if (!this.sessions.has(chatId)) {
       this.refused.push({ chatId, action, expect });
@@ -159,7 +159,9 @@ export class FakeComputerDriver implements ComputerDriver {
       this.refused.push({ chatId, action, expect });
       return { ok: false, reason: now.refuse };
     }
-    if (now.path !== expect.app || now.windowId !== expect.windowId || now.pid !== expect.pid || now.startedAt !== expect.startedAt) {
+    // The live facts against the approved ones. Not knowing whether the window is a file view counts as its being one.
+    const changed = now.path !== expect.app || (now.shellView !== false) !== expect.shellView || now.windowId !== expect.windowId || now.pid !== expect.pid || now.startedAt !== expect.startedAt;
+    if (changed) {
       this.refused.push({ chatId, action, expect });
       return { ok: false, reason: FAKE_WINDOW_CHANGED_REASON };
     }

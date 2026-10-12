@@ -15,6 +15,7 @@ const EXPECT: ComputerExpectation = {
   windowId: FAKE_COMPUTER_APP.windowId,
   pid: FAKE_COMPUTER_APP.pid,
   startedAt: FAKE_COMPUTER_APP.startedAt,
+  shellView: FAKE_COMPUTER_APP.shellView,
 };
 
 async function started(): Promise<FakeComputerDriver> {
@@ -146,6 +147,33 @@ describe('FakeComputerDriver', () => {
     expect(driver.actions).toHaveLength(1);
   });
 
+  it('does nothing when the approved window has become a file view, or a file dialog of the same app is now there', async () => {
+    const driver = await started();
+    const click: ComputerAction = { action: 'left_click', coordinate: [5, 5] };
+    // The same app, the same process, the same window: but it now shows a shell file view.
+    driver.pointTarget = fakeComputerTarget({ shellView: true });
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: FAKE_WINDOW_CHANGED_REASON });
+    // The same app and process, another window: its Open dialog came up over the point.
+    driver.pointTarget = fakeComputerTarget({ shellView: true, windowId: 'hwnd-dialog', title: 'Open' });
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: FAKE_WINDOW_CHANGED_REASON });
+    // A shell that no longer says whether it is one counts as one.
+    driver.pointTarget = { ...FAKE_COMPUTER_APP, shellView: undefined as unknown as boolean };
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: FAKE_WINDOW_CHANGED_REASON });
+    // The same for the keyboard.
+    driver.changeForeground(fakeComputerTarget({ shellView: true }));
+    expect(await driver.act('c1', { action: 'type', text: 'x' }, EXPECT)).toEqual({ ok: false, reason: FAKE_WINDOW_CHANGED_REASON });
+    expect(driver.actions).toEqual([]);
+
+    // And the other way round: a card about a file dialog does not cover the main window.
+    driver.pointTarget = FAKE_COMPUTER_APP;
+    expect(await driver.act('c1', click, { ...EXPECT, shellView: true })).toEqual({ ok: false, reason: FAKE_WINDOW_CHANGED_REASON });
+    // What was approved, as it was approved, is carried out.
+    const dialog = fakeComputerTarget({ shellView: true, windowId: 'hwnd-dialog' });
+    driver.pointTarget = dialog;
+    expect(await driver.act('c1', click, { ...EXPECT, shellView: true, windowId: 'hwnd-dialog' })).toEqual({ ok: true });
+    expect(driver.actions).toHaveLength(1);
+  });
+
   it('checks typing and keys against the foreground window, and clicks against the window under the point', async () => {
     const driver = await started();
     // The person answered the card, so another window now has the keyboard.
@@ -231,6 +259,8 @@ describe('FakeComputerDriver', () => {
       { ...EXPECT, pid: 0 },
       { ...EXPECT, pid: '4242' },
       { ...EXPECT, startedAt: undefined },
+      { ...EXPECT, shellView: undefined },
+      { ...EXPECT, shellView: 'false' },
     ];
     for (const expectation of partial) {
       await expect(driver.act('c1', click, expectation as ComputerExpectation), JSON.stringify(expectation)).rejects.toThrow(/not whole/);

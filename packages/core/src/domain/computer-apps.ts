@@ -11,6 +11,8 @@
  *   - `parseAction` checks a whole action against every rule and cap and
  *     builds the one that is carried out, and `actionSummary` describes
  *     exactly that;
+ *   - `classifyTarget` describes a target once, in one frozen object, and
+ *     `describedCallArgs` is how it reaches the card, the grant and the action;
  *   - `expectationOf` is what the shell must still find true when it acts.
  * The shell sends facts and presses what it is told. It has no copy of any
  * of these rules.
@@ -335,7 +337,18 @@ function isPid(value: unknown): value is number {
 const MAX_WINDOW_ID = 128;
 const MAX_STARTED_AT = 64;
 
-export type ClassifiedApp = {
+/**
+ * A target, described once. This one frozen object is the single input to
+ * everything that follows: the card (`describeApp(key)`, `title`), the
+ * grant's key (`key`), the risk (`risk`, `shellView`) and the action's
+ * expectation (`key`, `shellView`, `windowId`, `pid`, `startedAt`). It goes
+ * into the described call arguments as it stands (`describedCallArgs`), and
+ * every later reader (`isHighRiskApp`, `expectationOf`, the broker) reads
+ * those fields and nothing else. Nothing is classified a second time: after
+ * approval the driver only checks that the live window still has the same
+ * facts, and refuses when it does not.
+ */
+export type DescribedTarget = Readonly<{
   kind: 'app';
   /** The app's key: the validated path, unchanged. */
   key: string;
@@ -344,12 +357,20 @@ export type ClassifiedApp = {
   /** The window title, already one clean bounded line. */
   title: string;
   risk: 'normal' | 'high';
+  /**
+   * The window is a file dialog or shell file view. `true` also when the
+   * driver did not say (not knowing counts as being one). Part of the
+   * expectation: the same window must still be, or still not be, one when
+   * the action is carried out.
+   */
+  shellView: boolean;
   windowId: string;
   pid: number;
   startedAt: string;
-};
-export type ClassifiedTarget = { kind: 'refuse'; reason: string } | ClassifiedApp;
-
+}>;
+/** The older name for a `DescribedTarget`. */
+export type ClassifiedApp = DescribedTarget;
+export type ClassifiedTarget = Readonly<{ kind: 'refuse'; reason: string }> | DescribedTarget;
 /**
  * Decides what a target the driver reported is: something Grunt never
  * touches (a refusal, with no card), or an app with a risk. The ONLY place
@@ -371,7 +392,7 @@ export type ClassifiedTarget = { kind: 'refuse'; reason: string } | ClassifiedAp
  * wrong type.
  */
 export function classifyTarget(target: unknown): ClassifiedTarget {
-  const refuse = (reason: string): ClassifiedTarget => ({ kind: 'refuse', reason });
+  const refuse = (reason: string): ClassifiedTarget => Object.freeze({ kind: 'refuse', reason });
   const t = recordOf(target);
   if (t === null) return refuse(COMPUTER_NO_APP_REASON);
   // The driver's own refusal ("no window there").
@@ -396,60 +417,90 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   const startedAt = t['startedAt'];
   if (!isOpaqueId(windowId, MAX_WINDOW_ID) || !isPid(pid) || !isOpaqueId(startedAt, MAX_STARTED_AT)) return refuse(COMPUTER_NO_WINDOW_REASON);
 
+  // Not knowing whether the window is a file view counts as its being one.
+  const shellView = t['shellView'] !== false;
   const ordinary =
     byKey === 'normal' &&
     byOriginalName === 'normal' &&
     isTrustedSigner(t['signer']) &&
     t['console'] === false &&
-    t['shellView'] === false &&
+    !shellView &&
     t['location'] === 'fixed' &&
     typeof t['title'] === 'string';
-  return { kind: 'app', key, name, title: windowTitleForCard(t['title']), risk: ordinary ? 'normal' : 'high', windowId, pid, startedAt };
+  return Object.freeze({ kind: 'app', key, name, title: windowTitleForCard(t['title']), risk: ordinary ? 'normal' : 'high', shellView, windowId, pid, startedAt });
 }
 
 /**
- * The fields `describeCall` adds to a call's arguments. The model's own
- * copies of them are thrown away first; these always come from `appArgs`.
+ * The fields `describeCall` adds to a call's arguments, and the ONLY fields
+ * a target is ever read back from. The model can send fields with these
+ * names; none of them survives: the described arguments are built from the
+ * parsed action and the described target alone (`describedCallArgs`).
  */
-export const APP_ARG_FIELDS = Object.freeze(['app', 'appName', 'appTitle', 'appRisk', 'appWindow', 'appPid', 'appStarted'] as const);
+export const APP_ARG_FIELDS = Object.freeze(['app', 'appName', 'appTitle', 'appRisk', 'appShellView', 'appWindow', 'appPid', 'appStarted'] as const);
 
-/** The described-call fields for a classified app. `appName` is for convenience only: nothing reads it back (see `describeApp`). */
-export function appArgs(app: ClassifiedApp): Record<(typeof APP_ARG_FIELDS)[number], unknown> {
-  return { app: app.key, appName: app.name, appTitle: app.title, appRisk: app.risk, appWindow: app.windowId, appPid: app.pid, appStarted: app.startedAt };
+/** A described target as call-argument fields. `appName` and `appTitle` are for display only: nothing decides on them. */
+export function appArgs(target: DescribedTarget): Record<(typeof APP_ARG_FIELDS)[number], unknown> {
+  return {
+    app: target.key,
+    appName: target.name,
+    appTitle: target.title,
+    appRisk: target.risk,
+    appShellView: target.shellView,
+    appWindow: target.windowId,
+    appPid: target.pid,
+    appStarted: target.startedAt,
+  };
 }
 
 /**
- * Whether described call arguments are for an app Grunt asks about every
- * time. True unless the call is provably ordinary: a valid key, a risk of
- * exactly `'normal'` from `classifyTarget`, and a key that itself says
- * nothing against it (so a call can't talk a listed program down by claiming
- * `'normal'`). Anything missing, malformed or unknown is high risk.
+ * The described arguments of a call that changes something: the action
+ * `parseAction` returned and the target `classifyTarget` described, and
+ * nothing else. Nothing the model sent is copied across, so a field it
+ * forged (`appShellView: false`, another `app`) cannot survive. Frozen: the
+ * card, the grant, the risk and the expectation are all read from this one
+ * object, which nothing changes between the decision and the action.
+ */
+export function describedCallArgs(action: ComputerAction, target: DescribedTarget): Readonly<Record<string, unknown>> {
+  return Object.freeze({ ...action, ...appArgs(target) });
+}
+
+/**
+ * Whether described call arguments are for something Grunt asks about every
+ * time. Read from the described fields alone (`app`, `appRisk`,
+ * `appShellView`), never from live state. True unless the call is provably
+ * ordinary: a valid key, a risk of exactly `'normal'` from `classifyTarget`,
+ * a window that is exactly not a file view, and a key that itself says
+ * nothing against it (so described arguments cannot talk a listed program,
+ * a share or an odd path down by claiming `'normal'`). Anything missing,
+ * malformed or unknown is high risk.
  */
 export function isHighRiskApp(args: unknown): boolean {
   const a = recordOf(args);
   if (a === null) return true;
   const key = appKey(a['app']);
-  if (key === null || a['appRisk'] !== 'normal') return true;
+  if (key === null || a['appRisk'] !== 'normal' || a['appShellView'] !== false) return true;
   return keyRisk(key) !== 'normal';
 }
 
 /**
- * What the shell must still find true when it carries the call out, from the
- * described arguments: the app, the window and the run of the program the
- * card was about. `null` unless every part is present and well-typed, and
- * then the call must not run: there is no acting without an expectation.
+ * What the shell must still find true when it carries the call out, read
+ * from the described arguments: the app, whether its window is a file
+ * view, the window and the run of the program the card was about. `null`
+ * unless every part is present and well-typed, and then the call must not
+ * run: there is no acting without an expectation. Frozen.
  */
 export function expectationOf(args: unknown): ComputerExpectation | null {
   const a = recordOf(args);
   if (a === null) return null;
   const app = appKey(a['app']);
+  const shellView = a['appShellView'];
   const windowId = a['appWindow'];
   const pid = a['appPid'];
   const startedAt = a['appStarted'];
-  if (app === null || !isOpaqueId(windowId, MAX_WINDOW_ID) || !isPid(pid) || !isOpaqueId(startedAt, MAX_STARTED_AT)) return null;
-  return { app, windowId, pid, startedAt };
+  if (app === null || typeof shellView !== 'boolean') return null;
+  if (!isOpaqueId(windowId, MAX_WINDOW_ID) || !isPid(pid) || !isOpaqueId(startedAt, MAX_STARTED_AT)) return null;
+  return Object.freeze({ app, shellView, windowId, pid, startedAt });
 }
-
 // ---------------------------------------------------------------------------
 // Actions
 

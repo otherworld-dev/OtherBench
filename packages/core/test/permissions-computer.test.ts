@@ -25,7 +25,7 @@ function ctx(over: Partial<ToolContext> = {}): ToolContext {
 
 /** A described click: what the tool's describeCall hands the broker. `app: null` leaves the app fields out. */
 function click(app: unknown = EXCEL, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  const described = app === null ? {} : { app, appName: 'whatever the caller says', appTitle: 'Book1', appRisk: app === CMD ? 'high' : 'normal', appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' };
+  const described = app === null ? {} : { app, appName: 'whatever the caller says', appTitle: 'Book1', appRisk: app === CMD ? 'high' : 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' };
   return { action: 'left_click', coordinate: [512, 300], ...described, ...extra };
 }
 
@@ -158,7 +158,7 @@ describe('PermissionBroker and computer use', () => {
   it('refuses a call it cannot bind to one window, whatever grants are stored', () => {
     grant(EXCEL);
     const unpinned = "Grunt couldn't pin down which window that is, so it didn't use it.";
-    for (const over of [{ appWindow: undefined }, { appWindow: '' }, { appWindow: 7 }, { appPid: undefined }, { appPid: '4242' }, { appPid: 0 }, { appStarted: undefined }, { appStarted: '' }]) {
+    for (const over of [{ appWindow: undefined }, { appWindow: '' }, { appWindow: 7 }, { appPid: undefined }, { appPid: '4242' }, { appPid: 0 }, { appStarted: undefined }, { appStarted: '' }, { appShellView: undefined }, { appShellView: 'false' }, { appShellView: null }]) {
       expect(broker.decide(COMPUTER, click(EXCEL, over), policy(), ctx()), JSON.stringify(over)).toEqual({ kind: 'deny', reason: unpinned });
     }
     expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
@@ -386,6 +386,19 @@ describe('PermissionBroker and computer use', () => {
     const again = expectAsk(broker.decide(COMPUTER, dialog, policy(), ctx()));
     expect(() => broker.resolve(again.request.id, { choice: 'always', constraint: { app: NOTEPAD } })).toThrow(/asks every time/);
     expect(store.grants.list()).toHaveLength(2);
+  });
+
+  it('never matches a grant for described arguments that say the window is a file view, whatever risk they claim', () => {
+    grant(EXCEL);
+    grant(EXCEL, { chatId: 'chat-1', scope: 'chat' });
+    const fileView = click(EXCEL, { appShellView: true, appRisk: 'normal' });
+    expect(broker.decide(COMPUTER, fileView, policy(), ctx()).kind).toBe('ask');
+    for (const choice of [{ choice: 'chat' as const }, { choice: 'always' as const, constraint: { app: EXCEL } }]) {
+      const ask = expectAsk(broker.decide(COMPUTER, fileView, policy(), ctx()));
+      expect(() => broker.resolve(ask.request.id, choice)).toThrow(/asks every time/);
+    }
+    expect(store.grants.list()).toHaveLength(2);
+    expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
   it('never puts typed text in the card line: only how much of it there is', () => {

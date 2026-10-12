@@ -64,11 +64,16 @@ export interface ComputerRefusal {
 
 /**
  * What must still be true when an action is carried out: the app (its key),
- * the window, and the run of the program the card was about. Built by core's
- * `expectationOf` from the described call; there is no "no expectation".
+ * whether its window is a file view, the window, and the run of the program
+ * the card was about. Built by core's `expectationOf` from the described
+ * call; there is no "no expectation". The driver compares each part with
+ * the live target and refuses on any difference; it never decides again
+ * what the target is.
  */
 export interface ComputerExpectation {
   app: string;
+  /** The `shellView` fact the card was decided on. A window that has since become (or stopped being) a file view is not the window that was approved. */
+  shellView: boolean;
   windowId: string;
   pid: number;
   startedAt: string;
@@ -123,8 +128,9 @@ export interface ComputerDriver {
    * Carries out an action, but only on the window it was approved for: the
    * driver resolves the target again (under the point for an action with a
    * coordinate, the foreground window for `type` and `key`) and refuses
-   * unless its path, window, pid and start time all equal `expect`, compared
-   * exactly (the path byte for byte: the driver has no key rule of its own).
+   * unless its path, file-view fact, window, pid and start time all equal
+   * `expect`, compared exactly (the path byte for byte: the driver has no key
+   * rule of its own).
    * It checks again before every key combination and before every chunk of
    * at most 20 typed characters, and stops at the first check that fails. A
    * chat with no control session gets a refusal.

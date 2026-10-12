@@ -9,6 +9,7 @@ import {
   COMPUTER_LIMITS,
   coordinateOf,
   describeApp,
+  describedCallArgs,
   expectationOf,
   HIGH_RISK_FAMILIES,
   HIGH_RISK_STEMS,
@@ -177,6 +178,7 @@ describe('classifying a target', () => {
       name: 'notepad.exe',
       title: 'Untitled - Notepad',
       risk: 'normal',
+      shellView: false,
       windowId: 'hwnd-1',
       pid: 4242,
       startedAt: '2026-10-12T09:00:00.000Z',
@@ -305,6 +307,7 @@ describe('classifying a target', () => {
       appName: 'EXCEL.EXE',
       appTitle: 'Book1 - Approved by Grunt',
       appRisk: 'normal',
+      appShellView: false,
       appWindow: 'hwnd-1',
       appPid: 4242,
       appStarted: '2026-10-12T09:00:00.000Z',
@@ -373,31 +376,33 @@ describe('the high-risk list', () => {
       { app: NOTEPAD, appRisk: 'high' },
       { app: NOTEPAD, appRisk: 'unknown' },
       { app: NOTEPAD, appRisk: true },
-      { app: 'notepad.exe', appRisk: 'normal' },
-      { app: 'c:/windows/system32/notepad.exe', appRisk: 'normal' },
-      { app: 'C:\\Windows\\System32\\cmd.exe', appRisk: 'normal' },
-      { app: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE', appRisk: 'normal' },
-      { app: 'C:\\PROGRA~1\\App\\app.exe', appRisk: 'normal' },
-      { app: 'C:\\Programs\\Microsoft VS Code\\C\u043ede.exe', appRisk: 'normal' },
-      { app: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', appRisk: 'normal' },
-      { app: 'C:\\Tools\\thing.scr', appRisk: 'normal' },
-      { app: [NOTEPAD], appRisk: 'normal' },
+      { app: 'notepad.exe', appRisk: 'normal', appShellView: false },
+      { app: 'c:/windows/system32/notepad.exe', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\Windows\\System32\\cmd.exe', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\PROGRA~1\\App\\app.exe', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\Programs\\Microsoft VS Code\\C\u043ede.exe', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\Tools\\thing.scr', appRisk: 'normal', appShellView: false },
+      { app: [NOTEPAD], appRisk: 'normal', appShellView: false },
     ];
     for (const args of highRisk) expect(isHighRiskApp(args), JSON.stringify(args)).toBe(true);
-    expect(isHighRiskApp({ app: NOTEPAD, appRisk: 'normal' })).toBe(false);
-    expect(isHighRiskApp({ app: EXCEL, appRisk: 'normal', appName: 'cmd.exe' })).toBe(false);
+    expect(isHighRiskApp({ app: NOTEPAD, appRisk: 'normal', appShellView: false })).toBe(false);
+    expect(isHighRiskApp({ app: EXCEL, appRisk: 'normal', appShellView: false, appName: 'cmd.exe' })).toBe(false);
   });
 });
 
 describe('binding an action to the window the card was about', () => {
-  const described = { action: 'left_click', coordinate: [1, 2], app: NOTEPAD, appWindow: 'hwnd-1', appPid: 4242, appStarted: '2026-10-12T09:00:00.000Z' };
+  const described = { action: 'left_click', coordinate: [1, 2], app: NOTEPAD, appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: '2026-10-12T09:00:00.000Z' };
 
   it('reads the full expectation from described arguments', () => {
-    expect(expectationOf(described)).toEqual({ app: NOTEPAD, windowId: 'hwnd-1', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' });
+    expect(expectationOf(described)).toEqual({ app: NOTEPAD, shellView: false, windowId: 'hwnd-1', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' });
+    expect(expectationOf({ ...described, appShellView: true })).toMatchObject({ shellView: true });
+    expect(Object.isFrozen(expectationOf(described))).toBe(true);
   });
 
   it('gives nothing unless every part is there and well-typed', () => {
-    for (const field of ['app', 'appWindow', 'appPid', 'appStarted']) {
+    for (const field of ['app', 'appShellView', 'appWindow', 'appPid', 'appStarted']) {
       const args: Record<string, unknown> = { ...described };
       delete args[field];
       expect(expectationOf(args), field).toBeNull();
@@ -414,6 +419,9 @@ describe('binding an action to the window the card was about', () => {
       { appPid: Number.NaN },
       { appStarted: '' },
       { appStarted: 0 },
+      { appShellView: 'false' },
+      { appShellView: 0 },
+      { appShellView: null },
     ];
     for (const over of wrong) expect(expectationOf({ ...described, ...over }), JSON.stringify(over)).toBeNull();
     for (const notArgs of [null, undefined, 'x', 42, [described]]) expect(expectationOf(notArgs)).toBeNull();
@@ -729,8 +737,8 @@ describe('round 2: file dialogs, shares, look-alike folders and the longer list'
     for (const location of ['fixed', 'network', 'unknown']) {
       expect(app(classifyTarget(target({ path: share, originalName: null, location }))).risk, location).toBe('high');
     }
-    expect(isHighRiskApp({ app: share, appRisk: 'normal' })).toBe(true);
-    expect(isHighRiskApp({ app: '\\\\localhost\\c$\\Windows\\System32\\notepad.exe', appRisk: 'normal' })).toBe(true);
+    expect(isHighRiskApp({ app: share, appRisk: 'normal', appShellView: false })).toBe(true);
+    expect(isHighRiskApp({ app: '\\\\localhost\\c$\\Windows\\System32\\notepad.exe', appRisk: 'normal', appShellView: false })).toBe(true);
   });
 
   it('flags a space that is not a plain space anywhere in the path, not only in the file name', () => {
@@ -740,7 +748,7 @@ describe('round 2: file dialogs, shares, look-alike folders and the longer list'
       expect(appKey(key), space.codePointAt(0)?.toString(16)).toBe(key);
       expect(describeApp(key)?.unusual, space.codePointAt(0)?.toString(16)).toBe(true);
       expect(app(classifyTarget(target({ path: key, originalName: null }))).risk, space.codePointAt(0)?.toString(16)).toBe('high');
-      expect(isHighRiskApp({ app: key, appRisk: 'normal' }), space.codePointAt(0)?.toString(16)).toBe(true);
+      expect(isHighRiskApp({ app: key, appRisk: 'normal', appShellView: false }), space.codePointAt(0)?.toString(16)).toBe(true);
       // In the middle of a folder name and at the start of one, too.
       expect(describeApp(`C:\\Program${space}Files\\App\\app.exe`)?.unusual).toBe(true);
       expect(describeApp(`C:\\${space}App\\app.exe`)?.unusual).toBe(true);
@@ -795,7 +803,7 @@ describe('round 2: identity is the path as it stands, and anything outside plain
       expect(described?.key, what).toBe(key);
       expect(described?.unusual, what).toBe(true);
       expect(app(classifyTarget(target({ path: key, originalName: null }))).risk, what).toBe('high');
-      expect(isHighRiskApp({ app: key, appRisk: 'normal' }), what).toBe(true);
+      expect(isHighRiskApp({ app: key, appRisk: 'normal', appShellView: false }), what).toBe(true);
     }
   });
 
@@ -855,7 +863,86 @@ describe('round 2: identity is the path as it stands, and anything outside plain
     ];
     for (const [what, key] of onceOnly) {
       expect(appKey(key), what).toBe(key);
-      expect(isHighRiskApp({ app: key, appRisk: 'normal' }), what).toBe(true);
+      expect(isHighRiskApp({ app: key, appRisk: 'normal', appShellView: false }), what).toBe(true);
     }
+  });
+});
+
+describe('round 2: one described target for the card, the grant, the risk and the action', () => {
+  const DIALOG = { shellView: true, title: 'Open', windowId: 'hwnd-dialog' };
+
+  it('describes a target once, in an object nothing can change afterwards', () => {
+    const described = app(classifyTarget(target()));
+    expect(Object.isFrozen(described)).toBe(true);
+    expect(() => {
+      (described as { risk: string }).risk = 'normal';
+    }).toThrow();
+    expect(() => {
+      (described as { shellView: boolean }).shellView = false;
+    }).toThrow();
+    expect(Object.isFrozen(classifyTarget({}))).toBe(true);
+    // The target handed in is not what is kept: changing it afterwards changes nothing.
+    const live = target();
+    const kept = app(classifyTarget(live));
+    live['path'] = 'C:\\Windows\\System32\\cmd.exe';
+    live['shellView'] = true;
+    expect(kept).toMatchObject({ key: NOTEPAD, shellView: false, risk: 'normal' });
+  });
+
+  it('carries whether the window is a file view, and counts not knowing as being one', () => {
+    expect(app(classifyTarget(target())).shellView).toBe(false);
+    expect(app(classifyTarget(target(DIALOG))).shellView).toBe(true);
+    for (const shellView of [undefined, null, 'false', 0, 'no']) {
+      expect(app(classifyTarget(target({ shellView }))), JSON.stringify(shellView)).toMatchObject({ shellView: true, risk: 'high' });
+    }
+    expect(app(classifyTarget(without('shellView')))).toMatchObject({ shellView: true, risk: 'high' });
+  });
+
+  it('puts exactly the described target and the parsed action into the described arguments', () => {
+    expect(APP_ARG_FIELDS).toEqual(['app', 'appName', 'appTitle', 'appRisk', 'appShellView', 'appWindow', 'appPid', 'appStarted']);
+    const dialog = app(classifyTarget(target(DIALOG)));
+    // What a model might send to pass a file dialog off as the app's ordinary window.
+    const forged = {
+      action: 'left_click',
+      coordinate: [10.9, 20.2],
+      app: NOTEPAD,
+      appName: 'notepad.exe',
+      appTitle: 'Untitled - Notepad',
+      appRisk: 'normal',
+      appShellView: false,
+      appWindow: 'hwnd-1',
+      appPid: 4242,
+      appStarted: '2026-10-12T09:00:00.000Z',
+      somethingElse: 'x',
+    };
+    const parsed = parseAction(forged);
+    if (!parsed.ok || parsed.action.action !== 'left_click') throw new Error('expected a click');
+    expect(parsed.action).toEqual({ action: 'left_click', coordinate: [10, 20] });
+    const args = describedCallArgs(parsed.action, dialog);
+    expect(args).toEqual({
+      action: 'left_click',
+      coordinate: [10, 20],
+      app: NOTEPAD,
+      appName: 'notepad.exe',
+      appTitle: 'Open',
+      appRisk: 'high',
+      appShellView: true,
+      appWindow: 'hwnd-dialog',
+      appPid: 4242,
+      appStarted: '2026-10-12T09:00:00.000Z',
+    });
+    expect(Object.isFrozen(args)).toBe(true);
+    // Every reader takes its answer from those same fields.
+    expect(isHighRiskApp(args)).toBe(true);
+    expect(expectationOf(args)).toEqual({ app: NOTEPAD, shellView: true, windowId: 'hwnd-dialog', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' });
+    expect(describeApp(args['app'])?.name).toBe('notepad.exe');
+    expect(actionSummary(args)).toBe('click at 10, 20');
+  });
+
+  it('reads the risk from the described fields: a file view is never ordinary, whatever risk the call claims', () => {
+    const ordinary = { app: NOTEPAD, appRisk: 'normal', appShellView: false };
+    expect(isHighRiskApp(ordinary)).toBe(false);
+    for (const appShellView of [true, undefined, null, 'false', 0]) expect(isHighRiskApp({ ...ordinary, appShellView }), JSON.stringify(appShellView)).toBe(true);
+    expect(isHighRiskApp({ app: NOTEPAD, appRisk: 'normal' })).toBe(true);
   });
 });
