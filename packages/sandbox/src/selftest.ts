@@ -128,6 +128,16 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
       allowedHosts: none,
       expectOutput: /http_code=000/,
     });
+    // In sign-in mode (remote access) Grunt's port speaks HTTPS only, and a plain-HTTP request to it gets no HTTP
+    // status either (the TLS handshake fails), so the check above would pass even if the port were reachable.
+    // The same check over HTTPS (any certificate) covers that port: whichever one Grunt speaks answers if reachable.
+    cases.push({
+      name: "Grunt's own API on this machine is unreachable over HTTPS too",
+      command: `curl -sS -k --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' https://${p.gateway}:${p.gruntPort}/api/health`,
+      expect: 'blocked',
+      allowedHosts: none,
+      expectOutput: /http_code=000/,
+    });
   }
   return cases;
 }

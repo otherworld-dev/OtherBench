@@ -23,6 +23,8 @@ describe('selfTestCases', () => {
         'cat /etc/shadow',
         'curl -sS -m 15 -o /dev/null https://example.com/',
         "curl -sS --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' http://172.20.48.1:4747/api/health",
+        // Sign-in mode serves HTTPS only on that port: a plain-HTTP probe of it gets no status even when it connects.
+        "curl -sS -k --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' https://172.20.48.1:4747/api/health",
       ])
     );
     expect(cases.find((c) => c.command.includes('registry.npmjs.org'))).toMatchObject({ expect: 'ok', allowedHosts: ['registry.npmjs.org'] });
@@ -78,9 +80,19 @@ describe('selfTestCases', () => {
   });
 
   it("decides the Grunt-port check on the connection failing with no HTTP status, not on what Grunt answers", () => {
-    const grunt = selfTestCases(places).find((c) => c.command.includes('/api/health'));
-    expect(grunt?.expectOutput?.test('curl: (7) Failed to connect\nhttp_code=000')).toBe(true);
-    expect(grunt?.expectOutput?.test('http_code=403')).toBe(false);
+    const probes = selfTestCases(places).filter((c) => c.command.includes('/api/health'));
+    expect(probes).toHaveLength(2);
+    for (const grunt of probes) {
+      expect(grunt.expectOutput?.test('curl: (7) Failed to connect\nhttp_code=000')).toBe(true);
+      expect(grunt.expectOutput?.test('http_code=403')).toBe(false);
+    }
+  });
+
+  it('fails the self-test when Grunt answers over HTTPS only (sign-in mode), though the plain-HTTP probe got no status', async () => {
+    const probes = selfTestCases(places).filter((c) => c.command.includes('/api/health'));
+    // What a reachable HTTPS-only Grunt gives: the HTTP probe's TLS handshake fails, the HTTPS probe gets a status.
+    const run = async (c: SelfTestCase) => (c.command.includes('https://') ? result(0, 'http_code=200') : result(52, 'curl: (52) Empty reply from server\nhttp_code=000'));
+    await expect(runSelfTest(probes, run, () => {})).rejects.toThrow(/over HTTPS too" was not blocked/);
   });
 
   it("leaves out the Grunt-port check when the gateway or the port isn't known", () => {
