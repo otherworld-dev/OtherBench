@@ -189,8 +189,17 @@ describe('unattendedWarnings', () => {
     expect(unattendedWarnings(policy({ shell: true, fs: 'readwrite' }), 'claude_code', false)).toEqual([]);
   });
 
-  it('says nothing about a shell that runs in the sandbox', () => {
-    const sandboxed = { ...policy({ shell: true }), shellRuns: 'sandbox' } as ToolPolicy;
-    expect(unattendedWarnings(sandboxed, 'anthropic', true)).toEqual([]);
+  it('gives a sandboxed shell no "needs approval" line, only the refused hosts, on either engine; a host shell keeps its line', () => {
+    const hosts = "Sandboxed commands can't reach hosts that aren't on the profile's list: those requests are refused.";
+    expect(unattendedWarnings(policy({ shell: true, shellRuns: 'sandbox' }), 'anthropic', true)).toEqual([hosts]);
+    expect(unattendedWarnings(policy({ shell: true, shellRuns: 'sandbox' }), 'claude_code', true)).toEqual([hosts]);
+    // Claude Code with no folder gets no run_command at all.
+    expect(unattendedWarnings(policy({ shell: true, shellRuns: 'sandbox' }), 'claude_code', false)).toEqual([]);
+    expect(unattendedWarnings(policy({ shell: true, shellRuns: 'host' }), 'anthropic', true)).toEqual([
+      'Shell commands on this machine need approval. Run the shell in the sandbox to use it unattended.',
+    ]);
+    expect(unattendedWarnings(policy({ shell: true, shellRuns: 'host' }), 'claude_code', true)).toEqual(["Claude Code's shell commands need approval."]);
+    // shellRuns without the shell on is no shell at all.
+    expect(unattendedWarnings(policy({ shell: false, shellRuns: 'sandbox' }), 'anthropic', true)).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@
  * in its own IANA zone. Month and weekday names are this file's own English,
  * fed by Intl's numeric parts, so no text here moves with the ICU version.
  */
-import type { ConnectionKind, ToolPolicy } from '../types/config.js';
+import { runsShellInSandbox, type ConnectionKind, type ToolPolicy } from '../types/config.js';
 
 export const SCHEDULE_NAME_MAX = 80;
 export const SCHEDULE_PROMPT_MAX = 20_000;
@@ -289,14 +289,9 @@ export function runChatTitle(name: string, instant: number, timezone: string): s
   return `${name} · ${formatInZone(instant, timezone, 'short')}`;
 }
 
-/**
- * Whether the profile's shell runs on this machine rather than in the
- * sandbox. `shellRuns` comes from the sandbox feature (#935), read through a
- * widened type so this compiles whether or not that field exists. If
- * `ToolPolicy.shellRuns` exists when you implement this, read it directly.
- */
+/** Whether the profile's shell runs on this machine rather than in the sandbox (spec 2026-10-12-sandbox-design). */
 function hostShell(policy: ToolPolicy): boolean {
-  return policy.shell && (policy as ToolPolicy & { shellRuns?: string }).shellRuns !== 'sandbox';
+  return policy.shell && !runsShellInSandbox(policy);
 }
 
 /**
@@ -314,6 +309,9 @@ export function unattendedWarnings(policy: ToolPolicy, connectionKind: Connectio
   if (!claudeCode && hostShell(policy)) lines.push('Shell commands on this machine need approval. Run the shell in the sandbox to use it unattended.');
   if (policy.fs === 'readwrite' && (!claudeCode || hasFolder)) lines.push('File changes need approval unless an Always grant covers them.');
   if (claudeCode && hasFolder && hostShell(policy)) lines.push("Claude Code's shell commands need approval.");
+  // A sandboxed command needs no card under "Ask on changes", but a host off its list is a card (never automatic).
+  // Claude Code with no folder gets no sandboxed run_command at all.
+  if (runsShellInSandbox(policy) && (!claudeCode || hasFolder)) lines.push("Sandboxed commands can't reach hosts that aren't on the profile's list: those requests are refused.");
   if (policy.mcpServerIds.length > 0) lines.push('MCP tools not marked read-only need approval.');
   if (policy.recall !== false) lines.push('Searching past chats asks first in each chat, so it will be refused.');
   return lines;
