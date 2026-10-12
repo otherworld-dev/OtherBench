@@ -450,8 +450,6 @@ export class SubagentRunner implements SubagentHost {
 
     if (this.deps.signal.aborted) return subagentResult({ status: 'cancelled', error: null, finishReason: null, parts: [] });
 
-    this.send(callId, { type: 'start', label, prompt, profileId: chosen.id, profileName: chosen.name, modelId: chosen.modelId }, true);
-
     const startedAt = this.deps.now();
     const child = new AbortController();
     const follow = (): void => child.abort();
@@ -463,6 +461,9 @@ export class SubagentRunner implements SubagentHost {
     let slot = false;
     let aborted = false;
     try {
+      // Inside the try: if storing the start throws after it was broadcast,
+      // the end below still goes out, so no card is left queued.
+      this.send(callId, { type: 'start', label, prompt, profileId: chosen.id, profileName: chosen.name, modelId: chosen.modelId }, true);
       slot = await this.acquire(this.deps.signal);
       if (slot) {
         this.send(callId, { type: 'running' }, true);

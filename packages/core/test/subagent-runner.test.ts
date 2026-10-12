@@ -426,6 +426,28 @@ describe('SubagentRunner', () => {
     });
   });
 
+  it("ends a card whose start went out even when storing the start throws", async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const engine = childEngine(() => answer('x'));
+      let parts: Part[] = [];
+      const h = harness(engine, {
+        updateParts: (fn) => {
+          const next = fn(parts);
+          if (next.some((p) => p.type === 'subagent' && p.status === 'queued') && !parts.some((p) => p.type === 'subagent')) throw new Error('SQLITE_BUSY');
+          parts = next;
+        },
+      });
+      const result = await h.runner.run({ description: 'A', prompt: 'p' }, h.ctx('call-1'));
+      expect(result).toMatchObject({ error: true, code: 'subagent_failed' });
+      expect(h.events.map((e) => e.event.type)).toEqual(['start', 'end']);
+      expect(h.events[1]!.event).toMatchObject({ type: 'end', status: 'error' });
+      expect(engine.requests).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("passes the call's tools narrowing on to the tool list", async () => {
     const engine = childEngine(() => answer('x'));
     const h = harness(engine);
