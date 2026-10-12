@@ -16,6 +16,16 @@ export const SYNC_FALLBACK_MS = 60_000;
 export const CHANGE_CHECK_MS = 500;
 const MAX_BLOB_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Whether a row states a size its blob can be held to: a whole number of
+ * bytes from 0 to the cap. Anything else (text in an old row, NaN, a
+ * fraction, a negative) would make every comparison below false and so switch
+ * the limits off, so such a row's blob is not fetched at all.
+ */
+function usableBlobSize(size: unknown): size is number {
+  return typeof size === 'number' && Number.isInteger(size) && size >= 0 && size <= MAX_BLOB_BYTES;
+}
+
 export interface SyncStatus {
   lastSyncedAt: number | null;
   /** Why the last sync failed, until one succeeds. */
@@ -177,7 +187,7 @@ export class Syncer {
     const blobStore = this.options.blobStore;
     if (!blobStore) return;
     for (const missing of this.sync.missingBlobs()) {
-      if (!isSha256(missing.sha256)) continue;
+      if (!isSha256(missing.sha256) || !usableBlobSize(missing.size)) continue;
       try {
         const existing = await blobStore.get(missing.sha256).catch(() => null);
         const data =

@@ -772,6 +772,20 @@ describe('every path a file, its reference or its bytes travels is bound the sam
     expect(b.store.sync.missingBlobs().map((m) => m.id)).toEqual(['att']);
   });
 
+  it('pull side: no blob is asked for when the row does not state a usable size (an old row whose size is text, a fraction, negative, or over the cap)', () => {
+    const b = machine();
+    const insert = b.db.prepare('INSERT INTO attachment (id, chat_id, message_id, filename, mime, size, sha256, storage_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)');
+    // Written past the repo and past apply, as an older build could have left them. All bound, all without a blob here.
+    const sizes: [string, string | number][] = [['text', 'big'], ['empty', ''], ['fraction', 1.5], ['negative', -1], ['over-cap', 25 * 1024 * 1024 + 1], ['huge', 1e300]];
+    for (const [id, size] of sizes) insert.run(`size-${id}`, 'chat-a', 'm-a', `${id}.png`, 'image/png', size, sha, '');
+    insert.run('size-zero', 'chat-a', 'm-a', 'zero.png', 'image/png', 0, sha, '');
+    insert.run('size-cap', 'chat-a', 'm-a', 'cap.png', 'image/png', 25 * 1024 * 1024, sha, '');
+
+    const missing = b.store.sync.missingBlobs();
+    expect(missing.map((m) => m.id)).toEqual(['att', 'size-cap', 'size-zero']);
+    for (const m of missing) expect(Number.isInteger(m.size) && m.size >= 0, m.id).toBe(true);
+  });
+
   it('push side: a file row, and its bytes, are offered only when bound', () => {
     const a = machine('a');
     raw(a, 'mis-bound', 'chat-b', 'm-a', 'c'.repeat(64));

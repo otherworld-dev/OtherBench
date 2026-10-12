@@ -208,6 +208,46 @@ describe('syncing two machines over the peer listener', () => {
     expect(laptop.store.sync.missingBlobs().map((m) => m.id)).toEqual(['a-known', 'a-liar']);
   });
 
+  it('asks for no blob, and keeps none, for a row that does not state a usable size (text, a fraction, negative, not finite, over the cap)', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    // Blobs the PC would serve (each is sent in a message there); one of them is also on the laptop already.
+    const blobs = [];
+    for (let i = 0; i < 7; i++) {
+      const blob = await pc.blobs.put(Buffer.from(`file number ${i}, which the PC really has`));
+      pc.store.attachments.create({ id: `pc-${i}`, chatId: 'chat', messageId: 'u1', filename: `f${i}.png`, mime: 'image/png', size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+      blobs.push(blob);
+    }
+    await laptop.blobs.put(Buffer.from('file number 6, which the PC really has'));
+    await pairNodes(pc, laptop);
+
+    // What a store could hand over from old rows: the syncer itself must not act on any of these sizes.
+    const sizes: unknown[] = ['big', Number.NaN, 1.5, -1, Number.POSITIVE_INFINITY, 64 * 1024 * 1024 + 1, 'big'];
+    const rows = sizes.map((size, i) => ({ id: `pc-${i}`, sha256: blobs[i]!.sha256, size: size as number }));
+    const sync = laptop.store.sync!;
+    const realMissing = sync.missingBlobs.bind(sync);
+    sync.missingBlobs = () => rows;
+    const asked: string[] = [];
+    const realCall = laptop.service.call.bind(laptop.service);
+    laptop.service.call = ((nodeId: string, request: { method: string; path: string }, limits?: unknown) => {
+      asked.push(request.path);
+      return (realCall as (...args: unknown[]) => unknown)(nodeId, request, limits);
+    }) as typeof laptop.service.call;
+
+    await laptop.syncer.pullFrom('node-PC');
+
+    expect(asked.filter((p) => p.startsWith('/peer/blobs/'))).toEqual([]);
+    for (let i = 0; i < 7; i++) expect(laptop.store.attachments.get(`pc-${i}`)!.storagePath, `pc-${i}`).toBe('');
+    for (let i = 0; i < 6; i++) await expect(laptop.blobs.get(blobs[i]!.sha256), `pc-${i}`).rejects.toThrow();
+
+    // With its real rows back (sizes as the PC stated them), the same pull fetches every one.
+    sync.missingBlobs = realMissing;
+    await laptop.syncer.pullFrom('node-PC');
+    expect(asked.filter((p) => p.startsWith('/peer/blobs/'))).toHaveLength(6);
+    expect(laptop.store.sync!.missingBlobs()).toEqual([]);
+  });
+
   it('offers no file row and serves no blob for a file that is not bound to a message of its own chat', async () => {
     const pc = syncNode('PC');
     const laptop = syncNode('Laptop');
