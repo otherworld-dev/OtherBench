@@ -51,6 +51,11 @@ export const BROWSER_HOST_VECTORS: readonly BrowserHostVector[] = [
   no('*.internal', 'http://db.internal/', 'db.internal'),
   no('*.home.arpa', 'http://nas.home.arpa/', 'nas.home.arpa'),
   no('*.lan', 'http://router.lan/', 'router.lan'),
+  no('*.localdomain', 'http://box.localdomain/', 'box.localdomain'),
+  // A name with no dot: a different machine on every network, so never a site to approve.
+  no('a name with no dot', 'http://intranet/', 'intranet'),
+  no('a name with no dot, with a port and a path', 'https://router:8443/admin', 'router'),
+  no('a name with no dot, upper case and a trailing dot', 'http://NAS./', 'nas'),
 
   // IPv4 in every spelling WHATWG reads as an address.
   no('loopback', 'http://127.0.0.1/', '127.0.0.1'),

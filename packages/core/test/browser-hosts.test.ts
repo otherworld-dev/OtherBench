@@ -163,6 +163,10 @@ describe('isLocalName', () => {
 
   it('leaves ordinary names alone, even ones that merely contain those words', () => {
     for (const h of ['example.com', 'localhost.example.com', 'local.example.com', 'lan.example']) expect(isLocalName(h), h).toBe(false);
+    // A name with no dot is a search-domain name: a different machine on every network.
+    for (const h of ['router', 'intranet', 'NAS.', 'com', 'box.localdomain']) expect(isLocalName(h), h).toBe(true);
+    // An address is never a name, dots or not: its range decides.
+    for (const h of ['::1', '[2606:4700:4700::1111]', '8.8.8.8', '2130706433']) expect(isLocalName(h), h).toBe(false);
   });
 });
 
@@ -178,6 +182,10 @@ describe('browserHostDenial', () => {
 
   it('refuses local names, non-public addresses and a missing host', () => {
     expect(browserHostDenial('localhost', {})).toBe("localhost is a local network name. The model's browser can't reach it.");
+    expect(browserHostDenial('router', {})).toBe("router is a local network name. The model's browser can't reach it.");
+    expect(browserHostDenial('INTRANET.', {})).toBe("intranet is a local network name. The model's browser can't reach it.");
+    // A public IPv6 address has no dot either, and is still a site.
+    expect(browserHostDenial('2606:4700:4700::1111', {})).toBeNull();
     expect(browserHostDenial('192.168.1.1', {})).toBe("192.168.1.1 is a local or private address. The model's browser can't reach it.");
     expect(browserHostDenial('::1', {})).toMatch(/local or private address/);
     expect(browserHostDenial(null, {})).toBe("Grunt couldn't tell which website this is for.");

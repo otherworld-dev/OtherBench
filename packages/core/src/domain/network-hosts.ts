@@ -13,7 +13,7 @@
  * card can't read the same host two ways. What the sandbox adds on top is
  * narrower, never wider; `testing/shared-host-vectors.ts` pins each difference.
  */
-import { hasLocalSuffix, isPublicAddress, normaliseHost } from './browser-hosts.js';
+import { isLocalNetworkName, isPublicAddress, normaliseHost } from './browser-hosts.js';
 
 /**
  * Characters that make a "host" more than a host name: a path, query,
@@ -96,12 +96,11 @@ const LOOKS_LIKE_IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
  *     documentation and protocol assignments; the integer, hex and octal forms
  *     are already dotted quads by now). Four numbers `isPublicAddress` can't
  *     read as an address count as private (fail closed);
- *   - `localhost` and the names that only resolve on a private network
- *     (`hasLocalSuffix`: `*.internal`, `*.local`, `*.home.arpa`, `*.lan`, ...);
- *   - any name with no dot at all (`router`, `nas`: a search-domain name,
- *     never a public one). This one is the sandbox's own rule. The browser
- *     lets such a name through to its card, because its proxy resolves every
- *     name itself and refuses a non-public address there.
+ *   - a local name (`isLocalNetworkName`, the browser's rule too):
+ *     `localhost`, the names that only resolve on a private network
+ *     (`*.internal`, `*.local`, `*.home.arpa`, `*.lan`, ...), and any name
+ *     with no dot at all (`router`, `nas`: a search-domain name, never a
+ *     public one).
  *
  * IPv6 literals never get this far: `canonicalHost` refuses them all.
  *
@@ -110,7 +109,6 @@ const LOOKS_LIKE_IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
  * sandbox runtime refuses them again at connect time; this is the early refusal.
  */
 export function isLocalOrPrivateHost(host: string): boolean {
-  if (!host.includes('.')) return true;
-  if (hasLocalSuffix(host)) return true;
+  if (isLocalNetworkName(host)) return true;
   return LOOKS_LIKE_IPV4.test(host) && !isPublicAddress(host);
 }

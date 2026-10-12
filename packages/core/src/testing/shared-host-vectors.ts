@@ -3,7 +3,7 @@
  * (`canonicalHost` / `isLocalOrPrivateHost`, network-hosts.ts) and the model's
  * browser (`normaliseHost` / `browserHostDenial`, browser-hosts.ts). Both are
  * built on the same spelling, the same IPv4 ranges and the same local-name
- * suffixes, so most rows have one answer. Where they differ, the row says why,
+ * rule, so most rows have one answer. Where they differ, the row says why,
  * and `SHARED_HOST_DIFFERENCES` lists every reason there is: a new difference
  * has to be added there on purpose.
  *
@@ -19,8 +19,6 @@ export interface HostJudgement {
 /** Why the sandbox and the browser read a host differently. Every one is on purpose. */
 export const SHARED_HOST_DIFFERENCES = {
   ipv6: 'The sandbox reaches hosts by name only, so it takes no IPv6 literal. A website may be one, and the browser judges it by its range.',
-  singleLabel:
-    "The sandbox refuses a name with no dot (a search-domain name like `router`) by its spelling. The browser lets it through to its card: its proxy resolves every name itself and refuses a non-public address there.",
   percentEscape: 'The sandbox refuses a percent-escape instead of decoding it. The browser reads a host the way Chromium does, which decodes it.',
   hostCharacters: 'The sandbox takes only letters, digits, hyphens and dots (what its runtime can match). The browser takes whatever Chromium takes as a host, an underscore included.',
   length: 'The sandbox refuses a name over 253 characters. The browser leaves that to Chromium and DNS.',
@@ -77,6 +75,10 @@ export const SHARED_HOST_VECTORS: readonly SharedHostVector[] = [
   refused('*.localdomain', 'box.localdomain', 'box.localdomain'),
   refused('a local suffix on its own', 'local', 'local'),
   refused('a local suffix on its own (2)', 'internal', 'internal'),
+  // A name with no dot is a different machine on every network: refused by both.
+  refused('a search-domain name', 'router', 'router'),
+  refused('a search-domain name (2)', 'intranet', 'intranet'),
+  refused('a search-domain name, upper case and a trailing dot', 'NAS.', 'nas'),
 
   // IPv4 that isn't the public internet, in every spelling: one table of ranges.
   refused('loopback', '127.0.0.1', '127.0.0.1'),
@@ -128,10 +130,6 @@ export const SHARED_HOST_VECTORS: readonly SharedHostVector[] = [
   differs('ipv6', 'v4-mapped loopback', '::ffff:127.0.0.1', { canonical: null, refused: true }, { canonical: '::ffff:7f00:1', refused: true }),
   differs('ipv6', 'public IPv6', '2606:4700:4700::1111', { canonical: null, refused: true }, { canonical: '2606:4700:4700::1111', refused: false }),
   differs('ipv6', 'public IPv6 in brackets', '[2606:4700:4700::1111]', { canonical: null, refused: true }, { canonical: '2606:4700:4700::1111', refused: false }),
-
-  // A name with no dot.
-  differs('singleLabel', 'a search-domain name', 'router', { canonical: 'router', refused: true }, { canonical: 'router', refused: false }),
-  differs('singleLabel', 'a search-domain name (2)', 'intranet', { canonical: 'intranet', refused: true }, { canonical: 'intranet', refused: false }),
 
   // Spellings only the browser takes.
   differs('percentEscape', 'a percent-escaped letter', 'ex%61mple.com', { canonical: null, refused: true }, { canonical: 'example.com', refused: false }),

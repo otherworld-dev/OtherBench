@@ -35,7 +35,7 @@ export function browserCommandRisk(command: BrowserCommand): RiskClass {
  *
  * The sandbox's network cards (network-hosts.ts) are built on the same three
  * pieces: `normaliseHost` for the spelling, `isPublicAddress` for an IPv4
- * literal and `hasLocalSuffix` for a local name. Where the two differ they do
+ * literal and `isLocalNetworkName` for a local name. Where the two differ they do
  * so on purpose, and `testing/shared-host-vectors.ts` pins each case.
  */
 
@@ -306,10 +306,23 @@ export function hasLocalSuffix(canonical: string): boolean {
   return canonical === 'localhost' || LOCAL_NAME_SUFFIXES.some((suffix) => canonical === suffix.slice(1) || canonical.endsWith(suffix));
 }
 
-/** `localhost` and the local-network suffixes (and those suffixes on their own), in any spelling. */
+/**
+ * Whether a CANONICAL host that is NOT an IP address is a name that only ever
+ * means this machine or a private network: a name with no dot (`router`,
+ * `intranet`: a search-domain name, which is a different machine on each
+ * network, so a grant for one would mean a different site wherever Grunt
+ * runs), `localhost`, or a name under a local suffix. One rule for the browser
+ * and for the sandbox's network cards. Not for an IPv6 literal, which has no
+ * dot either: judge an address by `isPublicAddress`.
+ */
+export function isLocalNetworkName(canonical: string): boolean {
+  return !canonical.includes('.') || hasLocalSuffix(canonical);
+}
+
+/** A name with no dot, `localhost` and the local-network suffixes (and those suffixes on their own), in any spelling. Never an IP address. */
 export function isLocalName(host: string): boolean {
   const h = normaliseHost(host);
-  return h !== null && hasLocalSuffix(h);
+  return h !== null && !isIpLiteral(h) && isLocalNetworkName(h);
 }
 
 export interface HostCheckOptions {
@@ -338,7 +351,7 @@ export function browserHostDenial(
     if (h === '127.0.0.1' && loopbackEscape(opts)) return null;
     return isPublicAddress(h) ? null : `${h} is a local or private address. The model's browser can't reach it.`;
   }
-  if (isLocalName(h)) return `${h} is a local network name. The model's browser can't reach it.`;
+  if (isLocalNetworkName(h)) return `${h} is a local network name. The model's browser can't reach it.`;
   return null;
 }
 

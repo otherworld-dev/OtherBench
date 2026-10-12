@@ -31,7 +31,7 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
 
   it('refuses a blocked, local or private site, and a call naming no site, before any card', () => {
     const always = policy({ approvalMode: 'always_ask', browserBlockedHosts: ['ads.test'] });
-    for (const host of ['ads.test', 'x.ads.test', 'localhost', 'printer.local', '192.168.1.1', '10.0.0.5', '::1', '169.254.169.254']) {
+    for (const host of ['ads.test', 'x.ads.test', 'localhost', 'printer.local', 'router', 'intranet', '192.168.1.1', '10.0.0.5', '::1', '169.254.169.254']) {
       expect(broker.decide(BROWSER(), open(host), always, ctx()), host).toMatchObject({ kind: 'deny' });
     }
     expect(broker.decide(BROWSER(), { command: 'open', url: 'https://example.com/' }, always, ctx())).toEqual({ kind: 'deny', reason: "Grunt couldn't tell which website this is for." });
