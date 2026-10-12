@@ -406,6 +406,32 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('unattended turns', () => {
+    it('#tool, #artifact and #recall hand their tool an unattended context when the turn is unattended, and only then', async () => {
+      const seen: Record<string, boolean | undefined> = {};
+      const spec = (name: string, source: ToolSpec['source']): ToolSpec => ({
+        name,
+        description: '',
+        parameters: {},
+        risk: 'read',
+        source,
+        execute: async (_args: unknown, ctx: ToolContext) => {
+          seen[name] = ctx.unattended;
+          return name === 'recall' ? { projects: [], chats: [] } : { ok: true };
+        },
+      });
+      const tools = [spec('read_file', 'fs'), spec('artifact', 'artifact'), spec('recall', 'recall')];
+
+      for (const prompt of ['#tool notes.txt', '#artifact', '#recall x']) {
+        await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest(prompt, { tools, unattended: true, workspaceRoot: '/ws' })));
+      }
+      expect(seen).toEqual({ read_file: true, artifact: true, recall: true });
+
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall x', { tools })));
+      expect(seen['recall']).toBeUndefined();
+    });
+  });
+
   describe('#echo-system', () => {
     function systemMessage(text: string): CanonMessage {
       return { id: 'system:p', chatId: 'chat-1', parentId: null, role: 'system', parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 0 };

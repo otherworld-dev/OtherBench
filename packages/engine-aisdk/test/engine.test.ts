@@ -265,6 +265,38 @@ describe('AiSdkChatEngine.stream', () => {
     expect(seen[0]!.profileId).toBe(makeRequest().profile.id);
   });
 
+  it("marks each tool call of an unattended turn unattended, and leaves an ordinary turn's calls unmarked", async () => {
+    const seen: (boolean | undefined)[] = [];
+    const toolSpec: ToolSpec = {
+      name: 'get_weather',
+      description: 'Gets the weather for a city.',
+      parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+      risk: 'read',
+      source: 'mcp',
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        seen.push(ctx.unattended);
+        return { tempC: 22 };
+      },
+    };
+    const steps = () =>
+      stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'get_weather', input: JSON.stringify({ city: 'Paris' }) },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      );
+
+    await drain(new AiSdkChatEngine(resolverFor(new MockLanguageModelV3({ doStream: steps() }))).stream(makeRequest({ tools: [toolSpec], unattended: true })));
+    await drain(new AiSdkChatEngine(resolverFor(new MockLanguageModelV3({ doStream: steps() }))).stream(makeRequest({ tools: [toolSpec] })));
+
+    expect(seen).toEqual([true, undefined]);
+  });
+
   it('reports a failed tool execution as a tool-result event with isError true', async () => {
     const toolSpec: ToolSpec = {
       name: 'boom',
