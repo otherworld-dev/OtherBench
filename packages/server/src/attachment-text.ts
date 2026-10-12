@@ -6,29 +6,54 @@
  * doesn't declare vision support (packages/core/src/domain/turn.ts,
  * `degradeImagesForVision`).
  *
- * Covers exactly what the brief asks for: `text/*`, `.md`, `.csv`, and PDF.
- * Anything else (including every ordinary image format -- no OCR is
- * performed here) yields `null`, which is an entirely normal, expected
- * result, not a failure: `degradeImagesForVision` falls back to a generic
- * "not supported, no extracted text available" placeholder in that case.
+ * Covers `text/*`, `application/json`, `.md .markdown .csv .tsv .txt .json
+ * .log`, PDF, and Word, Excel and PowerPoint (.docx/.docm, .xlsx/.xlsm,
+ * .pptx/.pptm: spec 2026-10-12-office-files §1, read by office/extract.ts).
+ * Every attached file that isn't a PDF reaches the model as this text
+ * (TurnRunner.filesForModel), so it's what the model reads. Anything else
+ * (including every ordinary image format -- no OCR is performed here)
+ * yields `null`, an expected result, not a failure: the model gets a
+ * placeholder naming the file and the reply a notice.
  */
+
+import { extractOfficeText } from './office/extract.js';
 
 /** Hard cap on how many characters of extracted text are kept. A pathological multi-megabyte `.csv` (still under the 25MB attachment cap) would otherwise dump its entire content into every vision-fallback placeholder sent to a model -- plausibly blowing past its context window on its own. Generous enough that this never bites a realistic document. */
 export const MAX_EXTRACTED_TEXT_CHARS = 100_000;
 
-const PLAIN_TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.csv']);
+const PLAIN_TEXT_EXTENSIONS = new Set(['.md', '.markdown', '.csv', '.tsv', '.txt', '.json', '.log']);
+/** Read as text only: Grunt never makes a macro-enabled file. */
+const OFFICE_EXTENSIONS = new Set(['.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm']);
+const OFFICE_MIME = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
 
-export type ExtractionKind = 'plain-text' | 'pdf' | null;
+export type ExtractionKind = 'plain-text' | 'pdf' | 'office' | null;
 
-/** Classifies an upload by MIME type first, falling back to a small fixed extension allowlist for the two named-by-extension cases in the brief (`.md`, `.csv`) whose MIME type a browser/client may report generically (e.g. `text/markdown` isn't universally sent; a bare `.csv` sometimes arrives as `application/vnd.ms-excel` or even `application/octet-stream`). */
+/** Classifies an upload by MIME type first, then by a fixed extension allowlist, since a browser may send a generic type (a .csv as application/vnd.ms-excel, an .xlsx as application/octet-stream). An Office file's main part decides what it really is (office/extract.ts). */
 export function classifyForExtraction(mime: string, filename: string): ExtractionKind {
-  if (mime.startsWith('text/')) return 'plain-text';
+  if (mime.startsWith('text/') || mime === 'application/json') return 'plain-text';
   if (mime === 'application/pdf') return 'pdf';
+  if (OFFICE_MIME.has(mime)) return 'office';
 
   const dot = filename.lastIndexOf('.');
   const ext = dot === -1 ? '' : filename.slice(dot).toLowerCase();
   if (PLAIN_TEXT_EXTENSIONS.has(ext)) return 'plain-text';
+  if (OFFICE_EXTENSIONS.has(ext)) return 'office';
   return null;
+}
+
+/** An Office file's text, or null; a file that can't be read never fails the upload. */
+function extractOffice(data: Buffer): string | null {
+  try {
+    return extractOfficeText(data, { maxChars: MAX_EXTRACTED_TEXT_CHARS });
+  } catch (err) {
+    // Any error, not only ZipError/XmlError: a hostile part can also throw a RangeError.
+    console.error('[grunt-server] Office text extraction failed; storing the attachment with no extracted text:', err);
+    return null;
+  }
 }
 
 function truncate(text: string): string {
@@ -75,6 +100,11 @@ export async function extractAttachmentText(data: Buffer, mime: string, filename
   if (kind === 'plain-text') {
     const text = data.toString('utf8');
     return text.length > 0 ? truncate(text) : null;
+  }
+
+  if (kind === 'office') {
+    const officeText = extractOffice(data);
+    return officeText ? truncate(officeText) : null;
   }
 
   const pdfText = await extractPdfText(data);
