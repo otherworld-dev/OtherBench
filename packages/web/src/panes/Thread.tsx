@@ -81,6 +81,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     [messages, chatId]
   );
   useBrowserAutoOpen(chatId, chatMessages, viewer.open);
+  // The viewer bar's Browser button: shown once the model has used the browser in this chat.
+  const browserUsed = useMemo(() => chatMessages.some((m) => m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser')), [chatMessages]);
   const path = useMemo(() => {
     if (!chat?.headMessageId) return [];
     try {
@@ -452,7 +454,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               }}
             />
             <div style={{ flex: `${share} 1 0` }} className="min-h-0 min-w-0">
-              <ViewerPanel chat={chat} />
+              <ViewerPanel chat={chat} browserUsed={browserUsed} />
             </div>
           </>
         )}

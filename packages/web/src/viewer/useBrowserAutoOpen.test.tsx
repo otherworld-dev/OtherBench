@@ -27,6 +27,18 @@ describe('useBrowserAutoOpen', () => {
     expect(viewer()).toMatchObject({ open: true, mode: 'item', history: [{ kind: 'browser' }] });
   });
 
+  it('opens it once per reply: a later call in the same reply leaves the viewer on whatever the user turned to', () => {
+    const { rerender } = renderHook(({ messages, open }) => useBrowserAutoOpen('c1', messages, open), { initialProps: { messages: [] as CanonMessage[], open: false } });
+    act(() => rerender({ messages: [msg('b', 'streaming', [call('t1')])], open: false }));
+    expect(viewer()).toMatchObject({ open: true, history: [{ kind: 'browser' }] });
+    act(() => useViewerStore.getState().openItem('c1', { kind: 'file', path: 'C:\\ws\\a.md' }));
+    act(() => rerender({ messages: [msg('b', 'streaming', [call('t1'), call('t2')])], open: true }));
+    expect(viewer().history.at(viewer().index)).toEqual({ kind: 'file', path: 'C:\\ws\\a.md' });
+    // The next reply opens it on the browser again.
+    act(() => rerender({ messages: [msg('b', 'complete', [call('t1'), call('t2')]), msg('c', 'streaming', [call('t3')])], open: true }));
+    expect(viewer().history.at(viewer().index)).toEqual({ kind: 'browser' });
+  });
+
   it('leaves the viewer closed for the rest of a reply once the user closed it during that reply', () => {
     const { rerender } = renderHook(({ messages, open }) => useBrowserAutoOpen('c1', messages, open), { initialProps: { messages: [] as CanonMessage[], open: false } });
     act(() => rerender({ messages: [msg('b', 'streaming', [call('t1')])], open: false }));

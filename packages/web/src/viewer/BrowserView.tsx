@@ -7,7 +7,6 @@ import { oneLine } from './browser.js';
 /** A frame is shown only as plain base64 under the fixed inert type below, never anything else. */
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
-
 /**
  * The model's browser in a chat's viewer (spec 2026-10-12-model-browser-design
  * §6): view-only JPEG frames from the server's screencast, the page's address
@@ -60,9 +59,12 @@ export function BrowserView({ chatId, connect }: { chatId: string; connect?: Sse
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b border-[var(--border)] px-3 py-1 text-xs">
         <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">{oneLine(state.title) || 'Untitled page'}</div>
+          {/* The page's own words: <bdi> keeps their direction from spilling into the rest of the bar. */}
+          <div className="truncate font-medium">
+            <bdi>{oneLine(state.title) || 'Untitled page'}</bdi>
+          </div>
           <div className="truncate font-mono text-[var(--text-muted)]" title={url}>
-            {url}
+            <bdi>{url}</bdi>
           </div>
         </div>
         <button type="button" onClick={() => void close()} className="btn px-2 py-0.5">

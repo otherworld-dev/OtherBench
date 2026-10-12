@@ -85,9 +85,11 @@ function ToolResultBlock({ name, result, isError }: { name: string; result: unkn
     return (
       <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
         <div className="font-medium">
-          ↳ <span>{oneLine(page.title) || 'Untitled page'}</span>
+          ↳ <bdi>{oneLine(page.title) || 'Untitled page'}</bdi>
         </div>
-        <div className="truncate font-mono text-[var(--text-muted)]">{oneLine(page.url)}</div>
+        <div className="truncate font-mono text-[var(--text-muted)]">
+          <bdi>{oneLine(page.url)}</bdi>
+        </div>
         <details className="mt-1">
           <summary className="cursor-pointer text-[var(--text-muted)] select-none">Page snapshot</summary>
           <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap">{displayLines(page.snapshot)}</pre>

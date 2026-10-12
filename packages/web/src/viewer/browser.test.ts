@@ -16,8 +16,8 @@ describe('browser display helpers', () => {
   });
 
   it('shows page-derived text in a label as one plain line', () => {
-    expect(browserCallLabel({ command: 'open', url: 'https://a.test/‮evil\nline two​' })).toBe('open https://a.test/evil line two');
-    expect(browserCallLabel({ command: 'click', ref: 'e1‮' })).toBe('click e1');
+    expect(browserCallLabel({ command: 'open', url: 'https://a.test/\u202eevil\nline two\u200b' })).toBe('open https://a.test/evil line two');
+    expect(browserCallLabel({ command: 'click', ref: 'e1\u202e' })).toBe('click e1');
   });
 
   it('reads a page result from an object or its JSON text, and nothing else', () => {
@@ -29,15 +29,15 @@ describe('browser display helpers', () => {
   });
 
   it('oneLine strips hidden and bidi characters and folds whitespace', () => {
-    expect(oneLine('a‮b​c\n\td  e')).toBe('abc d e');
+    expect(oneLine('a\u202eb\u200bc\n\td  e')).toBe('abc d e');
     expect(oneLine(42)).toBe('');
   });
 
   it('revealHidden spells out hidden characters but keeps line breaks and tabs', () => {
-    expect(revealHidden('a‮b​c\nd\te')).toBe('a<U+202E>b<U+200B>c\nd\te');
+    expect(revealHidden('a\u202eb\u200bc\nd\te')).toBe('a<U+202E>b<U+200B>c\nd\te');
   });
 
   it('displayLines sanitises each line but keeps the line structure and indentation', () => {
-    expect(displayLines('- heading "a‮b" [ref=e1]\n  - link "c​d"\u0007')).toBe('- heading "ab" [ref=e1]\n  - link "cd"');
+    expect(displayLines('- heading "a\u202eb" [ref=e1]\n  - link "c\u200bd"\u0007')).toBe('- heading "ab" [ref=e1]\n  - link "cd"');
   });
 });

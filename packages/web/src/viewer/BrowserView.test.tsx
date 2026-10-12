@@ -80,8 +80,9 @@ describe('BrowserView', () => {
     const s = fakeConnect();
     render(<BrowserView chatId="c1" connect={s.connect} />);
     s.emit('hello', { open: true, url: 'https://exa\u202Emple.com/\u200Bpath\n<b>x</b>', title: 'Pay\u2066pal\u200B\r\nLogin <i>now</i>' });
-    expect(screen.getByText('https://example.com/path <b>x</b>')).toBeInTheDocument();
-    expect(screen.getByText('Paypal Login <i>now</i>')).toBeInTheDocument();
+    // Each in its own <bdi>, so a right-to-left title or address can't reorder the bar around it.
+    expect(screen.getByText('https://example.com/path <b>x</b>').tagName).toBe('BDI');
+    expect(screen.getByText('Paypal Login <i>now</i>').tagName).toBe('BDI');
     expect(document.querySelector('b, i')).toBeNull();
   });
 

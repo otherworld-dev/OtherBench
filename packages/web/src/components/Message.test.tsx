@@ -203,14 +203,15 @@ describe('Message', () => {
           type: 'tool-result' as const,
           id: 't1',
           name: 'browser',
-          result: JSON.stringify({ about: 'x', url: 'https://example.com/', title: 'Example‮ Domain', snapshot: '- heading "Example​ Domain" [ref=e1]' }),
+          result: JSON.stringify({ about: 'x', url: 'https://example.com/', title: 'Example\u202e Domain', snapshot: '- heading "Example\u200b Domain" [ref=e1]' }),
           isError: false,
         },
       ];
       render(<Message message={base({ parts })} />);
       expect(screen.getByText('browser: open https://example.com/', { exact: false })).toBeInTheDocument();
-      expect(screen.getByText('Example Domain')).toBeInTheDocument();
-      expect(screen.getByText('https://example.com/')).toBeInTheDocument();
+      // The page's title and address each sit in a <bdi>: their direction stays their own.
+      expect(screen.getByText('Example Domain').tagName).toBe('BDI');
+      expect(screen.getByText('https://example.com/').tagName).toBe('BDI');
       const snapshot = screen.getByText('Page snapshot').closest('details')!;
       expect(snapshot).not.toHaveAttribute('open');
       expect(snapshot).toHaveTextContent('- heading "Example Domain" [ref=e1]');

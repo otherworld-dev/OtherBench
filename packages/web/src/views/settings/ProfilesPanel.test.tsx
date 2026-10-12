@@ -17,7 +17,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
   };
 });
 
-import { api } from '../../state/api.js';
+import { api, ApiError } from '../../state/api.js';
 
 const mockedCreate = vi.mocked(api.profiles.create);
 const mockedPatch = vi.mocked(api.profiles.patch);
@@ -185,7 +185,7 @@ describe('ProfilesPanel', () => {
           name: 'Fast local',
           connectionId: 'conn-1',
           modelId: 'llama3.2',
-          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true, browser: false, browserBlockedHosts: [] },
+          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true, browser: false },
         })
       )
     );
@@ -213,6 +213,56 @@ describe('ProfilesPanel', () => {
     await waitFor(() =>
       expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ browser: true, browserBlockedHosts: ['ads.test', 'tracker.example'] }) }))
     );
+  });
+
+  it("pre-fills Browser and the blocked sites when editing, and doesn't send the hidden box once Browser is unticked", async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', browser: true, browserBlockedHosts: ['ads.test', 'tracker.example'] } }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByRole('checkbox', { name: 'Browser' })).toBeChecked();
+    expect(screen.getByLabelText('Blocked sites')).toHaveValue('ads.test\ntracker.example');
+
+    // A bad entry typed, then Browser unticked: the box is gone, and so is what it held.
+    await user.type(screen.getByLabelText('Blocked sites'), '{enter}https://not a host');
+    await user.click(screen.getByRole('checkbox', { name: 'Browser' }));
+    expect(screen.queryByLabelText('Blocked sites')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    const sent = mockedPatch.mock.calls[0]![1].toolPolicy as Record<string, unknown>;
+    expect(sent['browser']).toBe(false);
+    expect('browserBlockedHosts' in sent).toBe(false);
+  });
+
+  it('shows why the server refused a blocked site (400), in the form', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    const refusal = '"https://ads.test" isn\'t a website name. Use a name like example.com, one per line.';
+    mockedCreate.mockRejectedValue(new ApiError(400, refusal));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Researcher');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    await user.click(screen.getByRole('checkbox', { name: 'Browser' }));
+    await user.type(screen.getByLabelText('Blocked sites'), 'https://ads.test');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ browser: true, browserBlockedHosts: ['https://ads.test'] }) }));
+    // The form stays open with what was typed, so it can be put right.
+    expect(screen.getByLabelText('Blocked sites')).toHaveValue('https://ads.test');
+    errorLog.mockRestore();
   });
 
   it('requires a model to be chosen before saving', async () => {
@@ -452,7 +502,7 @@ describe('ProfilesPanel', () => {
       await user.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() =>
-        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true, browser: false, browserBlockedHosts: [] } }))
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true, browser: false } }))
       );
     });
 

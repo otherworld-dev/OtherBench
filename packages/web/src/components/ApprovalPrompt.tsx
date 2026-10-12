@@ -137,16 +137,19 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           </span>
         )}
       </div>
-      <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{browserHost !== null ? oneLine(request.summary) : request.summary}</p>
+      {/* Every browser card's summary can carry the page's or the model's text (an address), whether or not a site was named. */}
+      <p data-testid="approval-summary" className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">
+        {browserArgs !== null ? <bdi>{oneLine(request.summary)}</bdi> : request.summary}
+      </p>
       {browserTarget !== '' && (
         <p data-testid="approval-browser-target" className="text-xs text-[var(--text-muted)] break-all">
-          Element on the page: &ldquo;{browserTarget}&rdquo;
+          Element on the page: &ldquo;<bdi>{browserTarget}</bdi>&rdquo;
         </p>
       )}
       {typedText !== null && (
         <div className="text-xs">
           <span className="text-[var(--text-muted)]">It will type:</span>
-          <pre data-testid="approval-typed-text" className="mt-1 whitespace-pre-wrap break-all rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono">
+          <pre data-testid="approval-typed-text" className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono">
             {revealHidden(typedText)}
           </pre>
         </div>

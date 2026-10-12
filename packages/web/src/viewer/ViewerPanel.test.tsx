@@ -89,13 +89,9 @@ describe('ViewerPanel', () => {
   });
 
   it('offers a Browser button once the model has used the browser in this chat, opening its live view', async () => {
-    render(<ViewerPanel chat={chat} />);
+    const { rerender } = render(<ViewerPanel chat={chat} />);
     expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
-    act(() =>
-      useGruntStore.setState({
-        messages: { r1: { id: 'r1', chatId: 'c1', parentId: null, role: 'assistant', parts: [{ type: 'tool-call', id: 't1', name: 'browser', args: {} }], status: 'complete', error: null, producedBy: null, createdAt: 1 } } as never,
-      })
-    );
+    rerender(<ViewerPanel chat={chat} browserUsed />);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Browser' }));
     expect(viewer()).toMatchObject({ mode: 'item', history: [{ kind: 'browser' }] });
   });

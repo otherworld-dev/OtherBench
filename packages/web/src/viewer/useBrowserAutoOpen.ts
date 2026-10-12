@@ -15,13 +15,16 @@ export function browserCalls(messages: readonly CanonMessage[]): { messageId: st
 
 /**
  * Opens the chat's viewer on its browser when a running reply starts using it
- * (spec 2026-10-12-model-browser-design §6), unless the user closed the viewer
- * while that reply was running. Calls already in the chat when it's shown are
- * history, never news.
+ * (spec 2026-10-12-model-browser-design §6): once per reply, so its later
+ * calls don't pull the viewer back from whatever the user turned to, and not
+ * at all if the user closed the viewer while that reply was running. Calls
+ * already in the chat when it's shown are history, never news.
  */
 export function useBrowserAutoOpen(chatId: string | null, messages: readonly CanonMessage[], viewerOpen: boolean): void {
   const seen = useRef<{ chatId: string | null; ids: Set<string> }>({ chatId: null, ids: new Set() });
   const closedDuring = useRef(new Set<string>());
+  /** The replies the viewer has already been opened for. */
+  const openedFor = useRef(new Set<string>());
   const prev = useRef<{ chatId: string | null; open: boolean }>({ chatId, open: viewerOpen });
 
   useEffect(() => {
@@ -43,7 +46,9 @@ export function useBrowserAutoOpen(chatId: string | null, messages: readonly Can
     for (const c of calls) {
       if (seen.current.ids.has(c.callId)) continue;
       seen.current.ids.add(c.callId);
-      if (c.live && !closedDuring.current.has(c.messageId)) useViewerStore.getState().openItem(chatId, { kind: 'browser' });
+      if (!c.live || closedDuring.current.has(c.messageId) || openedFor.current.has(c.messageId)) continue;
+      openedFor.current.add(c.messageId);
+      useViewerStore.getState().openItem(chatId, { kind: 'browser' });
     }
   }, [chatId, messages]);
 }

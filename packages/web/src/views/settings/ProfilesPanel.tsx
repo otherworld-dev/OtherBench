@@ -132,10 +132,16 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     if (maxOutputTokens !== undefined) params.maxOutputTokens = maxOutputTokens as number;
     if (thinkingBudgetTokens !== undefined) params.thinkingBudgetTokens = thinkingBudgetTokens as number;
 
-    const browserBlockedHosts = blockedSites
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
+    // Sent only while Browser is on: with it off the box is hidden, and whatever it holds (a typo the server would
+    // refuse, unseen) stays out of the request. The server then keeps the profile's saved list as it is.
+    const blocked = browser
+      ? {
+          browserBlockedHosts: blockedSites
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
+        }
+      : {};
 
     const body: CreateProfileBody = {
       name: name.trim(),
@@ -146,8 +152,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, browserBlockedHosts }
-        : { fs, shell, approvalMode, mcpServerIds, artifacts, recall, browser, browserBlockedHosts },
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, ...blocked }
+        : { fs, shell, approvalMode, mcpServerIds, artifacts, recall, browser, ...blocked },
       isDefault,
       useGlobalMemory,
     };

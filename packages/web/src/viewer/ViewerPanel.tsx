@@ -12,18 +12,17 @@ const BAR_BUTTON = 'rounded px-1.5 py-0.5 text-xs text-[var(--text-muted)] hover
 /**
  * A chat's viewer panel (spec 2026-10-07-viewer): back and forward, an
  * address box for a path or a website, Files, Open as tab and close, over
- * either the Files tree or the open item.
+ * either the Files tree or the open item. `browserUsed` (the model has used
+ * the browser in this chat) shows the Browser button (spec
+ * 2026-10-12-model-browser-design §6); the thread works it out from the chat's
+ * own messages.
  */
-export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
+export function ViewerPanel({ chat, browserUsed = false }: { chat: Chat; browserUsed?: boolean }): JSX.Element {
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat.id));
   const { openItem, setOpen, setMode, step } = useViewerStore.getState();
   const openTab = useGruntStore((s) => s.openTab);
   const [address, setAddress] = useState('');
   const current = viewer.index >= 0 ? viewer.history[viewer.index] : undefined;
-  // The viewer bar's Browser button: shown once the model has used the browser in this chat (spec §6).
-  const browserUsed = useGruntStore((s) =>
-    Object.values(s.messages).some((m) => m.chatId === chat.id && m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser'))
-  );
   const showingItem = viewer.mode === 'item' && current !== undefined;
 
   function go(): void {
