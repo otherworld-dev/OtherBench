@@ -2,13 +2,14 @@ import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { AGENT_ASK_TOOL, DECLINED_QUESTION, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@grunt/core/domain/thread-tools.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import type { ToolPolicy, ToolSource } from '@grunt/core/types/config.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 
-export type GateDecision = { allow: true } | { allow: false; reason: string } | { defer: true };
+export type GateDecision = { allow: true; updatedInput?: Record<string, unknown> } | { allow: false; reason: string } | { defer: true };
 /**
  * `signal` is the SDK's own signal for this hook/permission call; the wait for
  * an answer ends when it or the turn's signal aborts. `mayDefer` is set only by
@@ -26,20 +27,23 @@ export type Gate = (
   toolName: string,
   input: Record<string, unknown>,
   signal?: AbortSignal,
-  opts?: { mayDefer?: boolean; own?: GruntTool | { relay: ToolSpec } }
+  opts?: { mayDefer?: boolean; own?: GruntTool | { relay: ToolSpec }; toolUseId?: string }
 ) => Promise<GateDecision>;
 
 /** Grunt's own tools on its per-process server, as the broker knows them. */
 export type GruntTool = 'artifact' | 'recall';
 
-const OWN_TOOLS: Record<GruntTool, { name: string; description: string }> = {
-  artifact: { name: ARTIFACT_TOOL, description: 'Grunt artifact tool' },
-  recall: { name: RECALL_TOOL, description: 'Grunt recall tool' },
+const OWN_TOOLS: Record<GruntTool, { name: string; description: string; source: ToolSource }> = {
+  artifact: { name: ARTIFACT_TOOL, description: 'Grunt artifact tool', source: 'artifact' },
+  recall: { name: RECALL_TOOL, description: 'Grunt recall tool', source: 'recall' },
 };
+
+/** When the engine was given no way to put a question to the user. */
+const NO_ASK_REASON = "Grunt can't put a question to the user here. Use your judgement, carry on, and say in your reply what you assumed.";
 
 const PATTERN_KEYS: Record<string, string> = { Glob: 'pattern', Grep: 'glob' };
 
-/** A clean chat's refusal for any Claude Code tool that needs a folder (everything but web). */
+/** A clean chat's refusal for any Claude Code tool that needs a folder (everything but web and internal tools). */
 export const NO_FOLDER_REASON = "This chat has no folder: Claude Code's file, shell and own MCP tools aren't available.";
 
 function isAbsoluteLike(v: string): boolean {
@@ -129,8 +133,25 @@ export function normaliseAgentArgs(
   return { args: rel === undefined ? { ...input } : { ...input, path: rel } };
 }
 
-export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApproval'>; policy: ToolPolicy; ctx: ToolContext; autoMode?: boolean }): Gate {
-  return async (toolName, input, callSignal, opts) => {
+export function createGate(deps: {
+  approvals: Pick<ToolProvider, 'requestApproval'> & Partial<Pick<ToolProvider, 'askUser'>>;
+  policy: ToolPolicy;
+  ctx: ToolContext;
+  autoMode?: boolean;
+}): Gate {
+  /** AskUserQuestion: the question card, answered through `updatedInput` (spec 2026-10-12-thread-cards-design section 6). */
+  const askQuestion = async (input: Record<string, unknown>, signal: AbortSignal): Promise<GateDecision> => {
+    const questions = parseQuestions(input);
+    if (isInvalid(questions)) return { allow: false, reason: questions.invalid };
+    if (!deps.approvals.askUser) return { allow: false, reason: NO_ASK_REASON };
+    const outcome = await deps.approvals.askUser({ ...deps.ctx, signal }, { kind: 'question', toolName: AGENT_ASK_TOOL, questions });
+    if ('unattended' in outcome) return { allow: false, reason: UNATTENDED_QUESTION };
+    if ('cancelled' in outcome) return { allow: false, reason: 'The turn was stopped.' };
+    if (!('answers' in outcome.reply)) return { allow: false, reason: DECLINED_QUESTION };
+    return { allow: true, updatedInput: { ...input, answers: answersByQuestion(questions, outcome.reply.answers) } };
+  };
+
+  const decide: Gate = async (toolName, input, callSignal, opts) => {
     // No approval card for a turn that is already dead.
     if (deps.ctx.signal.aborted) return { allow: false, reason: 'The turn was stopped.' };
     if (callSignal?.aborted) return { allow: false, reason: 'Claude Code stopped waiting for this tool call.' };
@@ -146,8 +167,10 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
       const own = opts?.own;
       const relay = typeof own === 'object' ? own.relay : undefined;
       const ownTool = typeof own === 'string' ? own : undefined;
-      // With no folder (a clean chat) only Grunt's own tools and web tools may go on.
-      if (!workspaceRoot && !own && classifyAgentTool(toolName).category !== 'web') return { allow: false, reason: NO_FOLDER_REASON };
+      // With no folder (a clean chat) only Grunt's own tools, web tools and
+      // Claude Code's internal ones (TodoWrite, AskUserQuestion) may go on.
+      const category = classifyAgentTool(toolName).category;
+      if (!workspaceRoot && !own && category !== 'web' && category !== 'internal') return { allow: false, reason: NO_FOLDER_REASON };
       const normalised = own || !workspaceRoot ? { args: { ...input } } : normaliseAgentArgs(toolName, input, workspaceRoot, deps.ctx.folders ?? []);
       if ('outside' in normalised) {
         return { allow: false, reason: `"${toolName}" was blocked: ${normalised.outside} is outside this chat's workspace folder.` };
@@ -163,7 +186,7 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         description: ownTool ? OWN_TOOLS[ownTool].description : 'Claude Code tool',
         parameters: {},
         risk: ownTool ? 'read' : classifyAgentTool(toolName).risk,
-        source: ownTool ?? 'agent',
+        source: ownTool ? OWN_TOOLS[ownTool].source : 'agent',
         execute: async () => undefined, // never called: Claude Code executes its own tools
       };
       // Only the PreToolUse hook, and only in auto mode, may hand a call to
@@ -175,14 +198,30 @@ export function createGate(deps: { approvals: Pick<ToolProvider, 'requestApprova
         return deferAsk ? { defer: true } : { allow: false, reason: 'Grunt could not check this tool call: unexpected deferral.' };
       }
       if (!('allowed' in outcome)) return { allow: false, reason: 'Grunt could not check this tool call: unrecognised approval outcome.' };
-      return outcome.allowed ? { allow: true } : { allow: false, reason: outcome.reason };
+      if (!outcome.allowed) return { allow: false, reason: outcome.reason };
+      // Allowed (internal, by policy): Claude Code's question now goes to the user as a card.
+      if (!own && toolName === AGENT_ASK_TOOL) return await askQuestion(normalised.args, signal);
+      return { allow: true };
     } catch (err) {
       return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
     }
   };
+
+  // Claude Code can ask about one call twice (the hook, then canUseTool); one
+  // question gets one card, so its decision is kept per tool use id for the reply.
+  const asked = new Map<string, Promise<GateDecision>>();
+  return (toolName, input, callSignal, opts) => {
+    const id = opts?.toolUseId;
+    if (id === undefined || opts?.own !== undefined || toolName !== AGENT_ASK_TOOL) return decide(toolName, input, callSignal, opts);
+    const earlier = asked.get(id);
+    if (earlier) return earlier;
+    const decision = decide(toolName, input, callSignal, opts);
+    asked.set(id, decision);
+    return decision;
+  };
 }
 
-async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined, opts?: { mayDefer?: boolean }): Promise<GateDecision> {
+async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined, opts?: { mayDefer?: boolean; toolUseId?: string }): Promise<GateDecision> {
   try {
     return await gate(toolName, input, signal, opts);
   } catch (err) {
@@ -201,15 +240,18 @@ const DEFER_TO_AUTO_MODE = {} as const;
 
 /** The primary gate: runs for every tool call before Claude Code applies settings rules or prompts. */
 export function preToolUseHook(gate: Gate): HookCallback {
-  return async (input, _toolUseId, options) => {
+  return async (input, toolUseId, options) => {
     if (input.hook_event_name !== 'PreToolUse') return {};
-    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options?.signal, { mayDefer: true });
+    const id = toolUseId ?? input.tool_use_id;
+    const decision = await safely(gate, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options?.signal, { mayDefer: true, ...(id ? { toolUseId: id } : {}) });
     if ('defer' in decision) return { ...DEFER_TO_AUTO_MODE };
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: decision.allow ? 'allow' : 'deny',
         permissionDecisionReason: decision.allow ? 'Approved in Grunt' : decision.reason,
+        // AskUserQuestion's answers ride on the input (the CLI's "hook satisfied user interaction via updatedInput").
+        ...(decision.allow && decision.updatedInput ? { updatedInput: decision.updatedInput } : {}),
       },
     };
   };
@@ -218,10 +260,10 @@ export function preToolUseHook(gate: Gate): HookCallback {
 /** Fallback for any permission prompt Claude Code still raises after the hook. Never defers. */
 export function canUseToolFor(gate: Gate): CanUseTool {
   return async (toolName, input, options) => {
-    const decision = await safely(gate, toolName, input, options?.signal);
+    const decision = await safely(gate, toolName, input, options?.signal, options?.toolUseID ? { toolUseId: options.toolUseID } : undefined);
     // Unreachable (the gate defers only for mayDefer), but fail closed.
     if ('defer' in decision) return { behavior: 'deny', message: 'Grunt could not check this tool call.' };
-    return decision.allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
+    return decision.allow ? { behavior: 'allow', updatedInput: decision.updatedInput ?? input } : { behavior: 'deny', message: decision.reason };
   };
 }
 

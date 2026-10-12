@@ -179,7 +179,7 @@ export class PermissionBroker {
       }
     }
 
-    // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, ExitPlanMode)
+    // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, AskUserQuestion)
     // have no side effects of their own; a subagent's real tool calls come
     // back through here individually.
     if (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'internal') {

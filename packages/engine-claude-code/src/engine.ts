@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
+import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
@@ -31,7 +31,8 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
 
 export interface ClaudeCodeEngineDeps {
   query: QueryFn;
-  approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'>;
+  /** `askUser` answers Claude Code's AskUserQuestion and Grunt's propose_plan through cards; without it both are refused. */
+  approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'> & Partial<Pick<ToolProvider, 'askUser'>>;
   /** Model listing for an endpoint backend (e.g. Ollama), supplied by the server. */
   listEndpointModels: (conn: Connection, token: string | null) => Promise<DiscoveredModel[]>;
   /** Defaults to `process.env`. */
@@ -317,7 +318,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // A clean chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design
       // §1): none of the user's Claude Code settings, CLAUDE.md, skills, hooks
       // or MCP config, no coding-agent prompt, and of the built-in tools only
-      // web search and fetch. Its MCP tools are Grunt's own server's.
+      // web search and fetch, the checklist and questions. Its MCP tools are Grunt's own server's.
       return {
         cwd,
         model: profile.modelId,
@@ -327,7 +328,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         settingSources: [],
         strictMcpConfig: true,
         settings: { disableSkillShellExecution: true },
-        tools: profile.toolPolicy.agentWeb === false ? [] : ['WebSearch', 'WebFetch'],
+        // Web search and fetch, plus the checklist and questions (spec 2026-10-12-thread-cards-design section 6).
+        tools: [...(profile.toolPolicy.agentWeb === false ? [] : ['WebSearch', 'WebFetch']), ...CLEAN_CHAT_AGENT_TOOLS],
         disallowedTools: agentDisallowedTools(profile.toolPolicy),
         ...(profile.systemPrompt ? { systemPrompt: profile.systemPrompt } : {}),
         ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),

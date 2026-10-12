@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { DECLINED_QUESTION, UNATTENDED_QUESTION } from '@grunt/core/domain/thread-tools.js';
+import type { AskInput, AskOutcome, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { canUseToolFor, createGate, isDriveLetterPosixPath, normaliseAgentArgs, permissionDeniedHook, preToolUseHook } from '../src/approval.js';
 
@@ -433,5 +434,80 @@ describe('extra folders (spec 2026-10-07-extra-folders)', () => {
   it('still blocks a folder the chat was not given', async () => {
     const gate = createGate({ approvals: { requestApproval: vi.fn() }, policy, ctx: ctx() });
     expect(await gate('Read', { file_path: join(refs, 'paper.md') })).toEqual({ allow: false, reason: expect.stringContaining('outside') });
+  });
+});
+
+describe('AskUserQuestion through the gate', () => {
+  const QUESTIONS = { questions: [
+    { question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: 'warm' }, { label: 'Blue', description: 'cool' }], multiSelect: false },
+    { question: 'Which sizes?', header: 'Sizes', options: [{ label: 'S', description: '' }, { label: 'M', description: '' }], multiSelect: true },
+  ] };
+  const allow = () => vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' }));
+  const askWith = (outcome: AskOutcome) => vi.fn(async (_c: ToolContext, _i: AskInput) => outcome);
+
+  it('answers through updatedInput, keyed by question text, multi-select joined with ", "', async () => {
+    const askUser = askWith({ reply: { answers: ['Blue', 'S, M'] } });
+    const gate = createGate({ approvals: { requestApproval: allow(), askUser }, policy, ctx: ctx() });
+    expect(await gate('AskUserQuestion', QUESTIONS)).toEqual({ allow: true, updatedInput: { ...QUESTIONS, answers: { 'Which colour?': 'Blue', 'Which sizes?': 'S, M' } } });
+    expect(askUser.mock.calls[0]![1]).toMatchObject({ kind: 'question', toolName: 'AskUserQuestion', questions: [{ question: 'Which colour?' }, { question: 'Which sizes?', multiSelect: true }] });
+  });
+
+  it('denies with the matching text on skip, unattended and stop', async () => {
+    for (const [outcome, reason] of [
+      [{ reply: { declined: true } }, DECLINED_QUESTION],
+      [{ unattended: true }, UNATTENDED_QUESTION],
+      [{ cancelled: true }, 'The turn was stopped.'],
+    ] as const) {
+      const gate = createGate({ approvals: { requestApproval: allow(), askUser: askWith(outcome) }, policy, ctx: ctx() });
+      expect(await gate('AskUserQuestion', QUESTIONS)).toEqual({ allow: false, reason });
+    }
+  });
+
+  it('denies invalid input without asking', async () => {
+    const askUser = askWith({ reply: { answers: ['x'] } });
+    const gate = createGate({ approvals: { requestApproval: allow(), askUser }, policy, ctx: ctx() });
+    const one = { questions: [{ question: 'Q?', header: 'H', options: [{ label: 'A', description: '' }], multiSelect: false }] };
+    expect(await gate('AskUserQuestion', one)).toMatchObject({ allow: false, reason: expect.stringMatching(/options/) });
+    expect(askUser).not.toHaveBeenCalled();
+  });
+
+  it('reuses the decision for a second permission round of the same call, with no second ask', async () => {
+    const askUser = askWith({ reply: { answers: ['Blue', 'S'] } });
+    const gate = createGate({ approvals: { requestApproval: allow(), askUser }, policy, ctx: ctx() });
+    const [a, b] = await Promise.all([gate('AskUserQuestion', QUESTIONS, undefined, { toolUseId: 't1' }), gate('AskUserQuestion', QUESTIONS, undefined, { toolUseId: 't1' })]);
+    expect(a).toEqual(b);
+    expect(askUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('two calls with different tool use ids raise two asks', async () => {
+    const askUser = askWith({ reply: { answers: ['Blue', 'S'] } });
+    const gate = createGate({ approvals: { requestApproval: allow(), askUser }, policy, ctx: ctx() });
+    await Promise.all([gate('AskUserQuestion', QUESTIONS, undefined, { toolUseId: 't1' }), gate('AskUserQuestion', QUESTIONS, undefined, { toolUseId: 't2' })]);
+    expect(askUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses when Grunt has no way to ask', async () => {
+    const gate = createGate({ approvals: { requestApproval: allow() }, policy, ctx: ctx() });
+    expect(await gate('AskUserQuestion', QUESTIONS)).toMatchObject({ allow: false });
+  });
+
+  it('the hook puts updatedInput in its output and canUseTool returns it', async () => {
+    const updated = { ...QUESTIONS, answers: { 'Which colour?': 'Blue' } };
+    const gate = vi.fn(async (..._a: unknown[]) => ({ allow: true as const, updatedInput: updated }));
+    const out = await preToolUseHook(gate)({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: QUESTIONS, tool_use_id: 't9' } as never, 't9', { signal: new AbortController().signal });
+    expect(out).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'Approved in Grunt', updatedInput: updated } });
+    expect(gate.mock.calls[0]![3]).toMatchObject({ mayDefer: true, toolUseId: 't9' });
+    const can = await canUseToolFor(gate)('AskUserQuestion', QUESTIONS, { signal: new AbortController().signal, toolUseID: 't9' } as never);
+    expect(can).toEqual({ behavior: 'allow', updatedInput: updated });
+    expect(gate.mock.calls[1]![3]).toMatchObject({ toolUseId: 't9' });
+  });
+
+  it("lets a clean chat's TodoWrite and AskUserQuestion past the no-folder check; Bash is still refused", async () => {
+    const requestApproval = allow();
+    const noFolder: ToolContext = { chatId: 'c', messageId: 'm', profileId: 'p', workspaceRoot: null, signal: new AbortController().signal };
+    const gate = createGate({ approvals: { requestApproval, askUser: askWith({ reply: { answers: ['Blue', 'S'] } }) }, policy, ctx: noFolder });
+    expect(await gate('TodoWrite', { todos: [] })).toEqual({ allow: true });
+    expect(await gate('AskUserQuestion', QUESTIONS)).toMatchObject({ allow: true });
+    expect(await gate('Bash', { command: 'ls' })).toMatchObject({ allow: false });
   });
 });

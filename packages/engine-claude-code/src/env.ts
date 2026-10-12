@@ -33,7 +33,8 @@ export function backendOf(conn: Connection): string {
  * billing. Variables marking a parent Claude Code session, and the switch that
  * loads an extra folder's CLAUDE.md, are removed for every backend. An endpoint backend gets its URL and token, and Claude Code's
  * background "small/fast" model is pointed at the chosen model so it never
- * asks the endpoint for a Claude model id.
+ * asks the endpoint for a Claude model id. Every backend also gets Claude
+ * Code's todo tools switched on.
  */
 export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -46,5 +47,9 @@ export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: 
     env['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = modelId;
     env['ANTHROPIC_SMALL_FAST_MODEL'] = modelId;
   }
+  // Newer models aren't offered TodoWrite in SDK sessions; this turns it on
+  // for every model (probe: test/fixtures/README.md, "Thread tools"). Grunt
+  // shows the list as the reply's checklist.
+  env['CLAUDE_CODE_ENABLE_TODO_TOOLS'] = '1';
   return env;
 }
