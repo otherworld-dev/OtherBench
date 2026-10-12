@@ -7,6 +7,7 @@ import { SqliteStore } from '../src/store.js';
 import { artifactsOnBranch, branchOf } from '@grunt/core/domain/artifacts.js';
 import type { ChangeRow } from '@grunt/core/domain/sync.js';
 import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
+import { bindToolImageParts } from '@grunt/core/domain/tool-images.js';
 import { BOUND_ATTACHMENT_SQL } from '../src/repos/sync.js';
 
 interface Node {
@@ -639,7 +640,7 @@ describe('images in synced tool results (security: a reference is only as good a
     const result = b.store.sync.apply([messageRow('m-evil', 'chat-b', [imageRef('att-a'), imageRef('att-b-other'), imageRef('att-late'), inline])]);
 
     expect(result.applied).toBe(1);
-    expect(toolResult(b, 'm-evil')).toEqual([note, note, imageRef('att-late'), { type: 'text', text: '[image not kept]' }]);
+    expect(toolResult(b, 'm-evil')).toEqual([note, note, { ...imageRef('att-late'), pending: true }, { type: 'text', text: '[image not kept]' }]);
     expect(JSON.stringify(b.store.messages.get('m-evil')!.parts)).not.toContain(inline.data);
   });
 
@@ -797,7 +798,7 @@ describe('every path a file, its reference or its bytes travels is bound the sam
     // Pull: att is chat-a's, so in chat-b it is a note; a file that has not arrived yet is left for the read-time check.
     const b = machine();
     b.store.sync.apply([rowOf()]);
-    expect(b.store.messages.get('m-evil')!.parts).toEqual([parts[0], note, parts[2]]);
+    expect(b.store.messages.get('m-evil')!.parts).toEqual([parts[0], note, { ...parts[2], pending: true }]);
     // Push: a message already stored like that (before this check) is offered with the note, not the reference.
     const a = machine('a');
     a.store.messages.create({ id: 'm-old', chatId: 'chat-b', parentId: null, role: 'user', parts: [{ type: 'image', attachmentId: 'att', mime: 'image/png' }] as never, status: 'complete', error: null, producedBy: null });
@@ -907,7 +908,7 @@ describe('a reply that stores files while it streams (tool screenshots)', () => 
 
     expect(b.store.messages.get('r1')).toMatchObject({ status: 'complete', chatId: 'c' });
     expect(b.store.attachments.get('shot')).toMatchObject({ chatId: 'c', messageId: 'r1' });
-    expect(b.store.sync.missingBlobs()).toEqual([{ id: 'shot', sha256: sha }]);
+    expect(b.store.sync.missingBlobs()).toEqual([{ id: 'shot', sha256: sha, size: 1 }]);
   });
 
   it('also follows a reply that ends in an error, and puts the reply before its files, in one batch and across batches', () => {
@@ -940,5 +941,160 @@ describe('a reply that stores files while it streams (tool screenshots)', () => 
     const mid = a.store.sync.latestSeq();
     a.store.messages.updateStatus('r1', 'complete');
     expect((a.db.prepare("SELECT row_id FROM change_log WHERE seq > ? AND tbl = 'attachment'").all(mid) as { row_id: string }[]).map((r) => r.row_id)).toEqual(['shot']);
+  });
+});
+
+describe('a synced reference passes only when its file is here and bound (nothing passes on a null, a missing row or a wrong type)', () => {
+  const hlc = '9999999999999-0000-a';
+  const sha = 'b'.repeat(64);
+  const note = { type: 'text', text: '[image omitted: it is not stored with this chat]' };
+  const ref = (attachmentId: unknown, mimeType: unknown = 'image/png') => ({ type: 'image', attachmentId, mimeType });
+
+  function machine(): Node {
+    const n = node('b');
+    seedProfile(n);
+    chat(n, 'chat-a');
+    chat(n, 'chat-b');
+    message(n, 'u-a', 'chat-a', null);
+    message(n, 'm-a', 'chat-a', 'u-a', { role: 'assistant' });
+    message(n, 'u-b', 'chat-b', null);
+    return n;
+  }
+  const messageRow = (id: string, chatId: string, result: unknown, role = 'assistant'): ChangeRow => ({
+    tbl: 'message', id, op: 'upsert', hlc,
+    row: {
+      id, chat_id: chatId, parent_id: null, role, status: 'complete', error: null, produced_by: null, created_at: 5,
+      parts: JSON.stringify([{ type: 'tool-call', id: 'k', name: 'computer', args: {} }, { type: 'tool-result', id: 'k', name: 'computer', result, isError: false }]),
+    },
+  });
+  const fileRow = (id: string, chatId: string, messageId: string | null, over: Record<string, unknown> = {}): ChangeRow => ({
+    tbl: 'attachment', id, op: 'upsert', hlc,
+    row: { id, chat_id: chatId, message_id: messageId, filename: `${id}.png`, mime: 'image/png', size: 10, sha256: sha, extracted_text: null, ...over },
+  });
+  const result = (n: Node, id: string): unknown[] => (n.store.messages.get(id)!.parts.find((p) => p.type === 'tool-result') as { result: unknown[] }).result;
+  /** What a read does with a stored message: the replay and the offer both run this. */
+  const readAs = (n: Node, id: string): unknown[] => {
+    const m = n.store.messages.get(id)!;
+    const out = bindToolImageParts(m.parts, m.chatId, m.id, (a) => n.store.attachments.get(a), 'drop');
+    return (out.find((p) => p.type === 'tool-result') as { result: unknown[] }).result;
+  };
+
+  it('holds a reference whose file is not here as pending, which nothing reads as an image, and verifies it when the file arrives in a later batch', () => {
+    const b = machine();
+    b.store.sync.apply([messageRow('m-new', 'chat-a', [ref('late-file')])]);
+    expect(result(b, 'm-new')).toEqual([{ ...ref('late-file'), pending: true }]);
+    expect(readAs(b, 'm-new')).toEqual([note]); // the model's replay: not an image yet
+    expect(b.store.sync.changesSince(0, 1000).rows.some((r) => r.tbl === 'message' && r.id === 'm-new' && JSON.stringify(r).includes('"pending"'))).toBe(false); // an offer never carries it on as an image
+
+    expect(b.store.sync.apply([fileRow('late-file', 'chat-a', 'm-new')]).applied).toBe(1);
+    expect(result(b, 'm-new')).toEqual([ref('late-file')]); // verified, the mark cleared
+    expect(readAs(b, 'm-new')).toEqual([ref('late-file')]);
+  });
+
+  it('verifies in the same batch when the file travels with the message', () => {
+    const b = machine();
+    b.store.sync.apply([messageRow('m-new', 'chat-a', [ref('with-it')]), fileRow('with-it', 'chat-a', 'm-new')]);
+    expect(result(b, 'm-new')).toEqual([ref('with-it')]);
+  });
+
+  it('turns a reference into a note when its file is here but is not bound to that chat and message', () => {
+    const b = machine();
+    b.db.prepare('INSERT INTO attachment (id, chat_id, message_id, filename, mime, size, sha256, storage_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run('unsent', 'chat-a', null, 'u.png', 'image/png', 10, sha, '');
+    b.store.attachments.create({ id: 'other-chat', chatId: 'chat-b', messageId: 'u-b', filename: 'o.png', mime: 'image/png', size: 10, sha256: sha, storagePath: '', extractedText: null });
+    b.store.attachments.create({ id: 'other-reply', chatId: 'chat-a', messageId: 'u-a', filename: 'r.png', mime: 'image/png', size: 10, sha256: sha, storagePath: '', extractedText: null });
+    b.store.sync.apply([messageRow('m-new', 'chat-a', [ref('unsent'), ref('other-chat'), ref('other-reply')])]);
+    expect(result(b, 'm-new')).toEqual([note, note, note]);
+  });
+
+  it("a user's image or file part is pending until its file arrives, a note when the file is not bound, and verified afterwards", () => {
+    const b = machine();
+    b.store.attachments.create({ id: 'theirs', chatId: 'chat-b', messageId: 'u-b', filename: 't.png', mime: 'image/png', size: 10, sha256: sha, storagePath: '', extractedText: null });
+    const parts = [{ type: 'image', attachmentId: 'later', mime: 'image/png' }, { type: 'image', attachmentId: 'theirs', mime: 'image/png' }, { type: 'file', attachmentId: '../etc/passwd', mime: 'text/plain', filename: 'x' }];
+    b.store.sync.apply([{ tbl: 'message', id: 'u-new', op: 'upsert', hlc, row: { id: 'u-new', chat_id: 'chat-a', parent_id: null, role: 'user', parts: JSON.stringify(parts), status: 'complete', error: null, produced_by: null, created_at: 5 } }]);
+    const note2 = { type: 'text', text: "[attachment omitted: it doesn't belong to this chat]" };
+    expect(b.store.messages.get('u-new')!.parts).toEqual([{ ...parts[0], pending: true }, note2, note2]);
+    b.store.sync.apply([fileRow('later', 'chat-a', 'u-new')]);
+    expect(b.store.messages.get('u-new')!.parts[0]).toEqual(parts[0]);
+  });
+});
+
+describe('what a synced message and file row may hold (the caps the local path has)', () => {
+  const hlc = '9999999999999-0000-a';
+  const sha = 'b'.repeat(64);
+  const note = (text: string) => ({ type: 'text', text });
+
+  function machine(): Node {
+    const n = node('b');
+    seedProfile(n);
+    chat(n, 'chat-a');
+    message(n, 'u-a', 'chat-a', null);
+    message(n, 'm-a', 'chat-a', 'u-a', { role: 'assistant' });
+    return n;
+  }
+  const messageRow = (id: string, result: unknown): ChangeRow => ({
+    tbl: 'message', id, op: 'upsert', hlc,
+    row: {
+      id, chat_id: 'chat-a', parent_id: null, role: 'assistant', status: 'complete', error: null, produced_by: null, created_at: 5,
+      parts: JSON.stringify([{ type: 'tool-call', id: 'k', name: 'computer', args: {} }, { type: 'tool-result', id: 'k', name: 'computer', result, isError: false }]),
+    },
+  });
+  const fileRow = (id: unknown, messageId: string, over: Record<string, unknown> = {}): ChangeRow => ({
+    tbl: 'attachment', id: String(id), op: 'upsert', hlc,
+    row: { id, chat_id: 'chat-a', message_id: messageId, filename: 'shot.png', mime: 'image/png', size: 10, sha256: sha, extracted_text: null, ...over },
+  });
+  const result = (n: Node, id: string): unknown[] => (n.store.messages.get(id)!.parts.find((p) => p.type === 'tool-result') as { result: unknown[] }).result;
+
+  it('keeps nothing but the reference Grunt itself mints: a bad id, type or extra field is dropped, base64 never survives, 50 at most', () => {
+    const b = machine();
+    const blob = Buffer.alloc(3 * 1024 * 1024).toString('base64');
+    const many = Array.from({ length: 52 }, (_, i) => ({ type: 'image', attachmentId: `f${i}`, mimeType: 'image/png' }));
+    b.store.sync.apply([
+      messageRow('m-bad', [
+        { type: 'image', attachmentId: '../../etc/passwd', mimeType: 'image/png' },
+        { type: 'image', attachmentId: 'x'.repeat(65), mimeType: 'image/png' },
+        { type: 'image', attachmentId: 42, mimeType: 'image/png' },
+        { type: 'image', attachmentId: 'ok-id', mimeType: 'text/html' },
+        { type: 'image', data: blob, mimeType: 'image/png' },
+        { type: 'audio', data: blob, mimeType: 'audio/wav' },
+        { type: 'resource', resource: { uri: 'file:///x', blob } },
+        { type: 'image', attachmentId: 'extras', mimeType: 'image/png', width: Number.NaN, bytes: -1, url: 'https://evil.example/x.png' },
+      ]),
+      messageRow('m-many', many),
+    ]);
+    const bad = result(b, 'm-bad');
+    expect(bad.slice(0, 5)).toEqual([note('[image not kept]'), note('[image not kept]'), note('[image not kept]'), note('[image not kept]'), note('[image not kept]')]);
+    expect(bad[5]).toEqual(note('[audio omitted: 3.0 MB]'));
+    expect(bad[6]).toEqual(note('[resource omitted: 3.0 MB of binary data]'));
+    expect(bad[7]).toEqual({ type: 'image', attachmentId: 'extras', mimeType: 'image/png', pending: true });
+    expect(JSON.stringify(b.store.messages.get('m-bad')!.parts)).not.toContain(blob.slice(0, 64));
+    const kept = result(b, 'm-many').filter((i) => (i as { type: string }).type === 'image');
+    expect(kept).toHaveLength(50);
+    expect(result(b, 'm-many').slice(50)).toEqual([note('[image not kept: too many or too large]'), note('[image not kept: too many or too large]')]);
+  });
+
+  it('refuses a file row that Grunt could never have made', () => {
+    const b = machine();
+    const table: [string, ChangeRow][] = [
+      ['tool image that is not a raster', fileRow('f1', 'm-a', { mime: 'text/html' })],
+      ['tool image over the per-image cap', fileRow('f2', 'm-a', { size: 5 * 1024 * 1024 + 1 })],
+      ['size over the upload cap', fileRow('f3', 'u-a', { size: 25 * 1024 * 1024 + 1 })],
+      ['negative size', fileRow('f4', 'u-a', { size: -1 })],
+      ['fractional size', fileRow('f5', 'u-a', { size: 1.5 })],
+      ['size as text', fileRow('f6', 'u-a', { size: '10' })],
+      ['null size', fileRow('f7', 'u-a', { size: null })],
+      ['path-like id', fileRow('../f8', 'u-a')],
+      ['over-long id', fileRow('x'.repeat(65), 'u-a')],
+      ['no file name', fileRow('f9', 'u-a', { filename: null })],
+      ['over-long file name', fileRow('f10', 'u-a', { filename: 'n'.repeat(256) })],
+      ['control character in the name', fileRow('f11', 'u-a', { filename: 'a\u0000b.png' })],
+      ['mime that is not a string', fileRow('f12', 'u-a', { mime: { x: 1 } })],
+      ['no message', fileRow('f13', 'u-a', { message_id: null })],
+    ];
+    for (const [label, row] of table) {
+      expect(b.store.sync.apply([row]).applied, label).toBe(0);
+      expect(b.store.attachments.get(row.id), label).toBeNull();
+    }
+    // The ordinary cases still go: a raster tool image within its cap, and a user's upload up to the upload cap.
+    expect(b.store.sync.apply([fileRow('good-shot', 'm-a'), fileRow('good-upload', 'u-a', { mime: 'application/pdf', size: 25 * 1024 * 1024 })]).applied).toBe(2);
   });
 });

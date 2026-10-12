@@ -1,3 +1,4 @@
+import { isAttachmentId } from './attachment-binding.js';
 import type { CanonMessage, Part } from '../types/messages.js';
 
 /**
@@ -110,12 +111,48 @@ export function sniffToolImageMime(data: Buffer): string | null {
  * this message: the one test a reference has to pass, wherever it is read.
  * The row's size is held to the same cap as a stored image.
  */
-export function toolImageBound(row: ToolImageRow, chatId: string, messageId: string): boolean {
+/** Whether `mime` (as a row or a reference states it) is one of the raster types a tool image may have. */
+export function isToolImageMime(mime: unknown): boolean {
+  return typeof mime === 'string' && TOOL_IMAGE_MIMES.includes(baseMime(mime));
+}
+
+export function toolImageBound(row: { chatId: unknown; messageId: unknown; mime: unknown; size?: unknown }, chatId: string, messageId: string): boolean {
   return (
+    typeof row.chatId === 'string' &&
+    row.chatId !== '' &&
     row.chatId === chatId &&
+    typeof row.messageId === 'string' &&
+    row.messageId !== '' &&
     row.messageId === messageId &&
+    typeof row.mime === 'string' &&
     TOOL_IMAGE_MIMES.includes(baseMime(row.mime)) &&
-    (row.size === undefined || (row.size >= 0 && row.size <= MAX_TOOL_IMAGE_BYTES))
+    (row.size === undefined || (typeof row.size === 'number' && Number.isFinite(row.size) && row.size >= 0 && row.size <= MAX_TOOL_IMAGE_BYTES))
+  );
+}
+
+/**
+ * Whether a row from another machine has the shape of a file Grunt itself
+ * makes: an id as the saver and the upload route make it, a name of sane
+ * length with no control characters, a mime that is a plain type string, a
+ * size that is a whole number from 0 to `maxBytes`. (The caller adds the rules
+ * for what the file is used as, e.g. a tool image is a raster of at most
+ * `MAX_TOOL_IMAGE_BYTES`.) Anything else, null and a wrong type included, is no.
+ */
+export function attachmentRowShapeOk(row: { id: unknown; filename: unknown; mime: unknown; size: unknown }, maxBytes: number): boolean {
+  return (
+    isAttachmentId(row.id) &&
+    typeof row.filename === 'string' &&
+    row.filename.length > 0 &&
+    row.filename.length <= 255 &&
+    !/[\u0000-\u001f\u007f]/.test(row.filename) &&
+    typeof row.mime === 'string' &&
+    row.mime.length > 0 &&
+    row.mime.length <= 255 &&
+    !/[\u0000-\u001f\u007f]/.test(row.mime) &&
+    typeof row.size === 'number' &&
+    Number.isInteger(row.size) &&
+    row.size >= 0 &&
+    row.size <= maxBytes
   );
 }
 
@@ -266,37 +303,59 @@ export async function keepToolImages(
 }
 
 /**
- * The parts of ONE message (`messageId`, in `chatId`) with every image item
- * checked against the attachment rows. A reference stays only while its row
- * exists, belongs to this chat and this very message, and is an allowlisted
- * raster type; its mime is then the row's, never the part's. Any other image
- * item (a reference that fails, an inline image, anything image-shaped) is
- * replaced by a text note. `missing` says what a reference whose row isn't
- * here (yet) becomes: `'drop'` a note, `'keep'` itself (a synced message can
- * arrive before its attachment; the same check runs again at every read).
+ * The parts of ONE message (`messageId`, in `chatId`) with every item that can
+ * carry an image or bulk data made safe.
+ *
+ * A tool image reference stays only if it is exactly what `TurnRunner` mints
+ * (type, an attachment id of the shape Grunt makes, an allowlisted raster
+ * type; nothing else is kept from the item) AND its attachment row is here AND
+ * is bound to this chat and this very message (`toolImageBound`); its mime is
+ * then the row's, never the part's. At most `MAX_TOOL_IMAGES_PER_MESSAGE` stay
+ * in one message; the surplus is `[image not kept: too many or too large]`.
+ * Any other image item (a reference that fails, an inline image, anything
+ * image-shaped) and any audio or resource blob is a text note, so no base64
+ * survives in a stored message.
+ *
+ * `missing` says what a well-formed reference whose row isn't here (yet)
+ * becomes. `'drop'`: a note. `'hold'`: the reference stays with `pending: true`,
+ * an explicit "not verified" that no read path treats as an image (every read
+ * runs this again with `'drop'`, and a reference whose row isn't bound is a
+ * note then). Nothing ever passes because a row is missing or a field is null.
  * Returns `parts` itself when nothing changed.
  */
-export function bindToolImageParts(parts: Part[], chatId: string, messageId: string, lookup: ToolImageLookup, missing: 'keep' | 'drop'): Part[] {
+export function bindToolImageParts(parts: Part[], chatId: string, messageId: string, lookup: ToolImageLookup, missing: 'hold' | 'drop'): Part[] {
   let changed = false;
+  let kept = 0;
+  const note = (text: string): { type: 'text'; text: string } => ({ type: 'text', text });
   const next = parts.map((part): Part => {
-    if (part.type !== 'tool-result' || !Array.isArray(part.result) || !part.result.some(isImageItem)) return part;
+    if (part.type !== 'tool-result' || !Array.isArray(part.result)) return part;
     const result = part.result.map((item): unknown => {
+      const binary = binaryItemNote(item);
+      if (binary !== null) return note(binary);
       if (!isImageItem(item)) return item;
-      if (!isToolImageRef(item)) return { type: 'text', text: IMAGE_NOT_KEPT };
+      if (!isToolImageRef(item)) return note(IMAGE_NOT_KEPT);
+      const ref = item as unknown as Record<string, unknown>;
+      if (!isAttachmentId(ref['attachmentId'])) return note(IMAGE_NOT_KEPT);
+      const claimed = baseMime(String(ref['mimeType']));
+      if (!TOOL_IMAGE_MIMES.includes(claimed)) return note(IMAGE_NOT_KEPT);
+      if (kept >= MAX_TOOL_IMAGES_PER_MESSAGE) return note(IMAGE_NOT_KEPT_LIMIT);
       let row: ToolImageRow | null = null;
       try {
-        row = lookup(item.attachmentId);
+        row = lookup(ref['attachmentId']);
       } catch {
         row = null;
       }
-      if (row === null) {
-        return missing === 'keep' ? { type: 'image', attachmentId: item.attachmentId, mimeType: baseMime(item.mimeType) } : { type: 'text', text: TOOL_IMAGE_NOT_BOUND };
+      if (row === null || row === undefined) {
+        if (missing === 'drop') return note(TOOL_IMAGE_NOT_BOUND);
+        kept += 1;
+        return { type: 'image', attachmentId: ref['attachmentId'], mimeType: claimed, pending: true };
       }
-      if (!toolImageBound(row, chatId, messageId)) return { type: 'text', text: TOOL_IMAGE_NOT_BOUND };
-      return { type: 'image', attachmentId: item.attachmentId, mimeType: baseMime(row.mime) };
+      if (!toolImageBound(row, chatId, messageId)) return note(TOOL_IMAGE_NOT_BOUND);
+      kept += 1;
+      return { type: 'image', attachmentId: ref['attachmentId'], mimeType: baseMime(row.mime) };
     });
-    changed = true;
-    return { ...part, result };
+    if (result.some((r, i) => r !== (part.result as unknown[])[i])) changed = true;
+    return changed ? { ...part, result } : part;
   });
   return changed ? next : parts;
 }

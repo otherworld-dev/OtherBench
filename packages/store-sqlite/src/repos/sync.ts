@@ -3,8 +3,8 @@ import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MA
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
-import { attachmentBound, bindHistoryAttachments } from '@grunt/core/domain/attachment-binding.js';
-import { bindToolImageParts } from '@grunt/core/domain/tool-images.js';
+import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
+import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, MAX_TOOL_IMAGE_BYTES, type ToolImageRow } from '@grunt/core/domain/tool-images.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { SyncClock } from './clock.js';
 import { deriveSearchText } from './messages.js';
@@ -108,9 +108,9 @@ export class SqliteSyncRepo implements SyncRepo {
     this.db.prepare('UPDATE attachment SET storage_path = ? WHERE id = ?').run(path, attachmentId);
   }
 
-  missingBlobs(): { id: string; sha256: string }[] {
+  missingBlobs(): { id: string; sha256: string; size: number }[] {
     // Only a file bound to a message of its own chat is ever fetched or given a local blob.
-    const rows = this.db.prepare(`SELECT a.id, a.sha256 FROM attachment a WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`).all() as { id: string; sha256: string }[];
+    const rows = this.db.prepare(`SELECT a.id, a.sha256, a.size FROM attachment a WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`).all() as { id: string; sha256: string; size: number }[];
     return rows.filter((r) => isSha256(r.sha256));
   }
 
@@ -192,7 +192,7 @@ export class SqliteSyncRepo implements SyncRepo {
     const row: SyncRow = {};
     for (const [k, v] of Object.entries(raw)) if (!drop.has(k)) row[k] = v;
     // Offered as it would be accepted: a message's references to files are checked here too, whatever was stored before.
-    if (tbl === 'message') this.bindMessageImages(row, id);
+    if (tbl === 'message') this.bindMessageImages(row, id, 'drop');
     const change: ChangeRow = { tbl, id, op: 'upsert', hlc: raw['hlc'] as string, row };
     if (tbl === 'chat') change.fieldHlc = JSON.parse((raw['field_hlc'] as string) || '{}') as Record<string, string>;
     return change;
@@ -216,17 +216,24 @@ export class SqliteSyncRepo implements SyncRepo {
     this.db.exec('BEGIN');
     try {
       const pendingHeads: { chatId: string; head: string; stamp: string }[] = [];
+      const arrived: unknown[] = [];
       for (const u of upserts) {
         const outcome = u.tbl === 'chat' ? this.applyChat(u, pendingHeads) : this.applyRow(u);
         if (outcome) {
           result.applied++;
           result.written.push({ tbl: u.tbl, id: u.id });
-          if (u.tbl === 'attachment') result.attachments.push({ id: u.id, sha256: u.row['sha256'] as string });
+          if (u.tbl === 'attachment') {
+            result.attachments.push({ id: u.id, sha256: u.row['sha256'] as string });
+            arrived.push(u.row['message_id']);
+          }
         } else {
           result.skipped++;
         }
       }
       this.resolveHeads(pendingHeads);
+      // Second phase: a message that came in this batch (or earlier) and names a file that has
+      // only now arrived is checked again against it, and verified or turned into a note.
+      for (const messageId of new Set(arrived)) if (typeof messageId === 'string') this.reverifyMessage(messageId);
       for (const d of deletes) {
         if (this.applyDelete(d)) result.applied++;
         else result.skipped++;
@@ -315,6 +322,7 @@ export class SqliteSyncRepo implements SyncRepo {
     if (u.tbl === 'attachment') {
       // A file travels only bound to a message of its own chat.
       if (!this.isBound(row['chat_id'], row['message_id'])) return false;
+      if (!this.attachmentRowOk(row)) return false;
       // A file stays what it was, in the chat and on the message it was sent with:
       // another machine can't re-point an attachment id it knows at a different chat
       // or reply, or swap its content or type, which would make any message's
@@ -338,7 +346,7 @@ export class SqliteSyncRepo implements SyncRepo {
     const tomb = this.tombstone(u.tbl, u.id);
     if (mergeRow((local?.['hlc'] as string | undefined) ?? null, u.hlc, tomb, u.tbl === 'location_path') === 'skip') return false;
     if (!this.parentsPresent(u.tbl, row)) return false;
-    if (u.tbl === 'message') this.bindMessageImages(row, u.id);
+    if (u.tbl === 'message') this.bindMessageImages(row, u.id, 'hold');
     // Columns only this machine sets get their defaults on a new row.
     const insertOnly: Record<string, unknown> = u.tbl === 'attachment' ? { storage_path: '' } : {};
     this.upsert(u.tbl, row, { hlc: u.hlc }, insertOnly);
@@ -347,13 +355,51 @@ export class SqliteSyncRepo implements SyncRepo {
   }
 
   /**
-   * A synced message's tool results can't make a file of another chat appear:
-   * a reference to an attachment that is here but belongs to another chat or
-   * reply, and any image that isn't a reference, becomes a text note. A
-   * reference to a file that hasn't arrived yet stays (files follow their
-   * message); every read checks the binding again.
+   * An attachment row as Grunt itself makes one (modelled on `artifactRowOk` and
+   * `artifactVersionRowOk` above): the shape core checks for every file, a size
+   * within the upload cap, and, for a file on an assistant reply (a tool's image),
+   * a raster type within the per-image cap. A user's upload keeps its own rules.
    */
-  private bindMessageImages(row: SyncRow, id: string): void {
+  private attachmentRowOk(row: SyncRow): boolean {
+    if (!attachmentRowShapeOk({ id: row['id'], filename: row['filename'], mime: row['mime'], size: row['size'] }, MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    const holder = this.db.prepare('SELECT role FROM message WHERE id = ?').get(row['message_id'] as string) as { role: string } | undefined;
+    if (holder?.role === 'assistant') return isToolImageMime(row['mime']) && (row['size'] as number) <= MAX_TOOL_IMAGE_BYTES;
+    return true;
+  }
+
+  /** The attachment row `id` as the binding checks read it: every field exactly as stored, null when there is none. */
+  private fileFacts(id: string): ToolImageRow | null {
+    const a = this.select('attachment', id);
+    return a ? ({ chatId: a['chat_id'], messageId: a['message_id'], mime: a['mime'], size: a['size'] } as ToolImageRow) : null;
+  }
+
+  /** A message's parts with their files checked (see `bindMessageImages`); the same array when nothing changed. */
+  private boundParts(chatId: string, id: string, parts: Part[], missing: 'hold' | 'drop'): Part[] {
+    // Images a tool result refers to: the file must be here and be this chat's and this message's.
+    const toolBound = bindToolImageParts(parts, chatId, id, (attachmentId) => this.fileFacts(attachmentId), missing);
+    // Images and files the user sent: a file that is here must be this chat's and bound; one that is not here
+    // yet is marked pending (not replayable) when `missing` is 'hold', and a note otherwise.
+    const [carrier] = bindHistoryAttachments(
+      [{ id, chatId, parentId: null, role: 'user', parts: toolBound, status: 'complete', error: null, producedBy: null, createdAt: 0 }],
+      (attachmentId) => {
+        const a = this.select('attachment', attachmentId);
+        if (a === null) return missing === 'hold' ? 'pending' : false;
+        return a['chat_id'] === chatId && this.isBound(a['chat_id'], a['message_id']);
+      }
+    );
+    const bound = carrier!.parts;
+    return JSON.stringify(bound) === JSON.stringify(parts) ? parts : bound;
+  }
+
+  /**
+   * A synced message's references to files are checked against the files here
+   * and no reference passes on a missing file or a null field. A file that has
+   * not arrived (`'hold'`, on apply) leaves the reference marked `pending`,
+   * which nothing replays or serves; `reverifyMessage` clears the mark, or
+   * turns the reference into a note, when the file arrives. On a read or an
+   * offer (`'drop'`) it is a note.
+   */
+  private bindMessageImages(row: SyncRow, id: string, missing: 'hold' | 'drop'): void {
     const chatId = row['chat_id'];
     if (typeof row['parts'] !== 'string' || typeof chatId !== 'string') return;
     let parts: Part[];
@@ -363,28 +409,23 @@ export class SqliteSyncRepo implements SyncRepo {
       return;
     }
     if (!Array.isArray(parts)) return;
-    // Images a tool result refers to: the file here must be this chat's and this message's.
-    const toolBound = bindToolImageParts(
-      parts,
-      chatId,
-      id,
-      (attachmentId) => {
-        const a = this.select('attachment', attachmentId);
-        return a ? { chatId: String(a['chat_id']), messageId: typeof a['message_id'] === 'string' ? a['message_id'] : null, mime: String(a['mime']) } : null;
-      },
-      'keep'
-    );
-    // Images and files the user sent: a file that is here must be this chat's (one that has not arrived yet is checked when it is read).
-    const [carrier] = bindHistoryAttachments(
-      [{ id, chatId, parentId: null, role: 'user', parts: toolBound, status: 'complete', error: null, producedBy: null, createdAt: 0 }],
-      (attachmentId) => {
-        const a = this.select('attachment', attachmentId);
-        // A file that hasn't arrived is left to the read-time check; one that is here must be this chat's and bound.
-        return a === null || (a['chat_id'] === chatId && this.isBound(a['chat_id'], a['message_id']));
-      }
-    );
-    const bound = carrier!.parts;
+    const bound = this.boundParts(chatId, id, parts, missing);
     if (bound !== parts) row['parts'] = JSON.stringify(bound);
+  }
+
+  /** Checks a stored message's files again (a file of its has just arrived). The stamp is untouched: nothing here is a change to send. */
+  private reverifyMessage(messageId: string): void {
+    const message = this.select('message', messageId);
+    if (!message || typeof message['parts'] !== 'string' || typeof message['chat_id'] !== 'string') return;
+    let parts: Part[];
+    try {
+      parts = JSON.parse(message['parts']) as Part[];
+    } catch {
+      return;
+    }
+    if (!Array.isArray(parts)) return;
+    const bound = this.boundParts(message['chat_id'], messageId, parts, 'hold');
+    if (bound !== parts) this.db.prepare('UPDATE message SET parts = ?, search_text = ? WHERE id = ?').run(JSON.stringify(bound), deriveSearchText(bound), messageId);
   }
 
   private applyChat(u: Extract<ChangeRow, { op: 'upsert' }>, pendingHeads: { chatId: string; head: string; stamp: string }[]): boolean {

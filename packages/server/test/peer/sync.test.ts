@@ -176,13 +176,36 @@ describe('syncing two machines over the peer listener', () => {
     expect(laptop.store.attachments.get('a-good')!.storagePath).not.toBe('');
     expect(laptop.store.attachments.get('a-bad')!.storagePath).toBe('');
     expect(laptop.store.attachments.get('a-unsent')).toBeNull();
-    expect(laptop.store.sync.missingBlobs()).toEqual([{ id: 'a-bad', sha256: bad.sha256 }]);
+    expect(laptop.store.sync.missingBlobs()).toEqual([{ id: 'a-bad', sha256: bad.sha256, size: bad.size }]);
     expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${unsent.sha256}` })).status).toBe(404);
 
     // The PC's copy is mended: the next sync fetches it.
     writeFileSync(bad.path, 'bytes about to be corrupted');
     await laptop.syncer.pullFrom('node-PC');
     expect(laptop.store.sync.missingBlobs()).toEqual([]);
+  });
+
+  it('drops a blob longer than its row says it is, whether it comes from the peer or is already here', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    const honest = await pc.blobs.put(Buffer.from('exactly as long'));
+    const liar = await pc.blobs.put(Buffer.from('this blob is much longer than its row claims'));
+    const known = await pc.blobs.put(Buffer.from('this one is already on the laptop, and also too long'));
+    await laptop.blobs.put(Buffer.from('this one is already on the laptop, and also too long'));
+    const make = (id: string, blob: { sha256: string; path: string }, size: number) =>
+      pc.store.attachments.create({ id, chatId: 'chat', messageId: 'u1', filename: `${id}.png`, mime: 'image/png', size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+    make('a-honest', honest, honest.size);
+    make('a-liar', liar, 3);
+    make('a-known', known, 3);
+    await pairNodes(pc, laptop);
+
+    await laptop.syncer.pullFrom('node-PC');
+
+    expect(laptop.store.attachments.get('a-honest')!.storagePath).not.toBe('');
+    expect(laptop.store.attachments.get('a-liar')!.storagePath).toBe('');
+    expect(laptop.store.attachments.get('a-known')!.storagePath).toBe('');
+    expect(laptop.store.sync.missingBlobs().map((m) => m.id)).toEqual(['a-known', 'a-liar']);
   });
 
   it('offers no file row and serves no blob for a file that is not bound to a message of its own chat', async () => {

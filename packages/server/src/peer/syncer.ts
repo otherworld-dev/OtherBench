@@ -183,11 +183,13 @@ export class Syncer {
         const data =
           existing ??
           (await (async (): Promise<Buffer | null> => {
-            const res = await this.options.peers.call(nodeId, { method: 'GET', path: `/peer/blobs/${missing.sha256}` }, { binary: true, maxBytes: MAX_BLOB_BYTES });
+            // No more than the row declares (and never more than the cap): a longer body is turned away by the client itself.
+            const res = await this.options.peers.call(nodeId, { method: 'GET', path: `/peer/blobs/${missing.sha256}` }, { binary: true, maxBytes: Math.min(MAX_BLOB_BYTES, missing.size) });
             if (res.status !== 200 || !Buffer.isBuffer(res.body)) return null;
             return sha256Of(res.body) === missing.sha256 ? res.body : null;
           })());
-        if (!data) continue;
+        // A file longer than its row says (or than the cap) is dropped, whether it came from the peer or was already here.
+        if (!data || data.length > missing.size || data.length > MAX_BLOB_BYTES) continue;
         const stored = await blobStore.put(data);
         this.sync.setStoragePath(missing.id, stored.path);
       } catch {

@@ -616,7 +616,7 @@ export interface SyncRepo {
   /** Where an attachment's blob is on this machine, recorded without counting as a change. */
   setStoragePath(attachmentId: string, path: string): void;
   /** Attachments that came from another machine whose blob isn't here yet. */
-  missingBlobs(): { id: string; sha256: string }[];
+  missingBlobs(): { id: string; sha256: string; size: number }[];
   /** Whether a blob belongs to a file that has been sent in a message (only those leave this machine). */
   isSentBlob(sha256: string): boolean;
   /** Observes a stamp from another machine (its clock runs ahead, say). */

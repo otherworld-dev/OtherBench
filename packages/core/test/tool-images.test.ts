@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FakeChatEngine, InMemoryStore } from '../src/testing/fakes.js';
 import { FAKE_PNG } from '../src/testing/fake-computer.js';
+import { attachmentBound, isAttachmentId } from '../src/domain/attachment-binding.js';
 import {
+  attachmentRowShapeOk,
   bindToolImageParts,
   bindToolImages,
   IMAGE_NOT_KEPT,
@@ -206,11 +208,14 @@ describe('bindToolImageParts and bindToolImages', () => {
     expect(out).toEqual([resultPart([note, note, note, note, note])]);
   });
 
-  it('keeps a reference whose row has not arrived yet only when told to (a synced message before its file)', () => {
+  it('holds a reference whose row has not arrived yet as pending (a synced message before its file), and never lets it pass as verified', () => {
     const parts = [resultPart([ref('late')])];
-    expect(bindToolImageParts(parts, 'chat-a', 'msg-a', only({}), 'keep')).toEqual(parts);
+    expect(bindToolImageParts(parts, 'chat-a', 'msg-a', only({}), 'hold')).toEqual([resultPart([{ ...ref('late'), pending: true }])]);
     expect(bindToolImageParts(parts, 'chat-a', 'msg-a', only({}), 'drop')).toEqual([resultPart([note])]);
-    expect(bindToolImageParts(parts, 'chat-a', 'msg-a', only({ late: row({ chatId: 'chat-b' }) }), 'keep')).toEqual([resultPart([note])]);
+    expect(bindToolImageParts(parts, 'chat-a', 'msg-a', only({ late: row({ chatId: 'chat-b' }) }), 'hold')).toEqual([resultPart([note])]);
+    // Once the row is here and bound, the mark is gone.
+    const held = bindToolImageParts(parts, 'chat-a', 'msg-a', only({}), 'hold');
+    expect(bindToolImageParts(held, 'chat-a', 'msg-a', only({ late: row() }), 'hold')).toEqual([resultPart([ref('late')])]);
   });
 
   it('replaces an inline or malformed image in a stored result, and a lookup that throws', () => {
@@ -517,6 +522,63 @@ describe('validateToolImage and screenToolResult (one validator for storing and 
     expect(stored.filter((i) => i.type === 'image')).toHaveLength(MAX_TOOL_IMAGES_PER_MESSAGE);
   });
 });
+
+describe('the binding checks fail closed on anything that is not what they expect', () => {
+  const weird: unknown[] = [null, undefined, '', 0, 7, Number.NaN, {}, [], ['c'], true];
+
+  it('attachmentBound: every field must be a non-empty string, and the chats must match', () => {
+    expect(attachmentBound({ chatId: 'c', messageId: 'm' }, 'c')).toBe(true);
+    for (const bad of weird) {
+      expect(attachmentBound({ chatId: bad, messageId: 'm' }, 'c'), `chatId ${String(bad)}`).toBe(false);
+      expect(attachmentBound({ chatId: 'c', messageId: bad }, 'c'), `messageId ${String(bad)}`).toBe(false);
+      expect(attachmentBound({ chatId: 'c', messageId: 'm' }, bad), `message chat ${String(bad)}`).toBe(false);
+    }
+    expect(attachmentBound({ chatId: bad2(), messageId: 'm' }, bad2())).toBe(false);
+  });
+
+  it('toolImageBound: the chat, message, type and size must all be exactly right', () => {
+    const good = { chatId: 'c', messageId: 'm', mime: 'image/png', size: 10 };
+    expect(toolImageBound(good, 'c', 'm')).toBe(true);
+    for (const bad of weird) {
+      for (const field of ['chatId', 'messageId', 'mime'] as const) expect(toolImageBound({ ...good, [field]: bad }, 'c', 'm'), `${field} ${String(bad)}`).toBe(false);
+      if (bad !== undefined && typeof bad !== 'number') expect(toolImageBound({ ...good, size: bad }, 'c', 'm'), `size ${String(bad)}`).toBe(false);
+    }
+    expect(toolImageBound({ ...good, size: Number.POSITIVE_INFINITY }, 'c', 'm')).toBe(false);
+  });
+
+  it('isAttachmentId and attachmentRowShapeOk accept what Grunt makes and nothing path-like, long or mistyped', () => {
+    for (const ok of ['3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f', 'att-1', 'A_b-9']) expect(isAttachmentId(ok), ok).toBe(true);
+    for (const bad of ['', '../x', 'a/b', 'a\\b', 'a b', '-lead', 'x'.repeat(65), 'a\u0000b', ...weird]) expect(isAttachmentId(bad), String(bad)).toBe(false);
+    const row = { id: 'att-1', filename: 'shot.png', mime: 'image/png', size: 10 };
+    expect(attachmentRowShapeOk(row, 100)).toBe(true);
+    for (const bad of [{ id: '../x' }, { filename: '' }, { filename: 'n'.repeat(256) }, { filename: 'a\nb' }, { filename: 5 }, { mime: '' }, { mime: 'x'.repeat(256) }, { mime: null }, { size: -1 }, { size: 1.5 }, { size: 101 }, { size: '10' }, { size: null }, { size: Number.NaN }]) {
+      expect(attachmentRowShapeOk({ ...row, ...bad }, 100), JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it('bindToolImageParts keeps only what TurnRunner mints and at most 50 of it', () => {
+    const lookup: ToolImageLookup = () => ({ chatId: 'c', messageId: 'm', mime: 'image/png' });
+    const part = (result: unknown[]): Part => ({ type: 'tool-result', id: 'k', name: 'computer', result, isError: false });
+    const bad = [
+      { type: 'image', attachmentId: '../x', mimeType: 'image/png' },
+      { type: 'image', attachmentId: 'ok', mimeType: 'application/pdf' },
+      { type: 'image', attachmentId: 7, mimeType: 'image/png' },
+      { type: 'image', attachmentId: 'ok', mimeType: null },
+    ];
+    const out = bindToolImageParts([part(bad)], 'c', 'm', lookup, 'drop');
+    expect((out[0] as { result: unknown[] }).result).toEqual(bad.map(() => ({ type: 'text', text: IMAGE_NOT_KEPT })));
+    const many = Array.from({ length: 60 }, (_, i) => ({ type: 'image', attachmentId: `f${i}`, mimeType: 'image/png', width: 99999, extra: 'x' }));
+    const kept = (bindToolImageParts([part(many)], 'c', 'm', lookup, 'drop')[0] as { result: { type: string }[] }).result;
+    expect(kept.filter((i) => i.type === 'image')).toHaveLength(MAX_TOOL_IMAGES_PER_MESSAGE);
+    expect(kept[0]).toEqual({ type: 'image', attachmentId: 'f0', mimeType: 'image/png' });
+    expect(kept[59]).toEqual({ type: 'text', text: IMAGE_NOT_KEPT_LIMIT });
+  });
+});
+
+/** A string that is a fine chat id, to show equal-but-empty/mistyped fields are what fail, not equality. */
+function bad2(): unknown {
+  return null;
+}
 
 describe('sniffToolImageMime and toolImageBound', () => {
   it('names the raster type of the bytes themselves, and nothing else', () => {
