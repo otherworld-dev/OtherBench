@@ -7,6 +7,7 @@ import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/
 import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
+import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1923,5 +1924,63 @@ describe('TurnRunner relays asks', () => {
     expect(request).toMatchObject({ messageId: id, ask: { kind: 'question', chatId: 'chat-1', messageId: id } });
     expect(events).toContainEqual({ messageId: id, type: 'ask-resolved', askId: request.ask.id });
     expect(store.messages.get(id)!.parts).toEqual([{ type: 'text', text: JSON.stringify({ reply: { answers: ['Blue'] } }) }]);
+  });
+});
+
+describe('TurnRunner plan mode', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const stub = (name: string) => ({ name, description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'thread' as const, execute: async () => null });
+  const thread = [stub('update_todos'), stub('ask_user'), stub('propose_plan')];
+  const textOf = (m: CanonMessage): string => m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+
+  function setup(planMode: boolean) {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: thread }) });
+    return { store, engine, runner };
+  }
+  async function send(runner: TurnRunner, store: InMemoryStore, profiles: ResolvedProfile[] = [makeResolvedProfile()]): Promise<string[]> {
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'write it' }], profiles });
+    for (const id of assistantMessageIds) await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    return assistantMessageIds;
+  }
+
+  it('with plan mode off, offers no propose_plan, makes no gate and adds no note', async () => {
+    const { store, engine, runner } = setup(false);
+    await send(runner, store);
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toEqual(['update_todos', 'ask_user']);
+    expect(req.plan).toBeUndefined();
+    expect(textOf(req.messages.at(-1)!)).toBe('write it');
+  });
+
+  it('with plan mode on, offers propose_plan, gives the reply a closed gate and notes it on the request only', async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store);
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toContain('propose_plan');
+    expect(req.plan?.approved).toBe(false);
+    expect(textOf(req.messages.at(-1)!)).toBe(`write it\n${PLAN_MODE_NOTE}`);
+    expect(store.messages.get(req.messages.at(-1)!.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
+  });
+
+  it('gives each compare variant its own gate, and the next message a fresh closed one', async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store, [makeResolvedProfile(), makeResolvedProfile({ id: 'profile-2', name: 'Two' })]);
+    const [a, b] = engine.requests;
+    expect(a!.plan).not.toBe(b!.plan);
+    a!.plan!.approve();
+    expect(b!.plan!.approved).toBe(false);
+    await send(runner, store);
+    expect(engine.requests[2]!.plan!.approved).toBe(false);
+  });
+
+  it("offers no thread tools to a model that can't use tools, and so no gate", async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store, [makeResolvedProfile({ model: makeModel({ supportsTools: false }) })]);
+    expect(engine.requests[0]!.tools).toEqual([]);
+    expect(engine.requests[0]!.plan).toBeUndefined();
+    expect(textOf(engine.requests[0]!.messages.at(-1)!)).toBe('write it');
   });
 });

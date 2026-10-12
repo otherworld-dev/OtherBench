@@ -17,6 +17,7 @@ import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
+import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
@@ -550,6 +551,7 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
+      const planMode = chat?.planMode === true;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -558,10 +560,14 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      // Artifacts and recall are on by default, so a model that can't use
-      // tools (as its model row says) isn't sent a tool it would refuse the
-      // whole request over.
-      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall') : listed;
+      // Artifacts, recall and the thread tools are on by default, so a model
+      // that can't use tools (as its model row says) isn't sent a tool it
+      // would refuse the whole request over.
+      const usable = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread') : listed;
+      // propose_plan only while the chat's Plan mode is on (spec 2026-10-12-thread-cards-design §4).
+      const tools = planMode ? usable : usable.filter((t) => !(t.source === 'thread' && t.name === PLAN_TOOL));
+      // One gate per reply: compare variants, retries and the next message each start closed.
+      const plan = planMode && tools.some((t) => t.source === 'thread' && t.name === PLAN_TOOL) ? createPlanGate() : undefined;
       const canRecall = tools.some((t) => t.source === 'recall');
       const requestProfile = this.withRecall(
         this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), tools), tools),
@@ -569,7 +575,11 @@ export class TurnRunner {
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
+      const history = this.withPlanNote(
+        this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId),
+        plan !== undefined,
+        userMessageId
+      );
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -611,6 +621,7 @@ export class TurnRunner {
         purpose: 'turn',
         autoMode,
         ...(effort ? { effort } : {}),
+        ...(plan ? { plan } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 
@@ -897,6 +908,12 @@ export class TurnRunner {
     if (!tools.some((t) => t.source === 'artifact')) return messages;
     const note = artifactsListNote(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
     return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: note }] } : m));
+  }
+
+  /** While Plan mode is on, a note at the end of the user's message in this request only (the stored message is untouched). */
+  private withPlanNote(messages: CanonMessage[], planning: boolean, userMessageId: string): CanonMessage[] {
+    if (!planning) return messages;
+    return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: PLAN_MODE_NOTE }] } : m));
   }
 
   /**
