@@ -3,6 +3,7 @@ import { Hono, type Context, type Next } from 'hono';
 import { encodeHlc } from '@grunt/core/domain/hlc.js';
 import type { ChangeRow, SyncRow } from '@grunt/core/domain/sync.js';
 import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/domain/parts.js';
+import { interruptSubagents } from '@grunt/core/domain/reconcile.js';
 import type { Part, ProducedBy, SerializedError } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { parseApprovalChoice } from '../routes/tools.js';
@@ -110,6 +111,15 @@ export function withEvent(parts: Part[], e: Record<string, unknown>): Part[] {
   }
 }
 
+/**
+ * A cut-off reply's parts as kept here: a sub-agent card still queued or
+ * running can't finish now, so it's closed as failed (as a restart does in
+ * reconcile), saying which machine went away.
+ */
+export function cutOffParts(parts: Part[], peerName: string): Part[] {
+  return interruptSubagents(parts, `${peerName} stopped responding while this sub-agent was working.`) ?? parts;
+}
+
 function messageRow(m: {
   id: string;
   chatId: string;
@@ -160,7 +170,7 @@ function keepCutOffReply(container: Container, runs: RemoteRuns, nodeId: string,
     const row = messageRow({ ...question, chatId: reply.chatId, role: 'user', status: 'complete', error: null, producedBy: null, createdAt: reply.at, originNode: nodeId });
     rows.push({ tbl: 'message', id: question.id, op: 'upsert', hlc: oldest, row });
   }
-  const row = messageRow({ id: messageId, chatId: reply.chatId, parentId: reply.parentId, role: 'assistant', parts, status: 'error', error: cutOff(peerName), producedBy, createdAt: reply.at, originNode: nodeId });
+  const row = messageRow({ id: messageId, chatId: reply.chatId, parentId: reply.parentId, role: 'assistant', parts: cutOffParts(parts, peerName), status: 'error', error: cutOff(peerName), producedBy, createdAt: reply.at, originNode: nodeId });
   rows.push({ tbl: 'message', id: messageId, op: 'upsert', hlc: oldest, row });
   try {
     sync.apply(rows);

@@ -4,13 +4,17 @@ import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
 /** Written on a sub-agent card that was still queued or running when Grunt's process died. */
 export const SUBAGENT_INTERRUPTED_MESSAGE = 'Grunt restarted while this sub-agent was working.';
 
-/** The parts with every unfinished sub-agent card turned into an error, or null when there is none. */
-function interruptSubagents(parts: Part[]): Part[] | null {
+/**
+ * The parts with every unfinished sub-agent card turned into an error with
+ * `message`, or null when there is none. Also used for a reply kept after the
+ * machine writing it went away (server peer/forward.ts).
+ */
+export function interruptSubagents(parts: Part[], message: string = SUBAGENT_INTERRUPTED_MESSAGE): Part[] | null {
   let changed = false;
   const next = parts.map((p): Part => {
     if (p.type !== 'subagent' || (p.status !== 'queued' && p.status !== 'running')) return p;
     changed = true;
-    return { ...p, status: 'error', error: SUBAGENT_INTERRUPTED_MESSAGE };
+    return { ...p, status: 'error', error: message };
   });
   return changed ? next : null;
 }

@@ -220,6 +220,30 @@ describe('running a chat on the machine it runs on', () => {
     for (const m of [pc, laptop]) expect(m.container.store.messages.get(replyId)!.status).toBe('cancelled');
   });
 
+  it('a cut-off reply keeps its sub-agent cards closed, not queued or running', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const patched = await pc.api('PATCH', `/api/profiles/${profileId}`, { toolPolicy: { fs: 'read', shell: false, mcpServerIds: [], approvalMode: 'always_ask', subagents: true } });
+    expect(patched.status).toBe(200);
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: '#subagents #tool note.txt' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+
+    let stopped = false;
+    await readStream(stream, async (e) => {
+      // The first helper waits on its card: the PC goes away while it's running.
+      if (!stopped && e.data.type === 'approval-request' && (e.data.request as { subagent?: unknown } | undefined)?.subagent) {
+        stopped = true;
+        await pc.container.peers!.listener.stop();
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'error';
+    });
+
+    const cards = laptop.container.store.messages.get(replyId)!.parts.filter((p) => p.type === 'subagent');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.every((c) => c.status !== 'queued' && c.status !== 'running')).toBe(true);
+    expect(cards.find((c) => c.label === 'First helper')).toMatchObject({ status: 'error', error: 'PC stopped responding while this sub-agent was working.' });
+  });
+
   it('a relayed reply whose connection goes silent ends here within the idle limit, but a quiet one kept alive does not', async () => {
     const { pc, laptop, chatId, profileId } = await setup({ keepaliveMs: 50, idleTimeoutMs: 300 });
     const proxy = await freezableProxy(laptop.container.store.peers.get(pc.id)!.addresses[0]!);
