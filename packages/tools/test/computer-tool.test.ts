@@ -156,6 +156,18 @@ describe('computerTool.describeCall', () => {
     }
   });
 
+  it('starts nothing for a reply that was already stopped: no dialog comes up', async () => {
+    const { tool, driver } = setup();
+    const calls = recordCalls(driver);
+    const stopped = new AbortController();
+    stopped.abort();
+    expect(await tool.describeCall!({ action: 'type', text: 'hi' }, ctx({ signal: stopped.signal }))).toMatchObject({ refuse: expect.stringContaining('stopped') });
+    expect(await tool.execute({ action: 'type', text: 'hi', ...APP }, ctx({ signal: stopped.signal }))).toMatchObject({ error: true, code: 'cancelled' });
+    expect(await tool.execute({ action: 'screenshot', app: null }, ctx({ signal: stopped.signal }))).toMatchObject({ error: true, code: 'cancelled' });
+    expect(calls).toEqual([]);
+    expect(driver.started).toEqual([]);
+  });
+
   it('does not look at the screen once the reply was stopped while the start dialog was up', async () => {
     const { tool, driver } = setup();
     const controller = new AbortController();

@@ -298,6 +298,8 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
       // The broker refuses an unattended call too, but only after this, and
       // no native dialog may appear in a run nobody is watching.
       if (isUnattendedRun(ctx)) return { refuse: COMPUTER_UNATTENDED_REASON };
+      // A reply that was already stopped starts nothing: no dialog comes up for it.
+      if (ctx.signal.aborted) return { refuse: STOPPED_REASON };
       // The session before the target: the driver tells nothing without one,
       // and finding out what is under a point is itself reading the screen.
       // The native dialog is the consent for that.
@@ -332,6 +334,8 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
         // No acting without an expectation: the app, the file-view fact, the window and the run the card was about.
         const expectation = isLook(action) ? null : expectationOf(args);
         if (!isLook(action) && expectation === null) return fail('computer_bad_call', NO_EXPECTATION_REASON);
+        // A reply that was already stopped starts nothing: no dialog comes up for it.
+        if (ctx.signal.aborted) return fail('cancelled', STOPPED_REASON);
 
         // The session first, for the looks too: the native dialog is the consent to see the screen.
         const notStarted = await startSession(ctx);
