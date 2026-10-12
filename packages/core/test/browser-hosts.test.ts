@@ -6,8 +6,10 @@ import {
   browserHostDenial,
   browserUrlCheck,
   isLocalName,
+  isOwnAddress,
   isPublicAddress,
   normaliseHost,
+  ownAddresses,
   siteOf,
 } from '../src/domain/browser-hosts.js';
 
@@ -123,6 +125,32 @@ describe('isPublicAddress', () => {
     }
     expect(isPublicAddress('8.8.8.8')).toBe(true);
     expect(isPublicAddress('1.0.0.1')).toBe(true);
+  });
+});
+
+describe('ownAddresses / isOwnAddress', () => {
+  // Public-looking addresses, only ever compared here: nothing connects to them.
+  const own = ownAddresses(['127.0.0.1', '::1', '192.168.1.20', 'fe80::1%eth0', '81.2.69.160', '2A02:8010:1234:5678:0:0:0:10', '2a02:8010:aaaa:1::%3']);
+
+  it("keeps only the public ones (the rest are refused as local or private anyway)", () => {
+    expect([...own.exact].sort()).toEqual(['2a02:8010:1234:5678:0:0:0:10', '2a02:8010:aaaa:1:0:0:0:0', '81.2.69.160']);
+    expect([...own.v6Prefixes].sort()).toEqual(['2a02:8010:1234:5678', '2a02:8010:aaaa:1']);
+  });
+
+  it('matches its own IPv4 address, written as IPv4 or as v4-mapped, NAT64 or 6to4 IPv6', () => {
+    for (const ip of ['81.2.69.160', '::ffff:81.2.69.160', '::ffff:5102:45a0', '64:ff9b::5102:45a0', '2002:5102:45a0::1']) expect(isOwnAddress(ip, own), ip).toBe(true);
+    expect(isOwnAddress('81.2.69.161', own)).toBe(false);
+  });
+
+  it('matches anything in the /64 of one of its public IPv6 addresses, in any spelling', () => {
+    for (const ip of ['2a02:8010:1234:5678::10', '2a02:8010:1234:5678:ffff:ffff:ffff:ffff', '2A02:8010:1234:5678::abcd', '2a02:8010:aaaa:1::99']) expect(isOwnAddress(ip, own), ip).toBe(true);
+    for (const ip of ['2a02:8010:1234:5679::10', '2a02:8010:1234::10', '8.8.8.8']) expect(isOwnAddress(ip, own), ip).toBe(false);
+  });
+
+  it('matches nothing for an empty list or a non-address', () => {
+    expect(isOwnAddress('81.2.69.160', ownAddresses([]))).toBe(false);
+    expect(isOwnAddress('example.com', own)).toBe(false);
+    expect(ownAddresses(['not an address']).exact.size).toBe(0);
   });
 });
 

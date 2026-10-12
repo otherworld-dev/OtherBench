@@ -217,6 +217,78 @@ export function isPublicAddress(ip: string): boolean {
   return v6 ? isPublicV6(v6) : false;
 }
 
+/**
+ * The IPv4 address an IPv6 one stands for, when it is v4-mapped
+ * (`::ffff:a.b.c.d`), NAT64 (`64:ff9b::a.b.c.d`) or 6to4 (`2002:aabb:ccdd::`);
+ * otherwise null.
+ */
+function embeddedV4(w: readonly number[]): number[] | null {
+  if (w.slice(0, 5).every((x) => x === 0) && w[5] === 0xffff) return v4Of(w, 6);
+  if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) return v4Of(w, 6);
+  if (w[0] === 0x2002) return v4Of(w, 1);
+  return null;
+}
+
+/**
+ * This computer's own public addresses, ready to check against (see
+ * `isOwnAddress`). Built from its interface list by the caller (core has no
+ * Node imports).
+ */
+export interface OwnAddresses {
+  /** Each public address exactly: dotted IPv4, or IPv6 as eight hex words. */
+  readonly exact: ReadonlySet<string>;
+  /** The /64 of each public IPv6 address (its first four hex words). */
+  readonly v6Prefixes: ReadonlySet<string>;
+}
+
+const v6Key = (w: readonly number[]): string => w.map((x) => x.toString(16)).join(':');
+const v6Prefix = (w: readonly number[]): string => v6Key(w.slice(0, 4));
+
+/**
+ * `addresses` (this computer's interface addresses, any spelling, a `%zone`
+ * allowed) as an `OwnAddresses`. Only the ones `isPublicAddress` would let
+ * through are kept: every other address is refused as local or private anyway.
+ */
+export function ownAddresses(addresses: readonly string[]): OwnAddresses {
+  const exact = new Set<string>();
+  const v6Prefixes = new Set<string>();
+  for (const address of addresses) {
+    if (!isPublicAddress(address)) continue;
+    const v4 = parseIPv4(address);
+    if (v4) {
+      exact.add(v4.join('.'));
+      continue;
+    }
+    const v6 = parseIPv6(address);
+    if (!v6) continue;
+    const inner = embeddedV4(v6);
+    if (inner) {
+      exact.add(inner.join('.'));
+      continue;
+    }
+    exact.add(v6Key(v6));
+    v6Prefixes.add(v6Prefix(v6));
+  }
+  return { exact, v6Prefixes };
+}
+
+/**
+ * Whether `ip` is one of this computer's own public addresses (an IPv6 form of
+ * one of its IPv4 addresses included), or is in the /64 of one of its public
+ * IPv6 addresses: the network it shares with the devices beside it. Such an
+ * address passes `isPublicAddress`, yet reaching it reaches this computer (or
+ * its neighbours) from inside.
+ */
+export function isOwnAddress(ip: string, own: OwnAddresses): boolean {
+  const v4 = parseIPv4(ip);
+  if (v4) return own.exact.has(v4.join('.'));
+  const v6 = parseIPv6(ip);
+  if (!v6) return false;
+  const inner = embeddedV4(v6);
+  if (inner && own.exact.has(inner.join('.'))) return true;
+  return own.exact.has(v6Key(v6)) || own.v6Prefixes.has(v6Prefix(v6));
+}
+
 const LOCAL_SUFFIXES = ['.localhost', '.local', '.internal', '.home.arpa', '.lan'];
 
 /** `localhost` and the local-network suffixes (and those suffixes on their own). */
