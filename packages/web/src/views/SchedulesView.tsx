@@ -161,7 +161,8 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
   }
 
   async function stop(s: ScheduleView): Promise<void> {
-    const messageId = s.lastRun?.messageId;
+    // The active run, not the last: a slot it overran is recorded after it.
+    const messageId = s.activeRun?.messageId;
     if (!messageId) return;
     await api.turns.cancel(messageId).catch((err: unknown) => console.error('[grunt-web] failed to stop a scheduled run:', err));
   }
@@ -235,7 +236,7 @@ export function SchedulesView({ prefill, onClose }: SchedulesViewProps): JSX.Ele
                     </p>
                   )}
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {s.running && s.lastRun?.messageId ? (
+                    {s.running && s.activeRun ? (
                       <button type="button" onClick={() => void stop(s)} className="btn px-2 py-1 text-xs">
                         Stop
                       </button>

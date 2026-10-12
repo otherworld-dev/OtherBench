@@ -85,7 +85,7 @@ function parseEnabled(value: unknown, fallback: boolean): boolean {
   return value;
 }
 
-/** A schedule as the UI shows it: the row plus its target's name, its rule in words, whether it's running, its last run and its warnings. */
+/** A schedule as the UI shows it: the row plus its target's name, its rule in words, whether it's running (and the run Stop stops), its last run and its warnings. */
 export function scheduleView(container: Container, s: Schedule): ScheduleView {
   const { store } = container;
   const chat = s.target.kind === 'chat' ? store.chats.get(s.target.chatId) : null;
@@ -98,6 +98,7 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
     targetName: chat?.title ?? project?.name ?? '',
     describe: describeRule(s.rule),
     running: container.schedules?.isRunning(s.id) ?? false,
+    activeRun: container.schedules?.activeRun(s.id) ?? null,
     lastRun: store.schedules.lastRun(s.id),
     warnings: profile && connection ? unattendedWarnings(profile.toolPolicy, connection.kind, hasFolder) : [],
   };

@@ -28,12 +28,13 @@ const list = vi.mocked(api.schedules.list);
 const patch = vi.mocked(api.schedules.patch);
 const run = vi.mocked(api.schedules.run);
 const create = vi.mocked(api.schedules.create);
+const cancel = vi.mocked(api.turns.cancel);
 
 function view(over: Partial<ScheduleView> = {}): ScheduleView {
   return {
     id: 's1', name: 'Weekly report', prompt: 'hello', profileId: 'p1', target: { kind: 'chat', chatId: 'c1' },
     rule: { cadence: 'daily', time: '09:00' }, timezone: 'Europe/London', enabled: true, nextRunAt: Date.parse('2099-10-13T08:00:00Z'),
-    createdAt: 1, updatedAt: 1, targetName: 'Trip plans', describe: 'Every day at 09:00', running: false, lastRun: null, warnings: [], ...over,
+    createdAt: 1, updatedAt: 1, targetName: 'Trip plans', describe: 'Every day at 09:00', running: false, activeRun: null, lastRun: null, warnings: [], ...over,
   };
 }
 
@@ -89,6 +90,21 @@ describe('SchedulesView', () => {
     const row = await screen.findByTestId('schedule-row-s1');
     await user.click(within(row).getByRole('button', { name: 'Run now' }));
     expect(await within(row).findByRole('alert')).toHaveTextContent('A reply is being written in this chat.');
+  });
+
+  it('keeps Stop, for the run still being written, after a slot it overran was recorded as not started', async () => {
+    const skipped = {
+      id: 'r2', scheduleId: 's1', trigger: 'scheduled' as const, dueAt: 2, startedAt: 2, finishedAt: 2, status: 'not_started' as const,
+      detail: 'The previous run was still going.', chatId: null, createdChat: false, userMessageId: null, messageId: null, refusedCalls: 0,
+    };
+    list.mockResolvedValue([view({ running: true, activeRun: { runId: 'r1', messageId: 'm1' }, lastRun: skipped })]);
+    cancel.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<SchedulesView onClose={vi.fn()} />);
+    const row = await screen.findByTestId('schedule-row-s1');
+    expect(within(row).queryByRole('button', { name: 'Run now' })).not.toBeInTheDocument();
+    await user.click(within(row).getByRole('button', { name: 'Stop' }));
+    expect(cancel).toHaveBeenCalledWith('m1');
   });
 
   it('opens the editor on its prefilled chat, with the profile warnings, and saves a new schedule', async () => {

@@ -101,6 +101,7 @@ describe('POST /api/schedules', () => {
       targetName: 'Chat chat-1',
       describe: 'Every day at 09:00',
       running: false,
+      activeRun: null,
       lastRun: null,
       warnings: ['This profile asks before every tool call, so every tool call will be refused.'],
     });
@@ -206,6 +207,20 @@ describe('POST /api/schedules/:id/run', () => {
     await container.schedules!.idle();
     const runs = (await (await send('GET', `/${made.id}/runs`)).json()) as { trigger: string }[];
     expect(runs.map((r) => r.trigger)).toEqual(['manual']);
+  });
+
+  it('lists the run being written as the active run, also once a later slot was recorded as not started', async () => {
+    setup();
+    const made = await create();
+    await send('POST', `/${made.id}/run`);
+    await container.schedules!.idle();
+    const running = container.store.schedules.lastRun(made.id)!;
+    expect(running.messageId).toBeTruthy();
+    // What the service writes when the run overruns its next slot.
+    container.store.schedules.addRun({ id: 'skipped', scheduleId: made.id, trigger: 'scheduled', dueAt: running.startedAt + 1, startedAt: running.startedAt + 1, finishedAt: running.startedAt + 1, status: 'not_started', detail: 'The previous run was still going.' });
+
+    const [view] = (await (await send('GET', '')).json()) as ScheduleView[];
+    expect(view).toMatchObject({ running: true, activeRun: { runId: running.id, messageId: running.messageId }, lastRun: { id: 'skipped', messageId: null } });
   });
 
   it('is a 409 "busy" while a reply is being written in its chat', async () => {

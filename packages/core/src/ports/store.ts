@@ -727,6 +727,8 @@ export interface ScheduleView extends Schedule {
   describe: string;
   /** A run of it is being set up or written right now. */
   running: boolean;
+  /** The run whose reply is being written now (what Stop stops); null while none is, or one is still being set up. Not always `lastRun`: a slot it overran is recorded after it. */
+  activeRun: { runId: string; messageId: string } | null;
   lastRun: ScheduleRun | null;
   /** `unattendedWarnings` for its profile and target. */
   warnings: string[];

@@ -190,6 +190,12 @@ export class ScheduleService {
     return this.starting.has(scheduleId) || [...this.active.values()].some((r) => r.schedule.id === scheduleId);
   }
 
+  /** The schedule's run whose reply is being written now; null while none is (or one is still being set up). */
+  activeRun(scheduleId: string): { runId: string; messageId: string } | null {
+    const run = [...this.active.values()].find((r) => r.schedule.id === scheduleId);
+    return run ? { runId: run.runId, messageId: run.messageId } : null;
+  }
+
   /** For tests: resolves once every run being set up has started its reply or ended. */
   async idle(): Promise<void> {
     while (this.launches.size > 0) await Promise.all([...this.launches]);
