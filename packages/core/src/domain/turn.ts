@@ -18,7 +18,7 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
-import { keepToolImages, type SaveToolImage } from './tool-images.js';
+import { bindToolImages, keepToolImages, type SaveToolImage } from './tool-images.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -569,7 +569,11 @@ export class TurnRunner {
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
+      // Every image a tool result refers to is checked against its attachment
+      // row first (this chat, the message that holds it): a reference that
+      // came from anywhere but this runner's own storing is never replayed.
+      const bound = bindToolImages(this.buildRequestMessages(userMessageId, requestProfile), chatId, (id) => this.store.attachments.get(id));
+      const history = this.withArtifactsList(translateForNode(bound, selfNodeId, locationPaths), tools, chatId, userMessageId);
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -652,7 +656,7 @@ export class TurnRunner {
         // never reaches an SSE client or a message row.
         const out: EngineEvent =
           event.type === 'tool-result'
-            ? { ...event, result: await keepToolImages(event.result, this.saveToolImage, chatId, messageId, imageBudget) }
+            ? { ...event, result: await keepToolImages(event.result, this.saveToolImage, chatId, messageId, imageBudget, event.name) }
             : event;
         this.emit({ messageId, ...out });
 
