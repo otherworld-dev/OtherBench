@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
@@ -15,6 +19,17 @@ import {
   runServe,
   sameScriptPath,
 } from '../src/cli.js';
+import {
+  InsecurePublicUrlError,
+  InvalidTrustProxyError,
+  NoPasswordError,
+  RemoteNeedsHttpsError,
+  RemoteWithAnnounceError,
+  TlsConflictError,
+  TlsWithoutPublicUrlError,
+} from '../src/remote/errors.js';
+import { PasswordFile } from '../src/remote/password.js';
+import { FAST, PASSWORD } from './remote/helpers.js';
 
 function fakeContainer(): Container {
   const store = new InMemoryStore();
@@ -342,6 +357,161 @@ describe('main() CLI entry', () => {
     await main(['bogus'], { ...deps, exit });
 
     expect(exit).toHaveBeenCalledWith(1);
+    errorSpy.mockRestore();
+  });
+});
+
+describe('parseServeArgs: sign-in flags', () => {
+  it('has none by default', () => {
+    expect(parseServeArgs([])).toMatchObject({ publicUrls: [], tls: null, tlsCert: null, tlsKey: null, trustProxies: [] });
+  });
+
+  it('parses repeated --public-url and --trust-proxy, --tls auto, --tls-cert and --tls-key', () => {
+    const o = parseServeArgs([
+      '--public-url', 'https://grunt.lan:4747', '--public-url', 'https://192.168.1.5:4747',
+      '--trust-proxy', '127.0.0.1', '--trust-proxy', '10.0.0.2',
+      '--tls', 'auto', '--tls-cert', '/c.pem', '--tls-key', '/k.pem',
+    ]);
+    expect(o).toMatchObject({
+      publicUrls: ['https://grunt.lan:4747', 'https://192.168.1.5:4747'],
+      trustProxies: ['127.0.0.1', '10.0.0.2'],
+      tls: 'auto',
+      tlsCert: '/c.pem',
+      tlsKey: '/k.pem',
+    });
+  });
+
+  it.each([['--tls', 'files'], ['--tls']])('refuses %s with anything but "auto"', (...args) => {
+    expect(() => parseServeArgs(args)).toThrow(TlsConflictError);
+  });
+});
+
+describe('assertServeSecurity: the whole matrix', () => {
+  const base = { host: '127.0.0.1', token: null, publicUrls: [] as string[], tls: null, tlsCert: null, tlsKey: null, trustProxies: [] as string[] };
+  const signIn = { ...base, host: '0.0.0.0', publicUrls: ['https://grunt.lan:4747'] };
+
+  it('keeps open and token modes as they were', () => {
+    expect(assertServeSecurity(base)).toBe('open');
+    expect(assertServeSecurity({ ...base, token: 't' })).toBe('token');
+    expect(assertServeSecurity({ ...base, host: '0.0.0.0', token: 't' })).toBe('token');
+    expect(() => assertServeSecurity({ ...base, host: '0.0.0.0' })).toThrow(NonLoopbackWithoutTokenError);
+  });
+
+  it('turns sign-in on for a public URL with an HTTPS route, even on a non-loopback bind with no token', () => {
+    expect(assertServeSecurity({ ...signIn, tls: 'auto' })).toBe('login');
+    expect(assertServeSecurity({ ...signIn, tlsCert: '/c', tlsKey: '/k' })).toBe('login');
+    expect(assertServeSecurity({ ...signIn, host: '127.0.0.1', trustProxies: ['127.0.0.1'] })).toBe('login');
+    expect(assertServeSecurity({ ...signIn, tls: 'auto', token: 't' })).toBe('login');
+  });
+
+  it('refuses each unsafe or contradictory combination by name', () => {
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['http://grunt.lan:4747'] })).toThrow(InsecurePublicUrlError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['https://grunt.lan/grunt'] })).toThrow(InsecurePublicUrlError);
+    expect(() => assertServeSecurity(signIn)).toThrow(RemoteNeedsHttpsError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', token: 't', announce: true })).toThrow(RemoteWithAnnounceError);
+    expect(() => assertServeSecurity({ ...base, tls: 'auto' })).toThrow(TlsWithoutPublicUrlError);
+    expect(() => assertServeSecurity({ ...base, trustProxies: ['127.0.0.1'] })).toThrow(TlsWithoutPublicUrlError);
+    expect(() => assertServeSecurity({ ...base, tlsCert: '/c', tlsKey: '/k' })).toThrow(TlsWithoutPublicUrlError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', tlsCert: '/c', tlsKey: '/k' })).toThrow(TlsConflictError);
+    expect(() => assertServeSecurity({ ...signIn, tlsCert: '/c' })).toThrow(TlsConflictError);
+    expect(() => assertServeSecurity({ ...signIn, trustProxies: ['10.0.0.0/8'] })).toThrow(InvalidTrustProxyError);
+  });
+});
+
+describe('runServe in sign-in mode', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'grunt-cli-signin-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const setPassword = () => new PasswordFile(join(dir, 'login.json'), Date.now, FAST).write(PASSWORD);
+
+  it('refuses without a password and never builds the container', async () => {
+    const deps = fakeDeps();
+
+    await expect(runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {})).rejects.toThrow(NoPasswordError);
+    expect(deps.createContainer).not.toHaveBeenCalled();
+  });
+
+  it('serves HTTPS with its own certificate, TLS 1.2 at least, and hands createApp the sign-in setup and a Host check', async () => {
+    await setPassword();
+    const deps = fakeDeps();
+
+    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--port', '0', '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {});
+
+    const serveOpts = deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown; serverOptions?: { key: string; cert: string; minVersion: string } };
+    expect(serveOpts.createServer).toBe(createHttpsServer);
+    expect(serveOpts.serverOptions?.minVersion).toBe('TLSv1.2');
+    expect(serveOpts.serverOptions?.key).toContain('PRIVATE KEY');
+    expect(serveOpts.serverOptions?.cert).toBe(readFileSync(join(dir, 'https', 'server.crt'), 'utf8'));
+    const appOptions = deps.createApp.mock.calls[0]![1] as { remote: { publicHosts: string[]; tls: { mode: string } } | null; hostCheckPort?: () => number };
+    expect(appOptions.remote?.publicHosts).toEqual(['grunt.test']);
+    expect(appOptions.remote?.tls.mode).toBe('auto');
+    expect(appOptions.hostCheckPort?.()).toBe(EPHEMERAL_PORT);
+    expect(handle.scheme).toBe('https');
+    expect(handle.publicUrls).toEqual(['https://grunt.test']);
+    expect(handle.notes.join('\n')).toMatch(/SHA-256 [0-9A-F]{2}(:[0-9A-F]{2}){31}/);
+    expect(handle.notes.join('\n')).toMatch(/only listens on this machine/);
+    handle.close();
+  });
+
+  it('serves plain HTTP behind a trusted proxy', async () => {
+    await setPassword();
+    const deps = fakeDeps();
+
+    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://box.tail.ts.net', '--trust-proxy', '127.0.0.1'], deps, {});
+
+    const serveOpts = deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown };
+    expect(serveOpts.createServer).toBeUndefined();
+    expect(handle.scheme).toBe('http');
+    expect(handle.notes.join('\n')).not.toMatch(/only listens on this machine/);
+    handle.close();
+  });
+
+  it('gives createApp no sign-in setup in the desktop mode', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+
+    const handle = await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    expect((deps.createApp.mock.calls[0]![1] as { remote: unknown }).remote).toBeNull();
+    expect((deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown }).createServer).toBeUndefined();
+    expect(handle.scheme).toBe('http');
+  });
+
+  it('answers /api/health over real HTTPS, trusting only the CA it made', async () => {
+    await setPassword();
+    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--port', '0', '--public-url', 'https://grunt.test', '--tls', 'auto'], { createContainer: async () => fakeContainer() }, {});
+    try {
+      const ca = readFileSync(join(dir, 'https', 'grunt-ca.crt'), 'utf8');
+      const answer = await new Promise<string>((resolve, reject) => {
+        const req = httpsRequest({ host: '127.0.0.1', port: handle.port, path: '/api/health', ca, servername: 'grunt.test', agent: false }, (res) => {
+          let body = '';
+          res.on('data', (d: Buffer) => (body += d.toString()));
+          res.on('end', () => resolve(`${res.statusCode} ${body}`));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      expect(answer).toMatch(/^200 \{"status":"ok"/);
+    } finally {
+      handle.close();
+    }
+  });
+});
+
+describe('main() with sign-in', () => {
+  it('prints a sign-in start-up refusal as an error and exits 1', async () => {
+    const deps = fakeDeps();
+    const exit = vi.fn();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main(['serve', '--public-url', 'http://grunt.lan'], { ...deps, exit, env: {} });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^Error: Refusing to start: --public-url/));
     errorSpy.mockRestore();
   });
 });

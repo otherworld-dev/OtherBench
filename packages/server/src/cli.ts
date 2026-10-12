@@ -1,3 +1,5 @@
+import { createServer as createHttpsServer } from 'node:https';
+import { isIP } from 'node:net';
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -7,6 +9,17 @@ import { createApp } from './app.js';
 import { createContainer, type Container } from './container.js';
 import { DatabaseLockedError } from './db-lock.js';
 import { announceLine, exitOnStdinClose } from './desktop.js';
+import {
+  InvalidTrustProxyError,
+  RemoteNeedsHttpsError,
+  RemoteStartError,
+  RemoteWithAnnounceError,
+  TlsConflictError,
+  TlsWithoutPublicUrlError,
+} from './remote/errors.js';
+import { parsePublicUrl } from './remote/public-url.js';
+import { checkSignIn, loginPathFor, startSignIn, type SignIn } from './remote/startup.js';
+import { expiryWarning } from './remote/tls.js';
 
 /** Arbitrary default port for `grunt serve`; overridable with `--port`. */
 const DEFAULT_PORT = 4747;
@@ -18,6 +31,11 @@ function defaultDbPath(): string {
 
 function defaultSecretsPath(dbPath: string): string {
   return dbPath === ':memory:' ? join(homedir(), '.grunt', 'secrets.json') : join(dirname(dbPath), 'secrets.json');
+}
+
+/** Where `grunt password` writes and `grunt serve` reads the sign-in password. */
+export function defaultLoginPath(dbPath: string): string {
+  return loginPathFor(defaultSecretsPath(dbPath));
 }
 
 /**
@@ -48,6 +66,14 @@ export interface ServeOptions {
   peerPort?: number;
   /** Addresses the peer listener binds; empty means every interface. */
   peerHosts: string[];
+  /** `--public-url`, repeatable: turns sign-in on (spec 2026-10-12-remote-access §1). */
+  publicUrls: string[];
+  /** `--tls auto`: Grunt's own CA and certificate. */
+  tls: 'auto' | null;
+  tlsCert: string | null;
+  tlsKey: string | null;
+  /** `--trust-proxy`, repeatable: exact IPs of HTTPS proxies in front. */
+  trustProxies: string[];
 }
 
 /**
@@ -67,6 +93,11 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
       'cors-origin': { type: 'string', multiple: true },
       'peer-port': { type: 'string' },
       'peer-host': { type: 'string', multiple: true },
+      'public-url': { type: 'string', multiple: true },
+      'trust-proxy': { type: 'string', multiple: true },
+      tls: { type: 'string' },
+      'tls-cert': { type: 'string' },
+      'tls-key': { type: 'string' },
     },
     strict: false,
   });
@@ -82,6 +113,11 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
   if (peerPort !== undefined && (typeof values['peer-port'] === 'boolean' || !Number.isInteger(peerPort) || peerPort < 0 || peerPort > 65535)) {
     throw new Error(`Invalid --peer-port "${String(values['peer-port'])}": must be an integer between 0 and 65535.`);
   }
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : []);
+  const tls = values['tls'];
+  if (tls !== undefined && tls !== 'auto') {
+    throw new TlsConflictError(`Invalid --tls "${String(tls)}": the only value is "auto". For your own certificate use --tls-cert <file> --tls-key <file>.`);
+  }
   return {
     ...(peerPort !== undefined ? { peerPort } : {}),
     peerHosts: Array.isArray(peerHosts) ? peerHosts.filter((h): h is string => typeof h === 'string') : [],
@@ -91,6 +127,11 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
     token: typeof values['token'] === 'string' ? values['token'] : envToken ? envToken : null,
     announce: values['announce'] === true,
     corsOrigins: Array.isArray(corsOrigins) ? corsOrigins.filter((o): o is string => typeof o === 'string') : [],
+    publicUrls: strings(values['public-url']),
+    trustProxies: strings(values['trust-proxy']),
+    tls: tls === 'auto' ? 'auto' : null,
+    tlsCert: typeof values['tls-cert'] === 'string' ? values['tls-cert'] : null,
+    tlsKey: typeof values['tls-key'] === 'string' ? values['tls-key'] : null,
   };
 }
 
@@ -115,19 +156,37 @@ export class NonLoopbackWithoutTokenError extends Error {
   }
 }
 
+export type ServeMode = 'open' | 'token' | 'login';
+
+type SecurityOptions = Pick<ServeOptions, 'host' | 'token'> &
+  Partial<Pick<ServeOptions, 'announce' | 'publicUrls' | 'tls' | 'tlsCert' | 'tlsKey' | 'trustProxies'>>;
+
 /**
- * The non-negotiable startup gate (task 15, decision #4): `grunt serve` must
- * refuse to bind to a non-loopback host unless a `--token` was supplied.
- * Kept as a small, pure, synchronous function (no I/O, no process.exit) so
- * it can be asserted on directly without spinning up a real server.
+ * The non-negotiable startup gate (task 15, decision #4; spec
+ * 2026-10-12-remote-access §1). Pure and synchronous (no I/O, no
+ * process.exit) so it can be asserted on directly. Open and token modes are
+ * exactly as before; one or more `--public-url` turns sign-in on, which
+ * needs an HTTPS route and allows a non-loopback bind without a token.
  */
-export function assertServeSecurity(options: Pick<ServeOptions, 'host' | 'token'> & { announce?: boolean }): void {
-  if (!isLoopbackHost(options.host) && !options.token) {
-    throw new NonLoopbackWithoutTokenError(options.host);
+export function assertServeSecurity(options: SecurityOptions): ServeMode {
+  const publicUrls = options.publicUrls ?? [];
+  const trustProxies = options.trustProxies ?? [];
+  const tls = options.tls ?? null;
+  const tlsCert = options.tlsCert ?? null;
+  const tlsKey = options.tlsKey ?? null;
+  if (publicUrls.length === 0) {
+    if (tls !== null || tlsCert !== null || tlsKey !== null || trustProxies.length > 0) throw new TlsWithoutPublicUrlError();
+    if (!isLoopbackHost(options.host) && !options.token) throw new NonLoopbackWithoutTokenError(options.host);
+    if (options.announce && !options.token) throw new AnnounceWithoutTokenError();
+    return options.token ? 'token' : 'open';
   }
-  if (options.announce && !options.token) {
-    throw new AnnounceWithoutTokenError();
-  }
+  if (options.announce) throw new RemoteWithAnnounceError();
+  for (const url of publicUrls) parsePublicUrl(url);
+  if (tls === 'auto' && (tlsCert !== null || tlsKey !== null)) throw new TlsConflictError('Refusing to start: use --tls auto or --tls-cert/--tls-key, not both.');
+  if ((tlsCert === null) !== (tlsKey === null)) throw new TlsConflictError('Refusing to start: --tls-cert and --tls-key go together.');
+  for (const proxy of trustProxies) if (isIP(proxy) === 0) throw new InvalidTrustProxyError(proxy);
+  if (tls !== 'auto' && tlsCert === null && trustProxies.length === 0) throw new RemoteNeedsHttpsError();
+  return 'login';
 }
 
 /**
@@ -170,6 +229,11 @@ export interface ServerHandle {
   port: number;
   host: string;
   announce: boolean;
+  scheme: 'http' | 'https';
+  /** Sign-in mode's public URLs; empty otherwise. */
+  publicUrls: string[];
+  /** Lines to print after the listening line (certificate fingerprint, warnings). */
+  notes: string[];
   close: () => void;
 }
 
@@ -195,14 +259,27 @@ export async function runServe(
   } = { ...defaultDeps, ...deps };
 
   const options = parseServeArgs(argv, env);
-  assertServeSecurity(options);
+  const mode = assertServeSecurity(options);
+  const secretsPath = defaultSecretsPath(options.dbPath);
+  const signInOptions = { ...options, loopback: isLoopbackHost(options.host) };
+  // Sign-in's file checks come before anything is built, so a refusal leaves nothing behind.
+  const check = mode === 'login' ? checkSignIn(signInOptions, secretsPath) : null;
 
   const container = await buildContainer({
     dbPath: options.dbPath,
-    secretsPath: defaultSecretsPath(options.dbPath),
+    secretsPath,
     ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
     peerHosts: options.peerHosts,
   });
+
+  let signIn: SignIn | null = null;
+  try {
+    if (check) signIn = startSignIn(signInOptions, check, container.store.nodes.self().name);
+  } catch (err) {
+    container.close();
+    throw err;
+  }
+  const remote = signIn?.remote ?? null;
 
   // Filled in by the listening callback; the Host check reads it per request,
   // and no request can arrive before the port is bound.
@@ -211,13 +288,19 @@ export async function runServe(
     token: options.token,
     webDistDir: defaultWebDistDir(),
     corsOrigins: options.corsOrigins,
-    hostCheckPort: isLoopbackHost(options.host) ? () => boundPort : undefined,
+    hostCheckPort: isLoopbackHost(options.host) || remote ? () => boundPort : undefined,
+    remote,
   });
+
+  const tls = signIn?.tls ?? null;
+  const serveOptions = tls
+    ? { fetch: app.fetch, port: options.port, hostname: options.host, createServer: createHttpsServer, serverOptions: { key: tls.key, cert: tls.cert, minVersion: 'TLSv1.2' as const } }
+    : { fetch: app.fetch, port: options.port, hostname: options.host };
 
   let server: ReturnType<typeof nodeServe>;
   try {
     await new Promise<void>((resolve, reject) => {
-      server = startServer({ fetch: app.fetch, port: options.port, hostname: options.host }, (info) => {
+      server = startServer(serveOptions, (info) => {
         boundPort = info.port;
         resolve();
       });
@@ -226,14 +309,28 @@ export async function runServe(
       (server as { once?: (event: string, fn: (err: Error) => void) => void }).once?.('error', reject);
     });
   } catch (err) {
+    remote?.close();
     container.close();
     throw err;
   }
+
+  // A long-running server says so in the log when its certificate is near its end; nothing renews mid-run.
+  const notAfter = signIn?.notAfter ?? null;
+  const expiryTimer =
+    notAfter !== null
+      ? setInterval(() => {
+          const warning = expiryWarning(notAfter, Date.now());
+          if (warning) console.error(warning);
+        }, 86_400_000)
+      : null;
+  expiryTimer?.unref?.();
 
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
+    if (expiryTimer) clearInterval(expiryTimer);
+    remote?.close();
     server.close();
     container.close();
   };
@@ -246,12 +343,27 @@ export async function runServe(
     });
   }
 
-  return { port: boundPort, host: options.host, announce: options.announce, close };
+  return {
+    port: boundPort,
+    host: options.host,
+    announce: options.announce,
+    scheme: tls ? 'https' : 'http',
+    publicUrls: remote?.publicOrigins ?? [],
+    notes: signIn?.notes ?? [],
+    close,
+  };
 }
 
 export interface MainDeps extends Partial<ServeDeps> {
   env?: NodeJS.ProcessEnv;
 }
+
+const USAGE = [
+  'Usage:',
+  '  grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...',
+  '              [--public-url https://<host>[:<port>]]... [--tls auto | --tls-cert <file> --tls-key <file>] [--trust-proxy <ip>]...',
+  '  grunt password [--db <path>]',
+].join('\n');
 
 /** The CLI entry point: `grunt <command> [options]`. Currently only `serve` exists. */
 export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
@@ -259,9 +371,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
   const [command, ...rest] = argv;
 
   if (command !== 'serve') {
-    console.error(
-      'Usage: grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...'
-    );
+    console.error(USAGE);
     exit(1);
     return;
   }
@@ -270,11 +380,14 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
     const handle = await runServe(rest, deps, deps.env ?? process.env);
     // In announce mode stdout belongs to the handshake alone.
     const log = handle.announce ? console.error : console.log;
-    log(`Grunt server listening on http://${handle.host}:${handle.port}`);
+    const signIn = handle.publicUrls.length > 0 ? `; sign-in on ${handle.publicUrls.join(', ')}` : '';
+    log(`Grunt server listening on ${handle.scheme}://${handle.host}:${handle.port}${signIn}`);
+    for (const note of handle.notes) log(note);
   } catch (err) {
     if (
       err instanceof NonLoopbackWithoutTokenError ||
       err instanceof AnnounceWithoutTokenError ||
+      err instanceof RemoteStartError ||
       err instanceof DatabaseLockedError
     ) {
       console.error(`Error: ${err.message}`);
