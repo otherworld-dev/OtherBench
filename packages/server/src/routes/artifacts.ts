@@ -27,7 +27,7 @@ export function chatBranch(store: Store, chat: Chat): { onBranch: (messageId: st
   }
 }
 
-function requireJson(c: Context): void {
+export function requireJson(c: Context): void {
   if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) throw new HTTPException(415, { message: 'Send the request as JSON.' });
 }
 
@@ -37,7 +37,7 @@ function chatOrThrow(container: Container, id: string): Chat {
   return chat;
 }
 
-function artifactOrThrow(container: Container, chatId: string, artifactId: string): { chat: Chat; artifact: Artifact } {
+export function artifactOrThrow(container: Container, chatId: string, artifactId: string): { chat: Chat; artifact: Artifact } {
   const chat = chatOrThrow(container, chatId);
   const artifact = container.store.artifacts.get(artifactId);
   if (!artifact || artifact.chatId !== chat.id) throw new HTTPException(404, { message: 'Artifact not found in this chat.' });
@@ -61,6 +61,7 @@ export function artifactsRoutes(container: Container): Hono {
       artifacts: artifactsOnBranch(store, chat.id, onBranch).map(({ artifact, current }) => ({
         id: artifact.id, slug: artifact.slug, kind: current.kind, language: current.language,
         title: current.title, versionId: current.id, number: current.number, madeBy: current.madeBy,
+        live: current.live?.calls.length ?? 0,
       })),
     });
   });
@@ -78,6 +79,7 @@ export function artifactsRoutes(container: Container): Hono {
       versions: versions.map((v) => ({
         id: v.id, number: v.number, title: v.title, madeBy: v.madeBy, createdAt: v.createdAt, onBranch: v.messageId !== null && onBranch(v.messageId),
         kind: v.kind, language: v.language, fileName: versionFileName(artifact, v),
+        live: v.live?.calls.length ?? 0,
       })),
     });
   });
@@ -107,8 +109,8 @@ export function artifactsRoutes(container: Container): Hono {
       artifactId: artifact.id,
       title: typeof body.title === 'string' ? body.title.trim() : (from?.title ?? artifact.slug),
       content: body.content,
-      // Your edit is the kind of the version it was made from.
-      ...(from ? { kind: from.kind, language: from.language } : {}),
+      // Your edit is the kind of the version it was made from, with its live calls (spec 2026-10-12-live-artifacts).
+      ...(from ? { kind: from.kind, language: from.language, live: from.kind === 'html' ? from.live : null } : {}),
       madeBy: 'user',
       messageId: tip,
       parentVersionId: from?.id ?? null,
