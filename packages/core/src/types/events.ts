@@ -20,7 +20,9 @@ export type AppEvent =
   | { type: 'peer-status'; nodeId: string; status: 'reachable' | 'unreachable'; since: number }
   | { type: 'sync-applied'; nodeId: string; changed: number }
   /** A paired machine said which of its chats have a reply running: re-read the list (#790). */
-  | { type: 'peer-activity'; nodeId: string };
+  | { type: 'peer-activity'; nodeId: string }
+  /** A chat started or stopped controlling this computer, or acted (computer use); `lastAction` is a one-line summary. */
+  | { type: 'computer-session'; chatId: string; active: boolean; lastAction?: string };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {
@@ -36,9 +38,17 @@ export interface RunningTurnSummary {
   messageId: string;
 }
 
+/** A chat that is controlling this computer, as the app-wide stream reports it. */
+export interface ComputerSessionSummary {
+  chatId: string;
+  lastAction?: string;
+}
+
 /** The `hello` that opens `GET /api/events`: the state a new subscriber can't rebuild from later events. */
 export interface AppEventsHello {
   pendingApprovals: PendingApprovalSummary[];
   /** Replies started and not yet finished, so a window opened mid-reply knows which chats are working (#824). */
   runningTurns: RunningTurnSummary[];
+  /** Chats controlling this computer right now (computer use), so a window opened mid-session shows the banner. */
+  computerSessions?: ComputerSessionSummary[];
 }

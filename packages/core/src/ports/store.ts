@@ -509,11 +509,14 @@ export interface Grant {
    *   stored as.
    * - `host`: one website, for `source: 'browser'` (spec
    *   2026-10-12-model-browser-design); matched exactly, ignoring case.
+   * - `app`: computer use's target app, its full program path lower-cased
+   *   (`appKey`, domain/computer-apps.ts). Matched exactly, never by name, so
+   *   `Downloads\excel.exe` can't ride on Excel's grant.
    *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; host?: string } | null;
+  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; host?: string; app?: string } | null;
   expiresAt: number | null;
 }
 

@@ -48,9 +48,10 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * source as well as name -- a tool merely sharing the shell tool's name must
  * not be able to satisfy, or to mint, a grant meant for the real shell.
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
- * Grunt only gates, never performs.
+ * Grunt only gates, never performs. `'computer'` is the desktop shell's
+ * computer use (spec 2026-10-12-computer-use-design).
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'browser';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'browser' | 'computer';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -77,6 +78,8 @@ export interface ToolPolicy {
   browser?: boolean;
   /** Websites the browser may never use; each entry also blocks its subdomains. Absent = none. */
   browserBlockedHosts?: string[];
+  /** Computer use (spec 2026-10-12-computer-use-design): the `computer` tool, desktop app on Windows only. Absent = off. */
+  computer?: boolean;
 }
 
 export interface ModelParams {

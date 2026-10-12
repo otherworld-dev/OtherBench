@@ -26,6 +26,8 @@ export interface ToolContext {
    */
   folders?: ResolvedFolder[];
   signal: AbortSignal;
+  /** Nobody can answer a card for this call (a scheduled run). It can only take permissions away. */
+  unattended?: boolean;
 }
 
 /**

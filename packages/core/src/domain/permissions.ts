@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
+import { COMPUTER_OFF_REASON } from './computer-apps.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
@@ -534,6 +535,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
     case 'browser':
       return policy.browser === true ? null : 'The browser is turned off for this profile.';
+    case 'computer':
+      return policy.computer === true ? null : COMPUTER_OFF_REASON;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;
