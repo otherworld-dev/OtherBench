@@ -310,6 +310,14 @@ export interface SettingsRepo {
   get(): AppSettings;
   /** Applies the keys `patch` defines and returns the full settings. */
   update(patch: Partial<AppSettings>): AppSettings;
+  /**
+   * A machine-local value kept beside the settings (the same `app_setting`
+   * table, never synced and never in `get()`), e.g. the sandbox's state
+   * (key `sandbox`). Null when unset or unreadable.
+   */
+  getValue(key: string): unknown;
+  /** Stores `value` as JSON under `key`; null removes it. Throws for an AppSettings key, which `update()` owns. */
+  setValue(key: string, value: unknown): void;
 }
 
 // --- messages ----------------------------------------------------------------

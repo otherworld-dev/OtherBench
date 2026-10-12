@@ -737,6 +737,15 @@ export function runStoreContract(
         store.settings.update({ memoryProfileId: null });
         expect(store.settings.get()).toEqual({ memoryProfileId: null });
       });
+      it('keeps machine-local values beside the settings, out of get(), and refuses a settings key', () => {
+        expect(store.settings.getValue('sandbox')).toBeNull();
+        store.settings.setValue('sandbox', { state: 'ready', packages: ['ffmpeg'] });
+        expect(store.settings.getValue('sandbox')).toEqual({ state: 'ready', packages: ['ffmpeg'] });
+        expect(store.settings.get()).toEqual({ memoryProfileId: null });
+        store.settings.setValue('sandbox', null);
+        expect(store.settings.getValue('sandbox')).toBeNull();
+        expect(() => store.settings.setValue('memoryProfileId', 'x')).toThrow(/settings key/);
+      });
     });
 
     it('attachments: create/get round-trip', () => {

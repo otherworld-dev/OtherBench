@@ -815,6 +815,8 @@ class InMemoryGlobalMemoryRepo implements GlobalMemoryRepo {
 
 class InMemorySettingsRepo implements SettingsRepo {
   private value: AppSettings = { ...DEFAULT_APP_SETTINGS };
+  /** JSON text, so a caller can't change a stored value through the object it passed in. */
+  private readonly values = new Map<string, string>();
   get(): AppSettings {
     return { ...this.value };
   }
@@ -823,6 +825,15 @@ class InMemorySettingsRepo implements SettingsRepo {
       if (value !== undefined) this.value = { ...this.value, [key]: value };
     }
     return this.get();
+  }
+  getValue(key: string): unknown {
+    const text = this.values.get(key);
+    return text === undefined ? null : (JSON.parse(text) as unknown);
+  }
+  setValue(key: string, value: unknown): void {
+    if (Object.hasOwn(DEFAULT_APP_SETTINGS, key)) throw new Error(`"${key}" is a settings key: change it with update().`);
+    if (value === null || value === undefined) this.values.delete(key);
+    else this.values.set(key, JSON.stringify(value));
   }
 }
 
