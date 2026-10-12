@@ -91,6 +91,16 @@ describe('relayServerTool', () => {
     expect(((await next.call({})).content as { type: string }[]).filter((c) => c.type === 'image')).toHaveLength(1);
   });
 
+  it('passes a computer screenshot back to Claude Code as MCP image content', async () => {
+    const screenshot = [
+      { type: 'text', text: 'Screenshot, 1366×768.' },
+      { type: 'image', data: FAKE_PNG.toString('base64'), mimeType: 'image/png' },
+    ];
+    expect(relayName('computer')).toBe('computer');
+    const tool = relayServerTool('computer', spec({ name: 'computer', source: 'computer', serverId: undefined }), () => async () => screenshot);
+    expect(await tool.call({ action: 'screenshot' })).toEqual({ content: screenshot });
+  });
+
   it('answers a tool error, a call that throws, or no running reply as an error result', async () => {
     const failed = relayServerTool('t', spec(), () => async () => ({ error: true, code: 'mcp_tool_error', message: 'Board not found' }));
     expect(await failed.call({})).toEqual({ content: [{ type: 'text', text: 'Board not found' }], isError: true });
