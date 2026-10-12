@@ -260,6 +260,23 @@ of work landed after that plan closed out:
   devices' browsers behind a password set with `grunt password`; see the
   README's *Use it from another device*.
 
+### The model's browser (Deck #926)
+
+Spec: `docs/superpowers/specs/2026-10-12-model-browser-design.md`; plan: `docs/superpowers/plans/2026-10-12-model-browser.md`.
+
+- A profile turns on **Browser** (off by default; `toolPolicy.browser`, `browserBlockedHosts`). API and Claude Code profiles alike: Claude Code gets it relayed on its `grunt_<hex>` server as `browser`, in folder and clean chats.
+- One headless Chromium per server (`playwright-core` 1.62.1; `GRUNT_BROWSER_PATH`, else Playwright's Chromium, Chrome, Edge), started on the first call and closed 5 minutes after the last chat's browser. Each chat gets a fresh in-memory context: no logins, no cookies, nothing on disk. A chat's browser closes after 15 idle minutes, on Close in the viewer, on chat delete and at shutdown; at most 4 are open.
+- Commands: open, snapshot, click, type, select, press, scroll, back, close. The model acts on `[ref=eN]` refs from an accessibility snapshot (cut at 40,000 characters). Every page result says the page text is untrusted.
+- **The host is judged one way only.** It is taken from the URL by the WHATWG parser and canonicalised (lower case, trailing dot, IDN, numeric and hex IPv4, bracketed and v4-mapped IPv6) in core's `browser-hosts.ts`. The same shared test vectors are run through the broker and through the proxy, so the two cannot drift apart.
+- **The proxy is the enforcement point.** All browser traffic goes through a Grunt proxy on 127.0.0.1 (per-chat user, per-launch password). It resolves names itself, checks the address after DNS on every request, then connects to the IP it checked, so DNS rebinding has nothing to swap. It refuses loopback, private, link-local, CGNAT, multicast and reserved addresses, local names and the profile's blocked sites. WebRTC UDP is off. It does **not** enforce per-site grants: a page loads other sites' sub-resources, and a page may move itself to another site without a card. The card is about what the model asks for, not a fence round the page.
+- **Approvals are per website and bound to the page described.** `ToolSpec.describeCall` works out the host before the broker decides. "For this chat" and "Always" grants are pinned to `{ host }`. Under "ask on mutate", snapshot/scroll/close need no card. An approval carries the navigation id and the ref snapshot generation of the page the model was shown, and both are re-checked synchronously right before acting. If the page moved: "The page moved to <site> since this was approved. Nothing was done: ask again."
+- **Claude Code runs only ticketed arguments.** The PreToolUse gate keeps the approved (described) arguments as an approval ticket; Grunt's MCP server runs only those, once. No ticket gives "Grunt has no approval for this call."
+- **Page-derived text is sanitised and labelled** wherever it reaches a card or the thread (web `viewer/browser.ts`: page text cleaned for display, the model still sees the raw text), so a page can't pass itself off as Grunt's own words.
+- The viewer's **Browser** item shows a view-only live JPEG stream (`/api/chats/:id/browser/live`, 5 fps at most). Not on the peer listener: a chat running elsewhere says which machine has its browser.
+- Tests: unit tests per module, `packages/tools/test/browser/browser.integration.test.ts` (real Chromium against a loopback fixture; skipped with a logged reason when none starts), `packages/web/e2e/browser.spec.ts` (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS` lets the e2e server reach its fixture site on `GRUNT_E2E_SITE_PORT`, default 4797). No test browses the internet. CI installs `chromium-headless-shell`.
+- **Not built on this branch:** unattended runs (scheduled tasks) and the sandbox-VM phase. Don't read the browser as covered by either.
+- Still to check by hand (spec §8 "Live check"): an API Sonnet profile and a clean Claude Code chat using a real site; a cookie banner and a form; Edge as the fallback through `GRUNT_BROWSER_PATH`; memory with two chats' browsers open; the 15-minute idle close; whether Chromium dies with the server when the server exits; the live view on a phone in sign-in mode. If a live Claude Code browser call answers "Grunt has no approval for this call.", suspect key order: tickets are keyed on `JSON.stringify` of the raw arguments, and the hook's `tool_input` may order keys differently from the MCP call (it fails closed). A hung Chromium's kill path is tested with a fake only.
+
 ## Settings UI
 
 A **Settings** button in the header (`App.tsx`) opens a full-screen overlay
@@ -1078,6 +1095,7 @@ this on startup.
   gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
   on real devices.
 - **MCP sign-in, phase 2** (Deck #931). Not built: registering the public and loopback redirect addresses side by side (each change of address registers again), revoking tokens at the provider on sign-out (RFC 7009), a fixed callback port for providers that pin it, a sign-in button in the Inspector, and URL-based client IDs (SEP-991). In open or token mode with `--host ::1` or one specific non-loopback address, `127.0.0.1` isn't served, so the callback can't arrive; paste-back still works. Tool-call error text from an MCP server isn't redacted (only lifecycle errors are). After a URL change and a new sign-in, a stale refresh on the old URL can force one more sign-in; it never discloses a token.
+- **The model's browser** (Deck #926). It runs on the host with Chromium's own sandbox only; a later phase moves it into the sandbox VM. The proxy doesn't enforce per-site grants (see the section above). Chromium may still resolve names itself for prefetching (a hostname leak to DNS, not a connection). Sign-in, cookie import, screenshots to the model, site categories and tabs are phase 2. Unattended runs aren't built on this branch.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 
 ## Deviations from the v2 spec and plan

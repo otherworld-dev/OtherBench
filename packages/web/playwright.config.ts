@@ -5,6 +5,9 @@ import { defineConfig } from '@playwright/test';
 
 const PORT = Number(process.env.GRUNT_E2E_PORT ?? 4756);
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
+/** The fixture site browser.spec.ts opens (e2e/fixtures/site-server.mjs). */
+export const SITE_PORT = Number(process.env.GRUNT_E2E_SITE_PORT ?? 4797);
+export const SITE_URL = `http://127.0.0.1:${SITE_PORT}`;
 /** The one Cowork session the e2e server finds (claude-import.spec.ts imports it). */
 export const COWORK_SESSION = { id: 'local_e2e_cowork', title: 'Cowork e2e session' };
 
@@ -59,11 +62,25 @@ export default defineConfig({
   // Requires `npm run build` (root or `-w @grunt/server -w @grunt/web`) to
   // have already produced packages/{server,web}/dist -- this only starts
   // the already-built server, it doesn't build it.
-  webServer: {
-    command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}"`,
-    url: `${BASE_URL}/api/health`,
-    reuseExistingServer: false,
-    timeout: 15_000,
-    env: { ...(process.env as Record<string, string>), GRUNT_COWORK_ROOT: coworkDir, GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig },
-  },
+  webServer: [
+    {
+      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}"`,
+      url: `${BASE_URL}/api/health`,
+      reuseExistingServer: false,
+      timeout: 15_000,
+      env: {
+        ...(process.env as Record<string, string>),
+        GRUNT_COWORK_ROOT: coworkDir,
+        GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig,
+        // The model's browser may reach the fixture site on 127.0.0.1 (tests only).
+        GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS: String(SITE_PORT),
+      },
+    },
+    {
+      command: `node e2e/fixtures/site-server.mjs ${SITE_PORT}`,
+      url: `${SITE_URL}/`,
+      reuseExistingServer: false,
+      timeout: 10_000,
+    },
+  ],
 });
