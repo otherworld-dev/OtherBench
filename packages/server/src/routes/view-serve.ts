@@ -16,8 +16,11 @@ const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store
 /**
  * The sandbox for everything a link serves but a PDF (spec 2026-10-07-viewer):
  * scripts run, but in an opaque origin; loads from https, data:, blob: and the
- * link's own folder; network to https and wss only, which also keeps it off
- * Grunt's API and anything else on plain http. Forms too: `form-action`
+ * link's own folder; network to https and wss only. With Grunt itself on
+ * HTTPS (sign-in mode) that no longer keeps a page off Grunt's API; what does
+ * is the sandbox's opaque origin: its requests carry no cookie,
+ * `Sec-Fetch-Site: cross-site` and `Origin: null`, which the auth gate and the
+ * cross-site check refuse. Forms too: `form-action`
  * doesn't fall back to `default-src`, and without it a page could post a
  * form to Grunt's API, which takes a text/plain body as JSON.
  */
@@ -84,13 +87,18 @@ export function parseRange(header: string | undefined, size: number): { start: n
  * its links at once. The type is always from view/kinds.ts. Not on the peer
  * listener.
  */
-export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => boolean = () => true, artifacts?: Pick<ArtifactRepo, 'get' | 'getVersion'>): Hono {
+export function viewServeRoutes(
+  links: ViewLinks,
+  allowed: (link: ViewLink) => boolean = () => true,
+  artifacts?: Pick<ArtifactRepo, 'get' | 'getVersion'>,
+  clientOf?: (c: Context) => string
+): Hono {
   const app = new Hono();
 
   app.get('/:id/*', async (c) => {
     const id = c.req.param('id');
     const link = links.get(id);
-    if (!link || !allowed(link)) return refuse(c, 404, 'This link has expired. Open the file again.');
+    if (!link || !allowed(link) || (clientOf !== undefined && link.client !== clientOf(c))) return refuse(c, 404, 'This link has expired. Open the file again.');
     const url = new URL(c.req.url);
     const rel = relativeOf(url.pathname, id);
     if (rel === null) return refuse(c, 404, 'Not found.');

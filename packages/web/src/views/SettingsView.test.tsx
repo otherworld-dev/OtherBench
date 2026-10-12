@@ -10,12 +10,15 @@ vi.mock('./settings/MemoryPanel.js', () => ({ MemoryPanel: () => <div>memory pan
 vi.mock('./settings/McpServersPanel.js', () => ({ McpServersPanel: () => <div>mcp</div> }));
 vi.mock('./settings/SandboxPanel.js', () => ({ SandboxPanel: () => <div>sandbox panel</div> }));
 vi.mock('./settings/DesktopPanel.js', () => ({ DesktopPanel: () => <div>desktop panel</div> }));
+vi.mock('./settings/RemoteAccessPanel.js', () => ({ RemoteAccessPanel: () => <div>remote panel</div> }));
 
+import { useAuthStore } from '../state/auth.js';
 import { SettingsView } from './SettingsView.js';
 
 afterEach(() => {
   cleanup();
   desktop = false;
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
 describe('SettingsView', () => {
@@ -35,6 +38,17 @@ describe('SettingsView', () => {
     expect(names.indexOf('Sandbox')).toBe(names.indexOf('MCP Servers') + 1);
     fireEvent.click(screen.getByRole('tab', { name: 'Sandbox' }));
     expect(screen.getByText('sandbox panel')).toBeInTheDocument();
+  });
+
+  it('has a Remote access tab only in sign-in mode', () => {
+    const { unmount } = render(<SettingsView onClose={vi.fn()} />);
+    expect(screen.queryByRole('tab', { name: 'Remote access' })).toBeNull();
+    unmount();
+
+    useAuthStore.setState({ mode: 'login' });
+    render(<SettingsView onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Remote access' }));
+    expect(screen.getByText('remote panel')).toBeInTheDocument();
   });
 
   it('has no Desktop tab in a browser', () => {

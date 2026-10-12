@@ -73,9 +73,12 @@ function headingSelector(projectId: string): string {
  * collapsed groups show expanded, while a search is active.
  *
  * `footer` renders at the end of the New chat / New project row, for
- * app-level controls the caller owns (Settings, Usage).
+ * app-level controls the caller owns (Settings, Usage). `wrapFooter` lets
+ * that row wrap onto a second line instead of running out of the sidebar
+ * (signed-in remote access adds a fourth button, which a phone-width sidebar
+ * can't fit).
  */
-export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
+export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; wrapFooter?: boolean } = {}): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
   const projects = useGruntStore((s) => s.projects);
   const profiles = useGruntStore((s) => s.profiles);
@@ -621,7 +624,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
         )}
       </div>
 
-      <div className="flex items-center gap-1 border-t border-[var(--border)] p-2">
+      <div className={`flex items-center gap-1 border-t border-[var(--border)] p-2${wrapFooter ? ' flex-wrap' : ''}`}>
         <button
           type="button"
           onClick={() => void createChat()}

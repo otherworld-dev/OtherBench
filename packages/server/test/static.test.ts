@@ -99,4 +99,18 @@ describe('mountStatic', () => {
 
     expect(res.status).toBe(404);
   });
+
+  it("tells browsers never to frame what it serves, the app, its assets and the placeholder alike", async () => {
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>Grunt App</title>');
+    writeFileSync(join(dir, 'app.js'), 'console.log(1)');
+    const app = new Hono();
+    mountStatic(app, { webDistDir: dir });
+    const missing = new Hono();
+    mountStatic(missing, { webDistDir: join(dir, 'does-not-exist') });
+
+    for (const res of [await app.request('/'), await app.request('/app.js'), await app.request('/chats/abc'), await missing.request('/')]) {
+      expect(res.headers.get('Content-Security-Policy')).toBe("frame-ancestors 'none'");
+      expect(res.headers.get('X-Frame-Options')).toBe('DENY');
+    }
+  });
 });

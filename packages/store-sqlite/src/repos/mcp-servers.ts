@@ -1,11 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { McpServer, McpServerRepo } from '@grunt/core/ports/store.js';
+import type { McpServer, McpServerOAuth, McpServerRepo } from '@grunt/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { fromBool, fromJson, fromJsonNullable, toBool, toJson, toJsonNullable } from './util.js';
 
 const mapping: CrudMapping<McpServer> = {
   table: 'mcp_server',
-  columns: ['id', 'name', 'transport', 'command', 'args', 'env_refs', 'url', 'header_refs', 'enabled', 'status', 'tools_cache'],
+  columns: ['id', 'name', 'transport', 'command', 'args', 'env_refs', 'url', 'header_refs', 'enabled', 'status', 'tools_cache', 'oauth'],
   toRow: (s) => [
     s.id,
     s.name,
@@ -18,6 +18,7 @@ const mapping: CrudMapping<McpServer> = {
     toBool(s.enabled),
     s.status,
     toJsonNullable(s.toolsCache),
+    toJsonNullable(s.oauth),
   ],
   fromRow: (row) => ({
     id: row.id as string,
@@ -31,6 +32,7 @@ const mapping: CrudMapping<McpServer> = {
     enabled: fromBool(row.enabled as number),
     status: row.status as McpServer['status'],
     toolsCache: fromJsonNullable(row.tools_cache as string | null),
+    oauth: fromJsonNullable<McpServerOAuth>(row.oauth as string | null),
   }),
 };
 

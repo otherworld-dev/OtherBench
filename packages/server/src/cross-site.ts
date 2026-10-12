@@ -14,8 +14,9 @@ const refused = (c: Context): Response =>
  *
  * A write is let through when the browser says it's same-origin
  * (`Sec-Fetch-Site`, which a page can't set: this also covers `npm run dev`
- * through Vite's proxy), when its `Origin` is this server's own or one of
- * `allowedOrigins` (the desktop webview's), or when it carries neither
+ * through Vite's proxy), when its `Origin` is this server's own (with the
+ * scheme it was reached by) or one of `allowedOrigins` (the desktop webview's,
+ * and the public URLs in sign-in mode), or when it carries neither
  * header, as clients that are no browser (curl, scripts, tests) send it.
  * Anything else a browser sends, an opaque `null` origin included, is refused.
  */
@@ -32,7 +33,12 @@ export function refuseCrossSiteWrites(allowedOrigins: readonly string[]): Middle
       const site = c.req.header('sec-fetch-site');
       const origin = c.req.header('origin');
       const host = c.req.header('host')?.toLowerCase();
-      const own = origin !== undefined && (allowed.has(origin) || (host !== undefined && origin.toLowerCase() === `http://${host}`));
+      // This server's own origin with the scheme it was reached by: https on
+      // a TLS socket (@hono/node-server builds the URL from Host and the
+      // socket). `allowed` adds the desktop webview's and, in sign-in mode,
+      // the public URLs' (which also covers a TLS proxy in front).
+      const scheme = new URL(c.req.url).protocol;
+      const own = origin !== undefined && (allowed.has(origin) || (host !== undefined && origin.toLowerCase() === `${scheme}//${host}`));
       const browserSaysSameOrigin = site === 'same-origin' || site === 'none';
       const noBrowser = origin === undefined && site === undefined;
       if (!own && !browserSaysSameOrigin && !noBrowser) return refused(c);

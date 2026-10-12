@@ -152,6 +152,7 @@ function makeMcpServer(over: Partial<McpServer> & { id: string }): McpServer {
     enabled: true,
     status: 'unknown',
     toolsCache: null,
+    oauth: null,
     ...over,
   };
 }
@@ -822,6 +823,14 @@ export function runStoreContract(
     it('mcpServers: create/get round-trip', () => {
       store.mcpServers.create(makeMcpServer({ id: 'mcp-a', name: 'My MCP Server' }));
       expect(store.mcpServers.get('mcp-a')).toMatchObject({ id: 'mcp-a', name: 'My MCP Server' });
+    });
+
+    it('mcpServers: the oauth summary round-trips, and an update can clear it', () => {
+      const oauth = { clientId: 'client-1', clientSecretRef: 'mcp:mcp-o:oauth:client-secret', account: 'alice@example.com', signedInAt: 1_760_000_000_000 };
+      store.mcpServers.create(makeMcpServer({ id: 'mcp-o', transport: 'http', command: null, url: 'https://mcp.example.com/mcp', oauth }));
+      expect(store.mcpServers.get('mcp-o')!.oauth).toEqual(oauth);
+      store.mcpServers.update('mcp-o', { oauth: null });
+      expect(store.mcpServers.get('mcp-o')!.oauth).toBeNull();
     });
 
     it('audit: create/get round-trip, defaulting createdAt', () => {

@@ -351,6 +351,21 @@ describe('MCP server routes', () => {
     expect(mcpManager.listFor([created.id])).toHaveLength(0);
   });
 
+  it('a PATCH that changes a connected server\'s env restarts it so the change takes effect', async () => {
+    const createRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Restartable', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { A: 'one' } }),
+    });
+    const { id } = (await createRes.json()) as { id: string };
+    await waitFor(() => mcpManager.health().find((h) => h.id === id)?.status === 'ok');
+    const before = mcpManager.listFor([id])[0]!.client;
+
+    await app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ env: { A: 'two' } }) });
+    await waitFor(() => mcpManager.health().find((h) => h.id === id)?.status === 'ok');
+    expect(mcpManager.listFor([id])[0]!.client).not.toBe(before);
+  });
+
   it('refresh forces a reconnect and 404s for an unknown server', async () => {
     store.mcpServers.create({
       id: 'srv-x',
@@ -364,6 +379,7 @@ describe('MCP server routes', () => {
       enabled: true,
       status: 'unknown',
       toolsCache: null,
+      oauth: null,
     });
     await mcpManager.sync();
     await waitFor(() => mcpManager.health()[0]?.status === 'ok');
@@ -404,7 +420,7 @@ describe('Import from Claude Desktop', () => {
 
   it('lists the servers it finds by name, never with their values, marking ones Grunt has and ones it cannot use', async () => {
     config();
-    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await app().request('/api/mcp-servers/import/claude-desktop');
     expect(res.status).toBe(200);
     const text = await res.text();
@@ -428,7 +444,7 @@ describe('Import from Claude Desktop', () => {
 
   it('imports the chosen servers, their values going into the secret store, and skips the rest with reasons', async () => {
     config();
-    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await postImport({ names: ['Home Assistant', 'blender', 'legacy', 'ghost'] });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
@@ -440,6 +456,14 @@ describe('Import from Claude Desktop', () => {
     expect(Object.keys(row.envRefs).sort()).toEqual(['HOMEASSISTANT_TOKEN', 'HOMEASSISTANT_URL']);
     expect(await secrets.get(row.envRefs['HOMEASSISTANT_TOKEN']!)).toBe('very-secret-token');
     expect(JSON.stringify(row)).not.toContain('very-secret-token');
+  });
+
+  it('skips an http server whose address holds a user name or password', async () => {
+    writeConfig(JSON.stringify({ mcpServers: { sneaky: { type: 'http', url: 'https://good.example@evil.example/mcp' } } }));
+    const body = (await (await postImport({ names: ['sneaky'] })).json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
+    expect(body.imported).toEqual([]);
+    expect(body.skipped).toEqual([{ name: 'sneaky', reason: "A server address can't hold a user name or password. Send credentials in a header instead." }]);
+    expect(store.mcpServers.list()).toEqual([]);
   });
 
   const profile = (id: string, mcpServerIds: string[]) =>

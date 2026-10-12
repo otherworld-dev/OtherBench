@@ -21,6 +21,7 @@ function makeRow(overrides: Partial<McpServer> = {}): McpServer {
     enabled: true,
     status: 'unknown',
     toolsCache: null,
+    oauth: null,
     ...overrides,
   };
 }

@@ -112,7 +112,7 @@ describe('change log (Task 49)', () => {
     });
     a.store.grants.create({ id: 'g', chatId: 'c', profileId: null, toolName: 't', source: 'fs', scope: 'chat', constraint: null, expiresAt: null });
     a.store.audit.create({ id: 'au', chatId: 'c', messageId: 'm', toolName: 't', argsRedacted: {}, resultSummary: '', durationMs: 0, grantedBy: 'user' });
-    a.store.mcpServers.create({ id: 'mcp', name: 'M', transport: 'stdio', command: 'x', args: [], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+    a.store.mcpServers.create({ id: 'mcp', name: 'M', transport: 'stdio', command: 'x', args: [], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null });
 
     const inserted = new Set(since(a, start));
     for (const t of ['location', 'location_path', 'connection', 'model', 'profile', 'project', 'project_memory', 'chat', 'message', 'attachment', 'usage']) {
@@ -540,7 +540,7 @@ describe('sync (Task 50)', () => {
     a.store.locations.create({ id: 'loc', name: 'Loc' });
     s.both();
     a.store.grants.create({ id: 'g', chatId: null, profileId: null, toolName: 't', source: 'fs', scope: 'always', constraint: null, expiresAt: null });
-    b.store.mcpServers.create({ id: 'mcp', name: 'M', transport: 'stdio', command: 'x', args: [], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+    b.store.mcpServers.create({ id: 'mcp', name: 'M', transport: 'stdio', command: 'x', args: [], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null });
 
     let n = 0;
     for (let i = 0; i < 500; i++) {

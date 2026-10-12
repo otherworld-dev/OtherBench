@@ -13,6 +13,20 @@ import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
+/** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
+export interface AuthStatus {
+  mode: 'open' | 'token' | 'login';
+  signedIn: boolean;
+  /** Sign-in with Grunt's own certificate: the login page offers it. */
+  caDownload?: boolean;
+  session?: { expiresAt: number; remember: boolean };
+  remote?: {
+    publicUrls: string[];
+    tls: { mode: 'auto' | 'files' | 'proxy'; notAfter?: number; caFingerprint?: string; names?: string[] };
+    trustProxies: string[];
+  };
+}
+
 export class ApiError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -332,6 +346,10 @@ export interface CreateMcpServerBody {
   /** Plaintext header VALUES -- same rules as `env` above, including the PATCH-only `null` ("keep") sentinel. */
   headers?: Record<string, string | null>;
   enabled?: boolean;
+  /** Sign-in app: a hand-registered client ID (null clears it). Only sent when changed. */
+  oauthClientId?: string | null;
+  /** Its secret, write-only like headers: a string sets it, null removes it, absent keeps it. */
+  oauthClientSecret?: string | null;
 }
 
 /**
@@ -343,6 +361,14 @@ export interface CreateMcpServerBody {
 export const api = {
   /** `platform` is the SERVER's `process.platform` (e.g. "win32"), not the browser's -- see routes/health.ts. Used to validate a chat's workspace root against the OS that will actually resolve it. */
   health: () => request<{ status: string; time: string; platform: string }>('/health'),
+  /** Sign-in (spec 2026-10-12-remote-access §3). Asked only in a browser, never in the desktop app. */
+  auth: {
+    status: () => request<AuthStatus>('/auth/status'),
+    login: (password: string, remember: boolean) => post<{ expiresAt: number }>('/auth/login', { password, remember }),
+    logout: () => post<void>('/auth/logout'),
+    logoutAll: () => post<void>('/auth/logout-all'),
+    changePassword: (current: string, next: string) => post<{ expiresAt: number }>('/auth/password', { current, next }),
+  },
 
   connections: {
     list: () => request<Connection[]>('/connections'),
@@ -527,6 +553,14 @@ export const api = {
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),
     refresh: (id: string) => post<void>(`/mcp-servers/${id}/refresh`),
+    /** Starts a browser sign-in (spec 2026-10-12-mcp-oauth-design §6); the caller opens `authorizationUrl`. */
+    signIn: (id: string) => post<{ authorizationUrl: string }>(`/mcp-servers/${id}/sign-in`),
+    cancelSignIn: (id: string) => post<void>(`/mcp-servers/${id}/sign-in/cancel`),
+    /** Paste-back: finishes a sign-in from the address a browser on another device ended on. */
+    completeSignIn: (id: string, url: string) => post<{ signedIn: true }>(`/mcp-servers/${id}/sign-in/complete`, { url }),
+    /** Forgets the sign-in here; the provider isn't told. */
+    signOut: (id: string) => post<void>(`/mcp-servers/${id}/sign-out`),
+    signInRedirectUri: () => request<{ redirectUri: string | null }>('/mcp-servers/sign-in/redirect-uri'),
     /** The MCP servers in Claude Desktop's config: names, commands and the NAMES of their env vars and headers, never the values. */
     claudeDesktop: () => request<ClaudeDesktopListing>('/mcp-servers/import/claude-desktop'),
     /** Imports the named servers; their env and header values go server-side into the secret store. */

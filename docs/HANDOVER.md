@@ -265,6 +265,10 @@ of work landed after that plan closed out:
   place of Bash. Settings > Sandbox sets it up, repairs and removes it; nothing
   is set up until you press Set up. `@grunt/sandbox` holds the backend; the
   in-VM agent is `packages/sandbox/resources/agent.mjs`.
+- **Remote access** (Deck #936). `grunt serve --public-url https://… --tls auto`
+  (or `--tls-cert/--tls-key`, or `--trust-proxy`) runs Grunt for other
+  devices' browsers behind a password set with `grunt password`; see the
+  README's *Use it from another device*.
 
 ## Settings UI
 
@@ -518,6 +522,26 @@ by path; immediate revocation; approvals never delegated (each tool call
 still needs an approval or a grant on the machine running it); every
 approval audited with the machine it came from. Pairing codes are
 single-use, last ten minutes, and are cancelled after five wrong guesses.
+
+**Sign-in mode is the whole UI on the network, by design** (`--public-url`,
+spec 2026-10-12-remote-access). A signed-in browser is the box's user
+account: it can approve shell commands, browse any folder (`GET
+/api/fs/dirs`), attach a file by path and import from a folder. The
+defences: a password (scrypt, at least 12 characters, in `login.json`, not
+the database) and a session cookie (`__Host-`, `HttpOnly; Secure;
+SameSite=Strict`, counted only when `Sec-Fetch-Site` says same-origin);
+HTTPS only (no plain-HTTP sign-in, no HSTS, no redirect); a Host check
+against the public URLs; the cross-site write check; 5 wrong passwords lock
+an address out for 15 minutes and 100 in an hour close sign-in for everyone,
+which trades guessing for denial of service; `/view/` links work only from
+the address that made them (weak behind shared NAT, nothing behind a proxy
+that sends no `X-Forwarded-For`); and `frame-ancestors 'none'` on the UI in
+every mode. With `--tls auto` the first visit is trust-on-first-use: only
+checking the CA's fingerprint against `grunt serve`'s own output stops a
+man in the middle. The CA's private key is thrown away after it signs the
+one server certificate, so a stolen disk can't mint certificates that
+devices trusting it would accept. Sessions live in memory: a restart signs
+everyone out.
 
 **The host shell tool (`run_command` with `shellRuns` absent or `host`) is unsandboxed by design.** It executes
 whatever command string the model produces on the real OS with the real
@@ -1010,6 +1034,36 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
   - The host-name check can't see DNS that points a public name at a private address (`127.0.0.1.nip.io`, rebinding). The connect-time guard covers that (checked live). It doesn't judge a literal-IP dial at all: that rests on the allowlist never holding a literal and on the agent's ask-time lookup (checked live too).
 - **Not built.** Background processes in the sandbox; a Linux backend (phase 2); macOS; scheduled tasks, which will set `ToolContext.unattended` (the provider already refuses a card on an unattended run).
 
+### Sign-in for HTTP MCP servers
+
+These follow spec 2026-10-12-mcp-oauth-design (Deck #931).
+
+- **Detection.** Every http server without a fixed `Authorization` header (any case) gets Grunt's OAuth provider. One that answers 401 with no usable token shows "needs sign-in" (live status `needs_auth`, stored as `error`), stops retrying and offers no tools, to API profiles and Claude Code's relay alike. A fixed `Authorization` header turns this off: a 401 there is an ordinary error.
+- **Signing in.** Settings > MCP servers > the server > Sign in… opens the provider in the system browser (desktop) or a new tab. Discovery (RFC 9728, then RFC 8414 or OpenID), dynamic registration (RFC 7591), PKCE S256, `state` and `resource` (RFC 8707) come from the MCP SDK, pinned to 1.30.0 in `packages/tools` because the provider relies on the order inside its `auth()`. Grunt registers as a public client named "Grunt", and registers again whenever the redirect address or the authorization server (its issuer) changes. A new registration is held in memory by the sign-in that made it (and reused by the next start) and only replaces the stored one when that sign-in completes, so a cancelled "Sign in again" leaves the registration the live tokens belong to in place.
+- **The redirect address.** In open and token modes (the desktop app included) it is `http://127.0.0.1:<bound port>/oauth/callback`, so it changes on every desktop relaunch. In sign-in mode (`--public-url`, Deck #936) it is `<first --public-url>/oauth/callback`: https, it passes the Host check, and it works behind a trusted proxy, which matters because there the main port may speak only HTTPS and the loopback address wouldn't load. Public and loopback addresses are not registered side by side: each change of address just registers again.
+- **Where things live.** Tokens, the registration (`{ redirectUri, issuer, info }`; one without an issuer, or made with another issuer, counts as absent) and a hand-registered secret: SecretStore, `mcp:<id>:oauth:tokens|client|client-secret`. SQLite: only `mcp_server.oauth` (`clientId`, `clientSecretRef`, `account`, `signedInAt`, migration 022). PKCE verifiers, `state` and discovery results: memory only. Nothing syncs between machines. Tokens are stored as `{ tokens, savedAt, resource }` and bound to the server URL they were issued for: a token whose `resource` differs from the server's current URL is never used.
+- **Staying signed in.** Refresh is the SDK's own, on a 401, unattended; the 30-second health check usually refreshes before a tool call needs it. `invalid_grant` forgets the tokens (needs sign-in); a provider that is down is an ordinary error with backoff. A forget request within 60 seconds of saving new tokens is ignored (two requests racing a rotating refresh token). Each server has an in-memory token generation, bumped by every forget and every sign-in: a connection's provider captures it when it is built, and its saves and forgets from an older generation are dropped, so a refresh still in flight (the SDK's `transport.close()` doesn't abort it) can't bring tokens back after a sign-out or overwrite a newer sign-in.
+- **The open callback route.** `GET /oauth/callback` sits outside `/api` and takes no bearer token or session cookie, because the system browser has neither. It can only finish a pending flow whose 256-bit `state` the caller already knows, once (removed on first lookup), within 10 minutes. The Host check (loopback binds and sign-in mode) blocks DNS rebinding there too; token mode on a non-loopback `--host` has no Host check, and the callback stays safe through the 256-bit single-use `state` alone. The page is plain HTML with no script, a `default-src 'none'` CSP, `no-referrer`, `no-store` and `nosniff`; it names the server (escaped) and shows a provider error by its sanitised code only. The callback URL holds the code and is never logged.
+- **Another device.** In sign-in mode a browser on another device is redirected back to the public URL and needs nothing pasted. Paste-back remains for a browser elsewhere in open or token mode (it ends on a page that won't load; pasting that address into the pending sign-in finishes it, `POST /api/mcp-servers/:id/sign-in/complete`, same checks), and for a sign-in started from a second `--public-url` that the browser can't reach as the first.
+- **Sign out** stops the connection and waits for it to close, then forgets the tokens and the registration here (a refresh still in flight is dropped, see above), keeps a hand-registered client, and reconnects, which then needs sign-in. It does not revoke at the provider.
+- **Edits.** A PATCH reconnects an enabled server when it changes a connection setting (URL, transport, command or args by value; headers or env whenever sent, since the form sends them only when edited) or the Sign-in app (a different client ID, or a secret set or removed). A changed URL or client ID forgets the sign-in (a hand-registered client survives a URL change); switching to stdio or deleting the server forgets every OAuth secret.
+- **Serialised changes.** A per-server lock serialises PATCH and DELETE reconfiguration (stop and await close, forget, update the row, reconnect), restart, sign-out and sign-in completion, so two of them can't interleave. A sync for another server's change leaves a server alone while it is being reconfigured. Overlapping sign-in starts for one server are serialised too, and the latest wins.
+- **Configured headers** go only to the MCP server's own origin (a fetch wrapper adds them), never to an authorization server elsewhere: the SDK's `auth()` would merge a transport's `requestInit` headers into discovery, registration and token requests.
+- **Redaction.** Every message that leaves the sign-in code, every connection's `lastError` and every failed tool call goes through `redactMessage` (`packages/tools/src/mcp/redact.ts`): known codes, verifiers, `state`, secrets and tokens (also percent-, form- and base64-encoded), `Bearer`/`Basic` credentials, sensitive `key=value` pairs, URL query, fragment and userinfo are removed, and the text is cut to 300 characters. A numeric `code`/`state` value ("exit code: 127") stays, and a configured env or header value is only treated as a secret when it looks like one (8 or more characters, not letters only), so `NODE_ENV=production` stays readable. The trade-off: a stdio server's error text is still capped and pattern-redacted.
+- **URL comparisons** all go through `packages/tools/src/mcp/url.ts`. It parses once with WHATWG `new URL()` and compares parsed, normalised parts: host lower-cased and punycoded, trailing dot and default port dropped, RFC 3986 percent-encoding, the path kept exactly (`/mcp` is not `/mcp-evil`), no query or fragment. Userinfo, backslashes and whitespace are refused. An http server address with userinfo or a backslash is refused at create, PATCH and import, and a stored one gets no sign-in.
+  - Authorization-server metadata whose `issuer` isn't the address it was discovered from is refused (RFC 8414 §3.3; SDK 1.30.0 doesn't check this).
+  - Protected-resource metadata must name this server's address or a parent path on its origin (RFC 9728 as MCP applies it: the SDK falls back to the origin's root metadata).
+  - Redirect URIs stay exact strings, as providers compare them.
+- **No RFC 9207 `iss` check.** The authorization response's `iss` isn't compared with the expected issuer. A mix-up through a hostile server's metadata is inherent to MCP and the SDK (the server names its own authorization server); adding a server is a trust decision.
+- **Sign-in app.** For providers without dynamic registration: a client ID and optional secret per server (the secret write-only, in SecretStore). The provider must accept the redirect address above; in open and token modes that means any loopback port, since the desktop app's port changes each launch.
+- **Probe (Task 1, read-only).** `https://mcp.notion.com/mcp` and `https://mcp.linear.app/mcp` both advertise dynamic registration, allow a public client (`none`) and S256 PKCE, and use https authorization endpoints, so neither needs the Sign-in app. It registered nothing; redirect acceptance is still unchecked.
+- **Live checks left for Adam** (nothing automated touched a real provider):
+  - Desktop app and a real hosted server with dynamic registration (Notion or Linear): the system browser opens; registration accepts `http://127.0.0.1:<port>/oauth/callback` (if it refuses the IP literal, change `OAUTH_CALLBACK_HOST` in `packages/server/src/routes/mcp-sign-in.ts` to `'localhost'`); Grunt shows "Signed in"; the tools work in an API chat and, relayed, in a Claude Code chat.
+  - Quit and relaunch (new port): still signed in, tools load. After the access token expires (usually an hour), calls still work. "Sign in again" after a relaunch works with the new port.
+  - Browser mode (`npm run serve`): the same sign-in, in a new tab.
+  - Sign-in mode (`--public-url`): a real provider accepts `<public url>/oauth/callback`, and a browser on another device finishes the sign-in with no paste-back.
+  - A provider without dynamic registration (GitHub's MCP server with a hand-registered OAuth app, callback `http://127.0.0.1/oauth/callback`): the Sign-in app path.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
@@ -1111,6 +1165,14 @@ this on startup.
   conversations (about 54 MB for 486 conversations) and inflating the ZIPs
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
+- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
+  no list of signed-in devices (only *Sign out everywhere*), sessions don't
+  survive a restart, certificate files aren't reloaded without a restart,
+  no Web Push for approvals, and no phone layout work beyond the sidebar
+  footer wrapping so Sign out stays reachable (the spec's §7 lists the other
+  gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
+  on real devices.
+- **MCP sign-in, phase 2** (Deck #931). Not built: registering the public and loopback redirect addresses side by side (each change of address registers again), revoking tokens at the provider on sign-out (RFC 7009), a fixed callback port for providers that pin it, a sign-in button in the Inspector, and URL-based client IDs (SEP-991). In open or token mode with `--host ::1` or one specific non-loopback address, `127.0.0.1` isn't served, so the callback can't arrive; paste-back still works. Tool-call error text from an MCP server isn't redacted (only lifecycle errors are). After a URL change and a new sign-in, a stale refresh on the old URL can force one more sign-in; it never discloses a token.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 - **Office files (Deck #928): the final writers' output hasn't been opened
   in Office.** The tests read the files back as XML. An early probe on
@@ -1157,7 +1219,7 @@ this on startup.
 | Plan or spec said | Built | Why |
 | --- | --- | --- |
 | Migrations numbered from 005 | 011-013 | v1 work after the plan was written had already used up to 010 |
-| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`) | Avoids a new dependency for one fixed certificate shape; Node signs and parses certificates, it just can't build one |
+| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`), which since remote access also makes `--tls auto`'s local CA and server certificate (SANs, key usages, key ids) | Avoids a new dependency for a few fixed certificate shapes; Node signs and parses certificates, it just can't build one |
 | `undici` Agent for the pinned client | `node:tls` + `node:http` with `createConnection` (`peer/client.ts`) | No new dependency, and the fingerprint is checked before any byte (the token included) is written |
 | Pairing MAC: `HMAC(code, fpA ‖ fpB)` | HMAC with a key derived by scrypt (N=2^14, r=8) from the code, salted with both fingerprints; the answer must come within 15 s | A security review showed a captured MAC of an 8-character code (2^40 guesses) falls to a GPU well inside the code's 10 minutes; the spec's "impractical" was wrong |
 | Messages are insert-only | Last writer wins by stamp | A retried reply and *keep* marks change a message in place; insert-only would never deliver them |

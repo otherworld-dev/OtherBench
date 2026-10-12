@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configureTransport } from './transport.js';
+import { configureTransport, onUnauthorized } from './transport.js';
 import { createFetchSseConnect, SseClient, SseParser, type SseConnect, type SseHandlers } from './sse.js';
 
 /** A minimal, fully hand-controlled stream double: no real network. */
@@ -148,6 +148,21 @@ describe('createFetchSseConnect', () => {
 
     expect(signal?.aborted).toBe(true);
     expect(onError).not.toHaveBeenCalled();
+  });
+});
+
+describe('createFetchSseConnect and sign-in', () => {
+  it('tells the 401 hook when a stream is refused for want of a session, then fails as before', async () => {
+    const seen = vi.fn();
+    const off = onUnauthorized(seen);
+    const onError = vi.fn();
+    const connect = createFetchSseConnect(async () => new Response(null, { status: 401 }));
+
+    connect('/api/events', { onEvent: vi.fn(), onError });
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(seen).toHaveBeenCalledTimes(1);
+    off();
   });
 });
 

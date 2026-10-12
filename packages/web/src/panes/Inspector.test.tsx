@@ -444,8 +444,8 @@ describe('Inspector MCP server health', () => {
 
   it('renders each server\'s live status and tool count, and lets a manual refresh be triggered', async () => {
     mockedMcpList.mockResolvedValue([
-      { id: 'srv-1', name: 'Filesystem MCP', transport: 'stdio', enabled: true, status: 'ok', lastError: null, toolCount: 3 },
-      { id: 'srv-2', name: 'Broken Server', transport: 'http', enabled: true, status: 'error', lastError: 'connection refused', toolCount: 0 },
+      { id: 'srv-1', name: 'Filesystem MCP', transport: 'stdio', enabled: true, status: 'ok', lastError: null, toolCount: 3, auth: null },
+      { id: 'srv-2', name: 'Broken Server', transport: 'http', enabled: true, status: 'error', lastError: 'connection refused', toolCount: 0, auth: null },
     ]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
@@ -459,6 +459,18 @@ describe('Inspector MCP server health', () => {
     expect(mockedMcpRefresh).toHaveBeenCalledWith('srv-1');
   });
 
+  it('shows a server that needs sign-in, with a pointer to Settings', async () => {
+    mockedMcpList.mockResolvedValue([
+      { id: 'srv-h', name: 'Hosted Docs', transport: 'http', enabled: true, status: 'needs_auth', lastError: 'This server needs you to sign in.', toolCount: 0, auth: { state: 'needs_sign_in', account: null, signedInAt: null, pending: false, error: null } },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const section = await within(mcpHealthSection()).findByTestId('mcp-health');
+    expect(within(section).getByText('needs sign-in')).toBeInTheDocument();
+    expect(within(section).getByText('Hosted Docs: needs sign-in (Settings > MCP servers).')).toBeInTheDocument();
+    expect(within(section).getByTestId('mcp-status-dot')).toHaveAttribute('data-status', 'needs_auth');
+  });
+
   it('shows an error state, not a crash, when the health fetch fails', async () => {
     mockedMcpList.mockRejectedValue(new Error('down'));
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
@@ -470,8 +482,8 @@ describe("Inspector MCP servers on the chat's profile", () => {
   afterEach(cleanup);
 
   const servers = [
-    { id: 'srv-1', name: 'nextcloud', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 73 },
-    { id: 'srv-2', name: 'blender', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 9 },
+    { id: 'srv-1', name: 'nextcloud', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 73, auth: null },
+    { id: 'srv-2', name: 'blender', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 9, auth: null },
   ];
   const opus = (mcpServerIds: string[]) =>
     makeProfile({ name: 'Claude Opus 5.5', toolPolicy: { fs: 'off', shell: false, mcpServerIds, approvalMode: 'ask_on_mutate' } });

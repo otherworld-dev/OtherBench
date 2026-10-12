@@ -24,8 +24,21 @@ export type ViewLink =
       /** The file, resolved. A folder link serves files under its folder. */
       target: string;
       expiresAt: number;
+      /**
+       * Sign-in mode: the client address that made the link. `/view/` refuses
+       * any other, because a sandboxed page can read its own URL and send it
+       * anywhere, and on a network another machine could use it.
+       */
+      client?: string;
     }
-  | { chatId: string; scope: 'artifact'; versionId: string; expiresAt: number };
+  | {
+      chatId: string;
+      scope: 'artifact';
+      versionId: string;
+      expiresAt: number;
+      /** As on the file member: the client address that made the link (sign-in mode). */
+      client?: string;
+    };
 
 /** A link to make: everything but its expiry. */
 export type NewViewLink = ViewLink extends infer L ? (L extends ViewLink ? Omit<L, 'expiresAt'> : never) : never;
