@@ -46,6 +46,14 @@ export const REFUSED_FUNCTIONS: readonly string[] = [
   'INDIRECT',
 ];
 
+/**
+ * Not in phase 1: LET, LAMBDA and the LAMBDA helpers, and GROUPBY/PIVOTBY
+ * (which need a LAMBDA or a bare function name). Excel stores their parameter
+ * names with an "_xlpm." prefix, which would need scope tracking to write, and
+ * bare names are otherwise refused.
+ */
+export const NOT_YET_FUNCTIONS: readonly string[] = ['LET', 'LAMBDA', 'MAP', 'REDUCE', 'SCAN', 'BYROW', 'BYCOL', 'MAKEARRAY', 'ISOMITTED', 'GROUPBY', 'PIVOTBY'];
+
 /** Functions Excel 2007 had: stored in the file by name alone. */
 const EXCEL_2007_FUNCTIONS = [
   // Maths and trigonometry
@@ -92,12 +100,12 @@ const FUTURE_FUNCTIONS = [
   'NORM.S.INV PERCENTILE.EXC PERCENTILE.INC PERCENTRANK.EXC PERCENTRANK.INC PERMUTATIONA PHI POISSON.DIST QUARTILE.EXC QUARTILE.INC RANK.AVG RANK.EQ SKEW.P STDEV.P',
   'STDEV.S T.DIST T.DIST.2T T.DIST.RT T.INV T.INV.2T T.TEST VAR.P VAR.S WEIBULL.DIST Z.TEST',
   // Lookup, reference and dynamic arrays
-  'CHOOSECOLS CHOOSEROWS DROP EXPAND FORMULATEXT GROUPBY HSTACK PERCENTOF PIVOTBY RANDARRAY SEQUENCE SORTBY TAKE TOCOL TOROW TRIMRANGE UNIQUE VSTACK WRAPCOLS',
-  'WRAPROWS XLOOKUP XMATCH',
-  // Text
-  'ARRAYTOTEXT CONCAT NUMBERVALUE REGEXEXTRACT REGEXREPLACE REGEXTEST TEXTAFTER TEXTBEFORE TEXTJOIN TEXTSPLIT UNICHAR UNICODE VALUETOTEXT',
-  // Logical, LET and LAMBDA
-  'IFNA IFS SWITCH XOR LET LAMBDA MAP REDUCE SCAN BYROW BYCOL MAKEARRAY ISOMITTED',
+  'CHOOSECOLS CHOOSEROWS DROP EXPAND FORMULATEXT HSTACK PERCENTOF RANDARRAY SEQUENCE SORTBY TAKE TOCOL TOROW TRIMRANGE UNIQUE VSTACK WRAPCOLS WRAPROWS XLOOKUP',
+  'XMATCH',
+  // Text (ENCODEURL only encodes text; it fetches nothing)
+  'ARRAYTOTEXT CONCAT DBCS ENCODEURL NUMBERVALUE REGEXEXTRACT REGEXREPLACE REGEXTEST TEXTAFTER TEXTBEFORE TEXTJOIN TEXTSPLIT UNICHAR UNICODE VALUETOTEXT',
+  // Logical
+  'IFNA IFS SWITCH XOR',
   // Date and time, financial, information
   'DAYS ISOWEEKNUM PDURATION RRI ISFORMULA SHEET SHEETS',
   // Engineering
@@ -165,13 +173,27 @@ const HEX = /^#[0-9a-fA-F]{6}$/;
 const SHEET_NAME_BAD = /[\\/?*[\]:]/;
 const FORMAT = /^[^\u0000-\u001f\u007f]{1,64}$/;
 const DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?$/;
-/** A name in a formula: a function, a sheet, a reference, a LET name, a number. Marks and format characters count, so a lookalike stays one (unknown) name. */
-const NAME = /[\p{L}\p{M}\p{N}\p{Pc}\p{Cf}.]+/uy;
-const SPACES = /\s*/uy;
-/** The prefixes a function can carry in the file, any number of times: future, worksheet-only, LAMBDA parameter. */
-const FILE_PREFIXES = /^(?:_xl(?:fn|ws|pm)\.)+/i;
-const ASCII_NAME = /^[A-Za-z0-9_.]+$/;
+// The formula tokenizer's pieces. All sticky, none with nested quantifiers, so reading is linear.
+/** An unquoted name: a function, a sheet, a reference, TRUE/FALSE. Marks and format characters count, so a lookalike stays one (unknown) name. */
+const WORD = /[\p{L}\p{M}\p{N}\p{Pc}\p{Cf}.]+/uy;
+/** What can't directly follow a reference or a number: more of a name, a "$" or a "(". */
+const NAME_GOES_ON = /[\p{L}\p{M}\p{N}\p{Pc}\p{Cf}.$(]/uy;
+/** The whitespace Excel allows in a formula: spaces and line breaks. */
+const BREAKS = /[ \r\n]*/y;
+const CELL_REF = /\$?([A-Za-z]{1,3})\$?([1-9]\d{0,6})/y;
+const COLUMN_RANGE = /\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})/y;
+const ROW_RANGE = /\$?([1-9]\d{0,6}):\$?([1-9]\d{0,6})/y;
+const NUMBER = /(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/y;
+const BOOLEAN = /(?:TRUE|FALSE)/iy;
+const ERROR_VALUE = /#(?:NULL!|DIV\/0!|VALUE!|REF!|NAME\?|NUM!|N\/A|GETTING_DATA|SPILL!|CALC!|FIELD!|BLOCKED!|CONNECT!|BUSY!|UNKNOWN!)/iy;
+/** The prefixes Excel writes before a function, any number of times; the canonical one is put back from ALLOWED_FUNCTIONS. */
+const FILE_PREFIXES = /^(?:_xl(?:fn|ws)\.)+/i;
+/** Any other "_xl...." prefix (_xlpm. for LAMBDA parameters, _xleta. for bare functions, _xludf. for add-ins) is refused. */
+const OTHER_PREFIX = /^_xl[^.]*\./i;
+const ASCII_NAME = /^[A-Za-z][A-Za-z0-9_.]*$/;
+const INVISIBLE = /[\p{Cf}\p{Z}\p{Co}\p{Cn}\p{Cs}]/u;
 const REFUSED = new Set(REFUSED_FUNCTIONS);
+const NOT_YET = new Set(NOT_YET_FUNCTIONS);
 const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 class SpecError extends Error {}
@@ -248,90 +270,248 @@ function closeQuote(text: string, start: number, quote: string): number {
   return -1;
 }
 
-/**
- * Why a call to `written` (as it appears before the "(") isn't allowed, or
- * null. Only ASCII names can match: a fullwidth or other lookalike is unknown.
- */
-function functionProblem(written: string): string | null {
-  const bare = written.replace(FILE_PREFIXES, '');
-  const name = ASCII_NAME.test(bare) ? bare.toUpperCase() : undefined;
-  if (name !== undefined && REFUSED.has(name)) return `uses ${name}, which Grunt refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened`;
-  if (name !== undefined && ALLOWED_FUNCTIONS.has(name)) return null;
-  return `uses ${shorten(bare || written)}, which isn't one of Excel's built-in functions Grunt allows`;
-}
-
-/**
- * What's wrong with a formula (without its "="), or null. Syntax, sheet names
- * and functions only: Grunt doesn't calculate, so a wrong reference shows in
- * Excel. One pass: every character is read once (whitespace after a name at
- * most twice), so a long formula can't make it slow.
- *
- * A function is a name, optional whitespace, then "(" (or a fullwidth one), so
- * "@WEBSERVICE (", "_xlfn._xlws.FILTERXML(" and "1\WEBSERVICE(" are all seen.
- * A name bound by LET or LAMBDA and then called ("f(2)") is unknown, so
- * refused. Text inside "..." is inert and not looked at.
- */
-export function formulaProblem(body: string, sheetNames: ReadonlySet<string>): string | null {
-  if (body.trim() === '') return 'is empty';
-  if (body.length > MAX_FORMULA_CHARS) return `is over ${MAX_FORMULA_CHARS} characters`;
-  let depth = 0;
-  let i = 0;
-  while (i < body.length) {
-    const ch = body[i]!;
-    if (ch === '"') {
-      const end = closeQuote(body, i, '"');
-      if (end === -1) return 'has an unclosed double quote';
-      i = end + 1;
-      continue;
-    }
-    if (ch === "'") {
-      const end = closeQuote(body, i, "'");
-      if (end === -1) return 'has an unclosed single quote';
-      const name = body.slice(i + 1, end).replace(/''/g, "'");
-      if (body[end + 1] === '!' && !sheetNames.has(name.toLowerCase())) return `refers to sheet "${name}", which isn't in the workbook`;
-      i = end + 1;
-      continue;
-    }
-    if (ch === '|') return 'uses "|" (a link to another program), which Grunt refuses';
-    if (ch === '[') return 'uses "[" (a link to another workbook, or a table reference), which Grunt refuses';
-    if (ch === '(') {
-      depth++;
-      i++;
-      continue;
-    }
-    if (ch === ')') {
-      depth--;
-      if (depth < 0) return 'has a ")" with no "(" before it';
-      i++;
-      continue;
-    }
-    NAME.lastIndex = i;
-    const name = NAME.exec(body)?.[0];
-    if (name !== undefined) {
-      // Names are read whole, so each starts where the last token ended and none hides inside another.
-      const end = i + name.length;
-      if (body[end] === '!' && !sheetNames.has(name.toLowerCase())) return `refers to sheet "${name}", which isn't in the workbook`;
-      SPACES.lastIndex = end;
-      SPACES.exec(body);
-      const next = body[SPACES.lastIndex];
-      if (next === '(' || next === '\uFF08') {
-        const problem = functionProblem(name);
-        if (problem) return problem;
-      }
-      i = SPACES.lastIndex;
-      continue;
-    }
-    // Anything else ("@", "\", operators, "!", ":") is one character; the name after it is read on its own.
-    i++;
-  }
-  return depth > 0 ? 'has an unclosed parenthesis' : null;
-}
-
 const shorten = (text: string): string => (text.length > 60 ? `${text.slice(0, 57)}...` : text);
 
+/** Where `re` (sticky) matches at `at` ends, or -1. */
+function matchAt(re: RegExp, text: string, at: number): number {
+  re.lastIndex = at;
+  return re.exec(text) === null ? -1 : re.lastIndex;
+}
+
+function columnNumber(letters: string): number {
+  let n = 0;
+  for (const c of letters.toUpperCase()) n = n * 26 + (c.charCodeAt(0) - 64);
+  return n;
+}
+
+const fitsColumn = (letters: string | undefined): boolean => columnNumber(letters ?? '') <= EXCEL_MAX_COLUMNS;
+const fitsRow = (digits: string | undefined): boolean => Number(digits) <= EXCEL_MAX_ROWS;
+
+/** Where an A1 reference starting at `at` ends (A1, $A$1, A:C, 2:5), or -1. A sheet prefix isn't part of it. */
+function referenceEnd(text: string, at: number): number {
+  for (const re of [CELL_REF, COLUMN_RANGE, ROW_RANGE]) {
+    re.lastIndex = at;
+    const m = re.exec(text);
+    if (!m || matchAt(NAME_GOES_ON, text, re.lastIndex) !== -1) continue;
+    const fits = re === CELL_REF ? fitsColumn(m[1]) && fitsRow(m[2]) : re === COLUMN_RANGE ? fitsColumn(m[1]) && fitsColumn(m[2]) : fitsRow(m[1]) && fitsRow(m[2]);
+    if (fits) return re.lastIndex;
+  }
+  return -1;
+}
+
+/** Where an array constant opened at `start` ends, or the position of what can't be in one. */
+function arrayEnd(text: string, start: number): { end: number } | { bad: number } {
+  let j = start + 1;
+  for (;;) {
+    let next: number;
+    if (text[j] === '-') next = matchAt(NUMBER, text, j + 1);
+    else if (text[j] === '"') {
+      const close = closeQuote(text, j, '"');
+      next = close === -1 ? -1 : close + 1;
+    } else {
+      next = matchAt(NUMBER, text, j);
+      if (next === -1) next = matchAt(BOOLEAN, text, j);
+      if (next === -1) next = matchAt(ERROR_VALUE, text, j);
+    }
+    if (next === -1) return { bad: j };
+    j = next;
+    if (text[j] === ',' || text[j] === ';') j++;
+    else if (text[j] === '}') return { end: j + 1 };
+    else return { bad: j };
+  }
+}
+
+type Named = { name: string } | { problem: string; unknown?: true };
+
+/** A function name as written -> its canonical file form (prefix + upper case), or why it can't be used. Only ASCII names match, so lookalikes are unknown. */
+function functionName(written: string): Named {
+  const bare = written.replace(FILE_PREFIXES, '');
+  const other = OTHER_PREFIX.exec(bare);
+  if (other) return { problem: `uses "${shorten(written)}", whose "${other[0]}" prefix Grunt refuses` };
+  const name = ASCII_NAME.test(bare) ? bare.toUpperCase() : undefined;
+  if (name !== undefined && REFUSED.has(name)) {
+    return { problem: `uses ${name}, which Grunt refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened` };
+  }
+  if (name !== undefined && NOT_YET.has(name)) return { problem: `uses ${name}, which Grunt doesn't support in spreadsheets yet` };
+  const prefix = name === undefined ? undefined : ALLOWED_FUNCTIONS.get(name);
+  if (name === undefined || prefix === undefined) return { problem: `uses ${shorten(bare || written)}, which isn't one of Excel's built-in functions Grunt allows`, unknown: true };
+  return { name: prefix + name };
+}
+
+const PIPE = 'uses "|" (a link to another program), which Grunt refuses';
+const BRACKET = 'uses "[" (a link to another workbook, or a table reference), which Grunt refuses';
+
+/** Why a name that isn't a reference, a call or TRUE/FALSE can't be there. */
+function bareNameProblem(word: string, text: string, end: number, sheetNames: ReadonlySet<string>): string {
+  if (text[end] === '|') return PIPE;
+  if (text[end] === '[') return BRACKET;
+  if (text[end] === ':' && sheetNames.has(word.toLowerCase())) {
+    WORD.lastIndex = end + 1;
+    return `uses references across sheets (${shorten(word)}:${shorten(WORD.exec(text)?.[0] ?? '')}!), which Grunt doesn't support`;
+  }
+  const named = functionName(word);
+  if ('name' in named) return `uses ${word.toUpperCase()} without calling it, which Grunt doesn't support: write ${word.toUpperCase()}(...)`;
+  if (!named.unknown) return named.problem;
+  return `uses the name "${shorten(word)}", which isn't a cell reference, a function call, TRUE or FALSE (Grunt's spreadsheets have no named ranges)`;
+}
+
+type TokenKind = 'space' | 'string' | 'number' | 'boolean' | 'error' | 'reference' | 'array' | 'call' | 'open' | 'close' | 'comma' | 'operator' | 'at' | 'spill';
+
+/** One token of a formula: what it is, its text as given, and its text as written to the file (only a call's differs). */
+interface Token {
+  kind: TokenKind;
+  text: string;
+  out: string;
+}
+
+/**
+ * A formula (without its "=") as tokens, by Excel's A1 grammar, or what's
+ * wrong with it. Fails closed: every character must belong to a token it
+ * understands. `base` turns an index into the character number shown to the
+ * model. One pass; whitespace after a name is looked at at most twice.
+ */
+function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number): Token[] | string {
+  if (body.trim() === '') return 'is empty';
+  if (body.length > MAX_FORMULA_CHARS) return `is over ${MAX_FORMULA_CHARS} characters`;
+  const tokens: Token[] = [];
+  let depth = 0;
+  let i = 0;
+  const push = (kind: TokenKind, end: number, out?: string): void => {
+    const text = body.slice(i, end);
+    tokens.push({ kind, text, out: out ?? text });
+    i = end;
+  };
+  const unreadable = (at: number): string => {
+    const cp = body.codePointAt(at)!;
+    const ch = String.fromCodePoint(cp);
+    const code = `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`;
+    const what = cp === 9 ? 'a tab' : cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) ? `a control character (${code})` : INVISIBLE.test(ch) ? `the character ${code}` : `"${ch}"`;
+    return `has ${what} at character ${at + base}, which Grunt can't read in a formula`;
+  };
+  /** A sheet-qualified reference: the sheet (written from `i` to the "!" at `bang`) must exist and a reference must follow. */
+  const sheetReference = (sheet: string, bang: number): string | null => {
+    const previous = tokens[tokens.length - 1];
+    if (previous?.kind === 'operator' && previous.text === ':') return `uses references across sheets (${shorten(tokens[tokens.length - 2]?.text ?? '')}:${shorten(body.slice(i, bang + 1))}), which Grunt doesn't support`;
+    if (!sheetNames.has(sheet.toLowerCase())) return `refers to sheet "${sheet}", which isn't in the workbook`;
+    const end = referenceEnd(body, bang + 1);
+    if (end === -1) return `needs a cell reference after "${shorten(body.slice(i, bang + 1))}"`;
+    push('reference', end);
+    return null;
+  };
+
+  while (i < body.length) {
+    const ch = body[i]!;
+    const previous = tokens[tokens.length - 1];
+    if (ch === ' ' || ch === '\n' || ch === '\r') {
+      push('space', matchAt(BREAKS, body, i));
+    } else if (ch === '"') {
+      const close = closeQuote(body, i, '"');
+      if (close === -1) return 'has an unclosed double quote';
+      push('string', close + 1);
+    } else if (ch === "'") {
+      const close = closeQuote(body, i, "'");
+      if (close === -1) return 'has an unclosed single quote';
+      if (body[close + 1] !== '!') return `has a name in single quotes at character ${i + base} that isn't followed by "!": single quotes are only for sheet names`;
+      const problem = sheetReference(body.slice(i + 1, close).replace(/''/g, "'"), close + 1);
+      if (problem) return problem;
+    } else if (ch === '{') {
+      const array = arrayEnd(body, i);
+      if ('bad' in array) return `has an array constant that holds something other than numbers, text, TRUE/FALSE and error values, at character ${array.bad + base}`;
+      push('array', array.end);
+    } else if (ch === '(') {
+      depth++;
+      push('open', i + 1);
+    } else if (ch === ')') {
+      if (--depth < 0) return 'has a ")" with no "(" before it';
+      push('close', i + 1);
+    } else if (ch === ',') {
+      push('comma', i + 1);
+    } else if ('+-*/^&=%:'.includes(ch)) {
+      push('operator', i + 1);
+    } else if (ch === '<' || ch === '>') {
+      const two = body[i + 1] === '=' || (ch === '<' && body[i + 1] === '>');
+      push('operator', i + (two ? 2 : 1));
+    } else if (ch === '@') {
+      push('at', i + 1);
+    } else if (ch === '#') {
+      // Right after a reference or ")" it's the spill operator; anywhere else it starts an error value.
+      if (previous?.kind === 'reference' || previous?.kind === 'close') push('spill', i + 1);
+      else {
+        const end = matchAt(ERROR_VALUE, body, i);
+        if (end === -1) return unreadable(i);
+        push('error', end);
+      }
+    } else if (ch === '|') {
+      return PIPE;
+    } else if (ch === '[') {
+      return BRACKET;
+    } else if (ch === '!') {
+      return `has "!" at character ${i + base} with no sheet name before it`;
+    } else if (ch === '$' || (ch >= '0' && ch <= '9') || (ch === '.' && body[i + 1]! >= '0' && body[i + 1]! <= '9')) {
+      const end = referenceEnd(body, i);
+      if (end !== -1) push('reference', end);
+      else {
+        const number = ch === '$' ? -1 : matchAt(NUMBER, body, i);
+        if (number === -1) return unreadable(i);
+        if (matchAt(NAME_GOES_ON, body, number) !== -1) return unreadable(number);
+        push('number', number);
+      }
+    } else {
+      const wordEnd = matchAt(WORD, body, i);
+      if (wordEnd === -1) return unreadable(i);
+      const word = body.slice(i, wordEnd);
+      if (body[wordEnd] === '!') {
+        if (referenceEnd(word, 0) === word.length || matchAt(BOOLEAN, word, 0) === word.length) return `refers to sheet "${word}" without quotes: write it as '${word}'!`;
+        const problem = sheetReference(word, wordEnd);
+        if (problem) return problem;
+        continue;
+      }
+      const open = matchAt(BREAKS, body, wordEnd);
+      if (body[open] === '(') {
+        const named = functionName(word);
+        if (!('name' in named)) return named.problem;
+        depth++;
+        push('call', open + 1, named.name + body.slice(wordEnd, open + 1));
+        continue;
+      }
+      const end = referenceEnd(body, i);
+      if (end !== -1) push('reference', end);
+      else if (matchAt(BOOLEAN, body, i) === wordEnd) push('boolean', wordEnd);
+      else return bareNameProblem(word, body, wordEnd, sheetNames);
+    }
+  }
+  return depth > 0 ? 'has an unclosed parenthesis' : tokens;
+}
+
+/** What's wrong with a formula (without its "="), or null. Grunt doesn't calculate, so a wrong reference still shows in Excel. */
+export function formulaProblem(body: string, sheetNames: ReadonlySet<string>): string | null {
+  const read = readFormula(body, sheetNames, 2);
+  return typeof read === 'string' ? read : null;
+}
+
+/**
+ * The exact text to write into a cell's <f> for `formula` (as given in the
+ * source, with or without its "="), or why it can't be written. The renderer
+ * writes nothing else: no "=", each function as its canonical name with the
+ * prefix Excel stores it with (the source's own prefixes dropped), and every
+ * other character as given. The text is read again before it's returned, and
+ * must give the same tokens, so what's written is exactly what was checked.
+ */
+export function formulaForFile(formula: string, sheetNames: ReadonlySet<string>): { ok: true; text: string } | { ok: false; error: string } {
+  const shown = formula.startsWith('=') ? formula : `=${formula}`;
+  const failed = (problem: string) => ({ ok: false as const, error: `"${shorten(shown)}" ${problem}` });
+  const tokens = readFormula(shown.slice(1), sheetNames, 2);
+  if (typeof tokens === 'string') return failed(tokens);
+  const text = tokens.map((t) => t.out).join('');
+  const again = readFormula(text, sheetNames, 1);
+  const same = typeof again !== 'string' && again.length === tokens.length && again.every((t, k) => t.kind === tokens[k]!.kind && t.out === tokens[k]!.out);
+  if (!same) return failed("couldn't be written exactly as it was checked");
+  return { ok: true, text };
+}
+
 function checkFormula(formula: string, path: string, sheetNames: ReadonlySet<string>): void {
-  const problem = formulaProblem(formula.slice(1), sheetNames);
-  if (problem) bad(path, `"${shorten(formula)}" ${problem}`);
+  const written = formulaForFile(formula, sheetNames);
+  if (!written.ok) bad(path, written.error);
 }
 
 function checkText(text: string, path: string): void {
@@ -487,6 +667,6 @@ export const OFFICE_GUIDANCE = [
   'Office files: for a Word document or Excel spreadsheet the user wants as a file, make a "document" or "spreadsheet" artifact. Grunt makes the .docx or .xlsx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
   '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file.',
   '- "spreadsheet": JSON, e.g. {"sheets":[{"name":"Costs","columns":[{"width":24},{"width":12}],"freeze":{"rows":1},"rows":[[{"value":"Item","bold":true},{"value":"Cost","bold":true}],["Widgets",12],["Gadgets",30.5],["Total","=SUM(B2:B3)"]]}]}. rows[0] is row 1 and rows[0][0] is A1. A cell is null, text, a number, true/false, or an object with one of "value", "formula" or "date" (YYYY-MM-DD or YYYY-MM-DDTHH:MM) and optional "format" (an Excel number format such as "#,##0.00"), "bold", "italic", "wrap", "align" (left, center, right), "color" and "fill" (#RRGGBB). Text starting with "=" is a formula; {"value":"=..."} is literal text.',
-  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT. Calling a LET or LAMBDA name, DDE (|) and links to other workbooks ([) are refused too.",
+  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
   '- Errors name the place in the JSON to fix.',
 ].join('\n');
