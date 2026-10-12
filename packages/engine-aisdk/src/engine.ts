@@ -134,7 +134,8 @@ export class AiSdkChatEngine implements ChatEngine {
         req.messages,
         { ...caps, toolImages: imagesOk },
         req.loadAttachment ?? loadAttachmentUnavailable,
-        req.loadToolImage ? { chatId, load: req.loadToolImage } : undefined
+        req.loadToolImage ? { chatId, load: req.loadToolImage, ...(req.toolImageSize ? { size: req.toolImageSize } : {}) } : undefined,
+        req.attachmentSize
       );
       // One budget for the whole reply: images a tool returns are screened against it as they come, across every step.
       const imageBudget: ToolImageBudget = { images: 0, bytes: 0 };

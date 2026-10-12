@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader } from '../ports/chat-engine.js';
+import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
@@ -594,15 +594,20 @@ export class TurnRunner {
       // gets nothing, and no blob is read.
       const threadIds = new Set(history.map((m) => m.id));
       const loadStored = this.loadAttachment;
+      const toolImageRow = (ref: { chatId: string; messageId: string; attachmentId: string }): { size: number } | null => {
+        if (ref.chatId !== chatId || !threadIds.has(ref.messageId)) return null;
+        const row = this.store.attachments.get(ref.attachmentId);
+        return row && toolImageBound(row, chatId, ref.messageId) ? { size: row.size } : null;
+      };
       const loadToolImage: ToolImageLoader | undefined = loadStored
         ? async (ref) => {
-            if (ref.chatId !== chatId || !threadIds.has(ref.messageId)) return null;
-            const row = this.store.attachments.get(ref.attachmentId);
-            if (!row || !toolImageBound(row, chatId, ref.messageId)) return null;
+            if (toolImageRow(ref) === null) return null;
             const bytes = await loadStored(ref.attachmentId);
             return bytes.length > MAX_TOOL_IMAGE_BYTES ? null : bytes;
           }
         : undefined;
+      const toolImageSize: ToolImageSizer | undefined = loadStored ? (ref) => toolImageRow(ref)?.size ?? null : undefined;
+      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentInChat(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -642,6 +647,8 @@ export class TurnRunner {
         ...(folders.length > 0 ? { folders } : {}),
         ...(this.loadAttachment ? { loadAttachment: this.chatScopedLoader(this.loadAttachment, chatId) } : {}),
         ...(loadToolImage ? { loadToolImage } : {}),
+        ...(toolImageSize ? { toolImageSize } : {}),
+        ...(attachmentSize ? { attachmentSize } : {}),
         purpose: 'turn',
         autoMode,
         ...(effort ? { effort } : {}),

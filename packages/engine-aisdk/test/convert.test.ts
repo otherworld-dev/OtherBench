@@ -241,7 +241,7 @@ describe('toModelMessages', () => {
   });
 
   it('stops adding attachments once a request carries its limit, and says so in place of the rest', async () => {
-    const big = Buffer.concat([FAKE_PNG, Buffer.alloc(Math.floor(MAX_REQUEST_ATTACHMENT_BYTES / 2) + 1)]);
+    const big = Buffer.concat([FAKE_PNG, Buffer.alloc(24 * 1024 * 1024)]);
     const messages: CanonMessage[] = [
       makeMessage('user', [
         { type: 'image', attachmentId: 'a', mime: 'image/png' },
@@ -250,10 +250,10 @@ describe('toModelMessages', () => {
         { type: 'file', attachmentId: 'a2', mime: 'application/pdf', filename: 'again.pdf' },
       ]),
     ];
-    const result = await toModelMessages(messages, VISION_AND_TOOLS, async (id) => (id === 'a' ? big : id === 'c' ? FAKE_PNG : big));
+    // Without sizes from the rows the plan picks by count, and the real bytes are checked as they are read.
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, async (id) => (id === 'c' ? FAKE_PNG : big));
     const content = (result[0] as { content: { type: string; text?: string }[] }).content;
-    expect(content.map((c) => c.type)).toEqual(['image', 'text', 'image', 'text']);
-    expect(content[1]!.text).toBe(ATTACHMENT_BUDGET_NOTE);
+    expect(content.map((c) => c.type)).toEqual(['image', 'file', 'image', 'text']);
     expect(content[3]!.text).toBe(ATTACHMENT_BUDGET_NOTE);
   });
 

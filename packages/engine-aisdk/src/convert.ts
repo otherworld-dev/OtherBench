@@ -7,36 +7,103 @@ import type {
   ToolResultPart,
 } from 'ai';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
 import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
-import { IMAGE_UNSUPPORTED_NOTE, loadReplayImages, replayCandidates, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
+import { MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, selectWithinBudget, withinAfterLoad, type Verdict } from '@grunt/core/domain/request-budget.js';
+import { IMAGE_UNSUPPORTED_NOTE, loadReplayImages, replayCandidates, replayedBytes, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
 
-/** All the attached files and images one request may carry together. */
-export const MAX_REQUEST_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+export { MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS };
 export const ATTACHMENT_BUDGET_NOTE = '[attachment omitted: this request already carries as much attached data as it can]';
+export const ATTACHMENT_TOO_LARGE_NOTE = '[attachment omitted: too large to send]';
+export const ATTACHMENT_UNAVAILABLE_NOTE = '[attachment omitted: it is not available in this chat]';
+export const ATTACHMENT_REPEAT_NOTE = '[attachment omitted: it appears again later in this conversation]';
 
-class OverRequestBudget extends Error {}
+/** How one occurrence of an attachment in the history is treated: loaded, or a note. */
+type Placement = Verdict | 'repeat';
+
+/** What a part gets: the bytes, or the note that stands in for them. */
+type Taken = { bytes: Buffer } | { note: string };
+type Take = (messageId: string, index: number, attachmentId: string) => Promise<Taken>;
+
+function placeId(messageId: string, index: number): string {
+  return `${messageId}\u0000${index}`;
+}
 
 /**
- * `load` for one request: each distinct attachment is read once however many
- * parts name it, and the bytes of all of them together stay within
- * `MAX_REQUEST_ATTACHMENT_BYTES`. A file that would pass it is not returned
- * (the part becomes a note). Any other failure is the caller's, as before.
+ * Decides, from the references alone and before any bytes are read, which
+ * attachments of the user's (`image` parts for a model with vision, every
+ * `file` part) the request carries. The history is walked once, newest first
+ * (parts too); an attachment named more than once is one, kept where it is
+ * newest; the distinct ones are then picked by `selectWithinBudget` against
+ * the sizes their rows state: at most `MAX_REQUEST_ATTACHMENTS`, none over the
+ * upload cap, and together within what the request has left after its tool
+ * images (`reservedBytes`). Everything not picked is a note.
  */
-function requestLoader(load: (id: string) => Promise<Buffer>): (id: string) => Promise<Buffer> {
-  const loaded = new Map<string, Promise<Buffer>>();
-  let total = 0;
-  return (id) => {
-    let pending = loaded.get(id);
-    if (!pending) {
-      pending = (async () => {
-        const bytes = await load(id);
-        if (total + bytes.length > MAX_REQUEST_ATTACHMENT_BYTES) throw new OverRequestBudget();
-        total += bytes.length;
-        return bytes;
-      })();
-      loaded.set(id, pending);
+export function planAttachments(
+  messages: CanonMessage[],
+  caps: { vision: boolean },
+  size: ((id: string) => number | null) | undefined,
+  reservedBytes = 0
+): Map<string, Placement> {
+  const placements = new Map<string, Placement>();
+  const seen = new Set<string>();
+  const picks: { key: string; size: number | null | undefined }[] = [];
+  for (let m = messages.length - 1; m >= 0; m--) {
+    const message = messages[m]!;
+    if (message.role === 'system') continue;
+    for (let i = message.parts.length - 1; i >= 0; i--) {
+      const part = message.parts[i]!;
+      if (part.type === 'file' || (part.type === 'image' && caps.vision)) {
+        const key = placeId(message.id, i);
+        if (seen.has(part.attachmentId)) {
+          placements.set(key, 'repeat');
+          continue;
+        }
+        seen.add(part.attachmentId);
+        picks.push({ key, size: size ? size(part.attachmentId) : undefined });
+      }
     }
-    return pending;
+  }
+  const verdicts = selectWithinBudget(picks, {
+    maxCount: MAX_REQUEST_ATTACHMENTS,
+    maxEach: MAX_HISTORY_ATTACHMENT_BYTES,
+    maxTotal: Math.max(0, MAX_REQUEST_ATTACHMENT_BYTES - reservedBytes),
+  });
+  for (const [key, verdict] of verdicts) placements.set(key, verdict);
+  return placements;
+}
+
+/**
+ * The loader for a request: only a part the plan picked is read, each distinct
+ * attachment once, and what is really read is checked again against the same
+ * caps (`withinAfterLoad`). Anything else is the note for its verdict. A read
+ * that fails is the caller's, as before.
+ */
+function takeFrom(plan: Map<string, Placement>, load: (id: string) => Promise<Buffer>, reservedBytes: number): Take {
+  const loaded = new Map<string, Promise<Buffer>>();
+  const real = { bytes: 0 };
+  const limits = { maxCount: MAX_REQUEST_ATTACHMENTS, maxEach: MAX_HISTORY_ATTACHMENT_BYTES, maxTotal: Math.max(0, MAX_REQUEST_ATTACHMENT_BYTES - reservedBytes) };
+  return async (messageId, index, attachmentId) => {
+    const placement = plan.get(placeId(messageId, index));
+    switch (placement) {
+      case 'load': {
+        let pending = loaded.get(attachmentId);
+        if (!pending) {
+          pending = load(attachmentId);
+          loaded.set(attachmentId, pending);
+        }
+        const bytes = await pending;
+        return withinAfterLoad(bytes.length, real, limits) ? { bytes } : { note: bytes.length > limits.maxEach ? ATTACHMENT_TOO_LARGE_NOTE : ATTACHMENT_BUDGET_NOTE };
+      }
+      case 'repeat':
+        return { note: ATTACHMENT_REPEAT_NOTE };
+      case 'too-large':
+        return { note: ATTACHMENT_TOO_LARGE_NOTE };
+      case 'over-budget':
+        return { note: ATTACHMENT_BUDGET_NOTE };
+      default:
+        return { note: ATTACHMENT_UNAVAILABLE_NOTE };
+    }
   };
 }
 
@@ -106,6 +173,11 @@ export function replayToolName(name: string): string {
  *  - A `CanonMessage` that converts to no content at all (e.g. it held only
  *    a reasoning part, or only tool activity that got dropped) contributes
  *    no `ModelMessage` -- providers reject empty message content.
+ *
+ * Stored bytes (the user's images and files, the last few tool images) are
+ * budgeted from references alone BEFORE anything is read: the tool images by
+ * `loadReplayImages`, the attachments by `planAttachments`, and the second
+ * takes what the first has used. Only what is picked is loaded, each file once.
  */
 export async function toModelMessages(
   messages: CanonMessage[],
@@ -116,10 +188,11 @@ export async function toModelMessages(
    * `loadAttachment` is never used for them. Without it every stored tool
    * image is replayed as a text note.
    */
-  toolImages?: ToolImageSource
+  toolImages?: ToolImageSource,
+  /** The size a user's attachment has in this chat, or null when it isn't available here (the same job as `ToolImageSource.size`). */
+  attachmentSize?: (id: string) => number | null
 ): Promise<ModelMessage[]> {
   const result: ModelMessage[] = [];
-  const load = requestLoader(loadAttachment);
   // Tool-call ids seen so far, across the whole conversation in order --
   // not scoped to one message -- so a result can match a call from an
   // earlier turn, not only one made in the same CanonMessage.
@@ -127,16 +200,18 @@ export async function toModelMessages(
   // Only the last few distinct stored tool images are loaded, within a size
   // cap each and together; earlier ones are replayed as a note.
   const replay = caps.toolImages === true ? await loadReplayImages(replayCandidates(messages, caps.tools), toolImages) : new Map<string, ReplayImage>();
+  const reserved = replayedBytes(replay);
+  const take = takeFrom(planAttachments(messages, caps, attachmentSize, reserved), loadAttachment, reserved);
 
   for (const message of messages) {
     if (message.role === 'system') {
-      const text = await systemTextFromParts(message.parts, load);
+      const text = systemTextFromParts(message.parts);
       if (text.length > 0) result.push({ role: 'system', content: text });
       continue;
     }
 
     if (message.role === 'user') {
-      const content = await userContentFromParts(message.parts, caps, load);
+      const content = await userContentFromParts(message.id, message.parts, caps, take);
       if (content.length > 0) result.push({ role: 'user', content });
       continue;
     }
@@ -145,7 +220,7 @@ export async function toModelMessages(
       message.id,
       message.parts,
       caps,
-      load,
+      take,
       seenToolCallIds,
       replay
     );
@@ -165,15 +240,14 @@ export async function toModelMessages(
  * into text; an image part still gets its placeholder (there is no way to
  * embed a real image content block in a system message in this format,
  * regardless of `caps.vision`), and tool activity is dropped -- it has no
- * meaning as system instructions.
+ * meaning as system instructions. Nothing is ever loaded for a system message.
  */
-async function systemTextFromParts(parts: Part[], loadAttachment: (id: string) => Promise<Buffer>): Promise<string> {
+function systemTextFromParts(parts: Part[]): string {
   const chunks: string[] = [];
   for (const part of parts) {
     if (part.type === 'text' && part.text.length > 0) {
       chunks.push(part.text);
     } else if (part.type === 'image') {
-      void loadAttachment; // never loaded for a system message -- see docstring
       chunks.push(imagePlaceholder(part.attachmentId, part.mime));
     }
     // reasoning, file, tool-call, tool-result, notice: dropped from system content.
@@ -181,22 +255,18 @@ async function systemTextFromParts(parts: Part[], loadAttachment: (id: string) =
   return chunks.join('\n\n');
 }
 
-async function userContentFromParts(
-  parts: Part[],
-  caps: ModelCapabilities,
-  loadAttachment: (id: string) => Promise<Buffer>
-): Promise<UserBlock[]> {
+async function userContentFromParts(messageId: string, parts: Part[], caps: ModelCapabilities, take: Take): Promise<UserBlock[]> {
   const content: UserBlock[] = [];
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     switch (part.type) {
       case 'text':
         if (part.text.length > 0) content.push({ type: 'text', text: part.text });
         break;
       case 'image':
-        content.push(await convertImagePart(part, caps, loadAttachment));
+        content.push(await convertImagePart(part, caps, () => take(messageId, index, part.attachmentId)));
         break;
       case 'file':
-        content.push(await convertFilePart(part, loadAttachment));
+        content.push(await convertFilePart(part, () => take(messageId, index, part.attachmentId)));
         break;
       case 'reasoning':
       case 'tool-call':
@@ -217,14 +287,14 @@ async function assistantContentFromParts(
   messageId: string,
   parts: Part[],
   caps: ModelCapabilities,
-  loadAttachment: (id: string) => Promise<Buffer>,
+  take: Take,
   seenToolCallIds: Set<string>,
   replay: Map<string, ReplayImage>
 ): Promise<{ assistantContent: AssistantBlock[]; toolResults: ToolResultPart[] }> {
   const assistantContent: AssistantBlock[] = [];
   const toolResults: ToolResultPart[] = [];
 
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     switch (part.type) {
       case 'text':
         if (part.text.length > 0) assistantContent.push({ type: 'text', text: part.text });
@@ -241,10 +311,10 @@ async function assistantContentFromParts(
       case 'image':
         // AssistantContent has no ImagePart variant; a model-authored
         // image is represented as a file part instead.
-        assistantContent.push(await convertImagePartAsAssistantBlock(part, caps, loadAttachment));
+        assistantContent.push(await convertImagePartAsAssistantBlock(part, caps, () => take(messageId, index, part.attachmentId)));
         break;
       case 'file':
-        assistantContent.push(await convertFilePart(part, loadAttachment));
+        assistantContent.push(await convertFilePart(part, () => take(messageId, index, part.attachmentId)));
         break;
       case 'tool-call':
         if (!caps.tools) break;
@@ -270,66 +340,45 @@ async function assistantContentFromParts(
 /**
  * Shared placeholder-or-bytes decision behind both image-part converters:
  * without vision support, a caption naming the (attachment-id-derived) file
- * stands in for the image; with it, the real bytes are loaded. Each caller
- * (user-turn image vs. assistant-authored image) still owns the final
- * object shape, since `ai`'s `ImagePart` and `FilePart` differ in field
- * names (`image` vs. `data`) and only one of the two is valid per role.
+ * stands in for the image; with it, the planned bytes are taken (or the note
+ * for why not). Each caller (user-turn image vs. assistant-authored image) still
+ * owns the final object shape, since `ai`'s `ImagePart` and `FilePart` differ in
+ * field names (`image` vs. `data`) and only one of the two is valid per role.
  */
 async function resolveImageContent(
   part: Extract<Part, { type: 'image' }>,
   caps: ModelCapabilities,
-  loadAttachment: (id: string) => Promise<Buffer>
+  take: () => Promise<Taken>
 ): Promise<{ type: 'placeholder'; text: string } | { type: 'bytes'; data: Buffer; mediaType: string }> {
   if (!caps.vision) {
     return { type: 'placeholder', text: imagePlaceholder(part.attachmentId, part.mime) };
   }
-  let data: Buffer;
-  try {
-    data = await loadAttachment(part.attachmentId);
-  } catch (err) {
-    if (err instanceof OverRequestBudget) return { type: 'placeholder', text: ATTACHMENT_BUDGET_NOTE };
-    throw err;
-  }
+  const taken = await take();
+  if ('note' in taken) return { type: 'placeholder', text: taken.note };
   // The type the model is told comes from the bytes, never from the part's own label.
-  const mediaType = sniffToolImageMime(data);
-  return mediaType ? { type: 'bytes', data, mediaType } : { type: 'placeholder', text: IMAGE_UNSUPPORTED_NOTE };
+  const mediaType = sniffToolImageMime(taken.bytes);
+  return mediaType ? { type: 'bytes', data: taken.bytes, mediaType } : { type: 'placeholder', text: IMAGE_UNSUPPORTED_NOTE };
 }
 
-async function convertImagePart(
-  part: Extract<Part, { type: 'image' }>,
-  caps: ModelCapabilities,
-  loadAttachment: (id: string) => Promise<Buffer>
-): Promise<TextPart | ImagePart> {
-  const resolved = await resolveImageContent(part, caps, loadAttachment);
+async function convertImagePart(part: Extract<Part, { type: 'image' }>, caps: ModelCapabilities, take: () => Promise<Taken>): Promise<TextPart | ImagePart> {
+  const resolved = await resolveImageContent(part, caps, take);
   if (resolved.type === 'placeholder') {
     return { type: 'text', text: resolved.text };
   }
   return { type: 'image', image: resolved.data, mediaType: resolved.mediaType };
 }
 
-async function convertImagePartAsAssistantBlock(
-  part: Extract<Part, { type: 'image' }>,
-  caps: ModelCapabilities,
-  loadAttachment: (id: string) => Promise<Buffer>
-): Promise<TextPart | FilePart> {
-  const resolved = await resolveImageContent(part, caps, loadAttachment);
+async function convertImagePartAsAssistantBlock(part: Extract<Part, { type: 'image' }>, caps: ModelCapabilities, take: () => Promise<Taken>): Promise<TextPart | FilePart> {
+  const resolved = await resolveImageContent(part, caps, take);
   if (resolved.type === 'placeholder') {
     return { type: 'text', text: resolved.text };
   }
   return { type: 'file', data: resolved.data, mediaType: resolved.mediaType };
 }
 
-async function convertFilePart(
-  part: Extract<Part, { type: 'file' }>,
-  loadAttachment: (id: string) => Promise<Buffer>
-): Promise<FilePart | TextPart> {
-  let data: Buffer;
-  try {
-    data = await loadAttachment(part.attachmentId);
-  } catch (err) {
-    if (err instanceof OverRequestBudget) return { type: 'text', text: ATTACHMENT_BUDGET_NOTE };
-    throw err;
-  }
+async function convertFilePart(part: Extract<Part, { type: 'file' }>, take: () => Promise<Taken>): Promise<FilePart | TextPart> {
+  const taken = await take();
+  if ('note' in taken) return { type: 'text', text: taken.note };
   // A file keeps the type it was sent with: providers need it (a PDF, a text file), and it is not an image.
-  return { type: 'file', data, mediaType: part.mime, filename: part.filename };
+  return { type: 'file', data: taken.bytes, mediaType: part.mime, filename: part.filename };
 }

@@ -6,6 +6,7 @@ import type { Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-a
 import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '../src/engine.js';
 import { liveKey } from '../src/live.js';
 import type { GruntServerTool } from '../src/grunt-server.js';
@@ -1081,5 +1082,45 @@ describe('ClaudeCodeChatEngine relayed browser (spec 2026-10-12-model-browser-de
     const events = await collect(e.stream(req({ profile: browserOn(true) })));
     expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', id: 't1', name: 'browser' }));
     e.dispose();
+  });
+});
+
+describe('ClaudeCodeChatEngine images in the new message', () => {
+  const MB = 1024 * 1024;
+  const png = (size = FAKE_PNG.length): Buffer => Buffer.concat([FAKE_PNG, Buffer.alloc(Math.max(0, size - FAKE_PNG.length))]);
+  const imageMessage = (ids: string[]): CanonMessage =>
+    user('look', { parts: [{ type: 'text', text: 'look' }, ...ids.map((id) => ({ type: 'image' as const, attachmentId: id, mime: 'image/png' }))] });
+
+  async function sent(ids: string[], load: (id: string) => Promise<Buffer>, size?: (id: string) => number | null): Promise<{ types: string[]; media: string[] }> {
+    const { query, calls } = fakeQuery(async function* () {
+      yield init();
+      yield success();
+    });
+    const e = engine(query);
+    await collect(e.stream(req({ messages: [imageMessage(ids)], loadAttachment: load, ...(size ? { attachmentSize: size } : {}) })));
+    e.dispose();
+    const content = (calls[0]!.prompt.message as unknown as { content: { type: string; source?: { media_type: string } }[] }).content;
+    return { types: content.map((c) => c.type), media: content.filter((c) => c.type === 'image').map((c) => c.source!.media_type) };
+  }
+
+  it('reads only what the rows say fits (count, per-file and total), each file once, and tells the type from the bytes', async () => {
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]);
+    const bytes: Record<string, Buffer> = { jpeg, html: Buffer.from('<html></html>'), ok: png() };
+    const load = vi.fn(async (id: string) => bytes[id] ?? png());
+    const out = await sent(['jpeg', 'html', 'ok', 'ok'], load, () => 10);
+    expect(out.media.sort()).toEqual(['image/jpeg', 'image/png']); // the html is not an image; the repeat is one image
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads nothing for a file the row says is too large or not available here, and no more than the count cap for fifty', async () => {
+    const load = vi.fn(async () => png());
+    await sent(['huge', 'foreign'], load, (id) => (id === 'huge' ? 26 * MB : null));
+    expect(load).not.toHaveBeenCalled();
+
+    const many = vi.fn(async () => png());
+    const ids = Array.from({ length: 50 }, (_, i) => `f${i}`);
+    const out = await sent(ids, many, () => 10);
+    expect(many).toHaveBeenCalledTimes(20);
+    expect(out.media).toHaveLength(20);
   });
 });

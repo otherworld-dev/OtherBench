@@ -4,11 +4,14 @@ import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
+import { MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, selectWithinBudget, withinAfterLoad } from '@grunt/core/domain/request-budget.js';
+import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ToolPolicy } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
 import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName, type GruntServerTool } from './grunt-server.js';
@@ -458,10 +461,20 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const last = req.messages[req.messages.length - 1];
     const history = fresh ? renderHistory(req.messages) : '';
     const blocks: ContentBlock[] = [];
-    for (const part of last?.parts ?? []) {
-      if (part.type === 'image' && req.loadAttachment && (req.profile.model?.supportsVision ?? true)) {
+    // The new message's images are picked from the references and the sizes their rows state before any is
+    // read (the same selector the API engine uses): the newest few, each within the upload cap and all together
+    // within the request's room, each file once; the type sent is the one the bytes have.
+    const images = (last?.parts ?? []).filter((p): p is Extract<Part, { type: 'image' }> => p.type === 'image');
+    if (images.length > 0 && req.loadAttachment && (req.profile.model?.supportsVision ?? true)) {
+      const distinct = [...new Map(images.map((p) => [p.attachmentId, p])).values()].reverse();
+      const limits = { maxCount: MAX_REQUEST_ATTACHMENTS, maxEach: MAX_HISTORY_ATTACHMENT_BYTES, maxTotal: MAX_REQUEST_ATTACHMENT_BYTES };
+      const verdicts = selectWithinBudget(distinct.map((p) => ({ key: p.attachmentId, size: req.attachmentSize ? req.attachmentSize(p.attachmentId) : undefined })), limits);
+      const loaded = { bytes: 0 };
+      for (const part of distinct.reverse()) {
+        if (verdicts.get(part.attachmentId) !== 'load') continue;
         const bytes = await req.loadAttachment(part.attachmentId);
-        blocks.push({ type: 'image', source: { type: 'base64', media_type: part.mime, data: bytes.toString('base64') } });
+        const mediaType = withinAfterLoad(bytes.length, loaded, limits) ? sniffToolImageMime(bytes) : null;
+        if (mediaType) blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } });
       }
     }
     const skipped = skippedFiles(last);

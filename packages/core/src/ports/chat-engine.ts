@@ -15,6 +15,14 @@ import type { ToolSpec } from './tool-provider.js';
  */
 export type ToolImageLoader = (ref: { chatId: string; messageId: string; attachmentId: string }) => Promise<Buffer | null>;
 
+/**
+ * The size a stored tool image's row states, in bytes, for the same reference a
+ * `ToolImageLoader` is given; `null` when it isn't stored for that chat and
+ * message (then nothing is loaded). It lets an engine decide what a request may
+ * carry before it reads any bytes.
+ */
+export type ToolImageSizer = (ref: { chatId: string; messageId: string; attachmentId: string }) => number | null;
+
 export interface EngineRequest {
   profile: ResolvedProfile;
   messages: CanonMessage[];
@@ -56,6 +64,10 @@ export interface EngineRequest {
   loadAttachment?: (id: string) => Promise<Buffer>;
   /** Loads a stored tool image for replay, checked against this chat and thread (see `ToolImageLoader`). Absent: stored tool images are replayed as a text note. */
   loadToolImage?: ToolImageLoader;
+  /** The size of a stored tool image (see `ToolImageSizer`), so the engine can budget a request without reading bytes. */
+  toolImageSize?: ToolImageSizer;
+  /** The size of a user's attachment in this chat, or null when it isn't available here: the same use, for `loadAttachment`. */
+  attachmentSize?: (id: string) => number | null;
   /**
    * `'utility'` marks a tool-less side call (auto-title, summaries) that must
    * not create a resumable session or load user settings. Default `'turn'`.

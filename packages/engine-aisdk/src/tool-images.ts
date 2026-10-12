@@ -1,6 +1,7 @@
 import type { JSONValue, ToolResultPart } from 'ai';
 import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, type InlineToolImage, type ValidatedToolImage } from '@grunt/core/domain/tool-images.js';
-import type { ToolImageLoader } from '@grunt/core/ports/chat-engine.js';
+import type { ToolImageLoader, ToolImageSizer } from '@grunt/core/ports/chat-engine.js';
+import { selectWithinBudget, withinAfterLoad } from '@grunt/core/domain/request-budget.js';
 import type { ConnectionKind } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 
@@ -103,6 +104,8 @@ export type ReplayImage = { type: 'image'; data: string; mediaType: string } | {
 export interface ToolImageSource {
   chatId: string;
   load: ToolImageLoader;
+  /** The size a row states for a reference (see `ToolImageSizer`); absent = not known, the real bytes are checked after loading. */
+  size?: ToolImageSizer;
 }
 
 /** The key a candidate is known by: an image is placed at one spot, not wherever its id repeats. */
@@ -142,12 +145,14 @@ export function replayedImageIds(messages: CanonMessage[], keep = REPLAYED_TOOL_
 }
 
 /**
- * Loads the candidates, newest first, through `source`. Nothing is read for a
- * message of another chat, and the loader itself answers null for anything not
- * stored for this chat and that message. An image is kept only if its own
- * bytes are a supported raster, it is within `maxEach`, and it fits in what is
- * left of `maxTotal`; the oldest are the ones left out. Base64 is only built
- * for an image that is kept.
+ * Picks, then loads. The candidates, newest first, are first decided from their
+ * REFERENCES AND THE SIZES THEIR ROWS STATE (`selectWithinBudget`): a candidate
+ * of another chat, one the row says is not stored for this chat and message,
+ * one over `maxEach` and one that would pass `maxTotal` are notes and are never
+ * loaded. Only the survivors are read, each once, and what was really read is
+ * checked again against the same caps (a row can state a smaller size than its
+ * file has). An image is kept only if its own bytes are a supported raster;
+ * base64 is only built for an image that is kept.
  */
 export async function loadReplayImages(
   candidates: ReplayCandidate[],
@@ -156,39 +161,61 @@ export async function loadReplayImages(
   maxTotal = REPLAYED_IMAGES_MAX_TOTAL_BYTES
 ): Promise<Map<string, ReplayImage>> {
   const out = new Map<string, ReplayImage>();
-  let total = 0;
-  for (const cand of [...candidates].reverse()) {
+  const newestFirst = [...candidates].reverse();
+  const note = (cand: ReplayCandidate, text: string): void => {
+    out.set(placeKey(cand.messageId, cand.attachmentId), { type: 'note', text });
+  };
+  if (!source) {
+    for (const cand of newestFirst) note(cand, IMAGE_UNAVAILABLE_NOTE);
+    return out;
+  }
+  const eligible: ReplayCandidate[] = [];
+  for (const cand of newestFirst) {
+    if (cand.chatId !== source.chatId) note(cand, IMAGE_NOT_YOURS_NOTE);
+    else eligible.push(cand);
+  }
+  const limits = { maxCount: Number.POSITIVE_INFINITY, maxEach, maxTotal };
+  const verdicts = selectWithinBudget(
+    eligible.map((cand) => ({ key: placeKey(cand.messageId, cand.attachmentId), size: source.size ? source.size({ chatId: source.chatId, messageId: cand.messageId, attachmentId: cand.attachmentId }) : undefined })),
+    limits
+  );
+  const loaded = { bytes: 0 };
+  for (const cand of eligible) {
     const key = placeKey(cand.messageId, cand.attachmentId);
-    const note = (text: string): void => {
-      out.set(key, { type: 'note', text });
-    };
-    if (!source) {
-      note(IMAGE_UNAVAILABLE_NOTE);
+    const verdict = verdicts.get(key);
+    if (verdict === 'unknown') {
+      note(cand, IMAGE_NOT_YOURS_NOTE);
       continue;
     }
-    if (cand.chatId !== source.chatId) {
-      note(IMAGE_NOT_YOURS_NOTE);
+    if (verdict !== 'load') {
+      note(cand, IMAGE_TOO_LARGE_NOTE);
       continue;
     }
     let bytes: Buffer | null;
     try {
       bytes = await source.load({ chatId: source.chatId, messageId: cand.messageId, attachmentId: cand.attachmentId });
     } catch {
-      note(IMAGE_UNAVAILABLE_NOTE);
+      note(cand, IMAGE_UNAVAILABLE_NOTE);
       continue;
     }
-    if (bytes === null) note(IMAGE_NOT_YOURS_NOTE);
-    else if (bytes.length > maxEach || total + bytes.length > maxTotal) note(IMAGE_TOO_LARGE_NOTE);
+    if (bytes === null) note(cand, IMAGE_NOT_YOURS_NOTE);
+    else if (!withinAfterLoad(bytes.length, loaded, limits)) note(cand, IMAGE_TOO_LARGE_NOTE);
     else {
       const mediaType = sniffToolImageMime(bytes);
-      if (!mediaType) note(IMAGE_UNSUPPORTED_NOTE);
-      else {
-        total += bytes.length;
-        out.set(key, { type: 'image', data: bytes.toString('base64'), mediaType });
-      }
+      if (!mediaType) {
+        loaded.bytes -= bytes.length;
+        note(cand, IMAGE_UNSUPPORTED_NOTE);
+      } else out.set(key, { type: 'image', data: bytes.toString('base64'), mediaType });
     }
   }
   return out;
+}
+
+/** The bytes of the images chosen in `loadReplayImages`'s result. */
+export function replayedBytes(images: Map<string, ReplayImage>): number {
+  let total = 0;
+  for (const image of images.values()) if (image.type === 'image') total += Buffer.byteLength(image.data, 'base64');
+  return total;
 }
 
 /**

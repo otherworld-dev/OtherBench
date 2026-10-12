@@ -406,6 +406,33 @@ describe('TurnRunner and references in tool results', () => {
     expect(loadAttachment).toHaveBeenCalledWith('att-ok');
   });
 
+  it('gives the engine the sizes the rows state, only for what is stored for this chat, so it can budget before reading', async () => {
+    const store = new InMemoryStore();
+    store.attachments.create({ ...attachment('att-ok', 'chat-b', 'msg-b'), size: 1234 });
+    store.attachments.create(attachment('att-other-chat', 'chat-a', 'msg-b'));
+    store.attachments.create({ ...attachment('att-upload', 'chat-b', 'u1'), size: 777, mime: 'application/pdf' });
+    store.attachments.create(attachment('att-foreign-upload', 'chat-a', 'msg-b'));
+    store.messages.create({ id: 'u1', chatId: 'chat-b', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'msg-b', chatId: 'chat-b', parentId: 'u1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => FAKE_PNG);
+    const turn = await new TurnRunner(store, engine, { loadAttachment }).run({ chatId: 'chat-b', parentId: 'msg-b', userParts: [{ type: 'text', text: 'go' }], profiles: [profile()] });
+    await done(store, turn.assistantMessageIds[0]!);
+
+    const request = engine.requests[0]!;
+    const toolSize = request.toolImageSize!;
+    expect(toolSize({ chatId: 'chat-b', messageId: 'msg-b', attachmentId: 'att-ok' })).toBe(1234);
+    expect(toolSize({ chatId: 'chat-b', messageId: 'msg-b', attachmentId: 'att-other-chat' })).toBeNull();
+    expect(toolSize({ chatId: 'chat-a', messageId: 'msg-b', attachmentId: 'att-ok' })).toBeNull();
+    expect(toolSize({ chatId: 'chat-b', messageId: 'not-on-the-thread', attachmentId: 'att-ok' })).toBeNull();
+    expect(toolSize({ chatId: 'chat-b', messageId: 'msg-b', attachmentId: 'nope' })).toBeNull();
+    const fileSize = request.attachmentSize!;
+    expect(fileSize('att-upload')).toBe(777);
+    expect(fileSize('att-foreign-upload')).toBeNull();
+    expect(fileSize('nope')).toBeNull();
+    expect(loadAttachment).not.toHaveBeenCalled(); // asking for sizes reads nothing
+  });
+
   it('gives the engine no loader when the runner has nowhere to read blobs from', async () => {
     const store = new InMemoryStore();
     const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
