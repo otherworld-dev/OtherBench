@@ -195,6 +195,10 @@ const INVISIBLE = /[\p{Cf}\p{Z}\p{Co}\p{Cn}\p{Cs}]/u;
 const REFUSED = new Set(REFUSED_FUNCTIONS);
 const NOT_YET = new Set(NOT_YET_FUNCTIONS);
 const NOT_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+/** NOT_XML without the global flag, for finding the first one. */
+const XML_UNSAFE = new RegExp(NOT_XML.source);
+/** Sheet names Excel reads as R1C1 references unless quoted: R, C, RC, R1, C3, R1C1 and so on. */
+const R1C1_LIKE = /^(?:[Rr]\d*(?:[Cc]\d*)?|[Cc]\d*)$/;
 
 class SpecError extends Error {}
 
@@ -355,13 +359,74 @@ function bareNameProblem(word: string, text: string, end: number, sheetNames: Re
   return `uses the name "${shorten(word)}", which isn't a cell reference, a function call, TRUE or FALSE (Grunt's spreadsheets have no named ranges)`;
 }
 
-type TokenKind = 'space' | 'string' | 'number' | 'boolean' | 'error' | 'reference' | 'array' | 'call' | 'open' | 'close' | 'comma' | 'operator' | 'at' | 'spill';
+type TokenKind = 'space' | 'string' | 'number' | 'boolean' | 'error' | 'reference' | 'array' | 'call' | 'open' | 'close' | 'comma' | 'operator';
 
-/** One token of a formula: what it is, its text as given, and its text as written to the file (only a call's differs). */
+/** One token of a formula: what it is, where it starts, its text as given, and its text as written to the file (only a call's differs). */
 interface Token {
   kind: TokenKind;
+  at: number;
   text: string;
   out: string;
+  /** For a sheet-qualified reference, the sheet part as written, "!" included. */
+  sheet?: string;
+}
+
+const VALUE_KINDS: ReadonlySet<TokenKind> = new Set(['string', 'number', 'boolean', 'error', 'reference', 'array']);
+
+/**
+ * Why a formula's tokens don't make an expression Excel reads without
+ * repairing the file, or null. Operands and operators alternate (unary + and -
+ * may repeat; % follows a value); "(" follows a value only as part of a call;
+ * "," only separates a call's arguments, which may be empty; ":" only joins
+ * references, all on one sheet; a space only joins two references (their
+ * intersection).
+ */
+function grammarProblem(tokens: readonly Token[], base: number): string | null {
+  const calls: boolean[] = []; // for each open "(": is it a call's?
+  let wantValue = true;
+  let previous: Token | undefined; // the last token that isn't a space
+  let beforePrevious: Token | undefined;
+  let space: Token | undefined; // a space since `previous`
+  const at = (t: Token): string => `at character ${t.at + base}`;
+  const wanted = (t: Token): string => `has "${shorten(t.text)}" ${at(t)} where Excel expects a value`;
+  const range = (colon: Token): string => `uses ":" ${at(colon)} between things that aren't cell references`;
+  for (const t of tokens) {
+    if (t.kind === 'space') {
+      space = t;
+      continue;
+    }
+    const afterColon = previous?.kind === 'operator' && previous.text === ':';
+    if (VALUE_KINDS.has(t.kind) || t.kind === 'call' || t.kind === 'open') {
+      if (!wantValue) {
+        if (!space) return `has "${shorten(t.text)}" ${at(t)} right after a value, with no operator between them`;
+        if (previous?.kind !== 'reference' || t.kind !== 'reference') return `has a space ${at(space)} between values that aren't both cell references`;
+      }
+      if (afterColon && t.kind !== 'reference' && t.kind !== 'call') return range(previous!);
+      if (afterColon && t.sheet !== undefined) return `uses references across sheets (${shorten(beforePrevious?.text ?? '')}:${shorten(t.sheet)}), which Grunt doesn't support`;
+      if (t.kind === 'call' || t.kind === 'open') calls.push(t.kind === 'call');
+      wantValue = t.kind === 'call' || t.kind === 'open';
+    } else if (t.kind === 'close') {
+      const call = calls.pop();
+      if (wantValue && !(call && (previous?.kind === 'call' || previous?.kind === 'comma'))) return wanted(t);
+      wantValue = false;
+    } else if (t.kind === 'comma') {
+      if (!calls[calls.length - 1]) return `has "," ${at(t)} outside a function's arguments`;
+      if (wantValue && previous?.kind !== 'call' && previous?.kind !== 'comma') return wanted(t);
+      wantValue = true;
+    } else if (wantValue) {
+      // An operator where a value should be: only a unary sign, and not straight after ":".
+      if (t.text !== '+' && t.text !== '-') return wanted(t);
+      if (afterColon) return range(previous!);
+    } else if (t.text === ':' && previous?.kind !== 'reference' && previous?.kind !== 'close') {
+      return range(t);
+    } else if (t.text !== '%') {
+      wantValue = true;
+    }
+    beforePrevious = previous;
+    previous = t;
+    space = undefined;
+  }
+  return wantValue ? 'ends where Excel expects a value' : null;
 }
 
 /**
@@ -376,10 +441,12 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
   const tokens: Token[] = [];
   let depth = 0;
   let i = 0;
-  const push = (kind: TokenKind, end: number, out?: string): void => {
+  const push = (kind: TokenKind, end: number, out?: string): Token => {
     const text = body.slice(i, end);
-    tokens.push({ kind, text, out: out ?? text });
+    const token: Token = { kind, at: i, text, out: out ?? text };
+    tokens.push(token);
     i = end;
+    return token;
   };
   const unreadable = (at: number): string => {
     const cp = body.codePointAt(at)!;
@@ -388,16 +455,23 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
     const what = cp === 9 ? 'a tab' : cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) ? `a control character (${code})` : INVISIBLE.test(ch) ? `the character ${code}` : `"${ch}"`;
     return `has ${what} at character ${at + base}, which Grunt can't read in a formula`;
   };
+  // Nothing xmlSafe would take out, even inside text or a quoted sheet name, so what's written is what was checked.
+  const unsafe = XML_UNSAFE.exec(body);
+  if (unsafe) return unreadable(unsafe.index);
   /** A sheet-qualified reference: the sheet (written from `i` to the "!" at `bang`) must exist and a reference must follow. */
   const sheetReference = (sheet: string, bang: number): string | null => {
-    const previous = tokens[tokens.length - 1];
-    if (previous?.kind === 'operator' && previous.text === ':') return `uses references across sheets (${shorten(tokens[tokens.length - 2]?.text ?? '')}:${shorten(body.slice(i, bang + 1))}), which Grunt doesn't support`;
     if (!sheetNames.has(sheet.toLowerCase())) return `refers to sheet "${sheet}", which isn't in the workbook`;
     const end = referenceEnd(body, bang + 1);
     if (end === -1) return `needs a cell reference after "${shorten(body.slice(i, bang + 1))}"`;
-    push('reference', end);
+    const part = body.slice(i, bang + 1);
+    push('reference', end).sheet = part;
     return null;
   };
+  /** Excel needs a sheet name quoted when it could be read as a reference, a boolean or a number. */
+  const needsQuotes = (word: string): string | null =>
+    referenceEnd(word, 0) === word.length || matchAt(BOOLEAN, word, 0) === word.length || R1C1_LIKE.test(word) || /^[0-9.]/.test(word)
+      ? `refers to sheet "${word}" without quotes: write it as '${word}'!`
+      : null;
 
   while (i < body.length) {
     const ch = body[i]!;
@@ -432,10 +506,11 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
       const two = body[i + 1] === '=' || (ch === '<' && body[i + 1] === '>');
       push('operator', i + (two ? 2 : 1));
     } else if (ch === '@') {
-      push('at', i + 1);
+      // Excel's file grammar has no "@": it saves _xlfn.SINGLE(...), which would need rewriting.
+      return 'uses "@" (implicit intersection), which Grunt doesn\'t support in spreadsheets yet';
     } else if (ch === '#') {
-      // Right after a reference or ")" it's the spill operator; anywhere else it starts an error value.
-      if (previous?.kind === 'reference' || previous?.kind === 'close') push('spill', i + 1);
+      // Right after a reference or ")" it's the spill operator (saved as _xlfn.ANCHORARRAY(...)); anywhere else it starts an error value.
+      if (previous?.kind === 'reference' || previous?.kind === 'close') return 'uses "#" (a spill reference), which Grunt doesn\'t support in spreadsheets yet';
       else {
         const end = matchAt(ERROR_VALUE, body, i);
         if (end === -1) return unreadable(i);
@@ -448,6 +523,8 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
     } else if (ch === '!') {
       return `has "!" at character ${i + base} with no sheet name before it`;
     } else if (ch === '$' || (ch >= '0' && ch <= '9') || (ch === '.' && body[i + 1]! >= '0' && body[i + 1]! <= '9')) {
+      const wordEnd = matchAt(WORD, body, i);
+      if (wordEnd !== -1 && body[wordEnd] === '!') return needsQuotes(body.slice(i, wordEnd))!;
       const end = referenceEnd(body, i);
       if (end !== -1) push('reference', end);
       else {
@@ -461,8 +538,7 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
       if (wordEnd === -1) return unreadable(i);
       const word = body.slice(i, wordEnd);
       if (body[wordEnd] === '!') {
-        if (referenceEnd(word, 0) === word.length || matchAt(BOOLEAN, word, 0) === word.length) return `refers to sheet "${word}" without quotes: write it as '${word}'!`;
-        const problem = sheetReference(word, wordEnd);
+        const problem = needsQuotes(word) ?? sheetReference(word, wordEnd);
         if (problem) return problem;
         continue;
       }
@@ -480,7 +556,8 @@ function readFormula(body: string, sheetNames: ReadonlySet<string>, base: number
       else return bareNameProblem(word, body, wordEnd, sheetNames);
     }
   }
-  return depth > 0 ? 'has an unclosed parenthesis' : tokens;
+  if (depth > 0) return 'has an unclosed parenthesis';
+  return grammarProblem(tokens, base) ?? tokens;
 }
 
 /** What's wrong with a formula (without its "="), or null. Grunt doesn't calculate, so a wrong reference still shows in Excel. */
@@ -496,21 +573,29 @@ export function formulaProblem(body: string, sheetNames: ReadonlySet<string>): s
  * prefix Excel stores it with (the source's own prefixes dropped), and every
  * other character as given. The text is read again before it's returned, and
  * must give the same tokens, so what's written is exactly what was checked.
+ * `sheetNames` are the workbook's sheet names, in any case: they're compared
+ * ignoring case.
  */
 export function formulaForFile(formula: string, sheetNames: ReadonlySet<string>): { ok: true; text: string } | { ok: false; error: string } {
+  return writeFormula(formula, new Set([...sheetNames].map((name) => name.toLowerCase())));
+}
+
+/** formulaForFile with `lowerNames` already lower-cased, so parseSpreadsheet doesn't redo it for every cell. */
+function writeFormula(formula: string, lowerNames: ReadonlySet<string>): { ok: true; text: string } | { ok: false; error: string } {
   const shown = formula.startsWith('=') ? formula : `=${formula}`;
   const failed = (problem: string) => ({ ok: false as const, error: `"${shorten(shown)}" ${problem}` });
-  const tokens = readFormula(shown.slice(1), sheetNames, 2);
+  const tokens = readFormula(shown.slice(1), lowerNames, 2);
   if (typeof tokens === 'string') return failed(tokens);
   const text = tokens.map((t) => t.out).join('');
-  const again = readFormula(text, sheetNames, 1);
+  if (text.length > MAX_FORMULA_CHARS) return failed(`is over ${MAX_FORMULA_CHARS} characters once Excel's function prefixes are added`);
+  const again = readFormula(text, lowerNames, 1);
   const same = typeof again !== 'string' && again.length === tokens.length && again.every((t, k) => t.kind === tokens[k]!.kind && t.out === tokens[k]!.out);
   if (!same) return failed("couldn't be written exactly as it was checked");
   return { ok: true, text };
 }
 
 function checkFormula(formula: string, path: string, sheetNames: ReadonlySet<string>): void {
-  const written = formulaForFile(formula, sheetNames);
+  const written = writeFormula(formula, sheetNames);
   if (!written.ok) bad(path, written.error);
 }
 
@@ -667,6 +752,6 @@ export const OFFICE_GUIDANCE = [
   'Office files: for a Word document or Excel spreadsheet the user wants as a file, make a "document" or "spreadsheet" artifact. Grunt makes the .docx or .xlsx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
   '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file.',
   '- "spreadsheet": JSON, e.g. {"sheets":[{"name":"Costs","columns":[{"width":24},{"width":12}],"freeze":{"rows":1},"rows":[[{"value":"Item","bold":true},{"value":"Cost","bold":true}],["Widgets",12],["Gadgets",30.5],["Total","=SUM(B2:B3)"]]}]}. rows[0] is row 1 and rows[0][0] is A1. A cell is null, text, a number, true/false, or an object with one of "value", "formula" or "date" (YYYY-MM-DD or YYYY-MM-DDTHH:MM) and optional "format" (an Excel number format such as "#,##0.00"), "bold", "italic", "wrap", "align" (left, center, right), "color" and "fill" (#RRGGBB). Text starting with "=" is a formula; {"value":"=..."} is literal text.',
-  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
+  "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers, '@' and the '#' spill operator aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
   '- Errors name the place in the JSON to fix.',
 ].join('\n');

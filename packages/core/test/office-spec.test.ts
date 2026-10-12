@@ -123,7 +123,7 @@ describe('parseSpreadsheet', () => {
   });
 });
 
-const SHEET_NAMES = ['Costs', 'Second sheet', "Q3's costs", 'Données'];
+const SHEET_NAMES = ['Costs', 'Second sheet', "Q3's costs", 'Données', 'R1', '2026'];
 const NAMES: ReadonlySet<string> = new Set(SHEET_NAMES.map((n) => n.toLowerCase()));
 const workbook = (rows: unknown[][]) => JSON.stringify({ sheets: SHEET_NAMES.map((name, i) => ({ name, rows: i === 0 ? rows : [] })) });
 
@@ -150,7 +150,6 @@ const ACCEPTED = [
   '=NPV(0.1,B1:B5)',
   '="see https://example.com"',
   '=ROUND( SUM(A1:A3) , 2)',
-  '=@A1:A3',
   '=sum(a1:a3)',
   '=LOG10(100)+ATAN2(1,1)+DAYS360(A1,A2)',
   '=NETWORKDAYS.INTL(A1,A2,1)+ISO.CEILING(2.5)',
@@ -159,8 +158,6 @@ const ACCEPTED = [
   '=IFERROR(1/0,#N/A)',
   '={1,2;3,4}',
   '=SUM({1,-2,"a",TRUE,#N/A})',
-  '=A1#',
-  '=SORT(A1:A3)#',
   '=B:B',
   '=2:2',
   '=$A$1:$B$2',
@@ -179,6 +176,15 @@ const ACCEPTED = [
   "='Second sheet'!$A$1:B2",
   '=.5+1.e-3',
   '=COUNTIFS(Costs!A:A,">0",B:B,"<>")',
+  '=SUM(A1,,B1)',
+  '=IF(A1,,1)',
+  '=SUM(A1,)',
+  '=--A1+-+1',
+  '=NOW()-PI()',
+  '=(A1+B1)*-(C1)%',
+  '=A1 : B2',
+  "='R1'!A1+'2026'!B2",
+  '="#DIV/0! in text"&#N/A',
 ];
 
 describe('formula functions', () => {
@@ -187,7 +193,7 @@ describe('formula functions', () => {
 
   it('refuses every function on the refused list, however it is written, called or not', () => {
     for (const f of REFUSED_FUNCTIONS) {
-      for (const written of [`${f}(1)`, `${f.toLowerCase()}(1)`, `${f} (1)`, `${f}\n(1)`, `_xlfn._xlws.${f}(1)`, `_XLFN._xlfn.${f}(1)`, `@${f}(1)`, `1+${f}(1)`, `SUM(${f})`, `SUM(A1,${f.toLowerCase()})`]) {
+      for (const written of [`${f}(1)`, `${f.toLowerCase()}(1)`, `${f} (1)`, `${f}\n(1)`, `_xlfn._xlws.${f}(1)`, `_XLFN._xlfn.${f}(1)`, `1+${f}(1)`, `SUM(${f})`, `SUM(A1,${f.toLowerCase()})`]) {
         expect(errorFor(`=${written}`), written).toMatch(new RegExp(`uses ${f.replace('.', '\\.')}, which Grunt refuses: it could reach the network or another program, or reveal details of this computer, when the file is opened`));
       }
     }
@@ -230,7 +236,6 @@ describe('formula functions', () => {
       '=webservice("x")',
       '=_xlfn._xlws.FILTERXML(A1,"//a")',
       '=_xlfn._xlfn.WEBSERVICE("x")',
-      '=@WEBSERVICE("x")',
       '=STOCKHISTORY("MSFT",A1)',
       '=TRANSLATE("hi","en","fr")',
       '=DETECTLANGUAGE("hi")',
@@ -249,6 +254,67 @@ describe('formula functions', () => {
       expect(errorFor(f), f).toMatch(/which Grunt refuses/);
     }
     expect(errorFor('=1\\WEBSERVICE("x")')).toMatch(/has "\\" at character 3, which Grunt can't read in a formula/);
+    expect(errorFor('=@WEBSERVICE("x")')).toMatch(/uses "@" \(implicit intersection\), which Grunt doesn't support in spreadsheets yet/);
+  });
+
+  it("refuses @ and the # spill operator for now, but keeps # in error values and text", () => {
+    for (const f of ['=@A1:A3', '=@@A1', '=SUM(@A1:A3)', '=A1:A3 @B1']) expect(errorFor(f), f).toMatch(/uses "@" \(implicit intersection\), which Grunt doesn't support in spreadsheets yet/);
+    for (const f of ['=A1#', '=SORT(A1:A3)#', '=Costs!A1#', '=SUM(A1#)']) expect(errorFor(f), f).toMatch(/uses "#" \(a spill reference\), which Grunt doesn't support in spreadsheets yet/);
+    for (const f of ['=A1=#DIV/0!', '="#A1#"', '=IFERROR(A1,#N/A)']) expect(parseSpreadsheet(sheet([[f]])), f).toMatchObject({ ok: true });
+  });
+
+  it("refuses syntax Excel would repair: operands and operators must alternate", () => {
+    const cases: [string | { formula: string }, RegExp][] = [
+      ['=1:2:+', /uses ":" at character 5 between things that aren't cell references/],
+      ['=1:2:', /ends where Excel expects a value/],
+      ['=A1+', /ends where Excel expects a value/],
+      ['=%', /has "%" at character 2 where Excel expects a value/],
+      ['=*A1', /has "\*" at character 2 where Excel expects a value/],
+      [{ formula: '==A1' }, /has "=" at character 2 where Excel expects a value/],
+      ['=1 2', /has a space at character 3 between values that aren't both cell references/],
+      ['="a" "b"', /has a space at character 5 between values that aren't both cell references/],
+      ['=SUM(A1) B1', /has a space at character 9 between values/],
+      ['=SUM(A1)(2)', /has "\(" at character 9 right after a value, with no operator between them/],
+      ['=(A1)(2)', /has "\(" at character 6 right after a value/],
+      ['="a"1', /has "1" at character 5 right after a value/],
+      ['=0:1', /uses ":" at character 3 between things that aren't cell references/],
+      ['=1:1048577', /uses ":" at character 3 between things that aren't cell references/],
+      ['=A1:-B1', /uses ":" at character 4 between things that aren't cell references/],
+      ['=A1:1', /uses ":" at character 4 between things that aren't cell references/],
+      ['=1,000', /has "," at character 3 outside a function's arguments/],
+      ['=(A1,B1)', /has "," at character 5 outside a function's arguments/],
+      ['=()', /has "\)" at character 3 where Excel expects a value/],
+      ['=SUM(1+)', /has "\)" at character 8 where Excel expects a value/],
+      ['=SUM(A1,1+,2)', /has "," at character 11 where Excel expects a value/],
+    ];
+    for (const [f, message] of cases) expect(errorOf(sheet([[f]])), JSON.stringify(f)).toMatch(message);
+  });
+
+  it('refuses a reference across sheets however it is spaced', () => {
+    const named = (f: string) => JSON.stringify({ sheets: [{ name: 'Costs', rows: [[f]] }, { name: 'Sheet2', rows: [] }] });
+    for (const f of ['=A1:Sheet2!B2', '=A1: Sheet2!B2', '=A1 :Sheet2!B2', '=A1 : Sheet2!B2', "=A1:'Sheet2'!B2"]) {
+      expect(errorOf(named(f)), f).toMatch(/uses references across sheets \(A1:'?Sheet2'?!\), which Grunt doesn't support/);
+    }
+  });
+
+  it('refuses unquoted sheet names Excel needs quoted, and takes them quoted', () => {
+    const names = ['A1', 'XFD1048576', 'R', 'C', 'RC', 'R1C1', 'R1', 'C3', '2026', 'Données'];
+    const book = (f: string) => JSON.stringify({ sheets: [{ name: 'Costs', rows: [[f]] }, ...names.map((name) => ({ name, rows: [] }))] });
+    for (const f of ['=A1!B1', '=XFD1048576!A1', '=R!A1', '=C!A1', '=RC!A1', '=rc!A1', '=r!A1', '=R1C1!A1', '=r1c1!A1', '=R1!A1', '=C3!A1', '=2026!A1']) {
+      expect(errorOf(book(f)), f).toMatch(/without quotes: write it as '.+'!/);
+    }
+    for (const f of ["='A1'!B1", "='R'!A1", "='rc'!A1", "='R1C1'!A1", "='2026'!A1", '=Données!A1']) expect(parseSpreadsheet(book(f)), f).toMatchObject({ ok: true });
+  });
+
+  it('refuses what xmlSafe would take out, even inside text and quoted sheet names', () => {
+    const lone = String.fromCharCode(0xd800);
+    const nonCharacter = String.fromCharCode(0xfffe);
+    expect(errorFor(`="a${lone}b"`)).toMatch(/has the character U\+D800 at character 4, which Grunt can't read in a formula/);
+    expect(errorFor(`="a${String.fromCharCode(0xdc00)}"`)).toMatch(/U\+DC00 at character 4/);
+    expect(errorFor(`='Co${lone}sts'!A1`)).toMatch(/U\+D800 at character 5/);
+    expect(errorFor(`="a${nonCharacter}"`)).toMatch(/U\+FFFE at character 4/);
+    expect(errorFor(`="a${String.fromCharCode(1)}"`)).toMatch(/a control character \(U\+0001\) at character 4/);
+    expect(parseSpreadsheet(sheet([['="pair 😀, tab\tand\nline"']]))).toMatchObject({ ok: true });
   });
 
   it('refuses any function that is not one of Excel built-ins, including lookalike letters', () => {
@@ -348,6 +414,15 @@ describe('formulaForFile', () => {
     expect(text("=\"x\"\"y\"&'Q3''s costs'!B4")).toBe("\"x\"\"y\"&'Q3''s costs'!B4");
     expect(text('=IF(a1>0,"sum(x)",donnÉes!b2)')).toBe('IF(a1>0,"sum(x)",donnÉes!b2)');
     expect(text('=ROUND( sum(A1:A3) , 2)')).toBe('ROUND( SUM(A1:A3) , 2)');
+  });
+
+  it('names the length when the prefixes take a formula over the limit, and takes sheet names in any case', () => {
+    const formula = '=' + 'STDEV.S(1)+'.repeat(700) + '1';
+    expect(formula.length).toBeLessThanOrEqual(8193);
+    const written = formulaForFile(formula, NAMES);
+    expect(written.ok).toBe(false);
+    if (!written.ok) expect(written.error).toMatch(/is over 8192 characters once Excel's function prefixes are added/);
+    expect(formulaForFile("=Costs!A1+'Second Sheet'!B2", new Set(['Costs', 'SECOND SHEET']))).toEqual({ ok: true, text: "Costs!A1+'Second Sheet'!B2" });
   });
 
   it('refuses what parseSpreadsheet refuses, with the same message', () => {
