@@ -148,4 +148,13 @@ describe('extractAttachmentText: what the file really is decides', () => {
   it('reads a .docx that is really a workbook as a workbook', async () => {
     expect(await extractAttachmentText(workbook(), DOCX_MIME, 'misnamed.docx')).toBe('Sheet "S" (A1:A1) as CSV:\n7');
   });
+
+  it('reads a PowerPoint file by its MIME type', async () => {
+    const deck = makeZip([
+      { name: 'ppt/presentation.xml', content: '<p:presentation xmlns:p="p" xmlns:r="r"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>' },
+      { name: 'ppt/_rels/presentation.xml.rels', content: '<Relationships><Relationship Id="rId1" Type="x/slide" Target="slides/slide1.xml"/></Relationships>' },
+      { name: 'ppt/slides/slide1.xml', content: '<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Hello deck</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>' },
+    ]);
+    expect(await extractAttachmentText(deck, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'd.pptx')).toBe('Slide 1: Hello deck');
+  });
 });
