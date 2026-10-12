@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
 import type { Grant, McpServer } from '@grunt/core/ports/store.js';
 import type { Container } from '../container.js';
 import { ClaudeDesktopConfigError, claudeDesktopConfigPath, readClaudeDesktopServers } from '../mcp-import.js';
@@ -191,6 +191,28 @@ export function parseApprovalChoice(body: ApprovalBody): ApprovalChoice {
   if (choice === 'chat') return { choice: 'chat' };
   if (choice === 'always') return { choice: 'always', constraint: parseConstraint(body.constraint) };
   throw new HTTPException(400, { message: '"choice" must be one of: deny, once, chat, always.' });
+}
+
+/** A question's or plan's answer, as `POST /asks/:id/answer` takes it: exactly one of the four shapes. */
+export function parseAskReply(body: unknown): AskReply {
+  const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+  const given = ['answers', 'declined', 'approve', 'changes'].filter((k) => b[k] !== undefined);
+  if (given.length !== 1) throw new HTTPException(400, { message: 'Send exactly one of "answers", "declined", "approve" or "changes".' });
+  if (b['answers'] !== undefined) {
+    const answers = b['answers'];
+    if (!Array.isArray(answers) || !answers.every((a) => typeof a === 'string')) throw new HTTPException(400, { message: '"answers" must be a list of strings.' });
+    return { answers: answers as string[] };
+  }
+  if (b['declined'] !== undefined) {
+    if (b['declined'] !== true) throw new HTTPException(400, { message: '"declined" must be true.' });
+    return { declined: true };
+  }
+  if (b['approve'] !== undefined) {
+    if (b['approve'] !== true) throw new HTTPException(400, { message: '"approve" must be true.' });
+    return { approve: true };
+  }
+  if (typeof b['changes'] !== 'string') throw new HTTPException(400, { message: '"changes" must be a string.' });
+  return { changes: b['changes'] };
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +483,17 @@ export function toolsRoutes(container: Container): Hono {
       throw new HTTPException(404, { message: `Approval request "${id}" is unknown or was already resolved.` });
     }
     return c.json({ resolved: true });
+  });
+
+  // --- questions and plans (spec 2026-10-12-thread-cards-design) -------------
+
+  app.post('/asks/:id/answer', async (c) => {
+    const id = c.req.param('id');
+    const reply = parseAskReply(await c.req.json().catch(() => ({})));
+    const result = container.toolProvider.answerAsk(id, reply);
+    if (result === 'unknown') throw new HTTPException(404, { message: `Question or plan "${id}" is unknown or was already answered.` });
+    if (typeof result === 'object') throw new HTTPException(400, { message: result.invalid });
+    return c.json({ answered: true });
   });
 
   return app;
