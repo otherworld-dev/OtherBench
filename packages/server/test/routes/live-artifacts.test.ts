@@ -120,6 +120,30 @@ describe('live artifact routes', () => {
     expect((await json(await app().request(BASE)))['runsOn']).toEqual({ id: 'node-laptop', name: 'node-laptop' });
   });
 
+  it("404s a version of another artifact in the chat, and an artifact of another chat, on status and on a call", async () => {
+    store.artifacts.create({ id: 'art-2', chatId: 'c1', slug: 'other', kind: 'html', language: null, createdAt: 5 });
+    store.artifacts.addVersion({ id: 'v2', artifactId: 'art-2', title: 'Other', content: '<p></p>', madeBy: 'model', messageId: 'a1', parentVersionId: null, createdAt: 6, live: LIVE });
+    store.chats.create({ id: 'c2', title: 'C2', profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    await send('POST', `${BASE}/allow`, {});
+    for (const base of [
+      '/api/chats/c1/artifacts/art/versions/v2/live',
+      '/api/chats/c1/artifacts/art-2/versions/v1/live',
+      '/api/chats/c2/artifacts/art/versions/v1/live',
+      '/api/chats/c2/artifacts/art-2/versions/v2/live',
+    ]) {
+      expect((await app().request(base)).status, base).toBe(404);
+      expect((await send('POST', `${base}/calls/value`, { params: { key: 'b' } })).status, base).toBe(404);
+    }
+  });
+
+  it('bypasses the cache only for fresh: true, not "true" or 1', async () => {
+    await send('POST', `${BASE}/allow`, {});
+    expect(await json(await send('POST', `${BASE}/calls/value`, { params: { key: 'b' } }))).toMatchObject({ ok: true, cached: false, json: { n: 1 } });
+    expect(await json(await send('POST', `${BASE}/calls/value`, { params: { key: 'b' }, fresh: 'true' }))).toMatchObject({ ok: true, cached: true, json: { n: 1 } });
+    expect(await json(await send('POST', `${BASE}/calls/value`, { params: { key: 'b' }, fresh: 1 }))).toMatchObject({ ok: true, cached: true, json: { n: 1 } });
+    expect(await json(await send('POST', `${BASE}/calls/value`, { params: { key: 'b' }, fresh: true }))).toMatchObject({ ok: true, cached: false, json: { n: 2 } });
+  });
+
   it('refuses a write from an opaque-origin page', async () => {
     const res = await app().request(`${BASE}/allow`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'null', 'Sec-Fetch-Site': 'cross-site' }, body: '{}' });
     expect(res.status).toBe(403);
