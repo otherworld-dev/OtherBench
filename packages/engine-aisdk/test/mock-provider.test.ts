@@ -264,6 +264,14 @@ describe('MockChatEngine', () => {
       expect(text(events)).toBe('I ran it in the sandbox: Linux');
     });
 
+    it("#run hands the tool the reply's plan gate and the unattended flag, like every other call", async () => {
+      const execute = vi.fn(async () => ({ exitCode: 0, output: '', sandbox: true }));
+      const tool: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute };
+      const plan = createPlanGate();
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls', { tools: [tool], workspaceRoot: '/ws', plan, unattended: true })));
+      expect(execute).toHaveBeenCalledWith({ command: 'ls' }, expect.objectContaining({ plan, unattended: true }));
+    });
+
     it('#run says so when the command did not run, or no run_command was offered', async () => {
       const refused: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute: async () => ({ error: true, code: 'not_set_up', message: 'nope' }) };
       expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls', { tools: [refused] }))))).toMatch(/^The command didn't run: /);
