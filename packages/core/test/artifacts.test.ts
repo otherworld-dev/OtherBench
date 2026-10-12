@@ -3,13 +3,17 @@ import {
   artifactFileName,
   artifactsOnBranch,
   artifactsListNote,
+  ARTIFACT_TOOL_DESCRIPTION,
+  ARTIFACT_TOOL_PARAMETERS,
   ARTIFACTS_GUIDANCE,
   branchOf,
   currentVersion,
   MAX_ARTIFACT_BYTES,
   runArtifactCommand,
   slugify,
+  versionFileName,
 } from '../src/domain/artifacts.js';
+import { OFFICE_GUIDANCE } from '../src/domain/office-spec.js';
 import type { ArtifactVersion } from '../src/ports/store.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
 
@@ -200,5 +204,44 @@ describe('artifact helpers', () => {
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: 'py' })).toBe('lib.py');
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: null })).toBe('lib.txt');
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: '../evil' })).toBe('lib.txt');
+  });
+});
+
+describe('office artifacts', () => {
+  const BUDGET = JSON.stringify({ sheets: [{ name: 'Budget', rows: [['Items', 'Cost'], ['Widgets', 12], ['Gadgets', 30.5], ['Total', '=SUM(B2:B3)']] }] });
+
+  it('refuses an invalid spreadsheet with the place to fix, and makes nothing', () => {
+    const store = setup();
+    const out = run(store, 'a1', { command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Budget', content: '{"sheets":[{"name":"Budget","rows":[["=SUM(B2:B3"]]}]}' });
+    expect(out).toEqual({ error: true, code: 'bad_content', message: `sheets[0].rows[0][0]: "=SUM(B2:B3" has an unclosed parenthesis. The artifact wasn't changed.` });
+    expect(store.artifacts.listByChat('c1')).toEqual([]);
+  });
+
+  it('refuses an update whose find-and-replace breaks the JSON, leaving the current version', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Budget', content: BUDGET });
+    expect(run(store, 'a3', { command: 'update', id: 'budget', find: '"Items"', replace: '"Items' })).toMatchObject({ error: true, code: 'bad_content', message: expect.stringMatching(/^The content isn't valid JSON/) });
+    expect(run(store, 'a3', { command: 'view', id: 'budget' })).toMatchObject({ number: 1, content: BUDGET });
+  });
+
+  it('refuses a rewrite into a spreadsheet that is not JSON', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'memo', kind: 'markdown', title: 'Memo', content: '# Memo' });
+    expect(run(store, 'a3', { command: 'rewrite', id: 'memo', kind: 'spreadsheet', content: '# Memo' })).toMatchObject({ error: true, code: 'bad_content' });
+  });
+
+  it('rewrites a markdown note into a document as it is, and names the files .docx and .xlsx', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'memo', kind: 'markdown', title: 'Memo', content: '# Memo\n\nText' });
+    expect(run(store, 'a3', { command: 'rewrite', id: 'memo', kind: 'document', content: '# Memo\n\nText' })).toMatchObject({ ok: true, kind: 'document', number: 2 });
+    expect(run(store, 'a3', { command: 'view', id: 'memo' })).toMatchObject({ kind: 'document', content: '# Memo\n\nText' });
+    expect(versionFileName({ slug: 'memo' }, { kind: 'document', language: null })).toBe('memo.docx');
+    expect(versionFileName({ slug: 'budget' }, { kind: 'spreadsheet', language: null })).toBe('budget.xlsx');
+  });
+
+  it('offers the new kinds to the model and tells it their formats', () => {
+    expect(ARTIFACT_TOOL_PARAMETERS.properties.kind.enum).toEqual(expect.arrayContaining(['document', 'spreadsheet']));
+    expect(ARTIFACTS_GUIDANCE).toContain(OFFICE_GUIDANCE);
+    expect(ARTIFACT_TOOL_DESCRIPTION).toMatch(/document and spreadsheet/);
   });
 });

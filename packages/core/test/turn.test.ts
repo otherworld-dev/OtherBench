@@ -628,18 +628,18 @@ describe('TurnRunner names the tools a turn can use', () => {
     };
 
     const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
-    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
-    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Calc', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
+    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'tracker', kind: 'html', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Tracker', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('off') }));
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: { ...fs('off'), artifacts: false } }));
 
     // The system prompt doesn't change with the artifacts, so Claude Code keeps its process and every engine its prompt cache.
     expect(engine.requests[0]!.profile.systemPrompt).toContain('# Artifacts');
     expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
-    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('calc');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('tracker');
     // The list rides on the user's message in the request only.
     expect(noteOf(0)).toContain('This chat has no artifacts on this branch yet.');
-    expect(noteOf(1)).toContain('- calc: "Calc" (html, v1)');
+    expect(noteOf(1)).toContain('- tracker: "Tracker" (html, v1)');
     const sent = engine.requests[1]!.messages.at(-1)!;
     expect(sent.role).toBe('user');
     expect(store.messages.get(sent.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
