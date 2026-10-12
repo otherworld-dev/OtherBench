@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react';
 import type { AuthStatus } from '../../state/api.js';
 import { useAuthStore } from '../../state/auth.js';
 import { serverUrl } from '../../state/transport.js';
+import { ChangePassword } from './ChangePassword.js';
 
 const date = (ms: number): string => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -90,6 +91,12 @@ export function RemoteAccessPanel(): JSX.Element {
         <section className="space-y-1">
           <h3 className="label-caps">HTTPS</h3>
           <HttpsDetails remote={remote} />
+        </section>
+      )}
+      {info?.session && (
+        <section className="space-y-2">
+          <h3 className="label-caps">Change password</h3>
+          <ChangePassword />
         </section>
       )}
       <section className="space-y-2">

@@ -156,7 +156,8 @@ loopback browser mode don't change.
 
    It goes in `login.json` beside `secrets.json` (`~/.grunt/` by default; pass
    the same `--db` as `serve`). Run it again any time, even while the server
-   runs, to change it; every signed-in device is then signed out.
+   runs, to change it; every signed-in device is then signed out. Or, signed
+   in, Settings → Remote access → *Change password*.
 
 2. **Start the server with the address the browser will type**, and an HTTPS
    route. With Grunt's own certificate:
