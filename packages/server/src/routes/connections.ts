@@ -237,7 +237,14 @@ export function connectionsRoutes(container: Container): Hono {
     const id = c.req.param('id');
     const existing = getConnectionOrThrow(container, id);
     if (existing.secretRef) await container.secrets.delete(existing.secretRef);
+    // Its profiles' chats go with it (ON DELETE CASCADE): so do their sandboxes.
+    const profileIds = new Set(container.store.profiles.list().filter((p) => p.connectionId === id).map((p) => p.id));
+    const chatIds = container.store.chats.list().filter((chat) => profileIds.has(chat.profileId)).map((chat) => chat.id);
     container.store.connections.delete(id);
+    // Best effort, and before the sweep below, which can fail the request on purpose.
+    for (const chatId of chatIds) {
+      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
+    }
     // Deleting a connection cascades away its models/profiles/chats and, in
     // turn, THEIR attachment rows (ON DELETE CASCADE) -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see

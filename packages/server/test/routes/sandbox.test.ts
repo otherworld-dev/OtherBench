@@ -176,8 +176,26 @@ describe('deleting chats releases their sandbox', () => {
     expect(sandbox.released).toEqual(['chat-1']);
   });
 
+  it("deleting a connection releases each chat of each of its profiles, and no other chat", async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const c = makeContainer(sandbox);
+    c.store.profiles.create({
+      id: 'profile-2', name: 'P2', description: null, colour: null, connectionId: 'conn-1', modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' }, isDefault: false, archivedAt: null,
+    });
+    c.store.chats.create({ id: 'chat-2', title: 'T2', profileId: 'profile-2', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    c.store.connections.create({ id: 'conn-2', name: 'Other', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    c.store.profiles.create({
+      id: 'profile-3', name: 'P3', description: null, colour: null, connectionId: 'conn-2', modelId: 'm', systemPrompt: null, params: {},
+      toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' }, isDefault: false, archivedAt: null,
+    });
+    c.store.chats.create({ id: 'chat-3', title: 'T3', profileId: 'profile-3', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    expect((await send(c, 'DELETE', '/api/connections/conn-1')).status).toBe(204);
+    expect(sandbox.released.sort()).toEqual(['chat-1', 'chat-2']);
+  });
+
   it('releases before the orphan-blob sweep, so a sweep that fails the request leaves no sandbox behind', async () => {
-    for (const [path, chats] of [['/api/chats/chat-1', ['chat-1']], ['/api/profiles/profile-1', ['chat-1']]] as const) {
+    for (const [path, chats] of [['/api/chats/chat-1', ['chat-1']], ['/api/profiles/profile-1', ['chat-1']], ['/api/connections/conn-1', ['chat-1']]] as const) {
       const sandbox = new FakeSandbox({ ready: true });
       const c = makeContainer(sandbox);
       // A wiring error (no root), which the sweep deliberately lets through as a 500.
