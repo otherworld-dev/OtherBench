@@ -60,6 +60,14 @@ export interface TurnInput {
   parentId: string | null;
   userParts: Part[];
   profiles: ResolvedProfile[];
+  /**
+   * A scheduled run with nobody watching (spec 2026-10-12-scheduled-tasks-design):
+   * the request is marked unattended, so tool calls that would raise a card are
+   * refused, and Claude Code's auto mode is off whatever the chat says. Only
+   * the schedule service sets it; no route reads it from a request body.
+   * `retry` and `regenerate` never set it: a person is pressing the button.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -360,7 +368,7 @@ export class TurnRunner {
     // `.catch` here is a last-resort backstop against a bug in that catch
     // logic turning into an unhandled rejection.
     for (const { message, profile } of variants) {
-      void this.runVariant(input.chatId, userMessage.id, message.id, profile).catch((err: unknown) => {
+      void this.runVariant(input.chatId, userMessage.id, message.id, profile, input.unattended === true).catch((err: unknown) => {
         console.error(`[TurnRunner] variant ${message.id} failed outside its own error handling:`, err);
       });
     }
@@ -502,7 +510,8 @@ export class TurnRunner {
     chatId: string,
     userMessageId: string,
     messageId: string,
-    profile: ResolvedProfile
+    profile: ResolvedProfile,
+    unattended = false
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
@@ -619,7 +628,10 @@ export class TurnRunner {
         ...(folders.length > 0 ? { folders } : {}),
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
-        autoMode,
+        // Nobody can catch what auto mode's classifier allows in a scheduled
+        // run, so it is never used there (the classifier isn't a security boundary).
+        autoMode: unattended ? false : autoMode,
+        ...(unattended ? { unattended: true } : {}),
         ...(effort ? { effort } : {}),
         ...(plan ? { plan } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,

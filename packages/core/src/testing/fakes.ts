@@ -63,7 +63,7 @@ import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
 import { UserAsks } from '../domain/user-asks.js';
 import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
-import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
@@ -193,6 +193,9 @@ const FAKE_CANCELLED = {
   reason: 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.',
 };
 
+/** What GruntToolProvider returns when an unattended run's call would need a card. */
+const FAKE_UNATTENDED = { ok: false as const, code: 'approval_unavailable' as const, reason: UNATTENDED_REASON };
+
 export class FakeToolProvider implements ToolProvider {
   readonly refreshed: string[] = [];
   readonly denials: { toolName: string; reason: string }[] = [];
@@ -269,7 +272,7 @@ export class FakeToolProvider implements ToolProvider {
 
   async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
       this.broker.discard(decision.request.id);
       return { deferred: true };
     }
@@ -305,7 +308,7 @@ export class FakeToolProvider implements ToolProvider {
   private async settle(
     decision: ReturnType<PermissionBroker['decide']>,
     ctx: ToolContext
-  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled'; reason: string }> {
+  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_unavailable'; reason: string }> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
     if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
 
@@ -314,6 +317,11 @@ export class FakeToolProvider implements ToolProvider {
     if (ctx.signal.aborted) {
       this.broker.discard(request.id);
       return FAKE_CANCELLED;
+    }
+    // Nobody can answer this run's cards: drop the request, raise none.
+    if (ctx.unattended === true) {
+      this.broker.discard(request.id);
+      return FAKE_UNATTENDED;
     }
     // Waiter registered BEFORE notifying so a listener may answer synchronously.
     const pending = new Promise<{ choice: ApprovalChoice; cancelled: boolean }>((resolve) => {

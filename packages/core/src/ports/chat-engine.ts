@@ -66,7 +66,11 @@ export interface EngineRequest {
   effort?: ClaudeEffort;
   /** This reply's plan approval when the chat's Plan mode is on (TurnRunner makes one per reply); copied onto every ToolContext. */
   plan?: PlanGate;
-  /** Nobody is watching this run (#925 sets it); copied onto every ToolContext. Keep an existing field of this name if one is already here. */
+  /**
+   * A scheduled run with nobody watching: every engine copies it onto each
+   * tool call's `ToolContext.unattended` (Claude Code onto its gate's
+   * context), so a call that would need a card is refused instead.
+   */
   unattended?: boolean;
 }
 

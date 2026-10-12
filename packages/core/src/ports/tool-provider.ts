@@ -34,9 +34,11 @@ export interface ToolContext {
    */
   plan?: PlanGate;
   /**
-   * Nobody can answer a card for this call (a scheduled run, #925). Questions
-   * and plans are answered for the model and never raise a card. If an
-   * earlier feature already added this field, keep that one.
+   * Nobody can answer a card for this call: a scheduled run (spec
+   * 2026-10-12-scheduled-tasks-design). Questions and plans are answered for
+   * the model and never raise a card; any other call that would ask is refused
+   * with `approval_unavailable` instead of waiting. Set only by the schedule
+   * service, through `TurnInput.unattended`; it can only take permissions away.
    */
   unattended?: boolean;
   signal: AbortSignal;

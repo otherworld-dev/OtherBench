@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { ApprovalChoice, AskInput, ToolApprovalEvent, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { ToolPolicy } from '../types/config.js';
+import { UNATTENDED_REASON } from '../domain/permissions.js';
 
 /** An MCP server the contract needs the provider under test to expose as connected. */
 export interface ContractMcpServer {
@@ -503,6 +504,40 @@ export function runToolProviderContract(
       const [shell] = await listed(policy({ shell: true }));
       expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
       expect(w.requests).toHaveLength(1);
+    });
+
+    // ---- unattended (scheduled) runs: nobody can answer a card ----
+
+    it('under unattended, a call that would ask is refused as approval_unavailable, raising no card', async () => {
+      const w = watch({ choice: 'once' });
+      const shell = await tool(policy({ shell: true }), 'run_command');
+      const out = await shell.execute(SHELL_ARGS, ctx({ unattended: true }));
+      expect(isToolError(out, 'approval_unavailable')).toBe(true);
+      expect((out as { message: string }).message).toBe(UNATTENDED_REASON);
+      expect(w.events).toHaveLength(0);
+    });
+
+    it('under unattended, what needs no card still runs: policy allows and earlier grants; denials stay denials', async () => {
+      const read = await tool(policy({ fs: 'read' }), 'read_file');
+      expect(isToolError(await read.execute(READ_ARGS, ctx({ unattended: true })))).toBe(false);
+
+      const w = watch({ choice: 'chat' });
+      const write = await tool(policy({ fs: 'readwrite' }), 'write_file');
+      expect(isToolError(await write.execute(WRITE_ARGS, ctx()))).toBe(false);
+      expect(isToolError(await write.execute(WRITE_ARGS, ctx({ unattended: true })))).toBe(false);
+      expect(w.requests).toHaveLength(1);
+
+      const shell = await tool(policy({ shell: true }), 'run_command');
+      expect(isToolError(await shell.execute(SHELL_ARGS, ctx({ unattended: true, workspaceRoot: null })), 'permission_denied')).toBe(true);
+    });
+
+    it('requestApproval under unattended refuses an ask, even one auto mode could take, and allows what needs no card', async () => {
+      const w = watch({ choice: 'once' });
+      expect(
+        await provider.requestApproval(agent('Bash', 'execute'), { command: 'npm test' }, policy({ shell: true }), ctx({ unattended: true }), { deferAsk: true })
+      ).toEqual({ allowed: false, reason: UNATTENDED_REASON });
+      expect(await provider.requestApproval(agent('Read', 'read'), { path: 'a.txt' }, policy({ fs: 'read' }), ctx({ unattended: true }))).toMatchObject({ allowed: true });
+      expect(w.requests).toHaveLength(0);
     });
   });
 }

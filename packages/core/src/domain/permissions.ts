@@ -443,6 +443,15 @@ export class PermissionBroker {
 // ---------------------------------------------------------------------------
 
 /**
+ * What an unattended (scheduled) run's tool call gets instead of a card
+ * (spec 2026-10-12-scheduled-tasks-design §2): the model reads it, so it says
+ * what happened and how to let the call run next time.
+ */
+export const UNATTENDED_REASON =
+  'Nobody is watching this scheduled run, so this tool call needed an approval that nobody can give. It did not run. ' +
+  'To let it run unattended, allow it ahead of time with an Always grant, or for shell commands use a profile whose shell runs in the sandbox.';
+
+/**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go
  * to Claude Code's own classifier instead of a Grunt card (spec
  * 2026-10-03-claude-code-auto-mode-design section 3). Only Claude Code tools

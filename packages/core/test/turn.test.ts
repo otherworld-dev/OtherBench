@@ -1984,3 +1984,46 @@ describe('TurnRunner plan mode', () => {
     expect(textOf(engine.requests[0]!.messages.at(-1)!)).toBe('write it');
   });
 });
+
+describe('unattended turns (scheduled runs)', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+  const newChat = (store: InMemoryStore) =>
+    store.chats.create({ id: 'chat-1', title: 't', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+  it('marks the request unattended and turns auto mode off, even in a chat with Auto on', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+    store.chats.update('chat-1', { autoMode: true });
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()], unattended: true });
+
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.unattended).toBe(true);
+    expect(engine.requests[0]!.autoMode).toBe(false);
+  });
+
+  it('leaves an ordinary run, a retry and a regenerate attended', async () => {
+    const store = new InMemoryStore();
+    let calls = 0;
+    const engine = new FakeChatEngine(() =>
+      calls++ === 0
+        ? [{ type: 'error', error: { kind: 'transient', message: 'boom', retryable: true } }]
+        : [{ type: 'finish', usage, finishReason: 'stop' }]
+    );
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('error'));
+    await runner.retry('chat-1', id, makeResolvedProfile());
+    expect(store.messages.get(id)!.status).toBe('complete');
+    const regenerated = await runner.regenerate({ chatId: 'chat-1', messageId: id, profile: makeResolvedProfile() });
+    await vi.waitFor(() => expect(store.messages.get(regenerated.assistantMessageId)!.status).toBe('complete'));
+
+    expect(engine.requests).toHaveLength(3);
+    expect(engine.requests.map((r) => r.unattended)).toEqual([undefined, undefined, undefined]);
+  });
+});
