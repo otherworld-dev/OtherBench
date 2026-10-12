@@ -2,11 +2,19 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, type StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js';
 import { resolveExecutable } from './spawn.js';
 
 export type McpTransportConfig =
   | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string> }
-  | { transport: 'http'; url: string; headers: Record<string, string> };
+  | {
+      transport: 'http';
+      url: string;
+      headers: Record<string, string>;
+      /** Sign-in (spec 2026-10-12-mcp-oauth-design §4): attached by `McpServerManager` to http servers without a fixed Authorization header. */
+      authProvider?: OAuthClientProvider;
+    };
 
 export interface McpToolDescriptor {
   name: string;
@@ -17,7 +25,10 @@ export interface McpToolDescriptor {
   destructiveHint?: boolean;
 }
 
-export type McpStatus = 'connecting' | 'ok' | 'error';
+/** `needs_auth`: the server answered 401 and only a browser sign-in can fix it. No reconnect is scheduled; `refresh()` starts over. */
+export type McpStatus = 'connecting' | 'ok' | 'error' | 'needs_auth';
+
+export const NEEDS_SIGN_IN_CALL_MESSAGE = 'This MCP server needs you to sign in again (Settings > MCP servers).';
 
 export interface McpCallResult {
   content: unknown;
@@ -118,7 +129,7 @@ export class McpClient {
     this.clearTimeoutFn = options.clearTimeout ?? clearTimeout;
   }
 
-  /** Subscribes to status transitions ('connecting' | 'ok' | 'error'). Returns an unsubscribe function. */
+  /** Subscribes to status transitions ('connecting' | 'ok' | 'error' | 'needs_auth'). Returns an unsubscribe function. */
   onStatusChange(cb: (status: McpStatus, error: string | null) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
@@ -150,6 +161,10 @@ export class McpClient {
       this.scheduleHealthCheck(seq);
     } catch (err) {
       if (seq !== this.connectSeq || this.closed) return;
+      if (this.signInRequired(err)) {
+        this.enterNeedsAuth();
+        return;
+      }
       this.client = null;
       this.setStatus('error', errorMessage(err));
       this.scheduleReconnect(seq);
@@ -173,6 +188,7 @@ export class McpClient {
   }
 
   async callTool(name: string, args: unknown): Promise<McpCallResult> {
+    if (this.status === 'needs_auth') throw new Error(NEEDS_SIGN_IN_CALL_MESSAGE);
     if (!this.client || this.status !== 'ok') {
       throw new Error(`MCP server "${this.id}" is not connected (status: ${this.status}).`);
     }
@@ -199,11 +215,18 @@ export class McpClient {
     const headers = this.config.headers;
     return new StreamableHTTPClientTransport(new URL(this.config.url), {
       requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
+      authProvider: this.config.authProvider,
     });
   }
 
   private handleUnexpectedClose(seq: number, err?: Error): void {
     if (seq !== this.connectSeq || this.closed) return; // stale event from an already-superseded/closed connection
+    // A failed connect fires onerror (with the sign-in error), then onclose (with none). Stay in needs_auth until refresh()/connect().
+    if (this.status === 'needs_auth') return;
+    if (err && this.signInRequired(err)) {
+      this.enterNeedsAuth();
+      return;
+    }
     this.client = null;
     this.clearTimer('health');
     this.setStatus('error', err ? errorMessage(err) : 'The MCP server connection closed unexpectedly.');
@@ -225,6 +248,10 @@ export class McpClient {
       this.scheduleHealthCheck(seq);
     } catch (err) {
       if (seq !== this.connectSeq || this.closed) return;
+      if (this.signInRequired(err)) {
+        this.enterNeedsAuth();
+        return;
+      }
       this.client = null;
       this.setStatus('error', errorMessage(err));
       this.scheduleReconnect(seq);
@@ -240,6 +267,21 @@ export class McpClient {
       void this.connect();
     }, delay);
     this.reconnectTimer.unref?.();
+  }
+
+  /** Only a server we attached a sign-in provider to can need a sign-in; a 401 with a fixed Authorization header stays an ordinary error. */
+  private signInRequired(err: unknown): boolean {
+    return this.config.transport === 'http' && this.config.authProvider !== undefined && isSignInRequired(err);
+  }
+
+  private enterNeedsAuth(): void {
+    const stale = this.client;
+    this.client = null;
+    this.clearTimer('health');
+    this.clearTimer('reconnect');
+    this.backoffMs = this.initialBackoffMs;
+    if (stale) void stale.close().catch(() => {});
+    if (this.status !== 'needs_auth') this.setStatus('needs_auth', SIGN_IN_REQUIRED_MESSAGE);
   }
 
   private clearTimer(which: 'health' | 'reconnect'): void {

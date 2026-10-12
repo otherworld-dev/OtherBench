@@ -10,6 +10,7 @@ const STATUS_COLOR: Record<McpServerHealth['status'], string> = {
   connecting: 'bg-[var(--accent)] animate-pulse',
   error: 'bg-[var(--danger)]',
   unknown: 'bg-[var(--text-faint)]',
+  needs_auth: 'bg-[var(--warn)]',
 };
 
 function errorMessage(err: unknown, fallback: string): string {

@@ -1,20 +1,47 @@
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { McpServer, Store } from '@grunt/core/ports/store.js';
 import { McpClient, type McpClientOptions, type McpTransportConfig } from './client.js';
+import { GruntOAuthProvider, hasAuthorizationHeader } from './oauth-provider.js';
+import { McpOAuthStore } from './oauth-store.js';
+
+/** One http server's sign-in, as the browser sees it: never a token, code or secret. */
+export interface McpServerAuthHealth {
+  /** `needs_sign_in` when the live status is needs_auth; else `signed_in` when a sign-in completed; else `none`. */
+  state: 'none' | 'needs_sign_in' | 'signed_in';
+  account: string | null;
+  signedInAt: number | null;
+  /** A sign-in started here is waiting for the browser. */
+  pending: boolean;
+  /** Why the last sign-in failed, until the next start. */
+  error: string | null;
+}
 
 export interface McpServerHealth {
   id: string;
   name: string;
   transport: 'stdio' | 'http';
   enabled: boolean;
-  /** 'connecting' only exists live, in-memory -- the persisted `McpServer.status` column has no such state (see `persistedStatus` below), so a fresh page load between (re)connect attempts reports whatever was last durably written instead. */
-  status: 'unknown' | 'connecting' | 'ok' | 'error';
+  /** 'connecting' and 'needs_auth' only exist live, in-memory -- the persisted `McpServer.status` column has neither (see `persistedStatus` below), so a fresh page load between (re)connect attempts reports whatever was last durably written instead. */
+  status: 'unknown' | 'connecting' | 'ok' | 'error' | 'needs_auth';
   lastError: string | null;
   toolCount: number;
+  /** Null for stdio servers and for http servers with a fixed Authorization header. */
+  auth: McpServerAuthHealth | null;
+}
+
+export interface McpOAuthOptions {
+  /** Clock for token save times, the refresh grace and sign-in expiry. Tests advance it. */
+  now?: () => number;
+  /** How long a started sign-in waits for the browser. Default 600_000 (10 minutes). */
+  signInTimeoutMs?: number;
+  /** Timeout for each HTTP request made while starting or finishing a sign-in. Default 15_000. */
+  requestTimeoutMs?: number;
 }
 
 function persistedStatus(status: McpClient['status']): McpServer['status'] {
-  return status === 'connecting' ? 'unknown' : status;
+  if (status === 'connecting') return 'unknown';
+  if (status === 'needs_auth') return 'error';
+  return status;
 }
 
 /**
@@ -26,16 +53,24 @@ function persistedStatus(status: McpClient['status']): McpServer['status'] {
  * than polling the table -- "connect on enable" (task 25/26 brief) means
  * exactly this: enabling a server is a write the route already knows about,
  * so it can just ask the manager to reconcile immediately afterward.
+ *
+ * Also owns sign-in state (spec 2026-10-12-mcp-oauth-design §4): one
+ * `McpOAuthStore`, and a background `GruntOAuthProvider` on every http
+ * connection without a fixed Authorization header.
  */
 export class McpServerManager {
   private readonly clients = new Map<string, McpClient>();
   private readonly unsubscribes = new Map<string, () => void>();
+  private readonly oauth: McpOAuthStore;
 
   constructor(
     private readonly store: Store,
     private readonly secrets: SecretStore,
-    private readonly clientOptions: McpClientOptions = {}
-  ) {}
+    private readonly clientOptions: McpClientOptions = {},
+    private readonly oauthOptions: McpOAuthOptions = {}
+  ) {
+    this.oauth = new McpOAuthStore(store, secrets, oauthOptions.now);
+  }
 
   async sync(): Promise<void> {
     const rows = this.store.mcpServers.list();
@@ -62,7 +97,23 @@ export class McpServerManager {
     await this.clients.get(serverId)?.refresh();
   }
 
-  /** Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. */
+  /**
+   * Tears one server's connection down and connects again from its CURRENT
+   * row, so a changed URL, headers, command, args, env or sign-in provider
+   * takes effect (`refresh()` reuses the config the client was built with).
+   * Connects only if the row still exists and is enabled.
+   */
+  async restart(serverId: string): Promise<void> {
+    const client = this.clients.get(serverId);
+    if (client) {
+      this.teardown(serverId);
+      await client.disconnect();
+    }
+    const row = this.store.mcpServers.get(serverId);
+    if (row?.enabled) await this.connectServer(row);
+  }
+
+  /** Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. A server that needs sign-in isn't `ok`, so it offers no tools. */
   listFor(serverIds: string[]): { id: string; name: string; client: McpClient }[] {
     const rows = new Map(this.store.mcpServers.list().map((r) => [r.id, r]));
     const out: { id: string; name: string; client: McpClient }[] = [];
@@ -79,14 +130,16 @@ export class McpServerManager {
   health(): McpServerHealth[] {
     return this.store.mcpServers.list().map((row) => {
       const client = this.clients.get(row.id);
+      const status = client?.status ?? row.status;
       return {
         id: row.id,
         name: row.name,
         transport: row.transport,
         enabled: row.enabled,
-        status: client?.status ?? row.status,
+        status,
         lastError: client?.lastError ?? null,
         toolCount: client?.tools.length ?? (Array.isArray(row.toolsCache) ? row.toolsCache.length : 0),
+        auth: this.authHealth(row, status),
       };
     });
   }
@@ -95,6 +148,18 @@ export class McpServerManager {
     const clients = [...this.clients.values()];
     for (const id of [...this.clients.keys()]) this.teardown(id);
     await Promise.all(clients.map((c) => c.disconnect()));
+  }
+
+  private authHealth(row: McpServer, status: McpServerHealth['status']): McpServerAuthHealth | null {
+    if (row.transport !== 'http' || hasAuthorizationHeader(row)) return null;
+    const signedInAt = row.oauth?.signedInAt ?? null;
+    return {
+      state: status === 'needs_auth' ? 'needs_sign_in' : signedInAt !== null ? 'signed_in' : 'none',
+      account: row.oauth?.account ?? null,
+      signedInAt,
+      pending: false,
+      error: null,
+    };
   }
 
   private async connectServer(row: McpServer): Promise<void> {
@@ -147,7 +212,9 @@ export class McpServerManager {
     // themselves -- the same "never plaintext in SQLite" discipline
     // Connection.secretRef already follows (see profile-resolution.ts).
     const headers = await this.resolveSecretRefs(row.headerRefs);
-    return { transport: 'http', url: row.url, headers };
+    // Sign-in is detected, not switched on: every http server without a fixed Authorization header gets the provider. A server that never answers 401 never asks it for anything.
+    if (hasAuthorizationHeader(row)) return { transport: 'http', url: row.url, headers };
+    return { transport: 'http', url: row.url, headers, authProvider: new GruntOAuthProvider(row.id, this.oauth, { kind: 'background' }) };
   }
 
   /** Resolves a `{name: secretRef}` map (`envRefs` or `headerRefs`) to `{name: value}`, silently dropping any ref that fails to resolve (see the two call sites above for why that's the right failure mode here). */

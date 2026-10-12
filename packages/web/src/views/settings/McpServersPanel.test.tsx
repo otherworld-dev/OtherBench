@@ -46,6 +46,7 @@ function makeHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
     status: 'ok',
     lastError: null,
     toolCount: 2,
+    auth: null,
     ...overrides,
   };
 }

@@ -387,6 +387,7 @@ const MCP_STATUS_COLOR: Record<McpServerHealth['status'], string> = {
   connecting: 'bg-[var(--accent)] animate-pulse',
   error: 'bg-[var(--danger)]',
   unknown: 'bg-[var(--text-faint)]',
+  needs_auth: 'bg-[var(--warn)]',
 };
 
 function StatusDot({ status }: { status: McpServerHealth['status'] }): JSX.Element {
