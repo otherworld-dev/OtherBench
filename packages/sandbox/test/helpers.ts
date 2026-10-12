@@ -4,6 +4,9 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import type { AgentChannel, AgentExit } from '../src/agent-channel.js';
+import { AgentClient, type AgentInit } from '../src/agent-client.js';
+import type { AgentMessage, HostMessage } from '../src/protocol.js';
 import type { WslResult, WslRunner, WslUser } from '../src/wsl.js';
 
 export interface FakeChild {
@@ -115,4 +118,71 @@ export function runMountScriptWithEnvPaths(win: string, target: string, mode = '
   // exec "$BASH": a bare `bash` would be found through PATH, and on Windows that can be System32\bash.exe (WSL).
   const r = spawnSync(BASH, ['-c', 'exec "$BASH" "$TEST_SCRIPT" mount "$TEST_WIN" "$TEST_TARGET" "$TEST_MODE"'], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
+}
+
+export type RunMessage = Extract<HostMessage, { type: 'run' }>;
+
+export interface AgentScript {
+  /** What the agent answers to init. Default 'ready'. */
+  ready?: 'ready' | 'fatal' | 'silent';
+  /** Don't exit on close (an agent that hangs). */
+  ignoreClose?: boolean;
+  /** What the agent does with a run. Default: finishes it with "ok\n", exit 0. */
+  onRun?: (msg: RunMessage, channel: FakeChannel) => void;
+}
+
+/** An AgentChannel with a scripted agent on the other end. */
+export class FakeChannel implements AgentChannel {
+  readonly sent: HostMessage[] = [];
+  killed = false;
+  private readonly messageListeners: ((m: AgentMessage) => void)[] = [];
+  private readonly exitListeners: ((e: AgentExit) => void)[] = [];
+  private exited = false;
+
+  constructor(private readonly script: AgentScript = {}) {}
+
+  send(m: HostMessage): void {
+    this.sent.push(m);
+    if (m.type === 'init') {
+      const ready = this.script.ready ?? 'ready';
+      if (ready === 'ready') queueMicrotask(() => this.emit({ type: 'ready' }));
+      if (ready === 'fatal') queueMicrotask(() => this.emit({ type: 'fatal', message: 'bwrap: No permissions to create new namespace' }));
+    }
+    if (m.type === 'run') (this.script.onRun ?? ((msg, ch) => queueMicrotask(() => ch.finish(msg.id, 'ok\n'))))(m, this);
+    if (m.type === 'close' && this.script.ignoreClose !== true) queueMicrotask(() => this.emitExit(0));
+  }
+  onMessage(cb: (m: AgentMessage) => void): void {
+    this.messageListeners.push(cb);
+  }
+  onExit(cb: (e: AgentExit) => void): void {
+    this.exitListeners.push(cb);
+  }
+  kill(): void {
+    this.killed = true;
+    this.emitExit(null, 'killed');
+  }
+  emit(m: AgentMessage): void {
+    for (const cb of this.messageListeners) cb(m);
+  }
+  emitExit(code: number | null, detail = ''): void {
+    if (this.exited) return;
+    this.exited = true;
+    for (const cb of this.exitListeners) cb({ code, detail });
+  }
+  /** The agent finishing run `id`: its output, then done with this exit code. */
+  finish(id: number, output = '', exitCode = 0): void {
+    if (output) this.emit({ type: 'output', id, chunk: output });
+    this.emit({ type: 'done', id, exitCode, signal: null, timedOut: false, truncated: false, note: '' });
+  }
+  runs(): RunMessage[] {
+    return this.sent.filter((m): m is RunMessage => m.type === 'run');
+  }
+}
+
+export function scriptedAgent(
+  script: AgentScript = {},
+  init: AgentInit = { home: '/home/grunt/chats/c1', tmpRoot: '/tmp/grunt-chats/c1', allowedHosts: [] }
+): { client: AgentClient; channel: FakeChannel } {
+  const channel = new FakeChannel(script);
+  return { channel, client: new AgentClient(channel, init) };
 }
