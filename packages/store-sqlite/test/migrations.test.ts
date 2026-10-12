@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
-import { runMigrations, MIGRATIONS, type Migration } from '../src/migrations/index.js';
+import { runMigrations, MIGRATIONS, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
 import type { DatabaseSync } from 'node:sqlite';
 
 function freshDb(): DatabaseSync {
@@ -21,6 +21,25 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('runMigrations', () => {
+  it('numbers migrations uniquely in ascending order, leaving 021 free (reserved) and running past the gap', () => {
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(new Set(versions).size).toBe(versions.length);
+    expect([...versions].sort((a, b) => a - b)).toEqual(versions);
+    for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
+    expect(versions).not.toContain(21);
+    expect(MIGRATIONS.slice(-3).map((m) => m.name)).toEqual(['022-chat-plan-mode', '023-schedules', '024-mcp-oauth']);
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
+      expect(userVersion(db)).toBe(20);
+      runMigrations(db);
+      expect(userVersion(db)).toBe(SCHEMA_VERSION);
+      expect(SCHEMA_VERSION).toBe(24);
+    } finally {
+      db.close();
+    }
+  });
+
   it('mcp-oauth adds mcp_server.oauth, empty for every existing server', () => {
     const mcpOauth = MIGRATIONS.find((m) => m.name.endsWith('mcp-oauth'));
     expect(mcpOauth).toBeDefined();
