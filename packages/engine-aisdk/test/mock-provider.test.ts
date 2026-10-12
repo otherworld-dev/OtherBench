@@ -263,9 +263,29 @@ describe('MockChatEngine', () => {
       expect(events.at(-1)).toMatchObject({ type: 'finish' });
     });
 
-    it('#browser reads a heading whose name the snapshot single-quoted', async () => {
-      const browser = browserWith({ snapshot: `- heading 'Say "hi" now' [level=1] [ref=e1]` });
-      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browser] }))))).toBe('The page says: Say "hi" now.');
+    const heading = async (snapshot: string) =>
+      text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browserWith({ snapshot })] }))));
+
+    it('#browser reads a heading from a key Playwright wrapped in single quotes', async () => {
+      expect(await heading(`- 'heading "Q: why?" [level=2] [ref=e8]'`)).toBe('The page says: Q: why?.');
+    });
+
+    it('#browser decodes the JSON name: escaped quote, newline and unicode', async () => {
+      expect(await heading(`- 'heading "Say \\"hi\\"" [level=1] [ref=e1]'`)).toBe('The page says: Say "hi".');
+      expect(await heading(`- heading "Caf\\u00e9 \\"x\\"" [level=1] [ref=e1]`)).toBe('The page says: Café "x".');
+    });
+
+    it('#browser undoes the doubled apostrophe of a wrapped key', async () => {
+      expect(await heading(`- 'heading "Adam''s page: home" [level=1] [ref=e1]'`)).toBe("The page says: Adam's page: home.");
+    });
+
+    it('#browser skips an empty-named heading for the next real one', async () => {
+      expect(await heading('- heading "" [level=2] [ref=e1]\n- heading [level=2] [ref=e2]\n  - heading "Real" [level=1] [ref=e3]')).toBe('The page says: Real.');
+    });
+
+    it('#browser ignores page text that only mentions a heading', async () => {
+      expect(await heading('- paragraph [ref=e1]: the heading "decoy" is below\n- heading "Real" [level=1] [ref=e2]')).toBe('The page says: Real.');
+      expect(await heading('- paragraph [ref=e1]: the heading "decoy" is below')).toBe('The page has no heading.');
     });
 
     it('#browser says so when the page has no heading', async () => {

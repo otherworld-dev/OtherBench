@@ -123,12 +123,30 @@ function isToolErrorResult(result: unknown): boolean {
   return typeof result === 'object' && result !== null && (result as { error?: unknown }).error === true;
 }
 
-/** The first named heading in an accessibility snapshot: `- heading "Title" [level=1] ...`, or YAML single-quoted (`'Say "hi"'`, with `''` for a quote) when the name holds a double quote. */
+/**
+ * The first named heading in an accessibility snapshot. A line is `- heading "Title" [level=1] [ref=e1]`, and Playwright
+ * wraps the whole key in YAML single quotes (apostrophes doubled) when it holds something YAML would misread, e.g.
+ * `- 'heading "Q: why?" [level=2] [ref=e8]'`. The name inside is JSON-quoted. Only a line that starts with the heading
+ * counts, so page text that merely says `heading "x"` is never taken for one. Local to the mock on purpose.
+ */
 function firstHeading(snapshot: string): string | null {
-  const match = /heading (?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')/.exec(snapshot);
-  if (!match) return null;
-  if (match[1] !== undefined) return match[1].replace(/\\(.)/g, '$1');
-  return (match[2] ?? '').replace(/''/g, "'");
+  for (const line of snapshot.split('\n')) {
+    let key = line.trim().replace(/^- /, '');
+    if (key.startsWith("'")) {
+      const quoted = /^'((?:[^']|'')*)'(?=\s*(?::|$))/.exec(key);
+      if (!quoted) continue;
+      key = quoted[1]!.replace(/''/g, "'");
+    }
+    const name = /^heading\s+("(?:[^"\\]|\\.)*")/.exec(key);
+    if (!name) continue;
+    try {
+      const text: unknown = JSON.parse(name[1]!);
+      if (typeof text === 'string' && text.trim() !== '') return text;
+    } catch {
+      // not valid JSON: not a name we can read, try the next line
+    }
+  }
+  return null;
 }
 
 /**
