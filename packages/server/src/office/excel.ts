@@ -1,3 +1,4 @@
+import { columnName } from '@grunt/core/domain/office-spec.js';
 import { attr, prefixedAttr, scanXml } from './xml.js';
 import type { OfficeParts, TextOut } from './parts.js';
 
@@ -58,18 +59,6 @@ export function serialToIso(serial: number, date1904: boolean): string {
   // Past year 9999 (the 1904 epoch gets there sooner than the serial limit) the year gets a sign: not a date Excel shows.
   if (iso[0] === '+' || iso[0] === '-') return String(serial);
   return serial === day ? iso.slice(0, 10) : `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
-}
-
-/** A0-based column index as letters: 0 is A, 26 is AA. */
-function columnLetters(index: number): string {
-  let n = index + 1;
-  let s = '';
-  while (n > 0) {
-    const r = (n - 1) % 26;
-    s = String.fromCharCode(65 + r) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
 }
 
 /** One CSV field, quoted as RFC 4180 says when it needs to be. */
@@ -184,7 +173,7 @@ interface CellState {
 }
 
 /** A cell's reference as the canonical "B4". */
-const refOf = (c: CellState): string => `${columnLetters(c.col)}${c.row}`;
+const refOf = (c: CellState): string => `${columnName(c.col)}${c.row}`;
 
 function cellText(c: CellState, book: Book): string {
   switch (c.t) {
@@ -329,12 +318,12 @@ function readSheet(xml: string, name: string, hidden: boolean, book: Book, out: 
     st.maxRow = Math.max(st.maxRow, st.dim.row);
     st.maxCol = Math.max(st.maxCol, Math.min(st.dim.col, MAX_COLUMNS - 1));
   }
-  const lastColumn = columnLetters(MAX_COLUMNS - 1);
+  const lastColumn = columnName(MAX_COLUMNS - 1);
   if (st.maxCol < 0) {
     const empty = st.wide ? `has cells only past column ${lastColumn}, which Grunt leaves out.` : 'is empty.';
     if (!out.line(`Sheet "${name}"${hidden ? ' (hidden)' : ''} ${empty}`)) return false;
   } else {
-    if (!out.line(`Sheet "${name}" (A1:${columnLetters(st.maxCol)}${st.maxRow})${hidden ? ', hidden' : ''} as CSV:`)) return false;
+    if (!out.line(`Sheet "${name}" (A1:${columnName(st.maxCol)}${st.maxRow})${hidden ? ', hidden' : ''} as CSV:`)) return false;
     // Ends as soon as the output is full, so a far-off last row costs no more than the cap.
     for (let r = 1; r <= st.maxRow; r++) {
       const row = cells.get(r);
