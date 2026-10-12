@@ -23,6 +23,14 @@ const WRITE_REFUSED_OR_MISSING = /Read-only file system|Permission denied|No suc
 /** Protected files (the agent's PROTECTED_PATHS) the self-test tries to write in the workspace; their folders are there. */
 export const PROTECTED_PROBES = ['.git/hooks/x', '.claude/settings.local.json', '.vscode/tasks.json'];
 
+/**
+ * The probe that is already there, with this content, before the self-test writes it: rewriting existing
+ * settings is the attack. (A MISSING denied file can't be written in any spelling: the runtime's empty
+ * placeholder for it comes out read-only on a Windows folder. A new file in a denied folder can.)
+ */
+export const EXISTING_PROBE = '.claude/settings.local.json';
+export const EXISTING_PROBE_CONTENT = '{}';
+
 /** Where the self-test's folders are in the sandbox, and how to reach Grunt from the VM. */
 export interface SelfTestPlaces {
   /** The self-test chat's workspace, mounted read-write, with .git/hooks, .claude and .vscode folders in it. */
@@ -96,8 +104,11 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
       expectOutput: new RegExp(`The sandbox undid changes to ${PROTECTED_PROBES.map((rel) => `(?=[^\\n]*${escapeRegExp(rel)})`).join('')}`),
     },
     {
-      name: 'the protected files are gone again',
-      command: PROTECTED_PROBES.map((rel) => `test ! -e ${shellQuote(`${p.rwLinux}/${rel}`)}`).join(' && '),
+      name: 'the protected files are as they were again',
+      command: PROTECTED_PROBES.map((rel) => {
+        const path = shellQuote(`${p.rwLinux}/${rel}`);
+        return rel === EXISTING_PROBE ? `test "$(cat ${path})" = ${shellQuote(EXISTING_PROBE_CONTENT)}` : `test ! -e ${path}`;
+      }).join(' && '),
       expect: 'ok',
       allowedHosts: none,
     },

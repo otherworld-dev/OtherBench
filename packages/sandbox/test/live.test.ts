@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toSandboxPath } from '@grunt/core/domain/sandbox-paths.js';
 import type { SandboxRunRequest, StoredSandboxState } from '@grunt/core/ports/sandbox.js';
 import { sandboxResourcesDir } from '../src/resources.js';
-import { otherSpelling, PROTECTED_PROBES } from '../src/selftest.js';
+import { EXISTING_PROBE, EXISTING_PROBE_CONTENT, otherSpelling, PROTECTED_PROBES } from '../src/selftest.js';
 import { WslSandbox } from '../src/wsl-sandbox.js';
 import { createWslRunner } from '../src/wsl.js';
 
@@ -28,6 +28,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
     mkdirSync(join(dir, 'ws'));
     // The folders of the protected files the live checks write: a refusal is then the sandbox's, not a missing folder's.
     for (const rel of PROTECTED_PROBES) mkdirSync(join(dir, 'ws', rel, '..'), { recursive: true });
+    writeFileSync(join(dir, 'ws', EXISTING_PROBE), EXISTING_PROBE_CONTENT);
     mkdirSync(join(dir, 'refs'));
     writeFileSync(join(dir, 'refs', 'note.txt'), 'read me\n');
     sandbox = new WslSandbox({
@@ -110,15 +111,21 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
       const r = await sandbox.run(req(`echo no > '${rel}'`));
       expect(r.exitCode, `${rel}: ${r.output}`).not.toBe(0);
       expect(r.output, rel).toMatch(/Read-only file system|Permission denied/);
-      expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
+      if (rel === EXISTING_PROBE) expect(readFileSync(join(dir, 'ws', rel), 'utf8')).toBe(EXISTING_PROBE_CONTENT);
+      else expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
     }
+    // A missing protected file can't be written in any spelling: the runtime's placeholder for it is read-only.
+    const missing = await sandbox.run(req(`echo no > '${otherSpelling('.claude')}/settings.json'`));
+    expect(missing.exitCode, missing.output).not.toBe(0);
+    expect(existsSync(join(dir, 'ws', '.claude', 'settings.json'))).toBe(false);
     const respelt = PROTECTED_PROBES.map((rel) => rel.replace(/^[^/]+/, (first) => otherSpelling(first)));
     const r = await sandbox.run(req(respelt.map((rel) => `echo no > '${rel}'`).join(' && ')));
     expect(r.exitCode, r.output).toBe(0);
     expect(r.output).toContain('The sandbox undid changes to');
     for (const rel of PROTECTED_PROBES) {
       expect(r.output, rel).toContain(rel);
-      expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
+      if (rel === EXISTING_PROBE) expect(readFileSync(join(dir, 'ws', rel), 'utf8')).toBe(EXISTING_PROBE_CONTENT);
+      else expect(existsSync(join(dir, 'ws', rel)), rel).toBe(false);
     }
     console.log(`[sandbox-live] protected files: ${r.output.trim()}`);
   }, 120_000);

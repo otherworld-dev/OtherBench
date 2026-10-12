@@ -10,7 +10,7 @@ import { channelFromProcess } from './agent-channel.js';
 import { AgentClient, type AgentOutcome } from './agent-client.js';
 import { AgentPool, type AgentPoolOptions } from './agent-pool.js';
 import { MountManager, wslMountRunner, type MountRunner } from './mounts.js';
-import { PROTECTED_PROBES, runSelfTest, selfTestCases } from './selftest.js';
+import { EXISTING_PROBE, EXISTING_PROBE_CONTENT, PROTECTED_PROBES, runSelfTest, selfTestCases } from './selftest.js';
 import { distroNames, INSTALL_DIR, installExtraPackages, isAptPackageName, notAnAptPackageName, runSetup, SETUP_STEPS, type SetupStep } from './setup.js';
 import { DISTRO, type WslRunner } from './wsl.js';
 
@@ -502,11 +502,12 @@ export class WslSandbox implements Sandbox {
     await mkdir(ro, { recursive: true });
     await writeFile(join(ro, 'hello.txt'), 'hello from Grunt\n');
     // The folders of the protected files the self-test writes (so a write is refused by the sandbox, not by a
-    // missing folder), with nothing an earlier self-test may have left in them.
+    // missing folder), with nothing an earlier self-test may have left in them, and the one that is there first.
     for (const rel of PROTECTED_PROBES) {
       await mkdir(join(rw, rel, '..'), { recursive: true });
       await rm(join(rw, rel), { recursive: true, force: true });
     }
+    await writeFile(join(rw, EXISTING_PROBE), EXISTING_PROBE_CONTENT);
     await rm(join(ro, 'nope.txt'), { force: true });
     const route = await this.opts.runner.exec('root', ['/usr/sbin/ip', 'route', 'show', 'default'], { timeoutMs: 30_000 });
     const gateway = /default via (\S+)/.exec(route.stdout)?.[1] ?? null;

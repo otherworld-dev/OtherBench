@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -611,6 +611,8 @@ describe('WslSandbox setup and status', () => {
     expect(first.writePaths[0]).toMatch(/\/selftest\/rw$/);
     // The folders of the protected files it writes are there, so a refusal is the sandbox's doing.
     for (const folder of ['.git/hooks', '.claude', '.vscode']) expect(existsSync(join(tmp, 'selftest', 'rw', folder))).toBe(true);
+    // And the settings file it rewrites is there first.
+    expect(readFileSync(join(tmp, 'selftest', 'rw', '.claude', 'settings.local.json'), 'utf8')).toBe('{}');
     expect(channels[0]!.channel.sent.at(-1)).toEqual({ type: 'close' });
     expect(mounts.filter((m) => m.startsWith('unmount'))).toHaveLength(mounts.filter((m) => m.startsWith('mount')).length);
   });

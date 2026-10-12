@@ -65,9 +65,10 @@ describe('selfTestCases', () => {
     expect(said.test('The sandbox undid changes to .vscode/tasks.json, .git/hooks/x, .claude/settings.local.json (protected files).')).toBe(true);
     expect(said.test('The sandbox undid changes to .git/hooks/x, .vscode/tasks.json (protected files).')).toBe(false);
     expect(said.test('')).toBe(false);
+    // The settings file was there before (rewriting it is the attack): it must hold what it held.
     expect(cases[i + 1]).toMatchObject({
       expect: 'ok',
-      command: `test ! -e ${rw}/.git/hooks/x' && test ! -e ${rw}/.claude/settings.local.json' && test ! -e ${rw}/.vscode/tasks.json'`,
+      command: `test ! -e ${rw}/.git/hooks/x' && test "$(cat ${rw}/.claude/settings.local.json')" = '{}' && test ! -e ${rw}/.vscode/tasks.json'`,
     });
   });
 
