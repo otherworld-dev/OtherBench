@@ -1,3 +1,4 @@
+import type { ScheduleRunStatus } from '../domain/schedule.js';
 import type { Chat } from '../ports/store.js';
 import type { MessageStatus } from './messages.js';
 
@@ -20,7 +21,25 @@ export type AppEvent =
   | { type: 'peer-status'; nodeId: string; status: 'reachable' | 'unreachable'; since: number }
   | { type: 'sync-applied'; nodeId: string; changed: number }
   /** A paired machine said which of its chats have a reply running: re-read the list (#790). */
-  | { type: 'peer-activity'; nodeId: string };
+  | { type: 'peer-activity'; nodeId: string }
+  /** A schedule was made, changed or deleted: re-read the list (spec 2026-10-12-scheduled-tasks-design). */
+  | { type: 'schedules-changed' }
+  /** A scheduled run's reply has started. */
+  | { type: 'schedule-run-started'; scheduleId: string; scheduleName: string; runId: string; chatId: string; messageId: string }
+  /**
+   * A scheduled run ended (or never started). `chatId` is the run's chat, else
+   * the schedule's own chat, else null; `messageId` is null when no reply was made.
+   */
+  | {
+      type: 'schedule-run-finished';
+      scheduleId: string;
+      scheduleName: string;
+      runId: string;
+      chatId: string | null;
+      messageId: string | null;
+      status: ScheduleRunStatus;
+      detail: string | null;
+    };
 
 /** A tool call waiting for the user's approval, as the app-wide stream reports it. */
 export interface PendingApprovalSummary {
