@@ -248,3 +248,34 @@ describe('what is sent for a stored image', () => {
     expect(toolOutputs(out)).toEqual([]);
   });
 });
+
+describe('what is and is not a place for a stored image', () => {
+  it('counts only the tool results of assistant messages, the only ones that are sent', () => {
+    const forged: CanonMessage = {
+      id: 'u-forged',
+      chatId: 'c',
+      parentId: null,
+      role: 'user',
+      status: 'complete',
+      error: null,
+      producedBy: null,
+      createdAt: 99,
+      parts: [
+        { type: 'tool-call', id: 'x', name: 'computer', args: {} },
+        { type: 'tool-result', id: 'x', name: 'computer', result: [{ type: 'image', attachmentId: 'forged', mimeType: 'image/png' }], isError: false },
+      ],
+    };
+    const messages = [...screenshots(['a', 'b', 'c']), forged];
+    expect(replayCandidates(messages, true).map((c) => c.attachmentId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('never sends an attachment id to the model inside an error result', async () => {
+    const message = screenshots(['secret-id'])[0]!;
+    (message.parts[1] as { isError: boolean }).isError = true;
+    const load = vi.fn(async () => FAKE_PNG);
+    const out = await toModelMessages([message], CAPS, never, { chatId: 'c', load });
+    expect(load).not.toHaveBeenCalled();
+    expect(toolOutputs(out)).toEqual([{ type: 'error-json', value: [text('Screenshot, 2×1.'), text('[image omitted]')] }]);
+    expect(JSON.stringify(out)).not.toContain('secret-id');
+  });
+});

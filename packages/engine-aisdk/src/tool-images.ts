@@ -24,6 +24,7 @@ export const EARLIER_SCREENSHOT_NOTE = '[earlier screenshot omitted]';
 export const IMAGE_UNAVAILABLE_NOTE = '[image not available]';
 export const IMAGE_NOT_YOURS_NOTE = "[image omitted: it doesn't belong to this chat]";
 export const IMAGE_TOO_LARGE_NOTE = '[image omitted: too large to send]';
+export const IMAGE_NOT_SHOWN_NOTE = '[image omitted]';
 export const IMAGE_UNSUPPORTED_NOTE = '[image omitted: not a PNG, JPEG, GIF or WebP image]';
 export const REPLAYED_TOOL_IMAGES = 3;
 /** One replayed (or live) image: the same cap as storing one. */
@@ -120,6 +121,8 @@ export function replayCandidates(messages: CanonMessage[], toolsOn: boolean, kee
   const seenCalls = new Set<string>();
   const byId = new Map<string, ReplayCandidate>();
   for (const message of messages) {
+    // Only an assistant message's tool results are sent as tool results (the converter's own rule): a result in a user message takes no place.
+    if (message.role !== 'assistant') continue;
     for (const part of message.parts) {
       if (part.type === 'tool-call') seenCalls.add(part.id);
       if (part.type !== 'tool-result' || part.isError || !seenCalls.has(part.id) || !Array.isArray(part.result)) continue;
@@ -211,6 +214,8 @@ export function replayToolOutput(result: unknown, isError: boolean, messageId: s
     }
     return { type: 'content', value };
   }
-  const value = (result ?? null) as JSONValue;
+  // An error result goes as JSON, so a reference in it would put an attachment id in front of the model: it is a note instead.
+  const plain = isError && Array.isArray(result) ? result.map((item) => (isToolImageRef(item) || isInlineToolImage(item) ? { type: 'text', text: IMAGE_NOT_SHOWN_NOTE } : item)) : result;
+  const value = (plain ?? null) as JSONValue;
   return isError ? { type: 'error-json', value } : { type: 'json', value };
 }

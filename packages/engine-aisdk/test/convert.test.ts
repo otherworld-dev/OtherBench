@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { replayToolName, toModelMessages, type ModelCapabilities } from '../src/convert.js';
+import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import { ATTACHMENT_BUDGET_NOTE, MAX_REQUEST_ATTACHMENT_BYTES, replayToolName, toModelMessages, type ModelCapabilities } from '../src/convert.js';
+import { IMAGE_UNSUPPORTED_NOTE } from '../src/tool-images.js';
 
 let counter = 0;
 function makeMessage(role: CanonMessage['role'], parts: Part[]): CanonMessage {
@@ -66,7 +68,7 @@ describe('toModelMessages', () => {
   });
 
   it('converts an image part to a real image content block when vision is on', async () => {
-    const bytes = Buffer.from('fake-png-bytes');
+    const bytes = FAKE_PNG;
     const loadAttachment = vi.fn(async (id: string) => {
       expect(id).toBe('att-1');
       return bytes;
@@ -203,6 +205,56 @@ describe('toModelMessages', () => {
         content: [{ type: 'tool-result', toolCallId: 'call-1', toolName: 'read_file', output: { type: 'json', value: 'ok' } }],
       },
     ]);
+  });
+
+  it('takes an image part\'s type from its bytes, not its label; a file keeps the type it was sent with', async () => {
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]);
+    const html = Buffer.from('<html><script>alert(1)</script></html>');
+    const bytes: Record<string, Buffer> = { png: FAKE_PNG, jpeg, html, pdf: Buffer.from('%PDF-1.4 fake') };
+    const messages: CanonMessage[] = [
+      makeMessage('user', [
+        { type: 'image', attachmentId: 'png', mime: 'image/svg+xml' },
+        { type: 'image', attachmentId: 'jpeg', mime: 'image/png' },
+        { type: 'image', attachmentId: 'html', mime: 'image/png' },
+        { type: 'file', attachmentId: 'pdf', mime: 'application/pdf', filename: 'a.pdf' },
+      ]),
+    ];
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, async (id) => bytes[id]!);
+    expect(result).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'image', image: FAKE_PNG, mediaType: 'image/png' },
+          { type: 'image', image: jpeg, mediaType: 'image/jpeg' },
+          { type: 'text', text: IMAGE_UNSUPPORTED_NOTE },
+          { type: 'file', data: bytes['pdf'], mediaType: 'application/pdf', filename: 'a.pdf' },
+        ],
+      },
+    ]);
+  });
+
+  it('loads each distinct attachment once per request, however many parts name it', async () => {
+    const loadAttachment = vi.fn(async () => FAKE_PNG);
+    const parts: Part[] = Array.from({ length: 30 }, () => ({ type: 'image', attachmentId: 'same', mime: 'image/png' }) as Part);
+    await toModelMessages([makeMessage('user', parts), makeMessage('user', parts)], VISION_AND_TOOLS, loadAttachment);
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops adding attachments once a request carries its limit, and says so in place of the rest', async () => {
+    const big = Buffer.concat([FAKE_PNG, Buffer.alloc(Math.floor(MAX_REQUEST_ATTACHMENT_BYTES / 2) + 1)]);
+    const messages: CanonMessage[] = [
+      makeMessage('user', [
+        { type: 'image', attachmentId: 'a', mime: 'image/png' },
+        { type: 'file', attachmentId: 'b', mime: 'application/pdf', filename: 'b.pdf' },
+        { type: 'image', attachmentId: 'c', mime: 'image/png' },
+        { type: 'file', attachmentId: 'a2', mime: 'application/pdf', filename: 'again.pdf' },
+      ]),
+    ];
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, async (id) => (id === 'a' ? big : id === 'c' ? FAKE_PNG : big));
+    const content = (result[0] as { content: { type: string; text?: string }[] }).content;
+    expect(content.map((c) => c.type)).toEqual(['image', 'text', 'image', 'text']);
+    expect(content[1]!.text).toBe(ATTACHMENT_BUDGET_NOTE);
+    expect(content[3]!.text).toBe(ATTACHMENT_BUDGET_NOTE);
   });
 
   it('converts a file part using loadAttachment regardless of vision support', async () => {

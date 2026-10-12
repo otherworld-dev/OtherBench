@@ -7,7 +7,38 @@ import type {
   ToolResultPart,
 } from 'ai';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { loadReplayImages, replayCandidates, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
+import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
+import { IMAGE_UNSUPPORTED_NOTE, loadReplayImages, replayCandidates, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
+
+/** All the attached files and images one request may carry together. */
+export const MAX_REQUEST_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+export const ATTACHMENT_BUDGET_NOTE = '[attachment omitted: this request already carries as much attached data as it can]';
+
+class OverRequestBudget extends Error {}
+
+/**
+ * `load` for one request: each distinct attachment is read once however many
+ * parts name it, and the bytes of all of them together stay within
+ * `MAX_REQUEST_ATTACHMENT_BYTES`. A file that would pass it is not returned
+ * (the part becomes a note). Any other failure is the caller's, as before.
+ */
+function requestLoader(load: (id: string) => Promise<Buffer>): (id: string) => Promise<Buffer> {
+  const loaded = new Map<string, Promise<Buffer>>();
+  let total = 0;
+  return (id) => {
+    let pending = loaded.get(id);
+    if (!pending) {
+      pending = (async () => {
+        const bytes = await load(id);
+        if (total + bytes.length > MAX_REQUEST_ATTACHMENT_BYTES) throw new OverRequestBudget();
+        total += bytes.length;
+        return bytes;
+      })();
+      loaded.set(id, pending);
+    }
+    return pending;
+  };
+}
 
 export interface ModelCapabilities {
   vision: boolean;
@@ -88,6 +119,7 @@ export async function toModelMessages(
   toolImages?: ToolImageSource
 ): Promise<ModelMessage[]> {
   const result: ModelMessage[] = [];
+  const load = requestLoader(loadAttachment);
   // Tool-call ids seen so far, across the whole conversation in order --
   // not scoped to one message -- so a result can match a call from an
   // earlier turn, not only one made in the same CanonMessage.
@@ -98,13 +130,13 @@ export async function toModelMessages(
 
   for (const message of messages) {
     if (message.role === 'system') {
-      const text = await systemTextFromParts(message.parts, loadAttachment);
+      const text = await systemTextFromParts(message.parts, load);
       if (text.length > 0) result.push({ role: 'system', content: text });
       continue;
     }
 
     if (message.role === 'user') {
-      const content = await userContentFromParts(message.parts, caps, loadAttachment);
+      const content = await userContentFromParts(message.parts, caps, load);
       if (content.length > 0) result.push({ role: 'user', content });
       continue;
     }
@@ -113,7 +145,7 @@ export async function toModelMessages(
       message.id,
       message.parts,
       caps,
-      loadAttachment,
+      load,
       seenToolCallIds,
       replay
     );
@@ -251,8 +283,16 @@ async function resolveImageContent(
   if (!caps.vision) {
     return { type: 'placeholder', text: imagePlaceholder(part.attachmentId, part.mime) };
   }
-  const data = await loadAttachment(part.attachmentId);
-  return { type: 'bytes', data, mediaType: part.mime };
+  let data: Buffer;
+  try {
+    data = await loadAttachment(part.attachmentId);
+  } catch (err) {
+    if (err instanceof OverRequestBudget) return { type: 'placeholder', text: ATTACHMENT_BUDGET_NOTE };
+    throw err;
+  }
+  // The type the model is told comes from the bytes, never from the part's own label.
+  const mediaType = sniffToolImageMime(data);
+  return mediaType ? { type: 'bytes', data, mediaType } : { type: 'placeholder', text: IMAGE_UNSUPPORTED_NOTE };
 }
 
 async function convertImagePart(
@@ -282,7 +322,14 @@ async function convertImagePartAsAssistantBlock(
 async function convertFilePart(
   part: Extract<Part, { type: 'file' }>,
   loadAttachment: (id: string) => Promise<Buffer>
-): Promise<FilePart> {
-  const data = await loadAttachment(part.attachmentId);
+): Promise<FilePart | TextPart> {
+  let data: Buffer;
+  try {
+    data = await loadAttachment(part.attachmentId);
+  } catch (err) {
+    if (err instanceof OverRequestBudget) return { type: 'text', text: ATTACHMENT_BUDGET_NOTE };
+    throw err;
+  }
+  // A file keeps the type it was sent with: providers need it (a PDF, a text file), and it is not an image.
   return { type: 'file', data, mediaType: part.mime, filename: part.filename };
 }
