@@ -7,7 +7,7 @@ import type {
   ToolResultPart,
 } from 'ai';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { replayedImageIds, replayToolOutput } from './tool-images.js';
+import { loadReplayImages, replayCandidates, replayToolOutput, type ReplayImage, type ToolImageSource } from './tool-images.js';
 
 export interface ModelCapabilities {
   vision: boolean;
@@ -79,16 +79,22 @@ export function replayToolName(name: string): string {
 export async function toModelMessages(
   messages: CanonMessage[],
   caps: ModelCapabilities,
-  loadAttachment: (id: string) => Promise<Buffer>
+  loadAttachment: (id: string) => Promise<Buffer>,
+  /**
+   * Where stored tool images come from, scoped to the chat the request is for.
+   * `loadAttachment` is never used for them. Without it every stored tool
+   * image is replayed as a text note.
+   */
+  toolImages?: ToolImageSource
 ): Promise<ModelMessage[]> {
   const result: ModelMessage[] = [];
   // Tool-call ids seen so far, across the whole conversation in order --
   // not scoped to one message -- so a result can match a call from an
   // earlier turn, not only one made in the same CanonMessage.
   const seenToolCallIds = new Set<string>();
-  // The images of the last few tool results are the only ones loaded; earlier
-  // ones are replayed as a note.
-  const replay = caps.toolImages === true ? replayedImageIds(messages) : new Set<string>();
+  // Only the last few distinct stored tool images are loaded, within a size
+  // cap each and together; earlier ones are replayed as a note.
+  const replay = caps.toolImages === true ? await loadReplayImages(replayCandidates(messages, caps.tools), toolImages) : new Map<string, ReplayImage>();
 
   for (const message of messages) {
     if (message.role === 'system') {
@@ -104,6 +110,7 @@ export async function toModelMessages(
     }
 
     const { assistantContent, toolResults } = await assistantContentFromParts(
+      message.id,
       message.parts,
       caps,
       loadAttachment,
@@ -175,11 +182,12 @@ async function userContentFromParts(
 }
 
 async function assistantContentFromParts(
+  messageId: string,
   parts: Part[],
   caps: ModelCapabilities,
   loadAttachment: (id: string) => Promise<Buffer>,
   seenToolCallIds: Set<string>,
-  replay: Set<string>
+  replay: Map<string, ReplayImage>
 ): Promise<{ assistantContent: AssistantBlock[]; toolResults: ToolResultPart[] }> {
   const assistantContent: AssistantBlock[] = [];
   const toolResults: ToolResultPart[] = [];
@@ -218,7 +226,7 @@ async function assistantContentFromParts(
           type: 'tool-result',
           toolCallId: part.id,
           toolName: replayToolName(part.name),
-          output: await replayToolOutput(part.result, part.isError, replay, caps.toolImages === true, loadAttachment),
+          output: replayToolOutput(part.result, part.isError, messageId, replay, caps.toolImages === true),
         });
         break;
     }

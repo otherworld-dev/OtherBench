@@ -6,6 +6,7 @@ import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
 import { FakeChatEngine } from '@grunt/core/testing/fakes.js';
+import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
 import { AiSdkChatEngine, type ProviderResolver } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 
@@ -260,10 +261,11 @@ describe('AiSdkChatEngine.stream', () => {
     }
   });
 
-  it('sends an image a tool returns to a vision model as image content, and a note to any other', async () => {
+  it('sends an image a tool returns to a vision model on a provider that takes it as image content, and a note to any other', async () => {
+    const png = FAKE_PNG.toString('base64');
     const shot = [
       { type: 'text', text: 'Screenshot, 2×1.' },
-      { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+      { type: 'image', data: png, mimeType: 'image/png' },
     ];
     const toolSpec: ToolSpec = {
       name: 'look',
@@ -278,7 +280,17 @@ describe('AiSdkChatEngine.stream', () => {
       supportsVision: vision, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null,
       priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
     });
-    for (const vision of [true, false]) {
+    const image = { type: 'image-data', data: png, mediaType: 'image/png' };
+    const omitted = { type: 'text', text: "[image omitted: this model can't take images]" };
+    const table: [boolean, Connection['kind'], unknown][] = [
+      [true, 'anthropic', image],
+      [true, 'openai', image],
+      [true, 'google', image],
+      [false, 'anthropic', omitted],
+      [true, 'openai_compatible', omitted],
+      [true, 'ollama', omitted],
+    ];
+    for (const [vision, kind, expected] of table) {
       const mock = new MockLanguageModelV3({
         doStream: stepsForModel(
           [
@@ -293,11 +305,40 @@ describe('AiSdkChatEngine.stream', () => {
         ),
       });
       const engine = new AiSdkChatEngine(resolverFor(mock));
-      await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ model: model(vision) }) })));
+      await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ connection: makeConnection({ kind }), model: model(vision) }) })));
       const toolMessage = mock.doStreamCalls[1]!.prompt.find((m) => m.role === 'tool');
-      const image = vision ? { type: 'image-data', data: 'AAAA', mediaType: 'image/png' } : { type: 'text', text: "[image omitted: this model can't take images]" };
-      expect(toolMessage?.content[0]).toMatchObject({ type: 'tool-result', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2×1.' }, image] } });
+      expect(toolMessage?.content[0], `${kind} vision=${vision}`).toMatchObject({ type: 'tool-result', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2×1.' }, expected] } });
     }
+  });
+
+  it('replays a stored tool image only through the chat-scoped loader, never through loadAttachment', async () => {
+    const history: CanonMessage[] = [
+      userMessage('look'),
+      {
+        id: 'msg-assistant', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null, createdAt: 2,
+        parts: [
+          { type: 'tool-call', id: 'call-1', name: 'look', args: {} },
+          { type: 'tool-result', id: 'call-1', name: 'look', result: [{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }], isError: false },
+        ],
+      },
+      userMessage('and now?'),
+    ];
+    const vision = { id: 'model-1', connectionId: 'conn-1', modelId: 'claude-test-model', displayName: 'Test', source: 'manual' as const, supportsVision: true, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
+    const run = async (extra: Partial<EngineRequest>): Promise<unknown> => {
+      const mock = new MockLanguageModelV3({ doStream: stepsForModel([{ type: 'stream-start', warnings: [] }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE }]) });
+      await drain(new AiSdkChatEngine(resolverFor(mock)).stream(makeRequest({ messages: history, profile: makeResolvedProfile({ model: vision }), ...extra })));
+      return mock.doStreamCalls[0]!.prompt.find((m) => m.role === 'tool')?.content[0];
+    };
+
+    const loadToolImage = vi.fn(async () => FAKE_PNG);
+    const loadAttachment = vi.fn(async () => FAKE_PNG);
+    expect(await run({ loadToolImage, loadAttachment })).toMatchObject({ output: { type: 'content', value: [{ type: 'image-data', data: FAKE_PNG.toString('base64'), mediaType: 'image/png' }] } });
+    expect(loadToolImage).toHaveBeenCalledTimes(1);
+    expect(loadToolImage).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-assistant', attachmentId: 'att-1' });
+
+    // No scoped loader: a note, and the raw loader is not used as a fallback.
+    expect(await run({ loadAttachment })).toMatchObject({ output: { type: 'content', value: [{ type: 'text', text: '[image not available]' }] } });
+    expect(loadAttachment).not.toHaveBeenCalled();
   });
 
   it('maps a 429 APICallError to a single error event with kind rate_limit, retryable true', async () => {

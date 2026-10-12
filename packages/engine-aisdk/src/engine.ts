@@ -127,7 +127,14 @@ export class AiSdkChatEngine implements ChatEngine {
         tools: req.profile.model?.supportsTools ?? true,
       };
       const imagesOk = caps.vision && toolImagesSupported(req.profile.connection.kind);
-      const messages = await toModelMessages(req.messages, { ...caps, toolImages: imagesOk }, req.loadAttachment ?? loadAttachmentUnavailable);
+      // Stored tool images come back only through a loader that checks them
+      // against this chat; `loadAttachment` is never used for them.
+      const messages = await toModelMessages(
+        req.messages,
+        { ...caps, toolImages: imagesOk },
+        req.loadAttachment ?? loadAttachmentUnavailable,
+        req.loadToolImage ? { chatId, load: req.loadToolImage } : undefined
+      );
       const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
