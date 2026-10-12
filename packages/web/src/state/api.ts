@@ -9,6 +9,7 @@ import type { PlanUsage, RecordedUsage } from '@grunt/core/types/usage.js';
 import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@grunt/core/types/workspace.js';
 import type { InferredMapping } from '@grunt/core/domain/workspace.js';
 import type { PublicPeer } from '@grunt/core/types/peer.js';
+import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
 
@@ -453,6 +454,14 @@ export const api = {
   settings: {
     get: () => request<AppSettings>('/settings'),
     patch: (body: Partial<AppSettings>) => patch<AppSettings>('/settings', body),
+  },
+
+  /** Settings > Sandbox (spec 2026-10-12-sandbox-design): Set up and Repair start a job (202; poll status), Remove, the extra packages (202). */
+  sandbox: {
+    status: () => request<SandboxStatus>('/sandbox'),
+    setup: () => post<SandboxStatus>('/sandbox/setup'),
+    remove: () => post<SandboxStatus>('/sandbox/remove'),
+    setPackages: (packages: string[]) => put<SandboxStatus>('/sandbox/packages', { packages }),
   },
 
   /** Import from claude.ai (spec 2026-10-09-claude-import-design §5): the running or last import, a preview, and a start (202). */

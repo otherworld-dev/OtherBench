@@ -8,6 +8,7 @@ vi.mock('./settings/ModelsPanel.js', () => ({ ModelsPanel: () => <div>models</di
 vi.mock('./settings/ProfilesPanel.js', () => ({ ProfilesPanel: () => <div>profiles</div> }));
 vi.mock('./settings/MemoryPanel.js', () => ({ MemoryPanel: () => <div>memory panel</div> }));
 vi.mock('./settings/McpServersPanel.js', () => ({ McpServersPanel: () => <div>mcp</div> }));
+vi.mock('./settings/SandboxPanel.js', () => ({ SandboxPanel: () => <div>sandbox panel</div> }));
 vi.mock('./settings/DesktopPanel.js', () => ({ DesktopPanel: () => <div>desktop panel</div> }));
 
 import { SettingsView } from './SettingsView.js';
@@ -26,6 +27,14 @@ describe('SettingsView', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Memory' }));
     expect(screen.getByText('memory panel')).toBeInTheDocument();
+  });
+
+  it('has a Sandbox tab after MCP Servers that shows the sandbox panel', () => {
+    render(<SettingsView onClose={vi.fn()} />);
+    const names = screen.getAllByRole('tab').map((t) => t.textContent);
+    expect(names.indexOf('Sandbox')).toBe(names.indexOf('MCP Servers') + 1);
+    fireEvent.click(screen.getByRole('tab', { name: 'Sandbox' }));
+    expect(screen.getByText('sandbox panel')).toBeInTheDocument();
   });
 
   it('has no Desktop tab in a browser', () => {
