@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KEY_MODIFIERS, KEY_NAMES, parseKeys } from '../src/domain/computer-keys.js';
+import { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, parseKeys } from '../src/domain/computer-keys.js';
 
 function canonical(text: unknown, reserved?: readonly unknown[]): string | null {
   const parsed = parseKeys(text, reserved);
@@ -21,7 +21,10 @@ describe('computer keys', () => {
       Enter: 'return',
       F5: 'f5',
       'shift+Tab': 'shift+tab',
-      'alt+F4': 'alt+f4',
+      'ctrl+F4': 'ctrl+f4',
+      'shift+F10': 'shift+f10',
+      'ctrl+shift+F12': 'ctrl+shift+f12',
+      F1: 'f1',
       Page_Down: 'page_down',
       Next: 'page_down',
       'CTRL+S': 'ctrl+s',
@@ -35,7 +38,7 @@ describe('computer keys', () => {
       Delete: 'delete',
       'ctrl+plus': 'ctrl+equal',
       'ctrl+7': 'ctrl+7',
-      F24: 'f24',
+      F12: 'f12',
       ' ctrl+z ': 'ctrl+z',
       space: 'space',
       'shift+space': 'shift+space',
@@ -46,8 +49,16 @@ describe('computer keys', () => {
   });
 
   it('never sends the Windows key, under any of its names', () => {
-    for (const keys of ['super+r', 'Win_L', 'meta+x', 'win+r', 'ctrl+super+d', 'Super_L', 'WIN+E', 'cmd+space', 'windows', 'lwin+d', 'hyper+a', 'mod4+r']) {
-      expect(reason(keys), keys).toBe('Key combinations with the Windows key are never sent.');
+    const windowsKey = ['super', 'super_l', 'super_r', 'win', 'win_l', 'win_r', 'windows', 'windows_l', 'windows_r', 'lwin', 'rwin', 'meta', 'meta_l', 'meta_r', 'cmd', 'command', 'hyper', 'hyper_l', 'hyper_r', 'mod4', 'os', 'os_l', 'os_r', 'logo', 'start'];
+    for (const name of windowsKey) {
+      // On its own, with a key, after a modifier, and in any letter case.
+      for (const keys of [name, `${name}+r`, `r+${name}`, `ctrl+${name}+d`, name.toUpperCase(), `${name[0]?.toUpperCase()}${name.slice(1)}+E`]) {
+        expect(reason(keys), keys).toBe('Key combinations with the Windows key are never sent.');
+      }
+    }
+    // A spelling that is not in the table is not the Windows key by another name: it is no key at all.
+    for (const keys of ['VK_LWIN+r', 'VK_RWIN', 'LWIN_KEY+r', 'win-r', 'w\u0131n+r', '\uff37in+r', '\uff53uper+r', 's\u200buper+r', 'supe\u0433+r', 'Meta\u00a0+x', 'XF86Launch1', 'KEY_LEFTMETA']) {
+      expect(canonical(keys), JSON.stringify(keys)).toBeNull();
     }
   });
 
@@ -58,6 +69,12 @@ describe('computer keys', () => {
     for (const keys of ['alt+Tab', 'alt+shift+Tab', 'Tab+alt', 'alt+Escape', 'alt+shift+Escape', 'alt_r+tab']) {
       expect(reason(keys), keys).toMatch(/leaves the app/);
     }
+    // Alt with a function key: alt+F4 closes the window, and the keyboard is then some other app's.
+    for (const keys of ['alt+F4', 'F4+alt', 'alt+shift+F4', 'Alt_R+f4', 'alt+F1', 'alt+F6', 'alt+F8', 'alt+F11', 'alt+shift+F12']) {
+      expect(reason(keys), keys).toMatch(/leaves the app/);
+    }
+    // The letter f is not a function key.
+    expect(canonical('alt+f')).toBe('alt+f');
   });
 
   it('refuses every ctrl+alt combination, alt+space, Print Screen and Caps Lock', () => {
@@ -75,11 +92,10 @@ describe('computer keys', () => {
   });
 
   it('refuses a name it does not know rather than guessing', () => {
-    for (const keys of ['super-r', 'VK_LWIN+r', 'XF86Search', '\uff53uper+r', 'ctrl+', '+s', 'ctrl++s', '', '   ', 'ctrl+\u0441', 'num_lock', 'scroll_lock', 'F25', 'F0', 'ctrl+s\u200b', 'ctrl+s\u0000', 'aa']) {
+    for (const keys of ['super-r', 'VK_LWIN+r', 'XF86Search', '\uff53uper+r', 'ctrl+', '+s', 'ctrl++s', '', '   ', 'ctrl+\u0441', 'num_lock', 'scroll_lock', 'F13', 'F24', 'F25', 'F0', 'F1.5', 'XF86AudioPlay', 'XF86AudioRaiseVolume', 'AudioMute', 'MediaPlayPause', 'VolumeUp', 'BrowserHome', 'LaunchMail', 'Sleep', 'Power', 'Pause', 'Help', 'KP_1', 'numpad1', 'Multi_key', 'dead_acute', 'ISO_Level3_Shift', 'AltGr', 'ctrl+s\u200b', 'ctrl+s\u0000', 'aa']) {
       expect(canonical(keys), JSON.stringify(keys)).toBeNull();
     }
     for (const notText of [undefined, null, 42, ['ctrl', 's'], { text: 'ctrl+s' }]) expect(canonical(notText)).toBeNull();
-    expect(canonical(`ctrl+${'s'.repeat(80)}`)).toBeNull();
     // What comes back never carries the hidden characters it was sent.
     expect(reason('evil\u202ekey')).toBe('"evilkey" isn\'t a key name Grunt knows.');
     expect(reason(`${'x'.repeat(30)}\u202e${'y'.repeat(30)}`)).not.toMatch(/\u202e/);
@@ -122,12 +138,35 @@ describe('computer keys', () => {
     expect(Object.isFrozen(KEY_MODIFIERS)).toBe(true);
     expect(KEY_MODIFIERS).toEqual(['ctrl', 'alt', 'shift']);
     expect(KEY_NAMES).toContain('return');
-    expect(KEY_NAMES).toContain('f24');
+    expect(KEY_NAMES).toContain('f12');
+    expect(KEY_NAMES).not.toContain('f13');
     expect(KEY_NAMES).toContain('z');
     expect(KEY_NAMES).toContain('0');
     for (const never of ['print', 'caps_lock', 'super', 'win', 'ctrl', 'alt', 'shift']) expect(KEY_NAMES).not.toContain(never);
     // Every name it writes reads back as itself.
     for (const name of KEY_NAMES) expect(canonical(name), name).toBe(name);
     for (const name of KEY_NAMES) expect(canonical(`shift+${name}`), name).toBe(`shift+${name}`);
+  });
+
+  it('holds a key action to its caps before it reads anything', () => {
+    expect(KEY_LIMITS).toEqual({ textLength: 64, keysPerCombo: 4, combosPerAction: 1 });
+    expect(Object.isFrozen(KEY_LIMITS)).toBe(true);
+    // The text's own length, checked on the text as it came.
+    expect(reason(`ctrl+${'s'.repeat(80)}`)).toBe('That is too long to be one key combination (at most 64 characters).');
+    expect(reason('s'.repeat(65))).toBe('That is too long to be one key combination (at most 64 characters).');
+    expect(reason(`${' '.repeat(63)}ctrl+s`)).toBe('That is too long to be one key combination (at most 64 characters).');
+    expect(reason('+'.repeat(1_000_000))).toBe('That is too long to be one key combination (at most 64 characters).');
+    expect(canonical(`${' '.repeat(58)}ctrl+s`)).toBe('ctrl+s');
+    // Keys per combination: three modifiers and one key.
+    expect(canonical('ctrl+shift+s')).toBe('ctrl+shift+s');
+    expect(parseKeys('shift+ctrl+shift+F5')).toEqual({ ok: true, combos: [['ctrl', 'shift', 'f5']], text: 'ctrl+shift+f5' });
+    for (const keys of ['ctrl+shift+ctrl+shift+s', 'ctrl+ctrl+ctrl+ctrl+s', 'a+b+c+d+e', 'shift+shift+shift+shift+shift']) {
+      expect(reason(keys), keys).toBe('A key combination is at most 4 keys: up to three modifiers and one key.');
+    }
+    // One combination per action.
+    for (const parsed of [parseKeys('ctrl+s'), parseKeys('Return'), parseKeys('ctrl+shift+F5')]) {
+      expect(parsed.ok && parsed.combos.length).toBe(KEY_LIMITS.combosPerAction);
+      expect(parsed.ok && parsed.combos.every((combo) => combo.length <= KEY_LIMITS.keysPerCombo)).toBe(true);
+    }
   });
 });

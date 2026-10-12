@@ -38,7 +38,8 @@ names({ kind: 'modifier', name: 'alt' }, 'alt', 'alt_l', 'alt_r');
 names({ kind: 'modifier', name: 'shift' }, 'shift', 'shift_l', 'shift_r');
 names(
   { kind: 'windows' },
-  'super', 'super_l', 'super_r', 'win', 'win_l', 'win_r', 'windows', 'lwin', 'rwin', 'meta', 'meta_l', 'meta_r', 'cmd', 'command', 'hyper', 'hyper_l', 'hyper_r', 'mod4'
+  'super', 'super_l', 'super_r', 'win', 'win_l', 'win_r', 'windows', 'windows_l', 'windows_r', 'lwin', 'rwin', 'meta', 'meta_l', 'meta_r', 'cmd', 'command',
+  'hyper', 'hyper_l', 'hyper_r', 'mod4', 'os', 'os_l', 'os_r', 'logo', 'start'
 );
 // Known, and never sent: Print Screen opens the snipping overlay, Caps Lock changes what the user types next.
 names({ kind: 'never', name: 'Print Screen' }, 'print', 'printscreen', 'print_screen', 'prtsc', 'prtscr', 'sys_req', 'sysrq', 'snapshot');
@@ -71,7 +72,8 @@ key('bracketleft');
 key('bracketright');
 key('backslash');
 key('grave');
-for (let n = 1; n <= 24; n++) key(`f${n}`);
+// F1 to F12 only: F13 to F24 are on no ordinary keyboard and exist to be bound to global macros.
+for (let n = 1; n <= 12; n++) key(`f${n}`);
 for (const letter of 'abcdefghijklmnopqrstuvwxyz') key(letter);
 for (const digit of '0123456789') key(digit);
 
@@ -106,10 +108,16 @@ const ACCELERATOR_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
   ...Array.from('0123456789', (digit): [string, string] => [`digit${digit}`, digit]),
 ]);
 
+/**
+ * The caps on a `key` action, enforced here before anything is looked up or
+ * sent: the text's length (checked before it is split), the names in one
+ * combination (three modifiers and one key), and one combination per action.
+ */
+export const KEY_LIMITS = Object.freeze({ textLength: 64, keysPerCombo: 4, combosPerAction: 1 });
+
 export const KEYS_WINDOWS_REASON = 'Key combinations with the Windows key are never sent.';
 const ONE_COMBO_REASON = 'Grunt sends one key combination per action. Send each one as its own action.';
 const NO_TEXT_REASON = 'A key action needs one key combination as its text, such as "ctrl+s" or "Return".';
-const MAX_KEY_TEXT = 64;
 
 const refuse = (reason: string): ParsedKeys => ({ ok: false, reason });
 
@@ -170,15 +178,19 @@ function reservedCombo(entry: unknown): string | null | undefined {
  */
 export function parseKeys(text: unknown, reserved: readonly unknown[] = []): ParsedKeys {
   if (typeof text !== 'string') return refuse(NO_TEXT_REASON);
+  // The length first, on the text as it came: nothing longer is trimmed, split or searched.
+  if (text.length > KEY_LIMITS.textLength) return refuse(`That is too long to be one key combination (at most ${KEY_LIMITS.textLength} characters).`);
   const trimmed = text.replace(/^ +| +$/g, '');
   if (trimmed === '') return refuse(NO_TEXT_REASON);
-  if (trimmed.length > MAX_KEY_TEXT) return refuse(`That is too long to be one key combination (at most ${MAX_KEY_TEXT} characters).`);
   // Only ASCII whitespace separates combinations, so this and the shell can
   // never disagree about where one ends; any other odd character makes its
   // token unknown below.
   if (/[ \t\n\r]/.test(trimmed)) return refuse(ONE_COMBO_REASON);
 
   const tokens = trimmed.split('+');
+  if (tokens.length > KEY_LIMITS.keysPerCombo) {
+    return refuse(`A key combination is at most ${KEY_LIMITS.keysPerCombo} keys: up to three modifiers and one key.`);
+  }
   for (const token of tokens) {
     if (!/^[A-Za-z0-9_]+$/.test(token)) {
       return refuse(token === '' ? `"${cardLine(trimmed, 40)}" isn't a key combination Grunt can read.` : `"${cardLine(token, 40)}" isn't a key name Grunt knows.`);
@@ -198,7 +210,11 @@ export function parseKeys(text: unknown, reserved: readonly unknown[] = []): Par
   if (ctrl && alt) {
     return refuse(`Grunt never sends ${canonical}: ctrl+alt combinations belong to Windows and to global shortcuts, not to the app.`);
   }
-  if ((pressed === 'escape' && (ctrl || alt)) || (pressed === 'tab' && alt) || (pressed === 'space' && alt)) {
+  // Start (ctrl+escape), Task Manager (ctrl+shift+escape), the window switchers
+  // (alt+tab, alt+escape), the window menu (alt+space), and alt with a function
+  // key: alt+f4 closes the window, after which the keyboard is some other app's.
+  const functionKey = pressed !== undefined && /^f[0-9]+$/.test(pressed);
+  if ((pressed === 'escape' && (ctrl || alt)) || (alt && (pressed === 'tab' || pressed === 'space' || functionKey))) {
     return refuse(`Grunt never sends ${canonical}: it leaves the app this action was approved for.`);
   }
 
