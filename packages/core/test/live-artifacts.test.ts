@@ -63,6 +63,45 @@ describe('parseLiveSpec', () => {
     expect(refused({ calls: [call({ args, params })] })).toMatch(/at most 5 params/);
   });
 
+  it('refuses args that is itself a placeholder, naming the call', () => {
+    expect(refused({ calls: [call({ args: { $param: 'p' }, params: { p: { enum: ['a'], default: 'a' } } })] })).toBe(
+      'live call "c": "args" must be an object of arguments; put {"$param": ...} inside it, not in place of it.',
+    );
+    expect(refused({ calls: [call({ args: { $param: 'p' } })] })).toMatch(/live call "c": "args" must be an object of arguments/);
+  });
+
+  it('refuses args nested past 32 levels with a message, not a RangeError', () => {
+    const nest = (levels: number): Record<string, unknown> => {
+      let v: Record<string, unknown> = {};
+      for (let i = 1; i < levels; i++) v = { a: v };
+      return v;
+    };
+    expect(parseLiveSpec({ calls: [call({ args: nest(32) })] })).toMatchObject({ ok: true });
+    expect(refused({ calls: [call({ args: nest(33) })] })).toBe('live call "c": "args" is nested more than 32 levels deep.');
+    expect(refused({ calls: [call({ args: nest(50000) })] })).toMatch(/nested more than 32 levels/);
+    let arrays: unknown = [];
+    for (let i = 0; i < 50000; i++) arrays = [arrays];
+    expect(refused({ calls: [call({ args: { k: arrays } })] })).toMatch(/nested more than 32 levels/);
+  });
+
+  it('keeps __proto__ and constructor keys in args as ordinary own keys', () => {
+    const text = '{"calls":[{"id":"c","tool":"mcp__s__t","args":{"__proto__":{"polluted":true},"constructor":{"prototype":{"x":1}},"k":{"$param":"p"}},"params":{"p":{"enum":["a"],"default":"a"}}}]}';
+    const r = parseLiveSpec(text);
+    if (!r.ok || !r.spec) throw new Error('expected a spec');
+    const c = r.spec.calls[0]!;
+    const built = buildLiveArgs(c, undefined);
+    if (!built.ok) throw new Error(built.message);
+    for (const args of [c.args, built.args]) {
+      expect(Object.hasOwn(args, '__proto__')).toBe(true);
+      expect(Object.hasOwn(args, 'constructor')).toBe(true);
+      expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
+      expect((args as { polluted?: unknown }).polluted).toBeUndefined();
+    }
+    expect(built.args['k']).toBe('a');
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(({} as { x?: unknown }).x).toBeUndefined();
+  });
+
   it('refuses a declaration over 32 KB in all', () => {
     const big = Array.from({ length: 10 }, (_, i) => call({ id: `c${i}`, args: { blob: 'x'.repeat(3500) } }));
     expect(refused({ calls: big })).toMatch(/over 32 KB/);
@@ -101,6 +140,11 @@ describe('buildLiveArgs', () => {
     expect(buildLiveArgs(DUE, { list: 'work' })).toEqual({ ok: false, message: 'param "list" must be one of: "Work", "Home".' });
     expect(buildLiveArgs(DUE, { list: 1 })).toMatchObject({ ok: false });
     expect(buildLiveArgs(DUE, [14])).toEqual({ ok: false, message: '"params" must be an object.' });
+  });
+
+  it('fails rather than return a scalar when the declared args is itself a placeholder', () => {
+    const SCALAR: LiveCall = { id: 's', tool: 'mcp__s__t', args: { $param: 'p' }, params: { p: { type: 'integer', minimum: 1, maximum: 9, default: 3 } } };
+    expect(buildLiveArgs(SCALAR, { p: 3 })).toEqual({ ok: false, message: '"s": the arguments must be an object.' });
   });
 
   it('never coerces: strings for integers, numbers for string enums and strings for number or boolean enums are refused', () => {

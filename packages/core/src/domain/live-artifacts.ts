@@ -13,6 +13,7 @@ export const MAX_LIVE_CALLS = 10;
 export const MAX_LIVE_PARAMS = 5;
 export const MAX_LIVE_ARGS_BYTES = 4 * 1024;
 export const MAX_LIVE_SPEC_BYTES = 32 * 1024;
+export const MAX_LIVE_ARGS_DEPTH = 32;
 export const LIVE_CALL_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const PARAM_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/;
 const MCP_TOOL = /^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/;
@@ -92,6 +93,13 @@ function parseParam(at: string, raw: unknown): { ok: true; param: LiveParam } | 
   return bad(`${at} must have "enum" or "type": "integer".`);
 }
 
+/** Whether `value` nests objects or arrays more than `limit` levels deep (stops descending past the limit, so it never overflows the stack). */
+function nestsDeeperThan(value: unknown, limit: number, depth = 1): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  if (depth > limit) return true;
+  return Object.values(value).some((v) => nestsDeeperThan(v, limit, depth + 1));
+}
+
 /** Collects the names of every `{ "$param": name }` in `value`; a message when one is malformed. */
 function placeholders(where: string, value: unknown, found: Set<string>): string | null {
   if (Array.isArray(value)) {
@@ -157,6 +165,8 @@ export function parseLiveSpec(raw: unknown): { ok: true; spec: LiveSpec | null }
     if (tool.length > MAX_TOOL_NAME || !MCP_TOOL.test(tool)) return bad(`${where}: "${rawTool}" isn't an MCP tool's name (mcp__<server>__<tool>).`);
     const args = c['args'] === undefined ? {} : c['args'];
     if (!isPlainObject(args)) return bad(`${where}: "args" must be an object.`);
+    if (Object.hasOwn(args, '$param')) return bad(`${where}: "args" must be an object of arguments; put {"$param": ...} inside it, not in place of it.`);
+    if (nestsDeeperThan(args, MAX_LIVE_ARGS_DEPTH)) return bad(`${where}: "args" is nested more than ${MAX_LIVE_ARGS_DEPTH} levels deep.`);
     if (bytes(canonicalJson(args)) > MAX_LIVE_ARGS_BYTES) return bad(`${where}: "args" is over ${MAX_LIVE_ARGS_BYTES} bytes.`);
     const rawParams = c['params'] === undefined ? {} : c['params'];
     if (!isPlainObject(rawParams)) return bad(`${where}: "params" must be an object.`);
@@ -210,7 +220,9 @@ export function buildLiveArgs(call: LiveCall, params: unknown): { ok: true; args
     }
     return value;
   };
-  return { ok: true, args: fill(call.args) as Record<string, unknown> };
+  const args = fill(call.args);
+  if (!isPlainObject(args)) return bad(`"${call.id}": the arguments must be an object.`);
+  return { ok: true, args };
 }
 
 /**
