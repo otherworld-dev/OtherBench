@@ -17,6 +17,8 @@ export interface ChatMenuHandlers {
   moveToNewProject(): void;
   /** Downloads the chat (#820). */
   exportAs(format: 'markdown' | 'json'): void;
+  /** Opens the Scheduled overlay's editor for a new schedule on this chat. */
+  schedule(): void;
   /** Sets "Don't add to project memory" to the given state (the opposite of the chat's state when the menu was built). */
   setMemoryExcluded(excluded: boolean): void;
   archive(): void;
@@ -73,6 +75,7 @@ export function chatMenuItems(
       ],
     },
     ...memory,
+    ...(archived ? [] : [{ id: 'schedule', label: 'Schedule…', onSelect: h.schedule }]),
     {
       id: 'export',
       label: 'Export…',
@@ -92,6 +95,8 @@ export interface ProjectMenuHandlers {
   rename(): void;
   /** Opens the project page for this project. */
   settings(): void;
+  /** Opens the Scheduled overlay's editor for a new schedule that makes chats in this project. */
+  schedule(): void;
   move(dir: -1 | 1): void;
   requestDelete(): void;
 }
@@ -101,6 +106,7 @@ export function projectMenuItems(index: number, count: number, h: ProjectMenuHan
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'settings', label: 'Project settings…', onSelect: h.settings },
+    { id: 'schedule', label: 'Schedule…', onSelect: h.schedule },
     { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
     { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },

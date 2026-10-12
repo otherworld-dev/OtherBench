@@ -88,6 +88,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const removeProject = useGruntStore((s) => s.removeProject);
   const setProjects = useGruntStore((s) => s.setProjects);
   const openTab = useGruntStore((s) => s.openTab);
+  const openSchedules = useGruntStore((s) => s.openSchedules);
   const paneTabs = useGruntStore((s) => s.paneState.tabs);
   const collapsedGroups = useCollapsedGroups();
 
@@ -655,6 +656,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               moveTo: (projectId) => void moveChat(menuChat.id, projectId),
               moveToNewProject: () => void moveToNewProject(menuChat),
               exportAs: (format) => void exportChat(menuChat, format),
+              schedule: () => openSchedules({ kind: 'chat', chatId: menuChat.id }),
               setMemoryExcluded: (excluded) => void setMemoryExcluded(menuChat, excluded),
               archive: () => void archiveChat(menuChat),
               unarchive: () => void unarchiveChat(menuChat),
@@ -694,6 +696,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
             {
               rename: () => setRenamingProjectId(menuProject.id),
               settings: () => openProjectPage({ mode: 'edit', projectId: menuProject.id, returnFocus: headingSelector(menuProject.id) }),
+              schedule: () => openSchedules({ kind: 'project', projectId: menuProject.id }),
               move: (dir) => void moveProject(menuProject.id, dir),
               requestDelete: () => setDeletingProjectId(menuProject.id),
             }
