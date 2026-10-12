@@ -2,8 +2,9 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { createServer, request as httpRequest, type ClientRequest, type IncomingHttpHeaders, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from 'node:http';
 import { connect as netConnect, isIP, type AddressInfo, type Socket } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import type { Duplex } from 'node:stream';
-import { browserUrlCheck, isPublicAddress } from '@grunt/core/domain/browser-hosts.js';
+import { browserUrlCheck, isOwnAddress, isPublicAddress, ownAddresses, type OwnAddresses } from '@grunt/core/domain/browser-hosts.js';
 
 /**
  * Grunt's egress proxy for the model's browser (spec
@@ -21,17 +22,45 @@ import { browserUrlCheck, isPublicAddress } from '@grunt/core/domain/browser-hos
  * disagree about which host an address means. Nothing here parses a host by
  * hand. The only text this file takes apart is the `:port` end of a CONNECT
  * authority, and the whole authority then goes through the core parser.
+ *
+ * Under every resolved address sits a floor no option can lift: this
+ * computer's own public addresses, and the /64 of each of its public IPv6
+ * addresses, are refused (`isOwnAddress`). They pass `isPublicAddress`, yet
+ * reaching them reaches this computer's own services (or, for the /64, the
+ * devices on its network) from inside.
  */
 
 export interface EgressProxyOptions {
   /** Why `host:port` may not be reached for proxy user `user` (one per chat), or null. `host` is normalised. */
   check(user: string, host: string, port: number): string | null;
-  /** Whether a resolved address (canonical form) may be connected to; defaults to isPublicAddress. */
+  /**
+   * Whether a resolved address (canonical form) may be connected to; defaults
+   * to isPublicAddress. It can't let through one of this computer's own
+   * addresses (see `interfaceAddresses`).
+   */
   addressAllowed?(ip: string, port: number): boolean;
   /** Name lookup; defaults to dns.lookup(host, { all: true }). Tests inject one. */
   resolve?(host: string): Promise<string[]>;
-  /** Told about every refused request. */
+  /**
+   * Told about every request refused by policy: a blocked host, a local name,
+   * a local, private or own address. Not about names that don't resolve,
+   * lookups that time out or malformed requests.
+   */
   onRefused?(user: string, host: string, reason: string): void;
+  /** This computer's interface addresses; defaults to os.networkInterfaces(). Tests inject a list. */
+  interfaceAddresses?(): readonly string[];
+  /** How old the interface list may get before it is read again; default 60 s. */
+  interfaceRefreshMs?: number;
+  /**
+   * An address not in the list is checked against a fresh read when the list
+   * is older than this (default 1 s), so a new address (an IPv6 privacy
+   * address, a new lease) is caught at once.
+   */
+  interfaceRecheckMs?: number;
+  /** At most this many name lookups at once (default 3: dns.lookup holds one of libuv's 4 threads while it runs). */
+  maxLookups?: number;
+  /** A lookup (counting any wait for a free slot) that takes longer than this is refused; default 5 s. */
+  lookupTimeoutMs?: number;
   /**
    * Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): 127.0.0.1 may be reached
    * on these ports. Core's own rules (local names, private and loopback
@@ -62,6 +91,13 @@ async function defaultResolve(host: string): Promise<string[]> {
   const found = await lookup(host, { all: true, verbatim: true });
   return found.map((a) => a.address);
 }
+
+function defaultInterfaceAddresses(): string[] {
+  return Object.values(networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address));
+}
+
+/** A lookup that ran out of time (counting any wait for a free slot). */
+class LookupTimeoutError extends Error {}
 
 /**
  * The proxy's own host check, a pure function: the site and port of the raw
@@ -133,7 +169,14 @@ function watchClient(client: Socket): { release(): Buffer } {
   };
 }
 
-type Routed = { ip: string; url: URL; site: string; port: number } | { refused: string; host: string; bad: boolean };
+/**
+ * Where a request may go, or why not. `kind` says what refused it: `policy`
+ * (a blocked host, a local name, a local, private or own address: counted and
+ * reported to the chat), `lookup` (the name didn't resolve in time) or `bad`
+ * (a malformed request).
+ */
+type Refusal = { refused: string; host: string; kind: 'policy' | 'lookup' | 'bad' };
+type Routed = { ip: string; url: URL; site: string; port: number } | Refusal;
 
 export async function startEgressProxy(options: EgressProxyOptions): Promise<EgressProxy> {
   const password = randomBytes(18).toString('hex');
@@ -141,6 +184,11 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
   const addressAllowed = options.addressAllowed ?? ((ip: string) => isPublicAddress(ip));
   const connectTimeoutMs = options.connectTimeoutMs ?? 15_000;
   const idleTimeoutMs = options.idleTimeoutMs ?? 5 * 60_000;
+  const readInterfaces = options.interfaceAddresses ?? defaultInterfaceAddresses;
+  const interfaceRefreshMs = options.interfaceRefreshMs ?? 60_000;
+  const interfaceRecheckMs = options.interfaceRecheckMs ?? 1_000;
+  const maxLookups = Math.max(1, options.maxLookups ?? 3);
+  const lookupTimeoutMs = options.lookupTimeoutMs ?? 5_000;
   let closed = false;
   const sockets = new Set<Duplex>();
   const requests = new Set<ClientRequest>();
@@ -148,6 +196,68 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     sockets.add(s);
     s.on('close', () => sockets.delete(s));
   };
+
+  let own: OwnAddresses = ownAddresses([]);
+  let ownReadAt = Number.NEGATIVE_INFINITY;
+  function readOwn(): void {
+    try {
+      own = ownAddresses(readInterfaces());
+    } catch (err) {
+      // Keep the last list; the next check tries again.
+      console.warn("[browser-proxy] couldn't read this computer's network addresses:", err);
+    }
+    ownReadAt = Date.now();
+  }
+
+  /** Whether `ip` is this computer's own (or on its IPv6 /64): re-read every minute, and at once for an address not in the list. */
+  function isOwn(ip: string): boolean {
+    if (Date.now() - ownReadAt >= interfaceRefreshMs) readOwn();
+    if (isOwnAddress(ip, own)) return true;
+    if (Date.now() - ownReadAt < interfaceRecheckMs) return false;
+    readOwn();
+    return isOwnAddress(ip, own);
+  }
+  readOwn();
+
+  // Name lookups: at most `maxLookups` at once, each refused after `lookupTimeoutMs`. A slot is freed only when
+  // its lookup really ends (dns.lookup can't be cancelled, and holds a libuv thread meanwhile), not when it times out.
+  let lookupsRunning = 0;
+  const lookupQueue: (() => void)[] = [];
+  function nextLookup(): void {
+    while (lookupsRunning < maxLookups && lookupQueue.length > 0) lookupQueue.shift()!();
+  }
+  function lookupName(host: string): Promise<string[]> {
+    return new Promise<string[]>((resolve, reject) => {
+      let settled = false;
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
+      const run = (): void => {
+        lookupsRunning += 1;
+        Promise.resolve()
+          .then(() => resolveName(host))
+          .then(
+            (found) => finish(() => resolve(found)),
+            (err: unknown) => finish(() => reject(err))
+          )
+          .finally(() => {
+            lookupsRunning -= 1;
+            nextLookup();
+          });
+      };
+      const timer = setTimeout(() => {
+        const waiting = lookupQueue.indexOf(run);
+        if (waiting >= 0) lookupQueue.splice(waiting, 1);
+        finish(() => reject(new LookupTimeoutError()));
+      }, lookupTimeoutMs);
+      timer.unref?.();
+      lookupQueue.push(run);
+      nextLookup();
+    });
+  }
 
   /** The proxy user a request authenticated as, or null. */
   function userOf(req: IncomingMessage): string | null {
@@ -169,39 +279,45 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
    */
   async function route(user: string, raw: string): Promise<Routed> {
     const verdict = checkProxyTarget(raw, (host, port) => options.check(user, host, port), { allowLoopbackPorts: options.allowLoopbackPorts });
-    if (verdict.site === null || verdict.port === null) return { refused: verdict.denial ?? 'Not a usable address.', host: raw.slice(0, 200), bad: true };
+    if (verdict.site === null || verdict.port === null) return { refused: verdict.denial ?? 'Not a usable address.', host: raw.slice(0, 200), kind: 'bad' };
     const { site, port } = verdict;
-    if (verdict.denial) return { refused: verdict.denial, host: site, bad: false };
-    if (!Number.isInteger(port) || port < 1 || port > 65535) return { refused: 'Not a usable port.', host: site, bad: true };
+    if (verdict.denial) return { refused: verdict.denial, host: site, kind: 'policy' };
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return { refused: 'Not a usable port.', host: site, kind: 'bad' };
     let url: URL;
     try {
       url = new URL(raw);
     } catch {
-      return { refused: 'Not a usable address.', host: raw.slice(0, 200), bad: true };
+      return { refused: 'Not a usable address.', host: raw.slice(0, 200), kind: 'bad' };
     }
     // Only http: is proxied here (https and wss arrive as CONNECT, which builds an http address).
-    if (url.protocol !== 'http:') return { refused: 'Only http addresses are proxied this way.', host: site, bad: true };
+    if (url.protocol !== 'http:') return { refused: 'Only http addresses are proxied this way.', host: site, kind: 'bad' };
     let found: string[];
     try {
-      found = isIP(site) ? [site] : await resolveName(site);
-    } catch {
-      return { refused: `${site} could not be found.`, host: site, bad: false };
+      found = isIP(site) ? [site] : await lookupName(site);
+    } catch (err) {
+      return { refused: err instanceof LookupTimeoutError ? `Looking up ${site} took too long.` : `${site} could not be found.`, host: site, kind: 'lookup' };
     }
-    if (found.length === 0) return { refused: `${site} could not be found.`, host: site, bad: false };
+    if (found.length === 0) return { refused: `${site} could not be found.`, host: site, kind: 'lookup' };
     const addresses: string[] = [];
     for (const address of found) {
       const canonical = canonicalAddress(address);
+      // The floor first: no `addressAllowed` lets this computer's own addresses through.
+      if (canonical !== null && isOwn(canonical)) {
+        return { refused: `${site} points at this computer or its own network (${address}). The model's browser can't reach it.`, host: site, kind: 'policy' };
+      }
       if (canonical === null || !addressAllowed(canonical, port)) {
-        return { refused: `${site} points at a local or private address (${address}).`, host: site, bad: false };
+        return { refused: `${site} points at a local or private address (${address}).`, host: site, kind: 'policy' };
       }
       addresses.push(canonical);
     }
     return { ip: addresses[0]!, url, site, port };
   }
 
-  function refuse(user: string, host: string, reason: string): void {
+  /** Tells `onRefused` about a policy refusal; a name that didn't resolve or a malformed request isn't one. */
+  function refuse(user: string, where: Refusal): void {
+    if (where.kind !== 'policy') return;
     try {
-      options.onRefused?.(user, host, reason);
+      options.onRefused?.(user, where.host, where.refused);
     } catch (err) {
       console.error('[browser-proxy] onRefused threw:', err);
     }
@@ -269,8 +385,8 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     });
     const where = await route(user, req.url ?? '');
     if ('refused' in where) {
-      refuse(user, where.host, where.refused);
-      res.writeHead(where.bad ? 400 : 403, { 'Content-Type': 'text/plain; charset=utf-8' }).end(where.refused);
+      refuse(user, where);
+      res.writeHead(where.kind === 'bad' ? 400 : 403, { 'Content-Type': 'text/plain; charset=utf-8' }).end(where.refused);
       return;
     }
     if (gone || closed || res.destroyed) return;
@@ -326,7 +442,6 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     // core parser as an http address.
     const authority = req.url ?? '';
     if (!/:\d{1,5}$/.test(authority) || /[/?#@]/.test(authority)) {
-      refuse(user, authority.slice(0, 200), 'Not a usable address.');
       client.end(BAD_REQUEST);
       return;
     }
@@ -334,8 +449,8 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     const where = await route(user, `http://${authority}/`);
     const first = Buffer.concat([head, watch.release()]);
     if ('refused' in where) {
-      refuse(user, where.host, where.refused);
-      client.end(where.bad ? BAD_REQUEST : FORBIDDEN);
+      refuse(user, where);
+      client.end(where.kind === 'bad' ? BAD_REQUEST : FORBIDDEN);
       return;
     }
     tunnel(client, where.ip, where.port, (upstream) => {
@@ -356,15 +471,16 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     const where = await route(user, req.url ?? '');
     const first = Buffer.concat([head, watch.release()]);
     if ('refused' in where) {
-      refuse(user, where.host, where.refused);
-      client.end(where.bad ? BAD_REQUEST : FORBIDDEN);
+      refuse(user, where);
+      client.end(where.kind === 'bad' ? BAD_REQUEST : FORBIDDEN);
       return;
     }
     tunnel(client, where.ip, where.port, (upstream) => {
       const lines = [`${req.method ?? 'GET'} ${where.url.pathname}${where.url.search} HTTP/1.1`, `Host: ${where.url.host}`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const name = req.rawHeaders[i]!;
-        if (/^(proxy-authorization|proxy-connection|host)$/i.test(name)) continue;
+        // Every Proxy-* header is for this proxy, never the site; the Host line is written above.
+        if (/^proxy-/i.test(name) || /^host$/i.test(name)) continue;
         lines.push(`${name}: ${req.rawHeaders[i + 1] ?? ''}`);
       }
       upstream.write(`${lines.join('\r\n')}\r\n\r\n`);

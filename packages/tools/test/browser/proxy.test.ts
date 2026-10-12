@@ -466,7 +466,7 @@ describe('every request is judged on its own', () => {
         port: Number(port),
         method: 'GET',
         path: `http://site.test:${portOf(site)}/ws`,
-        headers: { Host: 'evil.test', Connection: 'Upgrade', Upgrade: 'websocket', 'Proxy-Authorization': basic('chat-a', p.password) },
+        headers: { Host: 'evil.test', Connection: 'Upgrade', Upgrade: 'websocket', 'Proxy-Authorization': basic('chat-a', p.password), 'Proxy-Foo': 'secret', 'X-Kept': 'yes' },
       });
       req.on('upgrade', (_r: IncomingMessage, socket: Socket) => res(socket));
       req.on('error', rej);
@@ -476,6 +476,8 @@ describe('every request is judged on its own', () => {
     expect(resolve.mock.calls).toEqual([['site.test']]);
     expect(siteHeaders.at(-1)?.host).toBe(`site.test:${portOf(site)}`);
     expect(siteHeaders.at(-1)?.['proxy-authorization']).toBeUndefined();
+    expect(siteHeaders.at(-1)?.['proxy-foo']).toBeUndefined();
+    expect(siteHeaders.at(-1)?.['x-kept']).toBe('yes');
   });
 
   it('does not forward hop-by-hop headers on the plain path, and still forwards a streamed body', async () => {
@@ -717,5 +719,142 @@ describe('the proxy and approvals (security fix round 1)', () => {
     tunnel.socket.destroy();
     expect(tunnel.status).toBe(403);
     expect(siteHits.length).toBe(hits);
+  });
+});
+
+describe("this computer's own addresses (a floor under every resolved address)", () => {
+  // Public-looking addresses that only ever appear in the injected interface list and the fake lookup: every one is refused
+  // before any connection is made, so nothing here reaches the internet.
+  const OWN_V4 = '81.2.69.160';
+  const OWN_V6 = '2a02:8010:1234:5678::10';
+  const answers: Record<string, string[]> = {
+    'own.test': [OWN_V4],
+    'mapped.test': [`::ffff:${OWN_V4}`],
+    'own6.test': [OWN_V6],
+    'neighbour.test': ['2a02:8010:1234:5678::99'],
+    'mixed.test': ['127.0.0.1', OWN_V4],
+  };
+  const resolve = async (host: string): Promise<string[]> => answers[host] ?? ['127.0.0.1'];
+
+  it('refuses its own public addresses and anything in its IPv6 /64, whatever addressAllowed says, and counts them', async () => {
+    const onRefused = vi.fn();
+    const p = await start({ resolve, addressAllowed: () => true, interfaceAddresses: () => ['127.0.0.1', '::1', '192.168.1.20', OWN_V4, OWN_V6], onRefused });
+    const auth = basic('chat-a', p.password);
+    for (const authority of ['own.test:443', 'mapped.test:443', 'own6.test:443', 'neighbour.test:443', 'mixed.test:443', `${OWN_V4}:443`, `[${OWN_V6}]:443`, '[2a02:8010:1234:5678::1]:80']) {
+      const { status, socket } = await connectVia(p, authority, auth);
+      socket.destroy();
+      expect(status, authority).toBe(403);
+    }
+    expect(await rawVia(p, 'GET', 'http://own.test/', auth)).toBe(403);
+    expect(onRefused).toHaveBeenCalledTimes(9);
+    expect(onRefused).toHaveBeenCalledWith('chat-a', 'own.test', expect.stringMatching(/this computer or its own network/));
+  });
+
+  it('still lets 127.0.0.1 through on a configured test port, though it is an interface address', async () => {
+    const p = await start({ check: () => null, allowLoopbackPorts: [portOf(echo)], interfaceAddresses: () => ['127.0.0.1', OWN_V4] });
+    const ok = await connectVia(p, `127.0.0.1:${portOf(echo)}`, basic('chat-a', p.password));
+    expect(ok.status).toBe(200);
+    ok.socket.destroy();
+  });
+
+  it('reads the list again at once for an address not in it, and otherwise every interfaceRefreshMs', async () => {
+    const list: string[] = [];
+    const interfaceAddresses = vi.fn(() => list);
+    const onRefused = vi.fn();
+    // addressAllowed refuses everything, so a refusal names which rule refused it, and nothing is ever connected.
+    const p = await start({ resolve, addressAllowed: () => false, interfaceAddresses, interfaceRecheckMs: 0, onRefused });
+    const auth = basic('chat-a', p.password);
+    const reasonFor = async (authority: string): Promise<string> => {
+      onRefused.mockClear();
+      const { socket } = await connectVia(p, authority, auth);
+      socket.destroy();
+      return String(onRefused.mock.calls[0]?.[2]);
+    };
+    expect(await reasonFor('own.test:443')).toMatch(/local or private/);
+    list.push(OWN_V4); // the computer gets a new address
+    expect(await reasonFor('own.test:443')).toMatch(/this computer/);
+    await p.close();
+
+    // With the immediate re-read off, a new address is picked up on the next periodic read.
+    const later: string[] = [];
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const q = await start({ resolve, addressAllowed: () => false, interfaceAddresses: () => later, interfaceRecheckMs: 3_600_000, interfaceRefreshMs: 60_000, onRefused });
+      const auth2 = basic('chat-a', q.password);
+      const reason = async (): Promise<string> => {
+        onRefused.mockClear();
+        const { socket } = await connectVia(q, 'own.test:443', auth2);
+        socket.destroy();
+        return String(onRefused.mock.calls[0]?.[2]);
+      };
+      later.push(OWN_V4);
+      expect(await reason()).toMatch(/local or private/); // still the list read at start
+      now += 60_000;
+      expect(await reason()).toMatch(/this computer/);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+describe('name lookups are capped and timed', () => {
+  it('refuses a lookup that takes too long, and one still waiting for a slot, without counting either as a policy refusal', async () => {
+    let release!: () => void;
+    const hung = new Promise<string[]>((r) => (release = () => r(['127.0.0.1'])));
+    const resolve = vi.fn((host: string) => (host === 'slow.test' ? hung : Promise.resolve(['127.0.0.1'])));
+    const onRefused = vi.fn();
+    const p = await start({ resolve, maxLookups: 1, lookupTimeoutMs: 100, onRefused });
+    const auth = basic('chat-a', p.password);
+    const slow = await connectVia(p, 'slow.test:443', auth);
+    slow.socket.destroy();
+    expect(slow.status).toBe(403);
+    // The slow lookup still holds the only slot (dns.lookup can't be cancelled): the next name waits for it, then gives up.
+    const waiting = await connectVia(p, `echo.test:${portOf(echo)}`, auth);
+    waiting.socket.destroy();
+    expect(waiting.status).toBe(403);
+    expect(resolve.mock.calls).toEqual([['slow.test']]);
+    expect(onRefused).not.toHaveBeenCalled();
+    // Once it ends, the slot is free again.
+    release();
+    await pause(10);
+    const ok = await connectVia(p, `echo.test:${portOf(echo)}`, auth);
+    ok.socket.destroy();
+    expect(ok.status).toBe(200);
+  });
+
+  it('runs at most maxLookups at once', async () => {
+    let running = 0;
+    let most = 0;
+    const resolve = async (): Promise<string[]> => {
+      running += 1;
+      most = Math.max(most, running);
+      await pause(30);
+      running -= 1;
+      return ['127.0.0.1'];
+    };
+    const p = await start({ resolve, maxLookups: 2 });
+    const auth = basic('chat-a', p.password);
+    const results = await Promise.all([1, 2, 3, 4, 5].map((i) => connectVia(p, `n${i}.test:${portOf(echo)}`, auth)));
+    for (const r of results) r.socket.destroy();
+    expect(results.map((r) => r.status)).toEqual([200, 200, 200, 200, 200]);
+    expect(most).toBe(2);
+  });
+});
+
+describe('onRefused hears only policy refusals', () => {
+  it("isn't told about a name that doesn't resolve or a malformed request", async () => {
+    const onRefused = vi.fn();
+    const p = await start({ resolve: async () => [], onRefused });
+    const auth = basic('chat-a', p.password);
+    const missing = await connectVia(p, 'nowhere.test:443', auth);
+    missing.socket.destroy();
+    expect(missing.status).toBe(403);
+    expect(await rawVia(p, 'CONNECT', 'no-port.test', auth)).toBe(400);
+    expect(await rawVia(p, 'GET', 'ftp://files.test/', auth)).toBe(400);
+    expect(onRefused).not.toHaveBeenCalled();
+    const local = await connectVia(p, 'localhost:443', auth);
+    local.socket.destroy();
+    expect(onRefused).toHaveBeenCalledTimes(1);
   });
 });
