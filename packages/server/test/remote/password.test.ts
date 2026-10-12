@@ -1,10 +1,16 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LoginFileError } from '../../src/remote/errors.js';
 import { hashPassword, passwordProblem, PasswordFile, verifyPassword } from '../../src/remote/password.js';
 import { FAST } from './helpers.js';
+
+// Passes through to the real readFileSync; one test makes a single call fail.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 let dir: string;
 beforeEach(() => {
@@ -33,9 +39,9 @@ describe('hashPassword and verifyPassword', () => {
   });
 
   it('match the same accented password typed composed (Windows) or decomposed (iPhone)', async () => {
-    const record = await hashPassword('café au lait 99', FAST);
+    const record = await hashPassword('caf\u00e9 au lait 99', FAST);
 
-    expect(await verifyPassword('café au lait 99', record)).toBe(true);
+    expect(await verifyPassword('cafe\u0301 au lait 99', record)).toBe(true);
   });
 });
 
@@ -86,6 +92,21 @@ describe('PasswordFile', () => {
     now += 1001;
     expect(server.epoch()).toBe(writer.read()!.epoch);
     expect(server.epoch()).not.toBe(before);
+  });
+
+  it('retries a read that failed with an I/O error instead of remembering it, so sessions survive a busy file', async () => {
+    let now = 1_000_000;
+    const path = join(dir, 'login.json');
+    const written = await new PasswordFile(path, () => now, FAST).write('correct horse battery');
+    const server = new PasswordFile(path, () => now, FAST);
+    vi.mocked(readFileSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+    });
+
+    expect(server.epoch()).toBeNull();
+
+    now += 1001;
+    expect(server.epoch()).toBe(written.epoch);
   });
 
   it('has no epoch when the file is missing or broken, so every session ends', async () => {

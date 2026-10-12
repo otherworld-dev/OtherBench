@@ -157,7 +157,14 @@ export class PasswordFile {
       let record: PasswordRecord | null;
       try {
         record = parseRecord(readFileSync(this.path, 'utf8'), this.path);
-      } catch {
+      } catch (err) {
+        if (!(err instanceof LoginFileError)) {
+          // An I/O error (EBUSY, EPERM, a racing rename) says nothing about the
+          // file's content: don't pin it to this signature. A signature no real
+          // file has makes the next check, a second on, read it again.
+          this.cache = { sig: 'unreadable', record: null };
+          return null;
+        }
         record = null;
       }
       this.cache = { sig, record };
