@@ -21,6 +21,8 @@ const SHEET_MAX_ROW = 1_048_576;
 const SHEET_MAX_COLUMN = 16_383;
 /** The last day Excel can show (9999-12-31) as a serial. */
 const MAX_SERIAL = 2_958_465;
+/** Characters of a number format code that are looked at (Excel's own limit is 255). */
+const MAX_FORMAT_CODE = 255;
 
 const isBuiltInDate = (id: number): boolean => (id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) || (id >= 50 && id <= 58);
 
@@ -53,6 +55,8 @@ export function serialToIso(serial: number, date1904: boolean): string {
   const minutes = Math.round((serial - day) * 1440);
   const base = date1904 ? Date.UTC(1904, 0, 1) : day >= 61 ? Date.UTC(1899, 11, 30) : Date.UTC(1899, 11, 31);
   const iso = new Date(base + day * 86_400_000 + minutes * 60_000).toISOString();
+  // Past year 9999 (the 1904 epoch gets there sooner than the serial limit) the year gets a sign: not a date Excel shows.
+  if (iso[0] === '+' || iso[0] === '-') return String(serial);
   return serial === day ? iso.slice(0, 10) : `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
 }
 
@@ -148,9 +152,16 @@ function dateStyles(xml: string | null): Set<number> {
       if (local === 'cellXfs') st.inXfs = false;
     },
   });
+  // Each number format is decided once, however many styles use it, and only its first characters are looked at (Excel limits a format code to 255): a huge code used by thousands of styles would otherwise cost codes x styles.
+  const isDate = new Map<number, boolean>();
   xfs.forEach((id, index) => {
-    const code = custom.get(id);
-    if (code !== undefined ? isDateFormatCode(code) : isBuiltInDate(id)) out.add(index);
+    let date = isDate.get(id);
+    if (date === undefined) {
+      const code = custom.get(id);
+      date = code !== undefined ? isDateFormatCode(code.slice(0, MAX_FORMAT_CODE)) : isBuiltInDate(id);
+      isDate.set(id, date);
+    }
+    if (date) out.add(index);
   });
   return out;
 }
@@ -313,7 +324,8 @@ function readSheet(xml: string, name: string, hidden: boolean, book: Book, out: 
   });
 
   // Reading stopped before the end, so the range seen is short: the sheet's own dimension (written at its start) gives the real one.
-  if (st.over && st.dim) {
+  // Only when a value was stored: a sheet of formulas with no cached values has no CSV block, so the formula lines aren't pushed out by empty rows.
+  if (st.over && st.dim && st.maxCol >= 0) {
     st.maxRow = Math.max(st.maxRow, st.dim.row);
     st.maxCol = Math.max(st.maxCol, Math.min(st.dim.col, MAX_COLUMNS - 1));
   }

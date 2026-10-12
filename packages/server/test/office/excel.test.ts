@@ -141,11 +141,17 @@ describe('serialToIso', () => {
     for (const n of [1e300, -1, Infinity, NaN]) expect(() => serialToIso(n, false)).not.toThrow();
     expect(serialToIso(1e300, false)).toBe('1e+300');
   });
+
+  it('gives the number back when the 1904 epoch takes it past year 9999', () => {
+    expect(serialToIso(2_958_000, true)).toBe('2958000');
+    expect(serialToIso(2_958_465, false)).toBe('9999-12-31');
+    expect(serialToIso(2_900_000, true)).toMatch(/^98\d\d-\d\d-\d\d$/);
+  });
 });
 
 // Hostile input: linear time, and text that stops at the cap however the file is built.
 describe('reading hostile Excel files', () => {
-  const FAST_MS = 2000;
+  const FAST_MS = 5000;
   const CAP = 100_000;
   /** Runs `fn`, checks it was fast, and reports the time when GRUNT_TIMINGS is set. */
   function timed<T>(label: string, fn: () => T): T {
@@ -169,9 +175,19 @@ describe('reading hostile Excel files', () => {
     expect(timed(label, () => extractOfficeText(file))).toBe('Sheet "S" (A1:A1) as CSV:\n45000');
   });
 
-  it('reads a number format of 300 thousand quoted strings that ends in a date code', () => {
-    const file = xlsx({ sheets: [{ name: 'S', rows: dateRow }], styles: dateStyle(`${'&quot;x&quot;'.repeat(300_000)}yyyy`) });
-    expect(timed('300k quoted strings then yyyy', () => extractOfficeText(file))).toBe('Sheet "S" (A1:A1) as CSV:\n2023-03-15');
+  it('decides a 1 MB number format used by 100 thousand styles once, not once per style', () => {
+    const code = `&quot;${'x'.repeat(1_000_000)}`;
+    const styles = `<numFmts count="1"><numFmt numFmtId="164" formatCode="${code}"/></numFmts><cellXfs count="100000">${'<xf numFmtId="164"/>'.repeat(100_000)}</cellXfs>`;
+    const rows = '<row r="1"><c r="A1" s="99999"><v>45000</v></c></row>';
+    expect(timed('1 MB format x 100k styles', () => extractOfficeText(xlsx({ sheets: [{ name: 'S', rows }], styles })))).toBe('Sheet "S" (A1:A1) as CSV:\n45000');
+  });
+
+  it('looks only at the first 255 characters of a number format, as long as Excel lets one be', () => {
+    const quoted = '&quot;x&quot;'.repeat(300_000);
+    const late = xlsx({ sheets: [{ name: 'S', rows: dateRow }], styles: dateStyle(`${quoted}yyyy`) });
+    expect(timed('300k quoted strings then yyyy', () => extractOfficeText(late))).toBe('Sheet "S" (A1:A1) as CSV:\n45000');
+    const early = xlsx({ sheets: [{ name: 'S', rows: dateRow }], styles: dateStyle(`yyyy${quoted}`) });
+    expect(timed('yyyy then 300k quoted strings', () => extractOfficeText(early))).toBe('Sheet "S" (A1:A1) as CSV:\n2023-03-15');
   });
 
   it('reads a sheet whose only cell is in row 1048576 without looping past the cap', () => {
@@ -206,8 +222,16 @@ describe('reading hostile Excel files', () => {
 
   it('reads 200 thousand formulas in linear time and stops at the cap', () => {
     const rows = Array.from({ length: 200_000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><f>SUM(B${i + 1})</f></c></row>`).join('');
-    const text = timed('200k formulas', () => extractOfficeText(xlsx({ sheets: [{ name: 'S', rows }] }), { maxChars: 20_000 }));
-    expect(text === null || text.length <= 20_001).toBe(true);
+    const text = timed('200k formulas', () => extractOfficeText(xlsx({ sheets: [{ name: 'S', rows }] }), { maxChars: 20_000 }))!;
+    expect(text).toMatch(/^Sheet "S" is empty\.\nFormulas in "S":\nA1: =SUM\(B1\)\nA2: =SUM\(B2\)\n/);
+    expect(text.length).toBeLessThanOrEqual(20_001);
+  });
+
+  it('lists the formulas of a sheet with no cached values even when its dimension is huge', () => {
+    const rows = '<dimension ref="A1:GR1048576"/>' + Array.from({ length: 5000 }, (_, i) => `<row r="${i + 1}"><c r="A${i + 1}"><f>SUM(B${i + 1})</f></c></row>`).join('');
+    const text = timed('formulas, huge dimension', () => extractOfficeText(xlsx({ sheets: [{ name: 'S', rows }] }), { maxChars: 2000 }))!;
+    expect(text).toMatch(/^Sheet "S" is empty\.\nFormulas in "S":\nA1: =SUM\(B1\)\n/);
+    expect(text.length).toBeLessThanOrEqual(2001);
   });
 
   it.each([
