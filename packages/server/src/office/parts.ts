@@ -19,13 +19,20 @@ export const OFFICE_LIMITS: OfficeLimits = { maxPartBytes: 32 * 1024 * 1024, max
 
 const mb = (bytes: number): string => `${Math.max(1, Math.round(bytes / (1024 * 1024)))} MB`;
 
+/** At most this many distinct notes are kept, and each is cut to this length, so a file full of oversize parts can't flood the output. */
+const MAX_NOTES = 10;
+const MAX_NOTE_CHARS = 300;
+
 export class OfficeParts {
   private readonly entries = new Map<string, ZipEntry>();
   private total = 0;
+  /** Each part's text (null: skipped), by lower-cased name. A part is inflated and counted toward the total once, however many times and in whatever case of its name it's asked for; what is held adds up to at most the bytes counted. */
+  private readonly read = new Map<string, string | null>();
+  private readonly noted = new Set<string>();
+  private readonly kept: string[] = [];
+  private extraNotes = 0;
   /** True once the total cap was reached: nothing more is read. */
   stopped = false;
-  /** What was skipped, for the end of the text. */
-  readonly notes: string[] = [];
 
   constructor(
     private readonly zip: Buffer,
@@ -34,25 +41,44 @@ export class OfficeParts {
     for (const entry of listZipEntries(zip)) this.entries.set(entry.name.toLowerCase(), entry);
   }
 
+  /** What was skipped, for the end of the text: each note once, the first few in full and a count of the rest. */
+  get notes(): string[] {
+    return this.extraNotes > 0 ? [...this.kept, `[Grunt skipped ${this.extraNotes} more part${this.extraNotes === 1 ? '' : 's'} as well.]`] : [...this.kept];
+  }
+
+  private note(text: string): void {
+    const note = text.length > MAX_NOTE_CHARS ? `${text.slice(0, MAX_NOTE_CHARS)}...]` : text;
+    if (this.noted.has(note)) return;
+    this.noted.add(note);
+    if (this.kept.length < MAX_NOTES) this.kept.push(note);
+    else this.extraNotes++;
+  }
+
   has(name: string): boolean {
     return this.entries.has(name.toLowerCase());
   }
 
-  /** The part as UTF-8 text, or null when it's missing, over a cap (with a note), or reading has stopped. */
+  /** The part as UTF-8 text, or null when it's missing, over a cap (with a note), or reading has stopped. Read once: asking again, in any case, costs nothing. */
   text(name: string): string | null {
-    const entry = this.entries.get(name.toLowerCase());
+    const key = name.toLowerCase();
+    const entry = this.entries.get(key);
     if (!entry || this.stopped) return null;
+    const cached = this.read.get(key);
+    if (cached !== undefined) return cached;
     if (entry.size > this.limits.maxPartBytes) {
-      this.notes.push(`[Grunt skipped ${entry.name}: it's over the ${mb(this.limits.maxPartBytes)} Grunt reads from one part.]`);
+      this.note(`[Grunt skipped ${entry.name}: it's over the ${mb(this.limits.maxPartBytes)} Grunt reads from one part.]`);
+      this.read.set(key, null);
       return null;
     }
     if (this.total + entry.size > this.limits.maxTotalBytes) {
       this.stopped = true;
-      this.notes.push(`[Grunt stopped reading here: this file's parts come to over ${mb(this.limits.maxTotalBytes)}.]`);
+      this.note(`[Grunt stopped reading here: this file's parts come to over ${mb(this.limits.maxTotalBytes)}.]`);
       return null;
     }
     this.total += entry.size;
-    return readZipEntry(this.zip, entry, this.limits.maxPartBytes).toString('utf8');
+    const text = readZipEntry(this.zip, entry, this.limits.maxPartBytes).toString('utf8');
+    this.read.set(key, text);
+    return text;
   }
 
   /** A part's relationships by id: target part name and type. External targets (links) are left out. */

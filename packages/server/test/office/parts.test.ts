@@ -27,6 +27,43 @@ describe('OfficeParts', () => {
     expect(parts.notes[0]).toMatch(/stopped reading/);
   });
 
+  it('counts a part toward the total once, however often and in whatever case it is asked for', () => {
+    const parts = new OfficeParts(
+      makeZip([{ name: 'A.xml', content: 'a'.repeat(600) }, { name: 'b.xml', content: 'b'.repeat(300) }]),
+      { ...OFFICE_LIMITS, maxTotalBytes: 1000 }
+    );
+    const first = parts.text('a.xml');
+    expect(first).toHaveLength(600);
+    for (const name of ['a.xml', 'A.XML', 'A.xml', 'a.xMl']) expect(parts.text(name)).toBe(first);
+    // 600 + 300 fits; counted twice, 600 + 600 + 300 would not.
+    expect(parts.text('b.xml')).toHaveLength(300);
+    expect(parts.stopped).toBe(false);
+    expect(parts.notes).toEqual([]);
+  });
+
+  it('notes an over-cap part once, however often and in whatever case it is asked for', () => {
+    const parts = new OfficeParts(makeZip([{ name: 'word/Document.xml', content: 'x'.repeat(2000) }]), { ...OFFICE_LIMITS, maxPartBytes: 1000 });
+    for (const name of ['word/document.xml', 'WORD/DOCUMENT.XML', 'word/Document.xml', 'word/document.xml']) expect(parts.text(name)).toBeNull();
+    expect(parts.notes).toHaveLength(1);
+    expect(parts.notes[0]).toMatch(/^\[Grunt skipped word\/Document\.xml:/);
+  });
+
+  it('keeps ten distinct notes and counts the rest, each note cut to a bounded length', () => {
+    const parts = new OfficeParts(
+      makeZip([
+        ...Array.from({ length: 40 }, (_, i) => ({ name: `part${i}.xml`, content: 'x'.repeat(2000) })),
+        { name: `${'long/'.repeat(1000)}name.xml`, content: 'x'.repeat(2000) },
+      ]),
+      { ...OFFICE_LIMITS, maxPartBytes: 1000 }
+    );
+    for (let i = 0; i < 40; i++) parts.text(`part${i}.xml`);
+    parts.text(`${'long/'.repeat(1000)}name.xml`);
+    const notes = parts.notes;
+    expect(notes).toHaveLength(11);
+    expect(notes[10]).toBe('[Grunt skipped 31 more parts as well.]');
+    expect(notes.every((n) => n.length <= 310)).toBe(true);
+  });
+
   it("resolves a part's relationships, relative and absolute, leaving out external ones", () => {
     const rels = `<Relationships xmlns="x">
       <Relationship Id="rId1" Type="http://x/worksheet" Target="worksheets/sheet1.xml"/>

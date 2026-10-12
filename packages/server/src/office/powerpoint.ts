@@ -335,11 +335,11 @@ export function readPowerPoint(parts: OfficeParts, out: TextOut): void {
     if (!slide.over) {
       const notesTarget = [...parts.rels(target).values()].find((r) => r.type.endsWith('/notesSlide'))?.target;
       if (notesTarget) {
-        notes = notesParts.get(notesTarget) ?? null;
-        if (!notesParts.has(notesTarget)) {
+        notes = notesParts.get(notesTarget.toLowerCase()) ?? null;
+        if (!notesParts.has(notesTarget.toLowerCase())) {
           const notesXml = parts.text(notesTarget);
           notes = notesXml === null ? null : readNotes(notesXml, Math.max(0, out.room) + 1);
-          notesParts.set(notesTarget, notes);
+          notesParts.set(notesTarget.toLowerCase(), notes);
         }
       }
     }
@@ -350,10 +350,10 @@ export function readPowerPoint(parts: OfficeParts, out: TextOut): void {
   for (const [i, id] of ids.entries()) {
     const target = rels.get(id)?.target;
     if (!target) continue;
-    let slide = slides.get(target);
+    let slide = slides.get(target.toLowerCase());
     if (slide === undefined) {
       slide = load(target);
-      slides.set(target, slide);
+      slides.set(target.toLowerCase(), slide);
     }
     if (slide === null) {
       if (parts.stopped) return;

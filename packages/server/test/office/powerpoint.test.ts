@@ -144,6 +144,56 @@ describe('reading hostile PowerPoint files', () => {
     expect(text).toContain('Slide 1\nNotes: Note\n\nSlide 2\nNotes: Note');
   });
 
+  /** Many spellings of one name ("slide1.xml" with some letters upper-cased): OPC part names are case-insensitive. */
+  const caseVariants = (base: string, count: number): string[] =>
+    Array.from({ length: count }, (_, k) => {
+      let bit = 0;
+      return base.replace(/[a-z]/g, (ch) => (k & (1 << bit++) ? ch.toUpperCase() : ch));
+    });
+  /** A presentation whose list names one slide part through `count` rels, each spelling its target differently. */
+  function variantsDeck(slide: string, count: number): Buffer {
+    const targets = caseVariants('slides/slide1.xml', count);
+    return makeZip([
+      { name: 'ppt/presentation.xml', content: `<p:presentation ${NS}><p:sldIdLst>${targets.map((_, i) => `<p:sldId id="${256 + i}" r:id="v${i}"/>`).join('')}</p:sldIdLst></p:presentation>` },
+      { name: 'ppt/_rels/presentation.xml.rels', content: `<Relationships>${targets.map((t, i) => `<Relationship Id="v${i}" Type="x/slide" Target="${t}"/>`).join('')}</Relationships>` },
+      { name: 'ppt/slides/slide1.xml', content: slide },
+    ]);
+  }
+
+  it('notes one oversize slide once however its rels spell the name', () => {
+    const file = variantsDeck(slideXml(sp(null, ap('x'.repeat(40_000)))), 200);
+    const text = timed('200 case variants of an oversize slide', () => extractOfficeText(file, { maxPartBytes: 30_000 }))!;
+    expect(text).toMatch(/^\[Grunt skipped ppt\/slides\/slide1\.xml: [^\]]*\]$/);
+  });
+
+  it('reads one slide once however its rels spell the name, so the total cap is not reached', () => {
+    const file = variantsDeck(slideXml(sp(null, ap('word '.repeat(20_000)))), 200);
+    // The presentation and its rels come to about 40 KB and the slide to 100 KB: a second read of the slide would pass 250 KB.
+    const text = insideCap(timed('200 case variants of a readable slide', () => extractOfficeText(file, { maxTotalBytes: 200 * 1024 })));
+    expect(text).not.toContain('stopped reading here: this file');
+    expect(text.startsWith('Slide 1\nword word')).toBe(true);
+  });
+
+  it('reads many case variants of a 3 MB slide in the time of one read, with the output inside the cap', () => {
+    const file = variantsDeck(slideXml('<p:sp/>'.repeat(450_000)), 256);
+    const text = insideCap(timed('256 variants of a 3 MB slide', () => extractOfficeText(file)));
+    expect(text).not.toContain('stopped reading here: this file');
+  });
+
+  it('caps the notes when hundreds of distinct slide parts are all over the part cap', () => {
+    const count = 300;
+    const slide = slideXml(sp(null, ap('x'.repeat(30_000))));
+    const file = makeZip([
+      { name: 'ppt/presentation.xml', content: `<p:presentation ${NS}><p:sldIdLst>${Array.from({ length: count }, (_, i) => `<p:sldId id="${i}" r:id="r${i}"/>`).join('')}</p:sldIdLst></p:presentation>` },
+      { name: 'ppt/_rels/presentation.xml.rels', content: `<Relationships>${Array.from({ length: count }, (_, i) => `<Relationship Id="r${i}" Type="x/slide" Target="s${i}.xml"/>`).join('')}</Relationships>` },
+      ...Array.from({ length: count }, (_, i) => ({ name: `ppt/s${i}.xml`, content: slide })),
+    ]);
+    const text = timed('300 oversize slides', () => extractOfficeText(file, { maxPartBytes: 20_000 }))!;
+    expect(text.length).toBeLessThan(3500);
+    expect(text.match(/\[Grunt skipped ppt\//g)).toHaveLength(10);
+    expect(text).toContain('[Grunt skipped 290 more parts as well.]');
+  });
+
   it('reads thousands of slides that share one notes part, each with its own rels', () => {
     const count = 5000;
     const more: ZipFixtureEntry[] = [{ name: 'ppt/notesSlides/shared.xml', content: notesXml(ap('Shared note')) }];

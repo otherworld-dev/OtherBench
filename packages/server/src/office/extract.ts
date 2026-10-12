@@ -3,6 +3,9 @@ import { OFFICE_LIMITS, OfficeParts, TextOut, type OfficeLimits } from './parts.
 import { readPowerPoint } from './powerpoint.js';
 import { readWord } from './word.js';
 
+/** The most characters of skip notes added after the text (ten notes of at most 300 and the "more" line fit). */
+const MAX_NOTES_CHARS = 3200;
+
 /**
  * An Office file's text (spec 2026-10-12-office-files §1), read with Grunt's
  * own ZIP reader: no new dependencies, and no inflating past an entry's
@@ -28,6 +31,8 @@ export function extractOfficeText(data: Buffer, limits: Partial<OfficeLimits> = 
     body = body.slice(0, Math.max(0, caps.maxChars - note.length - 2)).trimEnd();
     stopNotes.push(note);
   }
-  const text = [body, ...stopNotes, ...parts.notes].filter((t) => t !== '').join('\n\n');
+  // OfficeParts keeps few, short notes; the cap here is a last guard so the text is never more than a small bound past the limit.
+  const partNotes = parts.notes.join('\n\n').slice(0, MAX_NOTES_CHARS);
+  const text = [body, ...stopNotes, partNotes].filter((t) => t !== '').join('\n\n');
   return text.trim() === '' ? null : text;
 }
