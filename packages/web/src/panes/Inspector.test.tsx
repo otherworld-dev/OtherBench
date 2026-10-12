@@ -556,7 +556,7 @@ describe('Inspector tool grants', () => {
 
   it('shows which live artifact call a live grant is for', async () => {
     mockedGrantsList.mockResolvedValue([
-      { id: 'g4', chatId: 'chat-1', profileId: 'p1', toolName: 'mcp__Live__lookup', source: 'mcp', scope: 'chat', constraint: { live: { artifactId: 'art', callId: 'value', hash: 'h' } }, expiresAt: null },
+      { id: 'g4', chatId: 'chat-1', profileId: 'p1', toolName: 'mcp__Live__lookup', source: 'mcp', scope: 'chat', constraint: { live: { artifactId: 'art', callId: 'value', hash: 'h', serverId: 'srv-live' } }, expiresAt: null },
     ]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     const row = await within(grantsSection()).findByTestId('grant-g4');

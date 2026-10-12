@@ -344,7 +344,9 @@ export class GruntToolProvider implements ToolProvider {
    * more than one tool. `mcp_server.name` isn't unique, sanitising collapses
    * distinct names, and the `_2` suffix follows listing order, which moves as
    * servers connect and drop. A grant is keyed on the name, so honouring an
-   * ambiguous one could run another server's tool under it.
+   * ambiguous one could run another server's tool under it. (It is keyed on
+   * the server's id too, so a server renamed or replaced into a granted name
+   * needs its own OK.)
    */
   private liveTarget(policy: ToolPolicy, name: string): { entry: McpEntry } | { reason: string } | null {
     if (policy.mcpServerIds.length === 0) return null;
@@ -455,7 +457,9 @@ export class GruntToolProvider implements ToolProvider {
       const base = { callId: call.id, tool: call.tool, serverName: target.origin.serverName, toolName: target.origin.toolName, description: target.spec.description.slice(0, 300) };
       const why = this.broker.liveIneligibility(target.spec, req.policy);
       if (why) return { ...base, state: 'unavailable', reason: why };
-      const granted = this.broker.liveGrant(target.spec, { chatId: req.chatId, profileId: req.profileId, live: { artifactId: req.artifactId, callId: call.id, hash } });
+      // Against the tool's current server: a grant made under a server since renamed or replaced doesn't count.
+      const live = { artifactId: req.artifactId, callId: call.id, hash, serverId: target.origin.serverId };
+      const granted = this.broker.liveGrant(target.spec, { chatId: req.chatId, profileId: req.profileId, live });
       return { ...base, state: granted ? 'allowed' : 'needs_ok' };
     });
   }
@@ -465,7 +469,7 @@ export class GruntToolProvider implements ToolProvider {
     const calls = req.calls.flatMap(({ call, hash }, i) => {
       if (before[i]!.state !== 'needs_ok') return [];
       const found = this.liveTarget(req.policy, call.tool);
-      return found && 'entry' in found ? [{ tool: found.entry.spec, callId: call.id, hash }] : [];
+      return found && 'entry' in found ? [{ tool: found.entry.spec, callId: call.id, hash, serverId: found.entry.origin.serverId }] : [];
     });
     if (calls.length > 0) this.broker.grantLive({ chatId: req.chatId, profileId: req.profileId, artifactId: req.artifactId, policy: req.policy, calls });
     return this.liveStatus(req);
@@ -496,7 +500,8 @@ export class GruntToolProvider implements ToolProvider {
       profileId: req.profileId,
       workspaceRoot: null,
       signal: req.signal,
-      live: { artifactId: req.artifactId, callId: req.callId, hash: req.hash },
+      // The server id comes from the lookup above, never from the request.
+      live: { artifactId: req.artifactId, callId: req.callId, hash: req.hash, serverId: target.origin.serverId },
     };
     const decision = this.broker.decide(target.spec, req.args, req.policy, ctx);
     if (decision.kind !== 'allow') {

@@ -500,11 +500,14 @@ export interface Grant {
    * - `live`: a live artifact's call (spec 2026-10-12-live-artifacts): only
    *   `PermissionBroker.grantLive` makes one, only a live call
    *   (`ToolContext.live`) can match it, and it matches nothing else.
+   *   `serverId` is the MCP server the tool came from when it was allowed,
+   *   so a server renamed or replaced into the tool's name doesn't inherit
+   *   it. Grants stored before it existed have none and never match.
    *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; live?: { artifactId: string; callId: string; hash: string } } | null;
+  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; live?: { artifactId: string; callId: string; hash: string; serverId: string } } | null;
   expiresAt: number | null;
 }
 

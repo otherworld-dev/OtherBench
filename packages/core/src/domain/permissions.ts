@@ -109,8 +109,9 @@ function isShellTool(tool: ToolSpec): boolean {
  * before all three: a call with `ctx.live` is one a page asked for while
  * someone has it open, never a model's. It gets the policy ceiling plus
  * "MCP, read-only, artifacts on", and then only a live grant for exactly that
- * call (tool, chat, profile, artifact, call id and declaration hash), made
- * by `grantLive` when the user allowed the page in the viewer. It never asks:
+ * call (tool, its MCP server's id, chat, profile, artifact, call id and
+ * declaration hash), made by `grantLive` when the user allowed the page in
+ * the viewer. It never asks:
  * there is no turn to raise a card in, and the declaration approval was the
  * decision. It never takes the ask-on-mutate read pass or any other grant,
  * and no other call ever matches a live grant.
@@ -270,14 +271,20 @@ export class PermissionBroker {
     return null;
   }
 
-  /** The live grant for exactly this call in this chat under this profile, or null. */
+  /**
+   * The live grant for exactly this call in this chat under this profile, or
+   * null. The grant's server id must be the tool's current server's: a server
+   * renamed or replaced into the tool's name never inherits it. A grant made
+   * before grants carried a server id has none, so it never matches.
+   */
   liveGrant(tool: ToolSpec, ctx: { chatId: string; profileId: string; live: LiveCallRef }): Grant | null {
     const now = Date.now();
     for (const grant of this.store.grants.list(ctx.chatId)) {
       const live = grant.constraint?.live;
       if (!live || grant.toolName !== tool.name || grant.source !== 'mcp' || grant.chatId !== ctx.chatId || grant.profileId !== ctx.profileId) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
-      if (live.artifactId === ctx.live.artifactId && live.callId === ctx.live.callId && live.hash === ctx.live.hash) return grant;
+      if (typeof live.serverId !== 'string' || typeof ctx.live.serverId !== 'string') continue;
+      if (live.artifactId === ctx.live.artifactId && live.callId === ctx.live.callId && live.hash === ctx.live.hash && live.serverId === ctx.live.serverId) return grant;
     }
     return null;
   }
@@ -292,19 +299,20 @@ export class PermissionBroker {
 
   /**
    * The user allowed a live page's calls in the viewer: one chat grant per
-   * call, bound to its declaration's hash. Every call must be eligible, or
-   * none is granted (an Error names the first that isn't), so this can never
-   * mint a grant the live branch would then deny. A call that already has
-   * its grant is skipped. Returns the grants it made.
+   * call, bound to its declaration's hash and to the id of the MCP server its
+   * tool comes from now. Every call must be eligible, or none is granted (an
+   * Error names the first that isn't), so this can never mint a grant the
+   * live branch would then deny. A call that already has its grant (same
+   * server too) is skipped. Returns the grants it made.
    */
-  grantLive(input: { chatId: string; profileId: string; artifactId: string; policy: ToolPolicy; calls: { tool: ToolSpec; callId: string; hash: string }[] }): Grant[] {
+  grantLive(input: { chatId: string; profileId: string; artifactId: string; policy: ToolPolicy; calls: { tool: ToolSpec; callId: string; hash: string; serverId: string }[] }): Grant[] {
     for (const call of input.calls) {
       const why = this.liveIneligibility(call.tool, input.policy);
       if (why) throw new Error(`Live call "${call.callId}" can't be allowed: ${why}`);
     }
     const made: Grant[] = [];
     for (const call of input.calls) {
-      const live = { artifactId: input.artifactId, callId: call.callId, hash: call.hash };
+      const live = { artifactId: input.artifactId, callId: call.callId, hash: call.hash, serverId: call.serverId };
       if (this.liveGrant(call.tool, { chatId: input.chatId, profileId: input.profileId, live })) continue;
       made.push(
         this.store.grants.create({

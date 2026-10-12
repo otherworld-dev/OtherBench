@@ -6,7 +6,12 @@ export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
-/** Which declared call of which artifact version a live call is, by its declaration's hash (spec 2026-10-12-live-artifacts). */
+/**
+ * Which declared call of which artifact version a live call is, by its
+ * declaration's hash, and the id of the MCP server its tool comes from now
+ * (spec 2026-10-12-live-artifacts). The server id is always the provider's
+ * own lookup, never anything the page sent.
+ */
 export type LiveCallRef = NonNullable<NonNullable<Grant['constraint']>['live']>;
 
 export interface ToolContext {

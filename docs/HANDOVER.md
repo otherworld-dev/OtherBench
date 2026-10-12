@@ -656,8 +656,8 @@ An html artifact may declare up to 10 calls to read-only MCP tools
 (`readOnlyHint: true`; a tool that declares nothing is refused), with only
 enum and bounded-integer parameters. You allow them once in the viewer, and
 each approval is a `chat` grant with a `live` constraint bound to the call's
-declaration hash, the chat's profile and this machine. Changing a call's args
-asks again, and a model rewrite that leaves the calls alone doesn't. Only
+declaration hash, the MCP server's id, the chat's profile and this machine.
+Changing a call's args asks again, and a model rewrite that leaves the calls alone doesn't. Only
 `PermissionBroker.grantLive` makes those grants, `resolve()` refuses one, an
 ordinary call never matches one, and the broker's live branch never asks and
 never takes the ask-on-mutate read pass. The page has an opaque origin and no
@@ -1031,7 +1031,7 @@ Spec: `docs/superpowers/specs/2026-10-12-live-artifacts-design.md` (Deck #929). 
   The spec had a shorter list that left `connect-src`, `frame-src` and `worker-src` to fall back to `default-src`. A security review asked for them to be written out, and for `script-src` to name the exact helper URL rather than the whole folder. Other versions still get `sandboxPolicy`.
 - **What the tests prove.** `packages/web/e2e/live-exfil.spec.ts` serves a page under the real `livePolicy` that tries about 35 ways of sending a result out (fetch, XHR, WebSocket, forms, images, fonts, workers and so on), and none of them makes a request. A control run with no policy shows the watches do see them. `packages/web/e2e/live-probe.spec.ts` pins what Chromium does with the frame: `event.source` is the page's frame, so the bridge needs no nonce.
 - **Limits.** Per artifact on the server: 4 calls in flight and 30 uncached calls in a rolling minute, else `rate_limited`. The first `rate_limited` in a minute gets an audit row and the rest are only counted, and the count goes on the artifact's next audited row (`error: timeout (+3 rate_limited calls not audited)`), so a page that keeps asking can't grow the audit table without bound. Per frame in the viewer: 4 calls sent at once, as the server allows no more, with the rest queued in order up to 16 outstanding, else `busy`. A dashboard that asks for all its calls together then gets every one rather than having the fifth refused. A queued request whose frame has been replaced, or whose page has gone, is dropped without being sent. Requests over 16 KB of JSON are ignored. Each call times out after 30 s (the helper gives up at 45 s). A result is text and structured JSON only, up to 1 MB, else `too_large`. Results are cached for 30 s in memory, at most 100 entries, and a `fresh` request skips the cache.
-- **Names, not server ids.** A live grant is bound to the namespaced tool name (`mcp__<server>__<tool>`), not to the MCP server's id. If two servers of the profile share a name, or sanitising makes two names equal, the call is unavailable ("names more than one tool"). The other direction isn't closed: a server renamed, or replaced by another, to take over a granted name inherits its grants. Phase 2 should bind grants to the server id.
+- **Names and server ids.** A live grant is bound to the namespaced tool name (`mcp__<server>__<tool>`) and to the MCP server's id (`constraint.live.serverId`). The provider takes the id from its own lookup of the tool, never from the page. If two servers of the profile share a name, or sanitising makes two names equal, the call is unavailable ("names more than one tool"). A renamed server needs a fresh OK, as its tools' names change. So does a server deleted and added again, or another server renamed to a granted name, as its id differs. Grants made before this have no server id, so they never match and the viewer asks for a fresh OK. "Stop live data" still removes all of an artifact's grants.
 - **What an approval trusts.** It binds to the declaration, not to the page's code, so a rewrite that keeps the same calls keeps the approval and can do anything with the results that the sandbox allows. `readOnlyHint` is the server's own claim, Grunt can't check it. Calls run on the machine serving the UI and grants don't sync, so a paired laptop is approved on its own.
 - **Residual leaks** (spec section 12). All of them are known, and the approval panel says so.
   - **Navigating its own frame.** The page can put data in the address (`location=`, a meta refresh). The viewer counts `load` events, and a second one closes the page ("This page went to another address, so Grunt closed it."), but the request has already gone. The guard is a best-effort notice for navigations that commit, and there are two cases it doesn't cover.
@@ -1147,14 +1147,17 @@ this on startup.
 - **Live artifacts in the desktop window are unchecked.** The probe
   (`packages/web/e2e/live-probe.spec.ts`) covers Chromium only; run its
   checks by hand in WebView2. Phase 2: forward live calls to the chat's *Runs
-  on* machine, bind live grants to the MCP server id rather than its name, a
-  bundled chart library, free-text and date parameters, and the iframe `csp`
+  on* machine, a bundled chart library, free-text and date parameters, and the iframe `csp`
   attribute (CSP Embedded Enforcement) in Chromium and WebView2 so a document
   that replaces a live page has to take the live policy too. Phase 3: WebView2
   `FrameNavigationStarting` to stop a live page leaving. Until then the
   navigation guard only notices navigations that commit: a 204 or 205 answer
   (or a download) leaves the page open, and a document that replaces the page
   before its first load is answered as the page while the view is open.
+- **Live grants are bound to the MCP server id.** A grant now needs the
+  tool's name and its server's id to match. A renamed or replaced server
+  needs a fresh OK. Live grants made before this change have no server id,
+  so they need approving again; there is no backfill.
 - **Live artifacts by hand:** a dashboard from the real Nextcloud server
   (`tasks_list`, `cal_list` with `from: 'today'`, `to: '+7d'`) written from
   the guidance alone; an `update` that leaves the calls alone keeps the

@@ -115,10 +115,18 @@ describe('GruntToolProvider live calls', () => {
   });
 
   const ambiguous = '"mcp__Live__lookup" names more than one tool; rename one of the MCP servers so each has its own name.';
-  const addSecondLive = async (over: { command?: string; args?: string[] } = {}) => {
-    store.mcpServers.create({ id: 'srv-live-2', name: 'Live', transport: 'stdio', command: over.command ?? process.execPath, args: over.args ?? [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+  const addServer = async (id: string, name: string, over: { command?: string; args?: string[] } = {}) => {
+    store.mcpServers.create({ id, name, transport: 'stdio', command: over.command ?? process.execPath, args: over.args ?? [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
     await manager.sync();
   };
+  const addSecondLive = (over: { command?: string; args?: string[] } = {}) => addServer('srv-live-2', 'Live', over);
+  const waitConnected = (ids: string[]) =>
+    vi.waitFor(
+      () => {
+        if (manager.listFor(ids).length !== ids.length) throw new Error('not connected yet');
+      },
+      { timeout: 5000, interval: 25 }
+    );
 
   it('two servers with the same name both offering the tool: it is unavailable, never allowed and never called', async () => {
     await addSecondLive();
@@ -145,6 +153,49 @@ describe('GruntToolProvider live calls', () => {
     expect(manager.listFor([SERVER, 'srv-live-2'])).toHaveLength(1);
     expect(provider.liveStatus(statusReq([lookupCall], { policy: both }))[0]).toMatchObject({ state: 'unavailable', reason: ambiguous });
     expect(await run(lookupCall, { key: 'a' }, { policy: both })).toMatchObject({ ok: false, code: 'not_available', message: ambiguous });
+  });
+
+  // Each fixture process counts its own lookups, so a new server's first answer being n: 1 shows nothing reached it before.
+  it('a server deleted and re-added under the same name needs a fresh OK, and the new one is never called before it', async () => {
+    provider.allowLive(statusReq([lookupCall]));
+    expect(await run(lookupCall, { key: 'a' })).toMatchObject({ ok: true, json: { n: 1 } });
+    store.mcpServers.delete(SERVER);
+    await addSecondLive();
+    await waitConnected(['srv-live-2']);
+    const replaced = policy({ mcpServerIds: [SERVER, 'srv-live-2'] });
+    expect(provider.liveStatus(statusReq([lookupCall], { policy: replaced }))[0]).toMatchObject({ serverName: 'Live', state: 'needs_ok' });
+    expect(await run(lookupCall, { key: 'a' }, { policy: replaced })).toEqual({ ok: false, code: 'not_approved', message: "You haven't allowed this live artifact's calls on this machine." });
+    expect(store.audit.list('chat-1').at(-1)).toMatchObject({ grantedBy: 'deny:policy' });
+    // Allowing it again is the new server's own grant, and its own cache entry.
+    expect(provider.allowLive(statusReq([lookupCall], { policy: replaced }))[0]!.state).toBe('allowed');
+    expect(store.grants.list('chat-1').map((g) => g.constraint?.live?.serverId)).toEqual([SERVER, 'srv-live-2']);
+    expect(await run(lookupCall, { key: 'a' }, { policy: replaced })).toMatchObject({ ok: true, cached: false, json: { n: 1 } });
+  });
+
+  it('another server renamed to a granted name needs its own OK and is never called before it', async () => {
+    await addServer('srv-other', 'Other');
+    await waitConnected([SERVER, 'srv-other']);
+    const both = policy({ mcpServerIds: [SERVER, 'srv-other'] });
+    provider.allowLive(statusReq([lookupCall], { policy: both }));
+    expect(await run(lookupCall, { key: 'a' }, { policy: both })).toMatchObject({ ok: true, json: { n: 1 } });
+    store.mcpServers.update(SERVER, { name: 'Retired' });
+    store.mcpServers.update('srv-other', { name: 'Live' });
+    expect(provider.liveStatus(statusReq([lookupCall], { policy: both }))[0]).toMatchObject({ serverName: 'Live', state: 'needs_ok' });
+    expect(await run(lookupCall, { key: 'a' }, { policy: both, fresh: true })).toMatchObject({ ok: false, code: 'not_approved' });
+    provider.allowLive(statusReq([lookupCall], { policy: both }));
+    expect(await run(lookupCall, { key: 'a' }, { policy: both })).toMatchObject({ ok: true, cached: false, json: { n: 1 } });
+  });
+
+  it("renaming the server changes the tool's name, so its grant no longer matches; renaming it back finds it again", async () => {
+    provider.allowLive(statusReq([lookupCall]));
+    store.mcpServers.update(SERVER, { name: 'Renamed' });
+    const renamed: LiveCall = { ...lookupCall, tool: 'mcp__Renamed__lookup' };
+    expect(provider.liveStatus(statusReq([renamed]))[0]!.state).toBe('needs_ok');
+    // Same server, artifact, call and hash: only the tool's name differs from the grant's.
+    expect(await run(renamed, { key: 'a' }, { hash: liveCallHash(lookupCall) })).toMatchObject({ ok: false, code: 'not_approved' });
+    expect(provider.liveStatus(statusReq([lookupCall]))[0]!.state).toBe('unavailable');
+    store.mcpServers.update(SERVER, { name: 'Live' });
+    expect(provider.liveStatus(statusReq([lookupCall]))[0]!.state).toBe('allowed');
   });
 
   it('an unexpected throw comes back as failed, and a later call still works', async () => {
