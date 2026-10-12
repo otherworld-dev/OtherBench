@@ -9,11 +9,15 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'resources', 
 const BASH = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/bash';
 const hasBash = existsSync(BASH);
 
-/** `mounted` pretends the target is already mounted in that mode (GRUNT_MOUNT_DRY_RUN_MOUNTED). */
-function run(args: string[], mounted?: 'ro' | 'rw'): { code: number | null; out: string; err: string } {
+/**
+ * `mounted` pretends the target is already mounted in that mode (GRUNT_MOUNT_DRY_RUN_MOUNTED); `sim` sets the
+ * other GRUNT_MOUNT_DRY_RUN_* variables that simulate the filesystem (SYMLINK, GRUNT_OWNED, GRUNT_OWNED_RO).
+ */
+function run(args: string[], mounted?: string, sim: Record<string, string> = {}): { code: number | null; out: string; err: string } {
   const env: NodeJS.ProcessEnv = { ...process.env, GRUNT_MOUNT_DRY_RUN: '1' };
-  delete env['GRUNT_MOUNT_DRY_RUN_MOUNTED'];
+  for (const key of Object.keys(env)) if (key.startsWith('GRUNT_MOUNT_DRY_RUN_')) delete env[key];
   if (mounted) env['GRUNT_MOUNT_DRY_RUN_MOUNTED'] = mounted;
+  for (const [key, value] of Object.entries(sim)) env[`GRUNT_MOUNT_DRY_RUN_${key}`] = value;
   const r = spawnSync(BASH, [SCRIPT, ...args], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
@@ -21,7 +25,8 @@ function run(args: string[], mounted?: 'ro' | 'rw'): { code: number | null; out:
 /** Like run(), but the paths travel in the environment: Git Bash splits a command-line argument at a newline. */
 function runWithEnvPaths(win: string, target: string): { code: number | null; out: string; err: string } {
   const env: NodeJS.ProcessEnv = { ...process.env, GRUNT_MOUNT_DRY_RUN: '1', TEST_WIN: win, TEST_TARGET: target, TEST_SCRIPT: SCRIPT };
-  const r = spawnSync(BASH, ['-c', 'bash "$TEST_SCRIPT" mount "$TEST_WIN" "$TEST_TARGET" ro'], { env, encoding: 'utf8' });
+  // exec "$BASH": a bare `bash` would be found through PATH, and on Windows that can be System32\bash.exe (WSL).
+  const r = spawnSync(BASH, ['-c', 'exec "$BASH" "$TEST_SCRIPT" mount "$TEST_WIN" "$TEST_TARGET" ro'], { env, encoding: 'utf8' });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
 
@@ -30,7 +35,13 @@ describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
     const r = run(['mount', 'E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'ro']);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
-    expect(r.out.split('\n').filter(Boolean)).toEqual(['mkdir|-p|/mnt/e/Git/Grunt|', 'mount|-t|drvfs|E:\\Git\\Grunt|/mnt/e/Git/Grunt|-o|ro,uid=UID,gid=GID|']);
+    // Missing folders are made one level at a time, as root, with their mode set.
+    expect(r.out.split('\n').filter(Boolean)).toEqual([
+      'mkdir|-m|0755|/mnt/e|',
+      'mkdir|-m|0755|/mnt/e/Git|',
+      'mkdir|-m|0755|/mnt/e/Git/Grunt|',
+      'mount|-t|drvfs|E:\\Git\\Grunt|/mnt/e/Git/Grunt|-o|ro,uid=UID,gid=GID|',
+    ]);
   });
 
   it('keeps spaces, apostrophes and accents as they are', () => {
@@ -63,11 +74,58 @@ describe.skipIf(!hasBash)('mount.sh (dry run)', () => {
     const r = run(['mount', 'E:\\Git', '/mnt/e/Git', wanted], was);
     expect(r.err).toBe('');
     expect(r.code).toBe(0);
-    expect(r.out.split('\n').filter(Boolean)).toEqual([
-      'umount|/mnt/e/Git|',
-      'mkdir|-p|/mnt/e/Git|',
-      `mount|-t|drvfs|E:\\Git|/mnt/e/Git|-o|${wanted},uid=UID,gid=GID|`,
-    ]);
+    expect(r.out.split('\n').filter(Boolean)).toEqual(['umount|/mnt/e/Git|', `mount|-t|drvfs|E:\\Git|/mnt/e/Git|-o|${wanted},uid=UID,gid=GID|`]);
+  });
+
+  it('takes a mount whose mode it cannot read off first, and mounts again', () => {
+    const r = run(['mount', 'E:\\Git', '/mnt/e/Git', 'ro'], 'unknown');
+    expect(r.code).toBe(0);
+    expect(r.out.split('\n').filter(Boolean)).toEqual(['umount|/mnt/e/Git|', 'mount|-t|drvfs|E:\\Git|/mnt/e/Git|-o|ro,uid=UID,gid=GID|']);
+  });
+
+  describe('the folders on the way to the target', () => {
+    const request = ['mount', 'E:\\Git\\Grunt', '/mnt/e/Git/Grunt', 'rw'];
+
+    it('refuses a symbolic link', () => {
+      const r = run(request, undefined, { SYMLINK: '/mnt/e/Git' });
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/\/mnt\/e\/Git is a symbolic link/);
+      expect(r.out).not.toContain('mount|');
+    });
+
+    it('refuses the target itself being a symbolic link', () => {
+      const r = run(request, undefined, { SYMLINK: '/mnt/e/Git/Grunt' });
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/symbolic link/);
+    });
+
+    it('refuses a folder the sandbox user owns on a writable mount', () => {
+      const r = run(request, undefined, { GRUNT_OWNED: '/mnt/e/Git' });
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/\/mnt\/e\/Git could be changed by the sandbox user/);
+      expect(r.out).not.toContain('mount|');
+    });
+
+    it('accepts a folder the sandbox user owns when it lies on a read-only mount (a rw child inside a ro parent)', () => {
+      const r = run(request, undefined, { GRUNT_OWNED: '/mnt/e/Git', GRUNT_OWNED_RO: '1' });
+      expect(r.err).toBe('');
+      expect(r.code).toBe(0);
+      expect(r.out.split('\n').filter(Boolean)).toContain('mount|-t|drvfs|E:\\Git\\Grunt|/mnt/e/Git/Grunt|-o|rw,uid=UID,gid=GID|');
+    });
+
+    it("doesn't hold the target's own mount to the ownership rule", () => {
+      const r = run(request, 'ro', { GRUNT_OWNED: '/mnt/e/Git/Grunt' });
+      expect(r.err).toBe('');
+      expect(r.code).toBe(0);
+      expect(r.out.split('\n').filter(Boolean)).toEqual(['umount|/mnt/e/Git/Grunt|', 'mount|-t|drvfs|E:\\Git\\Grunt|/mnt/e/Git/Grunt|-o|rw,uid=UID,gid=GID|']);
+    });
+
+    it('checks the way to an unmount too', () => {
+      const r = run(['unmount', 'E:\\Git\\Grunt', '/mnt/e/Git/Grunt'], undefined, { SYMLINK: '/mnt/e/Git' });
+      expect(r.code).toBe(2);
+      expect(r.err).toMatch(/symbolic link/);
+      expect(r.out).toBe('');
+    });
   });
 
   it('still checks a mount request for a target that looks mounted', () => {

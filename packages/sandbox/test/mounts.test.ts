@@ -182,10 +182,109 @@ describe('MountManager', () => {
       await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
       broken = true;
       await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git\\Grunt') });
+      // chat-2's request is dropped again, and the inner folder (chat-1's) is not mounted: what is mounted says so.
+      expect(m.mounted.map((x) => x.linuxPath)).toEqual([]);
       broken = false;
       // The next change mounts the inner folder again, since it is still wanted.
       await m.set('chat-3', [ro('D:\\Refs')]);
-      expect(m.mounted.map((x) => x.linuxPath).sort()).toEqual(['/mnt/d/Refs', '/mnt/e/Git', '/mnt/e/Git/Grunt']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`).sort()).toEqual(['ro /mnt/d/Refs', 'rw /mnt/e/Git/Grunt']);
+    });
+  });
+
+  describe('a stale parent with a wanted folder inside it', () => {
+    /** A runner like a real VM: a folder with another mounted inside it can't be unmounted. */
+    function treeRunner(): MountRunner & { log: string[]; mounts: Set<string> } {
+      const mounts = new Set<string>();
+      const log: string[] = [];
+      return {
+        mounts,
+        log,
+        mount: async (m) => {
+          mounts.add(m.linuxPath);
+          log.push(`mount ${m.mode} ${m.linuxPath}`);
+        },
+        unmount: async (m) => {
+          if ([...mounts].some((p) => p.startsWith(`${m.linuxPath}/`))) throw new Error('target is busy');
+          mounts.delete(m.linuxPath);
+          log.push(`unmount ${m.linuxPath}`);
+        },
+      };
+    }
+
+    it('lifts the inner mount, unmounts the parent, and mounts the inner one again', async () => {
+      const r = treeRunner();
+      const warn = vi.fn();
+      const m = new MountManager(r, warn);
+      await m.set('chat-1', [ro('E:\\Git'), rw('E:\\Git\\Grunt')]);
+      await m.set('chat-2', [rw('E:\\Git\\Grunt')]);
+      r.log.length = 0;
+      await m.remove('chat-1');
+      expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'unmount /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt']);
+      expect([...r.mounts]).toEqual(['/mnt/e/Git/Grunt']);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git/Grunt']);
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('failing closed', () => {
+    it("doesn't keep a refused chat's folders for the sake of later changes", async () => {
+      const r = recordingRunner({ mount: (x) => x.linuxPath === '/mnt/e/Git' });
+      const m = new MountManager(r, () => {});
+      await m.set('chat-1', [ro('D:\\Refs')]);
+      await expect(m.set('chat-2', [rw('D:\\Work'), rw('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
+      // Nothing of chat-2 stays mounted, and another chat's change doesn't bring it back.
+      expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/d/Refs']);
+      await m.remove('chat-1');
+      await m.set('chat-3', [ro('D:\\Other')]);
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['ro /mnt/d/Other']);
+      expect(r.log.filter((l) => l.includes('/mnt/d/Work')).sort()).toEqual(['mount rw /mnt/d/Work', 'unmount /mnt/d/Work']);
+    });
+
+    it("keeps a chat's earlier folders when a new request for it is refused", async () => {
+      let failNext = false;
+      const r = recordingRunner({ mount: (x) => failNext && x.linuxPath === '/mnt/e/Git' });
+      const m = new MountManager(r, () => {});
+      await m.set('chat-1', [ro('D:\\Refs')]);
+      failNext = true;
+      await expect(m.set('chat-1', [ro('D:\\Refs'), ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
+      expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/d/Refs']);
+    });
+
+    it('does not put a read-write mount back when read-only was asked and could not be mounted', async () => {
+      let failRo = false;
+      const r = recordingRunner({ mount: (x) => failRo && x.mode === 'ro' });
+      const m = new MountManager(r, () => {});
+      await m.set('chat-1', [rw('D:\\Refs')]);
+      failRo = true;
+      await expect(m.set('chat-1', [ro('D:\\Refs')])).rejects.toMatchObject({ code: 'mount_failed' });
+      // Not mounted at all, rather than read-write behind the back of a chat that asked for read-only.
+      expect(m.mounted).toEqual([]);
+      expect(r.log).toEqual(['mount rw /mnt/d/Refs', 'unmount /mnt/d/Refs']);
+    });
+
+    it('refuses a chat when a read-write mount over its folders will not come off', async () => {
+      const r = recordingRunner({ unmount: (x) => x.linuxPath === '/mnt/e/Git' });
+      const warn = vi.fn();
+      const m = new MountManager(r, warn);
+      await m.set('chat-1', [rw('E:\\Git')]);
+      await m.remove('chat-1');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('/mnt/e/Git'));
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git']);
+      await expect(m.set('chat-2', [ro('E:\\Git\\Grunt')])).rejects.toMatchObject({ code: 'mount_failed', message: expect.stringContaining('E:\\Git') });
+      await expect(m.set('chat-2', [ro('E:\\Git')])).rejects.toMatchObject({ code: 'mount_failed' });
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git']);
+    });
+
+    it('only warns about a stale mount that is not in the way of the chat', async () => {
+      const r = recordingRunner({ unmount: (x) => x.linuxPath === '/mnt/e/Git' });
+      const warn = vi.fn();
+      const m = new MountManager(r, warn);
+      await m.set('chat-1', [rw('E:\\Git')]);
+      await m.remove('chat-1');
+      warn.mockClear();
+      await m.set('chat-2', [ro('D:\\Refs')]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('/mnt/e/Git'));
+      expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git', 'ro /mnt/d/Refs']);
     });
   });
 });
