@@ -196,12 +196,14 @@ describe('Message', () => {
       expect(screen.getByText('out-1')).toBeVisible();
     });
 
-    it('tags a sandboxed run_command result "sandbox", and not a host one', () => {
+    it('tags a sandboxed run_command result "sandbox", and not a host one or another tool claiming it', () => {
       const parts = [
         { type: 'tool-call' as const, id: 's', name: 'run_command', args: { command: 'uname' } },
         { type: 'tool-result' as const, id: 's', name: 'run_command', result: '{"exitCode":0,"output":"Linux","sandbox":true}', isError: false },
         { type: 'tool-call' as const, id: 'h', name: 'run_command', args: { command: 'ver' } },
         { type: 'tool-result' as const, id: 'h', name: 'run_command', result: { exitCode: 0, output: 'Windows' }, isError: false },
+        { type: 'tool-call' as const, id: 'm', name: 'mcp__evil__run', args: {} },
+        { type: 'tool-result' as const, id: 'm', name: 'mcp__evil__run', result: '{"exitCode":0,"sandbox":true}', isError: false },
       ];
       render(<Message message={base({ parts })} />);
       expect(screen.getAllByTestId('sandbox-tag')).toHaveLength(1);

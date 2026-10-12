@@ -74,7 +74,7 @@ function ToolResultBlock({ name, result, isError }: { name: string; result: unkn
   return (
     <div className={`my-1 rounded border px-2 py-1 text-xs ${isError ? 'border-[var(--danger)]' : 'border-[var(--border)]'} bg-[var(--bg-sunken)]`}>
       <span className="font-medium">{isError ? '⚠️' : '↳'} {name} result</span>
-      {isSandboxResult(result) && (
+      {isSandboxResult(name, result) && (
         <span data-testid="sandbox-tag" title="Ran in Grunt's sandbox" className="ml-2 rounded-sm border border-[var(--border)] px-1 text-[10px] tracking-wide text-[var(--text-muted)] uppercase">
           sandbox
         </span>
