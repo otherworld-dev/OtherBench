@@ -1,3 +1,4 @@
+import { createSocket, type Socket as UdpSocket } from 'node:dgram';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,13 +11,19 @@ import { browserTool } from '../../src/browser/tool.js';
 /**
  * A real headless Chromium against a fixture HTTP server on 127.0.0.1 (spec
  * §8). Never the internet. Skipped, with the reason logged, when no Chromium
- * can be started (CI installs one with `npx playwright install --only-shell chromium`).
+ * can be started; in CI (`CI` set, where a Chromium is installed with
+ * `npx playwright install --only-shell chromium`) that fails instead, so a
+ * broken install can't pass unseen. Set GRUNT_BROWSER_PATH to run it against
+ * another build (full Chromium, Chrome, Edge).
  */
 
 let site: Server;
 let other: Server;
 let port = 0;
 let otherHits = 0;
+/** A stand-in STUN server on 127.0.0.1: any WebRTC UDP that went around the proxy lands here. */
+let stun: UdpSocket;
+let stunPackets = 0;
 let skipReason: string | null = null;
 let manager: BrowserManager;
 const turn = new AbortController();
@@ -32,6 +39,21 @@ const pageHtml = (otherPort: number) => `<!doctype html><title>Fixture</title>
 <a href="/file.txt">Get file</a>
 <button onclick="history.pushState({}, '', '/pushed')">Push</button>
 <script>fetch('http://127.0.0.1:${otherPort}/secret').catch(() => {});</script>`;
+
+/** A page that gathers WebRTC candidates against a STUN server at 127.0.0.1:<stunPort>, then says so in its heading. */
+const webrtcHtml = (stunPort: number) => `<!doctype html><title>WebRTC</title><h1>Gathering</h1>
+<script>
+(async () => {
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:127.0.0.1:${stunPort}' }] });
+  let candidates = 0;
+  pc.onicecandidate = (e) => { if (e.candidate) candidates += 1; };
+  pc.createDataChannel('x');
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((r) => setTimeout(r, 3000));
+  pc.close();
+  document.querySelector('h1').textContent = 'Gathered ' + candidates;
+})().catch((e) => { document.querySelector('h1').textContent = 'Failed ' + e; });
+</script>`;
 
 const listen = (s: Server) => new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)));
 
@@ -84,6 +106,7 @@ beforeAll(async () => {
   }
   if (reasons.length > 0) {
     skipReason = reasons.join('; ');
+    if (process.env['CI']) throw new Error(`No Chromium could be started in CI (${skipReason}); the install step should have provided one.`);
     console.warn(`[browser.integration] skipped: no Chromium could be started (${skipReason}). Run "npx playwright install --only-shell chromium".`);
     return;
   }
@@ -92,7 +115,17 @@ beforeAll(async () => {
     res.end('secret');
   });
   const otherPort = await listen(other);
+  stun = createSocket('udp4');
+  stun.on('message', () => {
+    stunPackets += 1;
+  });
+  await new Promise<void>((r) => stun.bind(0, '127.0.0.1', () => r()));
+  const stunPort = stun.address().port;
   site = createServer((req, res) => {
+    if (req.url === '/webrtc') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return void res.end(webrtcHtml(stunPort));
+    }
     if (req.url === '/second') return void res.end('<!doctype html><h1>Second</h1>');
     if (req.url === '/file.txt') {
       res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Disposition': 'attachment; filename="file.txt"' });
@@ -112,6 +145,7 @@ afterAll(async () => {
   site?.closeAllConnections();
   site?.close();
   other?.close();
+  stun?.close();
 }, 30_000);
 
 describe('the browser against a loopback fixture site', () => {
@@ -187,5 +221,17 @@ describe('the browser against a loopback fixture site', () => {
     await call({ command: 'snapshot' });
     expect(await tool.execute(greet, ctx)).toMatchObject({ error: true, code: 'stale_ref' });
     expect((await call({ command: 'snapshot' }))['snapshot']).toContain('Fixture heading');
+  }, 60_000);
+
+  it('sends no WebRTC UDP around the proxy, whichever browser launched', async (t) => {
+    if (skipReason) t.skip();
+    await call({ command: 'open', url: `http://127.0.0.1:${port}/webrtc` });
+    let heading = '';
+    for (let i = 0; i < 40 && !/Gathered|Failed/.test(heading); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      heading = String((await call({ command: 'snapshot' }))['snapshot']);
+    }
+    expect(heading).toMatch(/Gathered 0/);
+    expect(stunPackets).toBe(0);
   }, 60_000);
 });

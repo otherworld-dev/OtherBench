@@ -1,6 +1,6 @@
 import type { Browser } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
-import { browserAttempts, ChromiumSessions, WEBRTC_SWITCH } from '../../src/browser/chromium.js';
+import { browserAttempts, ChromiumSessions, CHROMIUM_ARGS, WEBRTC_SWITCHES } from '../../src/browser/chromium.js';
 import { BrowserUnavailableError } from '../../src/browser/session.js';
 
 describe('browserAttempts', () => {
@@ -18,9 +18,10 @@ describe('browserAttempts', () => {
 });
 
 /** A browser that only knows what ChromiumSessions asks of it. `closeNever` makes close() hang, as a wedged Chromium would. */
-function fakeBrowser(opts: { closeNever?: boolean; pid?: number } = {}): Browser {
+function fakeBrowser(opts: { closeNever?: boolean; pid?: number; connected?: () => boolean } = {}): Browser {
   return {
     on: () => undefined,
+    isConnected: opts.connected ?? (() => true),
     close: () => (opts.closeNever ? new Promise<void>(() => undefined) : Promise.resolve()),
     newBrowserCDPSession: async () => ({
       send: async () => ({ processInfo: [{ type: 'renderer', id: 1 }, { type: 'browser', id: opts.pid ?? 4242 }] }),
@@ -35,7 +36,7 @@ function fakeBrowser(opts: { closeNever?: boolean; pid?: number } = {}): Browser
 const creds = { server: 'http://127.0.0.1:1', username: 'u', password: 'p' };
 
 describe('ChromiumSessions launching', () => {
-  it('starts headless with the sandbox on, the proxy (loopback not bypassed) and the WebRTC switch', async () => {
+  it('starts headless with the sandbox on, the proxy (loopback not bypassed), both WebRTC switches and no signal handlers', async () => {
     const launch = vi.fn(async () => fakeBrowser());
     const sessions = new ChromiumSessions({}, { launch });
     await sessions.open(creds).catch(() => undefined); // newContext throws in the fake: only the launch matters here
@@ -45,9 +46,15 @@ describe('ChromiumSessions launching', () => {
         headless: true,
         chromiumSandbox: true,
         proxy: { server: creds.server, bypass: '<-loopback>' },
-        args: [WEBRTC_SWITCH],
+        args: [...CHROMIUM_ARGS],
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false,
       })
     );
+    // The headless shell reads the --force- form, full Chromium, Chrome and Edge the plain one: both, whichever launches.
+    expect(WEBRTC_SWITCHES).toEqual(['--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--webrtc-ip-handling-policy=disable_non_proxied_udp']);
+    expect(CHROMIUM_ARGS).toEqual(expect.arrayContaining([...WEBRTC_SWITCHES, '--disable-quic']));
     expect(JSON.stringify(launch.mock.calls[0])).not.toContain('no-sandbox');
   });
 
@@ -84,6 +91,19 @@ describe('ChromiumSessions shutdown', () => {
     await sessions.shutdown();
     warn.mockRestore();
     expect(kill).toHaveBeenCalledWith(777);
+  });
+
+  it("doesn't kill a Chromium that disconnected while it was closing (its process id may be another's by now)", async () => {
+    const kill = vi.fn();
+    let connected = true;
+    const browser = fakeBrowser({ closeNever: true, pid: 777, connected: () => connected });
+    const sessions = new ChromiumSessions({}, { launch: async () => browser, closeTimeoutMs: 50, kill });
+    await sessions.open(creds).catch(() => undefined);
+    setTimeout(() => {
+      connected = false;
+    }, 10);
+    await sessions.shutdown();
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("doesn't kill a Chromium that closed", async () => {

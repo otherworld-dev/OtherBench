@@ -10,8 +10,19 @@ export const NAVIGATION_TIMEOUT_MS = 30_000;
 export const SETTLE_MS = 3_000;
 /** A hung Chromium or context is given this long to close before it is killed or left behind. */
 export const CLOSE_TIMEOUT_MS = 5_000;
-/** Keeps WebRTC to proxied connections: no UDP around the proxy. */
-export const WEBRTC_SWITCH = '--force-webrtc-ip-handling-policy=disable_non_proxied_udp';
+/**
+ * Keep WebRTC to proxied connections: no UDP around the proxy. Only the
+ * headless shell reads the `--force-` form; full Chromium, Chrome and Edge read
+ * the plain one (each ignores the other), so both are passed, whichever
+ * browser launches.
+ */
+export const WEBRTC_SWITCHES = ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--webrtc-ip-handling-policy=disable_non_proxied_udp'] as const;
+/**
+ * Every switch Chromium starts with. `--disable-quic` is defence in depth:
+ * Chromium doesn't speak QUIC through an HTTP proxy anyway, and with it off no
+ * HTTP/3 attempt can go out over UDP whatever a page asks for.
+ */
+export const CHROMIUM_ARGS: readonly string[] = [...WEBRTC_SWITCHES, '--disable-quic'];
 
 const INSTALL_HINT = 'Install one with "npx playwright install --only-shell chromium", or set GRUNT_BROWSER_PATH to a Chromium, Chrome or Edge.';
 /** The longest page-sourced text (a dialog's message, a popup's address) put in a note. */
@@ -108,7 +119,8 @@ export class ChromiumSessions implements SessionFactory {
     const browser = pending ? await pending.catch(() => null) : null;
     if (!browser) return;
     const closed = await within(browser.close(), this.options.closeTimeoutMs ?? CLOSE_TIMEOUT_MS);
-    if (closed) return;
+    // A browser that disconnected meanwhile has gone: its id may already belong to another process.
+    if (closed || !browser.isConnected()) return;
     const pid = this.pids.get(browser);
     console.warn(`[browser] Chromium didn't close in time${pid === undefined ? '' : `; ending process ${pid}`}.`);
     if (pid === undefined) return;
@@ -136,7 +148,13 @@ export class ChromiumSessions implements SessionFactory {
       chromiumSandbox: true,
       // Browser-level requests carry no proxy credentials, so the proxy refuses them.
       proxy: { server: proxyServer, bypass: '<-loopback>' },
-      args: [WEBRTC_SWITCH],
+      args: [...CHROMIUM_ARGS],
+      // Grunt decides how it stops (see `grunt serve`); Playwright's own SIGINT/SIGTERM/SIGHUP handlers would
+      // change that once a browser had launched. Its `exit` handler stays (always installed): when the server's
+      // process exits, it kills Chromium's process tree (taskkill /T /F on Windows, the process group elsewhere).
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
     };
     const launch = this.options.launch ?? ((o: LaunchOptions) => chromium.launch(o));
     const attempts = browserAttempts(this.env);
@@ -234,7 +252,7 @@ class PageSession implements BrowserSession {
     return this.page.title().catch(() => '');
   }
 
-  snapshot(guard?: ActionGuard): Promise<string> {
+  async snapshot(guard?: ActionGuard): Promise<string> {
     this.check(guard);
     return this.page.ariaSnapshot({ mode: 'ai', timeout: ACTION_TIMEOUT_MS });
   }
@@ -245,9 +263,14 @@ class PageSession implements BrowserSession {
 
   // Each action below finds its element (an await), then checks the guard and
   // hands the action to Playwright in the same synchronous step: no await
-  // between the check and the call. What can still slip in is a navigation that
-  // starts after the check but before Chromium dispatches the input; that input
-  // then lands on the document that was approved, or the navigation cancels it.
+  // between the check and the call. The check reads Playwright's client-side
+  // view of the page, which learns of a navigation only when Chromium's event
+  // for it arrives. So a window remains: a navigation Chromium has already
+  // committed (or commits before it dispatches the input) but hasn't yet
+  // reported passes the check, and the input can land on that new document.
+  // It is short (one round trip to Chromium) and the page itself must cause it;
+  // an element-based action usually fails anyway, because its aria ref belongs
+  // to the old document.
 
   async click(ref: string, double: boolean, guard?: ActionGuard): Promise<void> {
     const el = await this.element(ref);
