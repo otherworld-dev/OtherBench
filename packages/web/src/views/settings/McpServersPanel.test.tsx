@@ -63,6 +63,7 @@ function makeServer(overrides: Partial<McpServer> = {}): McpServer {
     enabled: true,
     status: 'ok',
     toolsCache: null,
+    oauth: null,
     ...overrides,
   };
 }

@@ -224,6 +224,7 @@ async function createMcpServer(container: Container, input: NewMcpServerInput): 
     enabled: input.enabled,
     status: 'unknown',
     toolsCache: null,
+    oauth: null,
   });
 }
 

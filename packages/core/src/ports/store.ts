@@ -421,6 +421,23 @@ export interface UsageRepo {
 
 // --- mcp servers ----------------------------------------------------------------
 
+/**
+ * An http MCP server's sign-in summary (spec 2026-10-12-mcp-oauth-design §2).
+ * Never a token or a secret value: tokens, registered clients and a
+ * hand-registered client's secret live in `SecretStore` under
+ * `mcp:<id>:oauth:*` (`McpOAuthStore`, packages/tools/src/mcp/oauth-store.ts).
+ */
+export interface McpServerOAuth {
+  /** A client ID registered by hand with the server's sign-in provider. Null: Grunt registers itself. */
+  clientId: string | null;
+  /** SecretStore reference of that client's secret, if it has one. Never the value. */
+  clientSecretRef: string | null;
+  /** "Signed in as …": from the provider's id_token, when it sends one. Display only. */
+  account: string | null;
+  /** When the current sign-in completed (ms). Null: not signed in. */
+  signedInAt: number | null;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -443,6 +460,8 @@ export interface McpServer {
   enabled: boolean;
   status: 'unknown' | 'ok' | 'error';
   toolsCache: unknown;
+  /** Null for stdio servers and for http servers that never signed in or set a client ID. */
+  oauth: McpServerOAuth | null;
 }
 
 export interface McpServerRepo {

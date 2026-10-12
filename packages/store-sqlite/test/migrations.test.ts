@@ -21,6 +21,20 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('runMigrations', () => {
+  it('mcp-oauth adds mcp_server.oauth, empty for every existing server', () => {
+    const mcpOauth = MIGRATIONS.find((m) => m.name.endsWith('mcp-oauth'));
+    expect(mcpOauth).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < mcpOauth!.version));
+      db.exec(`INSERT INTO mcp_server (id, name, transport) VALUES ('s1', 'Old', 'http')`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT oauth FROM mcp_server WHERE id = 's1'`).get()).toEqual({ oauth: null });
+    } finally {
+      db.close();
+    }
+  });
+
   it('016 adds the artifact tables, tracked for sync', () => {
     const db = openDatabase(':memory:');
     runMigrations(db);

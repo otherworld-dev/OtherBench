@@ -363,6 +363,7 @@ describe('MCP server routes', () => {
       enabled: true,
       status: 'unknown',
       toolsCache: null,
+      oauth: null,
     });
     await mcpManager.sync();
     await waitFor(() => mcpManager.health()[0]?.status === 'ok');
@@ -403,7 +404,7 @@ describe('Import from Claude Desktop', () => {
 
   it('lists the servers it finds by name, never with their values, marking ones Grunt has and ones it cannot use', async () => {
     config();
-    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await app().request('/api/mcp-servers/import/claude-desktop');
     expect(res.status).toBe(200);
     const text = await res.text();
@@ -427,7 +428,7 @@ describe('Import from Claude Desktop', () => {
 
   it('imports the chosen servers, their values going into the secret store, and skips the rest with reasons', async () => {
     config();
-    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await postImport({ names: ['Home Assistant', 'blender', 'legacy', 'ghost'] });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
