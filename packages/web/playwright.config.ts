@@ -32,6 +32,8 @@ writeFileSync(
 // A Claude Desktop config the server reads instead of the real one
 // (GRUNT_CLAUDE_DESKTOP_CONFIG), for mcp-import.spec.ts. The commands don't
 // exist anywhere, so importing a server never starts anything.
+// GRUNT_SANDBOX=fake gives the server a FakeSandbox (sandbox.spec.ts): setting
+// it up and running in it touch no VM.
 export const DESKTOP_SERVERS = { secret: 'e2e-desktop-secret-value', command: 'grunt-e2e-no-such-command' };
 const desktopConfig = join(dbDir, 'claude_desktop_config.json');
 writeFileSync(
@@ -64,6 +66,6 @@ export default defineConfig({
     url: `${BASE_URL}/api/health`,
     reuseExistingServer: false,
     timeout: 15_000,
-    env: { ...(process.env as Record<string, string>), GRUNT_COWORK_ROOT: coworkDir, GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig },
+    env: { ...(process.env as Record<string, string>), GRUNT_COWORK_ROOT: coworkDir, GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig, GRUNT_SANDBOX: 'fake' },
   },
 });
