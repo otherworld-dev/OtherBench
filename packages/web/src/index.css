@@ -211,19 +211,20 @@ body {
 .markdown-body ul {
   list-style-type: disc;
 }
-.markdown-body ul ul {
+.markdown-body ul > li > ul {
   list-style-type: circle;
 }
-.markdown-body ul ul ul {
+.markdown-body ul > li > ul > li > ul {
   list-style-type: square;
 }
 .markdown-body ol {
   list-style-type: decimal;
 }
-.markdown-body ol ol {
+/* Child chains, so only same-type nesting changes the marker: an ol inside a ul inside an ol stays decimal. */
+.markdown-body ol > li > ol {
   list-style-type: lower-alpha;
 }
-.markdown-body ol ol ol {
+.markdown-body ol > li > ol > li > ol {
   list-style-type: lower-roman;
 }
 /* GFM task lists (remark-gfm: li.task-list-item holding a checkbox) show the checkbox, not a bullet. */

@@ -14,7 +14,7 @@ let ws: string;
 
 test.beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'grunt-e2e-lists-'));
-  writeFileSync(join(ws, 'lists.md'), '# Lists\n\n3. Third\n4. Fourth\n\n- Apples\n  - Green\n- [ ] Task\n');
+  writeFileSync(join(ws, 'lists.md'), '# Lists\n\n3. Third\n4. Fourth\n\n- Apples\n  - Green\n- [ ] Task\n\nMixed:\n\n1. Outer\n   - Middle\n     1. Inner\n\nSame type:\n\n1. Top\n   1. Sub\n');
 });
 
 test.afterEach(() => {
@@ -62,7 +62,11 @@ test('numbered and bulleted lists keep their markers in a chat reply and in the 
   await page.getByRole('button', { name: 'Open lists.md' }).click();
   const viewer = page.getByRole('complementary', { name: 'Viewer' });
   await expect(viewer.getByRole('heading', { name: 'Lists' })).toBeVisible();
-  expect(await listStyle(viewer.locator('.markdown-body ol'))).toBe('decimal');
-  await expect(viewer.locator('.markdown-body ol')).toHaveAttribute('start', '3');
+  const topOl = viewer.locator('.markdown-body > ol').first();
+  expect(await listStyle(topOl)).toBe('decimal');
+  await expect(topOl).toHaveAttribute('start', '3');
   expect(await listStyle(viewer.locator('.markdown-body > ul').first())).toBe('disc');
+  // Only same-type nesting changes the marker: an ol inside a ul inside an ol stays decimal, an ol inside an ol is lower-alpha.
+  expect(await listStyle(viewer.locator('.markdown-body ol > li > ul > li > ol'))).toBe('decimal');
+  expect(await listStyle(viewer.locator('.markdown-body ol > li > ol'))).toBe('lower-alpha');
 });
