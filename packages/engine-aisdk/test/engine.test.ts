@@ -5,6 +5,7 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
+import { createPlanGate } from '@grunt/core/domain/thread-tools.js';
 import { FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import { AiSdkChatEngine, type ProviderResolver } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
@@ -220,6 +221,48 @@ describe('AiSdkChatEngine.stream', () => {
       .join('');
     expect(text).toContain('22C in Paris');
     expect(events.at(-1)?.type).toBe('finish');
+  });
+
+  it('gives each tool call a context carrying the reply plan gate and the unattended flag', async () => {
+    const seen: ToolContext[] = [];
+    const toolExecute = vi.fn(async (_args: unknown, ctx: ToolContext) => {
+      seen.push(ctx);
+      return { tempC: 22 };
+    });
+    const toolSpec: ToolSpec = {
+      name: 'get_weather',
+      description: 'Gets the weather for a city.',
+      parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+      risk: 'read',
+      source: 'mcp',
+      execute: toolExecute,
+    };
+
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'get_weather', input: JSON.stringify({ city: 'Paris' }) },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'It is 22C in Paris.' },
+          { type: 'text-end', id: 't1' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      ),
+    });
+    const engine = new AiSdkChatEngine(resolverFor(model));
+    const plan = createPlanGate();
+
+    await drain(engine.stream(makeRequest({ tools: [toolSpec], plan, unattended: true })));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.plan).toBe(plan);
+    expect(seen[0]!.unattended).toBe(true);
+    expect(seen[0]!.profileId).toBe(makeRequest().profile.id);
   });
 
   it('reports a failed tool execution as a tool-result event with isError true', async () => {

@@ -3,6 +3,7 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
+import { createPlanGate, PLAN_APPROVED, PLAN_REFUSAL, planChangesText, UNATTENDED_PLAN } from '@grunt/core/domain/thread-tools.js';
 import { MockChatEngine } from '../src/mock-provider.js';
 
 function makeResolvedProfile(): ResolvedProfile {
@@ -339,6 +340,69 @@ describe('MockChatEngine', () => {
       const result = await engine.testConnection(makeResolvedProfile().connection, null);
       expect(result.ok).toBe(true);
       expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('#todos, #ask and #plan triggers', () => {
+    const textOf = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+    it('#todos updates the checklist three times through the real tool, then says it is done', async () => {
+      const execute = vi.fn(async () => 'Checklist updated.');
+      const todos: ToolSpec = { name: 'update_todos', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      const sleep = fakeSleep();
+      const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#todos', { tools: [todos] })));
+      const calls = events.filter((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>[];
+      expect(calls.map((c) => c.name)).toEqual(['update_todos', 'update_todos', 'update_todos']);
+      expect((calls[0]!.args as { todos: { status: string }[] }).todos.map((t) => t.status)).toEqual(['in_progress', 'pending']);
+      expect((calls[2]!.args as { todos: { status: string }[] }).todos.map((t) => t.status)).toEqual(['completed', 'completed']);
+      expect(execute).toHaveBeenCalledTimes(3);
+      expect(sleep.mock.calls.filter(([ms]) => ms === 1500)).toHaveLength(2);
+      expect(textOf(events)).toBe('All done.');
+    });
+
+    it('#ask asks which colour through the real tool and repeats the answer', async () => {
+      const execute = vi.fn(async () => 'User has answered your questions: "Which colour?"="Blue".');
+      const ask: ToolSpec = { name: 'ask_user', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#ask', { tools: [ask] })));
+      expect((execute.mock.calls[0]![0] as { questions: { question: string; options: { label: string }[] }[] }).questions[0]).toMatchObject({ question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] });
+      expect(textOf(events)).toBe('You said: User has answered your questions: "Which colour?"="Blue".');
+    });
+
+    it('#plan is refused a write, revises its plan after changes, and writes once approved', async () => {
+      const writes: unknown[] = [];
+      const writeFile: ToolSpec = {
+        name: 'write_file', description: '', parameters: {}, risk: 'mutate', source: 'fs',
+        execute: async (args, ctx) => {
+          if (ctx.plan && !ctx.plan.approved) return { error: true, code: 'plan_mode', message: PLAN_REFUSAL };
+          writes.push(args);
+          return 'Wrote planned.txt';
+        },
+      };
+      const answers = [planChangesText('smaller'), PLAN_APPROVED];
+      const plans: string[] = [];
+      const propose: ToolSpec = {
+        name: 'propose_plan', description: '', parameters: {}, risk: 'read', source: 'thread',
+        execute: async (args, ctx) => {
+          plans.push((args as { plan: string }).plan);
+          const answer = answers.shift()!;
+          if (answer === PLAN_APPROVED) ctx.plan?.approve();
+          return answer;
+        },
+      };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#plan', { tools: [writeFile, propose], plan: createPlanGate() })));
+      expect(events.filter((e) => e.type === 'tool-call').map((e) => (e as { name: string }).name)).toEqual(['write_file', 'propose_plan', 'propose_plan', 'write_file']);
+      expect(plans).toEqual(['1. Write planned.txt', '1. Write planned.txt (revised)']);
+      expect(writes).toEqual([{ path: 'planned.txt', content: 'planned' }]);
+      expect(textOf(events)).toBe('Done: Wrote planned.txt');
+    });
+
+    it('#plan stops proposing on an unattended answer and writes nothing', async () => {
+      const writeFile: ToolSpec = { name: 'write_file', description: '', parameters: {}, risk: 'mutate', source: 'fs', execute: async () => ({ error: true, code: 'plan_mode', message: PLAN_REFUSAL }) };
+      const propose: ToolSpec = { name: 'propose_plan', description: '', parameters: {}, risk: 'read', source: 'thread', execute: vi.fn(async () => UNATTENDED_PLAN) };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#plan', { tools: [writeFile, propose], plan: createPlanGate() })));
+      expect(propose.execute).toHaveBeenCalledTimes(1);
+      expect(events.filter((e) => e.type === 'tool-call')).toHaveLength(2);
+      expect(textOf(events)).toContain('No plan was approved');
     });
   });
 

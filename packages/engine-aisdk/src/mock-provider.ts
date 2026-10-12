@@ -6,7 +6,8 @@ import type {
   EngineEvent,
   EngineRequest,
 } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
+import { toolContextFor } from '@grunt/core/domain/tool-context.js';
+import { ASK_TOOL, PLAN_APPROVED, PLAN_TOOL, TODO_TOOL, UNATTENDED_PLAN, STOPPED_ASK, type TodoItem } from '@grunt/core/domain/thread-tools.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { Usage } from '@grunt/core/types/usage.js';
@@ -131,7 +132,12 @@ function isToolErrorResult(result: unknown): boolean {
  * `ConnectionKind` `'mock'`.
  *
  * Triggers (checked against the prompt text, first match wins, in this
- * order): `#fail` -> a single `rate_limit` error event. `#artifact` -> an
+ * order): `#fail` -> a single `rate_limit` error event. `#todos` -> three
+ * `update_todos` calls through the real tool when offered (a two-step
+ * checklist, 1.5 s apart), then "All done.". `#ask` -> one `ask_user` question
+ * ("Which colour?") through the real tool, then the answer back. `#plan` -> a
+ * `write_file` that plan mode refuses, then `propose_plan` rounds until
+ * approved, then the write again. `#artifact` -> an
  * `artifact` create through the real tool when offered (Deck #896), then
  * "I made the artifact.". `#recall <query>` -> a `recall` search for the
  * rest of that line through the real tool when offered, then the titles of
@@ -169,6 +175,21 @@ export class MockChatEngine implements ChatEngine {
           retryable: true,
         },
       };
+      return;
+    }
+
+    if (prompt.includes('#todos')) {
+      yield* this.streamTodosTurn(req, tokensIn);
+      return;
+    }
+
+    if (prompt.includes('#ask')) {
+      yield* this.streamAskTurn(req, tokensIn);
+      return;
+    }
+
+    if (prompt.includes('#plan')) {
+      yield* this.streamPlanTurn(req, tokensIn);
       return;
     }
 
@@ -236,8 +257,7 @@ export class MockChatEngine implements ChatEngine {
     if (req.signal.aborted) return;
     yield { type: 'tool-call', id: callId, name: 'artifact', args };
     const tool = req.tools.find((t) => t.name === 'artifact');
-    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
-    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
+    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
     if (req.signal.aborted) return;
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
@@ -250,6 +270,79 @@ export class MockChatEngine implements ChatEngine {
     yield finishEvent(tokensIn, estimateTokens(answer));
   }
 
+  /** One call to a tool from `req.tools` (the real, gated one), yielded as a call and its result; returns the result as text. */
+  private async *callTool(req: EngineRequest, name: string, args: unknown): AsyncGenerator<EngineEvent, string | null> {
+    const callId = `mock-${name}-${randomUUID()}`;
+    if (req.signal.aborted) return null;
+    yield { type: 'tool-call', id: callId, name, args };
+    const tool = req.tools.find((t) => t.name === name);
+    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: `No ${name} tool was offered.` };
+    if (req.signal.aborted) return null;
+    const text = typeof result === 'string' ? result : JSON.stringify(result);
+    yield { type: 'tool-result', id: callId, name, result: text, isError: isToolErrorResult(result) };
+    return text;
+  }
+
+  private async *answer(req: EngineRequest, text: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    for (const chunk of splitIntoChunks(text, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    if (req.signal.aborted) return;
+    yield finishEvent(tokensIn, estimateTokens(text));
+  }
+
+  /** `#todos` (spec 2026-10-12-thread-cards-design §5): a two-step checklist updated three times, 1.5 s apart. */
+  private async *streamTodosTurn(req: EngineRequest, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const step = (content: string, activeForm: string, status: TodoItem['status']): TodoItem => ({ content, activeForm, status });
+    const lists: TodoItem[][] = [
+      [step('Read the brief', 'Reading the brief', 'in_progress'), step('Write the answer', 'Writing the answer', 'pending')],
+      [step('Read the brief', 'Reading the brief', 'completed'), step('Write the answer', 'Writing the answer', 'in_progress')],
+      [step('Read the brief', 'Reading the brief', 'completed'), step('Write the answer', 'Writing the answer', 'completed')],
+    ];
+    for (const [i, todos] of lists.entries()) {
+      if (i > 0) await this.sleep(1500, req.signal);
+      if ((yield* this.callTool(req, TODO_TOOL, { todos })) === null) return;
+    }
+    yield* this.answer(req, 'All done.', tokensIn);
+  }
+
+  /** `#ask`: one question through the real ask_user tool, then the answer back. */
+  private async *streamAskTurn(req: EngineRequest, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const args = {
+      questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: 'Warm' }, { label: 'Blue', description: 'Cool' }], multiSelect: false }],
+    };
+    const result = yield* this.callTool(req, ASK_TOOL, args);
+    if (result === null) return;
+    yield* this.answer(req, `You said: ${result}`, tokensIn);
+  }
+
+  /**
+   * `#plan`: a write that plan mode refuses, then up to three rounds of
+   * propose_plan (revising after changes, stopping on approval, an unattended
+   * answer or a stop), then the write again once approved.
+   */
+  private async *streamPlanTurn(req: EngineRequest, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const write = { path: 'planned.txt', content: 'planned' };
+    const refused = yield* this.callTool(req, 'write_file', write);
+    if (refused === null) return;
+    let approved = false;
+    for (let round = 1; round <= 3 && !approved; round++) {
+      const result = yield* this.callTool(req, PLAN_TOOL, { plan: round === 1 ? '1. Write planned.txt' : '1. Write planned.txt (revised)' });
+      if (result === null) return;
+      if (result === PLAN_APPROVED) approved = true;
+      else if (result === UNATTENDED_PLAN || result === STOPPED_ASK) break;
+    }
+    if (!approved) {
+      yield* this.answer(req, `No plan was approved. The write said: ${refused}`, tokensIn);
+      return;
+    }
+    const written = yield* this.callTool(req, 'write_file', write);
+    if (written === null) return;
+    yield* this.answer(req, `Done: ${written}`, tokensIn);
+  }
+
   /** `#recall <query>` (spec 2026-10-09-recall-design): one `recall` search through the real tool when offered, then the titles it found. */
   private async *streamRecallTurn(req: EngineRequest, query: string, tokensIn: number): AsyncGenerator<EngineEvent> {
     const callId = `mock-recall-${randomUUID()}`;
@@ -257,8 +350,7 @@ export class MockChatEngine implements ChatEngine {
     if (req.signal.aborted) return;
     yield { type: 'tool-call', id: callId, name: 'recall', args };
     const tool = req.tools.find((t) => t.name === 'recall');
-    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
-    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No recall tool was offered.' };
+    const result = tool ? await tool.execute(args, toolContextFor(req)) : { error: true, code: 'unavailable', message: 'No recall tool was offered.' };
     if (req.signal.aborted) return;
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'recall', result: JSON.stringify(result), isError };
@@ -304,15 +396,7 @@ export class MockChatEngine implements ChatEngine {
     let isError = false;
 
     if (realTool) {
-      const ctx: ToolContext = {
-        chatId: req.chatId,
-        messageId: req.messageId,
-        profileId: req.profile.id,
-        workspaceRoot: req.workspaceRoot,
-        ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
-        signal: req.signal,
-      };
-      const result = await realTool.execute(args, ctx);
+      const result = await realTool.execute(args, toolContextFor(req));
       if (req.signal.aborted) return;
       isError = isToolErrorResult(result);
       resultText = typeof result === 'string' ? result : JSON.stringify(result);
