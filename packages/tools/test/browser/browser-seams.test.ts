@@ -149,6 +149,30 @@ describe('the browser in a scheduled run', () => {
     expect(s.cards).toEqual([]);
   });
 
+  it('says what the refusal tells the model about the browser, and each half of it is true', async () => {
+    expect(UNATTENDED_REASON).toContain('The browser needs an Always grant for each website it opens or acts on; with "Ask on changes" it can read a page that is already open without one.');
+    const unattended = ctx({ unattended: true });
+    // "an Always grant for each website it opens or acts on": without one both are refused, with one both run.
+    const none = setup();
+    const bare = await none.browser();
+    expect(isError(await bare.execute({ command: 'open', url: 'https://example.com/' }, unattended), 'approval_unavailable')).toBe(true);
+    const s = setup({ grants: [siteGrant('g1', 'example.com')] });
+    const tool = await s.browser();
+    expect(isError(await tool.execute({ command: 'open', url: 'https://example.com/' }, unattended))).toBe(false);
+    expect(isError(await tool.execute({ command: 'click', ref: 'e3' }, unattended))).toBe(false);
+    // "read a page that is already open without one": the page is now on a site with no grant.
+    s.factory.sessions[0]!.navigate('https://elsewhere.test/', 'Elsewhere');
+    expect(await tool.execute({ command: 'snapshot' }, unattended)).toMatchObject({ url: 'https://elsewhere.test/' });
+    expect(isError(await tool.execute({ command: 'scroll', direction: 'down' }, unattended))).toBe(false);
+    // Reading is all: acting on that page, or opening another on its site, is refused.
+    expect(isError(await tool.execute({ command: 'click', ref: 'e3' }, unattended), 'approval_unavailable')).toBe(true);
+    expect(isError(await tool.execute({ command: 'open', url: 'https://elsewhere.test/next' }, unattended), 'approval_unavailable')).toBe(true);
+    // 'with "Ask on changes"': under "always ask" the read is refused too.
+    const strict = await s.browser(policy({ approvalMode: 'always_ask' }));
+    expect(isError(await strict.execute({ command: 'snapshot' }, unattended), 'approval_unavailable')).toBe(true);
+    expect(s.cards).toEqual([]);
+  });
+
   it("refuses the relayed browser the same way, and never hands it to Claude Code's auto mode", async () => {
     const s = setup({ answer: 'once' });
     const [spec] = s.provider.relayTools(policy());
