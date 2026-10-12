@@ -65,6 +65,29 @@ function buildLongReply(): string {
 }
 const LONG_REPLY = buildLongReply();
 
+/** `#office <kind>` (spec 2026-10-12-office-files §6): one small sample of each Office kind, valid as the artifact tool checks it. */
+export const OFFICE_SAMPLES: Record<string, { id: string; title: string; content: string }> = {
+  document: {
+    id: 'memo',
+    title: 'Mock memo',
+    content: '# Quarterly memo\n\nSales are **up** this quarter.\n\n| Item | Cost |\n| --- | ---: |\n| Widgets | 12 |\n| Gadgets | 30.5 |\n',
+  },
+  spreadsheet: {
+    id: 'budget',
+    title: 'Mock budget',
+    content: JSON.stringify({
+      sheets: [
+        {
+          name: 'Budget',
+          columns: [{ width: 20 }, { width: 12 }],
+          freeze: { rows: 1 },
+          rows: [[{ value: 'Items', bold: true }, { value: 'Cost', bold: true }], ['Widgets', 12], ['Gadgets', 30.5], ['Total', '=SUM(B2:B3)']],
+        },
+      ],
+    }),
+  },
+};
+
 /** Crude word-count-as-token-count proxy -- good enough for a mock's "plausible usage". */
 function estimateTokens(text: string): number {
   return Math.max(1, text.split(/\s+/).filter(Boolean).length);
@@ -131,7 +154,11 @@ function isToolErrorResult(result: unknown): boolean {
  * `ConnectionKind` `'mock'`.
  *
  * Triggers (checked against the prompt text, first match wins, in this
- * order): `#fail` -> a single `rate_limit` error event. `#artifact` -> an
+ * order): `#fail` -> a single `rate_limit` error event. `#office
+ * <document|spreadsheet>` -> that Office artifact made through the real tool,
+ * then "I made the file.". `#echo-user` -> the latest user message's text
+ * parts as the request carries them (an attached file's text included).
+ * `#artifact` -> an
  * `artifact` create through the real tool when offered (Deck #896), then
  * "I made the artifact.". `#recall <query>` -> a `recall` search for the
  * rest of that line through the real tool when offered, then the titles of
@@ -169,6 +196,18 @@ export class MockChatEngine implements ChatEngine {
           retryable: true,
         },
       };
+      return;
+    }
+
+    const office = /#office[ \t]+([a-z-]+)/.exec(prompt);
+    const sample = office && Object.hasOwn(OFFICE_SAMPLES, office[1]!) ? OFFICE_SAMPLES[office[1]!] : undefined;
+    if (office && sample) {
+      yield* this.streamOfficeTurn(req, office[1]!, sample, tokensIn);
+      return;
+    }
+
+    if (prompt.includes('#echo-user')) {
+      yield* this.streamReply(req, prompt, 8, 20, tokensIn);
       return;
     }
 
@@ -242,6 +281,27 @@ export class MockChatEngine implements ChatEngine {
     const isError = isToolErrorResult(result);
     yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
     const answer = isError ? `The artifact didn't work: ${JSON.stringify(result)}` : 'I made the artifact.';
+    for (const chunk of splitIntoChunks(answer, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /** `#office <kind>`: one Office artifact made through the real tool when offered, so the e2e and the bundle smoke drive the whole path. */
+  private async *streamOfficeTurn(req: EngineRequest, kind: string, sample: { id: string; title: string; content: string }, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-office-${randomUUID()}`;
+    const args = { command: 'create', id: sample.id, kind, title: sample.title, content: sample.content };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'artifact', args };
+    const tool = req.tools.find((t) => t.name === 'artifact');
+    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No artifact tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'artifact', result: JSON.stringify(result), isError };
+    const answer = isError ? `The file didn't work: ${JSON.stringify(result)}` : 'I made the file.';
     for (const chunk of splitIntoChunks(answer, 6)) {
       if (req.signal.aborted) return;
       await this.sleep(30, req.signal);
