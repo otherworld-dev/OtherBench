@@ -25,4 +25,12 @@ describe('PlanCard', () => {
     await user.click(send);
     expect(onAnswer).toHaveBeenCalledWith('p1', { changes: 'smaller' });
   });
+  it('moves keyboard focus to the note, and back to Ask for changes on Cancel', async () => {
+    const user = userEvent.setup();
+    render(<PlanCard ask={ask} profileName="Sonnet" onAnswer={vi.fn(async () => {})} />);
+    await user.click(screen.getByRole('button', { name: 'Ask for changes' }));
+    expect(screen.getByRole('textbox', { name: 'Changes to the plan' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Ask for changes' })).toHaveFocus();
+  });
 });

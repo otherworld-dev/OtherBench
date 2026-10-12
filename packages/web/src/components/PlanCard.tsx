@@ -1,4 +1,4 @@
-import { useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import { CHANGES_MAX_CHARS } from '@grunt/core/domain/thread-tools.js';
 import type { AskReply, UserAsk } from '@grunt/core/types/thread.js';
 import { MarkdownBody } from './MarkdownBody.js';
@@ -15,6 +15,19 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
   const [note, setNote] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  const askChangesRef = useRef<HTMLButtonElement>(null);
+  // Switching rows unmounts the focused button; hand focus to the control that replaces it (not on first mount).
+  const switched = useRef(false);
+  useEffect(() => {
+    if (!switched.current) return;
+    (changing ? noteRef.current : askChangesRef.current)?.focus();
+  }, [changing]);
+
+  function setMode(next: boolean): void {
+    switched.current = true;
+    setChanging(next);
+  }
 
   async function send(reply: AskReply): Promise<void> {
     setPending(true);
@@ -38,6 +51,7 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
       {changing ? (
         <div className="space-y-1">
           <textarea
+            ref={noteRef}
             aria-label="Changes to the plan"
             value={note}
             maxLength={CHANGES_MAX_CHARS}
@@ -50,7 +64,7 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
             <button type="button" disabled={pending || note.trim() === ''} onClick={() => void send({ changes: note.trim() })} className="btn btn-primary px-2 py-1">
               Send changes
             </button>
-            <button type="button" disabled={pending} onClick={() => setChanging(false)} className="btn px-2 py-1">
+            <button type="button" disabled={pending} onClick={() => setMode(false)} className="btn px-2 py-1">
               Cancel
             </button>
           </div>
@@ -60,7 +74,7 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
           <button type="button" disabled={pending} onClick={() => void send({ approve: true })} className="btn btn-primary px-2 py-1">
             Approve plan
           </button>
-          <button type="button" disabled={pending} onClick={() => setChanging(true)} className="btn px-2 py-1">
+          <button ref={askChangesRef} type="button" disabled={pending} onClick={() => setMode(true)} className="btn px-2 py-1">
             Ask for changes
           </button>
         </div>
