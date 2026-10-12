@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PermissionBroker } from '../src/domain/permissions.js';
+import { PermissionBroker, SUBAGENT_THREAD_REFUSAL } from '../src/domain/permissions.js';
 import type { Decision } from '../src/domain/permissions.js';
 import type { RiskClass, ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
@@ -890,6 +890,18 @@ describe('PermissionBroker and sub-agents', () => {
     // A hand-made live grant row for it still allows nothing.
     store.grants.create({ id: 'g-live', chatId: 'chat-1', profileId: 'profile-1', toolName: 'subagent', source: 'subagent', scope: 'chat', constraint: { live }, expiresAt: null });
     expect(broker.decide(SUBAGENT(), {}, policy, makeCtx({ live }))).toMatchObject({ kind: 'deny', reason: 'Only MCP tools can feed a live artifact.' });
+  });
+
+  it("refuses the thread tools inside a sub-agent: it can't ask the user, propose a plan or keep the reply's checklist", () => {
+    const broker = new PermissionBroker(new InMemoryStore());
+    const inside = makeCtx({ subagent: { callId: 'c1', label: 'Helper', parentProfileId: 'p' } });
+    for (const name of ['ask_user', 'propose_plan', 'update_todos']) {
+      const thread = makeTool({ name, risk: 'read', source: 'thread' });
+      expect(broker.decide(thread, {}, makePolicy(), inside), name).toEqual({ kind: 'deny', reason: SUBAGENT_THREAD_REFUSAL });
+      // The reply's own call is allowed by policy, as before.
+      expect(broker.decide(thread, {}, makePolicy(), makeCtx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    }
+    expect(broker.pendingCount).toBe(0);
   });
 
   it("leaves a parent's own card untagged", () => {

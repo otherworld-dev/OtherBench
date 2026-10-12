@@ -29,6 +29,15 @@ export const SUBAGENT_PLAN_NOTE =
   '# Plan mode\n' +
   "The user hasn't approved a plan for this work yet, so tools that change things (writing files, running commands) are refused for you too, and you can't propose a plan yourself. Look around with the tools that only read, and report what you found and what you would change.";
 
+/** For a sub-agent whose profile has a sandboxed shell but which gets none here (`subagentShellWithheld`). */
+export const SUBAGENT_NO_SHELL_NOTE =
+  '# No shell\n' +
+  "You have no run_command for this job. Your profile runs commands in the sandbox, but the chat that started you runs its commands on this machine, each with the user's approval, so a sandboxed shell isn't offered here. If the job needs a command run, say which one in your answer.";
+
+/** The line the `subagent` tool's description gets for a parent whose shell runs on this machine. */
+export const SUBAGENT_SHELL_LINE =
+  "Your shell runs on this machine, so a sub-agent run as a profile whose shell runs in the sandbox has no shell. For a job that needs commands, use your own profile or one whose shell runs on this machine.";
+
 export const MAX_CONCURRENT_SUBAGENTS = 4;
 export const MAX_SUBAGENTS_PER_REPLY = 10;
 export const SUBAGENT_ANSWER_MAX_CHARS = 20_000;
@@ -163,6 +172,15 @@ function shellRunsOf(policy: ToolPolicy): 'host' | 'sandbox' {
   return policy.shellRuns === 'sandbox' ? 'sandbox' : 'host';
 }
 
+/**
+ * Both profiles have a shell, but the sub-agent gets none: the parent's runs
+ * on this machine and the chosen profile's in the sandbox (see the `shell`
+ * rule in `SUBAGENT_POLICY_RULES` for why).
+ */
+export function subagentShellWithheld(parent: ToolPolicy, chosen: ToolPolicy): boolean {
+  return parent.shell === true && chosen.shell === true && shellRunsOf(parent) === 'host' && shellRunsOf(chosen) === 'sandbox';
+}
+
 const idsOf = (policy: ToolPolicy): string[] => (Array.isArray(policy.mcpServerIds) ? policy.mcpServerIds.filter((id): id is string => typeof id === 'string') : []);
 
 /** What a narrowing rule works from: both policies and what the call asked for. */
@@ -204,8 +222,7 @@ export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]
   // and every command of the parent's does, so offering it would let text
   // injected into the parent run commands (with the chat's folders and the
   // allowlisted hosts) that the parent's policy never allows without a card.
-  shell: ({ parent, chosen, ask }) =>
-    parent.shell === true && chosen.shell === true && ask.shell !== false && !(shellRunsOf(parent) === 'host' && shellRunsOf(chosen) === 'sandbox'),
+  shell: ({ parent, chosen, ask }) => parent.shell === true && chosen.shell === true && ask.shell !== false && !subagentShellWithheld(parent, chosen),
   // On this machine only when both run theirs here; never when the parent is sandboxed. Always named.
   shellRuns: ({ parent, chosen }) => (shellRunsOf(parent) === 'host' && shellRunsOf(chosen) === 'host' ? 'host' : 'sandbox'),
   // Only the hosts on both allowlists. Always named, even when empty: an absent list would mean the defaults again.
@@ -308,8 +325,15 @@ export const SUBAGENT_TOOL_PARAMETERS = {
   additionalProperties: false,
 } as const;
 
-/** The `subagent` tool's description, naming the profiles it can run as. */
-export function subagentToolDescription(profiles: readonly Profile[]): string {
+/**
+ * The `subagent` tool's description, naming the profiles it can run as.
+ * `parent` is the policy the tool is listed for: when its shell runs on this
+ * machine and a listed profile's runs in the sandbox, the description says
+ * that profile's sub-agent has no shell, so the model can choose another.
+ */
+export function subagentToolDescription(profiles: readonly Profile[], parent?: ToolPolicy): string {
+  const shown = profiles.slice(0, PROFILES_LISTED_MAX);
+  const shellLine = parent !== undefined && shown.some((p) => subagentShellWithheld(parent, p.toolPolicy));
   const listed = profiles.slice(0, PROFILES_LISTED_MAX).map((p) => {
     const about = p.description?.trim() ? `: ${p.description.trim().slice(0, PROFILE_DESCRIPTION_MAX_CHARS)}` : '';
     return `- "${p.name}" (${p.modelId})${about}`;
@@ -319,6 +343,7 @@ export function subagentToolDescription(profiles: readonly Profile[]): string {
     "It can't see this chat, so put everything it needs in `prompt`: the goal, the files or facts involved, and what to report.",
     'Several subagent calls in one message run at the same time (up to 4 at once), so give independent jobs a call each.',
     'It has at most your tools, and `tools` can give it fewer. Its tool calls need the user\'s approval the same way yours do.',
+    ...(shellLine ? [SUBAGENT_SHELL_LINE] : []),
     'It returns only its final answer, as text.',
     ...(listed.length > 0 ? ['Profiles it can run as:', ...listed] : []),
     'Leave out `profile` to use your own.',
@@ -563,6 +588,8 @@ export class SubagentRunner implements SubagentHost {
     const serverNames = new Map(this.deps.store.mcpServers.list().map((s) => [s.id, s.name] as const));
     const narrowed = subagentPolicy(this.deps.parent.toolPolicy, chosen.toolPolicy, parsed.input.tools, serverNames);
     if (!narrowed.ok) return subagentError('subagent_tools', narrowed.message);
+    // It would have had a shell but for the sandbox rule (and the call didn't turn the shell off itself): it is told why.
+    const shellWithheld = parsed.input.tools?.shell !== false && subagentShellWithheld(this.deps.parent.toolPolicy, chosen.toolPolicy);
 
     if (this.deps.signal.aborted) return subagentResult({ status: 'cancelled', error: null, finishReason: null, parts: [] });
 
@@ -584,7 +611,7 @@ export class SubagentRunner implements SubagentHost {
       if (slot) {
         this.send(callId, { type: 'running' }, true);
         const tools = await this.toolsFor(chosen, narrowed.policy);
-        const request = this.requestFor(chosen, label, prompt, callId, tools, child.signal, ctx);
+        const request = this.requestFor(chosen, narrowed.policy, shellWithheld, label, prompt, callId, tools, child.signal, ctx);
         for await (const event of this.deps.engine.stream(request)) {
           const subEvent = toSubagentEvent(event);
           if (subEvent) {
@@ -702,7 +729,17 @@ export class SubagentRunner implements SubagentHost {
     return listed.filter((t) => !NEVER_FOR_SUBAGENTS.has(t.source) && !(chosen.model?.supportsTools === false && t.source === 'recall'));
   }
 
-  private requestFor(chosen: ResolvedProfile, label: string, prompt: string, callId: string, tools: ToolSpec[], signal: AbortSignal, ctx: ToolContext): EngineRequest {
+  private requestFor(
+    chosen: ResolvedProfile,
+    policy: ToolPolicy,
+    shellWithheld: boolean,
+    label: string,
+    prompt: string,
+    callId: string,
+    tools: ToolSpec[],
+    signal: AbortSignal,
+    ctx: ToolContext
+  ): EngineRequest {
     const { chatId, messageId, workspaceRoot, folders } = this.deps;
     // The parent's plan gate and unattended flag go with the sub-agent, from
     // the `subagent` call's own context and from the turn that made this
@@ -714,7 +751,11 @@ export class SubagentRunner implements SubagentHost {
     const unattended = ctx.unattended === true || this.deps.unattended === true;
     // Its run_command is the sandboxed one (the narrowed policy decides): say where the folders are in there, as the parent's prompt does.
     const sandboxNote = workspaceRoot !== null && tools.some((t) => t.source === 'sandbox') ? sandboxFoldersPrompt(workspaceRoot, folders, this.deps.canonicalPath) : null;
-    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), [sandboxNote, plan && !plan.approved ? SUBAGENT_PLAN_NOTE : null]);
+    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), [
+      sandboxNote,
+      shellWithheld ? SUBAGENT_NO_SHELL_NOTE : null,
+      plan && !plan.approved ? SUBAGENT_PLAN_NOTE : null,
+    ]);
     // Synthetic, never stored: the sub-agent sees no chat history.
     const message = (id: string, role: 'system' | 'user', text: string): CanonMessage => ({
       id,
@@ -728,7 +769,8 @@ export class SubagentRunner implements SubagentHost {
       createdAt: 0,
     });
     return {
-      profile: { ...chosen, systemPrompt },
+      // The narrowed policy, not the chosen profile's own: nothing that reads the request's profile sees a wider one.
+      profile: { ...chosen, systemPrompt, toolPolicy: policy },
       messages: [message(`subagent-system:${callId}`, 'system', systemPrompt), message(`subagent-prompt:${callId}`, 'user', prompt)],
       tools,
       signal,

@@ -314,5 +314,7 @@ export function unattendedWarnings(policy: ToolPolicy, connectionKind: Connectio
   if (runsShellInSandbox(policy) && (!claudeCode || hasFolder)) lines.push("Sandboxed commands' requests for hosts that aren't on the profile's list are refused, unless a grant already covers the host (an Always grant, or one for the schedule's own chat).");
   if (policy.mcpServerIds.length > 0) lines.push('MCP tools not marked read-only need approval.');
   if (policy.recall !== false) lines.push('Searching past chats asks first in each chat, so it will be refused.');
+  // Sub-agents are for API profiles. One run as another profile is held to both policies, the stricter approval mode included.
+  if (!claudeCode && policy.subagents === true) lines.push('A sub-agent run as a profile that asks before every tool call will have every tool call refused.');
   return lines;
 }

@@ -251,9 +251,12 @@ export class PermissionBroker {
 
     // Thread tools (spec 2026-10-12-thread-cards-design): a checklist, a
     // question or a plan for the user. They change nothing, so they never
-    // need a card; they are still audited like every call.
+    // need a card; they are still audited like every call. A sub-agent gets
+    // none of them: it can't ask the user anything, a plan it proposed would
+    // open its parent's plan gate, and the checklist is the reply's own.
+    // SubagentRunner never offers them; this refuses one that arrives anyway.
     if (tool.source === 'thread') {
-      return { kind: 'allow', grantedBy: 'policy' };
+      return ctx.subagent ? { kind: 'deny', reason: SUBAGENT_THREAD_REFUSAL } : { kind: 'allow', grantedBy: 'policy' };
     }
 
     // Sub-agents (spec 2026-10-12-api-subagents-design): the call itself has
@@ -595,6 +598,9 @@ export class PermissionBroker {
  * (spec 2026-10-12-scheduled-tasks-design §2): the model reads it, so it says
  * what happened and how to let the call run next time.
  */
+/** A thread tool (question, plan, checklist) called from inside a sub-agent. */
+export const SUBAGENT_THREAD_REFUSAL = "A sub-agent can't ask the user, propose a plan or keep the reply's checklist. Put what you need to say in your answer.";
+
 export const UNATTENDED_REASON =
   'Nobody is watching this scheduled run, so this tool call needed an approval that nobody can give. It did not run. ' +
   'To let it run unattended, allow it ahead of time with an Always grant. Shell commands run unattended in the sandbox ' +

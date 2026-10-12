@@ -231,6 +231,8 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
         const parentKind = settle(broker.decide(spec, args, parent, ctx));
         const context = `case ${i}, ${spec.name} (${spec.source}) ${JSON.stringify(args)}: parent ${JSON.stringify(parent)}, chosen ${JSON.stringify(chosen)}, sub ${JSON.stringify(sub)}`;
         checked += 1;
+        // The broker keeps the thread tools and the subagent tool from a sub-agent whatever the policies say.
+        if (spec.source === 'thread' || spec.source === 'subagent') expect(subKind, context).toBe('deny');
         if (subKind === 'allow') {
           allowed += 1;
           expect(parentKind, context).toBe('allow');

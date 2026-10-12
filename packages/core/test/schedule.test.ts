@@ -202,4 +202,15 @@ describe('unattendedWarnings', () => {
     // shellRuns without the shell on is no shell at all.
     expect(unattendedWarnings(policy({ shell: false, shellRuns: 'sandbox' }), 'anthropic', true)).toEqual([]);
   });
+
+  // Integration with sub-agents: one run as another profile is held to both policies, the stricter approval mode included.
+  it('says a sub-agent run as an always-ask profile gets nothing done, for an API profile with sub-agents on', () => {
+    const line = 'A sub-agent run as a profile that asks before every tool call will have every tool call refused.';
+    expect(unattendedWarnings(policy({ fs: 'read', subagents: true }), 'anthropic', true)).toEqual([line]);
+    expect(unattendedWarnings(policy({ fs: 'read', subagents: false }), 'anthropic', true)).toEqual([]);
+    expect(unattendedWarnings(policy({ fs: 'read' }), 'anthropic', true)).toEqual([]);
+    // Claude Code never gets Grunt's subagent tool, and an always-ask profile already says everything is refused.
+    expect(unattendedWarnings(policy({ fs: 'read', subagents: true }), 'claude_code', true)).toEqual([]);
+    expect(unattendedWarnings(policy({ approvalMode: 'always_ask', subagents: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
+  });
 });

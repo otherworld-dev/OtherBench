@@ -8,7 +8,7 @@ import { FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import type { SubagentEvent, SubagentPart } from '../src/domain/parts.js';
 import { createPlanGate } from '../src/domain/thread-tools.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
-import { SUBAGENT_PLAN_NOTE, SUBAGENT_RESULT_COPY_MAX_CHARS, SubagentRunner, type SubagentRunnerDeps } from '../src/domain/subagent.js';
+import { SUBAGENT_NO_SHELL_NOTE, SUBAGENT_PLAN_NOTE, SUBAGENT_RESULT_COPY_MAX_CHARS, SubagentRunner, type SubagentRunnerDeps } from '../src/domain/subagent.js';
 
 const USAGE: Usage = { tokensIn: 40, tokensOut: 8, tokensCached: 0, tokensReasoning: 0 };
 const finish = (finishReason = 'stop'): EngineEvent => ({ type: 'finish', usage: USAGE, finishReason });
@@ -147,6 +147,11 @@ describe('SubagentRunner', () => {
     }
     expect(listed[0]).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org'] });
     expect(listed[1]).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org', 'github.com'] });
+    // The request's own profile carries the narrowed policy, not the chosen profile's wider one (Cheap's is a host shell with another host list).
+    expect(engine.requests[0]!.profile.id).toBe('p-cheap');
+    expect(engine.requests[0]!.profile.toolPolicy).toEqual(listed[0]);
+    expect(engine.requests[0]!.profile.toolPolicy).not.toEqual(store.profiles.get('p-cheap')!.toolPolicy);
+    expect(engine.requests[1]!.profile.toolPolicy).toEqual(listed[1]);
   });
 
   it("a host-shell parent's sub-agent run as a sandboxed profile gets no run_command at all, sandboxed or not", async () => {
@@ -162,6 +167,10 @@ describe('SubagentRunner', () => {
     // As Cheap: a sandboxed command would need no card, and every command of this parent's does. As itself: the host shell, as the parent has.
     expect(sources).toEqual([[], ['shell'], []]);
     expect(engine.requests.map((req) => req.profile.systemPrompt!.includes('# Sandbox'))).toEqual([false, false, false]);
+    // The one that lost its shell to the rule is told why; one that has a shell, or was asked to have none, isn't.
+    expect(engine.requests.map((req) => req.profile.systemPrompt!.includes(SUBAGENT_NO_SHELL_NOTE))).toEqual([true, false, false]);
+    await h.runner.run({ description: 'As Cheap, no shell asked', prompt: 'Read it.', profile: 'Cheap', tools: { shell: false } }, h.ctx('call-4'));
+    expect(engine.requests[3]!.profile.systemPrompt).not.toContain('# No shell');
   });
 
   // Integration with thread cards and scheduled tasks: what limits the parent reply limits its sub-agents.

@@ -15,7 +15,9 @@ import {
   parseSubagentInput,
   runSubagentTool,
   SUBAGENT_POLICY_RULES,
+  SUBAGENT_SHELL_LINE,
   subagentPolicy,
+  subagentShellWithheld,
   subagentResult,
   subagentSystemPrompt,
   subagentToolDescription,
@@ -269,6 +271,22 @@ describe('eligibleSubagentProfiles and the tool description', () => {
     expect(text).toContain('- "Local Llama" (p-local-model)');
     expect(text).not.toContain('Coder');
     expect(text).toContain('Leave out `profile` to use your own.');
+  });
+
+  it("says a sandboxed profile's sub-agent has no shell, only to a parent whose shell runs on this machine", () => {
+    const sandboxed = profile('p-box', 'Boxed', 'api', { toolPolicy: policy({ shellRuns: 'sandbox' }) });
+    const host = profile('p-host', 'Hosty', 'api');
+    // A host-shell parent, with a sandboxed profile on the list.
+    expect(subagentToolDescription([host, sandboxed], policy())).toContain(SUBAGENT_SHELL_LINE);
+    // No sandboxed profile to choose, a sandboxed parent, a parent with no shell, or no policy given: nothing to say.
+    expect(subagentToolDescription([host], policy())).not.toContain(SUBAGENT_SHELL_LINE);
+    expect(subagentToolDescription([host, sandboxed], policy({ shellRuns: 'sandbox' }))).not.toContain(SUBAGENT_SHELL_LINE);
+    expect(subagentToolDescription([host, sandboxed], policy({ shell: false }))).not.toContain(SUBAGENT_SHELL_LINE);
+    expect(subagentToolDescription([host, sandboxed])).not.toContain(SUBAGENT_SHELL_LINE);
+    // The line says exactly what the policy does.
+    expect(subagentShellWithheld(policy(), sandboxed.toolPolicy)).toBe(true);
+    const narrowed = subagentPolicy(policy(), sandboxed.toolPolicy, {}, servers);
+    expect(narrowed.ok && narrowed.policy.shell).toBe(false);
   });
 
   it('lists at most 20 profiles', () => {
