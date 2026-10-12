@@ -550,7 +550,7 @@ The *only* control on it is the approval gate — every call needs a human
 decision unless a grant already covers it — so the gate has to be right,
 because it's the entire defense, not one layer of several.
 
-**The sandboxed shell has two walls, and a break-out of the inner one reaches more than its own chat.** With `shellRuns: 'sandbox'`, `run_command` runs in the `grunt-sandbox` WSL2 distro (interop and automount off) under the sandbox runtime (bubblewrap, a filtering proxy). The runtime keeps a command to its chat's folders, its home `/home/grunt/chats/<chat>` and its own temp folder, and off the network except allowlisted hosts. A command that broke out of the runtime would reach everything in the distro, every folder mounted for any chat with a running agent (read-write where some chat has it writable), and the VM's network; with WSL's `networkingMode=mirrored` that includes services on this machine that only listen locally, Grunt's own API among them, which is why Settings > Sandbox warns about it. A break-out of the VM reaches Windows (Hyper-V's boundary, as with Cowork). drvfs mounts carry the Windows user's own rights, so read-only is enforced by the runtime (`denyWrite`) and, when no running chat needs a folder writable, by a read-only mount as well. drvfs folders also ignore case while the runtime's binds and guards hold one spelling, so a read-only folder nested in a writable one is refused and the agent puts back the files that make code run on Windows (git hooks and config, `.vscode`, Claude Code's settings and hooks, ...) after every command; a planted file exists until the command ends (see "The sandbox" below). The runtime is beta (0.0.x) and pinned; setup's self-test runs again on every Repair and any surprise marks the sandbox failed. Antivirus can't see inside the VM.
+**The sandboxed shell has two walls, and a break-out of the inner one reaches more than its own chat.** With `shellRuns: 'sandbox'`, `run_command` runs in the `grunt-sandbox` WSL2 distro (interop and automount off) under the sandbox runtime (bubblewrap, a filtering proxy). The runtime keeps a command to its chat's folders, its home `/home/grunt/chats/<chat>` and its own temp folder, and off the network except allowlisted hosts. A command that broke out of the runtime would reach everything in the distro, every folder mounted for any chat with a running agent (read-write where some chat has it writable), and the VM's network; with WSL's `networkingMode=mirrored` that includes services on this machine that only listen locally, Grunt's own API among them, which is why Settings > Sandbox warns about it. In remote access's sign-in mode (`--public-url`) Grunt listens on a non-loopback address, so even in WSL's default NAT mode a break-out could reach Grunt's port over the VM's virtual network; there it would find only the password-protected HTTPS sign-in (and the OAuth callback, which needs a pending flow's 256-bit `state`), and Settings > Sandbox doesn't warn about this case. A break-out of the VM reaches Windows (Hyper-V's boundary, as with Cowork). drvfs mounts carry the Windows user's own rights, so read-only is enforced by the runtime (`denyWrite`) and, when no running chat needs a folder writable, by a read-only mount as well. drvfs folders also ignore case while the runtime's binds and guards hold one spelling, so a read-only folder nested in a writable one is refused and the agent puts back the files that make code run on Windows (git hooks and config, `.vscode`, Claude Code's settings and hooks, ...) after every command; a planted file exists until the command ends (see "The sandbox" below). The runtime is beta (0.0.x) and pinned; setup's self-test runs again on every Repair and any surprise marks the sandbox failed. Antivirus can't see inside the VM.
 
 The temp folders are part of the inner wall. `/tmp` is unreadable inside a command, so each run gets its own folder under `/tmp/grunt-chats/<chat>/<run>`, and the runtime's sockets live in `/tmp/grunt-chats/<chat>/rt`. The runtime sets `TMPDIR` itself inside bubblewrap from `CLAUDE_CODE_TMPDIR`, which is why the agent points that at the per-run folder before each wrap (a `TMPDIR` in the spawn environment is ignored, and with `/tmp` denied and the sockets left in it every connection fails).
 
@@ -891,7 +891,7 @@ goes through `containPath`, and transcripts are capped at 512 MiB each and
 exactly what needs no card: existing Always grants (exact host-shell commands
 included), read-only tools and read-only MCP tools under "Ask on changes",
 artifacts, web tools a profile allows and sandboxed commands (under "Ask on
-changes"; a host off the sandbox's list is refused, never asked). A prompt
+changes"; a host off the sandbox's list is refused, never asked, unless a host grant already covers it). A prompt
 injection in a scheduled run is limited to those, and a sandboxed command can
 still push data to a host on the allowlist (see the sandbox's known limits). The editor's warnings list what will be refused, not what will run.
 There's no spend cap; usage rows are written as normal.
@@ -1072,7 +1072,7 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
   - A chat deleted by peer sync (not through this machine's routes) is never released here: its agent closes when idle and its folders are unmounted then, but its home and temp folders in the VM stay until the sandbox is removed (Settings > Sandbox > Remove). Deleting a chat, a profile or a connection here releases them.
   - Under ask on mutate a sandboxed command runs with no card even when the profile's file access is off or read-only, and the default allowlist includes write-capable hosts (`github.com`, `registry.npmjs.org`). A command can therefore push data out to an account the attacker controls. This was agreed in the spec, and it is worth revisiting if the default list changes.
   - The host-name check can't see DNS that points a public name at a private address (`127.0.0.1.nip.io`, rebinding). The connect-time guard covers that (checked live). It doesn't judge a literal-IP dial at all: that rests on the allowlist never holding a literal and on the agent's ask-time lookup (checked live too).
-- **Scheduled runs and Plan mode.** A scheduled run sets `ToolContext.unattended` (the one flag thread cards added); a sandboxed command runs with no card under "Ask on changes", and its `sandbox_network` question is refused without a card (`approval_unavailable`, audited `deny:unattended`). Under "Ask before every call" the command itself is refused. In Plan mode, until the plan is approved, the broker refuses both `sandbox` and `network` calls like the host shell, before the sandbox's no-card pass and before any host grant.
+- **Scheduled runs and Plan mode.** A scheduled run sets `ToolContext.unattended` (the one flag thread cards added); a sandboxed command runs with no card under "Ask on changes", and its `sandbox_network` question is refused without a card unless a host grant already covers it (`approval_unavailable`, audited `deny:unattended`). Under "Ask before every call" the command itself is refused. In Plan mode, until the plan is approved, the broker refuses both `sandbox` and `network` calls like the host shell, before the sandbox's no-card pass and before any host grant.
 - **Self-test and sign-in mode.** In sign-in mode (`--public-url`) Grunt's port speaks HTTPS only, so a plain-HTTP probe of it gets no status even when it connects. The self-test probes Grunt's port over both HTTP and HTTPS (`-k`) and needs both to fail to connect.
 - **Not built.** Background processes in the sandbox; a Linux backend (phase 2); macOS.
 
@@ -1162,7 +1162,7 @@ Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925).
 - **Where it lives.** `schedule` and `schedule_run` (migration `023-schedules`) are local. They have no sync triggers, so a schedule runs only on the machine that holds it. Deleting its chat, project or profile deletes it. Archiving its profile leaves it, and its runs record "Didn't run" until the profile is changed.
 - **When it runs.** `ScheduleService` (`packages/server/src/schedule/service.ts`) re-arms one timer for the earliest next run, never more than 30 s away, so sleep and clock changes are caught within 30 s. A schedule that missed slots runs once, marked late if more than 5 minutes past due. At most two scheduled runs go at once. A busy target chat makes its schedule wait, and a schedule still running at its next slot records that slot as "Didn't run". Runs stop after 30 minutes ("Timed out"). On start, a run left running by the previous process is marked as an error. `nextRunAt` moves before a run starts, so a crash never repeats a slot.
 - **Unattended.** Every scheduled run (and Run now) is unattended: `TurnInput.unattended` → `EngineRequest.unattended` → `ToolContext.unattended`. The last two came from thread cards and nothing set them until now. The schedule service sets them, and `TurnInput.unattended` is new. `GruntToolProvider.settle` refuses any call that would raise a card with `approval_unavailable`, audited `deny:unattended` (the Inspector says "refused: nobody to approve (scheduled run)"), and the run's history counts them. Grants, read-only tools under "Ask on changes", artifacts and allowed web tools still run. Thread cards already answer for the model in an unattended run: a question gets the unattended text and a plan stays closed. Claude Code's auto mode is never used in a scheduled run. The flag is only ever set by the service, never from a request body, so the peer listener can't set it.
-- **Sandbox.** Sandboxed commands run unattended under "Ask on changes" (no card). `unattendedWarnings` reads `ToolPolicy.shellRuns` through `runsShellInSandbox`: only a shell on this machine gets the "needs approval" line, and a sandboxed one gets a line saying hosts off its list are refused.
+- **Sandbox.** Sandboxed commands run unattended under "Ask on changes" (no card). `unattendedWarnings` reads `ToolPolicy.shellRuns` through `runsShellInSandbox`: only a shell on this machine gets the "needs approval" line, and a sandboxed one gets a line saying hosts off its list are refused unless a grant already covers them (an Always grant, or one for the schedule's own chat).
 - **Notifications.** Desktop only, shown even while Grunt is focused (Settings → Desktop → "Scheduled runs"). The run's own "Reply finished" is suppressed.
 - **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
 - **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
@@ -1376,34 +1376,43 @@ branch, so they were renumbered once merged. The final order is:
 - 024 `artifact-version-live`
 - 025 `mcp-oauth`
 
-021 stays free for the chat-unread migration. The runner applies every
-version above the database's `user_version` in order, so the gap needs
-nothing.
+**021 is a trap.** It is kept free for the chat-unread migration, but the
+runner only applies versions above the database's `user_version`. A database
+that this branch, or any feature branch here, has taken to 22-25 would skip a
+021 committed later: silently, with no error. So chat-unread must land on dev
+and be merged in here before this branch runs on a database that matters. If
+it can't, give it a number after 025, or add its column by hand to every
+database already past 21. A dev database at 20, or at 21 with chat-unread,
+runs 022 to 025 normally.
 
 The runner trusts `user_version`, so a dev database that a feature branch
-migrated with a different number can't come here as it is:
+migrated under another numbering can't come here as it is. Migration 025
+checks for that: if `mcp_server.oauth` is already there, it stops with an
+error that points here, rather than skipping or failing on a bare
+duplicate-column error. Each migration commits on its own, so the ones before
+025 still run. Check `PRAGMA user_version` first, with Grunt stopped:
 
-- **Recreate it (or fix it by hand):**
-  - A database from `feat/remote-access-build`: `user_version` 22, with
-    `mcp_server.oauth` but no `chat.plan_mode`. Here it skips 022, so plan
-    mode is missing, and 025 then fails ("duplicate column name: oauth").
-  - A database from this branch before live artifacts were merged (commits
-    b4bc881 to 5013bb6, where 024 was `mcp-oauth`): `user_version` 24, with
-    `mcp_server.oauth` but no `artifact_version.live`. Here it skips 024, so
-    live declarations are missing, and 025 fails the same way.
+- **From `feat/remote-access-build`** (022 was `mcp-oauth`: it has
+  `mcp_server.oauth` but no `chat.plan_mode`):
+  - At 22 (not yet opened here): `ALTER TABLE mcp_server DROP COLUMN oauth;`
+    then `PRAGMA user_version = 20;`. The runner then adds 022 to 025. The
+    sign-in summaries (account, time, a hand-registered client ID) go with
+    the column, so a signed-in MCP server may need signing in again.
+  - At 24 (opened here once: 023 and 024 ran, then 025 stopped):
+    `ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;` then
+    `PRAGMA user_version = 25;`. This keeps the sign-in data. Don't use the
+    first fix here: the runner would then try to create `schedule` again.
+- **From this branch before live artifacts were merged** (commits b4bc881 to
+  5013bb6, where 024 was `mcp-oauth`): at 24, with `mcp_server.oauth` but no
+  `artifact_version.live`, whether or not it has been opened since (025 stops
+  before changing anything). Run `ALTER TABLE artifact_version ADD COLUMN live
+  TEXT;` then `PRAGMA user_version = 25;`.
 - **Fine as it is:**
-  - A database from `dev`, `feat/cowork-parity` (the sandbox) or
-    `feat/office-files-build`: `user_version` 20, or 21 with the chat-unread
-    migration. It runs 022 to 025.
-  - A database from `feat/thread-cards-build`: 23 at ec65b4a, or 24 from
-    eb31223 on. Those numbers mean the same here, and it runs the rest.
-
-To fix one by hand instead, with Grunt stopped, take the MCP sign-in column
-out and wind the version back to the last migration the two numberings
-agree on, so the runner adds everything after it: `ALTER TABLE mcp_server
-DROP COLUMN oauth;` then `PRAGMA user_version = 20;` (from the remote-access
-branch) or `PRAGMA user_version = 23;` (from this branch before live
-artifacts). The sign-in summaries (account, time, a hand-registered client ID) go with the column, so a signed-in MCP server may need signing in again.
+  - From `dev`, `feat/cowork-parity` (the sandbox) or
+    `feat/office-files-build`: 20, or 21 with chat-unread.
+  - From `feat/thread-cards-build`: 23 if migrated before b55da3e, or 24 from
+    b55da3e on (that commit added `024-artifact-version-live`). Those numbers
+    mean the same here, and it runs the rest.
 
 ## Deviations from the v2 spec and plan
 
