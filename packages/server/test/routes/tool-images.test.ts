@@ -122,6 +122,22 @@ describe('the id-only attachment routes', () => {
     }
   });
 
+  it('show an image a Cowork import made, whose id is `<line uuid>:image:<n>`, with the colons as they are or percent-encoded', async () => {
+    const imported = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f:image:1';
+    await file(imported, { messageId: 'm1', filename: 'image-1.png' });
+    for (const id of [imported, encodeURIComponent(imported)]) {
+      const row = await app().request(`/api/attachments/${id}`);
+      expect(row.status, id).toBe(200);
+      expect(await row.json(), id).toMatchObject({ id: imported, chatId: 'chat-1', messageId: 'm1' });
+      const content = await app().request(`/api/attachments/${id}/content`);
+      expect(content.status, id).toBe(200);
+      expect(content.headers.get('content-type'), id).toBe('image/png');
+      expect(Buffer.from(await content.arrayBuffer()), id).toEqual(FAKE_PNG);
+      // An import only makes user images, never a tool's; an id of this shape is carried by the scoped route all the same.
+      expect((await app().request(url('chat-1', 'm1', id))).status, id).toBe(200);
+    }
+  });
+
   it("refuse a sent file whose reply is missing or in another chat, as if there were no such file", async () => {
     await file('moved', { messageId: 'm2' }); // chat-1's file on chat-2's reply
     await file('ghost', { messageId: 'ghost' });

@@ -9,11 +9,22 @@ import type { CanonMessage, Part } from '../types/messages.js';
  * part that fails becomes a short note (the turn goes on).
  */
 
-const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+/** One or more words of letters, digits, `-` and `_` (each starting with a letter or digit), joined by single colons. */
+const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*(?::[A-Za-z0-9][A-Za-z0-9_-]*)*$/;
+export const MAX_ATTACHMENT_ID_LENGTH = 128;
 
-/** An attachment id as Grunt makes one (a UUID, or a short test id): letters, digits, `-` and `_`, at most 64. Nothing path-like. */
+/**
+ * An attachment id as Grunt makes one. The shapes it makes are: a UUID (an
+ * upload, and a tool's image), `<transcript line uuid>:image:<n>` (an image a
+ * Cowork import brought in, see cowork-import.ts), and the short ids tests
+ * use. So: words of letters, digits, `-` and `_` joined by single colons, at
+ * most 128 characters in all. Nothing path-like (`/`, `\`, `.`), no space or
+ * control character, nothing empty, nothing that is not a string. An id is a
+ * database key and a URL segment only; it never becomes part of a path on
+ * disk (a blob is stored under its SHA-256).
+ */
 export function isAttachmentId(value: unknown): value is string {
-  return typeof value === 'string' && ATTACHMENT_ID.test(value);
+  return typeof value === 'string' && value.length <= MAX_ATTACHMENT_ID_LENGTH && ATTACHMENT_ID.test(value);
 }
 
 function nonEmptyString(value: unknown): value is string {

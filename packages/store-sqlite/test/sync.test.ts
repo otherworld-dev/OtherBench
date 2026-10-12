@@ -1051,7 +1051,7 @@ describe('what a synced message and file row may hold (the caps the local path h
     b.store.sync.apply([
       messageRow('m-bad', [
         { type: 'image', attachmentId: '../../etc/passwd', mimeType: 'image/png' },
-        { type: 'image', attachmentId: 'x'.repeat(65), mimeType: 'image/png' },
+        { type: 'image', attachmentId: 'x'.repeat(129), mimeType: 'image/png' },
         { type: 'image', attachmentId: 42, mimeType: 'image/png' },
         { type: 'image', attachmentId: 'ok-id', mimeType: 'text/html' },
         { type: 'image', data: blob, mimeType: 'image/png' },
@@ -1072,6 +1072,37 @@ describe('what a synced message and file row may hold (the caps the local path h
     expect(result(b, 'm-many').slice(50)).toEqual([note('[image not kept: too many or too large]'), note('[image not kept: too many or too large]')]);
   });
 
+  it('takes an image a Cowork import made (its id is `<line uuid>:image:<n>`): the file row is accepted and the message keeps its reference, verified', () => {
+    const imported = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f:image:1';
+    const part = { type: 'image', attachmentId: imported, mime: 'image/png' };
+    const userRow = (id: string): ChangeRow => ({
+      tbl: 'message', id, op: 'upsert', hlc,
+      row: { id, chat_id: 'chat-a', parent_id: null, role: 'user', status: 'complete', error: null, produced_by: null, created_at: 5, parts: JSON.stringify([part, { type: 'text', text: 'What is on this receipt?' }]) },
+    });
+
+    // The message first, its file in a later batch: held, then verified.
+    const b = machine();
+    b.store.sync.apply([userRow('u-imp')]);
+    expect(b.store.messages.get('u-imp')!.parts[0]).toEqual({ ...part, pending: true });
+    expect(b.store.sync.apply([fileRow(imported, 'u-imp', { filename: 'image-1.png' })]).applied).toBe(1);
+    expect(b.store.attachments.get(imported)).toMatchObject({ chatId: 'chat-a', messageId: 'u-imp', filename: 'image-1.png' });
+    expect(b.store.messages.get('u-imp')!.parts[0]).toEqual(part);
+    expect(b.store.sync.missingBlobs()).toEqual([{ id: imported, sha256: sha, size: 10 }]);
+
+    // Through a real sync from the machine that imported it, and offered on again as an image.
+    const a = node('a');
+    seedProfile(a);
+    chat(a, 'chat-i');
+    message(a, 'u-i', 'chat-i', null, { parts: [part] as CanonMessage['parts'] });
+    a.store.attachments.create({ id: imported, chatId: 'chat-i', messageId: 'u-i', filename: 'image-1.png', mime: 'image/png', size: 10, sha256: sha, storagePath: 'E:/blobs/i', extractedText: null });
+    const c = node('c');
+    pull(a, c, { seq: 0 });
+    expect(c.store.attachments.get(imported)).toMatchObject({ chatId: 'chat-i', messageId: 'u-i' });
+    expect(c.store.messages.get('u-i')!.parts).toEqual([part]);
+    const offered = c.store.sync.changesSince(0, 1000).rows.find((r) => r.tbl === 'message' && r.id === 'u-i') as Extract<ChangeRow, { op: 'upsert' }>;
+    expect(JSON.parse(offered.row['parts'] as string)).toEqual([part]);
+  });
+
   it('refuses a file row that Grunt could never have made', () => {
     const b = machine();
     const table: [string, ChangeRow][] = [
@@ -1083,7 +1114,7 @@ describe('what a synced message and file row may hold (the caps the local path h
       ['size as text', fileRow('f6', 'u-a', { size: '10' })],
       ['null size', fileRow('f7', 'u-a', { size: null })],
       ['path-like id', fileRow('../f8', 'u-a')],
-      ['over-long id', fileRow('x'.repeat(65), 'u-a')],
+      ['over-long id', fileRow('x'.repeat(129), 'u-a')],
       ['no file name', fileRow('f9', 'u-a', { filename: null })],
       ['over-long file name', fileRow('f10', 'u-a', { filename: 'n'.repeat(256) })],
       ['control character in the name', fileRow('f11', 'u-a', { filename: 'a\u0000b.png' })],

@@ -924,6 +924,29 @@ describe('TurnRunner capability fallback for image attachments', () => {
     expect(store.messages.get('u1')!.parts[1]).toMatchObject({ type: 'image', attachmentId: 'att-theirs' });
   });
 
+  it('replays an image a Cowork import made (its id is `<line uuid>:image:<n>`): the part is sent as an image and its bytes can be loaded', async () => {
+    const imported = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f:image:1';
+    const store = new InMemoryStore();
+    store.attachments.create(makeAttachment({ id: imported, chatId: 'chat-1', messageId: 'u1', filename: 'image-1.png' }));
+    store.messages.create({
+      id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null,
+      parts: [{ type: 'image', attachmentId: imported, mime: 'image/png' }, { type: 'text', text: 'What is on this receipt?' }],
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const runner = new TurnRunner(store, engine, { loadAttachment });
+    const profile = makeResolvedProfile({ model: makeModel({ supportsVision: true }) });
+
+    await runner.run({ chatId: 'chat-1', parentId: 'u1', userParts: [{ type: 'text', text: 'and?' }], profiles: [profile] });
+    await flush();
+
+    const request = engine.requests[0]!;
+    expect(request.messages.find((m) => m.id === 'u1')!.parts).toEqual([{ type: 'image', attachmentId: imported, mime: 'image/png' }, { type: 'text', text: 'What is on this receipt?' }]);
+    expect(request.attachmentSize!(imported)).toBe(1234);
+    expect((await request.loadAttachment!(imported)).toString()).toBe('bytes');
+    expect(loadAttachment).toHaveBeenCalledWith(imported);
+  });
+
   it('removes the images a failed run stored for a reply when it is retried, so the reply starts its image budget from zero', async () => {
     const store = new InMemoryStore();
     store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null, parts: [{ type: 'text', text: 'hi' }] });

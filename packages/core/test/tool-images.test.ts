@@ -574,10 +574,17 @@ describe('the binding checks fail closed on anything that is not what they expec
   });
 
   it('isAttachmentId and attachmentRowShapeOk accept what Grunt makes and nothing path-like, long or mistyped', () => {
-    for (const ok of ['3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f', 'att-1', 'A_b-9']) expect(isAttachmentId(ok), ok).toBe(true);
-    for (const bad of ['', '../x', 'a/b', 'a\\b', 'a b', '-lead', 'x'.repeat(65), 'a\u0000b', ...weird]) expect(isAttachmentId(bad), String(bad)).toBe(false);
+    // Every shape Grunt mints: an upload's UUID, an imported Cowork image (`<line uuid>:image:<n>`), and the short ids tests use.
+    const imported = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f:image:12';
+    for (const ok of ['3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f', imported, 'u1:image:1', 'att-1', 'A_b-9', 'x'.repeat(128)]) expect(isAttachmentId(ok), ok).toBe(true);
+    const refused = [
+      '', '../x', 'a/b', 'a\\b', 'a b', '-lead', 'x'.repeat(129), `${'x'.repeat(120)}:image:12`, 'a\u0000b', 'a\tb', 'a\nb', ' a', 'a ', 'a.b', '..', 'a:..', 'a:../b', 'a:/b', 'a:\\b', 'C:\\x',
+      ':a', 'a:', 'a::b', ':', 'a:-b', 'a:b c', 'a%3Ab', 'a?b', 'a#b', 'a\u00e9',
+    ];
+    for (const bad of [...refused, ...weird]) expect(isAttachmentId(bad), JSON.stringify(bad)).toBe(false);
     const row = { id: 'att-1', filename: 'shot.png', mime: 'image/png', size: 10 };
     expect(attachmentRowShapeOk(row, 100)).toBe(true);
+    expect(attachmentRowShapeOk({ ...row, id: imported }, 100)).toBe(true);
     for (const bad of [{ id: '../x' }, { filename: '' }, { filename: 'n'.repeat(256) }, { filename: 'a\nb' }, { filename: 5 }, { mime: '' }, { mime: 'x'.repeat(256) }, { mime: null }, { size: -1 }, { size: 1.5 }, { size: 101 }, { size: '10' }, { size: null }, { size: Number.NaN }]) {
       expect(attachmentRowShapeOk({ ...row, ...bad }, 100), JSON.stringify(bad)).toBe(false);
     }
