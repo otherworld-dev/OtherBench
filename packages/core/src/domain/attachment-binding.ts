@@ -9,6 +9,19 @@ import type { CanonMessage, Part } from '../types/messages.js';
  * part that fails becomes a short note (the turn goes on).
  */
 
+/**
+ * THE rule for whether an attachment is bound: it was sent (it has a message)
+ * and that message exists in the attachment's OWN chat. `messageChatId` is the
+ * chat the message belongs to, or null when there is no such message. Every
+ * caller in JS uses this (the runner's replay check, the store's own refusal,
+ * sync's checks); the one SQL spelling of it lives in store-sqlite's sync.ts
+ * (`BOUND_ATTACHMENT_SQL`) beside a test that proves the two agree. A chat that
+ * does not exist cannot have a message, so it needs no term of its own.
+ */
+export function attachmentBound(attachment: { chatId: string; messageId: string | null }, messageChatId: string | null): boolean {
+  return attachment.messageId !== null && messageChatId !== null && messageChatId === attachment.chatId;
+}
+
 /** The size an attachment may have to be replayed (the upload route's own cap). */
 export const MAX_HISTORY_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 

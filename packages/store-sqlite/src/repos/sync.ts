@@ -3,7 +3,7 @@ import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MA
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
-import { bindHistoryAttachments } from '@grunt/core/domain/attachment-binding.js';
+import { attachmentBound, bindHistoryAttachments } from '@grunt/core/domain/attachment-binding.js';
 import { bindToolImageParts } from '@grunt/core/domain/tool-images.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { SyncClock } from './clock.js';
@@ -27,9 +27,10 @@ const STAMP_COLUMNS = ['hlc', 'field_hlc'];
  * in a message, that message exists, and the message belongs to the attachment's
  * own chat (which exists). Every path that offers a file row, offers its bytes,
  * asks for its bytes or accepts its row uses this (SQL here, `isBound` for a row
- * being applied), so none can disagree about what a file is bound to.
+ * being applied), so none can disagree about what a file is bound to. The JS
+ * form is core's `attachmentBound`; a test proves the two agree.
  */
-const BOUND_ATTACHMENT_SQL = `EXISTS (SELECT 1 FROM message m JOIN chat c ON c.id = m.chat_id WHERE m.id = a.message_id AND m.chat_id = a.chat_id)`;
+export const BOUND_ATTACHMENT_SQL = `EXISTS (SELECT 1 FROM message m WHERE m.id = a.message_id AND m.chat_id = a.chat_id)`;
 
 /** The facts of an attachment that never change once it is sent: a peer can't re-point or swap one. */
 const ATTACHMENT_FIXED_FACTS = ['chat_id', 'sha256', 'mime', 'size'] as const;
@@ -139,7 +140,7 @@ export class SqliteSyncRepo implements SyncRepo {
   private isBound(chatId: unknown, messageId: unknown): boolean {
     if (typeof chatId !== 'string' || typeof messageId !== 'string') return false;
     const message = this.db.prepare('SELECT chat_id FROM message WHERE id = ?').get(messageId) as { chat_id: string } | undefined;
-    return message !== undefined && message.chat_id === chatId && this.exists('chat', chatId);
+    return attachmentBound({ chatId, messageId }, message?.chat_id ?? null);
   }
 
   private tombstone(tbl: SyncTable, id: string): string | null {
@@ -366,7 +367,8 @@ export class SqliteSyncRepo implements SyncRepo {
       [{ id, chatId, parentId: null, role: 'user', parts: toolBound, status: 'complete', error: null, producedBy: null, createdAt: 0 }],
       (attachmentId) => {
         const a = this.select('attachment', attachmentId);
-        return a === null || a['chat_id'] === chatId;
+        // A file that hasn't arrived is left to the read-time check; one that is here must be this chat's and bound.
+        return a === null || (a['chat_id'] === chatId && this.isBound(a['chat_id'], a['message_id']));
       }
     );
     const bound = carrier!.parts;

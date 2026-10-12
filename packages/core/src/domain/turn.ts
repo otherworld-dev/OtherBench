@@ -18,7 +18,7 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
-import { bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from './attachment-binding.js';
+import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from './attachment-binding.js';
 import { bindToolImages, keepToolImages, MAX_TOOL_IMAGE_BYTES, toolImageBound, type SaveToolImage } from './tool-images.js';
 
 /**
@@ -789,8 +789,8 @@ export class TurnRunner {
   /** Whether attachment `id` may be replayed in chat `chatId`: its row is in that chat, within the size cap, and was sent in a message of that chat. */
   private attachmentInChat(id: string, chatId: string): boolean {
     const row = this.store.attachments.get(id);
-    if (!row || row.chatId !== chatId || !(row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES) || row.messageId === null) return false;
-    return this.store.messages.get(row.messageId)?.chatId === chatId;
+    if (!row || row.chatId !== chatId || !(row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    return attachmentBound(row, row.messageId === null ? null : (this.store.messages.get(row.messageId)?.chatId ?? null));
   }
 
   /** `load` for one chat: it refuses an attachment `attachmentInChat` would not let through, and bytes over the cap, so no engine can read across chats by id. */

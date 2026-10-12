@@ -6,6 +6,8 @@ import { MIGRATIONS, runMigrations } from '../src/migrations/index.js';
 import { SqliteStore } from '../src/store.js';
 import { artifactsOnBranch, branchOf } from '@grunt/core/domain/artifacts.js';
 import type { ChangeRow } from '@grunt/core/domain/sync.js';
+import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
+import { BOUND_ATTACHMENT_SQL } from '../src/repos/sync.js';
 
 interface Node {
   id: string;
@@ -809,5 +811,56 @@ describe('every path a file, its reference or its bytes travels is bound the sam
     message(b, 'm-a2', 'chat-a', null);
     expect(() => b.store.attachments.update('x3', { messageId: 'm-a2' })).toThrow(/already sent/);
     expect(b.store.attachments.update('x3', { filename: 'renamed.png' }).filename).toBe('renamed.png');
+  });
+});
+
+describe('the binding rule has one meaning in SQL and in JS', () => {
+  function machine(): Node {
+    const n = node('b');
+    seedProfile(n);
+    chat(n, 'chat-a');
+    chat(n, 'chat-b');
+    for (const [id, chatId] of [['m-a', 'chat-a'], ['m-a2', 'chat-a'], ['m-b', 'chat-b'], ['m-gone', 'chat-a']] as const) message(n, id, chatId, null);
+    return n;
+  }
+  const raw = (n: Node, id: string, chatId: string, messageId: string | null): void => {
+    n.db.prepare('INSERT INTO attachment (id, chat_id, message_id, filename, mime, size, sha256, storage_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)').run(id, chatId, messageId, `${id}.png`, 'image/png', 1, id.padEnd(64, '0').replace(/[^0-9a-f]/g, '0'), '');
+  };
+  const sqlSays = (n: Node, id: string): boolean => (n.db.prepare(`SELECT ${BOUND_ATTACHMENT_SQL} AS ok FROM attachment a WHERE a.id = ?`).get(id) as { ok: number }).ok === 1;
+  const jsSays = (n: Node, id: string): boolean => {
+    const row = n.store.attachments.get(id)!;
+    const message = row.messageId === null ? null : n.store.messages.get(row.messageId);
+    return attachmentBound(row, message?.chatId ?? null);
+  };
+
+  it('agrees over bound, unsent, another chat, a deleted message, and a message moved to another chat', () => {
+    const n = machine();
+    raw(n, 'bound', 'chat-a', 'm-a');
+    raw(n, 'unsent', 'chat-a', null);
+    raw(n, 'other-chat', 'chat-b', 'm-a');
+    raw(n, 'deleted', 'chat-a', 'm-gone');
+    n.db.prepare('DELETE FROM message WHERE id = ?').run('m-gone');
+    raw(n, 'moved', 'chat-a', 'm-a2');
+    n.db.prepare('UPDATE message SET chat_id = ? WHERE id = ?').run('chat-b', 'm-a2');
+    const expected: [string, boolean][] = [['bound', true], ['unsent', false], ['other-chat', false], ['deleted', false], ['moved', false]];
+    for (const [id, bound] of expected) {
+      expect(sqlSays(n, id), `sql ${id}`).toBe(bound);
+      expect(jsSays(n, id), `js ${id}`).toBe(bound);
+    }
+    // A chat that is deleted takes its files with it (no row is left to be bound).
+    n.db.prepare('DELETE FROM chat WHERE id = ?').run('chat-a');
+    expect(n.store.attachments.get('bound')).toBeNull();
+  });
+
+  it("moving a message to another chat unbinds its files: they are not offered, not served, not fetched", () => {
+    const n = machine();
+    raw(n, 'att', 'chat-a', 'm-a2');
+    const sha = n.store.attachments.get('att')!.sha256;
+    expect(n.store.sync.isSentBlob(sha)).toBe(true);
+    expect(n.store.sync.missingBlobs().map((m) => m.id)).toEqual(['att']);
+    n.db.prepare('UPDATE message SET chat_id = ? WHERE id = ?').run('chat-b', 'm-a2');
+    expect(n.store.sync.isSentBlob(sha)).toBe(false);
+    expect(n.store.sync.missingBlobs()).toEqual([]);
+    expect(n.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'attachment')).toEqual([]);
   });
 });

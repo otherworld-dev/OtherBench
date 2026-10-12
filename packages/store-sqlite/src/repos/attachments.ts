@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
 import type { Attachment, AttachmentRepo } from '@grunt/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
@@ -34,13 +35,13 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
   /**
    * A file is tied to one chat for good, and once it is sent to a message of
    * that chat: the same rule sync applies to a row from another machine
-   * (`BOUND_ATTACHMENT_SQL` in sync.ts). A message of another chat, or one that
+   * (`attachmentBound` in core, and `BOUND_ATTACHMENT_SQL` in sync.ts). A message of another chat, or one that
    * does not exist, is refused whoever asks (a route, an import, a turn).
    */
   private requireBoundTo(chatId: string, messageId: string | null): void {
     if (messageId === null) return;
     const message = this.db.prepare('SELECT chat_id FROM message WHERE id = ?').get(messageId) as { chat_id: string } | undefined;
-    if (!message || message.chat_id !== chatId) {
+    if (!attachmentBound({ chatId, messageId }, message?.chat_id ?? null)) {
       throw new Error(`Attachment cannot be bound to message "${messageId}": it is not a message of chat "${chatId}".`);
     }
   }
