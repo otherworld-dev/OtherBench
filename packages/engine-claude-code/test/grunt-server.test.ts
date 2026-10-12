@@ -26,6 +26,11 @@ describe("Grunt's own tools for Claude Code", () => {
     expect((await failing.call({ command: 'view', id: 'x' })).isError).toBe(true);
   });
 
+  it('offers live as a string in the artifact tool schema (spec 2026-10-12-live-artifacts)', () => {
+    const def = gruntArtifactTool(() => undefined);
+    expect((def.inputSchema.properties as Record<string, { type?: string }>)['live']).toMatchObject({ type: 'string' });
+  });
+
   it('refuses when no Grunt reply is running or artifacts are off', async () => {
     const result = await gruntArtifactTool(() => undefined).call({ command: 'view', id: 'x' });
     expect(result.isError).toBe(true);

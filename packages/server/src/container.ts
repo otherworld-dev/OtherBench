@@ -22,6 +22,7 @@ import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations, SCHEMA_VERSION } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { liveToolRisks } from '@grunt/tools/artifact-tool.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
@@ -296,7 +297,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       approvals: toolProvider,
       listEndpointModels: endpointModelLister(aisdkEngine),
       // Artifacts (Deck #896) and recall: the same executors as the API engines' tools.
-      artifactTool: async (ctx, args) => runArtifactCommand(store, ctx, args),
+      // A live declaration may name only the profile's read-only MCP tools (relayed names are normalised).
+      artifactTool: async (ctx, args) =>
+        runArtifactCommand(store, { chatId: ctx.chatId, messageId: ctx.messageId, liveTools: () => liveToolRisks(toolProvider.relayMcpTools(ctx.mcpServerIds)) }, args),
       recallTool: async (ctx, args) => runRecallCommand(store, ctx, args),
       // Clean chats, and the profile's MCP servers relayed through Grunt's own server.
       scratchRoot: claudeScratchRoot,

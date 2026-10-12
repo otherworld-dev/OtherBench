@@ -16,6 +16,9 @@ const SHAPE = {
   language: z.string().optional(),
   find: z.string().optional(),
   replace: z.string().optional(),
+  // Live artifacts (spec 2026-10-12-live-artifacts): JSON text. The executor
+  // takes an object too, since this server's raw handler doesn't validate.
+  live: z.string().optional(),
 };
 
 /**

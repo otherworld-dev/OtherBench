@@ -45,8 +45,13 @@ export interface ClaudeCodeEngineDeps {
   liveIdleMs?: number;
   /** How many idle Claude Code processes are kept. Defaults to 3. */
   maxLive?: number;
-  /** Runs an `artifact` tool call for a reply (Deck #896): the server's executor. Without it, Claude Code gets no artifact tool. */
-  artifactTool?: (ctx: { chatId: string; messageId: string }, args: unknown) => Promise<unknown>;
+  /**
+   * Runs an `artifact` tool call for a reply (Deck #896): the server's
+   * executor. `mcpServerIds` are the profile's, so a live declaration (spec
+   * 2026-10-12-live-artifacts) is checked against its tools. Without it,
+   * Claude Code gets no artifact tool.
+   */
+  artifactTool?: (ctx: { chatId: string; messageId: string; mcpServerIds: string[] }, args: unknown) => Promise<unknown>;
   /** Runs a `recall` tool call for a reply (spec 2026-10-09-recall-design): the server's executor. Without it, Claude Code gets no recall tool. */
   recallTool?: (ctx: { chatId: string }, args: unknown) => Promise<unknown>;
   /**
@@ -223,7 +228,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const binding: TurnBinding = {
       gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
-      ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
+      ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: serverIds }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
       ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
       ...(relay.tools.size > 0 ? { relay: (spec: ToolSpec, args: unknown) => spec.execute(args, gateCtx) } : {}),
