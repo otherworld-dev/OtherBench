@@ -3,6 +3,7 @@ import type { McpServer, Store } from '@grunt/core/ports/store.js';
 import { McpClient, type McpClientOptions, type McpTransportConfig } from './client.js';
 import { GruntOAuthProvider, hasAuthorizationHeader } from './oauth-provider.js';
 import { McpOAuthStore } from './oauth-store.js';
+import { McpSignIns, SignInError } from './sign-in.js';
 
 /** One http server's sign-in, as the browser sees it: never a token, code or secret. */
 export interface McpServerAuthHealth {
@@ -62,6 +63,7 @@ export class McpServerManager {
   private readonly clients = new Map<string, McpClient>();
   private readonly unsubscribes = new Map<string, () => void>();
   private readonly oauth: McpOAuthStore;
+  private readonly signIns: McpSignIns;
 
   constructor(
     private readonly store: Store,
@@ -70,6 +72,11 @@ export class McpServerManager {
     private readonly oauthOptions: McpOAuthOptions = {}
   ) {
     this.oauth = new McpOAuthStore(store, secrets, oauthOptions.now);
+    this.signIns = new McpSignIns(this.oauth, {
+      now: oauthOptions.now,
+      signInTimeoutMs: oauthOptions.signInTimeoutMs,
+      requestTimeoutMs: oauthOptions.requestTimeoutMs,
+    });
   }
 
   async sync(): Promise<void> {
@@ -113,6 +120,39 @@ export class McpServerManager {
     if (row?.enabled) await this.connectServer(row);
   }
 
+  /** Starts a browser sign-in for one http server. Throws `SignInError` (404 unknown server, 400/409/502 from `McpSignIns.start`). */
+  async startSignIn(id: string, redirectUri: string): Promise<{ authorizationUrl: string }> {
+    const row = this.store.mcpServers.get(id);
+    if (!row) throw new SignInError(404, `MCP server "${id}" not found.`);
+    const headers = await this.resolveSecretRefs(row.headerRefs);
+    return this.signIns.start(row, redirectUri, headers);
+  }
+
+  /** Finishes a sign-in (the callback, or paste-back with `serverId`), then reconnects the server if it is enabled. */
+  async completeSignIn(params: { serverId?: string; state: string; code?: string; error?: string }): Promise<{ serverId: string; serverName: string }> {
+    const { serverId } = await this.signIns.complete(params);
+    const row = this.store.mcpServers.get(serverId);
+    if (row?.enabled) await this.refresh(serverId);
+    return { serverId, serverName: row?.name ?? 'the server' };
+  }
+
+  cancelSignIn(id: string): void {
+    this.signIns.cancel(id);
+  }
+
+  /** Forgets the tokens and the registered client here (no revocation at the provider), keeps a hand-registered client, and reconnects (which then needs sign-in). */
+  async signOut(id: string): Promise<void> {
+    this.signIns.cancel(id);
+    await this.oauth.forget(id, { keepManualClient: true });
+    await this.restart(id);
+  }
+
+  /** For edits and deletes: drops any pending flow and forgets the sign-in, without reconnecting. */
+  async forgetSignIn(id: string, opts: { keepManualClient: boolean }): Promise<void> {
+    this.signIns.cancel(id);
+    await this.oauth.forget(id, opts);
+  }
+
   /** Every currently-connected client among `serverIds`, paired with its row's own name (used for `mcp__<name>__<tool>` namespacing). Unknown/not-yet-connected ids are silently omitted -- a policy naming a server that hasn't connected yet simply contributes no tools this call, rather than erroring the whole turn. A server that needs sign-in isn't `ok`, so it offers no tools. */
   listFor(serverIds: string[]): { id: string; name: string; client: McpClient }[] {
     const rows = new Map(this.store.mcpServers.list().map((r) => [r.id, r]));
@@ -145,6 +185,7 @@ export class McpServerManager {
   }
 
   async shutdown(): Promise<void> {
+    this.signIns.dropAll();
     const clients = [...this.clients.values()];
     for (const id of [...this.clients.keys()]) this.teardown(id);
     await Promise.all(clients.map((c) => c.disconnect()));
@@ -157,8 +198,8 @@ export class McpServerManager {
       state: status === 'needs_auth' ? 'needs_sign_in' : signedInAt !== null ? 'signed_in' : 'none',
       account: row.oauth?.account ?? null,
       signedInAt,
-      pending: false,
-      error: null,
+      pending: this.signIns.pending(row.id),
+      error: this.signIns.lastError(row.id),
     };
   }
 

@@ -82,7 +82,7 @@ describe('connections that need sign-in', () => {
 
   it('health reports auth null for stdio, and state none for an http server that never asked', async () => {
     const httpServer = await serveHttp(0);
-    cleanups.push(() => new Promise<void>((resolve) => httpServer.close(() => resolve())));
+    cleanups.push(() => new Promise<void>((resolve) => { httpServer.closeAllConnections(); httpServer.close(() => resolve()); }));
     const port = (httpServer.address() as AddressInfo).port;
     const store = new InMemoryStore();
     store.mcpServers.create(row({ id: 'plain', url: `http://127.0.0.1:${port}/mcp` }));
@@ -97,7 +97,7 @@ describe('connections that need sign-in', () => {
 
   it('restart() reconnects from the current row, picking up a changed URL', async () => {
     const httpServer = await serveHttp(0);
-    cleanups.push(() => new Promise<void>((resolve) => httpServer.close(() => resolve())));
+    cleanups.push(() => new Promise<void>((resolve) => { httpServer.closeAllConnections(); httpServer.close(() => resolve()); }));
     const fixture = await oauthFixture();
     const store = new InMemoryStore();
     store.mcpServers.create(row({ url: `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}/mcp` }));

@@ -1,0 +1,259 @@
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import type { AddressInfo } from 'node:net';
+import { InMemoryStore, FakeSecretStore } from '@grunt/core/testing/fakes.js';
+import type { McpServer } from '@grunt/core/ports/store.js';
+import { McpServerManager } from '../../src/mcp/manager.js';
+import { oauthRefs } from '../../src/mcp/oauth-store.js';
+import { SignInError, checkAuthorizationUrl, sanitiseErrorCode } from '../../src/mcp/sign-in.js';
+import { serveHttp } from '../fixtures/echo-server.js';
+import { startOAuthEchoServer } from '../fixtures/oauth-echo-server.js';
+
+const REDIRECT = 'http://127.0.0.1:4747/oauth/callback';
+const OTHER_REDIRECT = 'http://127.0.0.1:5858/oauth/callback';
+
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  while (cleanups.length > 0) await cleanups.pop()!();
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  await vi.waitFor(() => {
+    if (!predicate()) throw new Error('condition not met yet');
+  }, { timeout: timeoutMs, interval: 25 });
+}
+
+function httpRow(url: string, over: Partial<McpServer> = {}): McpServer {
+  return { id: 'srv-1', name: 'Hosted Docs', transport: 'http', command: null, args: [], envRefs: {}, url, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null, ...over };
+}
+
+async function setup(fixtureOpts: Record<string, unknown> = {}, rowOver: Partial<McpServer> = {}) {
+  const fixture = await startOAuthEchoServer(fixtureOpts);
+  cleanups.push(() => fixture.close());
+  const store = new InMemoryStore();
+  const secrets = new FakeSecretStore();
+  const clock = { t: Date.now() };
+  store.mcpServers.create(httpRow(fixture.url, rowOver));
+  const manager = new McpServerManager(store, secrets, { initialBackoffMs: 50, maxBackoffMs: 100 }, { now: () => clock.t });
+  cleanups.push(() => manager.shutdown());
+  await manager.sync();
+  // Let the background connect settle first, so it never races the sign-in a test starts.
+  await waitFor(() => manager.health()[0]?.status === 'needs_auth');
+  return { fixture, store, secrets, clock, manager };
+}
+
+/** Follows the authorization URL the way a browser would, stopping at the redirect back to Grunt. */
+async function followAuthorization(authorizationUrl: string): Promise<{ state: string; code?: string; error?: string }> {
+  const res = await fetch(authorizationUrl, { redirect: 'manual' });
+  const location = res.headers.get('location');
+  if (!location) throw new Error(`no redirect (HTTP ${res.status}): ${await res.text()}`);
+  const q = new URL(location).searchParams;
+  return { state: q.get('state')!, code: q.get('code') ?? undefined, error: q.get('error') ?? undefined };
+}
+
+async function signIn(manager: McpServerManager, redirectUri = REDIRECT): Promise<void> {
+  const { authorizationUrl } = await manager.startSignIn('srv-1', redirectUri);
+  await manager.completeSignIn(await followAuthorization(authorizationUrl));
+}
+
+const health = (manager: McpServerManager) => manager.health()[0]!;
+
+describe('signing in', () => {
+  it('start returns an authorization URL with S256, state, the redirect address and resource, and registers one client', async () => {
+    const { fixture, manager } = await setup();
+    await waitFor(() => health(manager).status === 'needs_auth');
+
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    const url = new URL(authorizationUrl);
+    expect(url.origin).toBe(fixture.origin);
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(url.searchParams.get('code_challenge')).toBeTruthy();
+    expect(url.searchParams.get('state')).toMatch(/^[A-Za-z0-9_-]{43}$/); // 32 bytes, base64url
+    expect(url.searchParams.get('redirect_uri')).toBe(REDIRECT);
+    expect(url.searchParams.get('resource')).toBe(fixture.url);
+    expect(fixture.registrations).toHaveLength(1);
+    expect(fixture.registrations[0]!.metadata).toMatchObject({
+      client_name: 'Grunt',
+      redirect_uris: [REDIRECT],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    });
+    expect(health(manager).auth).toMatchObject({ pending: true });
+  });
+
+  it('completing it connects the server, lists and calls its tools, and keeps no token in the row', async () => {
+    const { fixture, store, secrets, manager } = await setup({ idTokenEmail: 'alice@example.com' });
+    await signIn(manager);
+
+    expect(health(manager)).toMatchObject({ status: 'ok', toolCount: 2, auth: { state: 'signed_in', account: 'alice@example.com', pending: false, error: null } });
+    const listed = manager.listFor(['srv-1']);
+    expect(listed[0]!.client.tools.map((t) => t.name).sort()).toEqual(['crash', 'echo']);
+    const result = await listed[0]!.client.callTool('echo', { text: 'signed-in' });
+    expect(JSON.stringify(result.content)).toContain('signed-in');
+
+    const rowJson = JSON.stringify(store.mcpServers.get('srv-1'));
+    for (const token of [...fixture.issued.accessTokens, ...fixture.issued.refreshTokens, ...fixture.issued.idTokens]) expect(rowJson).not.toContain(token);
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).toContain(fixture.issued.accessTokens[0]!);
+  });
+
+  it('an expired access token is refreshed on the next call, and the rotated refresh token is stored', async () => {
+    const { fixture, secrets, manager } = await setup({ rotate: true });
+    await signIn(manager);
+    fixture.expireAccessTokens();
+
+    const result = await manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'after-expiry' });
+    expect(JSON.stringify(result.content)).toContain('after-expiry');
+    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').tokens))!) as { tokens: { refresh_token: string } };
+    expect(fixture.issued.refreshTokens).toHaveLength(2);
+    expect(stored.tokens.refresh_token).toBe(fixture.issued.refreshTokens[1]);
+  });
+
+  it('two calls racing after expiry both succeed through rotating refresh tokens, and the server stays signed in', async () => {
+    const { fixture, manager, clock } = await setup({ rotate: true });
+    await signIn(manager);
+    clock.t += 2 * 60 * 60_000; // the sign-in itself is long past the 60-second grace
+    fixture.expireAccessTokens();
+
+    const client = manager.listFor(['srv-1'])[0]!.client;
+    const [a, b] = await Promise.all([client.callTool('echo', { text: 'race-a' }), client.callTool('echo', { text: 'race-b' })]);
+    expect(JSON.stringify(a.content)).toContain('race-a');
+    expect(JSON.stringify(b.content)).toContain('race-b');
+    expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in' } });
+  });
+
+  it('a revoked refresh token ends in needs_auth with the sign-in forgotten', async () => {
+    const { fixture, store, secrets, manager, clock } = await setup();
+    await signIn(manager);
+    clock.t += 2 * 60 * 60_000;
+    fixture.revokeRefreshTokens();
+    fixture.expireAccessTokens();
+
+    await expect(manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'x' })).rejects.toThrow();
+    await waitFor(() => health(manager).status === 'needs_auth');
+    expect(health(manager).auth).toMatchObject({ state: 'needs_sign_in', signedInAt: null });
+    expect(store.mcpServers.get('srv-1')!.oauth?.signedInAt ?? null).toBeNull();
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+  });
+
+  it('a token endpoint that is down is an ordinary error, keeps the sign-in and recovers', async () => {
+    const { fixture, secrets, manager } = await setup();
+    await signIn(manager);
+    fixture.setTokenDown(true);
+    fixture.expireAccessTokens();
+
+    await expect(manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'x' })).rejects.toThrow();
+    await waitFor(() => health(manager).status === 'error');
+    expect(health(manager).lastError).toContain("Couldn't refresh the sign-in; will retry.");
+    expect(health(manager).auth).toMatchObject({ state: 'signed_in' });
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).not.toBeNull();
+
+    fixture.setTokenDown(false);
+    await waitFor(() => health(manager).status === 'ok'); // the backoff reconnect refreshes and gets back in
+  });
+
+  it('a second start with the same redirect address reuses the registration and replaces the first flow; a new address registers again', async () => {
+    const { fixture, manager } = await setup();
+    const first = await manager.startSignIn('srv-1', REDIRECT);
+    const second = await manager.startSignIn('srv-1', REDIRECT);
+    expect(fixture.registrations).toHaveLength(1);
+
+    const stale = await followAuthorization(first.authorizationUrl);
+    await expect(manager.completeSignIn(stale)).rejects.toMatchObject({ status: 400, message: 'This sign-in has expired or was already used. Start it again from Grunt.' });
+    expect(new URL(second.authorizationUrl).searchParams.get('state')).not.toBe(stale.state);
+
+    await manager.startSignIn('srv-1', OTHER_REDIRECT);
+    expect(fixture.registrations).toHaveLength(2);
+  });
+
+  it('completion refuses an unknown state, a reused state and one older than 10 minutes', async () => {
+    const { manager, clock } = await setup();
+    await expect(manager.completeSignIn({ state: 'no-such-state', code: 'x' })).rejects.toBeInstanceOf(SignInError);
+
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    const back = await followAuthorization(authorizationUrl);
+    await manager.completeSignIn(back);
+    await expect(manager.completeSignIn(back)).rejects.toMatchObject({ status: 400 });
+    expect(health(manager).auth).toMatchObject({ state: 'signed_in' }); // a reload of the callback leaves the sign-in alone
+
+    const late = await manager.startSignIn('srv-1', REDIRECT);
+    const lateBack = await followAuthorization(late.authorizationUrl);
+    clock.t += 10 * 60_000 + 1;
+    await expect(manager.completeSignIn(lateBack)).rejects.toMatchObject({ status: 400 });
+    expect(health(manager).auth).toMatchObject({ pending: false });
+  });
+
+  it('a refusal at the provider is recorded as the last error until the next start', async () => {
+    const { fixture, manager } = await setup();
+    fixture.setDeny(true);
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    await expect(manager.completeSignIn(await followAuthorization(authorizationUrl))).rejects.toMatchObject({
+      status: 400,
+      message: 'The sign-in provider said: access_denied',
+    });
+    expect(health(manager).auth).toMatchObject({ error: 'The sign-in provider said: access_denied', pending: false });
+
+    fixture.setDeny(false);
+    await manager.startSignIn('srv-1', REDIRECT);
+    expect(health(manager).auth).toMatchObject({ error: null, pending: true });
+  });
+
+  it('cancel drops the pending flow', async () => {
+    const { manager } = await setup();
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    manager.cancelSignIn('srv-1');
+    expect(health(manager).auth).toMatchObject({ pending: false });
+    await expect(manager.completeSignIn(await followAuthorization(authorizationUrl))).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('start is refused for a fixed Authorization header (any case), an unknown server, and a server that never asks', async () => {
+    const { manager, store, secrets } = await setup();
+    await secrets.set('ref-auth', 'Bearer fixed');
+    store.mcpServers.update('srv-1', { headerRefs: { authorization: 'ref-auth' } });
+    await expect(manager.startSignIn('srv-1', REDIRECT)).rejects.toMatchObject({
+      status: 409,
+      message: 'This server sends a fixed Authorization header. Remove it to sign in with a browser instead.',
+    });
+    await expect(manager.startSignIn('no-such-server', REDIRECT)).rejects.toMatchObject({ status: 404 });
+
+    const plain = await serveHttp(0);
+    cleanups.push(() => new Promise<void>((resolve) => { plain.closeAllConnections(); plain.close(() => resolve()); }));
+    store.mcpServers.create(httpRow(`http://127.0.0.1:${(plain.address() as AddressInfo).port}/mcp`, { id: 'plain', name: 'Plain' }));
+    await expect(manager.startSignIn('plain', REDIRECT)).rejects.toMatchObject({ status: 409, message: "This server didn't ask for a sign-in." });
+  });
+
+  it('with no dynamic registration, start explains how to register Grunt by hand', async () => {
+    const { manager } = await setup({ dcr: false });
+    await expect(manager.startSignIn('srv-1', REDIRECT)).rejects.toMatchObject({
+      status: 502,
+      message: `This server's sign-in provider doesn't let apps register themselves. Register Grunt with it (redirect address: ${REDIRECT}) and enter the client ID under Sign-in app.`,
+    });
+  });
+
+  it('sign out deletes the secrets, clears the summary and leaves the server needing sign-in', async () => {
+    const { store, secrets, manager } = await setup({ idTokenEmail: 'alice@example.com' });
+    await signIn(manager);
+    await manager.signOut('srv-1');
+
+    expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
+    expect(await secrets.get(oauthRefs('srv-1').client)).toBeNull();
+    expect(store.mcpServers.get('srv-1')!.oauth).toBeNull();
+    await waitFor(() => health(manager).status === 'needs_auth');
+    expect(health(manager).auth).toMatchObject({ state: 'needs_sign_in', account: null, signedInAt: null });
+  });
+});
+
+describe('sign-in helpers', () => {
+  it('sanitiseErrorCode keeps [A-Za-z0-9_.-] and at most 64 characters', () => {
+    expect(sanitiseErrorCode('access_denied<script>alert(1)</script>')).toBe('access_deniedscriptalert1script');
+    expect(sanitiseErrorCode('x'.repeat(100))).toHaveLength(64);
+  });
+
+  it('checkAuthorizationUrl accepts https and loopback http, and refuses anything else', () => {
+    expect(() => checkAuthorizationUrl(new URL('https://auth.example.com/authorize'))).not.toThrow();
+    expect(() => checkAuthorizationUrl(new URL('http://127.0.0.1:9000/authorize'))).not.toThrow();
+    expect(() => checkAuthorizationUrl(new URL('http://localhost:9000/authorize'))).not.toThrow();
+    expect(() => checkAuthorizationUrl(new URL('http://[::1]:9000/authorize'))).not.toThrow();
+    expect(() => checkAuthorizationUrl(new URL('http://auth.example.com/authorize'))).toThrow(SignInError);
+    expect(() => checkAuthorizationUrl(new URL('javascript:alert(1)'))).toThrow(SignInError);
+  });
+});
