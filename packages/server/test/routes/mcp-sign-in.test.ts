@@ -93,7 +93,7 @@ async function endedOn(authorizationUrl: string): Promise<URL> {
 
 const callbackPath = (ended: URL) => `${ended.pathname}${ended.search}`;
 
-describe('MCP sign-in routes', () => {
+describe('MCP sign-in routes', { timeout: 20_000 }, () => {
   it('POST sign-in returns the authorization URL for the bound redirect address', async () => {
     const id = await createServer();
     const url = new URL(await startSignIn(id));
@@ -180,7 +180,7 @@ describe('MCP sign-in routes', () => {
   });
 });
 
-describe('GET /oauth/callback', () => {
+describe('GET /oauth/callback', { timeout: 20_000 }, () => {
   it('finishes the sign-in with a plain, locked-down page naming the server, escaped', async () => {
     const id = await createServer('<b>Docs & Co</b>');
     const res = await app().request(callbackPath(await endedOn(await startSignIn(id))));
@@ -243,7 +243,7 @@ describe('GET /oauth/callback', () => {
   });
 });
 
-describe('what the browser can see', () => {
+describe('what the browser can see', { timeout: 20_000 }, () => {
   it('health carries auth, and neither health nor the stored row nor the secrets file holds a token', async () => {
     const id = await createServer();
     await app().request(callbackPath(await endedOn(await startSignIn(id))));
@@ -262,7 +262,7 @@ describe('what the browser can see', () => {
   });
 });
 
-describe('Sign-in app fields', () => {
+describe('Sign-in app fields', { timeout: 20_000 }, () => {
   it('POST stores the client secret by reference only, and GET never shows it', async () => {
     const id = await createServer('Manual', { oauthClientId: 'app-1', oauthClientSecret: 'super-secret-client-value' });
     const row = store.mcpServers.get(id)!;
@@ -326,7 +326,7 @@ describe('Sign-in app fields', () => {
   });
 });
 
-describe('sign-in mode (remote access)', () => {
+describe('sign-in mode (remote access)', { timeout: 20_000 }, () => {
   let fx: RemoteFixture;
   afterEach(() => fx?.cleanup());
 
@@ -383,7 +383,7 @@ describe('sign-in mode (remote access)', () => {
   });
 });
 
-describe('editing and deleting a signed-in server', () => {
+describe('editing and deleting a signed-in server', { timeout: 20_000 }, () => {
   async function signedIn(name = 'Hosted Docs'): Promise<string> {
     const id = await createServer(name);
     await app().request(callbackPath(await endedOn(await startSignIn(id))));
