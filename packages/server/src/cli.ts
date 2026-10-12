@@ -17,6 +17,7 @@ import {
   TlsConflictError,
   TlsWithoutPublicUrlError,
 } from './remote/errors.js';
+import { PasswordCommandError, runPasswordCommand } from './remote/password-command.js';
 import { parsePublicUrl } from './remote/public-url.js';
 import { checkSignIn, loginPathFor, startSignIn, type SignIn } from './remote/startup.js';
 import { expiryWarning } from './remote/tls.js';
@@ -356,6 +357,8 @@ export async function runServe(
 
 export interface MainDeps extends Partial<ServeDeps> {
   env?: NodeJS.ProcessEnv;
+  /** Whether stdin is a terminal, for `grunt password`. Defaults to `process.stdin.isTTY`. */
+  isTTY?: boolean;
 }
 
 const USAGE = [
@@ -365,10 +368,30 @@ const USAGE = [
   '  grunt password [--db <path>]',
 ].join('\n');
 
-/** The CLI entry point: `grunt <command> [options]`. Currently only `serve` exists. */
+/** The CLI entry point: `grunt serve` or `grunt password`. */
 export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
   const exit = deps.exit ?? ((code: number) => { process.exitCode = code; });
   const [command, ...rest] = argv;
+
+  if (command === 'password') {
+    const { values } = parseArgs({ args: rest, options: { db: { type: 'string' } }, strict: false });
+    const dbPath = typeof values['db'] === 'string' ? values['db'] : defaultDbPath();
+    try {
+      await runPasswordCommand(defaultLoginPath(dbPath), {
+        stdin: deps.stdin ?? process.stdin,
+        stdout: deps.stdout ?? process.stdout,
+        isTTY: deps.isTTY ?? Boolean(process.stdin.isTTY),
+      });
+    } catch (err) {
+      if (err instanceof PasswordCommandError) {
+        console.error(`Error: ${err.message}`);
+        exit(1);
+        return;
+      }
+      throw err;
+    }
+    return;
+  }
 
   if (command !== 'serve') {
     console.error(USAGE);
