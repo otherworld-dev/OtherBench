@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
+import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
@@ -18,7 +18,7 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
-import { bindToolImages, keepToolImages, type SaveToolImage } from './tool-images.js';
+import { bindToolImages, keepToolImages, toolImageBound, type SaveToolImage } from './tool-images.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -574,6 +574,20 @@ export class TurnRunner {
       // came from anywhere but this runner's own storing is never replayed.
       const bound = bindToolImages(this.buildRequestMessages(userMessageId, requestProfile), chatId, (id) => this.store.attachments.get(id));
       const history = this.withArtifactsList(translateForNode(bound, selfNodeId, locationPaths), tools, chatId, userMessageId);
+      // The only way an engine gets a stored tool image's bytes back: for this
+      // chat, a message on this thread, and the row stored for exactly that
+      // pair. Anything else (an id from tool output, another chat's history)
+      // gets nothing, and no blob is read.
+      const threadIds = new Set(bound.map((m) => m.id));
+      const loadStored = this.loadAttachment;
+      const loadToolImage: ToolImageLoader | undefined = loadStored
+        ? async (ref) => {
+            if (ref.chatId !== chatId || !threadIds.has(ref.messageId)) return null;
+            const row = this.store.attachments.get(ref.attachmentId);
+            if (!row || !toolImageBound(row, chatId, ref.messageId)) return null;
+            return loadStored(ref.attachmentId);
+          }
+        : undefined;
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -612,6 +626,7 @@ export class TurnRunner {
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
         loadAttachment: this.loadAttachment,
+        ...(loadToolImage ? { loadToolImage } : {}),
         purpose: 'turn',
         autoMode,
         ...(effort ? { effort } : {}),

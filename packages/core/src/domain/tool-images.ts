@@ -48,6 +48,8 @@ export interface ToolImageRow {
   chatId: string;
   messageId: string | null;
   mime: string;
+  /** Stored size in bytes, when known; over `MAX_TOOL_IMAGE_BYTES` never counts as bound. */
+  size?: number;
 }
 
 export type ToolImageLookup = (attachmentId: string) => ToolImageRow | null;
@@ -91,6 +93,30 @@ export function hasToolImageSignature(data: Buffer, mime: string): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * The raster type `data` really is (png, jpeg, gif or webp, by its leading
+ * bytes), or null. What a model is told an image is comes from here, never
+ * from a stored row or a tool's own label.
+ */
+export function sniffToolImageMime(data: Buffer): string | null {
+  for (const mime of TOOL_IMAGE_MIMES) if (hasToolImageSignature(data, mime)) return mime;
+  return null;
+}
+
+/**
+ * Whether an attachment row is a tool image stored for exactly this chat and
+ * this message: the one test a reference has to pass, wherever it is read.
+ * The row's size is held to the same cap as a stored image.
+ */
+export function toolImageBound(row: ToolImageRow, chatId: string, messageId: string): boolean {
+  return (
+    row.chatId === chatId &&
+    row.messageId === messageId &&
+    TOOL_IMAGE_MIMES.includes(baseMime(row.mime)) &&
+    (row.size === undefined || (row.size >= 0 && row.size <= MAX_TOOL_IMAGE_BYTES))
+  );
 }
 
 /**
@@ -188,9 +214,8 @@ export function bindToolImageParts(parts: Part[], chatId: string, messageId: str
       if (row === null) {
         return missing === 'keep' ? { type: 'image', attachmentId: item.attachmentId, mimeType: baseMime(item.mimeType) } : { type: 'text', text: TOOL_IMAGE_NOT_BOUND };
       }
-      const mime = baseMime(row.mime);
-      if (row.chatId !== chatId || row.messageId !== messageId || !TOOL_IMAGE_MIMES.includes(mime)) return { type: 'text', text: TOOL_IMAGE_NOT_BOUND };
-      return { type: 'image', attachmentId: item.attachmentId, mimeType: mime };
+      if (!toolImageBound(row, chatId, messageId)) return { type: 'text', text: TOOL_IMAGE_NOT_BOUND };
+      return { type: 'image', attachmentId: item.attachmentId, mimeType: baseMime(row.mime) };
     });
     changed = true;
     return { ...part, result };

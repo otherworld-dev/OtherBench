@@ -8,6 +8,8 @@ import {
   IMAGE_NOT_KEPT_LIMIT,
   isToolImageRef,
   keepToolImages,
+  sniffToolImageMime,
+  toolImageBound,
   MAX_TOOL_IMAGE_BYTES,
   MAX_TOOL_IMAGES_PER_MESSAGE,
   TOOL_IMAGE_NOT_BOUND,
@@ -320,5 +322,73 @@ describe('TurnRunner and references in tool results', () => {
     expect(events.find((e) => e.type === 'tool-result')).toMatchObject({ result: expected });
     expect(store.messages.get(id)!.parts).toContainEqual({ type: 'tool-result', id: 'call-1', name: 'mcp_tool', result: expected, isError: false });
     expect(store.attachments.list('chat-b')).toEqual([]);
+  });
+
+  it('gives the engine a loader that reads a blob only for a row stored for this chat and a message on its thread', async () => {
+    const store = new InMemoryStore();
+    store.attachments.create(attachment('att-ok', 'chat-b', 'msg-b'));
+    store.attachments.create(attachment('att-other-chat', 'chat-a', 'msg-b'));
+    store.attachments.create(attachment('att-other-msg', 'chat-b', 'msg-elsewhere'));
+    store.attachments.create(attachment('att-unsent', 'chat-b', null));
+    store.attachments.create({ ...attachment('att-svg', 'chat-b', 'msg-b'), mime: 'image/svg+xml' });
+    store.attachments.create({ ...attachment('att-huge', 'chat-b', 'msg-b'), size: MAX_TOOL_IMAGE_BYTES + 1 });
+    store.messages.create({ id: 'msg-user-b', chatId: 'chat-b', parentId: null, role: 'user', parts: [{ type: 'text', text: 'hi' }], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'msg-b', chatId: 'chat-b', parentId: 'msg-user-b', role: 'assistant', parts: [{ type: 'text', text: 'ok' }], status: 'complete', error: null, producedBy: null });
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => FAKE_PNG);
+    const runner = new TurnRunner(store, engine, { loadAttachment });
+    const turn = await runner.run({ chatId: 'chat-b', parentId: 'msg-b', userParts: [{ type: 'text', text: 'go' }], profiles: [profile()] });
+    await done(store, turn.assistantMessageIds[0]!);
+
+    const load = engine.requests[0]!.loadToolImage!;
+    expect(load).toBeTypeOf('function');
+    const refused: [string, string, string][] = [
+      ['chat-a', 'msg-b', 'att-ok'], // not the chat this turn is for
+      ['chat-b', 'msg-b', 'att-other-chat'], // row belongs to another chat
+      ['chat-b', 'msg-b', 'att-other-msg'], // row belongs to another reply
+      ['chat-b', 'msg-elsewhere', 'att-other-msg'], // a reply that is not on this thread
+      ['chat-b', 'msg-b', 'att-unsent'],
+      ['chat-b', 'msg-b', 'att-svg'],
+      ['chat-b', 'msg-b', 'att-huge'],
+      ['chat-b', 'msg-b', 'no-such-attachment'],
+    ];
+    for (const [chatId, messageId, attachmentId] of refused) expect(await load({ chatId, messageId, attachmentId }), attachmentId).toBeNull();
+    expect(loadAttachment).not.toHaveBeenCalled();
+
+    expect(await load({ chatId: 'chat-b', messageId: 'msg-b', attachmentId: 'att-ok' })).toBe(FAKE_PNG);
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+    expect(loadAttachment).toHaveBeenCalledWith('att-ok');
+  });
+
+  it('gives the engine no loader when the runner has nowhere to read blobs from', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const turn = await new TurnRunner(store, engine).run({ chatId: 'chat-b', parentId: null, userParts: [{ type: 'text', text: 'go' }], profiles: [profile()] });
+    await done(store, turn.assistantMessageIds[0]!);
+    expect(engine.requests[0]!.loadToolImage).toBeUndefined();
+  });
+});
+
+describe('sniffToolImageMime and toolImageBound', () => {
+  it('names the raster type of the bytes themselves, and nothing else', () => {
+    const table: [Buffer, string | null][] = [
+      [FAKE_PNG, 'image/png'],
+      [Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0]), 'image/jpeg'],
+      [Buffer.from('GIF89a....'), 'image/gif'],
+      [Buffer.from('RIFF\0\0\0\0WEBPVP8 '), 'image/webp'],
+      [Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), null],
+      [Buffer.from('BM......'), null],
+      [Buffer.alloc(0), null],
+    ];
+    for (const [bytes, expected] of table) expect(sniffToolImageMime(bytes)).toBe(expected);
+  });
+
+  it('binds a row to one chat and one message, an allowlisted type and a sane size', () => {
+    const row = { chatId: 'c', messageId: 'm', mime: 'Image/PNG; charset=x', size: 10 };
+    expect(toolImageBound(row, 'c', 'm')).toBe(true);
+    expect(toolImageBound({ ...row, size: undefined }, 'c', 'm')).toBe(true);
+    for (const bad of [{ chatId: 'x' }, { messageId: 'x' }, { messageId: null }, { mime: 'text/html' }, { size: MAX_TOOL_IMAGE_BYTES + 1 }, { size: -1 }]) {
+      expect(toolImageBound({ ...row, ...bad }, 'c', 'm'), JSON.stringify(bad)).toBe(false);
+    }
   });
 });

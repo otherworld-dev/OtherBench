@@ -4,6 +4,17 @@ import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import type { ToolSpec } from './tool-provider.js';
 
+/**
+ * Loads the bytes of an image a tool result in the history refers to.
+ * The reference is named with the chat and the message that holds it, and the
+ * loader answers `null` unless that attachment was stored for exactly that
+ * chat and message: an id that came from tool output, MCP, a sub-agent or
+ * another chat's history gets no bytes. It is the only way an engine turns a
+ * stored tool image back into bytes (`loadAttachment` is for what the user
+ * attached, and is never used for these).
+ */
+export type ToolImageLoader = (ref: { chatId: string; messageId: string; attachmentId: string }) => Promise<Buffer | null>;
+
 export interface EngineRequest {
   profile: ResolvedProfile;
   messages: CanonMessage[];
@@ -43,6 +54,8 @@ export interface EngineRequest {
    * `routes/attachments.ts` writes to on upload.
    */
   loadAttachment?: (id: string) => Promise<Buffer>;
+  /** Loads a stored tool image for replay, checked against this chat and thread (see `ToolImageLoader`). Absent: stored tool images are replayed as a text note. */
+  loadToolImage?: ToolImageLoader;
   /**
    * `'utility'` marks a tool-less side call (auto-title, summaries) that must
    * not create a resumable session or load user settings. Default `'turn'`.
