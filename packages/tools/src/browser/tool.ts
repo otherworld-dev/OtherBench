@@ -2,7 +2,7 @@ import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, n
 import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
 import { BrowserBusyError, StaleRefError } from './session.js';
-import { cutSnapshot, refLines } from './snapshot.js';
+import { MAX_NOTE_CHARS, MAX_TARGET_CHARS, cutSnapshot, pageText, refLines } from './snapshot.js';
 
 export const NO_PAGE = 'No page is open: use open first.';
 const NO_APPROVAL = 'Grunt has no approval for this call.';
@@ -143,15 +143,9 @@ function failure(code: string, message: string): { error: true; code: string; me
   return { error: true, code, message };
 }
 
-const MAX_MESSAGE = 300;
-
-/** At most 300 characters, with an ellipsis when cut. */
-function cap(text: string): string {
-  return text.length <= MAX_MESSAGE ? text : `${text.slice(0, MAX_MESSAGE - 1)}…`;
-}
-
+/** An error's first line as page-safe text (an engine error can quote the page). */
 function firstLine(err: unknown): string {
-  return cap((err instanceof Error ? err.message : String(err)).split('\n')[0] ?? '');
+  return pageText((err instanceof Error ? err.message : String(err)).split('\n')[0] ?? '', MAX_NOTE_CHARS);
 }
 
 async function describe(manager: BrowserManager, raw: unknown, ctx: ToolContext): Promise<DescribedCall> {
@@ -171,7 +165,9 @@ async function describe(manager: BrowserManager, raw: unknown, ctx: ToolContext)
   const chat = manager.peek(ctx.chatId);
   const host = chat ? siteOf(chat.session.url()) : null;
   if (!chat || host === null) return { refuse: NO_PAGE };
-  const target = call.ref !== undefined ? chat.refs.get(call.ref) : undefined;
+  // `host` is the committed URL's site (never a title, a link or the model's word); `target` is the element as the page describes it, cleaned.
+  const line = call.ref !== undefined ? chat.refs.get(call.ref) : undefined;
+  const target = line !== undefined ? pageText(line, MAX_TARGET_CHARS) : undefined;
   return { args: { ...callArgs(call), host, ...(target !== undefined ? { target } : {}) }, risk };
 }
 
@@ -202,12 +198,12 @@ async function pageResult(chat: ChatBrowser): Promise<Record<string, unknown>> {
   const [title, raw] = await Promise.all([chat.session.title(), chat.session.snapshot()]);
   chat.refs = refLines(raw);
   const { snapshot, truncated } = cutSnapshot(raw);
-  // Notes can carry the page's own words (a dialog's message, a popup's address): capped.
-  const notes = chat.takeNotes().map(cap);
+  // The page's own words (its title, a dialog's message, a popup's address) are cleaned and capped; the site named in `about` is the committed URL's.
+  const notes = chat.takeNotes().map((n) => pageText(n, MAX_NOTE_CHARS)).filter((n) => n !== '');
   return {
     about: aboutPage(siteOf(url) ?? 'an unknown page'),
     url,
-    title,
+    title: pageText(title, MAX_TARGET_CHARS),
     snapshot,
     ...(truncated ? { truncated: true } : {}),
     ...(notes.length > 0 ? { notes } : {}),
