@@ -176,3 +176,45 @@ export function optionalWorkspaceRoot(value: unknown, field: string): string | n
   }
   return trimmed;
 }
+
+/** Most hosts a profile's sandbox allowlist may name (spec 2026-10-12-sandbox-design). */
+export const MAX_SANDBOX_HOSTS = 200;
+const HOST_LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
+
+/**
+ * Why `entry` (already trimmed and lower-cased) isn't a host pattern the
+ * sandbox runtime takes the way Grunt allows: `pypi.org`, `*.example.com`,
+ * optionally `:port`; no IP literals, no localhost. Null when it is fine.
+ */
+export function sandboxHostProblem(entry: string): string | null {
+  if (entry.length > 253) return 'is longer than 253 characters';
+  let host = entry;
+  const withPort = /^(.*):(\d{1,5})$/.exec(entry);
+  if (withPort) {
+    const port = Number(withPort[2]);
+    if (port < 1 || port > 65535 || withPort[2]!.startsWith('0')) return 'has a port outside 1-65535';
+    host = withPort[1]!;
+  }
+  if (host.includes('[') || host.includes(':')) return 'is an IP address; name the host instead';
+  const bare = host.startsWith('*.') ? host.slice(2) : host;
+  const labels = bare.split('.');
+  if (labels.every((l) => /^\d+$/.test(l))) return 'is an IP address; name the host instead';
+  if (labels[labels.length - 1] === 'localhost') return 'is this machine, which the sandbox never reaches';
+  if (labels.length < 2) return 'must be a full host name like pypi.org';
+  if (!labels.every((l) => HOST_LABEL.test(l))) return "isn't a host name pattern (letters, digits, hyphens and dots, optionally starting with *.)";
+  return null;
+}
+
+/** `toolPolicy.sandboxHosts`: trimmed, lower-cased, de-duplicated and checked. */
+export function parseSandboxHosts(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
+    throw new HTTPException(400, { message: '"toolPolicy.sandboxHosts" must be an array of strings, or null for the defaults.' });
+  }
+  const hosts = [...new Set(value.map((v) => v.trim().toLowerCase()).filter((v) => v.length > 0))];
+  if (hosts.length > MAX_SANDBOX_HOSTS) throw new HTTPException(400, { message: `"toolPolicy.sandboxHosts" may list at most ${MAX_SANDBOX_HOSTS} hosts.` });
+  for (const host of hosts) {
+    const problem = sandboxHostProblem(host);
+    if (problem) throw new HTTPException(400, { message: `"toolPolicy.sandboxHosts": "${host}" ${problem}.` });
+  }
+  return hosts;
+}

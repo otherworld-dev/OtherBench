@@ -10,6 +10,7 @@ import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { createApp } from '../../src/app.js';
+import { parseApprovalChoice } from '../../src/routes/tools.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -588,5 +589,30 @@ describe('Approval routes', () => {
       body: JSON.stringify({ choice: 'maybe' }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('parseApprovalChoice: sandbox network grants', () => {
+  it('keeps the host of an "always" constraint', () => {
+    expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org' } })).toMatchObject({ choice: 'always', constraint: { host: 'pypi.org' } });
+  });
+
+  it('refuses a host that is not a string', () => {
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 42 } })).toThrow('"constraint.host" must be a string.');
+  });
+
+  it.each([[''], ['a'.repeat(254)]])('refuses a host of the wrong size (%#)', (host) => {
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host } })).toThrow('"constraint.host" must be 1-253 characters.');
+  });
+
+  it('refuses a constraint that mixes keys, and one with a key Grunt does not know', () => {
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org', commandExact: 'ls' } })).toThrow('"constraint" must set only one key.');
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { pathPrefix: 'src', commandPrefix: 'git' } })).toThrow('"constraint" must set only one key.');
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org', extra: 1 } })).toThrow('"constraint" has an unknown key "extra".');
+  });
+
+  it('still takes a single path or command key, and an empty constraint as none', () => {
+    expect(parseApprovalChoice({ choice: 'always', constraint: { commandExact: 'ls' } })).toMatchObject({ constraint: { commandExact: 'ls' } });
+    expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toMatchObject({ choice: 'always', constraint: null });
   });
 });

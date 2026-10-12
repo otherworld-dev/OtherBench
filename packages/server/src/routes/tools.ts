@@ -158,15 +158,23 @@ interface ApprovalBody {
   constraint?: unknown;
 }
 
+/** The keys a grant's constraint may set, and only one of them at a time (the broker enforces the same). */
+const CONSTRAINT_KEYS = ['pathPrefix', 'commandPrefix', 'commandExact', 'host'] as const;
+
 function parseConstraint(value: unknown): Grant['constraint'] {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new HTTPException(400, { message: '"constraint" must be an object or null.' });
   }
   const v = value as Record<string, unknown>;
+  const unknownKey = Object.keys(v).find((key) => !(CONSTRAINT_KEYS as readonly string[]).includes(key));
+  if (unknownKey !== undefined) {
+    throw new HTTPException(400, { message: `"constraint" has an unknown key "${unknownKey}".` });
+  }
   const pathPrefix = v['pathPrefix'];
   const commandPrefix = v['commandPrefix'];
   const commandExact = v['commandExact'];
+  const host = v['host'];
   if (pathPrefix !== undefined && typeof pathPrefix !== 'string') {
     throw new HTTPException(400, { message: '"constraint.pathPrefix" must be a string.' });
   }
@@ -176,11 +184,20 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   if (commandExact !== undefined && typeof commandExact !== 'string') {
     throw new HTTPException(400, { message: '"constraint.commandExact" must be a string.' });
   }
-  if (pathPrefix === undefined && commandPrefix === undefined && commandExact === undefined) return null;
+  if (host !== undefined && typeof host !== 'string') {
+    throw new HTTPException(400, { message: '"constraint.host" must be a string.' });
+  }
+  if (host !== undefined && (host.length === 0 || host.length > 253)) {
+    throw new HTTPException(400, { message: '"constraint.host" must be 1-253 characters.' });
+  }
+  const setKeys = [pathPrefix, commandPrefix, commandExact, host].filter((k) => k !== undefined).length;
+  if (setKeys === 0) return null;
+  if (setKeys > 1) throw new HTTPException(400, { message: '"constraint" must set only one key.' });
   return {
     pathPrefix: pathPrefix as string | undefined,
     commandPrefix: commandPrefix as string | undefined,
     commandExact: commandExact as string | undefined,
+    host: host as string | undefined,
   };
 }
 

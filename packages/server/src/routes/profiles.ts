@@ -4,7 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
-import { optionalBoolean, optionalNullableString, optionalStringArray, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString } from '../validation.js';
 import { clearProjectDefaultProfile } from './projects.js';
 import { clearMemoryProfile } from './settings.js';
 
@@ -59,6 +59,12 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
   }
+  const shellRuns = v['shellRuns'];
+  if (shellRuns !== undefined && shellRuns !== 'host' && shellRuns !== 'sandbox') {
+    throw new HTTPException(400, { message: '"toolPolicy.shellRuns" must be one of: host, sandbox.' });
+  }
+  // null = back to the default allowlist (the key is dropped); omitted = keep the base's.
+  const sandboxHosts = v['sandboxHosts'] === undefined ? base.sandboxHosts : v['sandboxHosts'] === null ? undefined : parseSandboxHosts(v['sandboxHosts']);
   return {
     fs: (fs as ToolPolicy['fs']) ?? base.fs,
     shell: typeof v['shell'] === 'boolean' ? v['shell'] : base.shell,
@@ -74,6 +80,8 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : base.agentMcp !== undefined ? { agentMcp: base.agentMcp } : {}),
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
+    ...(shellRuns !== undefined ? { shellRuns: shellRuns as ToolPolicy['shellRuns'] } : base.shellRuns !== undefined ? { shellRuns: base.shellRuns } : {}),
+    ...(sandboxHosts !== undefined ? { sandboxHosts } : {}),
   };
 }
 

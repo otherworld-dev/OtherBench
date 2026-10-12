@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
+import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
+import { DEFAULT_SANDBOX_HOSTS } from '@grunt/core/types/config.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
+import { sandboxHostProblem } from '../../src/validation.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -328,5 +331,58 @@ describe('PATCH /api/profiles/:id toolPolicy merging', () => {
       mcpServerIds: [],
       approvalMode: 'always_ask',
     });
+  });
+});
+
+describe('toolPolicy: the sandboxed shell', () => {
+  const create = (toolPolicy: unknown) =>
+    app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+  const patch = (id: string, toolPolicy: unknown) =>
+    app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolPolicy }) });
+
+  it('stores shellRuns and a tidied allowlist', async () => {
+    const res = await create({ fs: 'readwrite', shell: true, shellRuns: 'sandbox', sandboxHosts: ['  PyPI.org ', '*.example.com', 'api.example.com:8443', 'pypi.org'] });
+    expect(res.status).toBe(201);
+    expect((await res.json()).toolPolicy).toMatchObject({ shellRuns: 'sandbox', sandboxHosts: ['pypi.org', '*.example.com', 'api.example.com:8443'] });
+  });
+
+  it('a partial PATCH keeps them, and sandboxHosts: null goes back to the defaults', async () => {
+    const created = await (await create({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org'] })).json();
+    const kept = await (await patch(created.id, { fs: 'read' })).json();
+    expect(kept.toolPolicy).toMatchObject({ fs: 'read', shellRuns: 'sandbox', sandboxHosts: ['pypi.org'] });
+    const reset = await (await patch(created.id, { sandboxHosts: null })).json();
+    expect(reset.toolPolicy.sandboxHosts).toBeUndefined();
+    expect(reset.toolPolicy.shellRuns).toBe('sandbox');
+    const host = await (await patch(created.id, { shellRuns: 'host' })).json();
+    expect(host.toolPolicy.shellRuns).toBe('host');
+  });
+
+  it.each([...DEFAULT_SANDBOX_HOSTS])('the default allowlist host %s passes the validation and is already canonical', (host) => {
+    expect(sandboxHostProblem(host)).toBeNull();
+    expect(canonicalHost(host)).toBe(host);
+  });
+
+  it('accepts every default allowlist host', async () => {
+    const res = await create({ shell: true, shellRuns: 'sandbox', sandboxHosts: [...DEFAULT_SANDBOX_HOSTS] });
+    expect(res.status).toBe(201);
+    expect((await res.json()).toolPolicy.sandboxHosts).toEqual([...DEFAULT_SANDBOX_HOSTS]);
+  });
+
+  it.each([
+    [{ shellRuns: 'vm' }, '"toolPolicy.shellRuns" must be one of: host, sandbox.'],
+    [{ sandboxHosts: 'pypi.org' }, '"toolPolicy.sandboxHosts" must be an array of strings, or null for the defaults.'],
+    [{ sandboxHosts: ['1.2.3.4'] }, '"toolPolicy.sandboxHosts": "1.2.3.4" is an IP address; name the host instead.'],
+    [{ sandboxHosts: ['[::1]:22'] }, '"toolPolicy.sandboxHosts": "[::1]:22" is an IP address; name the host instead.'],
+    [{ sandboxHosts: ['localhost'] }, '"toolPolicy.sandboxHosts": "localhost" is this machine, which the sandbox never reaches.'],
+    [{ sandboxHosts: ['api.localhost'] }, '"toolPolicy.sandboxHosts": "api.localhost" is this machine, which the sandbox never reaches.'],
+    [{ sandboxHosts: ['intranet'] }, '"toolPolicy.sandboxHosts": "intranet" must be a full host name like pypi.org.'],
+    [{ sandboxHosts: ['pypi.org:0'] }, '"toolPolicy.sandboxHosts": "pypi.org:0" has a port outside 1-65535.'],
+    [{ sandboxHosts: ['bad_host.org'] }, '"toolPolicy.sandboxHosts": "bad_host.org" isn\'t a host name pattern (letters, digits, hyphens and dots, optionally starting with *.).'],
+    [{ sandboxHosts: [`${'a'.repeat(250)}.org`] }, `"toolPolicy.sandboxHosts": "${'a'.repeat(250)}.org" is longer than 253 characters.`],
+    [{ sandboxHosts: Array.from({ length: 201 }, (_, i) => `h${i}.example.com`) }, '"toolPolicy.sandboxHosts" may list at most 200 hosts.'],
+  ])('refuses %j', async (toolPolicy, message) => {
+    const res = await create(toolPolicy);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: message });
   });
 });
