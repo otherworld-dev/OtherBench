@@ -59,6 +59,12 @@ export class McpOAuthStore {
     return (await this.loadTokens(serverId))?.tokens;
   }
 
+  /** The token strings held in memory right now, for redacting error text without reading the SecretStore. */
+  cachedSecrets(serverId: string): string[] {
+    const tokens = this.tokenCache.get(serverId)?.tokens;
+    return [tokens?.access_token, tokens?.refresh_token, tokens?.id_token].filter((v): v is string => typeof v === 'string' && v.length > 0);
+  }
+
   async lastSavedAt(serverId: string): Promise<number | null> {
     return (await this.loadTokens(serverId))?.savedAt ?? null;
   }

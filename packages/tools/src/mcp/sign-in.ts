@@ -6,6 +6,7 @@ import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
 import { GruntOAuthProvider, hasAuthorizationHeader } from './oauth-provider.js';
 import type { McpOAuthStore } from './oauth-store.js';
+import { redactMessage } from './redact.js';
 
 export type SignInStatus = 400 | 404 | 409 | 502 | 503;
 
@@ -22,7 +23,8 @@ export class SignInError extends Error {
 
 const DEFAULT_SIGN_IN_TIMEOUT_MS = 600_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+const REPLACED_MESSAGE = 'This sign-in was replaced or cancelled before it was ready. Start it again from Grunt.';
+const LOOPBACK_HOSTS =new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 /** A provider's error code, reduced to [A-Za-z0-9_.-] and 64 characters before it is shown or stored. */
 export function sanitiseErrorCode(code: string): string {
@@ -43,29 +45,7 @@ function fetchWithTimeout(ms: number): FetchLike {
   };
 }
 
-const MAX_MESSAGE_LENGTH = 300;
-const MIN_SECRET_LENGTH = 4;
-const SENSITIVE_PAIR = /\b(code|code_verifier|state|access_token|refresh_token|id_token|client_secret|assertion)(["']?\s*[=:]\s*["']?)[^\s&"',}]+/gi;
-
-/**
- * Makes text safe to leave this module (an HTTP error, `health().auth.error`,
- * a log line): every known secret the flow holds becomes `[redacted]`, so do
- * `key=value` / `"key":"value"` pairs for the usual OAuth secrets, URLs lose
- * their query and fragment, whitespace collapses, and it is cut to 300
- * characters. SDK and fetch errors can embed request URLs and response
- * bodies, which can carry the code, the verifier or a token.
- */
-export function redactMessage(text: string, secrets: Iterable<string | null | undefined> = []): string {
-  let out = text;
-  for (const secret of secrets) {
-    if (!secret || secret.length < MIN_SECRET_LENGTH) continue;
-    for (const form of new Set([secret, encodeURIComponent(secret)])) out = out.split(form).join('[redacted]');
-  }
-  out = out.replace(SENSITIVE_PAIR, '$1$2[redacted]');
-  out = out.replace(/https?:\/\/[^\s"'<>)]+/gi, (url) => url.split(/[?#]/)[0] ?? '');
-  out = out.replace(/\s+/g, ' ').trim();
-  return out.length > MAX_MESSAGE_LENGTH ? `${out.slice(0, MAX_MESSAGE_LENGTH)}...` : out;
-}
+export { redactMessage };
 
 function startFailureMessage(err: unknown, redirectUri: string, secrets: Iterable<string | null | undefined>): string {
   const message = err instanceof Error ? err.message : String(err);
@@ -116,6 +96,8 @@ export class McpSignIns {
   /** The start that currently owns each server: a start that finds it changed (replaced, cancelled, dropped) while it was connecting must not store its flow. */
   private readonly latestStart = new Map<string, number>();
   private startCounter = 0;
+  /** Each server's starts run one after another, so two never register a client at once and clobber each other's registration. */
+  private readonly startChains = new Map<string, Promise<void>>();
   private readonly now: () => number;
   private readonly signInTimeoutMs: number;
   private readonly requestTimeoutMs: number;
@@ -141,6 +123,25 @@ export class McpSignIns {
     const startId = ++this.startCounter;
     this.latestStart.set(row.id, startId);
 
+    const previous = this.startChains.get(row.id) ?? Promise.resolve();
+    const run = previous.then(() => this.runStart(row, redirectUri, headers, startId));
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.startChains.set(row.id, tail);
+    void tail.then(() => {
+      if (this.startChains.get(row.id) === tail) this.startChains.delete(row.id);
+    });
+    return run;
+  }
+
+  private async runStart(row: McpServer, redirectUri: string, headers: Record<string, string>, startId: number): Promise<{ authorizationUrl: string }> {
+    const url = row.url;
+    if (url === null) throw new SignInError(400, 'Only an http server with a URL can sign in.');
+    // Replaced or cancelled while it waited its turn.
+    if (this.latestStart.get(row.id) !== startId) throw new SignInError(409, REPLACED_MESSAGE);
+
     const state = randomBytes(32).toString('base64url');
     const captured: { url: URL | null } = { url: null };
     const provider = new GruntOAuthProvider(row.id, this.oauth, {
@@ -151,7 +152,7 @@ export class McpSignIns {
         captured.url = url;
       },
     });
-    const transport = new StreamableHTTPClientTransport(new URL(row.url), {
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
       authProvider: provider,
       requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
       fetch: fetchWithTimeout(this.requestTimeoutMs),
@@ -164,7 +165,7 @@ export class McpSignIns {
         if (this.latestStart.get(row.id) !== startId) {
           // Another start, a cancel, a sign-out or a shutdown came in while this one was connecting.
           drop({ transport });
-          throw new SignInError(409, 'This sign-in was replaced or cancelled before it was ready. Start it again from Grunt.');
+          throw new SignInError(409, REPLACED_MESSAGE);
         }
         try {
           checkAuthorizationUrl(captured.url);
@@ -258,13 +259,16 @@ export class McpSignIns {
       const manual = await this.oauth.manualClient(serverId);
       const registered = await this.oauth.registeredClient(serverId);
       const tokens = await this.oauth.tokens(serverId);
-      out.push(
-        manual?.client_secret ?? null,
-        registered?.info && 'client_secret' in registered.info ? (registered.info.client_secret ?? null) : null,
-        tokens?.access_token ?? null,
-        tokens?.refresh_token ?? null,
-        tokens?.id_token ?? null
-      );
+      const registeredSecret = registered?.info && 'client_secret' in registered.info ? (registered.info.client_secret ?? null) : null;
+      out.push(manual?.client_secret ?? null, registeredSecret, tokens?.access_token ?? null, tokens?.refresh_token ?? null, tokens?.id_token ?? null);
+      // The Basic header carries base64(client_id:client_secret), plain or form-encoded (RFC 6749 2.3.1).
+      for (const [id, secret] of [
+        [manual?.client_id, manual?.client_secret],
+        [registered?.info.client_id, registeredSecret],
+      ] as const) {
+        if (!id || !secret) continue;
+        out.push(`${id}:${secret}`, `${encodeURIComponent(id)}:${encodeURIComponent(secret)}`);
+      }
     } catch {
       // Redaction still has the flow's own values and the key=value patterns.
     }

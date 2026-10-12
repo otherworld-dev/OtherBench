@@ -45,6 +45,9 @@ export async function startOAuthEchoServer(opts = {}) {
   let registerRequests = 0;
   /** Every POST /token body as a plain object (so a test can look up the PKCE verifier the client sent). */
   const tokenRequests = [];
+  /** The Authorization header of each POST /token that `tokenEcho` answered. */
+  const tokenAuthHeaders = [];
+  let mcpFailure = false;
 
   /** client_id -> { secret: string | null, redirectUris: string[] | null }; null redirectUris: any 127.0.0.1 /oauth/callback (hand-registered). */
   const clients = new Map();
@@ -170,7 +173,9 @@ export async function startOAuthEchoServer(opts = {}) {
       // A careless provider that answers an error by repeating the request (body, and Basic credentials decoded) back.
       const header = req.headers.authorization ?? '';
       const basic = header.startsWith('Basic ') ? Buffer.from(header.slice(6), 'base64').toString('utf8') : '';
-      res.writeHead(400, { 'Content-Type': 'text/plain' }).end(`bad request: ${rawBody} ${header} ${basic}`);
+      // Credentials first, so no length cap can hide them.
+      tokenAuthHeaders.push(header);
+      res.writeHead(400, { 'Content-Type': 'text/plain' }).end(`bad request: ${header} ${basic} ${rawBody}`);
       return;
     }
     const clientId = authenticateClient(req, params);
@@ -206,6 +211,11 @@ export async function startOAuthEchoServer(opts = {}) {
           'WWW-Authenticate': `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
         })
         .end(JSON.stringify({ error: 'invalid_token' }));
+      return;
+    }
+    if (mcpFailure) {
+      // A careless server that answers an error by repeating the credential it was given.
+      res.writeHead(500, { 'Content-Type': 'text/plain' }).end(`rejected credential ${token} (header: ${header})`);
       return;
     }
     void (async () => {
@@ -252,6 +262,10 @@ export async function startOAuthEchoServer(opts = {}) {
     registrations,
     issued,
     tokenRequests,
+    tokenAuthHeaders,
+    setMcpFailure: (value) => {
+      mcpFailure = value;
+    },
     registerRequests: () => registerRequests,
     mcpRequests: () => mcpRequests,
     expireAccessTokens: () => accessTokens.clear(),

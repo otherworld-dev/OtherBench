@@ -255,7 +255,13 @@ export class McpServerManager {
     const headers = await this.resolveSecretRefs(row.headerRefs);
     // Sign-in is detected, not switched on: every http server without a fixed Authorization header gets the provider. A server that never answers 401 never asks it for anything.
     if (hasAuthorizationHeader(row)) return { transport: 'http', url: row.url, headers };
-    return { transport: 'http', url: row.url, headers, authProvider: new GruntOAuthProvider(row.id, this.oauth, { kind: 'background' }) };
+    return {
+      transport: 'http',
+      url: row.url,
+      headers,
+      authProvider: new GruntOAuthProvider(row.id, this.oauth, { kind: 'background' }),
+      secrets: () => this.oauth.cachedSecrets(row.id),
+    };
   }
 
   /** Resolves a `{name: secretRef}` map (`envRefs` or `headerRefs`) to `{name: value}`, silently dropping any ref that fails to resolve (see the two call sites above for why that's the right failure mode here). */

@@ -260,13 +260,17 @@ describe('sign-in helpers', () => {
 
 describe('one sign-in per server', () => {
   it('two starts fired together leave exactly one flow: the earlier one is refused, the later one completes', async () => {
-    const { manager } = await setup();
+    const { fixture, secrets, manager } = await setup();
     const [first, second] = await Promise.allSettled([manager.startSignIn('srv-1', REDIRECT), manager.startSignIn('srv-1', REDIRECT)]);
 
     expect(first.status).toBe('rejected');
     expect((first as PromiseRejectedResult).reason).toMatchObject({ status: 409 });
     expect(second.status).toBe('fulfilled');
     expect(health(manager).auth).toMatchObject({ pending: true });
+    // Starts run one after another: one registration, and it is the stored one.
+    expect(fixture.registrations).toHaveLength(1);
+    const stored = JSON.parse((await secrets.get(oauthRefs('srv-1').client))!) as { info: { client_id: string } };
+    expect(stored.info.client_id).toBe(fixture.registrations[0]!.clientId);
 
     await manager.completeSignIn(await followAuthorization((second as PromiseFulfilledResult<{ authorizationUrl: string }>).value.authorizationUrl));
     expect(health(manager)).toMatchObject({ status: 'ok', auth: { state: 'signed_in', pending: false } }); // no second flow was left waiting
@@ -336,10 +340,15 @@ describe('keeping codes, verifiers and tokens out of every message', () => {
     expect(err).toBeInstanceOf(SignInError);
     const verifier = fixture.tokenRequests.at(-1)!.code_verifier!;
     expect(verifier.length).toBeGreaterThan(20);
+    // The manual client authenticated with client_secret_basic, and the provider echoed that header back first.
+    const header = fixture.tokenAuthHeaders.at(-1)!;
+    expect(header).toMatch(/^Basic /);
+    const basicBase64 = header.slice('Basic '.length);
+    expect(Buffer.from(basicBase64, 'base64').toString('utf8')).toBe(`manual-id:${MANUAL_SECRET}`);
     const shown = [(err as SignInError).message, health(manager).auth?.error ?? '', output.text()];
     expect((err as SignInError).message).toContain('[redacted]'); // the provider's echo did reach the SDK's error, and was cleaned
     for (const text of shown) {
-      for (const secret of [back.code!, back.state, verifier, MANUAL_SECRET]) expect(text).not.toContain(secret);
+      for (const secret of [back.code!, back.state, verifier, MANUAL_SECRET, basicBase64]) expect(text).not.toContain(secret);
     }
     expect((err as SignInError).message.length).toBeLessThan(400);
   });
@@ -370,6 +379,20 @@ describe('keeping codes, verifiers and tokens out of every message', () => {
     for (const leaked of ['abc123xyz', 'tok-999', 'frag-777', '?code']) expect(message).not.toContain(leaked);
   });
 
+  it('a background connect error that echoes the access token reaches health redacted', async () => {
+    const { fixture, manager } = await setup();
+    await signIn(manager);
+    const token = fixture.issued.accessTokens[0]!;
+    fixture.setMcpFailure(true);
+
+    await manager.refresh('srv-1'); // reconnect: the server now answers 500, repeating the credential it was sent
+    await waitFor(() => health(manager).status === 'error');
+    const lastError = health(manager).lastError!;
+    expect(lastError).toContain('[redacted]');
+    expect(lastError).not.toContain(token);
+    expect(lastError).not.toMatch(/Bearer\s+at-/);
+  });
+
   it('sign-out and forgetting a sign-in clear the last error', async () => {
     const { fixture, manager } = await setup();
     fixture.setDeny(true);
@@ -395,6 +418,32 @@ describe('redactMessage', () => {
     expect(out).not.toMatch(/abc\.def|xyz|tok-1|rt-2|verifier-value-123|a%20b%26c/);
     expect(out).toContain('[redacted]');
     expect(out).toContain('tiny'); // too short to count as a secret: left alone
+  });
+
+  it('redacts Bearer and Basic credentials', () => {
+    const out = redactMessage('sent Authorization: Bearer abc.DEF-123_x~y+z/== then basic dXNlcjpwYXNz and Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==');
+    expect(out).not.toMatch(/abc\.DEF|dXNlcjpwYXNz|QWxhZGRpbjpvcGVu/);
+    expect(out).toContain('Bearer [redacted]');
+    expect(out).toContain('Basic [redacted]');
+  });
+
+  it('redacts authorization_code, client_assertion, token and password pairs, in URLs and outside them', () => {
+    const out = redactMessage('authorization_code=ac-111 client_assertion=ca-222 token: tk-333 {"password":"pw-444"} at https://x.example/p?token=tk-555&password=pw-666');
+    expect(out).not.toMatch(/ac-111|ca-222|tk-333|pw-444|tk-555|pw-666/);
+    expect(out).toContain('https://x.example/p');
+  });
+
+  it('strips userinfo from URLs', () => {
+    expect(redactMessage('failed https://user:pa55word@host.example/path?q=1 and http://tok@h2.example/')).toBe('failed https://host.example/path and http://h2.example/');
+  });
+
+  it('matches secrets form-encoded, percent-encoded and as base64 (also the client_id:secret Basic payload)', () => {
+    const secret = 'se cret/+&=';
+    const form = new URLSearchParams({ v: secret }).toString().slice(2);
+    const b64 = Buffer.from(`my-client:${secret}`).toString('base64');
+    const out = redactMessage(`a ${secret} b ${encodeURIComponent(secret)} c ${form} d ${b64} e`, [secret, `my-client:${secret}`]);
+    for (const form2 of [secret, encodeURIComponent(secret), form, b64]) expect(out).not.toContain(form2);
+    expect(out.match(/\[redacted\]/g)).toHaveLength(4);
   });
 
   it('drops the query and fragment of every URL, collapses whitespace and caps the length', () => {

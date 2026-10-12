@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js';
+import { redactMessage } from './redact.js';
 import { resolveExecutable } from './spawn.js';
 
 export type McpTransportConfig =
@@ -14,6 +15,8 @@ export type McpTransportConfig =
       headers: Record<string, string>;
       /** Sign-in (spec 2026-10-12-mcp-oauth-design §4): attached by `McpServerManager` to http servers without a fixed Authorization header. */
       authProvider?: OAuthClientProvider;
+      /** Secret strings the provider holds right now (tokens), so an error that echoes one is redacted before `lastError` shows it. */
+      secrets?: () => string[];
     };
 
 export interface McpToolDescriptor {
@@ -51,9 +54,6 @@ const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30_000;
 const DEFAULT_INITIAL_BACKOFF_MS = 1_000;
 const DEFAULT_MAX_BACKOFF_MS = 60_000;
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 interface RawListedTool {
   name: string;
@@ -129,6 +129,17 @@ export class McpClient {
     this.clearTimeoutFn = options.clearTimeout ?? clearTimeout;
   }
 
+  /**
+   * An error's text as `lastError` (and so the Inspector) may show it. A response
+   * body or header an SDK error embeds can carry a token or a fixed credential,
+   * so configured header and env values and the provider's tokens are redacted.
+   */
+  private errorMessage(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    const configured = this.config.transport === 'http' ? [...Object.values(this.config.headers), ...(this.config.secrets?.() ?? [])] : Object.values(this.config.env);
+    return redactMessage(message, configured);
+  }
+
   /** Subscribes to status transitions ('connecting' | 'ok' | 'error' | 'needs_auth'). Returns an unsubscribe function. */
   onStatusChange(cb: (status: McpStatus, error: string | null) => void): () => void {
     this.listeners.add(cb);
@@ -166,7 +177,7 @@ export class McpClient {
         return;
       }
       this.client = null;
-      this.setStatus('error', errorMessage(err));
+      this.setStatus('error', this.errorMessage(err));
       this.scheduleReconnect(seq);
     }
   }
@@ -229,7 +240,7 @@ export class McpClient {
     }
     this.client = null;
     this.clearTimer('health');
-    this.setStatus('error', err ? errorMessage(err) : 'The MCP server connection closed unexpectedly.');
+    this.setStatus('error', err ? this.errorMessage(err) : 'The MCP server connection closed unexpectedly.');
     this.scheduleReconnect(seq);
   }
 
@@ -253,7 +264,7 @@ export class McpClient {
         return;
       }
       this.client = null;
-      this.setStatus('error', errorMessage(err));
+      this.setStatus('error', this.errorMessage(err));
       this.scheduleReconnect(seq);
     }
   }
