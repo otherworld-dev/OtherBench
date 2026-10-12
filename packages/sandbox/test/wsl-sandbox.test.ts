@@ -282,6 +282,31 @@ describe('WslSandbox.run', () => {
     expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Grunt']);
   });
 
+  it('refuses a command queued behind a running one on release even when the closing agent reports the running one done', async () => {
+    const { held, onRun } = holding();
+    const agents: FakeChannel[] = [];
+    const { sandbox, mounts } = make({
+      startAgent: () => {
+        // As the real agent: on close it stops the running command and reports it done, then exits.
+        const agent = scriptedAgent({ onRun, finishOnClose: true });
+        agents.push(agent.channel);
+        return agent.client;
+      },
+    });
+    const first = sandbox.run(request({ folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    // Same folders as the running command: its mounting changes nothing, so only the chat's token can stop it.
+    const queued = sandbox.run(request({ folders: [] }));
+    const queuedRefused = expect(queued).rejects.toMatchObject({ code: 'aborted' });
+    await sandbox.release('chat-1');
+    expect(await first).toMatchObject({ exitCode: null, signal: 'SIGTERM' });
+    await queuedRefused;
+    await tick();
+    expect(agents).toHaveLength(1);
+    expect(held).toHaveLength(1);
+    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Grunt']);
+  });
+
   it('refuses a command queued behind a running one when setup starts, starting no agent', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -581,6 +606,21 @@ describe('WslSandbox remove and packages', () => {
     await sandbox.setPackages(['ffmpeg']);
     await sandbox.idle();
     expect(state.value).toEqual({ state: 'ready', versions: VERSIONS, packages: ['ffmpeg'] });
+  });
+
+  it('a package list change that installs nothing also clears an earlier failed install', async () => {
+    const runner = happyWsl({
+      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      node: true,
+      override: (call) => (call.kind === 'exec' && call.argv.includes('install') ? { code: 100, stderr: 'E: nope' } : undefined),
+    });
+    const { sandbox, state } = make({ runner });
+    await sandbox.setPackages(['nosuch']);
+    await sandbox.idle();
+    expect(state.value?.detail).toContain('nope');
+    await sandbox.setPackages([]);
+    expect(state.value).toEqual({ state: 'ready', versions: VERSIONS, packages: [] });
+    expect(await sandbox.status()).not.toHaveProperty('detail');
   });
 
   it("remove refuses when wsl --unregister fails and the distro list can't be read", async () => {

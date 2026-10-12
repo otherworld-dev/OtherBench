@@ -160,6 +160,11 @@ export interface AgentScript {
   ready?: 'ready' | 'fatal' | 'silent';
   /** Don't exit on close (an agent that hangs). */
   ignoreClose?: boolean;
+  /**
+   * On close, report a command still running as done (killed by SIGTERM), then exit a little later, as the real
+   * agent does (it resets the runtime in between).
+   */
+  finishOnClose?: boolean;
   /** What the agent does with a run. Default: finishes it with "ok\n", exit 0. */
   onRun?: (msg: RunMessage, channel: FakeChannel) => void;
 }
@@ -171,6 +176,8 @@ export class FakeChannel implements AgentChannel {
   private readonly messageListeners: ((m: AgentMessage) => void)[] = [];
   private readonly exitListeners: ((e: AgentExit) => void)[] = [];
   private exited = false;
+  /** Runs sent and not yet reported done. */
+  private readonly open = new Set<number>();
 
   constructor(private readonly script: AgentScript = {}) {}
 
@@ -181,8 +188,15 @@ export class FakeChannel implements AgentChannel {
       if (ready === 'ready') queueMicrotask(() => this.emit({ type: 'ready' }));
       if (ready === 'fatal') queueMicrotask(() => this.emit({ type: 'fatal', message: 'bwrap: No permissions to create new namespace' }));
     }
+    if (m.type === 'run') this.open.add(m.id);
+    if (m.type === 'close' && this.script.finishOnClose === true) {
+      for (const id of [...this.open]) this.emit({ type: 'done', id, exitCode: null, signal: 'SIGTERM', timedOut: false, truncated: false, note: '' });
+    }
     if (m.type === 'run') (this.script.onRun ?? ((msg, ch) => queueMicrotask(() => ch.finish(msg.id, 'ok\n'))))(m, this);
-    if (m.type === 'close' && this.script.ignoreClose !== true) queueMicrotask(() => this.emitExit(0));
+    if (m.type === 'close' && this.script.ignoreClose !== true) {
+      if (this.script.finishOnClose === true) setTimeout(() => this.emitExit(0), 20);
+      else queueMicrotask(() => this.emitExit(0));
+    }
   }
   onMessage(cb: (m: AgentMessage) => void): void {
     this.messageListeners.push(cb);
@@ -195,6 +209,7 @@ export class FakeChannel implements AgentChannel {
     this.emitExit(null, 'killed');
   }
   emit(m: AgentMessage): void {
+    if (m.type === 'done') this.open.delete(m.id);
     for (const cb of this.messageListeners) cb(m);
   }
   emitExit(code: number | null, detail = ''): void {

@@ -228,7 +228,8 @@ export class WslSandbox implements Sandbox {
     if (this.job) throw new SandboxError('busy', "The sandbox is being set up. Change its packages when that's finished.");
     if (this.removal) throw new SandboxError('busy', "The sandbox is being removed. Change its packages when that's finished.");
     const stored = this.stored();
-    this.opts.state.set({ ...stored, packages: [...packages] });
+    // On a ready sandbox a new list also clears what an earlier failed install left in detail and log.
+    this.opts.state.set({ ...(stored.state === 'ready' ? readyState(stored) : stored), packages: [...packages] });
     if (stored.state !== 'ready' || packages.length === 0) return;
     // A failed install leaves the sandbox ready (what was there still works) and says why in detail and log.
     void this.startJob(async (log) => {
@@ -346,8 +347,10 @@ export class WslSandbox implements Sandbox {
 
   /** Closes the chat's agent and takes its folders down. */
   private async dropChat(chatId: string): Promise<void> {
-    await this.pool.release(chatId);
+    // First, so a command of the chat that gets past its wait while the agent closes (the agent reports the
+    // running command done before it exits) is refused rather than starting a fresh agent.
     this.chats.delete(chatId);
+    await this.pool.release(chatId);
     await this.mounts.remove(chatId);
   }
 
