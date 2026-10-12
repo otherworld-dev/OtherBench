@@ -1,7 +1,7 @@
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Store } from '../ports/store.js';
 import type { SubagentHost, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
-import { runsShellInSandbox, sandboxHostsOf, type FsMode, type Profile, type ResolvedProfile, type ToolPolicy } from '../types/config.js';
+import { sandboxHostsOf, type FsMode, type Profile, type ResolvedProfile, type ToolPolicy } from '../types/config.js';
 import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
 import type { Usage } from '../types/usage.js';
 import type { PlanGate } from '../types/thread.js';
@@ -125,6 +125,7 @@ export function parseSubagentInput(args: unknown): { ok: true; input: SubagentIn
 // --- policy -----------------------------------------------------------------
 
 const FS_RANK: Record<FsMode, number> = { off: 0, read: 1, readwrite: 2 };
+const FS_BY_RANK: readonly FsMode[] = ['off', 'read', 'readwrite'];
 
 /** An MCP server name as it appears in `mcp__<server>__<tool>` (same rule as the provider's `sanitizeNameSegment`). */
 function mcpSegment(name: string): string {
@@ -150,28 +151,101 @@ function sharedSandboxHosts(a: readonly string[], b: readonly string[]): string[
   });
 }
 
+/** A policy's allowlist as the sandbox tool reads it (`sandboxHostsOf`: absent = the defaults). Anything that isn't a list of names is no hosts. */
+function effectiveSandboxHosts(policy: ToolPolicy): string[] {
+  const hosts: unknown = policy.sandboxHosts;
+  if (hosts === undefined || hosts === null) return sandboxHostsOf(policy);
+  return Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === 'string') : [];
+}
+
+/** Where a policy's `run_command` runs, read the way the provider and broker read it (`runsShellInSandbox`): anything but 'sandbox' is this machine. */
+function shellRunsOf(policy: ToolPolicy): 'host' | 'sandbox' {
+  return policy.shellRuns === 'sandbox' ? 'sandbox' : 'host';
+}
+
+const idsOf = (policy: ToolPolicy): string[] => (Array.isArray(policy.mcpServerIds) ? policy.mcpServerIds.filter((id): id is string => typeof id === 'string') : []);
+
+/** What a narrowing rule works from: both policies and what the call asked for. */
+export interface SubagentNarrowing {
+  parent: ToolPolicy;
+  chosen: ToolPolicy;
+  ask: SubagentToolsAsk;
+  /** The MCP servers both policies enable, cut down to the call's `mcpServers` when it named any. */
+  mcpServerIds: string[];
+}
+
+/**
+ * One rule per `ToolPolicy` field: what a sub-agent gets for it. This is the
+ * whole of a sub-agent's policy, so it is the place where a sub-agent could
+ * be given more than the reply that started it, and every rule must give a
+ * value no wider than the PARENT's (and no wider than the chosen profile's).
+ *
+ * The type makes the table exhaustive: a field added to `ToolPolicy` without
+ * a rule here fails typecheck. When a new field has no obvious way to
+ * combine two policies, give it its most restrictive value (as `artifacts`,
+ * `subagents`, `agentWeb` and `agentMcp` have), never the chosen profile's.
+ *
+ * Every rule also fails closed on a value it doesn't know (a profile synced
+ * from a newer peer never went through this build's routes): an unknown file
+ * mode is no files, an unknown approval mode asks always.
+ */
+export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]: (n: SubagentNarrowing) => Required<ToolPolicy>[K] } = {
+  // The lowest of the parent's, the chosen profile's and the call's.
+  fs: ({ parent, chosen, ask }) => {
+    const ranks = [parent.fs, chosen.fs, ask.files ?? 'readwrite'].map((m) => FS_RANK[m] ?? 0);
+    return FS_BY_RANK[Math.min(...ranks)] ?? 'off';
+  },
+  // Both must have a shell, the call may turn it off, and it must be a shell
+  // the parent's own policy has. A sandboxed parent's sub-agent is sandboxed
+  // whatever the chosen profile runs on. A host parent's sub-agent gets the
+  // host shell (a card for each command, as the parent's) only as a profile
+  // that runs on this machine too. Run as a sandboxed profile it gets NO
+  // shell: the sandboxed run_command needs no card under "Ask on changes",
+  // and every command of the parent's does, so offering it would let text
+  // injected into the parent run commands (with the chat's folders and the
+  // allowlisted hosts) that the parent's policy never allows without a card.
+  shell: ({ parent, chosen, ask }) =>
+    parent.shell === true && chosen.shell === true && ask.shell !== false && !(shellRunsOf(parent) === 'host' && shellRunsOf(chosen) === 'sandbox'),
+  // On this machine only when both run theirs here; never when the parent is sandboxed. Always named.
+  shellRuns: ({ parent, chosen }) => (shellRunsOf(parent) === 'host' && shellRunsOf(chosen) === 'host' ? 'host' : 'sandbox'),
+  // Only the hosts on both allowlists. Always named, even when empty: an absent list would mean the defaults again.
+  sandboxHosts: ({ parent, chosen }) => sharedSandboxHosts(effectiveSandboxHosts(parent), effectiveSandboxHosts(chosen)),
+  // The servers both enable, cut down by the call (worked out, and refused if the call names another, before the rules run).
+  mcpServerIds: ({ mcpServerIds }) => [...mcpServerIds],
+  // The stricter: "Ask on changes" only when both are exactly that.
+  approvalMode: ({ parent, chosen }) => (parent.approvalMode === 'ask_on_mutate' && chosen.approvalMode === 'ask_on_mutate' ? 'ask_on_mutate' : 'always_ask'),
+  // Claude Code's own tools: a sub-agent never runs as Claude Code, so it has none to allow.
+  agentWeb: () => false,
+  agentMcp: () => false,
+  // Never, whatever either profile has: a sub-agent makes no artifacts (so no live pages) and starts no sub-agents.
+  artifacts: () => false,
+  subagents: () => false,
+  // On only when both have it on (absent = on, as the policy defines it).
+  recall: ({ parent, chosen }) => parent.recall !== false && chosen.recall !== false,
+};
+
 /**
  * A sub-agent's tool policy: what BOTH the parent's and the chosen
  * profile's policies allow, narrowed further by the call. Never wider than
- * either. `serverNames` maps MCP server ids to names, for `ask.mcpServers`.
+ * either, field by field (`SUBAGENT_POLICY_RULES`), and every field is
+ * written out, so nothing is left to a default. `serverNames` maps MCP
+ * server ids to names, for `ask.mcpServers`.
  *
- * The shell is narrowed the same way (spec 2026-10-12-sandbox-design): it is
- * on only when both have it, and it runs on this machine only when BOTH run
- * theirs here. If either runs its shell in the sandbox, so does the
- * sub-agent, and it may reach only the hosts on both allowlists (each with
- * its defaults applied). A sandboxed parent can therefore never get a host
- * shell, or a wider allowlist, by picking another profile.
+ * What this guarantees, and `subagent-policy-property.test.ts` checks
+ * against the real broker for random pairs of policies: any call the
+ * sub-agent's policy lets through without a card, the parent's policy lets
+ * through without a card too. The thread tools (questions, plans,
+ * checklists) aren't a policy field: `SubagentRunner.toolsFor` never offers
+ * them, nor the artifact and subagent tools.
  */
 export function subagentPolicy(
   parent: ToolPolicy,
   chosen: ToolPolicy,
   ask: SubagentToolsAsk = {},
   serverNames: ReadonlyMap<string, string> = new Map()
-): { ok: true; policy: ToolPolicy } | { ok: false; message: string } {
-  const fs = [parent.fs, chosen.fs, ask.files ?? 'readwrite'].reduce<FsMode>((low, m) => (FS_RANK[m] < FS_RANK[low] ? m : low), 'readwrite');
-  const shell = parent.shell && chosen.shell && ask.shell !== false;
-
-  const shared = parent.mcpServerIds.filter((id) => chosen.mcpServerIds.includes(id));
+): { ok: true; policy: Required<ToolPolicy> } | { ok: false; message: string } {
+  const chosenIds = idsOf(chosen);
+  const shared = idsOf(parent).filter((id, i, all) => chosenIds.includes(id) && all.indexOf(id) === i);
   let mcpServerIds = shared;
   if (ask.mcpServers !== undefined) {
     const picked = new Set<string>();
@@ -195,21 +269,10 @@ export function subagentPolicy(
     mcpServerIds = shared.filter((id) => picked.has(id));
   }
 
-  // `shell` is true only when both have it, so each side's `runsShellInSandbox` is just its `shellRuns`.
-  const sandboxed = shell && (runsShellInSandbox(parent) || runsShellInSandbox(chosen));
-
-  const policy: ToolPolicy = {
-    fs,
-    shell,
-    mcpServerIds,
-    approvalMode: parent.approvalMode === 'always_ask' || chosen.approvalMode === 'always_ask' ? 'always_ask' : 'ask_on_mutate',
-    artifacts: false,
-    recall: parent.recall !== false && chosen.recall !== false,
-    subagents: false,
-    // Always named when sandboxed (an absent list would mean the defaults, which could be wider than what both share).
-    ...(sandboxed ? { shellRuns: 'sandbox' as const, sandboxHosts: sharedSandboxHosts(sandboxHostsOf(parent), sandboxHostsOf(chosen)) } : {}),
-  };
-  return { ok: true, policy };
+  const narrowing: SubagentNarrowing = { parent, chosen, ask, mcpServerIds };
+  const policy: Partial<Record<keyof ToolPolicy, unknown>> = {};
+  for (const field of Object.keys(SUBAGENT_POLICY_RULES) as (keyof ToolPolicy)[]) policy[field] = SUBAGENT_POLICY_RULES[field](narrowing);
+  return { ok: true, policy: policy as Required<ToolPolicy> };
 }
 
 // --- profiles and the tool --------------------------------------------------
@@ -674,6 +737,9 @@ export class SubagentRunner implements SubagentHost {
       workspaceRoot,
       ...(folders.length > 0 ? { folders } : {}),
       purpose: 'turn',
+      // Never auto mode, whatever the chat's toggle says: it hands approvals to
+      // Claude Code's own classifier, and a sub-agent is never Claude Code.
+      autoMode: false,
       ...(plan ? { plan } : {}),
       ...(unattended ? { unattended: true } : {}),
       subagent: { callId, label, parentProfileId: this.deps.parent.id, ...(chosen.id !== this.deps.parent.id ? { profileName: chosen.name } : {}) },

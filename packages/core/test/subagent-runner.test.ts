@@ -149,7 +149,7 @@ describe('SubagentRunner', () => {
     expect(listed[1]).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org', 'github.com'] });
   });
 
-  it("a host-shell parent's sub-agent run as a sandboxed profile is sandboxed, and one with no shell gets none", async () => {
+  it("a host-shell parent's sub-agent run as a sandboxed profile gets no run_command at all, sandboxed or not", async () => {
     const store = seeded();
     store.profiles.update('p-main', { toolPolicy: policy({ shell: true }) });
     store.profiles.update('p-cheap', { toolPolicy: policy({ shell: true, shellRuns: 'sandbox' }) });
@@ -159,8 +159,9 @@ describe('SubagentRunner', () => {
     await h.runner.run({ description: 'As me', prompt: 'Run it.' }, h.ctx('call-2'));
     await h.runner.run({ description: 'No shell', prompt: 'Run it.', tools: { shell: false } }, h.ctx('call-3'));
     const sources = engine.requests.map((req) => req.tools.filter((t) => t.name === 'run_command').map((t) => t.source));
-    expect(sources).toEqual([['sandbox'], ['shell'], []]);
-    expect(engine.requests.map((req) => req.profile.systemPrompt!.includes('# Sandbox'))).toEqual([true, false, false]);
+    // As Cheap: a sandboxed command would need no card, and every command of this parent's does. As itself: the host shell, as the parent has.
+    expect(sources).toEqual([[], ['shell'], []]);
+    expect(engine.requests.map((req) => req.profile.systemPrompt!.includes('# Sandbox'))).toEqual([false, false, false]);
   });
 
   // Integration with thread cards and scheduled tasks: what limits the parent reply limits its sub-agents.
@@ -214,6 +215,20 @@ describe('SubagentRunner', () => {
     await h3.runner.run({ description: 'Look', prompt: 'Read it.' }, h3.ctx('call-1'));
     expect(attended.requests[0]).not.toHaveProperty('unattended');
     expect(toolContextFor(attended.requests[0]!)).not.toHaveProperty('unattended');
+  });
+
+  it("never runs a sub-agent in auto mode, and never offers it the artifact, subagent or thread tools whatever the provider lists", async () => {
+    const tool = (name: string, source: ToolSpec['source']): ToolSpec => ({ name, description: '', parameters: {}, risk: 'read', source, execute: async () => 'ok' });
+    const store = seeded();
+    // Even a policy that turned everything on would not get them: the runner filters by source.
+    store.profiles.update('p-main', { toolPolicy: policy({ artifacts: true, subagents: true }) });
+    const provider = new FakeToolProvider({ tools: [readFile, tool('artifact', 'artifact'), tool('subagent', 'subagent'), tool('ask_user', 'thread'), tool('propose_plan', 'thread'), tool('update_todos', 'thread')] });
+    const engine = childEngine(() => answer('ok'));
+    const h = harness(engine, { store }, provider);
+    await h.runner.run({ description: 'Look', prompt: 'Read it.' }, h.ctx('call-1'));
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toEqual(['read_file']);
+    expect(req.autoMode).toBe(false);
   });
 
   it('refuses bad input without starting anything', async () => {

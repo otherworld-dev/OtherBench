@@ -14,6 +14,7 @@ import {
   eligibleSubagentProfiles,
   parseSubagentInput,
   runSubagentTool,
+  SUBAGENT_POLICY_RULES,
   subagentPolicy,
   subagentResult,
   subagentSystemPrompt,
@@ -138,10 +139,11 @@ describe('subagentPolicy and the sandbox', () => {
   /** Where the narrowed policy's run_command runs, as the provider reads it. */
   const shellOf = (p: ToolPolicy): Shell => (!p.shell ? 'none' : runsShellInSandbox(p) ? 'sandbox' : 'host');
 
-  it('runs the shell on this machine only when both run theirs here, in the sandbox when either does, and not at all without both', () => {
+  it("runs the shell where the parent's runs or not at all: on this machine only when both do, sandboxed under a sandboxed parent, and none for a host parent's sandboxed profile", () => {
     const matrix: [parent: Shell, chosen: Shell, result: Shell][] = [
       ['host', 'host', 'host'],
-      ['host', 'sandbox', 'sandbox'],
+      // A sandboxed command needs no card and every command of a host parent's does, so this one gets no shell (never the host one either).
+      ['host', 'sandbox', 'none'],
       ['sandbox', 'host', 'sandbox'],
       ['sandbox', 'sandbox', 'sandbox'],
       ['none', 'host', 'none'],
@@ -158,16 +160,47 @@ describe('subagentPolicy and the sandbox', () => {
     }
   });
 
-  it("a sandboxed parent's sub-agent is sandboxed even as its own profile, and a host one carries no sandbox fields", () => {
+  it("a sandboxed parent's sub-agent is sandboxed even as its own profile, and every policy names where its shell runs", () => {
     const own = withShell('sandbox', ['pypi.org']);
     expect(narrowed(own, own)).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org'] });
-    const host = narrowed(withShell('host'), withShell('host'));
-    expect(host).not.toHaveProperty('shellRuns');
-    expect(host).not.toHaveProperty('sandboxHosts');
-    // `shellRuns: 'sandbox'` left on a profile whose shell is off doesn't count as sandboxed, and gives no shell.
-    const off = narrowed(policy({ shell: false, shellRuns: 'sandbox' }), withShell('host'));
-    expect(off.shell).toBe(false);
-    expect(off).not.toHaveProperty('shellRuns');
+    expect(narrowed(withShell('host'), withShell('host'))).toMatchObject({ shell: true, shellRuns: 'host' });
+    // Where the shell is off, `shellRuns` is still written, and never as this machine unless both are.
+    expect(narrowed(policy({ shell: false, shellRuns: 'sandbox' }), withShell('host'))).toMatchObject({ shell: false, shellRuns: 'sandbox' });
+    expect(narrowed(withShell('host'), withShell('sandbox'))).toMatchObject({ shell: false, shellRuns: 'sandbox' });
+    // A value this build doesn't know is read as the provider and broker read it (this machine), on either side.
+    const odd = { ...withShell('host'), shellRuns: 'container' as never };
+    expect(narrowed(odd, withShell('host'))).toMatchObject({ shell: true, shellRuns: 'host' });
+    expect(narrowed(odd, withShell('sandbox'))).toMatchObject({ shell: false });
+  });
+
+  it('writes out every ToolPolicy field, with a rule for each', () => {
+    const fields = ['agentMcp', 'agentWeb', 'approvalMode', 'artifacts', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
+    expect(Object.keys(SUBAGENT_POLICY_RULES).sort()).toEqual(fields);
+    for (const [parent, chosen] of [[policy(), policy()], [withShell('sandbox'), withShell('none')], [policy({ fs: 'off', mcpServerIds: [] }), policy({ approvalMode: 'always_ask' })]] as const) {
+      const got = narrowed(parent, chosen);
+      expect(Object.keys(got).sort()).toEqual(fields);
+      for (const value of Object.values(got)) expect(value).not.toBeUndefined();
+    }
+  });
+
+  it('fails closed on a value it does not know, and never takes a capability from the chosen profile alone', () => {
+    // An unknown file mode is no files; an unknown approval mode asks always; a list that isn't one is empty.
+    expect(narrowed({ ...policy(), fs: 'everything' as never }, policy()).fs).toBe('off');
+    expect(narrowed(policy(), { ...policy(), fs: undefined as never }).fs).toBe('off');
+    expect(narrowed({ ...policy(), approvalMode: 'never_ask' as never }, policy()).approvalMode).toBe('always_ask');
+    expect(narrowed(policy(), { ...policy(), approvalMode: undefined as never }).approvalMode).toBe('always_ask');
+    expect(narrowed({ ...policy(), mcpServerIds: 's1' as never }, policy()).mcpServerIds).toEqual([]);
+    expect(narrowed({ ...withShell('sandbox'), sandboxHosts: 'pypi.org' as never }, withShell('sandbox')).sandboxHosts).toEqual([]);
+    expect(narrowed({ ...policy(), shell: 'yes' as never }, policy()).shell).toBe(false);
+    // Claude Code's tools, artifacts and sub-agents are off whatever both profiles say.
+    const open = policy({ agentWeb: true, agentMcp: true, artifacts: true, subagents: true, recall: true });
+    expect(narrowed(open, open)).toMatchObject({ agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: true });
+    // A locked-down parent gets nothing from a wide-open profile.
+    const locked = policy({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', recall: false });
+    expect(narrowed(locked, { ...open, shellRuns: 'sandbox', sandboxHosts: ['evil.example.com'] })).toEqual({
+      fs: 'off', shell: false, shellRuns: 'sandbox', sandboxHosts: [], mcpServerIds: [], approvalMode: 'always_ask',
+      agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: false,
+    });
   });
 
   it('may reach only the hosts on both allowlists, with the defaults standing in for a list that is absent', () => {
@@ -184,8 +217,9 @@ describe('subagentPolicy and the sandbox', () => {
     expect(hosts(withShell('sandbox', []), withShell('sandbox'))).toEqual([]);
     expect(hosts(withShell('sandbox'), withShell('sandbox', []))).toEqual([]);
     // A host-shell side counts with its effective list too: a profile that runs on this machine can't lend a sandboxed one more hosts.
-    expect(hosts(withShell('host'), withShell('sandbox', ['pypi.org', 'internal.example.com']))).toEqual(['pypi.org']);
     expect(hosts(withShell('sandbox', ['pypi.org', 'internal.example.com']), withShell('host'))).toEqual(['pypi.org']);
+    // (A host parent's sandboxed profile gets no shell at all; its list is still only what both hold.)
+    expect(hosts(withShell('host'), withShell('sandbox', ['pypi.org', 'internal.example.com']))).toEqual(['pypi.org']);
     // Entries are compared whole: a wildcard and a name under it share nothing, a port must match, and a repeat is kept once.
     expect(hosts(withShell('sandbox', ['*.example.com', 'pypi.org:443', 'github.com', 'GitHub.com']), withShell('sandbox', ['api.example.com', 'pypi.org', 'github.com']))).toEqual(['github.com']);
   });
@@ -196,6 +230,7 @@ describe('subagentPolicy and the sandbox', () => {
     for (const a of lists) for (const b of lists) for (const [pa, pb] of [['sandbox', 'sandbox'], ['host', 'sandbox'], ['sandbox', 'host']] as [Shell, Shell][]) {
       const got = narrowed(withShell(pa, a), withShell(pb, b));
       expect(got.shellRuns).toBe('sandbox');
+      expect(got.shell).toBe(pa === 'sandbox');
       expect(got.sandboxHosts).toBeDefined();
       for (const h of got.sandboxHosts!) {
         expect(effective(a)).toContain(h.toLowerCase());
