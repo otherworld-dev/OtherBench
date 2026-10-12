@@ -1,10 +1,13 @@
+import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Store } from '../ports/store.js';
-import type { ToolContext, ToolSpec } from '../ports/tool-provider.js';
+import type { SubagentHost, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { FsMode, Profile, ResolvedProfile, ToolPolicy } from '../types/config.js';
-import type { Part, SerializedError } from '../types/messages.js';
+import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
+import type { Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
+import { classifyProviderError } from '../types/errors.js';
 import { availableOn } from './availability.js';
-import type { SubagentEndStatus } from './parts.js';
+import { applySubagentEvent, foldSubagentContent, type SubagentEndStatus, type SubagentEvent } from './parts.js';
 import { RECALL_GUIDANCE } from './recall.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { extraFoldersPrompt } from './workspace.js';
@@ -251,20 +254,32 @@ export function subagentSystemPrompt(
 
 // --- results ----------------------------------------------------------------
 
-/** The copy of a tool result kept in the stored transcript: whole when short, cut with a note when long. */
+const UNSHOWABLE_RESULT_TEXT = "[a result Grunt couldn't show]";
+
+function cutText(text: string): string {
+  if (text.length <= SUBAGENT_RESULT_COPY_MAX_CHARS) return text;
+  return `${text.slice(0, SUBAGENT_RESULT_COPY_MAX_CHARS)}\n… [Cut here: the result was ${text.length} characters, and the sub-agent saw all of it.]`;
+}
+
+/**
+ * The copy of a tool result kept in the stored transcript: whole when short,
+ * cut with a note when long. Never throws, whatever the tool returned.
+ */
 export function cutToolResultForCopy(result: unknown): unknown {
+  if (typeof result === 'string') return cutText(result);
   let text: string;
-  if (typeof result === 'string') {
-    text = result;
-  } else {
+  try {
+    text = JSON.stringify(result) ?? String(result);
+  } catch {
+    // A circular object or a BigInt: JSON can't hold it, so store it as text.
     try {
-      text = JSON.stringify(result) ?? String(result);
+      return cutText(String(result));
     } catch {
-      text = String(result);
+      // A null-prototype object has no toString to call.
+      return UNSHOWABLE_RESULT_TEXT;
     }
   }
-  if (text.length <= SUBAGENT_RESULT_COPY_MAX_CHARS) return result;
-  return `${text.slice(0, SUBAGENT_RESULT_COPY_MAX_CHARS)}\n… [Cut here: the result was ${text.length} characters, and the sub-agent saw all of it.]`;
+  return text.length <= SUBAGENT_RESULT_COPY_MAX_CHARS ? result : cutText(text);
 }
 
 export interface SubagentOutcome {
@@ -312,4 +327,262 @@ export function subagentResult(outcome: SubagentOutcome): string | SubagentToolE
   return text.length > SUBAGENT_ANSWER_MAX_CHARS
     ? `${text.slice(0, SUBAGENT_ANSWER_MAX_CHARS)}\n\n[Cut: the full answer was ${text.length} characters.]`
     : text;
+}
+
+// --- the runner -------------------------------------------------------------
+
+export interface SubagentRunnerDeps {
+  store: Store;
+  engine: ChatEngine;
+  toolProvider: ToolProvider;
+  /** Resolves another profile by id; without it only the parent's own profile can be chosen. */
+  resolveProfile?: (id: string) => Promise<ResolvedProfile>;
+  now: () => number;
+  generateId: () => string;
+  chatId: string;
+  /** The parent reply's id: cards, audit rows and usage rows all hang off it. */
+  messageId: string;
+  /** The parent's own profile, as resolved (its raw system prompt, not the composed one). */
+  parent: ResolvedProfile;
+  workspaceRoot: string | null;
+  folders: ResolvedFolder[];
+  /** The parent reply's signal: Stop, or the reply ending any other way, stops every sub-agent. */
+  signal: AbortSignal;
+  emit: (callId: string, event: SubagentEvent) => void;
+  updateParts: (fn: (parts: Part[]) => Part[], force: boolean) => void;
+  writeUsage: (profile: ResolvedProfile, usage: Usage, latencyMs: number, callId: string) => void;
+}
+
+/**
+ * Tool sources a sub-agent never gets, whatever its policy says (defence in
+ * depth: the narrowed policy already turns artifacts and sub-agents off).
+ * `thread` is the thread-cards tools (ask the user, todos, plans), if that
+ * work landed: a sub-agent can't ask anyone anything.
+ */
+const NEVER_FOR_SUBAGENTS: ReadonlySet<string> = new Set(['subagent', 'artifact', 'thread']);
+
+const sameName = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+function toSubagentEvent(event: EngineEvent): SubagentEvent | null {
+  switch (event.type) {
+    case 'text-delta':
+      return { type: 'text-delta', text: event.text };
+    case 'reasoning-delta':
+      return { type: 'reasoning-delta', text: event.text };
+    case 'notice':
+      return { type: 'notice', text: event.text };
+    case 'tool-call':
+      return { type: 'tool-call', id: event.id, name: event.name, args: event.args };
+    case 'tool-result':
+      // The stored and broadcast copy is cut; the sub-agent's model already had the whole result.
+      return { type: 'tool-result', id: event.id, name: event.name, result: cutToolResultForCopy(event.result), isError: event.isError };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Runs one reply's sub-agents (spec 2026-10-12-api-subagents-design). Made
+ * by `TurnRunner.runVariant` for a turn that offers the `subagent` tool and
+ * reached by the tool through `ToolContext.subagents`. Each sub-agent is its
+ * own model loop through the same engine, with tools from the same provider
+ * (`listTools` of a narrowed policy, so the same broker gates every call),
+ * under the parent's chat and reply. At most four run at once; the rest
+ * wait in order.
+ */
+export class SubagentRunner implements SubagentHost {
+  private started = 0;
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
+  private readonly inFlight = new Set<Promise<unknown>>();
+  private readonly callIds = new Set<string>();
+
+  constructor(private readonly deps: SubagentRunnerDeps) {}
+
+  run(input: unknown, ctx: ToolContext): Promise<unknown> {
+    const job = this.runOne(input, ctx);
+    this.inFlight.add(job);
+    const done = (): void => {
+      this.inFlight.delete(job);
+    };
+    job.then(done, done);
+    return job;
+  }
+
+  async settled(): Promise<void> {
+    while (this.inFlight.size > 0) await Promise.allSettled([...this.inFlight]);
+  }
+
+  private async runOne(input: unknown, ctx: ToolContext): Promise<unknown> {
+    try {
+      return await this.execute(input, ctx);
+    } catch (err) {
+      console.error('[SubagentRunner] a sub-agent failed outside its own error handling:', err);
+      return subagentError('subagent_failed', `The sub-agent failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private async execute(input: unknown, ctx: ToolContext): Promise<unknown> {
+    const parsed = parseSubagentInput(input);
+    if (!parsed.ok) return subagentError('invalid_input', parsed.message);
+    if (this.started >= MAX_SUBAGENTS_PER_REPLY) {
+      return subagentError('subagent_limit', `This reply has already started ${MAX_SUBAGENTS_PER_REPLY} sub-agents, the most one reply may. Do the rest of the work yourself.`);
+    }
+    this.started += 1;
+    const { description: label, prompt } = parsed.input;
+    const callId = ctx.toolCallId !== undefined && !this.callIds.has(ctx.toolCallId) ? ctx.toolCallId : this.deps.generateId();
+    this.callIds.add(callId);
+
+    const picked = await this.pickProfile(parsed.input.profile);
+    if (!picked.ok) return subagentError('subagent_profile', picked.message);
+    const chosen = picked.profile;
+
+    const serverNames = new Map(this.deps.store.mcpServers.list().map((s) => [s.id, s.name] as const));
+    const narrowed = subagentPolicy(this.deps.parent.toolPolicy, chosen.toolPolicy, parsed.input.tools, serverNames);
+    if (!narrowed.ok) return subagentError('subagent_tools', narrowed.message);
+
+    if (this.deps.signal.aborted) return subagentResult({ status: 'cancelled', error: null, finishReason: null, parts: [] });
+
+    this.send(callId, { type: 'start', label, prompt, profileId: chosen.id, profileName: chosen.name, modelId: chosen.modelId }, true);
+
+    const startedAt = this.deps.now();
+    const child = new AbortController();
+    const follow = (): void => child.abort();
+    this.deps.signal.addEventListener('abort', follow, { once: true });
+    let parts: Part[] = [];
+    let usage: Usage | null = null;
+    let finishReason: string | null = null;
+    let failure: SerializedError | null = null;
+    let slot = false;
+    let aborted = false;
+    try {
+      slot = await this.acquire(this.deps.signal);
+      if (slot) {
+        this.send(callId, { type: 'running' }, true);
+        const tools = await this.toolsFor(chosen, narrowed.policy);
+        const request = this.requestFor(chosen, label, prompt, callId, tools, child.signal);
+        for await (const event of this.deps.engine.stream(request)) {
+          const subEvent = toSubagentEvent(event);
+          if (subEvent) {
+            parts = foldSubagentContent(parts, subEvent);
+            // Deltas are throttled like the parent's; everything else is written at once.
+            this.send(callId, subEvent, subEvent.type !== 'text-delta' && subEvent.type !== 'reasoning-delta');
+          } else if (event.type === 'finish') {
+            usage = event.usage;
+            finishReason = event.finishReason;
+          } else if (event.type === 'error') {
+            failure = event.error;
+          }
+          // engine-meta is Claude Code's, which never runs a sub-agent: ignored.
+        }
+      }
+    } catch (err) {
+      failure = classifyProviderError(err);
+    } finally {
+      this.deps.signal.removeEventListener('abort', follow);
+      aborted = child.signal.aborted || this.deps.signal.aborted;
+      // Whatever ended it, nothing may still wait on it: this settles any
+      // card it left open (the provider's abort path) as cancelled.
+      child.abort();
+      if (slot) this.release();
+    }
+
+    const status: SubagentEndStatus = failure
+      ? failure.kind === 'cancelled' ? 'cancelled' : 'error'
+      : finishReason !== null ? 'complete' : aborted || !slot ? 'cancelled' : 'complete';
+    const result = subagentResult({ status, error: failure, finishReason, parts });
+    if (usage) this.deps.writeUsage(chosen, usage, this.deps.now() - startedAt, callId);
+    const endStatus: SubagentEndStatus = status === 'complete' && typeof result !== 'string' ? 'error' : status;
+    const endError = endStatus === 'error' ? (failure?.message ?? (typeof result === 'string' ? undefined : result.message)) : undefined;
+    this.send(callId, { type: 'end', status: endStatus, ...(endError !== undefined ? { error: endError } : {}), ...(usage ? { usage } : {}) }, true);
+    return result;
+  }
+
+  private send(callId: string, event: SubagentEvent, force: boolean): void {
+    this.deps.emit(callId, event);
+    this.deps.updateParts((parts) => applySubagentEvent(parts, callId, event), force);
+  }
+
+  /** Waits for one of the `MAX_CONCURRENT_SUBAGENTS` slots, first come first served. False when the reply stopped first. */
+  private acquire(signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    if (this.active < MAX_CONCURRENT_SUBAGENTS) {
+      this.active += 1;
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      const grant = (): void => {
+        signal.removeEventListener('abort', onAbort);
+        this.active += 1;
+        resolve(true);
+      };
+      const onAbort = (): void => {
+        const at = this.waiting.indexOf(grant);
+        if (at !== -1) this.waiting.splice(at, 1);
+        resolve(false);
+      };
+      this.waiting.push(grant);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  private release(): void {
+    this.active -= 1;
+    this.waiting.shift()?.();
+  }
+
+  private async pickProfile(name: string | undefined): Promise<{ ok: true; profile: ResolvedProfile } | { ok: false; message: string }> {
+    const parent = this.deps.parent;
+    if (name === undefined || sameName(name, parent.name)) return { ok: true, profile: parent };
+    const eligible = eligibleSubagentProfiles(this.deps.store);
+    const choices = `Choose one of: ${eligible.map((p) => `"${p.name}"`).join(', ')}, or leave out "profile" to use your own.`;
+    const matches = eligible.filter((p) => sameName(p.name, name));
+    if (matches.length === 0) return { ok: false, message: `No profile called "${name}" can run a sub-agent here. ${choices}` };
+    if (matches.length > 1) {
+      return { ok: false, message: `${matches.length} profiles are called "${name}": ${matches.map((p) => `${p.id} (${p.modelId})`).join(' and ')}. Ask the user to rename one, or leave out "profile" to use your own.` };
+    }
+    const match = matches[0]!;
+    if (match.id === parent.id) return { ok: true, profile: parent };
+    if (!this.deps.resolveProfile) return { ok: false, message: 'Sub-agents can only run as your own profile here. Leave out "profile".' };
+    try {
+      return { ok: true, profile: await this.deps.resolveProfile(match.id) };
+    } catch (err) {
+      return { ok: false, message: `The profile "${match.name}" can't be used: ${err instanceof Error ? err.message : String(err)} ${choices}` };
+    }
+  }
+
+  private async toolsFor(chosen: ResolvedProfile, policy: ToolPolicy): Promise<ToolSpec[]> {
+    const listed = await this.deps.toolProvider.listTools(policy);
+    // Recall is on by default, so a model that says it can't use tools isn't sent it (as runVariant does).
+    return listed.filter((t) => !NEVER_FOR_SUBAGENTS.has(t.source) && !(chosen.model?.supportsTools === false && t.source === 'recall'));
+  }
+
+  private requestFor(chosen: ResolvedProfile, label: string, prompt: string, callId: string, tools: ToolSpec[], signal: AbortSignal): EngineRequest {
+    const { chatId, messageId, workspaceRoot, folders } = this.deps;
+    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'));
+    // Synthetic, never stored: the sub-agent sees no chat history.
+    const message = (id: string, role: 'system' | 'user', text: string): CanonMessage => ({
+      id,
+      chatId,
+      parentId: null,
+      role,
+      parts: [{ type: 'text', text }],
+      status: 'complete',
+      error: null,
+      producedBy: null,
+      createdAt: 0,
+    });
+    return {
+      profile: { ...chosen, systemPrompt },
+      messages: [message(`subagent-system:${callId}`, 'system', systemPrompt), message(`subagent-prompt:${callId}`, 'user', prompt)],
+      tools,
+      signal,
+      chatId,
+      messageId,
+      workspaceRoot,
+      ...(folders.length > 0 ? { folders } : {}),
+      purpose: 'turn',
+      subagent: { callId, label },
+    };
+  }
 }

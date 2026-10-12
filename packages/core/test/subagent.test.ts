@@ -236,4 +236,17 @@ describe('subagentResult and cutToolResultForCopy', () => {
     expect(cut).toContain('50000 characters');
     expect(cut.length).toBeLessThan(SUBAGENT_RESULT_COPY_MAX_CHARS + 200);
   });
+
+  it('never throws on a result JSON cannot show: a circular object, a BigInt, a null-prototype object', () => {
+    const circular: Record<string, unknown> = {};
+    circular['self'] = circular;
+    for (const odd of [circular, 10n, Object.create(null), Object.assign(Object.create(null), { n: 1n })]) {
+      expect(() => cutToolResultForCopy(odd)).not.toThrow();
+    }
+    // What can't be written as JSON is stored as text, so the stored part stays serialisable.
+    expect(typeof cutToolResultForCopy(circular)).toBe('string');
+    expect(typeof cutToolResultForCopy(10n)).toBe('string');
+    expect(cutToolResultForCopy(Object.assign(Object.create(null), { n: 1n }))).toBe("[a result Grunt couldn't show]");
+    expect(cutToolResultForCopy(Object.create(null))).toEqual({});
+  });
 });
