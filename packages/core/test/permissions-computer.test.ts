@@ -287,6 +287,20 @@ describe('PermissionBroker and computer use', () => {
     expect(broker.decide(COMPUTER, click(EXCEL.toLowerCase()), policy(), ctx()).kind).toBe('ask');
   });
 
+  it('never lets a computer grant with anything beside its app match by the other key', () => {
+    // Each names Excel AND carries a second key that a click on Notepad can be made to satisfy.
+    const beside: Record<string, unknown>[] = [{ commandExact: 'x' }, { commandPrefix: 'x' }, { host: 'example.com' }, { pathPrefix: '/' }];
+    for (const extra of beside) grant(EXCEL, { constraint: { app: EXCEL, ...extra } });
+    const riding = { command: 'x', host: 'example.com', path: '/' };
+    expect(broker.decide(COMPUTER, click(NOTEPAD, riding), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL, riding), policy(), ctx()).kind).toBe('ask');
+    // Nor do they cover Excel itself: a grant that is not exactly one app is no grant.
+    expect(broker.decide(COMPUTER, click(EXCEL, riding), policy(), ctx()).kind).toBe('ask');
+    grant(EXCEL);
+    expect(broker.decide(COMPUTER, click(EXCEL, riding), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    expect(broker.decide(COMPUTER, click(NOTEPAD, riding), policy(), ctx()).kind).toBe('ask');
+  });
+
   it('refuses to store anything when the call no longer names a valid app by the time it is answered', () => {
     for (const choice of [{ choice: 'chat' as const }, { choice: 'always' as const, constraint: { app: EXCEL } }, { choice: 'always' as const, constraint: { app: 'excel.exe' } }]) {
       const args = click();

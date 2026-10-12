@@ -537,11 +537,14 @@ export class PermissionBroker {
       // then matched in a different chat -- exactly the blanket always-grant
       // the shell guard in resolve() exists to prevent, through a side door.
       if (grant.source !== tool.source) continue;
-      // A browser grant always names its site; one that doesn't (made some
-      // other way) must not cover every site.
-      if (tool.source === 'browser' && grant.constraint?.host === undefined) continue;
-      // Likewise a computer grant always names its app.
-      if (tool.source === 'computer' && grant.constraint?.app === undefined) continue;
+      // A browser grant is one site and nothing else: its constraint is
+      // exactly `{ host }`. One with no site must not cover every site, and
+      // one with a second key (`{ host, commandExact }`, made some other way)
+      // must not match by that key and so cover any site: the matcher below
+      // tries the keys in turn and would never reach the host.
+      if (tool.source === 'browser' && !isExactlyOneKey(grant.constraint, 'host')) continue;
+      // Likewise a computer grant is one app and nothing else: `{ app }`.
+      if (tool.source === 'computer' && !isExactlyOneKey(grant.constraint, 'app')) continue;
       if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
       // null chatId = a global ('always') grant; a non-null chatId must
       // match this exact chat ('chat'-scope grants, or a scoped 'once').
@@ -664,6 +667,13 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return `Unknown tool source: ${String(exhaustive)}`;
     }
   }
+}
+
+/** Whether a stored constraint is an object whose only key is `key`. A key present with no value still counts as a key. */
+function isExactlyOneKey(constraint: Grant['constraint'], key: 'host' | 'app'): boolean {
+  if (typeof constraint !== 'object' || constraint === null) return false;
+  const keys = Object.keys(constraint);
+  return keys.length === 1 && keys[0] === key && constraint[key] !== undefined;
 }
 
 function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): boolean {
