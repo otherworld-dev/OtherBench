@@ -8,6 +8,7 @@ import type { ArtifactRepo } from '@grunt/core/ports/store.js';
 import { openVerified } from '@grunt/tools/fs-tools.js';
 import { servedType } from '../view/kinds.js';
 import type { ViewLink, ViewLinks } from '../view/links.js';
+import { LIVE_CLIENT_FILE, LIVE_CLIENT_JS } from '../view/live-client.js';
 import { mermaidPage, mermaidScript } from '../view/mermaid.js';
 
 /** Sent with every /view response. */
@@ -23,6 +24,19 @@ const ALWAYS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store
  */
 export function sandboxPolicy(folderUrl: string): string {
   return `sandbox allow-scripts allow-forms; default-src https: data: blob: 'unsafe-inline' 'unsafe-eval' ${folderUrl}; connect-src https: wss:; form-action https:`;
+}
+
+/**
+ * The policy for a live artifact's page and its helper (spec
+ * 2026-10-12-live-artifacts): no network of any kind. connect-src, frame-src
+ * and worker-src fall back to 'none', so fetch, XHR, WebSocket, EventSource,
+ * beacons, frames and workers are closed; images, fonts and media only from
+ * data: and blob:; scripts inline or from the link's own folder (the helper);
+ * no eval. allow-forms stays so submit handlers fire, and form-action 'none'
+ * stops the submission itself. Data only arrives by postMessage.
+ */
+export function livePolicy(folderUrl: string): string {
+  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'`;
 }
 
 function refuse(c: Context, status: 404 | 415, text: string): Response {
@@ -101,9 +115,15 @@ export function viewServeRoutes(links: ViewLinks, allowed: (link: ViewLink) => b
       const version = artifacts?.getVersion(link.versionId);
       const artifact = version ? artifacts?.get(version.artifactId) : null;
       if (!version || !artifact) return refuse(c, 404, 'Not found.');
-      const policy = sandboxPolicy(`${url.origin}/view/${id}/`);
+      // A live page (spec 2026-10-12-live-artifacts) gets the strict policy and
+      // its helper; every other version the ordinary sandbox, as before.
+      const folder = `${url.origin}/view/${id}/`;
+      const live = version.kind === 'html' && version.live !== null;
+      const policy = live ? livePolicy(folder) : sandboxPolicy(folder);
+      const extra: Record<string, string> = live ? { 'X-DNS-Prefetch-Control': 'off' } : {};
       const send = (body: string | Buffer, mime: string): Response =>
-        c.body(typeof body === 'string' ? body : new Uint8Array(body), 200, { ...ALWAYS, 'Content-Type': mime, 'Content-Disposition': 'inline', 'Content-Security-Policy': policy });
+        c.body(typeof body === 'string' ? body : new Uint8Array(body), 200, { ...ALWAYS, ...extra, 'Content-Type': mime, 'Content-Disposition': 'inline', 'Content-Security-Policy': policy });
+      if (rel === LIVE_CLIENT_FILE) return live ? send(LIVE_CLIENT_JS, 'text/javascript; charset=utf-8') : refuse(c, 404, 'Not found.');
       if (version.kind === 'mermaid') {
         if (rel === 'diagram.html') return send(mermaidPage(version.content), 'text/html; charset=utf-8');
         if (rel === 'mermaid.min.js') return send(await mermaidScript(), 'text/javascript; charset=utf-8');
