@@ -211,14 +211,13 @@ describe('the computer tool in GruntToolProvider', () => {
   });
 
   it('turns a refusal into an error result with no card, audited as a policy denial', async () => {
-    const { provider, requests, driver, store, tool } = await gatedReady();
+    const { requests, driver, store, tool } = await gatedReady();
     driver.pointTarget = fakeComputerTarget({ grunt: true });
     expect(await tool.execute({ action: 'left_click', coordinate: [1, 1] }, ctx())).toEqual({ error: true, code: 'permission_denied', message: COMPUTER_GRUNT_REASON });
     expect(await tool.execute({ action: 'key', text: 'super+r' }, ctx())).toEqual({ error: true, code: 'permission_denied', message: KEYS_WINDOWS_REASON });
     expect(requests).toHaveLength(0);
     expect(driver.actions).toEqual([]);
     expect(store.audit.list('chat-1').slice(-2).map((r) => r.grantedBy)).toEqual(['deny:policy', 'deny:policy']);
-    void provider;
   });
 
   it('does nothing when the window changes while its card is up', async () => {
