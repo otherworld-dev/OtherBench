@@ -2,12 +2,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isPublicAddress } from '@grunt/core/domain/browser-hosts.js';
 import { toSandboxPath } from '@grunt/core/domain/sandbox-paths.js';
 import type { SandboxRunRequest, StoredSandboxState } from '@grunt/core/ports/sandbox.js';
+import { DEFAULT_SANDBOX_HOSTS } from '@grunt/core/types/config.js';
+// Plain ESM that ships into the VM; vitest loads it as it is.
+import { DENIED_RESOLVED_ADDRESSES } from '../resources/agent-core.mjs';
 import { sandboxResourcesDir } from '../src/resources.js';
 import { EXISTING_PROBE, EXISTING_PROBE_CONTENT, otherSpelling, PROTECTED_PROBES } from '../src/selftest.js';
-import { WslSandbox } from '../src/wsl-sandbox.js';
+import { AGENT_ARGV, WslSandbox } from '../src/wsl-sandbox.js';
 import { createWslRunner } from '../src/wsl.js';
+import { addressSample } from './address-sample.js';
 
 /**
  * The real sandbox on this Windows machine (spec 2026-10-12-sandbox-design §6,
@@ -202,6 +207,64 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
       await runner.exec('root', ['/usr/bin/pkill', '-f', 'http.server 8765']);
     }
   }, 180_000);
+
+  it("has the real runtime refuse every address the agent calls private and no public one, and take the default hosts' addresses", async () => {
+    // The distro's own Node runs fixtures/runtime-address-check.mjs (which says what it checks) against the agent
+    // setup installed and the runtime beside it: its config schema, and its guard for a name's resolved addresses.
+    // Every range edge and every IPv4 address inside IPv6 from the unit tests' sample, and one in 16 of the rest.
+    const addresses: [string, boolean][] = [];
+    let seen = 0;
+    for (const address of addressSample()) {
+      seen += 1;
+      if (address.kind !== 'edge' && address.kind !== 'carried' && seen % 16 !== 0) continue;
+      addresses.push([address.text, isPublicAddress(address.text)]);
+    }
+    const input = { denied: DENIED_RESOLVED_ADDRESSES, hosts: DEFAULT_SANDBOX_HOSTS, addresses };
+    const script = `const INPUT = ${JSON.stringify(input)};\n${readFileSync(new URL('./fixtures/runtime-address-check.mjs', import.meta.url), 'utf8')}`;
+    const child = runner.spawn('grunt', [AGENT_ARGV[0] as string, '--input-type=module', '-']);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')));
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')));
+    const code = await new Promise<number | null>((resolve) => {
+      child.on('close', resolve);
+      child.stdin.end(script);
+    });
+    expect(code, stderr).toBe(0);
+    const result = JSON.parse(stdout) as {
+      installedIsThisCheckout: boolean;
+      ranges: number;
+      schema: string[];
+      agentDiffers: string[];
+      letThrough: string[];
+      refusedByRanges: string[];
+      refusedByRuntimeAnyway: string[];
+      privateRefusedByRuntimeAlone: number;
+      privateRefusedByRanges: number;
+      hosts: Record<string, { address: string; private: boolean; permitted: boolean }[] | { error: string }>;
+    };
+    // Repair put this checkout's agent in the distro, and the runtime's schema takes every range in its list.
+    expect(result.installedIsThisCheckout).toBe(true);
+    expect(result.schema).toEqual([]);
+    // The agent answers as core does in the distro's Node too.
+    expect(result.agentDiffers).toEqual([]);
+    // The runtime, given the list, would dial no address that isn't public, and the list costs no public one.
+    expect(result.letThrough).toEqual([]);
+    expect(result.refusedByRanges).toEqual([]);
+    expect(result.privateRefusedByRanges).toBeGreaterThan(10_000);
+    for (const host of DEFAULT_SANDBOX_HOSTS) {
+      const found = result.hosts[host];
+      expect(Array.isArray(found) && found.length > 0, `${host}: ${JSON.stringify(found)}`).toBe(true);
+      for (const address of found as { address: string; private: boolean; permitted: boolean }[]) expect(address, host).toMatchObject({ private: false, permitted: true });
+    }
+    const resolved = Object.values(result.hosts).flatMap((found) => (Array.isArray(found) ? found.map((a) => a.address) : []));
+    console.log(
+      `[sandbox-live] resolved-address guard: ${result.ranges} ranges taken by the runtime's schema; ${addresses.length} addresses, ` +
+        `${result.privateRefusedByRanges} refused because of the ranges and ${result.privateRefusedByRuntimeAlone} by the runtime alone, none let through, ` +
+        `no public one refused by the ranges (the runtime refuses ${result.refusedByRuntimeAnyway.length} itself: ${result.refusedByRuntimeAnyway.join(', ')}); ` +
+        `default hosts resolve to ${resolved.length} addresses (${resolved.filter((a) => a.includes(':')).length} IPv6), all let through`
+    );
+  }, 120_000);
 
   it('keeps the chat home between commands', async () => {
     await sandbox.run(req('echo kept > ~/kept.txt'));
