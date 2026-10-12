@@ -9,7 +9,7 @@
  * form written here, and the card shows the same text; the shell presses it
  * and decides nothing. Pure (no Node imports).
  */
-import { cardLine } from './card-text.js';
+import { asciiLower, cardLine } from './card-text.js';
 
 export type ParsedKeys =
   /** `combos` is one combination (phase 1): its modifiers in `KEY_MODIFIERS` order, then its key. `text` is the same, joined with `+`. */
@@ -120,11 +120,6 @@ const ONE_COMBO_REASON = 'Grunt sends one key combination per action. Send each 
 const NO_TEXT_REASON = 'A key action needs one key combination as its text, such as "ctrl+s" or "Return".';
 
 const refuse = (reason: string): ParsedKeys => ({ ok: false, reason });
-
-/** ASCII only: a key name is never anything else, and nothing here may depend on a runtime's Unicode tables. */
-function asciiLower(text: string): string {
-  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
-}
 
 interface Combo {
   modifiers: Set<string>;

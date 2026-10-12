@@ -97,6 +97,12 @@ describe('FakeComputerDriver', () => {
     expect(fakeComputerTarget({ windowId: 'hwnd-2' })).toEqual({ ...FAKE_COMPUTER_APP, windowId: 'hwnd-2' });
   });
 
+  it('can stand in for a file dialog of an ordinary app, which core asks about every time', () => {
+    const dialog = fakeComputerTarget({ shellView: true, title: 'Open', windowId: 'hwnd-dialog' });
+    expect(classifyTarget(dialog)).toMatchObject({ kind: 'app', key: FAKE_COMPUTER_APP.path, risk: 'high', windowId: 'hwnd-dialog' });
+    expect(FAKE_COMPUTER_APP.shellView).toBe(false);
+  });
+
   it('does nothing when the window under the point is no longer the one the action was approved for', async () => {
     const driver = await started();
     const click: ComputerAction = { action: 'left_click', coordinate: [5, 5] };

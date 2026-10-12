@@ -30,6 +30,7 @@ export const FAKE_COMPUTER_APP: ComputerTarget = Object.freeze({
   elevated: false,
   uiAccess: false,
   grunt: false,
+  shellView: false,
   title: 'Fake App',
   windowId: 'hwnd-1',
   pid: 4242,

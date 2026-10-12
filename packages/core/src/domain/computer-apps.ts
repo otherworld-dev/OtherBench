@@ -15,7 +15,7 @@
  * The shell sends facts and presses what it is told. It has no copy of any
  * of these rules.
  */
-import { cardLine, hasHiddenCharacter, isWellFormedText, revealAllHidden, revealHidden } from './card-text.js';
+import { asciiLower, cardLine, hasHiddenCharacter, isWellFormedText, revealAllHidden, revealHidden } from './card-text.js';
 import { KEY_LIMITS, parseKeys } from './computer-keys.js';
 import type { ComputerAction, ComputerExpectation } from '../ports/computer.js';
 
@@ -61,11 +61,6 @@ export function isReadAction(value: unknown): boolean {
 
 function recordOf(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-/** ASCII only, so a name's fold never depends on a runtime's Unicode tables (and never makes two names one). */
-function asciiLower(text: string): string {
-  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 }
 
 const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
@@ -115,6 +110,22 @@ export function appKey(raw: unknown): string | null {
   return raw;
 }
 
+/**
+ * A space that is not the plain one (U+0020): no-break, en, em, thin, narrow
+ * no-break, ideographic and the rest of Unicode's space separators. One of
+ * these in a folder or file name reads as a plain space, or as nothing at
+ * the end of a name, so a folder named Slack plus a no-break space looks
+ * like Slack's own. (Hidden characters never get this far: `appKey` refuses
+ * them anywhere in a key.)
+ */
+function hasOddSpace(text: string): boolean {
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp === 0x00a0 || cp === 0x1680 || (cp >= 0x2000 && cp <= 0x200a) || cp === 0x202f || cp === 0x205f || cp === 0x3000) return true;
+  }
+  return false;
+}
+
 function fileNameOf(key: string): string {
   return key.slice(key.lastIndexOf('\\') + 1);
 }
@@ -124,7 +135,11 @@ export interface AppDescription {
   name: string;
   /** The key itself: the full path. Show all of it, never cut. */
   path: string;
-  /** The file name has a character outside plain ASCII, which can pass for another (say so on the card). */
+  /**
+   * Something in the path can pass for something else, so the card should say
+   * so: the file name has a character outside plain ASCII, or any part of the
+   * path has a space that is not the plain one.
+   */
   unusual: boolean;
 }
 
@@ -138,7 +153,7 @@ export function describeApp(key: unknown): AppDescription | null {
   const valid = appKey(key);
   if (valid === null) return null;
   const name = fileNameOf(valid);
-  return { name, path: valid, unusual: !PRINTABLE_ASCII.test(name) };
+  return { name, path: valid, unusual: !PRINTABLE_ASCII.test(name) || hasOddSpace(valid) };
 }
 
 /**
@@ -161,7 +176,7 @@ export function windowTitleForCard(title: unknown): string {
 // ---------------------------------------------------------------------------
 // Risk
 
-const JETBRAINS = ['idea', 'pycharm', 'webstorm', 'phpstorm', 'clion', 'goland', 'rider', 'rubymine', 'datagrip', 'dataspell', 'rustrover', 'studio', 'aqua', 'fleet', 'writerside'];
+const JETBRAINS = ['idea', 'pycharm', 'webstorm', 'phpstorm', 'clion', 'goland', 'rider', 'rubymine', 'datagrip', 'dataspell', 'rustrover', 'studio', 'aqua', 'fleet', 'writerside', 'gateway', 'mps'];
 
 /**
  * Programs Grunt asks about every time ("Allow once" only: no grant is stored
@@ -190,21 +205,34 @@ export const HIGH_RISK_STEMS: readonly string[] = Object.freeze([
   'credentialuibroker', 'consent', 'logonui', 'lockapp',
   // Remote desktop and VM clients: another machine in a window.
   'mstsc', 'msrdc', 'vmconnect', 'vmware', 'vmplayer', 'virtualbox', 'virtualboxvm', 'anydesk', 'teamviewer', 'rustdesk', 'parsecd', 'vncviewer',
+  'quickassist', 'msra', 'mremoteng', 'rdcman',
+  // File managers and "Open with": they start any program and open any file.
+  'doublecmd', 'dopus', 'openwith',
   // Password managers.
   '1password', 'keepass', 'keepassxc', 'bitwarden', 'lastpass', 'dashlane',
   // Browsers: devtools, javascript: addresses, and Grunt's own pages in a tab. Grunt has its own browser for the web.
   'chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'chromium', 'iexplore',
   // Editors and IDEs with a terminal inside. JetBrains launchers are named per product, with and without "64".
-  'code', 'code - insiders', 'vscodium', 'cursor', 'windsurf', 'devenv',
+  'code', 'code - insiders', 'vscodium', 'cursor', 'windsurf', 'devenv', 'zed',
+  // Editors that run plugins, macros or build commands.
+  'notepad++', 'sublime_text',
   ...JETBRAINS.flatMap((product) => [product, `${product}64`]),
 ]);
 
 /**
  * Families: a name that STARTS with one of these is high-risk too
  * (`python3.12.exe`, `pythonw.exe`, `ubuntu2204.exe`, `conemu64.exe`,
- * `SystemPropertiesAdvanced.exe`).
+ * `SystemPropertiesAdvanced.exe`, `WindowsSandboxClient.exe`,
+ * `TOTALCMD64.EXE`, `AutoHotkeyU64.exe`).
  */
-export const HIGH_RISK_FAMILIES: readonly string[] = Object.freeze(['python', 'ubuntu', 'conemu', 'systemproperties']);
+export const HIGH_RISK_FAMILIES: readonly string[] = Object.freeze(['python', 'ubuntu', 'conemu', 'systemproperties', 'windowssandbox', 'totalcmd', 'autohotkey']);
+
+/**
+ * Publishers whose every program is asked about each time, by a word in the
+ * verified signer (any letter case). JetBrains: all its IDEs have a terminal,
+ * and a product that is on no list yet is covered the day it ships.
+ */
+const HIGH_RISK_SIGNERS: readonly string[] = Object.freeze(['jetbrains']);
 
 const HIGH_RISK_STEM_SET: ReadonlySet<string> = new Set(HIGH_RISK_STEMS);
 /** Grunt's own programs. A window of one is refused outright, whatever the shell said about whose it is. */
@@ -242,12 +270,16 @@ export function isHighRiskProgramName(name: string): boolean {
 
 type Risk = 'normal' | 'high' | 'grunt';
 
-/** What the key alone says: its file name, and whether any part of the path is a short (8.3) name. */
+/** What the key alone says: its file name, and whether the path is one Grunt can't take at its word. */
 function keyRisk(key: string): Risk {
   const stem = exeStem(fileNameOf(key));
   if (stem !== null && GRUNT_STEMS.has(stem)) return 'grunt';
   if (stem === null || isListedStem(stem)) return 'high';
-  return /~\d/.test(key) ? 'high' : 'normal';
+  // A short (8.3) segment hides the real name; a share does not pin what a
+  // path names, whatever kind of drive it is said to be on; a space that is
+  // not the plain one makes one folder read as another.
+  if (/~\d/.test(key) || key.startsWith('\\\\') || hasOddSpace(key)) return 'high';
+  return 'normal';
 }
 
 /**
@@ -264,6 +296,13 @@ function originalNameRisk(original: unknown): Risk {
   if (stem === '') return 'high';
   if (GRUNT_STEMS.has(stem)) return 'grunt';
   return isListedStem(stem) ? 'high' : 'normal';
+}
+
+/** A verified signer that says nothing against the program: a non-empty name with no word from `HIGH_RISK_SIGNERS` in it. */
+function isTrustedSigner(signer: unknown): boolean {
+  if (typeof signer !== 'string' || signer.trim() === '') return false;
+  const lower = asciiLower(signer);
+  return !HIGH_RISK_SIGNERS.some((word) => lower.includes(word));
 }
 
 function isOpaqueId(value: unknown, max: number): value is string {
@@ -304,9 +343,12 @@ export type ClassifiedTarget = { kind: 'refuse'; reason: string } | ClassifiedAp
  *
  * High risk (asked about every time): a name on the list or in a family, by
  * file name or by the name the program was built with; a name that can't be
- * vouched for; a short (8.3) segment anywhere in the path; a console
- * program; a program not on a fixed disk; an unsigned one; any other fact
- * missing or of the wrong type.
+ * vouched for; a short (8.3) segment or an odd space anywhere in the path;
+ * a path on a share; a console program; a program not on a fixed disk; an
+ * unsigned one, or one signed by a publisher in `HIGH_RISK_SIGNERS`; a file
+ * dialog or shell file view (`shellView`), which belongs to an ordinary app's
+ * process and can open or run any file; any other fact missing or of the
+ * wrong type.
  */
 export function classifyTarget(target: unknown): ClassifiedTarget {
   const refuse = (reason: string): ClassifiedTarget => ({ kind: 'refuse', reason });
@@ -337,9 +379,9 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   const ordinary =
     byKey === 'normal' &&
     byOriginalName === 'normal' &&
-    typeof t['signer'] === 'string' &&
-    t['signer'].trim() !== '' &&
+    isTrustedSigner(t['signer']) &&
     t['console'] === false &&
+    t['shellView'] === false &&
     t['location'] === 'fixed' &&
     typeof t['title'] === 'string';
   return { kind: 'app', key, name, title: windowTitleForCard(t['title']), risk: ordinary ? 'normal' : 'high', windowId, pid, startedAt };

@@ -3,6 +3,8 @@ import { PermissionBroker, type Decision } from '../src/domain/permissions.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
+import { appArgs, classifyTarget } from '../src/domain/computer-apps.js';
+import { fakeComputerTarget } from '../src/testing/fake-computer.js';
 
 // App keys are the paths the shell resolved, compared exactly: on-disk case and all.
 const EXCEL = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE';
@@ -351,6 +353,26 @@ describe('PermissionBroker and computer use', () => {
     }
     expect(store.grants.list().every((g) => g.id.startsWith('g'))).toBe(true);
     expect(store.grants.list()).toHaveLength(6);
+  });
+
+  it("asks every time in an ordinary app's file dialog: the app's grant does not reach it, and no answer stores one", () => {
+    const classify = (over: Parameters<typeof fakeComputerTarget>[0]): Record<string, unknown> => {
+      const classified = classifyTarget(fakeComputerTarget({ path: NOTEPAD, originalName: 'NOTEPAD.EXE', ...over }));
+      if (classified.kind !== 'app') throw new Error(classified.reason);
+      return { action: 'left_click', coordinate: [512, 300], ...appArgs(classified) };
+    };
+    grant(NOTEPAD);
+    grant(NOTEPAD, { chatId: 'chat-1', scope: 'chat' });
+    // The main window is covered by the grant.
+    expect(broker.decide(COMPUTER, classify({}), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    // Its Open dialog is the same program, and is asked about.
+    const dialog = classify({ shellView: true, title: 'Open', windowId: 'hwnd-dialog' });
+    const ask = expectAsk(broker.decide(COMPUTER, dialog, policy(), ctx()));
+    expect(ask.request.summary).toBe('Use notepad.exe: click at 512, 300');
+    expect(() => broker.resolve(ask.request.id, { choice: 'chat' })).toThrow(/asks every time/);
+    const again = expectAsk(broker.decide(COMPUTER, dialog, policy(), ctx()));
+    expect(() => broker.resolve(again.request.id, { choice: 'always', constraint: { app: NOTEPAD } })).toThrow(/asks every time/);
+    expect(store.grants.list()).toHaveLength(2);
   });
 
   it('never puts typed text in the card line: only how much of it there is', () => {

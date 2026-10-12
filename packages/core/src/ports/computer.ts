@@ -37,8 +37,18 @@ export interface ComputerTarget {
   elevated: boolean;
   /** The process holds UI access (it can drive other apps' windows). */
   uiAccess: boolean;
-  /** Any Grunt process, not only the shell's own. */
+  /**
+   * A Grunt window: Grunt's own process, any process descended from it (its
+   * webview children, whose dropdowns, context menus and devtools are
+   * top-level windows of their own), or any window owned by a Grunt window.
+   */
   grunt: boolean;
+  /**
+   * The window is a common file dialog (Open, Save), hosts a shell file view,
+   * or is a menu owned by one. It belongs to an ordinary app's process but
+   * can open, run or delete any file, so core asks about it every time.
+   */
+  shellView: boolean;
   /** The window's title, raw. Set by the app: core bounds and cleans it before any card sees it. */
   title: string;
   /** The window itself, opaque to core (a window handle as text). */

@@ -40,6 +40,7 @@ function target(over: Record<string, unknown> = {}): Record<string, unknown> {
     elevated: false,
     uiAccess: false,
     grunt: false,
+    shellView: false,
     title: 'Untitled - Notepad',
     windowId: 'hwnd-1',
     pid: 4242,
@@ -697,5 +698,73 @@ describe('the line that says what an action does', () => {
     for (const args of [{ action: 'type', text: `${'a'.repeat(39)}\u{1f600}` }, { action: 'key', text: '\ud83d' }, { action: '\ud83d' }]) {
       expect(isWellFormedText(actionSummary(args))).toBe(true);
     }
+  });
+});
+
+describe('round 2: file dialogs, shares, look-alike folders and the longer list', () => {
+  it('asks every time for a file dialog or a shell file view inside an ordinary app', () => {
+    // Notepad's own Open dialog: the same program, signed, on a fixed disk.
+    const dialog = app(classifyTarget(target({ shellView: true, title: 'Open', windowId: 'hwnd-dialog' })));
+    expect(dialog).toMatchObject({ key: NOTEPAD, name: 'notepad.exe', risk: 'high', windowId: 'hwnd-dialog' });
+    expect(isHighRiskApp({ action: 'left_click', coordinate: [1, 2], ...appArgs(dialog) })).toBe(true);
+    // The main window of the same program stays ordinary.
+    const main = app(classifyTarget(target({ shellView: false })));
+    expect(main.risk).toBe('normal');
+    expect(isHighRiskApp({ action: 'left_click', coordinate: [1, 2], ...appArgs(main) })).toBe(false);
+  });
+
+  it('never calls a target ordinary when it was not told whether it is a file dialog', () => {
+    for (const t of [without('shellView'), target({ shellView: undefined }), target({ shellView: null }), target({ shellView: 'false' }), target({ shellView: 0 })]) {
+      expect(app(classifyTarget(t)).risk, JSON.stringify(t['shellView'])).toBe('high');
+    }
+  });
+
+  it('asks every time for a program on a share, whatever kind of drive the shell said it is on', () => {
+    const share = '\\\\server\\share\\App.exe';
+    expect(appKey(share)).toBe(share);
+    for (const location of ['fixed', 'network', 'unknown']) {
+      expect(app(classifyTarget(target({ path: share, originalName: null, location }))).risk, location).toBe('high');
+    }
+    expect(isHighRiskApp({ app: share, appRisk: 'normal' })).toBe(true);
+    expect(isHighRiskApp({ app: '\\\\localhost\\c$\\Windows\\System32\\notepad.exe', appRisk: 'normal' })).toBe(true);
+  });
+
+  it('flags a space that is not a plain space anywhere in the path, not only in the file name', () => {
+    // A folder named "Slack" plus a no-break space, an en space, an ideographic space, a narrow no-break space.
+    for (const space of ['\u00a0', '\u2002', '\u3000', '\u202f', '\u1680', '\u205f', '\u2000', '\u200a']) {
+      const key = `C:\\Users\\a\\AppData\\Local\\Slack${space}\\slack.exe`;
+      expect(appKey(key), space.codePointAt(0)?.toString(16)).toBe(key);
+      expect(describeApp(key)?.unusual, space.codePointAt(0)?.toString(16)).toBe(true);
+      expect(app(classifyTarget(target({ path: key, originalName: null }))).risk, space.codePointAt(0)?.toString(16)).toBe('high');
+      expect(isHighRiskApp({ app: key, appRisk: 'normal' }), space.codePointAt(0)?.toString(16)).toBe(true);
+      // In the middle of a folder name and at the start of one, too.
+      expect(describeApp(`C:\\Program${space}Files\\App\\app.exe`)?.unusual).toBe(true);
+      expect(describeApp(`C:\\${space}App\\app.exe`)?.unusual).toBe(true);
+    }
+    // A plain space, and letters that are not ASCII, in a folder are ordinary.
+    for (const key of ['C:\\Program Files\\Fake App\\FakeApp.exe', 'C:\\Users\\Jos\u00e9\\AppData\\Local\\App\\app.exe', 'C:\\Users\\\u5c71\u7530\\App\\app.exe']) {
+      expect(describeApp(key)?.unusual, key).toBe(false);
+      expect(app(classifyTarget(target({ path: key, originalName: null }))).risk, key).toBe('normal');
+    }
+  });
+
+  it('holds the remote-help tools, file managers, scriptable editors and automation hosts', () => {
+    const names = [
+      'quickassist.exe', 'msra.exe', 'WindowsSandbox.exe', 'WindowsSandboxClient.exe', 'mRemoteNG.exe', 'RDCMan.exe', 'TOTALCMD.EXE', 'TOTALCMD64.EXE',
+      'doublecmd.exe', 'dopus.exe', 'notepad++.exe', 'sublime_text.exe', 'Zed.exe', 'AutoHotkey.exe', 'AutoHotkey64.exe', 'AutoHotkeyU64.exe', 'OpenWith.exe',
+      'gateway64.exe', 'gateway.exe', 'mps64.exe', 'mps.exe',
+    ];
+    for (const name of names) expect(isHighRiskProgramName(name), name).toBe(true);
+    for (const family of ['windowssandbox', 'totalcmd', 'autohotkey']) expect(HIGH_RISK_FAMILIES).toContain(family);
+    expect(new Set(HIGH_RISK_STEMS).size).toBe(HIGH_RISK_STEMS.length);
+  });
+
+  it('asks every time for anything JetBrains signed, so a product that is on no list yet is covered', () => {
+    const fresh = { path: 'C:\\Program Files\\JetBrains\\NewThing 2027.1\\bin\\newthing64.exe', originalName: 'newthing64.exe' };
+    expect(isHighRiskProgramName('newthing64.exe')).toBe(false);
+    for (const signer of ['JetBrains s.r.o.', 'CN=JetBrains s.r.o., O=JetBrains s.r.o., L=Praha, C=CZ', 'JETBRAINS S.R.O.', 'jetbrains']) {
+      expect(app(classifyTarget(target({ ...fresh, signer }))).risk, signer).toBe('high');
+    }
+    expect(app(classifyTarget(target({ ...fresh, signer: 'Some Other Software Ltd' }))).risk).toBe('normal');
   });
 });

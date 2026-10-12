@@ -56,6 +56,16 @@ const ELLIPSIS = String.fromCodePoint(0x2026);
 
 const spell = (codePoint: number): string => `<U+${codePoint.toString(16).toUpperCase().padStart(4, '0')}>`;
 
+/**
+ * Lower case for A to Z only. Names Grunt compares (a program's file name, a
+ * key's name, a signer) are folded with this and nothing else, so the result
+ * never depends on a runtime's Unicode tables and never makes two different
+ * names one (as full lower-casing does for the Kelvin sign and `k`).
+ */
+export function asciiLower(text: string): string {
+  return text.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
 /** Whether `text` is a string every character of which can be written down (no lone surrogate). */
 export function isWellFormedText(text: unknown): text is string {
   if (typeof text !== 'string') return false;
