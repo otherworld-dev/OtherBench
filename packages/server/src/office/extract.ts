@@ -15,6 +15,9 @@ export function extractOfficeText(data: Buffer, limits: Partial<OfficeLimits> = 
   const out = new TextOut(caps.maxChars);
   if (parts.has('word/document.xml')) readWord(parts, out);
   else return null;
-  const text = [out.toString(), ...parts.notes].filter((t) => t !== '').join('\n\n');
+  const body = out.toString();
+  // A reader that stopped with the text not yet past the cap says so itself (past the cap, attachment-text.ts's truncate() does).
+  const stopNote = out.full && body.length <= caps.maxChars ? [`[Grunt stopped reading here: the text reached its ${caps.maxChars}-character limit.]`] : [];
+  const text = [body, ...stopNote, ...parts.notes].filter((t) => t !== '').join('\n\n');
   return text.trim() === '' ? null : text;
 }

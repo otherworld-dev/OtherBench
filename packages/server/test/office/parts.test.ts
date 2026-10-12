@@ -53,6 +53,25 @@ describe('TextOut', () => {
     expect(out.line('more')).toBe(false);
     expect(out.toString()).toBe('12345\n67890');
   });
+
+  it('cuts a line that does not fit so the text ends one character past the cap', () => {
+    const out = new TextOut(10);
+    expect(out.line('abc')).toBe(true);
+    expect(out.line('x'.repeat(1_000_000))).toBe(false);
+    expect(out.full).toBe(true);
+    expect(out.toString().length).toBe(11);
+    expect(out.line('more')).toBe(false);
+    expect(out.toString().length).toBe(11);
+  });
+
+  it('is full once the reader stops it, whatever its length', () => {
+    const out = new TextOut(100);
+    out.line('short');
+    out.stop();
+    expect(out.full).toBe(true);
+    expect(out.line('more')).toBe(false);
+    expect(out.toString()).toBe('short');
+  });
 });
 
 describe('markdownTable', () => {

@@ -92,20 +92,34 @@ export class TextOut {
 
   constructor(private readonly maxChars: number) {}
 
-  /** Past the cap (not at it), so the text is always longer than the cap once full and attachment-text.ts's truncate() marks it. */
+  private stopped = false;
+
+  /** Past the cap (not at it), so the text is always longer than the cap once full and attachment-text.ts's truncate() marks it; or stopped by the reader, which dropped text it couldn't hold. */
   get full(): boolean {
-    return this.chars > this.maxChars;
+    return this.stopped || this.chars > this.maxChars;
+  }
+
+  /** How many more characters fit before the cap (negative once past it). */
+  get room(): number {
+    return this.maxChars - this.chars;
   }
 
   get last(): string | undefined {
     return this.lines.at(-1);
   }
 
-  /** Adds a line; false once the text is full (stop reading). */
+  /** The reader dropped text it couldn't hold within the cap: the text is full whatever its length. */
+  stop(): void {
+    this.stopped = true;
+  }
+
+  /** Adds a line; false once the text is full (stop reading). A line that doesn't fit is cut so the text ends one character past the cap (at most maxChars + 1 long), not at the end of whatever the reader buffered. */
   line(text: string): boolean {
     if (this.full) return false;
-    this.lines.push(text);
-    this.chars += text.length + 1;
+    const fit = this.maxChars - this.chars + 1;
+    const kept = text.length > fit ? text.slice(0, fit) : text;
+    this.lines.push(kept);
+    this.chars += kept.length + 1;
     return !this.full;
   }
 
