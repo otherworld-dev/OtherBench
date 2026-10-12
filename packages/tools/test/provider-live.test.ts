@@ -114,6 +114,51 @@ describe('GruntToolProvider live calls', () => {
     expect(provider.liveStatus(statusReq([lookupCall]))[0]).toMatchObject({ reason: `MCP server "Live" is turned off.` });
   });
 
+  const ambiguous = '"mcp__Live__lookup" names more than one tool; rename one of the MCP servers so each has its own name.';
+  const addSecondLive = async (over: { command?: string; args?: string[] } = {}) => {
+    store.mcpServers.create({ id: 'srv-live-2', name: 'Live', transport: 'stdio', command: over.command ?? process.execPath, args: over.args ?? [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+    await manager.sync();
+  };
+
+  it('two servers with the same name both offering the tool: it is unavailable, never allowed and never called', async () => {
+    await addSecondLive();
+    await vi.waitFor(
+      () => {
+        if (manager.listFor([SERVER, 'srv-live-2']).length !== 2) throw new Error('not connected yet');
+      },
+      { timeout: 5000, interval: 25 }
+    );
+    const both = policy({ mcpServerIds: [SERVER, 'srv-live-2'] });
+    expect(provider.liveStatus(statusReq([lookupCall], { policy: both }))[0]).toMatchObject({ state: 'unavailable', reason: ambiguous });
+    expect(provider.allowLive(statusReq([lookupCall], { policy: both }))[0]).toMatchObject({ state: 'unavailable', reason: ambiguous });
+    expect(store.grants.list('chat-1')).toEqual([]);
+    expect(await run(lookupCall, { key: 'a' }, { policy: both })).toEqual({ ok: false, code: 'not_available', message: ambiguous });
+    // Neither server was called: allowing the call with only the first server on, then calling with both, still calls nothing.
+    provider.allowLive(statusReq([lookupCall]));
+    expect(await run(lookupCall, { key: 'a' }, { policy: both })).toEqual({ ok: false, code: 'not_available', message: ambiguous });
+    expect(await run(lookupCall, { key: 'a' }, { fresh: true })).toMatchObject({ ok: true, json: { n: 1 } });
+  });
+
+  it("a same-named server that isn't connected right now still makes the name ambiguous", async () => {
+    await addSecondLive({ command: process.execPath, args: ['-e', 'process.exit(1)'] });
+    const both = policy({ mcpServerIds: [SERVER, 'srv-live-2'] });
+    expect(manager.listFor([SERVER, 'srv-live-2'])).toHaveLength(1);
+    expect(provider.liveStatus(statusReq([lookupCall], { policy: both }))[0]).toMatchObject({ state: 'unavailable', reason: ambiguous });
+    expect(await run(lookupCall, { key: 'a' }, { policy: both })).toMatchObject({ ok: false, code: 'not_available', message: ambiguous });
+  });
+
+  it('an unexpected throw comes back as failed, and a later call still works', async () => {
+    provider.allowLive(statusReq([lookupCall]));
+    const spy = vi.spyOn(store.grants, 'list').mockImplementation(() => {
+      throw new Error('db gone '.repeat(100));
+    });
+    const out = await run(lookupCall, { key: 'a' });
+    expect(out).toMatchObject({ ok: false, code: 'failed' });
+    expect((out as { message: string }).message.length).toBeLessThanOrEqual(500);
+    spy.mockRestore();
+    expect(await run(lookupCall, { key: 'a' })).toMatchObject({ ok: true });
+  });
+
   it('a call that outlives the timeout comes back as timeout', async () => {
     provider.allowLive(statusReq([waitCall]));
     expect(await run(waitCall, { ms: 2000 })).toMatchObject({ ok: false, code: 'timeout' });

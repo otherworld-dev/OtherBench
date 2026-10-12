@@ -101,6 +101,11 @@ function toolError(code: string, message: string): ToolError {
 // ---------------------------------------------------------------------------
 
 const SENSITIVE_KEY_PATTERN = /content|body|password|secret|token|apikey|api_key|authorization|output|oldstring|newstring/i;
+/** A failure's message for the page, cut to the length tool_error messages get. */
+function boundMessage(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).slice(0, 500);
+}
+
 const MAX_STRING_PREVIEW = 200;
 const MAX_REDACT_DEPTH = 6;
 
@@ -331,14 +336,33 @@ export class GruntToolProvider implements ToolProvider {
     return entries;
   }
 
-  /** The profile's MCP tool called `name` (as listTools names it), with its origin; null when it has none. */
-  private liveTarget(policy: ToolPolicy, name: string): McpEntry | null {
+  /**
+   * The profile's MCP tool called `name` (as listTools names it), with its
+   * origin; null when it has none, or `{ reason }` when the name could mean
+   * more than one tool. `mcp_server.name` isn't unique, sanitising collapses
+   * distinct names, and the `_2` suffix follows listing order, which moves as
+   * servers connect and drop. A grant is keyed on the name, so honouring an
+   * ambiguous one could run another server's tool under it.
+   */
+  private liveTarget(policy: ToolPolicy, name: string): { entry: McpEntry } | { reason: string } | null {
     if (policy.mcpServerIds.length === 0) return null;
     const entries = this.mcpEntries(policy.mcpServerIds);
     // Deduplicated as listTools does, so a suffixed name means the same tool here.
-    const specs = this.deduplicateNames(entries.map((e) => e.spec));
+    const specs = this.deduplicateNames(entries.map((e) => e.spec), false);
     const at = specs.findIndex((s) => s.name === name);
-    return at === -1 ? null : { spec: specs[at]!, origin: entries[at]!.origin };
+    if (at === -1) return null;
+    const entry: McpEntry = { spec: specs[at]!, origin: entries[at]!.origin };
+    const baseName = entries[at]!.spec.name;
+    const serverSegment = sanitizeNameSegment(entry.origin.serverName);
+    const ambiguous =
+      specs.filter((s) => s.name === name).length > 1 ||
+      entries.filter((e) => e.spec.name === baseName).length > 1 ||
+      // Another enabled server of this profile that shares the name but isn't connected right now: its tool may come back under this one.
+      this.store.mcpServers
+        .list()
+        .some((r) => r.enabled && r.id !== entry.origin.serverId && policy.mcpServerIds.includes(r.id) && sanitizeNameSegment(r.name) === serverSegment);
+    if (ambiguous) return { reason: `"${name}" names more than one tool; rename one of the MCP servers so each has its own name.` };
+    return { entry };
   }
 
   /** Why the profile has no tool called `name`, in words the viewer shows. */
@@ -365,14 +389,14 @@ export class GruntToolProvider implements ToolProvider {
    * are suffixed `_2`, `_3`, ... deterministically, and the collision is
    * logged so it's diagnosable rather than silently masking one tool.
    */
-  private deduplicateNames(specs: ToolSpec[]): ToolSpec[] {
+  private deduplicateNames(specs: ToolSpec[], log = true): ToolSpec[] {
     const seen = new Map<string, number>();
     return specs.map((spec) => {
       const priorCount = seen.get(spec.name) ?? 0;
       seen.set(spec.name, priorCount + 1);
       if (priorCount === 0) return spec;
       const suffixed = `${spec.name}_${priorCount + 1}`;
-      console.warn(`[GruntToolProvider] tool name collision on "${spec.name}"; suffixed to "${suffixed}".`);
+      if (log) console.warn(`[GruntToolProvider] tool name collision on "${spec.name}"; suffixed to "${suffixed}".`);
       return { ...spec, name: suffixed };
     });
   }
@@ -420,11 +444,12 @@ export class GruntToolProvider implements ToolProvider {
 
   liveStatus(req: LiveStatusRequest): LiveCallStatus[] {
     return req.calls.map(({ call, hash }): LiveCallStatus => {
-      const target = this.liveTarget(req.policy, call.tool);
-      if (!target) {
+      const found = this.liveTarget(req.policy, call.tool);
+      if (!found || 'reason' in found) {
         const [serverName, toolName] = splitToolName(call.tool);
-        return { callId: call.id, tool: call.tool, serverName, toolName, description: '', state: 'unavailable', reason: this.whyUnavailable(req.policy, call.tool) };
+        return { callId: call.id, tool: call.tool, serverName, toolName, description: '', state: 'unavailable', reason: found ? found.reason : this.whyUnavailable(req.policy, call.tool) };
       }
+      const target = found.entry;
       const base = { callId: call.id, tool: call.tool, serverName: target.origin.serverName, toolName: target.origin.toolName, description: target.spec.description.slice(0, 300) };
       const why = this.broker.liveIneligibility(target.spec, req.policy);
       if (why) return { ...base, state: 'unavailable', reason: why };
@@ -437,8 +462,8 @@ export class GruntToolProvider implements ToolProvider {
     const before = this.liveStatus(req);
     const calls = req.calls.flatMap(({ call, hash }, i) => {
       if (before[i]!.state !== 'needs_ok') return [];
-      const target = this.liveTarget(req.policy, call.tool);
-      return target ? [{ tool: target.spec, callId: call.id, hash }] : [];
+      const found = this.liveTarget(req.policy, call.tool);
+      return found && 'entry' in found ? [{ tool: found.entry.spec, callId: call.id, hash }] : [];
     });
     if (calls.length > 0) this.broker.grantLive({ chatId: req.chatId, profileId: req.profileId, artifactId: req.artifactId, policy: req.policy, calls });
     return this.liveStatus(req);
@@ -448,10 +473,21 @@ export class GruntToolProvider implements ToolProvider {
     return this.broker.revokeLive(chatId, artifactId);
   }
 
+  /** Never throws: anything unexpected comes back as a `failed` outcome. */
   async runLiveCall(req: LiveRunRequest): Promise<LiveCallOutcome> {
+    try {
+      return await this.runLive(req);
+    } catch (err) {
+      return { ok: false, code: 'failed', message: boundMessage(err) };
+    }
+  }
+
+  private async runLive(req: LiveRunRequest): Promise<LiveCallOutcome> {
     const startedAt = this.now();
-    const target = this.liveTarget(req.policy, req.toolName);
-    if (!target) return { ok: false, code: 'not_available', message: this.whyUnavailable(req.policy, req.toolName) };
+    const found = this.liveTarget(req.policy, req.toolName);
+    if (!found) return { ok: false, code: 'not_available', message: this.whyUnavailable(req.policy, req.toolName) };
+    if ('reason' in found) return { ok: false, code: 'not_available', message: found.reason };
+    const target = found.entry;
     const ctx: ToolContext = {
       chatId: req.chatId,
       messageId: req.messageId,
@@ -470,8 +506,8 @@ export class GruntToolProvider implements ToolProvider {
       return { ok: false, code, message };
     }
     const grantedBy = `live:${decision.grantId ?? ''}`;
-    // Canonical args last, so the fields before them can't be confused with them.
-    const key = [req.chatId, req.profileId, req.artifactId, req.callId, req.hash, canonicalJson(req.args)].join('|');
+    // The server is part of the key; canonical args last, so the fields before them can't be confused with them.
+    const key = [req.chatId, req.profileId, req.artifactId, req.callId, req.hash, target.origin.serverId, canonicalJson(req.args)].join('|');
     if (!req.fresh) {
       const hit = this.liveCache.get(key);
       // A copy: the cache hands back the stored object itself.
@@ -506,7 +542,7 @@ export class GruntToolProvider implements ToolProvider {
     } catch (err) {
       const timedOut = !req.signal.aborted && (signal.aborted || (err as { code?: unknown }).code === MCP_REQUEST_TIMEOUT);
       if (timedOut) return { ok: false, code: 'timeout', message: `"${target.origin.toolName}" didn't answer within ${Math.round(this.liveTimeoutMs / 1000)} seconds.` };
-      return { ok: false, code: 'failed', message: err instanceof Error ? err.message : String(err) };
+      return { ok: false, code: 'failed', message: boundMessage(err) };
     }
     if (result.isError) return { ok: false, code: 'tool_error', message: summarizeMcpContent(result.content) };
     const shaped = shapeLiveResult(result.content, result.structured);
