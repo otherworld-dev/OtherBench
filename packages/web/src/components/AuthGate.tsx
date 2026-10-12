@@ -10,7 +10,8 @@ import { LoginView } from '../views/LoginView.js';
  * page, so the app doesn't fire a burst of 401s; signed out later puts the
  * login over the app, which stays mounted (its streams reconnect on their
  * own backoff once signed in again); token mode says so. If the server
- * can't be reached the app shows as before, with its own unreachable state.
+ * can't be reached the app shows as before, with its own unreachable state;
+ * a 401 after that asks again and routes by the answer.
  */
 export function AuthGate({ children }: { children: ReactNode }): JSX.Element | null {
   const status = useAuthStore((s) => s.status);
@@ -22,8 +23,9 @@ export function AuthGate({ children }: { children: ReactNode }): JSX.Element | n
   }, []);
 
   useEffect(() => {
-    if (mode !== 'login') return undefined;
-    return onUnauthorized(() => useAuthStore.getState().expire());
+    // Also while the mode is unknown (the status call failed at load): a later 401 re-asks.
+    if (mode === 'open' || mode === 'token') return undefined;
+    return onUnauthorized(() => void useAuthStore.getState().expire());
   }, [mode]);
 
   if (status === 'checking') return null;

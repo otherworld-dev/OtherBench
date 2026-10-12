@@ -54,6 +54,7 @@ describe('AuthGate', () => {
     renderGate();
     await screen.findByTestId('app');
 
+    status.mockResolvedValueOnce({ mode: 'login', signedIn: false });
     act(() => reportUnauthorized());
 
     expect(await screen.findByLabelText('Password')).toBeInTheDocument();
@@ -67,6 +68,19 @@ describe('AuthGate', () => {
     expect(mounts).toBe(1);
   });
 
+  it('does not show "signed out" for a 401 the server says was stale (the cookie was just replaced)', async () => {
+    status.mockResolvedValueOnce({ mode: 'login', signedIn: true });
+    renderGate();
+    await screen.findByTestId('app');
+
+    status.mockResolvedValueOnce({ mode: 'login', signedIn: true });
+    act(() => reportUnauthorized());
+    await waitFor(() => expect(status).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByLabelText('Password')).toBeNull();
+    expect(screen.getByTestId('app')).toBeInTheDocument();
+  });
+
   it('ignores 401s outside sign-in mode', async () => {
     status.mockResolvedValueOnce({ mode: 'open', signedIn: true });
     renderGate();
@@ -75,6 +89,7 @@ describe('AuthGate', () => {
     act(() => reportUnauthorized());
 
     expect(screen.queryByLabelText('Password')).toBeNull();
+    expect(status).toHaveBeenCalledTimes(1);
   });
 
   it('says a token is needed in token mode', async () => {
@@ -90,5 +105,18 @@ describe('AuthGate', () => {
     renderGate();
 
     expect(await screen.findByTestId('app')).toBeInTheDocument();
+  });
+
+  it('still listens for 401s after the status call failed at load, and routes by a fresh answer', async () => {
+    status.mockRejectedValueOnce(new Error('offline'));
+    renderGate();
+    await screen.findByTestId('app');
+
+    status.mockResolvedValueOnce({ mode: 'login', signedIn: false });
+    act(() => reportUnauthorized());
+
+    expect(await screen.findByLabelText('Password')).toBeInTheDocument();
+    expect(screen.getByTestId('app')).toBeInTheDocument();
+    expect(mounts).toBe(1);
   });
 });
