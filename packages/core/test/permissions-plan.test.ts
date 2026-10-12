@@ -68,6 +68,28 @@ describe('plan mode in the broker', () => {
     expect(b.decide(agent('Bash'), { command: 'ls' }, policy(), ctx({ workspaceRoot: null })).kind).toBe('deny');
   });
 
+  it("refuses the sandbox's run_command and its network requests like the host shell, before the sandbox's no-card pass or any host grant", () => {
+    const store = new InMemoryStore();
+    const b = new PermissionBroker(store);
+    const sandboxed = policy({ shellRuns: 'sandbox' });
+    const runCommand = tool('run_command', 'sandbox', 'execute');
+    const network = tool('sandbox_network', 'network', 'execute');
+    store.grants.create({ id: 'g1', chatId: null, profileId: 'p1', toolName: 'sandbox_network', source: 'network', scope: 'always', constraint: { host: 'pypi.org' }, expiresAt: null });
+    expect(allowedWhilePlanning(runCommand)).toBe(false);
+    expect(allowedWhilePlanning(network)).toBe(false);
+    for (const approvalMode of ['ask_on_mutate', 'always_ask'] as const) {
+      const p = { ...sandboxed, approvalMode };
+      expect(b.decide(runCommand, { command: 'touch x' }, p, planning())).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+      expect(b.decide(network, { host: 'pypi.org' }, p, planning())).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+    }
+    expect(b.pendingCount).toBe(0);
+    // Once the plan is approved both are back to what the sandbox decides: no card for the command, the grant for the host.
+    const gate = createPlanGate();
+    gate.approve();
+    expect(b.decide(runCommand, { command: 'touch x' }, sandboxed, ctx({ plan: gate }))).toEqual({ kind: 'allow', grantedBy: 'sandbox' });
+    expect(b.decide(network, { host: 'pypi.org' }, sandboxed, ctx({ plan: gate }))).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g1' });
+  });
+
   it('fails closed for a source it has never heard of', () => {
     expect(allowedWhilePlanning(tool('teleport', 'teleport' as ToolSource, 'read'))).toBe(false);
   });
