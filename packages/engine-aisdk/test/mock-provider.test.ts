@@ -249,6 +249,38 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#browser trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+    const browserWith = (result: unknown): ToolSpec => ({ name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => result });
+
+    it('#browser opens the address through the real tool, then names the first heading', async () => {
+      const execute = vi.fn(async () => ({ about: 'x', url: 'http://127.0.0.1:4766/', title: 'Fixture', snapshot: '- heading "Fixture heading" [level=1] [ref=e1]\n- heading "Second" [level=2] [ref=e2]' }));
+      const browser: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/\nthanks', { tools: [browser] })));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'browser', args: { command: 'open', url: 'http://127.0.0.1:4766/' } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'browser', isError: false }));
+      expect(text(events)).toBe('The page says: Fixture heading.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('#browser reads a heading whose name the snapshot single-quoted', async () => {
+      const browser = browserWith({ snapshot: `- heading 'Say "hi" now' [level=1] [ref=e1]` });
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browser] }))))).toBe('The page says: Say "hi" now.');
+    });
+
+    it('#browser says so when the page has no heading', async () => {
+      const browser = browserWith({ snapshot: '- paragraph [ref=e1]' });
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browser] }))))).toBe('The page has no heading.');
+    });
+
+    it('#browser says so when the tool failed or was not offered', async () => {
+      const failing: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => ({ error: true, code: 'approval_denied', message: 'The user denied this tool call.' }) };
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/', { tools: [failing] }))))).toBe("The browser didn't work: The user denied this tool call.");
+      const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/')));
+      expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'browser', isError: true }));
+    });
+  });
+
   describe('#slow trigger', () => {
     it('streams exactly 20 chunks at 400ms each', async () => {
       const sleep = fakeSleep();

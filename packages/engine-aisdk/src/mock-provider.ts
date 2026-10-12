@@ -123,6 +123,14 @@ function isToolErrorResult(result: unknown): boolean {
   return typeof result === 'object' && result !== null && (result as { error?: unknown }).error === true;
 }
 
+/** The first named heading in an accessibility snapshot: `- heading "Title" [level=1] ...`, or YAML single-quoted (`'Say "hi"'`, with `''` for a quote) when the name holds a double quote. */
+function firstHeading(snapshot: string): string | null {
+  const match = /heading (?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')/.exec(snapshot);
+  if (!match) return null;
+  if (match[1] !== undefined) return match[1].replace(/\\(.)/g, '$1');
+  return (match[2] ?? '').replace(/''/g, "'");
+}
+
 /**
  * A keyless `ChatEngine` whose behaviour is driven entirely by markers in
  * the latest user message's text, so it can be steered by hand to exercise
@@ -135,7 +143,8 @@ function isToolErrorResult(result: unknown): boolean {
  * `artifact` create through the real tool when offered (Deck #896), then
  * "I made the artifact.". `#recall <query>` -> a `recall` search for the
  * rest of that line through the real tool when offered, then the titles of
- * the chats it found. `#tool` -> a
+ * the chats it found. `#browser <url>` -> a `browser` `open` of that address
+ * through the real tool when offered, then the page's first heading. `#tool` -> a
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
@@ -180,6 +189,12 @@ export class MockChatEngine implements ChatEngine {
     const recall = /#recall[ \t]+([^\r\n]*)/.exec(prompt);
     if (recall) {
       yield* this.streamRecallTurn(req, recall[1]!.trim(), tokensIn);
+      return;
+    }
+
+    const browse = /#browser[ \t]+(\S+)/.exec(prompt);
+    if (browse) {
+      yield* this.streamBrowserTurn(req, browse[1]!, tokensIn);
       return;
     }
 
@@ -264,6 +279,33 @@ export class MockChatEngine implements ChatEngine {
     yield { type: 'tool-result', id: callId, name: 'recall', result: JSON.stringify(result), isError };
     const titles = isError ? [] : ((result as { chats?: { title?: unknown }[] }).chats ?? []).map((c) => String(c.title));
     const answer = isError ? `Recall didn't work: ${JSON.stringify(result)}` : titles.length > 0 ? `I found: ${titles.join(', ')}.` : 'I found nothing.';
+    for (const chunk of splitIntoChunks(answer, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /** `#browser <url>` (spec 2026-10-12-model-browser-design §8): one `open` through the real tool when offered, then the page's first heading. */
+  private async *streamBrowserTurn(req: EngineRequest, url: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-browser-${randomUUID()}`;
+    const args = { command: 'open', url };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'browser', args };
+    const tool = req.tools.find((t) => t.name === 'browser');
+    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
+    const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No browser tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'browser', result: JSON.stringify(result), isError };
+    const snapshot = (result as { snapshot?: unknown }).snapshot;
+    const heading = !isError && typeof snapshot === 'string' ? firstHeading(snapshot) : null;
+    const answer = isError
+      ? `The browser didn't work: ${String((result as { message?: unknown }).message ?? JSON.stringify(result))}`
+      : heading !== null
+        ? `The page says: ${heading}.`
+        : 'The page has no heading.';
     for (const chunk of splitIntoChunks(answer, 6)) {
       if (req.signal.aborted) return;
       await this.sleep(30, req.signal);
