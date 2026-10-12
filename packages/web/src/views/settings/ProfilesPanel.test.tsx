@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
+import { ApiError } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
 import { ProfilesPanel } from './ProfilesPanel.js';
 
@@ -13,6 +14,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     api: {
       profiles: { list: vi.fn(), create: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       mcpServers: { list: vi.fn() },
+      sandbox: { status: vi.fn() },
     },
   };
 });
@@ -23,6 +25,7 @@ const mockedCreate = vi.mocked(api.profiles.create);
 const mockedPatch = vi.mocked(api.profiles.patch);
 const mockedDelete = vi.mocked(api.profiles.delete);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
+const mockedSandboxStatus = vi.mocked(api.sandbox.status);
 
 function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -95,6 +98,7 @@ function reset(): void {
   mockedPatch.mockReset();
   mockedDelete.mockReset();
   mockedMcpList.mockReset().mockResolvedValue([]);
+  mockedSandboxStatus.mockReset().mockResolvedValue({ state: 'ready', packages: [], machine: 'This machine' });
 }
 
 describe('ProfilesPanel', () => {
@@ -514,5 +518,94 @@ describe('ProfilesPanel', () => {
         expect.objectContaining({ toolPolicy: expect.objectContaining({ agentWeb: false, agentMcp: true }) })
       )
     );
+  });
+});
+
+describe('ProfilesPanel: where the shell runs', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  async function newProfileWithShell(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Sandboxed');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    expect(screen.queryByLabelText('Shell runs')).toBeNull();
+    await user.click(screen.getByLabelText('Shell access'));
+  }
+
+  it('choosing "in the sandbox" saves shellRuns, and leaves the default allowlist out', async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    expect(screen.getByLabelText('The sandbox can reach')).toHaveValue('registry.npmjs.org\npypi.org\nfiles.pythonhosted.org\ngithub.com\ncodeload.github.com\nobjects.githubusercontent.com\nraw.githubusercontent.com');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ shell: true, shellRuns: 'sandbox' }) })));
+    expect(mockedCreate.mock.calls[0]![0].toolPolicy).not.toHaveProperty('sandboxHosts');
+  });
+
+  it('saves an edited allowlist, one host per line', async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    const hosts = screen.getByLabelText('The sandbox can reach');
+    await user.clear(hosts);
+    await user.type(hosts, 'pypi.org{Enter}*.example.com');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ sandboxHosts: ['pypi.org', '*.example.com'] }) })));
+  });
+
+  it("says when the sandbox isn't set up on this machine", async () => {
+    mockedSandboxStatus.mockResolvedValue({ state: 'not_set_up', packages: [], machine: 'This machine' });
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    expect(screen.queryByTestId('sandbox-not-ready-note')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    expect(await screen.findByTestId('sandbox-not-ready-note')).toHaveTextContent('Settings > Sandbox');
+  });
+
+  it('"Reset to defaults" on a profile with its own list sends null', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    const own = makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', sandboxHosts: ['example.org'], mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    useGruntStore.getState().setProfiles([own]);
+    mockedPatch.mockResolvedValue(own);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByLabelText('The sandbox can reach')).toHaveValue('example.org');
+    await user.click(screen.getByRole('button', { name: 'Reset to defaults' }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ shellRuns: 'sandbox', sandboxHosts: null }) })));
+  });
+
+  it('switching a sandboxed profile back to this machine saves shellRuns "host"', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    const sandboxed = makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    useGruntStore.getState().setProfiles([sandboxed]);
+    mockedPatch.mockResolvedValue(sandboxed);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'host');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ shellRuns: 'host' }) })));
+  });
+
+  it("shows the server's message when it refuses the allowlist", async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    mockedCreate.mockRejectedValue(new ApiError(400, '"toolPolicy.sandboxHosts": "localhost" is not a hostname the sandbox can reach.'));
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    const hosts = screen.getByLabelText('The sandbox can reach');
+    await user.clear(hosts);
+    await user.type(hosts, 'localhost');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText(/"localhost" is not a hostname/)).toBeInTheDocument();
   });
 });

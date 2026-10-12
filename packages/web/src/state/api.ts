@@ -101,6 +101,9 @@ export interface CreateConnectionBody {
   syncSecret?: boolean;
 }
 
+/** A tool policy as the profiles API takes it: `sandboxHosts: null` puts the default allowlist back. */
+export type ToolPolicyBody = Omit<ToolPolicy, 'sandboxHosts'> & { sandboxHosts?: string[] | null };
+
 export interface CreateProfileBody {
   name: string;
   description?: string | null;
@@ -109,14 +112,14 @@ export interface CreateProfileBody {
   modelId: string;
   systemPrompt?: string | null;
   params?: ModelParams;
-  toolPolicy?: ToolPolicy;
+  toolPolicy?: ToolPolicyBody;
   isDefault?: boolean;
   /** Absent means on. */
   useGlobalMemory?: boolean;
 }
 
 /** `PATCH /api/profiles/:id`: any `CreateProfileBody` field, and only the `toolPolicy` fields to change (the server keeps the rest). */
-export type ProfilePatchBody = Partial<Omit<CreateProfileBody, 'toolPolicy'>> & { toolPolicy?: Partial<ToolPolicy> };
+export type ProfilePatchBody = Partial<Omit<CreateProfileBody, 'toolPolicy'>> & { toolPolicy?: Partial<ToolPolicyBody> };
 
 /** What `GET /api/memory/global` and its writes return (spec 2026-10-08-global-memory-design §3). */
 export interface GlobalMemoryView {
