@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
-import { ChartIcon, GearIcon } from './components/icons.js';
+import { ChartIcon, GearIcon, SignOutIcon } from './components/icons.js';
 import { isQuickView } from './desktop/bridge.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
@@ -8,6 +8,7 @@ import { PaneGrid } from './panes/PaneGrid.js';
 import { SidebarResizer } from './panes/sidebar/SidebarResizer.js';
 import { TabBar } from './panes/TabBar.js';
 import { api } from './state/api.js';
+import { useAuthStore } from './state/auth.js';
 import { useGruntStore } from './state/store.js';
 import { useTextSizeShortcuts } from './state/textSize.js';
 import { useDesktopShell } from './desktop/useDesktopShell.js';
@@ -39,6 +40,10 @@ function MainApp(): JSX.Element {
   const setProfiles = useGruntStore((s) => s.setProfiles);
   const setChats = useGruntStore((s) => s.setChats);
   const setProjects = useGruntStore((s) => s.setProjects);
+
+  // Sign-in mode only (spec 2026-10-12-remote-access §5); never in the desktop app.
+  const signedInRemotely = useAuthStore((s) => s.mode === 'login');
+  const signOut = useAuthStore((s) => s.signOut);
 
   const isNarrow = useMediaQuery(NARROW_BREAKPOINT);
   // Separate from `inspectorCollapsed` (the docked-mode show/hide
@@ -145,6 +150,11 @@ function MainApp(): JSX.Element {
               <button type="button" onClick={() => setUsageViewOpen(true)} aria-label="Usage" title="Usage" className="btn px-2 py-1.5">
                 <ChartIcon />
               </button>
+              {signedInRemotely && (
+                <button type="button" onClick={() => void signOut()} aria-label="Sign out" title="Sign out" className="btn px-2 py-1.5">
+                  <SignOutIcon />
+                </button>
+              )}
             </>
           }
         />
