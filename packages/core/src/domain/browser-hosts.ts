@@ -32,6 +32,11 @@ export function browserCommandRisk(command: BrowserCommand): RiskClass {
  * string, and nothing compares raw text. Input that parsers could read
  * differently (userinfo, backslashes, whitespace, control characters, other
  * schemes, empty hosts) is refused, never repaired.
+ *
+ * The sandbox's network cards (network-hosts.ts) are built on the same three
+ * pieces: `normaliseHost` for the spelling, `isPublicAddress` for an IPv4
+ * literal and `hasLocalSuffix` for a local name. Where the two differ they do
+ * so on purpose, and `testing/shared-host-vectors.ts` pins each case.
  */
 
 /** Whitespace (any Unicode kind), control characters and backslashes: refused anywhere in raw input. */
@@ -289,13 +294,22 @@ export function isOwnAddress(ip: string, own: OwnAddresses): boolean {
   return own.exact.has(v6Key(v6)) || own.v6Prefixes.has(v6Prefix(v6));
 }
 
-const LOCAL_SUFFIXES = ['.localhost', '.local', '.internal', '.home.arpa', '.lan'];
+/**
+ * Name suffixes that only ever mean this machine or a private network: mDNS,
+ * internal DNS, home routers and the default search domain. One list for the
+ * browser and for the sandbox's network cards (network-hosts.ts).
+ */
+export const LOCAL_NAME_SUFFIXES: readonly string[] = ['.localhost', '.local', '.internal', '.home.arpa', '.lan', '.localdomain'];
 
-/** `localhost` and the local-network suffixes (and those suffixes on their own). */
+/** Whether a CANONICAL host is `localhost`, one of the local suffixes on its own, or a name under one. */
+export function hasLocalSuffix(canonical: string): boolean {
+  return canonical === 'localhost' || LOCAL_NAME_SUFFIXES.some((suffix) => canonical === suffix.slice(1) || canonical.endsWith(suffix));
+}
+
+/** `localhost` and the local-network suffixes (and those suffixes on their own), in any spelling. */
 export function isLocalName(host: string): boolean {
   const h = normaliseHost(host);
-  if (h === null) return false;
-  return h === 'localhost' || LOCAL_SUFFIXES.some((suffix) => h === suffix.slice(1) || h.endsWith(suffix));
+  return h !== null && hasLocalSuffix(h);
 }
 
 export interface HostCheckOptions {
