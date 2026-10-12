@@ -2,6 +2,7 @@ import type { CanonMessage, EngineMeta, SerializedError } from '../types/message
 import type { ClaudeEffort, Connection, ResolvedProfile } from '../types/config.js';
 import type { PlanUsage, Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
+import type { PlanGate } from '../types/thread.js';
 import type { ToolSpec } from './tool-provider.js';
 
 export interface EngineRequest {
@@ -63,6 +64,10 @@ export interface EngineRequest {
   autoMode?: boolean;
   /** The chat's effort (`Chat.effort`), read fresh for every turn. Only the Claude Code engine reads it; unset follows the user's Claude Code settings. */
   effort?: ClaudeEffort;
+  /** This reply's plan approval when the chat's Plan mode is on (TurnRunner makes one per reply); copied onto every ToolContext. */
+  plan?: PlanGate;
+  /** Nobody is watching this run (#925 sets it); copied onto every ToolContext. Keep an existing field of this name if one is already here. */
+  unattended?: boolean;
 }
 
 export type EngineEvent =

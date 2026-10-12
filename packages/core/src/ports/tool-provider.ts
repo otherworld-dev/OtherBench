@@ -1,6 +1,8 @@
 import type { Grant } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
+import type { PlanGate } from '../types/thread.js';
+export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
@@ -25,6 +27,18 @@ export interface ToolContext {
    * path always means the workspace. Absent means none.
    */
   folders?: ResolvedFolder[];
+  /**
+   * This reply's plan approval (spec 2026-10-12-thread-cards-design §4), set
+   * only while the chat's Plan mode is on. Until it is approved,
+   * `PermissionBroker.decide` refuses anything that could change something.
+   */
+  plan?: PlanGate;
+  /**
+   * Nobody can answer a card for this call (a scheduled run, #925). Questions
+   * and plans are answered for the model and never raise a card. If an
+   * earlier feature already added this field, keep that one.
+   */
+  unattended?: boolean;
   signal: AbortSignal;
 }
 
