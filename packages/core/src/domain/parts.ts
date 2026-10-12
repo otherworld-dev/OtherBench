@@ -74,11 +74,19 @@ export function applySubagentEvent(parts: Part[], callId: string, event: Subagen
   }
   if (index === -1) return parts;
   const part = parts[index] as SubagentPart;
+  // A finished sub-agent stays finished: a late event (a relay replaying out of order) changes nothing.
+  if (part.status === 'complete' || part.status === 'error' || part.status === 'cancelled') return parts;
   let next: SubagentPart;
   if (event.type === 'running') {
     next = { ...part, status: 'running' };
   } else if (event.type === 'end') {
-    next = { ...part, status: event.status, ...(event.error !== undefined ? { error: event.error } : {}), ...(event.usage ? { usage: event.usage } : {}) };
+    const { usage } = event;
+    next = {
+      ...part,
+      status: event.status,
+      ...(event.error !== undefined ? { error: event.error } : {}),
+      ...(usage ? { usage: { tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, tokensCached: usage.tokensCached, tokensReasoning: usage.tokensReasoning } } : {}),
+    };
   } else {
     next = { ...part, parts: foldSubagentContent(part.parts, event) };
   }
@@ -123,7 +131,7 @@ const END_STATUSES: ReadonlySet<string> = new Set(['complete', 'error', 'cancell
 function isUsage(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) return false;
   const u = value as Record<string, unknown>;
-  return ['tokensIn', 'tokensOut', 'tokensCached', 'tokensReasoning'].every((k) => typeof u[k] === 'number');
+  return ['tokensIn', 'tokensOut', 'tokensCached', 'tokensReasoning'].every((k) => typeof u[k] === 'number' && Number.isFinite(u[k]) && (u[k] as number) >= 0);
 }
 
 /** Whether `value` is a well-formed `SubagentEvent`: for events that come from outside this process (a paired machine's relay). */

@@ -80,6 +80,22 @@ describe('applySubagentEvent', () => {
     expect(applySubagentEvent(parts, 'nope', { type: 'end', status: 'error', error: 'boom' })).toBe(parts);
   });
 
+  it('keeps a finished sub-agent finished: late events change nothing', () => {
+    for (const status of ['complete', 'error', 'cancelled'] as const) {
+      const done = fold([start, { type: 'running' }, { type: 'text-delta', text: 'a' }, { type: 'end', status }]);
+      for (const late of [{ type: 'running' }, { type: 'text-delta', text: 'b' }, { type: 'tool-call', id: 't', name: 'n', args: 1 }, { type: 'end', status: 'complete', usage }] as SubagentEvent[]) {
+        expect(applySubagentEvent(done, 'call-1', late)).toBe(done);
+      }
+    }
+  });
+
+  it('stores only the four usage fields on end', () => {
+    const noisy = { ...usage, extra: 'x' } as typeof usage;
+    const parts = fold([start, { type: 'end', status: 'complete', usage: noisy }]);
+    expect((parts[0] as SubagentPart).usage).toEqual(usage);
+    expect(Object.keys((parts[0] as SubagentPart).usage!)).toHaveLength(4);
+  });
+
   it('records an error on end', () => {
     const parts = fold([start, { type: 'running' }, { type: 'end', status: 'error', error: 'Rate limited.' }]);
     expect(parts[0]).toMatchObject({ status: 'error', error: 'Rate limited.' });
@@ -115,7 +131,7 @@ describe('isSubagentEvent', () => {
   });
 
   it('refuses malformed ones (as a paired machine could send)', () => {
-    for (const bad of [null, 'start', [], { type: 'start', label: 1 }, { type: 'text-delta' }, { type: 'tool-result', id: 'x', name: 'y' }, { type: 'end', status: 'exploded' }, { type: 'end', status: 'error', error: 3 }, { type: 'end', status: 'complete', usage: { tokensIn: 'lots' } }, { type: 'subagent' }]) {
+    for (const bad of [null, 'start', [], { type: 'start', label: 1 }, { type: 'text-delta' }, { type: 'tool-result', id: 'x', name: 'y' }, { type: 'end', status: 'exploded' }, { type: 'end', status: 'error', error: 3 }, { type: 'end', status: 'complete', usage: { tokensIn: 'lots' } }, { type: 'end', status: 'complete', usage: null }, { type: 'end', status: 'complete', usage: { ...usage, tokensOut: -1 } }, { type: 'end', status: 'complete', usage: { ...usage, tokensIn: Infinity } }, { type: 'end', status: 'complete', usage: { ...usage, tokensIn: NaN } }, { type: 'subagent' }]) {
       expect(isSubagentEvent(bad)).toBe(false);
     }
   });

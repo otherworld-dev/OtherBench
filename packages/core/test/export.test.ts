@@ -106,6 +106,25 @@ describe('chatToMarkdown', () => {
     expect(md).toContain('The helper found one error.');
   });
 
+  it('escapes a sub-agent\'s label, profile name and model in the summary so they cannot end the block', () => {
+    const ms = [
+      msg({ id: 'u1', createdAt: 1 }),
+      msg({
+        id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'),
+        parts: [
+          {
+            type: 'subagent', callId: 'c1', label: 'x</summary></details>\n\n# Injected <script>', prompt: 'p', profileId: 'p', profileName: '<b>Cheap</b>', modelId: 'm&1', status: 'error',
+            parts: [],
+          },
+        ],
+      }),
+    ];
+    const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
+    expect(md).toContain('<summary>Sub-agent: x&lt;/summary&gt;&lt;/details&gt;  # Injected &lt;script&gt; (&lt;b&gt;Cheap&lt;/b&gt;, m&amp;1), error</summary>');
+    expect(md).not.toContain('<script>');
+    expect(md).not.toContain('<b>');
+  });
+
   it('fences tool output with more backticks than it contains, so it cannot break out', () => {
     const ms = [
       msg({ id: 'u1', createdAt: 1 }),

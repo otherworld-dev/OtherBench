@@ -52,6 +52,18 @@ export function shownPath(messages: CanonMessage[], headMessageId: string | null
   return [...path, ...extendToTip(messages, path.at(-1)!.id)];
 }
 
+/** Control characters (newlines included) and the Unicode line and paragraph separators. */
+const LINE_BREAKERS = new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${String.fromCharCode(0x2028, 0x2029)}]`, 'g');
+
+/** Text for one line of HTML (a `<summary>`): line breakers become spaces, and `&`, `<`, `>` are escaped, so model-written text can't end the element or add markup. */
+function inlineHtml(text: string): string {
+  return text
+    .replace(LINE_BREAKERS, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 /** A fenced code block whose fence is longer than any run of backticks inside it, so content can't close it early. */
 export function fenced(content: string, lang = ''): string {
   const longest = Math.max(2, ...[...content.matchAll(/`+/g)].map((m) => m[0].length));
@@ -94,7 +106,7 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
         .map((p) => p.text)
         .join('\n\n');
       const body = [`**Prompt:**\n\n${fenced(cut(part.prompt))}`, text].filter((s) => s.length > 0).join('\n\n');
-      return `<details>\n<summary>Sub-agent: ${part.label} (${part.profileName}, ${part.modelId}), ${part.status}</summary>\n\n${body}\n\n</details>`;
+      return `<details>\n<summary>Sub-agent: ${inlineHtml(part.label)} (${inlineHtml(part.profileName)}, ${inlineHtml(part.modelId)}), ${part.status}</summary>\n\n${body}\n\n</details>`;
     }
   }
 }
