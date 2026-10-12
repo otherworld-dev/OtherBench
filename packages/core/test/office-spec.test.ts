@@ -5,6 +5,12 @@ import {
   columnName,
   formulaForFile,
   isOfficeKind,
+  MAX_DOCUMENT_CHARS,
+  MAX_DOCUMENT_INDENT,
+  MAX_DOCUMENT_LINES,
+  MAX_DOCUMENT_MARKS,
+  MAX_DOCUMENT_QUOTE_DEPTH,
+  MAX_DOCUMENT_TABLE_ROWS,
   NOT_YET_FUNCTIONS,
   OFFICE_GUIDANCE,
   parseCellDate,
@@ -477,5 +483,84 @@ describe('office-spec helpers', () => {
     expect(OFFICE_GUIDANCE).toContain('WEBSERVICE');
     expect(OFFICE_GUIDANCE.length).toBeLessThan(2048);
     expect(OFFICE_GUIDANCE.split('\n').some((l) => l.startsWith('#'))).toBe(false);
+  });
+});
+
+describe('checkOfficeContent: document size limits', () => {
+  const doc = (content: string) => checkOfficeContent('document', content);
+  const lines = (n: number, line = 'x') => Array.from({ length: n }, () => line).join('\n');
+  const table = (rows: number) => ['| a | b |', '|---|---|', ...Array.from({ length: rows - 2 }, (_, i) => `| ${i} | y |`)].join('\n');
+  const FENCE = '`'.repeat(3);
+
+  it('accepts ordinary documents', () => {
+    expect(doc('')).toBeNull();
+    expect(doc('# Memo\n\nSome **bold** text, a [link](https://example.com).\n\n- one\n  - two\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |')).toBeNull();
+  });
+
+  it('refuses more lines than the limit, naming it, and accepts exactly the limit', () => {
+    expect(doc(lines(MAX_DOCUMENT_LINES))).toBeNull();
+    expect(doc(lines(MAX_DOCUMENT_LINES + 1))).toBe(`The document has ${(MAX_DOCUMENT_LINES + 1).toLocaleString('en-US')} lines; Grunt makes Word files of at most ${MAX_DOCUMENT_LINES.toLocaleString('en-US')} lines. Split it into more than one document.`);
+    expect(doc(lines(MAX_DOCUMENT_LINES + 1).replace(/\n/g, '\r\n'))).toMatch(/lines/);
+  });
+
+  it('refuses more characters than the limit, and accepts exactly the limit', () => {
+    expect(doc('a'.repeat(MAX_DOCUMENT_CHARS))).toBeNull();
+    expect(doc('a'.repeat(MAX_DOCUMENT_CHARS + 1))).toMatch(/characters; Grunt makes Word files of at most 120,000 characters/);
+  });
+
+  it('refuses a table of more rows than the limit, and accepts exactly the limit', () => {
+    expect(doc(table(MAX_DOCUMENT_TABLE_ROWS))).toBeNull();
+    expect(doc(table(MAX_DOCUMENT_TABLE_ROWS + 1))).toMatch(/table of more than 1,000 rows/);
+    // Without leading pipes it is still a table.
+    const bare = ['a | b', '--|--', ...Array.from({ length: MAX_DOCUMENT_TABLE_ROWS }, (_, i) => `${i} | y`)].join('\n');
+    expect(doc(bare)).toMatch(/table of more than 1,000 rows/);
+    // A blank line starts a new table.
+    expect(doc(`${table(MAX_DOCUMENT_TABLE_ROWS)}\n\n${table(MAX_DOCUMENT_TABLE_ROWS)}`)).toBeNull();
+  });
+
+  it('refuses indentation past the limit (a tab is 4 columns) and accepts exactly the limit', () => {
+    expect(doc(`${' '.repeat(MAX_DOCUMENT_INDENT)}- deep`)).toBeNull();
+    expect(doc(`${' '.repeat(MAX_DOCUMENT_INDENT + 1)}- deep`)).toMatch(/Line 1 of the document is indented 25 columns; .* at most 24 columns/);
+    expect(doc(`${'\t'.repeat(MAX_DOCUMENT_INDENT / 4)}- deep`)).toBeNull();
+    expect(doc(`ok\n${'\t'.repeat(MAX_DOCUMENT_INDENT / 4 + 1)}- deep`)).toMatch(/Line 2 .* indented 28 columns/);
+    expect(doc(`> ${' '.repeat(MAX_DOCUMENT_INDENT + 1)}- deep`)).toMatch(/indented/);
+  });
+
+  it('refuses quotes nested past the limit, spaced or not, and accepts exactly the limit', () => {
+    expect(doc(`${'>'.repeat(MAX_DOCUMENT_QUOTE_DEPTH)} q`)).toBeNull();
+    expect(doc(`${'> '.repeat(MAX_DOCUMENT_QUOTE_DEPTH)}q`)).toBeNull();
+    expect(doc(`${'>'.repeat(MAX_DOCUMENT_QUOTE_DEPTH + 1)} q`)).toMatch(/quoted 9 levels deep; .* at most 8 levels deep/);
+    expect(doc(`${'> '.repeat(MAX_DOCUMENT_QUOTE_DEPTH + 1)}q`)).toMatch(/quoted 9 levels/);
+    expect(doc(`${'>'.repeat(10_000)} q`)).toMatch(/quoted 10,000 levels/);
+  });
+
+  it('refuses more formatting marks than the limit outside code, and accepts exactly the limit', () => {
+    expect(doc('*'.repeat(MAX_DOCUMENT_MARKS))).toBeNull();
+    expect(doc('*'.repeat(MAX_DOCUMENT_MARKS + 1))).toMatch(/more than 10,000 formatting marks/);
+    expect(doc(`${FENCE}\n${'*'.repeat(50_000)}\n${FENCE}`)).toBeNull();
+  });
+
+  it('treats indentation, quotes and tables as ordinary code inside fenced blocks', () => {
+    const deep = `${' '.repeat(100)}code`;
+    expect(doc(`${FENCE}\n${deep}\n> > > > > > > > > > \n${FENCE}`)).toBeNull();
+    expect(doc(`~~~js\n${deep}\n~~~`)).toBeNull();
+    expect(doc(`${FENCE}\n${lines(2000, '| a | b |')}\n${FENCE}`)).toBeNull();
+    // A longer fence is closed only by one as long; a shorter inner one is code.
+    expect(doc(`${FENCE}\`\n${FENCE}\n${deep}\n${FENCE}\n${FENCE}\``)).toBeNull();
+    // After the fence closes, indentation counts again.
+    expect(doc(`${FENCE}\n${deep}\n${FENCE}\n${deep}`)).toMatch(/Line 4 .* indented 100 columns/);
+    // An unclosed fence runs to the end.
+    expect(doc(`${FENCE}\n${deep}`)).toBeNull();
+  });
+
+  it('checks a worst-case 120 KB document in a fraction of a second', () => {
+    const worst = Array.from({ length: MAX_DOCUMENT_LINES }, (_, i) => `${' '.repeat((i % 12) * 2)}> - *a* | b`).join('\n').slice(0, MAX_DOCUMENT_CHARS);
+    const start = performance.now();
+    for (let i = 0; i < 20; i++) doc(worst);
+    expect((performance.now() - start) / 20).toBeLessThan(250);
+  });
+
+  it('is only for documents', () => {
+    expect(checkOfficeContent('markdown', lines(MAX_DOCUMENT_LINES + 1))).toBeNull();
   });
 });

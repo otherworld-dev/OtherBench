@@ -217,6 +217,13 @@ describe('office artifacts', () => {
     expect(store.artifacts.listByChat('c1')).toEqual([]);
   });
 
+  it('refuses a document over the line limit with bad_content, and makes nothing', () => {
+    const store = setup();
+    const out = run(store, 'a1', { command: 'create', id: 'memo', kind: 'document', title: 'Memo', content: Array.from({ length: 6001 }, () => 'x').join('\n') });
+    expect(out).toEqual({ error: true, code: 'bad_content', message: "The document has 6,001 lines; Grunt makes Word files of at most 6,000 lines. Split it into more than one document. The artifact wasn't changed." });
+    expect(store.artifacts.listByChat('c1')).toEqual([]);
+  });
+
   it('refuses an update whose find-and-replace breaks the JSON, leaving the current version', () => {
     const store = setup();
     run(store, 'a1', { command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Budget', content: BUDGET });

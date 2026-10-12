@@ -1,6 +1,7 @@
 /**
  * The sources Office artifacts are made from (spec 2026-10-12-office-files §3,
- * Deck #928). A `document` is Markdown and has no checks beyond the 1 MB cap.
+ * Deck #928). A `document` is Markdown, bounded only by the 1 MB cap and the size limits
+ * below (lines, table rows, indent, quote depth).
  * A `spreadsheet` is JSON: sheets of rows of cells, where text starting with
  * "=" is a formula. The artifact tool, your edit (PUT) and the server's
  * renderers parse with this, and the web draws its previews from it, so it
@@ -738,19 +739,115 @@ export function parseSpreadsheet(content: string): Parsed<SpreadsheetSpec> {
   return guard(() => spreadsheet(json(content)));
 }
 
-/** Why `content` can't be an artifact of `kind`, or null. Only JSON kinds are checked. */
+// A document's size limits. The Markdown parser and the .docx writer do far
+// more than linear work on tables, deep nesting and very many blocks, and run
+// in the request, so a document is bounded by structure, not only by the 1 MB
+// cap. Measured so a document at every limit at once still makes in about a
+// second.
+export const MAX_DOCUMENT_CHARS = 120_000;
+export const MAX_DOCUMENT_LINES = 6_000;
+export const MAX_DOCUMENT_TABLE_ROWS = 1_000;
+export const MAX_DOCUMENT_INDENT = 24;
+export const MAX_DOCUMENT_QUOTE_DEPTH = 8;
+/** Emphasis, strikethrough, code, link, footnote and HTML marks (`*`, `_`, `~`, backtick, `[`, `<`) outside code blocks: the parser's work on them grows fast, so they are counted for the whole document. */
+export const MAX_DOCUMENT_MARKS = 10_000;
+
+const number = (n: number): string => n.toLocaleString('en-US');
+
+/** The opening or closing fence on a line: its character and length, or null. */
+function fenceOf(line: string): { char: string; length: number; rest: string } | null {
+  let i = 0;
+  while (i < line.length && i < 4 && line.charCodeAt(i) === 32) i++;
+  if (i > 3) return null;
+  const char = line[i];
+  if (char !== '`' && char !== '~') return null;
+  let j = i;
+  while (line[j] === char) j++;
+  return j - i >= 3 ? { char, length: j - i, rest: line.slice(j) } : null;
+}
+
+/**
+ * Why a document's Markdown is too big to make into a Word file, or null. One
+ * linear pass over the lines, with no Markdown parser. Indentation inside a
+ * fenced code block is ordinary code and isn't counted.
+ */
+function documentProblem(content: string): string | null {
+  if (content.length > MAX_DOCUMENT_CHARS) {
+    return `The document has ${number(content.length)} characters; Grunt makes Word files of at most ${number(MAX_DOCUMENT_CHARS)} characters. Split it into more than one document.`;
+  }
+  const lines = content.split(/\r\n|\r|\n/);
+  if (lines.length > MAX_DOCUMENT_LINES) {
+    return `The document has ${number(lines.length)} lines; Grunt makes Word files of at most ${number(MAX_DOCUMENT_LINES)} lines. Split it into more than one document.`;
+  }
+  let fence: { char: string; length: number } | null = null;
+  let tableRows = 0;
+  let marks = 0;
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n]!;
+    const found = fenceOf(line);
+    if (fence) {
+      if (found && found.char === fence.char && found.length >= fence.length && found.rest.trim() === '') fence = null;
+      continue;
+    }
+    if (found && !(found.char === '`' && found.rest.includes('`'))) {
+      fence = found;
+      tableRows = 0;
+      continue;
+    }
+    for (let k = 0; k < line.length; k++) {
+      const c = line.charCodeAt(k);
+      if (c === 42 || c === 95 || c === 126 || c === 96 || c === 91 || c === 60) marks++;
+    }
+    if (marks > MAX_DOCUMENT_MARKS) {
+      return `The document has more than ${number(MAX_DOCUMENT_MARKS)} formatting marks (* _ ~ backtick [ <) outside code blocks (it passes that at line ${number(n + 1)}); Grunt makes Word files with at most ${number(MAX_DOCUMENT_MARKS)}. Split it into more than one document.`;
+    }
+    // Leading whitespace and `>` markers: a tab is 4 columns, one space after a `>` belongs to it.
+    let column = 0;
+    let widest = 0;
+    let quote = 0;
+    let i = 0;
+    for (; i < line.length; i++) {
+      const c = line.charCodeAt(i);
+      if (c === 32) column++;
+      else if (c === 9) column += 4;
+      else if (c === 62) {
+        quote++;
+        widest = Math.max(widest, column);
+        column = 0;
+        if (line.charCodeAt(i + 1) === 32) i++;
+      } else break;
+    }
+    if (quote > MAX_DOCUMENT_QUOTE_DEPTH) {
+      return `Line ${number(n + 1)} of the document is quoted ${number(quote)} levels deep; Grunt makes Word files with quotes at most ${MAX_DOCUMENT_QUOTE_DEPTH} levels deep.`;
+    }
+    widest = Math.max(widest, column);
+    if (widest > MAX_DOCUMENT_INDENT) {
+      return `Line ${number(n + 1)} of the document is indented ${number(widest)} columns; Grunt makes Word files with indents of at most ${MAX_DOCUMENT_INDENT} columns.`;
+    }
+    if (line.includes('|') && line.trim() !== '') {
+      tableRows++;
+      if (tableRows > MAX_DOCUMENT_TABLE_ROWS) {
+        return `The document has a table of more than ${number(MAX_DOCUMENT_TABLE_ROWS)} rows (it passes that at line ${number(n + 1)}); Grunt makes Word files with tables of at most ${number(MAX_DOCUMENT_TABLE_ROWS)} rows. Split the table.`;
+      }
+    } else tableRows = 0;
+  }
+  return null;
+}
+
+/** Why `content` can't be an artifact of `kind`, or null. A spreadsheet is parsed; a document's size is bounded. */
 export function checkOfficeContent(kind: string, content: string): string | null {
   if (kind === 'spreadsheet') {
     const parsed = parseSpreadsheet(content);
     return parsed.ok ? null : parsed.error;
   }
+  if (kind === 'document') return documentProblem(content);
   return null;
 }
 
 /** Appended to ARTIFACTS_GUIDANCE: fixed text, so it never churns the system prompt. */
 export const OFFICE_GUIDANCE = [
   'Office files: for a Word document or Excel spreadsheet the user wants as a file, make a "document" or "spreadsheet" artifact. Grunt makes the .docx or .xlsx when the user downloads or saves it. Use "markdown" for notes read in Grunt.',
-  '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file.',
+  '- "document": Markdown: headings, paragraphs, bold, italic, lists, tables, links, code. Images are not put in the file. At most 120,000 characters and 6,000 lines: split a bigger one.',
   '- "spreadsheet": JSON, e.g. {"sheets":[{"name":"Costs","columns":[{"width":24},{"width":12}],"freeze":{"rows":1},"rows":[[{"value":"Item","bold":true},{"value":"Cost","bold":true}],["Widgets",12],["Gadgets",30.5],["Total","=SUM(B2:B3)"]]}]}. rows[0] is row 1 and rows[0][0] is A1. A cell is null, text, a number, true/false, or an object with one of "value", "formula" or "date" (YYYY-MM-DD or YYYY-MM-DDTHH:MM) and optional "format" (an Excel number format such as "#,##0.00"), "bold", "italic", "wrap", "align" (left, center, right), "color" and "fill" (#RRGGBB). Text starting with "=" is a formula; {"value":"=..."} is literal text.',
   "- Formulas use Excel's English function names with commas, and 'Sheet name'!A1 for another sheet. Grunt can't calculate them; Excel does when the file is opened, so check every reference. Only Excel's built-in worksheet functions are allowed, and not WEBSERVICE, FILTERXML, IMAGE, HYPERLINK, RTD, CALL, REGISTER, EXEC, STOCKHISTORY, TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL or INDIRECT; LET, LAMBDA and its helpers, '@' and the '#' spill operator aren't supported yet. Use cell references (there are no named ranges); DDE (|), links to other workbooks and table references ([) are refused.",
   '- Errors name the place in the JSON to fix.',
