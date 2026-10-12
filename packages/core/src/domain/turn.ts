@@ -4,7 +4,7 @@ import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engin
 import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
-import type { ResolvedProfile } from '../types/config.js';
+import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
@@ -17,6 +17,7 @@ import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
+import { sandboxFoldersPrompt } from './sandbox-paths.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
@@ -552,7 +553,7 @@ export class TurnRunner {
       const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall') : listed;
       const canRecall = tools.some((t) => t.source === 'recall');
       const requestProfile = this.withRecall(
-        this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), tools), tools),
+        this.withArtifacts(this.withTools(this.withSandbox(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), workspaceRoot, folders), tools), tools),
         canRecall
       );
       // Other machines' folder paths in tool calls and results, as they are
@@ -844,6 +845,18 @@ export class TurnRunner {
   private withFolders(profile: ResolvedProfile, folders: ResolvedFolder[]): ResolvedProfile {
     if (folders.length === 0) return profile;
     const block = extraFoldersPrompt(folders);
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
+  /**
+   * The profile with the "# Sandbox" block (spec 2026-10-12-sandbox-design,
+   * "Model guidance") when its shell runs in the sandbox: what run_command is
+   * and where the workspace and each extra folder are in it. A chat with no
+   * workspace can't run sandboxed commands at all, so it gets none.
+   */
+  private withSandbox(profile: ResolvedProfile, workspaceRoot: string | null, folders: ResolvedFolder[]): ResolvedProfile {
+    if (workspaceRoot === null || !runsShellInSandbox(profile.toolPolicy)) return profile;
+    const block = sandboxFoldersPrompt(workspaceRoot, folders);
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 

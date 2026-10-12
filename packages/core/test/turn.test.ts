@@ -1886,3 +1886,33 @@ describe('TurnRunner.regenerate', () => {
     await expect(runner.regenerate({ chatId: 'chat-1', messageId: orphan.id, profile })).rejects.toMatchObject({ code: 'no_parent' });
   });
 });
+
+describe('TurnRunner tells a sandboxed shell where the folders are', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+
+  async function systemPromptFor(shellRuns: 'host' | 'sandbox'): Promise<string> {
+    const store = new InMemoryStore('node-pc');
+    store.chats.create({
+      id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null,
+      workspace: { kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git\\Grunt' },
+      folders: [{ workspace: { kind: 'machine', nodeId: 'node-pc', root: 'D:\\Refs' }, access: 'read' }],
+    });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { pathExists: () => true });
+    const profile = makeResolvedProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+    return engine.requests[0]!.messages.find((m) => m.role === 'system')?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+  }
+
+  it("adds the workspace's and each folder's sandbox path when the profile's shell runs in the sandbox", async () => {
+    const system = await systemPromptFor('sandbox');
+    expect(system).toContain('# Sandbox');
+    expect(system).toContain('The workspace E:\\Git\\Grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
+  });
+
+  it('adds nothing when the shell runs on this machine', async () => {
+    expect(await systemPromptFor('host')).not.toContain('# Sandbox');
+  });
+});
