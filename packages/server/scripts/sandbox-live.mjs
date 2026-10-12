@@ -33,8 +33,11 @@ const fail = (message) => {
 const log = (line) => console.log(`[sandbox-live] ${line}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isSandboxResult = (r) => (typeof r === 'string' ? r : JSON.stringify(r)).includes('"sandbox":true');
-/** run_command as the API engine names it, or as Claude Code calls the relayed one (`mcp__grunt_<hex>__run_command`). */
-const isRunCommand = (name) => name === 'run_command' || /^mcp__grunt_[0-9a-f]+__run_command$/.test(name);
+/**
+ * run_command. Claude Code calls the relayed one `mcp__grunt_<hex>__run_command`, but the engine stores its
+ * parts under Grunt's name (the relay renames map), so the parts say run_command for both engines.
+ */
+const isRunCommand = (name) => name === 'run_command';
 
 let port;
 async function api(method, path, body) {
