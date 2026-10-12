@@ -1225,6 +1225,9 @@ These follow spec 2026-10-12-api-subagents-design (Deck #930).
     - A sandboxed sub-agent may reach only the hosts on both allowlists (`sandboxHostsOf`, so an absent list counts as the defaults). Entries are compared whole, ignoring case: `*.example.com` on one side and `api.example.com` on the other share nothing, so that host raises a card. A sandboxed sub-agent's prompt gets the same "# Sandbox" note as a parent's.
   - **Every field has a rule.** `SUBAGENT_POLICY_RULES` (in `domain/subagent.ts`) has one rule per `ToolPolicy` field, and its type makes it exhaustive: a field added to `ToolPolicy` without a rule fails typecheck. The narrowed policy writes every field out, so nothing falls back to a default. A new field with no obvious way to combine two policies takes its most restrictive value, as `artifacts`, `subagents`, `agentWeb` and `agentMcp` do (all off). A value a rule doesn't know (a profile synced from a newer peer) fails closed: no files, always ask. `core/test/subagent-policy-property.test.ts` checks 400 random pairs of policies against the real broker: any call the sub-agent's policy allows without a card, the parent's policy allows without a card too, with every kind of grant held by the chosen profile and never counting.
   - **Auto mode.** A sub-agent's request always has `autoMode` off: it hands approvals to Claude Code's classifier, and a sub-agent is never Claude Code.
+  - **Its request carries the narrowed policy.** `SubagentRunner.requestFor` sets `profile.toolPolicy` to the narrowed policy, so nothing that reads the request's profile sees the chosen profile's wider one.
+  - **Thread tools.** The runner never offers a sub-agent the question, plan or checklist tools, and the broker refuses one called from inside a sub-agent (`SUBAGENT_THREAD_REFUSAL`), as it refuses `subagent`.
+  - **Saying why there is no shell.** For a parent whose shell runs on this machine, the `subagent` tool's description says a sandboxed profile's sub-agent has no shell (`SUBAGENT_SHELL_LINE`, only when such a profile is listed), and a sub-agent that lost its shell this way is told so in its prompt (`SUBAGENT_NO_SHELL_NOTE`). The schedule editor warns, for an API profile with sub-agents on, that a sub-agent run as an always-ask profile has every call refused.
   - **Plan mode.** The sub-agent's request carries the parent reply's plan gate (the same object), and `allowedWhilePlanning` lists `subagent`. The two go together: a planning reply can send a sub-agent to look around, and every change the sub-agent tries (a file write, a host or sandboxed command, a sandbox network request, an MCP tool that isn't read-only) is refused with `plan_mode` until the user approves the parent's plan. A sub-agent has no `propose_plan` of its own (it gets no thread tools), so one started while the plan is waiting is told so in its prompt (`SUBAGENT_PLAN_NOTE`). Never keep the `allowedWhilePlanning` case without the gate on the request.
   - **Scheduled runs.** The sub-agent's request carries `unattended`, so a call of its that would need a card is refused with `approval_unavailable` like the parent's, and a sandboxed command's unlisted host is refused without a card.
   - **`toolContextFor`.** Thread cards and sub-agents each created `domain/tool-context.ts`. There is one function now, carrying the plan gate, `unattended`, the call id, the sub-agent host and the sub-agent tag, and every engine builds its `ToolContext` with it.
@@ -1453,15 +1456,19 @@ stopped:
   TEXT;` then `PRAGMA user_version = 25;`. The runner then adds 026.
 - **From `feat/office-files-build` once sub-agents landed** (0a76225 on,
   where 022 was `usage-subagent`: it has `usage.subagent_call_id` but no
-  `chat.plan_mode`):
-  - At 22 (not yet opened here): `ALTER TABLE usage DROP COLUMN
-    subagent_call_id;` then `PRAGMA user_version = 20;`. The runner then adds
-    022 to 026. The marks on sub-agent usage rows go with the column, so
-    those rows can no longer be told apart from the reply's own.
-  - At 25 (opened here once: 023 to 025 ran, then 026 stopped):
+  `chat.plan_mode`). It starts at 22. The preferred route loses nothing:
+  - **Open it here once, then fix it at 25.** Opening it runs 023 to 025,
+    then 026 stops with the error that points here and leaves it at 25.
+    With Grunt stopped again, run
     `ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;` then
-    `PRAGMA user_version = 26;`. This keeps the marks. Don't use the first
-    fix here: the runner would then try to create `schedule` again.
+    `PRAGMA user_version = 26;`. This keeps `usage.subagent_call_id`, so
+    sub-agent usage rows stay marked.
+  - Or, at 22 without opening it here: `ALTER TABLE usage DROP COLUMN
+    subagent_call_id;` then `PRAGMA user_version = 20;`. The runner then adds
+    022 to 026. This one is lossy: the marks on sub-agent usage rows go with
+    the column, so those rows can no longer be told apart from the reply's
+    own. Don't use it on a database already at 25: the runner would then try
+    to create `schedule` again.
 - **Fine as it is:**
   - From `dev`, `feat/cowork-parity` (the sandbox) or
     `feat/office-files-build` before sub-agents (up to 91a0af4): 20, or 21
