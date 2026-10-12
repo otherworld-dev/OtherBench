@@ -79,6 +79,9 @@ interface ApplyOptions {
 export class MountManager {
   private readonly needs = new Map<string, MountNeed[]>();
   private current: PlannedMount[] = [];
+  /** Set by resync(): `current` may no longer be in the VM, so the next change mounts the wanted ones again. */
+  private unsure = false;
+  private resyncs = 0;
   private chain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -133,11 +136,17 @@ export class MountManager {
   forget(): void {
     this.needs.clear();
     this.current = [];
+    this.unsure = false;
   }
 
-  /** Something may have dropped every mount (an agent died: `wsl --shutdown`, say): mount everything again on the next change. */
+  /**
+   * Something may have dropped every mount (an agent died: `wsl --shutdown`, say). The next change mounts every
+   * wanted folder again and still takes down the unwanted ones: mount.sh leaves a folder that is already
+   * mounted in that mode alone, and unmounting one that isn't there does nothing, so nothing is left untracked.
+   */
   resync(): void {
-    this.current = [];
+    this.unsure = true;
+    this.resyncs += 1;
   }
 
   private serial(fn: () => Promise<void>): Promise<void> {
@@ -176,14 +185,30 @@ export class MountManager {
       this.warn(`couldn't unmount ${m.linuxPath}, kept for now: ${failure}`);
     }
 
+    const resyncs = this.resyncs;
+    // After resync(), what is believed mounted and still wanted is mounted again (a no-op for one that is still there).
+    const recheck = new Set(this.unsure ? target.filter((t) => this.current.some((c) => same(c, t))).map((t) => t.linuxPath) : []);
+    let sure = true;
+
     // Put on what is wanted and missing, parents first (the ones lifted above come back here).
     const skipped = new Set<string>();
     for (;;) {
       const m = target
-        .filter((t) => !this.current.some((c) => same(c, t)) && !skipped.has(t.linuxPath))
+        .filter((t) => (recheck.has(t.linuxPath) || !this.current.some((c) => same(c, t))) && !skipped.has(t.linuxPath))
         .sort((a, b) => depth(a) - depth(b))[0];
       if (!m) break;
       skipped.add(m.linuxPath);
+      if (recheck.has(m.linuxPath) && this.current.some((c) => same(c, m))) {
+        // Never lifts what is inside it: if it is still there, so is that; if it was dropped, so was that.
+        try {
+          await this.runner.mount(m);
+        } catch (err) {
+          if (strict) throw new SandboxError('mount_failed', `Couldn't mount ${m.windowsPath} in the sandbox: ${messageOf(err)}`);
+          this.warn(`couldn't mount ${m.linuxPath} again: ${messageOf(err)}`);
+          sure = false;
+        }
+        continue;
+      }
       // Its old mode couldn't be unmounted (only when not strict): keep that one.
       if (this.current.some((c) => c.linuxPath === m.linuxPath)) continue;
       // A mount over a folder hides what is mounted inside it: lift those, they come back in a later turn of this loop.
@@ -197,6 +222,8 @@ export class MountManager {
       if (strict) throw new SandboxError('mount_failed', `Couldn't mount ${m.windowsPath} in the sandbox: ${failure}`);
       this.warn(`couldn't mount ${m.linuxPath}: ${failure}`);
     }
+    // A resync() during this change still counts for the next one.
+    if (sure && this.resyncs === resyncs) this.unsure = false;
   }
 
   /** Mounts one folder and records it. The failure message, or undefined. */

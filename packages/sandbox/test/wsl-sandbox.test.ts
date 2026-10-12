@@ -266,6 +266,76 @@ describe('WslSandbox.run', () => {
     expect(asked[0]!.signal?.aborted).toBe(true);
   });
 
+  it('refuses a command queued behind a running one when the chat is released, starting no agent and leaving nothing mounted', async () => {
+    const { held, onRun } = holding();
+    const { sandbox, channels, mounts } = make({}, onRun);
+    const first = sandbox.run(request({ folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const queued = sandbox.run(request({ folders: [{ root: 'D:\\Refs', access: 'read' }] }));
+    const firstFails = expect(first).rejects.toMatchObject({ code: 'agent_failed' });
+    const queuedRefused = expect(queued).rejects.toMatchObject({ code: 'aborted' });
+    await sandbox.release('chat-1');
+    await firstFails;
+    await queuedRefused;
+    await tick();
+    expect(channels).toHaveLength(1);
+    expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt', 'unmount /mnt/e/Git/Grunt']);
+  });
+
+  it('refuses a command queued behind a running one when setup starts, starting no agent', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { held, onRun } = holding();
+    const { sandbox, channels } = make({ steps: [{ name: 'Wait', run: () => gate }] }, onRun);
+    const first = sandbox.run(request({ folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const queued = sandbox.run(request({ folders: [] }));
+    const firstFails = expect(first).rejects.toMatchObject({ code: 'agent_failed' });
+    const queuedRefused = expect(queued).rejects.toMatchObject({ code: expect.stringMatching(/^(not_set_up|aborted)$/) });
+    const job = sandbox.setup();
+    await firstFails;
+    await queuedRefused;
+    release();
+    await job;
+    expect(channels).toHaveLength(1);
+  });
+
+  it('refuses a command once the sandbox has closed, mounting nothing', async () => {
+    const { sandbox, mounts, channels } = make();
+    await sandbox.close();
+    await expect(sandbox.run(request())).rejects.toMatchObject({ code: 'agent_failed' });
+    expect(mounts).toEqual([]);
+    expect(channels).toEqual([]);
+  });
+
+  it("narrows the chat's folders again when its agent closed while the next command was mounting", async () => {
+    let releaseMount!: () => void;
+    const gate = new Promise<void>((r) => (releaseMount = r));
+    const mounts: string[] = [];
+    const { sandbox, channels } = make({
+      pool: { idleMs: 20 },
+      mountRunner: {
+        mount: async (m) => {
+          if (m.windowsPath === 'D:\\Refs') await gate;
+          mounts.push(`mount ${m.mode} ${m.linuxPath}`);
+        },
+        unmount: async (m) => {
+          mounts.push(`unmount ${m.linuxPath}`);
+        },
+      },
+    });
+    // The first command writes; its agent goes idle and closes while the second (read-only) one mounts D:\Refs.
+    await sandbox.run(request({ folders: [] }));
+    const second = sandbox.run(request({ writable: false, folders: [{ root: 'D:\\Refs', access: 'read' }] }));
+    await vi.waitFor(() => expect(channels[0]!.channel.sent.at(-1)).toEqual({ type: 'close' }));
+    releaseMount();
+    await second;
+    mounts.length = 0;
+    await sandbox.run(request({ writable: false, folders: [] }));
+    // The new agent's commands have only ever asked for read-only: the workspace is no longer kept read-write.
+    expect(mounts).toContain('mount ro /mnt/e/Git/Grunt');
+  });
+
   it('runs commands again after a setup', async () => {
     const { sandbox, channels, mounts } = make({ steps: [] });
     await sandbox.run(request({ folders: [] }));
@@ -348,6 +418,67 @@ describe('WslSandbox setup and status', () => {
     expect(state.value?.state).toBe('failed');
   });
 
+  it("keeps the sandbox ready when WSL can't list its distros (timed out or didn't start), without remembering anything", async () => {
+    for (const answer of [{ code: null, stdout: '', timedOut: true }, { code: null, stdout: '', stderr: 'spawn failed' }]) {
+      const runner = happyWsl({ override: (call) => (call.kind === 'wsl' && call.args[0] === '--list' ? answer : undefined) });
+      const { sandbox, state } = make({ runner });
+      expect(await sandbox.status()).toMatchObject({ state: 'ready', versions: VERSIONS });
+      expect(state.value).toEqual(READY);
+    }
+  });
+
+  it("doesn't call the distro gone while it is being removed", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const runner = happyWsl({ distros: 'Ubuntu\r\n' });
+    const wsl = runner.wsl.bind(runner);
+    runner.wsl = async (args) => {
+      if (args[0] === '--unregister') await gate;
+      return wsl(args);
+    };
+    const { sandbox, state } = make({ runner });
+    const removing = sandbox.remove();
+    await tick();
+    expect((await sandbox.status()).state).not.toBe('failed');
+    expect(state.value?.state).toBe('ready');
+    release();
+    await removing;
+    expect(state.value).toEqual({ state: 'not_set_up', packages: [] });
+  });
+
+  it("doesn't overwrite what a Remove wrote with a gone distro it saw before the Remove finished", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const runner = happyWsl({ distros: 'Ubuntu\r\n' });
+    const wsl = runner.wsl.bind(runner);
+    let gateList = true;
+    runner.wsl = async (args) => {
+      if (args[0] === '--list' && gateList) {
+        gateList = false;
+        await gate;
+      }
+      return wsl(args);
+    };
+    const { sandbox, state } = make({ runner });
+    const status = sandbox.status();
+    await tick();
+    await sandbox.remove();
+    release();
+    expect((await status).state).toBe('not_set_up');
+    expect(state.value).toEqual({ state: 'not_set_up', packages: [] });
+  });
+
+  it('records a setup as interrupted while it runs, so a Grunt stopped mid-Repair is not left ready', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { sandbox, state } = make({ steps: [{ name: 'Wait', run: () => gate }] });
+    const job = sandbox.setup();
+    await vi.waitFor(() => expect(state.value).toMatchObject({ state: 'failed', detail: 'Setup was interrupted.' }));
+    release();
+    await job;
+    expect(state.value).toEqual(READY);
+  });
+
   it("warns when WSL's mirrored networking is on", async () => {
     const { sandbox } = make({ readWslConfig: async () => '[wsl2]\r\nnetworkingMode=mirrored\r\n' });
     expect((await sandbox.status()).warnings).toEqual([expect.stringContaining('mirrored')]);
@@ -418,6 +549,52 @@ describe('WslSandbox remove and packages', () => {
     await sandbox.idle();
     expect(runner.commands).toContain('root: /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q ffmpeg pandoc');
     expect(state.value).toMatchObject({ state: 'ready', packages: ['ffmpeg', 'pandoc'], versions: VERSIONS });
+  });
+
+  it("a failed package install leaves the sandbox ready, says why, and commands still run", async () => {
+    const runner = happyWsl({
+      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      node: true,
+      override: (call) => (call.kind === 'exec' && call.argv.includes('install') ? { code: 100, stderr: 'E: Unable to locate package nosuch' } : undefined),
+    });
+    const { sandbox, state } = make({ runner });
+    await sandbox.setPackages(['nosuch']);
+    await sandbox.idle();
+    const status = await sandbox.status();
+    expect(status).toMatchObject({ state: 'ready', versions: VERSIONS, packages: ['nosuch'], detail: expect.stringContaining('Unable to locate package nosuch') });
+    expect(status.log).toEqual(expect.arrayContaining([expect.stringContaining('✖')]));
+    expect(state.value).toMatchObject({ state: 'ready', versions: VERSIONS });
+    expect((await sandbox.run(request({ folders: [] }))).exitCode).toBe(0);
+  });
+
+  it('a later successful install clears the earlier failure', async () => {
+    let fail = true;
+    const runner = happyWsl({
+      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      node: true,
+      override: (call) => (fail && call.kind === 'exec' && call.argv.includes('install') ? { code: 100, stderr: 'E: nope' } : undefined),
+    });
+    const { sandbox, state } = make({ runner });
+    await sandbox.setPackages(['nosuch']);
+    await sandbox.idle();
+    fail = false;
+    await sandbox.setPackages(['ffmpeg']);
+    await sandbox.idle();
+    expect(state.value).toEqual({ state: 'ready', versions: VERSIONS, packages: ['ffmpeg'] });
+  });
+
+  it("remove refuses when wsl --unregister fails and the distro list can't be read", async () => {
+    const runner = happyWsl({
+      override: (call) => {
+        if (call.kind !== 'wsl') return undefined;
+        if (call.args[0] === '--unregister') return { code: 1, stderr: 'The service is busy.' };
+        if (call.args[0] === '--list') return { code: null, stdout: '', timedOut: true };
+        return undefined;
+      },
+    });
+    const { sandbox, state } = make({ runner });
+    await expect(sandbox.remove()).rejects.toMatchObject({ code: 'remove_failed' });
+    expect(state.value).toEqual(READY);
   });
 
   it('setPackages only stores the list when the sandbox is not set up', async () => {

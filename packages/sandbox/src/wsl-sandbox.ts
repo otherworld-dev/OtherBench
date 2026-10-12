@@ -70,6 +70,11 @@ export function mirroredNetworking(wslconfig: string | null): boolean {
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** A ready state, without what an earlier failed package install left in detail and log. */
+function readyState(s: StoredSandboxState): StoredSandboxState {
+  return { state: 'ready', packages: s.packages, ...(s.versions ? { versions: s.versions } : {}) };
+}
+
 /** Two sets of folders as one: each folder once (Windows compares paths without case), writable if either has it so. */
 function unionOf(a: readonly MountNeed[], b: readonly MountNeed[]): MountNeed[] {
   const merged = new Map<string, MountNeed>();
@@ -115,6 +120,8 @@ interface ChatState {
   tail: Promise<void>;
   /** Its commands between run() and their result. */
   active: number;
+  /** Counts the chat's agents going away, so a command that was mounting meanwhile doesn't put back the old `granted`. */
+  epoch: number;
 }
 
 type RunInput = Pick<SandboxRunRequest, 'command' | 'timeoutMs' | 'allowedHosts' | 'signal' | 'askHost'>;
@@ -140,6 +147,8 @@ export class WslSandbox implements Sandbox {
   private removal: Promise<void> | null = null;
   /** Setup or Remove is closing every agent: the distro restarts or goes, so mounts are forgotten, not taken down one by one. */
   private resetting = false;
+  /** close() has run: Grunt is stopping. */
+  private closed = false;
 
   constructor(private readonly opts: WslSandboxOptions) {
     this.realpath = opts.realpath ?? ((p) => realpathSync.native(p));
@@ -163,17 +172,20 @@ export class WslSandbox implements Sandbox {
     const warnings = mirroredNetworking(await this.wslConfig()) ? { warnings: [MIRRORED_WARNING] } : {};
     const base = { packages: stored.packages, machine: this.opts.machineName(), ...warnings };
     if (this.job) return { state: 'setting_up', log: [...this.jobLog], ...base };
+    // A detail and log on a ready sandbox say why the last package install failed.
+    const report = { ...(stored.detail ? { detail: stored.detail } : {}), ...(stored.log ? { log: stored.log } : {}) };
     if (stored.state === 'ready') {
-      if (!(await this.distroExists())) {
+      // While a Remove runs the distro is expected to go: that isn't a failure.
+      if (!this.removal && (await this.distroExists()) === false) {
+        // The answer took a while: only a sandbox still ready, with nothing running on it, is marked failed.
+        if (this.job || this.removal || this.stored().state !== 'ready') return this.status();
         const detail = `The ${DISTRO} WSL distro is gone. Press Set up to make it again.`;
         this.opts.state.set({ state: 'failed', detail, packages: stored.packages });
         return { state: 'failed', detail, ...base };
       }
-      return { state: 'ready', ...(stored.versions ? { versions: stored.versions } : {}), ...base };
+      return { state: 'ready', ...(stored.versions ? { versions: stored.versions } : {}), ...report, ...base };
     }
-    if (stored.state === 'failed') {
-      return { state: 'failed', ...(stored.detail ? { detail: stored.detail } : {}), ...(stored.log ? { log: stored.log } : {}), ...base };
-    }
+    if (stored.state === 'failed') return { state: 'failed', ...report, ...base };
     return { state: 'not_set_up', ...base };
   }
 
@@ -181,6 +193,8 @@ export class WslSandbox implements Sandbox {
     if (this.job) return this.job;
     return this.startJob(async (log) => {
       await this.removal?.catch(() => undefined);
+      // Overwritten by the outcome; if Grunt stops first, the sandbox isn't left looking ready.
+      this.opts.state.set({ state: 'failed', detail: 'Setup was interrupted.', packages: this.stored().packages });
       await this.dropAgents();
       const packages = this.stored().packages;
       const outcome = await runSetup(
@@ -198,7 +212,8 @@ export class WslSandbox implements Sandbox {
     const removal = (async () => {
       await this.dropAgents();
       const r = await this.opts.runner.wsl(['--unregister', DISTRO], { timeoutMs: 5 * 60_000 });
-      if (r.code !== 0 && (await this.distroExists())) {
+      // Removed only when the list says so: a list that couldn't be read proves nothing.
+      if (r.code !== 0 && (await this.distroExists()) !== false) {
         throw new SandboxError('remove_failed', `Removing the ${DISTRO} distro failed: ${(r.stderr || r.stdout).trim()}`);
       }
       this.opts.state.set({ state: 'not_set_up', packages: this.stored().packages });
@@ -215,9 +230,16 @@ export class WslSandbox implements Sandbox {
     const stored = this.stored();
     this.opts.state.set({ ...stored, packages: [...packages] });
     if (stored.state !== 'ready' || packages.length === 0) return;
+    // A failed install leaves the sandbox ready (what was there still works) and says why in detail and log.
     void this.startJob(async (log) => {
-      await installExtraPackages(this.opts.runner, packages, log);
-      return { ...this.stored(), state: 'ready' };
+      try {
+        await installExtraPackages(this.opts.runner, packages, log);
+        return readyState(this.stored());
+      } catch (err) {
+        const detail = `Installing packages: ${messageOf(err)}`;
+        log(`✖ ${detail}`);
+        return { ...readyState(this.stored()), detail, log: [...this.jobLog] };
+      }
     });
   }
 
@@ -227,10 +249,8 @@ export class WslSandbox implements Sandbox {
   }
 
   async run(req: SandboxRunRequest): Promise<SandboxRunResult> {
-    const machine = this.opts.machineName();
-    if (this.job) throw new SandboxError('not_set_up', `The sandbox on ${machine} is being set up. Try again when it's ready.`);
-    if (this.removal) throw new SandboxError('not_set_up', `The sandbox on ${machine} is being removed.`);
-    if (this.stored().state !== 'ready') throw new SandboxError('not_set_up', `The sandbox isn't set up on ${machine}. Set it up in Settings > Sandbox.`);
+    this.refuseIfBusy();
+    if (this.stored().state !== 'ready') throw new SandboxError('not_set_up', `The sandbox isn't set up on ${this.opts.machineName()}. Set it up in Settings > Sandbox.`);
     if (req.signal.aborted) throw new SandboxError('aborted', NOT_STARTED);
     return this.runIn(req.chatId, this.places(req.workspaceRoot, req.folders, req.writable), req);
   }
@@ -242,6 +262,7 @@ export class WslSandbox implements Sandbox {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     await this.pool.closeAll();
     this.chats.clear();
     await this.mounts.clear().catch(() => undefined);
@@ -249,6 +270,26 @@ export class WslSandbox implements Sandbox {
 
   private stored(): StoredSandboxState {
     return this.opts.state.get() ?? { state: 'not_set_up', packages: [] };
+  }
+
+  /** Refuses a chat's command while Grunt is stopping, or the sandbox is being set up or removed. */
+  private refuseIfBusy(): void {
+    if (this.closed) throw new SandboxError('agent_failed', 'The sandbox is shutting down.');
+    const machine = this.opts.machineName();
+    if (this.job) throw new SandboxError('not_set_up', `The sandbox on ${machine} is being set up. Try again when it's ready.`);
+    if (this.removal) throw new SandboxError('not_set_up', `The sandbox on ${machine} is being removed.`);
+  }
+
+  /**
+   * Refuses a command that waited (for the chat's previous command, or for its mounts) while the chat was
+   * released or its agents were closed for setup or Remove (its ChatState is no longer the chat's), or while
+   * the sandbox started being set up or removed. Without this it would start a fresh agent for it.
+   */
+  private refuseIfStale(chatId: string, mine: ChatState, selfTest: boolean): void {
+    // The self-test runs inside the setup job, so only Grunt stopping refuses it.
+    if (!selfTest) this.refuseIfBusy();
+    else if (this.closed) throw new SandboxError('agent_failed', 'The sandbox is shutting down.');
+    if (this.chats.get(chatId) !== mine) throw new SandboxError('aborted', "The chat's sandbox was closed before this command started, so it was not run.");
   }
 
   private startJob(fn: (log: (line: string) => void) => Promise<StoredSandboxState>): Promise<void> {
@@ -290,6 +331,7 @@ export class WslSandbox implements Sandbox {
     if (chat && chat.active > 0) {
       // A command of this chat is on its way to a new agent: its folders stay for it, and the next command starts afresh.
       chat.granted = [];
+      chat.epoch += 1;
       return;
     }
     this.chatGone(chatId);
@@ -342,10 +384,10 @@ export class WslSandbox implements Sandbox {
     return places;
   }
 
-  private async runIn(chatId: string, places: Places, input: RunInput): Promise<SandboxRunResult> {
+  private async runIn(chatId: string, places: Places, input: RunInput, selfTest = false): Promise<SandboxRunResult> {
     let chat = this.chats.get(chatId);
     if (!chat) {
-      chat = { granted: [], tail: Promise.resolve(), active: 0 };
+      chat = { granted: [], tail: Promise.resolve(), active: 0, epoch: 0 };
       this.chats.set(chatId, chat);
     }
     const mine = chat;
@@ -357,9 +399,13 @@ export class WslSandbox implements Sandbox {
     let outcome: AgentOutcome;
     try {
       await untilTurn(previous, input.signal);
+      this.refuseIfStale(chatId, mine, selfTest);
+      const epoch = mine.epoch;
       const needs = unionOf(mine.granted, places.needs);
       await this.mounts.set(chatId, needs);
-      mine.granted = needs;
+      // The agent went while mounting: the next one starts from this command's folders alone.
+      mine.granted = mine.epoch === epoch ? needs : places.needs;
+      this.refuseIfStale(chatId, mine, selfTest);
       outcome = await this.pool.run(chatId, {
         command: input.command,
         cwd: places.cwd,
@@ -412,7 +458,7 @@ export class WslSandbox implements Sandbox {
               log(`(the sandbox asked about ${host}: refused)`);
               return false;
             },
-          }),
+          }, true),
         log
       );
     } finally {
@@ -426,8 +472,10 @@ export class WslSandbox implements Sandbox {
     return readFile(join(homedir(), '.wslconfig'), 'utf8').catch(() => null);
   }
 
-  private async distroExists(): Promise<boolean> {
+  /** Whether the distro is registered; null when WSL couldn't say (wsl.exe timed out or didn't start). */
+  private async distroExists(): Promise<boolean | null> {
     const list = await this.opts.runner.wsl(['--list', '--quiet'], { timeoutMs: 30_000 });
+    if (list.timedOut || list.code === null) return null;
     return distroNames(list.stdout).some((n) => n.toLowerCase() === DISTRO);
   }
 }

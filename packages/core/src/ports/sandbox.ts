@@ -20,10 +20,10 @@ export type SandboxState = 'unsupported' | 'not_set_up' | 'setting_up' | 'ready'
 
 export interface SandboxStatus {
   state: SandboxState;
-  /** Why it is unsupported or failed ("<step>: <message>" for a failed setup). */
+  /** Why it is unsupported or failed ("<step>: <message>" for a failed setup); on a ready sandbox, why the last package install failed. */
   detail?: string;
   versions?: SandboxVersions;
-  /** Progress lines of the running setup, or of the last failed one; newest last, at most 200. */
+  /** Progress lines of the running setup or install, or of the last failed one; newest last, at most 200. */
   log?: string[];
   /** Extra apt packages Settings asked for. */
   packages: string[];

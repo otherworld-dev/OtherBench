@@ -104,14 +104,52 @@ describe('MountManager', () => {
     expect(order).toEqual(['start /mnt/d/A', 'end /mnt/d/A', 'start /mnt/d/B', 'end /mnt/d/B']);
   });
 
-  it('resync() forgets what is mounted but keeps the needs, so the next change mounts everything again', async () => {
+  it('after resync() the next change mounts every wanted folder again, once', async () => {
     const r = recordingRunner();
     const m = new MountManager(r, () => {});
     await m.set('chat-1', [ro('D:\\Refs')]);
     m.resync();
-    expect(m.mounted).toEqual([]);
+    expect(m.mounted.map((x) => x.linuxPath)).toEqual(['/mnt/d/Refs']);
     await m.set('chat-2', [ro('E:\\Git')]);
-    expect(r.log).toEqual(['mount ro /mnt/d/Refs', 'mount ro /mnt/d/Refs', 'mount ro /mnt/e/Git']);
+    await m.set('chat-3', [ro('C:\\Data')]);
+    expect(r.log).toEqual(['mount ro /mnt/d/Refs', 'mount ro /mnt/d/Refs', 'mount ro /mnt/e/Git', 'mount ro /mnt/c/Data']);
+  });
+
+  it('after resync() it still takes down what is no longer wanted, so nothing is left mounted untracked', async () => {
+    const r = recordingRunner();
+    const m = new MountManager(r, () => {});
+    await m.set('chat-1', [ro('D:\\Refs')]);
+    await m.set('chat-2', [rw('E:\\Git')]);
+    m.resync();
+    r.log.length = 0;
+    await m.remove('chat-1');
+    expect(r.log).toEqual(['unmount /mnt/d/Refs', 'mount rw /mnt/e/Git']);
+    expect(m.mounted.map((x) => `${x.mode} ${x.linuxPath}`)).toEqual(['rw /mnt/e/Git']);
+  });
+
+  it('after resync() a new parent still lifts the folder inside it and puts it back', async () => {
+    const r = recordingRunner();
+    const m = new MountManager(r, () => {});
+    await m.set('chat-1', [rw('E:\\Git\\Grunt')]);
+    m.resync();
+    r.log.length = 0;
+    await m.set('chat-2', [ro('E:\\Git')]);
+    expect(r.log).toEqual(['unmount /mnt/e/Git/Grunt', 'mount ro /mnt/e/Git', 'mount rw /mnt/e/Git/Grunt']);
+  });
+
+  it('after resync() a folder that will not mount again refuses the chat, and is tried again on the next change', async () => {
+    let fail = true;
+    const r = recordingRunner({ mount: (x) => fail && x.linuxPath === '/mnt/d/Refs' });
+    const m = new MountManager(r, () => {});
+    fail = false;
+    await m.set('chat-1', [ro('D:\\Refs')]);
+    m.resync();
+    fail = true;
+    await expect(m.set('chat-1', [ro('D:\\Refs')])).rejects.toMatchObject({ code: 'mount_failed' });
+    fail = false;
+    r.log.length = 0;
+    await m.set('chat-1', [ro('D:\\Refs')]);
+    expect(r.log).toEqual(['mount ro /mnt/d/Refs']);
   });
 
   it('forget() drops needs and mounts without touching the VM', async () => {
