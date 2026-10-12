@@ -197,7 +197,9 @@ describe('sync (Task 50)', () => {
     expect(latest(a)).toBe(aLog);
   });
 
-  it("a sub-agent usage row's call id syncs, and an older build (without the column) takes the row and drops only that", () => {
+  // Peers on different schema versions refuse to sync (server peer/syncer.ts), so an older build never
+  // meets this column in practice; this pins the fallback if that gate relaxes: upsert writes only known columns.
+  it("a sub-agent usage row's call id syncs, and (fallback if the schema gate relaxes) an older build takes the row and drops only that", () => {
     const a = node('a');
     const b = node('b');
     const old = openDatabase(':memory:');

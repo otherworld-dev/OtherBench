@@ -818,7 +818,7 @@ session and transcript ids that could make a path are refused, every path
 goes through `containPath`, and transcripts are capped at 512 MiB each and
 2 GiB for each folder read.
 
-**Sub-agents never widen what a reply can do.** A sub-agent's tools are what both its parent's policy and its chosen profile's policy allow (never wider than either), every one of its tool calls goes through the same broker, cards, grants and audit as the parent's, and it can't start another sub-agent or make artifacts. Its answer is model-written text the parent reads like any other tool result, so text it read (a web page, a file) can reach the parent's context the same way a tool result always could.
+**Sub-agents never widen what a reply can do.** A sub-agent's tools are what both its parent's policy and its chosen profile's policy allow (never wider than either), every one of its tool calls goes through the same broker, cards, grants and audit as the parent's, and it can't start another sub-agent or make artifacts. Grants are matched and stored under the parent reply's own profile, not the profile the sub-agent runs as, so a careful parent (always ask, no grants) can't borrow another profile's grants by running a sub-agent as it. Its answer is model-written text the parent reads like any other tool result, so text it read (a web page, a file) can reach the parent's context the same way a tool result always could.
 
 ### Claude Code engine
 
@@ -981,14 +981,16 @@ These follow spec 2026-10-12-api-subagents-design (Deck #930).
 - **What.** A profile switch, Settings > Profiles > "Sub-agents" (`toolPolicy.subagents`, off by default, API profiles only), offers the `subagent` tool. The model gives it a label, a prompt, optionally a profile name and optionally fewer tools. The sub-agent runs its own model loop through the same engine, with tools from the same provider, gated by the same broker, under the same chat and reply. Its final text (what it wrote after its last tool call) is the tool result.
 - **Where.** `packages/core/src/domain/subagent.ts` (rules and `SubagentRunner`), `domain/parts.ts` (the `subagent` part and `applySubagentEvent`, shared by server, peer relay and web), `TurnRunner.runVariant` (makes a runner per reply), `packages/tools/src/subagent-tool.ts`, `engine-aisdk`'s `buildToolSet` (via `toolContextFor`, in `packages/core/src/domain/tool-context.ts`), `web/src/components/SubagentCard.tsx`. The mock's `#subagents <rest>` trigger drives the e2e (`packages/web/e2e/subagents.spec.ts`).
 - **Profiles.** "This profile" or any unarchived API profile whose connection works on this machine (`eligibleSubagentProfiles`), by name. Claude Code profiles can't be chosen and never get the tool; their own Task/Agent is unchanged.
-- **Tools.** What both profiles' policies allow, narrowed by the call (`subagentPolicy`); `always_ask` wins; never artifacts or sub-agents. Grants are matched and stored under the profile it runs as. Cards carry "Sub-agent: <label>" and sit under the parent reply; audit rows use the parent reply's id.
-- **Context.** Its profile's own prompt, `SUBAGENT_ROLE_PROMPT`, the folders and tools notes, and recall guidance when offered. No history, memory or project instructions.
+- **Tools.** What both profiles' policies allow, narrowed by the call (`subagentPolicy`); `always_ask` wins; never artifacts or sub-agents. Grants are matched and stored under the parent reply's own profile, never the one it runs as (`SubagentTag.parentProfileId`, applied in `toolContextFor`), so picking a profile with more grants can't skip a card. Approval cards carry "Sub-agent: <label>", plus "(runs as <profile>)" when it isn't the reply's own, and sit under the parent reply; audit rows use the parent reply's id.
+- **Context.** Its profile's own prompt, `SUBAGENT_ROLE_PROMPT`, the folders note when the chat has extra folders, the tools note when its connection names its tools, and recall guidance when offered. No history, memory or project instructions.
 - **Limits.** One level deep. 4 at once per reply (the rest wait), 10 per reply, 20 steps each. Its answer is cut at 20,000 characters; the stored copy of each of its tool results at 4,000. Refusals (an unknown profile, bad tools, Stop before it started) count toward the 10, as the spec's step order implies.
 - **Storage.** Its transcript is a `subagent` part in the parent reply's `parts`. Each finished sub-agent writes its own usage row on the reply with `usage.subagent_call_id` (migration 022). The compare tabs show only the reply's own cost; the Inspector's spend and the Usage view include sub-agents (`ProfileRollup.subagentCount`).
-- **Robustness details reviewers asked for.**
+- **Robustness details.**
   - A finished (terminal) `subagent` part ignores later events, so an out-of-order relay can't reopen a settled card.
   - `isSubagentEvent` requires finite, non-negative usage numbers and keeps only the four known fields.
-  - A sub-agent's card always closes: if its usage row can't be written, the failure is swallowed and the `end` event is still sent.
+  - A sub-agent's card always closes: if its usage row can't be written, the failure is swallowed and the `end` event is still sent; if storing its `start` throws, the `end` still follows.
+  - The web reducer folds a `subagent` event only when its call id is a string and `isSubagentEvent` passes; a card with no `parts`, or usage without both token counts, still renders.
+  - A reply kept after the machine running it went away (`keepCutOffReply`) closes any card still queued or running as an error naming that machine.
   - The Markdown/HTML export escapes a sub-agent's label, profile name and model id, so a model-written label can't break out of the `<summary>`.
 - **Stop.** The reply's Stop stops every sub-agent and settles their cards; `runVariant` waits for them before writing its final status. A restart turns a running card into an error.
 - **Gaps (phase 2).** No Stop per sub-agent. A stopped sub-agent's tokens aren't counted (same gap as a stopped reply). The reply footer and compare tabs don't include sub-agent cost. No per-profile list of allowed sub-agent profiles. Whether the calls of one step really run at once depends on the model making parallel calls; the AI SDK side is pinned by a test in `engine-aisdk/test/engine.test.ts`.
@@ -998,7 +1000,7 @@ These follow spec 2026-10-12-api-subagents-design (Deck #930).
   - There is no `allowedWhilePlanning` case for `subagent` (it should be allowed while planning).
   - `NEVER_FOR_SUBAGENTS` names `thread` but nothing filters a thread tool source yet.
   - `domain/tool-context.ts` (`toolContextFor`) was created here. If thread cards also creates it, merge the two: theirs adds `plan`/`unattended`, ours adds `toolCallId`/`subagents`/`subagent`.
-  - Migration 022 is the next free number on this branch (021 is reserved). A dev database that has run 022 skips 021 when it lands (migrations only run when the version is above `user_version`), so 021 must be re-applied or the database recreated. Another track may also use 022; renumber at integration.
+  - **Migration 022 MUST be renumbered before merge.** feat/cowork-parity-all already uses 022-025, and real databases sit at `user_version` 24-25, so a migration numbered 022 is skipped there (migrations only run when the version is above `user_version`) and every usage write then fails, because the usage repo always writes `subagent_call_id`. Renumber it above the highest migration on the target branch. (On this branch 021 is reserved; a dev database that ran 022 here skips 021 when it lands, so re-apply 021 or recreate the database.)
 
 ## Encryption at rest
 
