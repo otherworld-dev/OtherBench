@@ -76,11 +76,11 @@ export function bindHistoryAttachments(messages: CanonMessage[], allowed: (attac
       if (verdict === true) {
         if (!('pending' in part)) return part;
         changed = true;
-        const { pending: _pending, ...verified } = part as Part & { pending?: boolean };
-        return verified as Part;
+        const { pending: _pending, ...verified } = part;
+        return verified;
       }
       changed = true;
-      if (verdict === 'pending') return { ...part, pending: true } as unknown as Part;
+      if (verdict === 'pending') return { ...part, pending: true };
       return { type: 'text', text: ATTACHMENT_NOT_BOUND };
     });
     return changed ? { ...message, parts } : message;

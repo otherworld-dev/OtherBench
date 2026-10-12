@@ -1,8 +1,25 @@
+/**
+ * The mark on a reference to a file that has not been checked yet. Sync can
+ * bring a message before the file rows it names; until the row arrives, the
+ * store keeps the reference with `pending: true` (only ever `true`; a checked
+ * reference has no such field). The mark is set and cleared by the store on
+ * sync apply (store-sqlite `SqliteSyncRepo`) and by nothing else.
+ *
+ * A reader must treat a pending item as NOT shown: it names an attachment id
+ * nothing has verified, so it is not replayed to a model, not served, not
+ * offered to a peer as an image, and a UI shows a placeholder, not the file.
+ * It is carried by a user's `image` and `file` parts and by a tool result's
+ * image reference (`ToolImageRef` in domain/tool-images.ts).
+ */
+export interface PendingMark {
+  pending?: true;
+}
+
 export type Part =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'image'; attachmentId: string; mime: string }
-  | { type: 'file'; attachmentId: string; mime: string; filename: string }
+  | ({ type: 'image'; attachmentId: string; mime: string } & PendingMark)
+  | ({ type: 'file'; attachmentId: string; mime: string; filename: string } & PendingMark)
   | { type: 'tool-call'; id: string; name: string; args: unknown }
   | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean }
   /**

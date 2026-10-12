@@ -1,5 +1,5 @@
 import { isAttachmentId } from './attachment-binding.js';
-import type { CanonMessage, Part } from '../types/messages.js';
+import type { CanonMessage, Part, PendingMark } from '../types/messages.js';
 
 /**
  * Images in tool results (spec 2026-10-12-computer-use-design section 6). A
@@ -38,7 +38,7 @@ export interface InlineToolImage {
   mimeType: string;
 }
 
-export interface ToolImageRef {
+export interface ToolImageRef extends PendingMark {
   type: 'image';
   attachmentId: string;
   mimeType: string;
@@ -348,11 +348,13 @@ export function bindToolImageParts(parts: Part[], chatId: string, messageId: str
       if (row === null || row === undefined) {
         if (missing === 'drop') return note(TOOL_IMAGE_NOT_BOUND);
         kept += 1;
-        return { type: 'image', attachmentId: ref['attachmentId'], mimeType: claimed, pending: true };
+        const held: ToolImageRef = { type: 'image', attachmentId: ref['attachmentId'], mimeType: claimed, pending: true };
+        return held;
       }
       if (!toolImageBound(row, chatId, messageId)) return note(TOOL_IMAGE_NOT_BOUND);
       kept += 1;
-      return { type: 'image', attachmentId: ref['attachmentId'], mimeType: baseMime(row.mime) };
+      const verified: ToolImageRef = { type: 'image', attachmentId: ref['attachmentId'], mimeType: baseMime(row.mime) };
+      return verified;
     });
     if (result.some((r, i) => r !== (part.result as unknown[])[i])) changed = true;
     return changed ? { ...part, result } : part;

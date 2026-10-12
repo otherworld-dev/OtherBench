@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FakeChatEngine, InMemoryStore } from '../src/testing/fakes.js';
 import { FAKE_PNG } from '../src/testing/fake-computer.js';
-import { attachmentBound, isAttachmentId } from '../src/domain/attachment-binding.js';
+import { attachmentBound, bindHistoryAttachments, isAttachmentId } from '../src/domain/attachment-binding.js';
 import {
   attachmentRowShapeOk,
   bindToolImageParts,
@@ -21,6 +21,7 @@ import {
   TOOL_IMAGE_NOT_BOUND,
   TOOL_IMAGE_REF_REMOVED,
   type ToolImageLookup,
+  type ToolImageRef,
   type ToolImageRow,
 } from '../src/domain/tool-images.js';
 import { TurnRunner, type TurnEvent } from '../src/domain/turn.js';
@@ -588,6 +589,31 @@ describe('the binding checks fail closed on anything that is not what they expec
     for (const bad of [{ id: '../x' }, { filename: '' }, { filename: 'n'.repeat(256) }, { filename: 'a\nb' }, { filename: 5 }, { mime: '' }, { mime: 'x'.repeat(256) }, { mime: null }, { size: -1 }, { size: 1.5 }, { size: 101 }, { size: '10' }, { size: null }, { size: Number.NaN }]) {
       expect(attachmentRowShapeOk({ ...row, ...bad }, 100), JSON.stringify(bad)).toBe(false);
     }
+  });
+
+  it('the pending mark is a declared field of the parts and the reference that carry it: set while a file is not here, gone once it is checked', () => {
+    // Written with the declared types and no cast: `pending` is only ever `true`, on a user's image or file part and on a tool image reference.
+    const image: Part = { type: 'image', attachmentId: 'img', mime: 'image/png', pending: true };
+    const file: Part = { type: 'file', attachmentId: 'doc', mime: 'application/pdf', filename: 'a.pdf', pending: true };
+    const held: ToolImageRef = { type: 'image', attachmentId: 'shot', mimeType: 'image/png', pending: true };
+    const message = (parts: Part[]): CanonMessage => ({ id: 'm', chatId: 'c', parentId: null, role: 'user', parts, status: 'complete', error: null, producedBy: null, createdAt: 0 });
+    const plain: Part[] = [{ type: 'image', attachmentId: 'img', mime: 'image/png' }, { type: 'file', attachmentId: 'doc', mime: 'application/pdf', filename: 'a.pdf' }];
+
+    // A user's parts: marked while the file is not here, the mark removed when the check passes, a note when it fails.
+    expect(bindHistoryAttachments([message(plain)], () => 'pending')[0]!.parts).toEqual([image, file]);
+    const verified = bindHistoryAttachments([message([image, file])], () => true)[0]!.parts;
+    expect(verified).toEqual(plain);
+    for (const part of verified) expect(part.type === 'image' || part.type === 'file' ? part.pending : 'other').toBeUndefined();
+    expect(bindHistoryAttachments([message([image])], () => false)[0]!.parts).toEqual([{ type: 'text', text: "[attachment omitted: it doesn't belong to this chat]" }]);
+
+    // A tool's image reference: the same three outcomes, and a read ('drop') never shows a held one as an image.
+    const result = (parts: Part[]): unknown[] => (parts[0] as Extract<Part, { type: 'tool-result' }>).result as unknown[];
+    const part = (items: unknown[]): Part[] => [{ type: 'tool-result', id: 'k', name: 'computer', result: items, isError: false }];
+    const unmarked: ToolImageRef = { type: 'image', attachmentId: 'shot', mimeType: 'image/png' };
+    expect(result(bindToolImageParts(part([unmarked]), 'c', 'm', () => null, 'hold'))).toEqual([held]);
+    expect(result(bindToolImageParts(part([held]), 'c', 'm', () => null, 'drop'))).toEqual([{ type: 'text', text: TOOL_IMAGE_NOT_BOUND }]);
+    expect(result(bindToolImageParts(part([held]), 'c', 'm', () => ({ chatId: 'c', messageId: 'm', mime: 'image/png' }), 'hold'))).toEqual([unmarked]);
+    expect(isToolImageRef(held)).toBe(true);
   });
 
   it('bindToolImageParts keeps only what TurnRunner mints and at most 50 of it', () => {
