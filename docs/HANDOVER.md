@@ -342,6 +342,29 @@ Ollama instance.
   `toPublicAttachment()` strips it before every `c.json()` call in that
   route; it's still used internally (loading the blob to serve `/content`),
   just never sent to the client.
+- **Office files and files as text (Deck #928).** Uploads of .docx/.docm,
+  .xlsx/.xlsm and .pptx/.pptm (by MIME type or extension; the main part in
+  the ZIP decides what it really is) are read into `extracted_text` by
+  Grunt's own extractor (`server/src/office/`: the claude.ai import's ZIP
+  reader plus a small XML scanner, no new dependencies). Word gives headings,
+  lists and tables as Markdown; Excel gives each sheet as CSV plus its
+  formulas with cached values; PowerPoint gives each slide's text, tables
+  and notes. A part over 32 MB is skipped with a note, reading stops at
+  64 MB of parts or 100,000 characters, and a DOCTYPE is refused. A part is
+  read once however often (and in whatever case) it's named, and every read
+  is charged to the 64 MB; the skip notes are deduplicated and capped. The
+  scanner and the three readers are linear in the size of a hostile part and
+  stop appending at the character cap (a paragraph, cell or table is never
+  held past it); the hostile cases are tests with time bounds. A
+  near-cap hostile part can still hold the upload request for a few seconds
+  (the scanner runs at about 6 MB/s). `.txt .tsv .json .log` and
+  `application/json` are plain text now too. Every attached file that isn't
+  a PDF reaches the model as that text, fenced as `<attached-file
+  name="…">`, for every engine (`TurnRunner.filesForModel`); API models
+  still get PDFs as PDFs, Claude Code gets their text. A file with no text
+  becomes a placeholder and a notice on the reply. Attachments uploaded
+  before this change have no text and get the placeholder: attach them
+  again. Not read: headers, footers, footnotes, comments, charts, masters.
 
 The review for this merge found two Criticals in the first cut (the
 sent-attachment delete guard was never actually armed in production; the
@@ -649,6 +672,38 @@ the check and the open gets the same question). A code artifact's file
 extension comes from a fixed list of languages, else `.txt`, so a download
 is never a `.bat` or `.hta`. The web must never import
 `@grunt/core/domain/artifacts.js`: it pulls in `node:crypto`. Schemas 16 and 17.
+
+Office artifacts (`document` Markdown, `spreadsheet` and `presentation`
+JSON) are checked by `core/domain/office-spec.ts` when the tool or your edit
+stores them, and checked again when the file is made, since a synced version
+was never checked. A document is bounded too: 120,000 characters, 6,000
+lines, tables of 1,000 rows and 10,000 cells, indents of 24 columns, quotes 8
+deep and 10,000 formatting marks outside code. The checks are early, clear
+errors for the model; they aren't what keeps a hostile document harmless. The
+.docx/.xlsx/.pptx is made only on Download (`GET
+…/versions/:versionId/file`: `application/octet-stream`, `attachment`,
+`nosniff`, `default-src 'none'; sandbox`) or Save to workspace (unchanged
+containment and `openVerified`), and always in a `worker_threads` Worker
+(`office/render.ts`, `render-worker.ts`): 512 MB of heap, a 20 s wall-clock
+limit, at most two at once, and any failure (a writer's, the limit's, running
+out of memory) is a 422 with a message. The bundle has a second entry for it,
+`dist-bundle/server/render-worker.js`, which must sit beside `cli.js`. No
+writer is given a path or URL to fetch: no images, no pptx links or media,
+docx links only for http, https and mailto, which are text in the file.
+Formulas are an allowlist, not a denylist: only Excel's built-in worksheet
+functions (about 500, each with the file prefix Excel wants, `_xlfn.` or
+`_xlfn._xlws.`) pass a fail-closed tokenizer, and WEBSERVICE, FILTERXML,
+IMAGE, HYPERLINK, RTD, CALL, REGISTER, REGISTER.ID, EXEC, STOCKHISTORY,
+TRANSLATE, DETECTLANGUAGE, COPILOT, INFO, CELL and INDIRECT are named and
+refused. Bare names, `[` (other workbooks, tables), `|` (DDE), 3-D
+references, control characters, `@` and the `#` spill operator are refused;
+LET, LAMBDA, its helpers, GROUPBY and PIVOTBY aren't supported in phase 1.
+The text that is checked is the text that is written: `formulaForFile` gives
+the exact `<f>` content, and the renderer rewrites each `<f>` from it because
+the library alters some characters (the .xlsx test reads it back and compares).
+Formulas aren't calculated by Grunt; the workbook asks Excel to calculate on
+open. An attached file's text is the user's, fenced, and may carry
+instructions the model follows: the approval gate is unchanged.
 
 **Recall asks once per chat before it reads other chats** (spec
 2026-10-09-recall-design). The `recall` tool searches past chats and projects
@@ -1017,6 +1072,31 @@ this on startup.
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
+- **Office files (Deck #928) have not been opened in Office.** Nothing here
+  was checked in Word, Excel or PowerPoint; the tests read the files back as
+  XML. By hand, once: ask a Claude Code profile and an API profile for a
+  one-page memo, a budget with a formula on a second sheet that refers to the
+  first, and a five-slide deck; download each and open it.
+  - Excel: no repair prompt; formulas show values, not `#NAME?` or `#REF!`,
+    including newer functions (XLOOKUP, FILTER, SORT and the ten whose
+    `_xlfn.` prefix was set from memory, not Microsoft's list: XMATCH,
+    VALUETOTEXT, ARRAYTOTEXT, PERCENTOF, TRIMRANGE, REGEXTEST, REGEXEXTRACT,
+    REGEXREPLACE, ENCODEURL, DBCS); a cross-sheet reference; an unquoted
+    non-ASCII sheet name (`Données!A1`). Dynamic arrays are written without
+    spill metadata, so FILTER/SORT/SEQUENCE may show as `@FILTER` and return
+    one value.
+  - Word: Heading 1/2 are Word's own styles; numbered lists restart; tables
+    and links look right.
+  - PowerPoint: 16:9; slide numbers (none on title slides); notes; a table of
+    20 or more rows (the layout sets no row height, so it may run off the
+    slide); section slide colours.
+  - Attach a real Word file, Excel workbook (with dates and formulas) and
+    deck on each profile and ask questions only their contents answer.
+  - Known limits meanwhile: no charts or images in made files, no templates,
+    no .doc/.xls/.ppt or OpenDocument, no previews of Office files already
+    in the workspace, no argument-count check on formulas (`=ROUND(1)` is
+    accepted and may make Excel complain), and a hostile near-cap part in an
+    uploaded file can hold the upload request for a few seconds.
 
 ## Deviations from the v2 spec and plan
 
@@ -1034,6 +1114,12 @@ this on startup.
 | `GET /fs/dirs` forwarded with `?node=` | Never mounted on the peer listener | It lists directories anywhere on the machine; see What is NOT built |
 | `WorkspaceStatus.hint.nodeName` | `hint.nodeId` | The UI names machines from the paired list; the server needn't |
 | Task 40: try a Node SEA first, else ship a pinned `node` | Ships the build machine's own `node.exe` beside an esbuild bundle (`packages/server/scripts/bundle.mjs`), with the Claude Agent SDK, its native Claude Code runtime and `unpdf` copied beside the bundle rather than bundled | The Agent SDK starts a 237 MB per-platform native runtime and unpdf loads PDF.js from its own folder; neither survives bundling or a SEA. Shipping the node that ran the tests avoids a download and checksum step for now; a pinned, CI-downloaded node comes with the release workflow |
+| Office files (Deck #928): the server bundle gains the writers | `docx` 9.8.1, `write-excel-file` 4.1.1, `pptxgenjs` 4.0.1 and the mdast/GFM parser are bundled, not copied beside it. `cli.js` is 5.59 MB and the new `render-worker.js` 1.93 MB: 7.51 MB together, up from 4.59 MB | The writers are plain JS and bundle cleanly. `npm audit` reports `image-size` (high) through `pptxgenjs`: the ES build Grunt bundles never imports it and Grunt never passes images. Don't run `npm audit fix --force` (it would also move `ai` to v7). `bundle:smoke` makes one file of each kind through the bundle |
+| Spec: a spreadsheet formula check refuses a list of named functions | An allowlist of Excel's built-in worksheet functions behind a fail-closed tokenizer, with a short list refused by name; `formulaForFile` is the one source of the text written | A security review showed the denylist incomplete (STOCKHISTORY, TRANSLATE, INFO, CELL, INDIRECT...) and bypassable by spacing, prefixes and LET/LAMBDA aliases; what was checked has to be exactly what's written. It refuses some valid workbooks (INDIRECT, CELL, INFO, LET, LAMBDA, named ranges, 3-D references, `@`, `#`); the ~500-entry list could also miss a function |
+| Spec: a document has no checks beyond the 1 MB cap | Limits on characters, lines, table rows and cells, indent, quote depth and formatting marks | The Markdown parser is super-linear on some shapes (200 KB of `**a**` took about 2 minutes). The limits are early, clear errors; the Worker is what actually bounds it |
+| Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
+| The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
+| Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
 
 ## Deviations from the original spec
 
