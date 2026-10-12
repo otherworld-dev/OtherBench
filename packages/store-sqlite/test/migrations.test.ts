@@ -150,6 +150,22 @@ describe('runMigrations', () => {
     }
   });
 
+  it('chat-plan-mode adds chat.plan_mode, with every existing chat off', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('chat-plan-mode'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Mock', 'c1', 'mock')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT plan_mode FROM chat WHERE id = 'legacy'`).get()).toEqual({ plan_mode: 0 });
+    } finally {
+      db.close();
+    }
+  });
+
   it('extra-folders gives every existing chat and project an empty folder list', () => {
     const folders = MIGRATIONS.find((m) => m.name.endsWith('extra-folders'));
     expect(folders).toBeDefined();

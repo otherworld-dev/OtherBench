@@ -78,6 +78,13 @@ export interface Chat {
    */
   autoMode: boolean;
   /**
+   * Plan mode (spec 2026-10-12-thread-cards-design §4): every new message
+   * plans first; tools that change things are refused until the user approves
+   * the reply's plan. Read fresh by TurnRunner on every reply. Repositories
+   * always fill it (false by default); optional only so older objects type-check.
+   */
+  planMode?: boolean;
+  /**
    * Claude Code's effort for this chat's turns, chosen in the chat window;
    * absent or null follows the user's Claude Code settings. Read fresh by
    * TurnRunner on every turn, so a change applies from the next message.

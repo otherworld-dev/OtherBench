@@ -304,6 +304,16 @@ export function runStoreContract(
       expect(store.chats.get('chat-b')!.autoMode).toBe(true);
     });
 
+    it('chats: planMode defaults to false and round-trips through create and update', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).planMode).toBe(false);
+      store.chats.update('chat-a', { planMode: true });
+      expect(store.chats.get('chat-a')!.planMode).toBe(true);
+      expect(store.chats.list().find((c) => c.id === 'chat-a')!.planMode).toBe(true);
+      store.chats.create(makeChatInput({ id: 'chat-b', profileId, planMode: true }));
+      expect(store.chats.get('chat-b')!.planMode).toBe(true);
+    });
+
     it('transaction: returns what fn returns and keeps its writes; a nested one just runs', () => {
       const { profileId } = seedProfile(store, 'profile-a');
       const result = store.transaction(() => {

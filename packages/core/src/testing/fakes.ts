@@ -573,6 +573,7 @@ class InMemoryChatRepo implements ChatRepo {
       workspace: fields.workspace ?? null,
       runsOn: c.runsOn ?? this.selfNodeId,
       autoMode: c.autoMode ?? false,
+      planMode: c.planMode ?? false,
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,

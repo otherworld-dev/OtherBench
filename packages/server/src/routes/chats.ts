@@ -28,6 +28,7 @@ interface ChatBody {
   projectPinned?: unknown;
   archivedAt?: unknown;
   autoMode?: unknown;
+  planMode?: unknown;
   effort?: unknown;
   folders?: unknown;
   projectId?: unknown;
@@ -37,7 +38,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -177,6 +178,7 @@ export function chatsRoutes(container: Container): Hono {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
+    if (body.planMode !== undefined) patch.planMode = optionalBoolean(body.planMode, 'planMode', false);
     if (body.effort !== undefined) {
       if (body.effort !== null && !isClaudeEffort(body.effort)) {
         throw new HTTPException(400, { message: `"effort" must be null or one of ${CLAUDE_EFFORTS.join(', ')}.` });

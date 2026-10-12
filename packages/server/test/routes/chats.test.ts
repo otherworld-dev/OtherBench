@@ -318,6 +318,21 @@ describe('chats CRUD', () => {
     expect((await json(off))['autoMode']).toBe(false);
   });
 
+  it('turns plan mode on and off via PATCH planMode, without moving the chat in the list, and refuses a non-boolean', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    expect(created['planMode']).toBe(false);
+    const before = container.store.chats.get(id)!.updatedAt;
+    const on = await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planMode: true }) });
+    expect(on.status).toBe(200);
+    const onBody = await json(on);
+    expect(onBody['planMode']).toBe(true);
+    expect(onBody['updatedAt']).toBe(before);
+    const bad = await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planMode: 'yes' }) });
+    expect(bad.status).toBe(400);
+    expect(container.store.chats.get(id)!.planMode).toBe(true);
+  });
+
   it('rejects a non-boolean autoMode with 400 and leaves the chat unchanged', async () => {
     const created = await createChat();
     const id = created['id'] as string;
