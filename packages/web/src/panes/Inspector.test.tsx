@@ -557,6 +557,15 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByTestId('grant-g1')).toBeInTheDocument();
   });
 
+  it('shows the site a browser grant is for', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g4', chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await within(grantsSection()).findByTestId('grant-g4');
+    expect(within(grantsSection()).getByText(/example\.com/)).toBeInTheDocument();
+  });
+
   it('shows the pinned command for a commandExact grant (the default shape for an "Always allow" shell grant)', async () => {
     mockedGrantsList.mockResolvedValue([
       { id: 'g3', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandExact: 'npm test' }, expiresAt: null },

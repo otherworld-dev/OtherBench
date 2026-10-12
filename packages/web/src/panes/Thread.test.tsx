@@ -7,7 +7,7 @@ import { useGruntStore } from '../state/store.js';
 import { Thread } from './Thread.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
 
-vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: () => <aside aria-label="Viewer" /> }));
+vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: ({ browserUsed }: { browserUsed?: boolean }) => <aside aria-label="Viewer" data-browser-used={String(browserUsed)} /> }));
 
 vi.mock('../state/api.js', () => ({
   api: {
@@ -123,6 +123,18 @@ describe('Thread', () => {
     expect(viewerFor(useViewerStore.getState().viewers, 'chat-1').open).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Viewer' }));
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+  });
+
+  it("tells the viewer the model used the browser only from this chat's own messages", () => {
+    useViewerStore.setState({ viewers: {} });
+    useViewerStore.getState().setOpen('chat-1', true);
+    const browserCall = (id: string, chatId: string) =>
+      ({ id, chatId, parentId: null, role: 'assistant', parts: [{ type: 'tool-call', id: `t-${id}`, name: 'browser', args: {} }], status: 'complete', error: null, producedBy: null, createdAt: 1 }) as unknown as CanonMessage;
+    useGruntStore.setState({ chats: [makeChat(), makeChat({ id: 'chat-2' })], messages: { other: browserCall('other', 'chat-2') } });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByRole('complementary', { name: 'Viewer' })).toHaveAttribute('data-browser-used', 'false');
+    act(() => useGruntStore.setState((s) => ({ messages: { ...s.messages, mine: browserCall('mine', 'chat-1') } })));
+    expect(screen.getByRole('complementary', { name: 'Viewer' })).toHaveAttribute('data-browser-used', 'true');
   });
 
   // CRITICAL reproduction (task 19/20 brief): Thread must scope tree

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Gate } from './approval.js';
+import type { ApprovalTickets } from './tickets.js';
 
 /** How long a Claude Code process with no reply in progress stays alive for the next message. */
 export const LIVE_IDLE_MS = 30 * 60_000;
@@ -49,6 +50,8 @@ export interface TurnBinding {
   plan?: (args: unknown) => Promise<unknown>;
   /** Runs a relayed MCP tool's (already approved) call for this reply, with the reply's tool context. */
   relay?: (spec: ToolSpec, args: unknown) => Promise<unknown>;
+  /** This reply's approval tickets for relayed calls with `describeCall` (tickets.ts); cleared when the reply ends. */
+  tickets?: ApprovalTickets;
 }
 
 /** Which of Grunt's own tools a process's server carries; fixed when it starts. */

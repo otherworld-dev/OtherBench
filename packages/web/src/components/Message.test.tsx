@@ -211,6 +211,36 @@ describe('Message', () => {
       expect(screen.getAllByTestId('sandbox-tag')).toHaveLength(1);
     });
 
+    it('shows a browser call by what it does, and its result by title and address with the snapshot folded away', () => {
+      const parts = [
+        { type: 'tool-call' as const, id: 't1', name: 'browser', args: { command: 'open', url: 'https://example.com/' } },
+        {
+          type: 'tool-result' as const,
+          id: 't1',
+          name: 'browser',
+          result: JSON.stringify({ about: 'x', url: 'https://example.com/', title: 'Example\u202e Domain', snapshot: '- heading "Example\u200b Domain" [ref=e1]' }),
+          isError: false,
+        },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByText('browser: open https://example.com/', { exact: false })).toBeInTheDocument();
+      // The page's title and address each sit in a <bdi>: their direction stays their own.
+      expect(screen.getByText('Example Domain').tagName).toBe('BDI');
+      expect(screen.getByText('https://example.com/').tagName).toBe('BDI');
+      const snapshot = screen.getByText('Page snapshot').closest('details')!;
+      expect(snapshot).not.toHaveAttribute('open');
+      expect(snapshot).toHaveTextContent('- heading "Example Domain" [ref=e1]');
+    });
+
+    it('shows a failed browser call as the ordinary error block', () => {
+      const parts = [
+        { type: 'tool-call' as const, id: 't1', name: 'browser', args: { command: 'snapshot' } },
+        { type: 'tool-result' as const, id: 't1', name: 'browser', result: 'No page is open: use open first.', isError: true },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByText('No page is open: use open first.')).toBeInTheDocument();
+    });
+
     it('prefixes the summary with a warning when any result is an error', () => {
       render(<Message message={base({ parts: [call('1', 'Bash'), result('1', 'Bash', true)] })} />);
       expect(screen.getByText('⚠ Used 1 tool: Bash')).toBeInTheDocument();

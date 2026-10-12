@@ -529,8 +529,13 @@ export interface Grant {
    * - `commandExact`: the command must equal this string exactly (modulo
    *   surrounding whitespace). What a `'chat'`-scope shell approval is
    *   stored as.
-   * - `host`: a `sandbox_network` grant's host (exact, case-insensitive, any
-   *   port). Every network grant carries one; one without never matches.
+   * - `host`: one host, for a `sandbox_network` grant (`source: 'network'`)
+   *   or a browser grant (`source: 'browser'`, spec
+   *   2026-10-12-model-browser-design): exact on the canonical spelling (so
+   *   case-insensitive), any port, never a subdomain. Every network and
+   *   browser grant carries one; one without never matches. The grant's
+   *   source is part of the match: a browser grant never covers the sandbox's
+   *   network, and a network grant never covers the browser.
    *
    * - `live`: a live artifact's call (spec 2026-10-12-live-artifacts): only
    *   `PermissionBroker.grantLive` makes one, only a live call

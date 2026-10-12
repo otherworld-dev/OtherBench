@@ -81,6 +81,32 @@ describe('createGate with a relayed MCP tool', () => {
   });
 });
 
+describe('createGate approval tickets (onApproved)', () => {
+  const described: ToolSpec = { name: 'browser', description: 'b', parameters: { type: 'object' }, risk: 'mutate', source: 'browser', describeCall: async (a) => ({ args: a }), execute: async () => undefined };
+  const plain: ToolSpec = { ...described, name: 'mcp__s__t', source: 'mcp' };
+  delete (plain as { describeCall?: unknown }).describeCall;
+
+  it('hands onApproved the raw input and the described args for an allowed call of a spec with describeCall', async () => {
+    const onApproved = vi.fn();
+    const requestApproval = vi.fn(async (..._a: unknown[]) => ({ allowed: true as const, grantedBy: 'ask:once', args: { command: 'open', host: 'example.com' } }));
+    const gate = createGate({ approvals: { requestApproval }, policy, ctx: ctx(), onApproved });
+    const input = { command: 'open', url: 'example.com' };
+    expect(await gate('mcp__grunt_x__browser', input, undefined, { own: { relay: described } })).toEqual({ allow: true });
+    expect(onApproved).toHaveBeenCalledWith(described, input, { command: 'open', host: 'example.com' });
+  });
+
+  it('keeps no ticket for a denied call, a spec without describeCall, or an outcome without args', async () => {
+    const onApproved = vi.fn();
+    const deny = createGate({ approvals: { requestApproval: vi.fn(async () => ({ allowed: false as const, reason: 'no' })) }, policy, ctx: ctx(), onApproved });
+    expect(await deny('mcp__grunt_x__browser', {}, undefined, { own: { relay: described } })).toEqual({ allow: false, reason: 'no' });
+    const allow = createGate({ approvals: { requestApproval: vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy', args: { a: 1 } })) }, policy, ctx: ctx(), onApproved });
+    await allow('mcp__grunt_x__s__t', {}, undefined, { own: { relay: plain } });
+    const noArgs = createGate({ approvals: { requestApproval: vi.fn(async () => ({ allowed: true as const, grantedBy: 'policy' })) }, policy, ctx: ctx(), onApproved });
+    await noArgs('mcp__grunt_x__browser', {}, undefined, { own: { relay: described } });
+    expect(onApproved).not.toHaveBeenCalled();
+  });
+});
+
 describe('createGate', () => {
   it('sends a classified agent ToolSpec with normalised args to requestApproval', async () => {
     const requestApproval = vi.fn(async (_t: ToolSpec) => ({ allowed: true as const, grantedBy: 'ask:once' }));

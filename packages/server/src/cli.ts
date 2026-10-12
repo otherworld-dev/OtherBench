@@ -211,7 +211,7 @@ export class AnnounceWithoutTokenError extends Error {
 }
 
 export interface ServeDeps {
-  createContainer: (opts: { dbPath: string; secretsPath: string; peerPort?: number; peerHosts?: string[]; serverPort?: () => number | null }) => Promise<Container>;
+  createContainer: (opts: { dbPath: string; secretsPath: string; apiPort?: number; peerPort?: number; peerHosts?: string[]; serverPort?: () => number | null }) => Promise<Container>;
   createApp: typeof createApp;
   serve: typeof nodeServe;
   /** Where the announce line goes. Defaults to `process.stdout`. */
@@ -279,6 +279,7 @@ export async function runServe(
   const container = await buildContainer({
     dbPath: options.dbPath,
     secretsPath,
+    apiPort: options.port,
     ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
     peerHosts: options.peerHosts,
     serverPort: () => (boundPort > 0 ? boundPort : null),

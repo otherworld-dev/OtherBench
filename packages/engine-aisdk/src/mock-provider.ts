@@ -177,6 +177,32 @@ function isToolErrorResult(result: unknown): boolean {
 }
 
 /**
+ * The first named heading in an accessibility snapshot. A line is `- heading "Title" [level=1] [ref=e1]`, and Playwright
+ * wraps the whole key in YAML single quotes (apostrophes doubled) when it holds something YAML would misread, e.g.
+ * `- 'heading "Q: why?" [level=2] [ref=e8]'`. The name inside is JSON-quoted. Only a line that starts with the heading
+ * counts, so page text that merely says `heading "x"` is never taken for one. Local to the mock on purpose.
+ */
+function firstHeading(snapshot: string): string | null {
+  for (const line of snapshot.split('\n')) {
+    let key = line.trim().replace(/^- /, '');
+    if (key.startsWith("'")) {
+      const quoted = /^'((?:[^']|'')*)'(?=\s*(?::|$))/.exec(key);
+      if (!quoted) continue;
+      key = quoted[1]!.replace(/''/g, "'");
+    }
+    const name = /^heading\s+("(?:[^"\\]|\\.)*")/.exec(key);
+    if (!name) continue;
+    try {
+      const text: unknown = JSON.parse(name[1]!);
+      if (typeof text === 'string' && text.trim() !== '') return text;
+    } catch {
+      // not valid JSON: not a name we can read, try the next line
+    }
+  }
+  return null;
+}
+
+/**
  * A keyless `ChatEngine` whose behaviour is driven entirely by markers in
  * the latest user message's text, so it can be steered by hand to exercise
  * the whole app -- streaming, tool calls, slow connections, long replies,
@@ -202,7 +228,9 @@ function isToolErrorResult(result: unknown): boolean {
  * rest of that line through the real tool when offered, then the titles of
  * the chats it found. `#run <command>` -> a `run_command` call with the
  * rest of that line through the real tool when offered, then its output
- * ("I ran it in the sandbox: ..." for a sandboxed one). `#tool` -> a
+ * ("I ran it in the sandbox: ..." for a sandboxed one). `#browser <url>` ->
+ * a `browser` `open` of that address through the real tool when offered,
+ * then the page's first heading. `#tool` -> a
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
@@ -292,6 +320,12 @@ export class MockChatEngine implements ChatEngine {
     const run = /#run[ \t]+([^\r\n]+)/.exec(prompt);
     if (run) {
       yield* this.streamRunTurn(req, run[1]!.trim(), tokensIn);
+      return;
+    }
+
+    const browse = /#browser[ \t]+(\S+)/.exec(prompt);
+    if (browse) {
+      yield* this.streamBrowserTurn(req, browse[1]!, tokensIn);
       return;
     }
 
@@ -544,6 +578,33 @@ export class MockChatEngine implements ChatEngine {
     const r = result as { output?: unknown; sandbox?: unknown };
     const output = typeof r.output === 'string' ? r.output.trim() : '';
     const answer = isError ? `The command didn't run: ${JSON.stringify(result)}` : `I ran it${r.sandbox === true ? ' in the sandbox' : ''}: ${output}`;
+    for (const chunk of splitIntoChunks(answer, 6)) {
+      if (req.signal.aborted) return;
+      await this.sleep(30, req.signal);
+      yield { type: 'text-delta', text: chunk };
+    }
+    yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /** `#browser <url>` (spec 2026-10-12-model-browser-design §8): one `open` through the real tool when offered, then the page's first heading. */
+  private async *streamBrowserTurn(req: EngineRequest, url: string, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const callId = `mock-browser-${randomUUID()}`;
+    const args = { command: 'open', url };
+    if (req.signal.aborted) return;
+    yield { type: 'tool-call', id: callId, name: 'browser', args };
+    const tool = req.tools.find((t) => t.name === 'browser');
+    // toolContextFor, like every other tool branch: the browser must see the reply's plan gate, the unattended flag and a sub-agent's tag.
+    const result = tool ? await tool.execute(args, toolContextFor(req, req.signal, callId)) : { error: true, code: 'unavailable', message: 'No browser tool was offered.' };
+    if (req.signal.aborted) return;
+    const isError = isToolErrorResult(result);
+    yield { type: 'tool-result', id: callId, name: 'browser', result: JSON.stringify(result), isError };
+    const snapshot = (result as { snapshot?: unknown }).snapshot;
+    const heading = !isError && typeof snapshot === 'string' ? firstHeading(snapshot) : null;
+    const answer = isError
+      ? `The browser didn't work: ${String((result as { message?: unknown }).message ?? JSON.stringify(result))}`
+      : heading !== null
+        ? `The page says: ${heading}.`
+        : 'The page has no heading.';
     for (const chunk of splitIntoChunks(answer, 6)) {
       if (req.signal.aborted) return;
       await this.sleep(30, req.signal);

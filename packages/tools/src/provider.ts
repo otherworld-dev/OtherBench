@@ -26,6 +26,8 @@ import type { Sandbox } from '@grunt/core/ports/sandbox.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
 import { runsShellInSandbox, type ToolPolicy } from '@grunt/core/types/config.js';
+import type { BrowserManager } from './browser/manager.js';
+import { browserTool } from './browser/tool.js';
 import { fsTools } from './fs-tools.js';
 import { LiveCallCache, LiveCallLimiter, LiveRefusalAudit, shapeLiveResult } from './live-calls.js';
 import type { McpCallResult, McpToolDescriptor } from './mcp/client.js';
@@ -44,6 +46,8 @@ export interface GruntToolProviderOptions {
   sandbox?: Sandbox;
   /** How long a live call may take (spec 2026-10-12-live-artifacts); 30 s. Tests shorten it. */
   liveTimeoutMs?: number;
+  /** The model's browser (spec 2026-10-12-model-browser-design). Without it, no profile gets the browser tool. */
+  browser?: BrowserManager;
 }
 
 const LIVE_TIMEOUT_MS = 30_000;
@@ -119,6 +123,23 @@ function redact(value: unknown, depth = 0): unknown {
   }
   return value;
 }
+
+/**
+ * The arguments as the audit keeps them. For the browser, the text typed is
+ * redacted like file content: it may be something the user asked the model
+ * to type (spec 2026-10-12-model-browser-design §3).
+ */
+function auditArgs(tool: ToolSpec, args: unknown): unknown {
+  return tool.source === 'browser' ? withoutTypedText(args) : args;
+}
+
+function withoutTypedText(args: unknown): unknown {
+  if (typeof args !== 'object' || args === null || !('text' in args)) return args;
+  return { ...(args as Record<string, unknown>), text: '[redacted]' };
+}
+
+/** Claude Code's name for the browser relayed on its per-process Grunt server (`mcp__grunt_<hex>__browser`), or the tool's own name. */
+const RELAYED_BROWSER_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?browser$/;
 
 function summarizeResult(result: unknown): string {
   if (result && typeof result === 'object' && (result as { error?: unknown }).error === true) {
@@ -205,6 +226,7 @@ export class GruntToolProvider implements ToolProvider {
   private readonly liveCache: LiveCallCache;
   private readonly liveLimiter: LiveCallLimiter;
   private readonly liveRefusals: LiveRefusalAudit;
+  private readonly browser: BrowserManager | null;
 
   constructor(
     private readonly store: Store,
@@ -221,6 +243,7 @@ export class GruntToolProvider implements ToolProvider {
     this.liveLimiter = new LiveCallLimiter(this.now);
     this.liveRefusals = new LiveRefusalAudit(this.now);
     this.asks = new UserAsks((event) => this.notify(event));
+    this.browser = options.browser ?? null;
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
     // knowing it): settle it as a denial, which also emits `resolved` so the
@@ -256,6 +279,8 @@ export class GruntToolProvider implements ToolProvider {
     raw.push(...threadTools((ctx, input) => this.askUser(ctx, input)));
     // Sub-agents (spec 2026-10-12-api-subagents-design): off unless the profile turns them on.
     if (policy.subagents === true) raw.push(subagentTool(this.store, policy));
+    // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
+    raw.push(...this.relayGruntTools(policy));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
@@ -264,23 +289,37 @@ export class GruntToolProvider implements ToolProvider {
   /**
    * Everything the Claude Code engine relays through its per-process Grunt
    * server for this policy, ungated (the engine's gate approves each call
-   * with the very same spec first): the allowlisted MCP servers' tools, and
-   * the sandboxed run_command when the shell runs in the sandbox and this
-   * Grunt has one (spec 2026-10-12-sandbox-design, "Claude Code"). Never the
-   * host run_command: a profile that wants the sandbox gets it or nothing.
+   * with the very same spec first): the allowlisted MCP servers' tools, the
+   * sandboxed run_command when the shell runs in the sandbox and this Grunt
+   * has one (spec 2026-10-12-sandbox-design, "Claude Code"), and Grunt's own
+   * relayed tools (`relayGruntTools`: the browser). Never the host
+   * run_command: a profile that wants the sandbox gets it or nothing.
    */
   relayTools(policy: ToolPolicy): ToolSpec[] {
     const shell = runsShellInSandbox(policy) && this.sandbox !== null ? [this.sandboxTool(policy)] : [];
-    return this.deduplicateNames([...shell, ...this.relayMcpTools(policy.mcpServerIds)]);
+    return this.deduplicateNames([...shell, ...this.relayGruntTools(policy), ...this.relayMcpTools(policy.mcpServerIds)]);
   }
 
   /**
    * Only the allowlisted MCP servers' tools, ungated and deduplicated: what a
    * live artifact's declaration may name (spec 2026-10-12-live-artifacts),
-   * and the MCP part of `relayTools`. Never the sandboxed run_command.
+   * and the MCP part of `relayTools`. Never the sandboxed run_command, and
+   * never the browser.
    */
   relayMcpTools(serverIds: string[]): ToolSpec[] {
     return serverIds.length === 0 ? [] : this.deduplicateNames(this.mcpToolSpecs(serverIds));
+  }
+
+  /**
+   * Grunt's own tools that describe their calls, ungated: today the browser,
+   * when the profile turns it on (spec 2026-10-12-model-browser-design). An
+   * API model gets them through `listTools`' gate; Claude Code gets them as
+   * part of `relayTools`, where its gate approves each call through
+   * `requestApproval` and the engine runs only the arguments it approved (an
+   * approval ticket).
+   */
+  relayGruntTools(policy: ToolPolicy): ToolSpec[] {
+    return policy.browser === true && this.browser ? [browserTool(this.browser, policy)] : [];
   }
 
   /** The sandboxed run_command for this policy; its network questions become sandbox_network cards. */
@@ -455,25 +494,39 @@ export class GruntToolProvider implements ToolProvider {
     if (ctx.signal.aborted) {
       const gone = cancelledAuth();
       if (!gone.ok) {
-        this.audit(ctx, tool.name, args, toolError(gone.code, gone.reason), 0, gone.grantedBy);
+        this.audit(ctx, tool.name, auditArgs(tool, args), toolError(gone.code, gone.reason), 0, gone.grantedBy);
         return { allowed: false, reason: gone.reason };
       }
     }
-    const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
+    // What the call is about, before the broker decides (describeCall).
+    const call = await this.described(tool, args, ctx);
+    if ('refuse' in call) {
+      this.audit(ctx, tool.name, auditArgs(tool, args), toolError('permission_denied', call.refuse), this.now() - startedAt, 'deny:policy');
+      return { allowed: false, reason: call.refuse };
+    }
+    // The turn ended while the call was being described: nobody is there to answer, and nothing may be approved.
+    if (ctx.signal.aborted) {
+      const gone = cancelledAuth();
+      if (!gone.ok) {
+        this.audit(ctx, tool.name, auditArgs(tool, call.args), toolError(gone.code, gone.reason), this.now() - startedAt, gone.grantedBy);
+        return { allowed: false, reason: gone.reason };
+      }
+    }
+    const decision = this.broker.decide(call.tool, call.args, policy, ctx);
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(call.tool, call.args)) {
       // Auto mode: Claude Code's classifier decides this call. No card, no
       // event and nothing stored -- the pending request is dropped unanswered.
       this.broker.discard(decision.request.id);
-      this.audit(ctx, tool.name, args, null, this.now() - startedAt, 'auto', 'delegated to Claude Code auto mode');
+      this.audit(ctx, tool.name, auditArgs(tool, call.args), null, this.now() - startedAt, 'auto', 'delegated to Claude Code auto mode');
       return { deferred: true };
     }
     const auth = await this.settle(decision, ctx);
     if (!auth.ok) {
-      this.audit(ctx, tool.name, args, toolError(auth.code, auth.reason), this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
+      this.audit(ctx, tool.name, auditArgs(tool, call.args), toolError(auth.code, auth.reason), this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
       return { allowed: false, reason: auth.reason };
     }
-    this.audit(ctx, tool.name, args, null, this.now() - startedAt, auth.grantedBy, 'delegated to Claude Code', auth.decidedOnNode);
-    return { allowed: true, grantedBy: auth.grantedBy };
+    this.audit(ctx, tool.name, auditArgs(tool, call.args), null, this.now() - startedAt, auth.grantedBy, 'delegated to Claude Code', auth.decidedOnNode);
+    return { allowed: true, grantedBy: auth.grantedBy, ...(tool.describeCall ? { args: call.args } : {}) };
   }
 
   /** Questions and plans for the user (spec 2026-10-12-thread-cards-design): raised on the same event channel as approval cards. */
@@ -488,7 +541,24 @@ export class GruntToolProvider implements ToolProvider {
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void {
     const text = reason.trim().length > 0 ? reason.trim() : 'Blocked by Claude Code auto mode.';
     // redact() truncates a long string exactly as it does audit args.
-    this.audit(ctx, toolName, args, null, 0, 'deny:auto', redact(text) as string);
+    // The relayed browser's typed text is redacted here too, like auditArgs does for the calls Grunt runs.
+    const audited = RELAYED_BROWSER_NAME.test(toolName) ? withoutTypedText(args) : args;
+    this.audit(ctx, toolName, audited, null, 0, 'deny:auto', redact(text) as string);
+  }
+
+  /**
+   * A call as the broker should see it (spec 2026-10-12-model-browser-design
+   * §3): `describeCall`'s arguments and risk when the spec has one. A throw
+   * is a refusal, never an unchecked call.
+   */
+  private async described(tool: ToolSpec, args: unknown, ctx: ToolContext): Promise<{ tool: ToolSpec; args: unknown } | { refuse: string }> {
+    if (!tool.describeCall) return { tool, args };
+    try {
+      const d = await tool.describeCall(args, ctx);
+      return 'refuse' in d ? { refuse: d.refuse } : { tool: { ...tool, risk: d.risk }, args: d.args };
+    } catch (err) {
+      return { refuse: `Grunt couldn't check this call: ${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
   liveStatus(req: LiveStatusRequest): LiveCallStatus[] {
@@ -657,16 +727,32 @@ export class GruntToolProvider implements ToolProvider {
       ...tool,
       execute: async (args: unknown, ctx: ToolContext): Promise<unknown> => {
         const startedAt = this.now();
+        let callArgs = args;
+        let auth: Authorization;
         // A call that arrives after its turn ended must not run, even when a
         // grant or policy would allow it.
-        const auth = ctx.signal.aborted ? cancelledAuth() : await this.authorize(tool, args, policy, ctx);
+        if (ctx.signal.aborted) {
+          auth = cancelledAuth();
+        } else {
+          // What the call is about, before the broker decides (describeCall).
+          const call = await this.described(tool, args, ctx);
+          if ('refuse' in call) {
+            const result = toolError('permission_denied', call.refuse);
+            this.audit(ctx, tool.name, auditArgs(tool, args), result, this.now() - startedAt, 'deny:policy');
+            return result;
+          }
+          callArgs = call.args;
+          // The turn may have ended while the call was being described: it must not run, even when a grant would allow it.
+          auth = ctx.signal.aborted ? cancelledAuth() : await this.authorize(call.tool, callArgs, policy, ctx);
+        }
         if (!auth.ok) {
           const result = toolError(auth.code, auth.reason);
-          this.audit(ctx, tool.name, args, result, this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
+          this.audit(ctx, tool.name, auditArgs(tool, callArgs), result, this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
           return result;
         }
-        const result = await tool.execute(args, ctx);
-        this.audit(ctx, tool.name, args, result, this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
+        // The tool runs with the described arguments, never the raw ones.
+        const result = await tool.execute(callArgs, ctx);
+        this.audit(ctx, tool.name, auditArgs(tool, callArgs), result, this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
         return result;
       },
     };

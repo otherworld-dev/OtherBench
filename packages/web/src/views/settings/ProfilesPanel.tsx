@@ -99,6 +99,9 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   }, [shell, shellRuns]);
   // Sub-agents (spec 2026-10-12-api-subagents-design): off unless turned on; API profiles only.
   const [subagents, setSubagents] = useState(profile?.toolPolicy.subagents ?? false);
+  // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
+  const [browser, setBrowser] = useState(profile?.toolPolicy.browser ?? false);
+  const [blockedSites, setBlockedSites] = useState((profile?.toolPolicy.browserBlockedHosts ?? []).join('\n'));
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
@@ -167,6 +170,16 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
         : profile?.toolPolicy.shellRuns !== undefined
           ? { shellRuns }
           : {};
+    // Sent only while Browser is on: with it off the box is hidden, and whatever it holds (a typo the server would
+    // refuse, unseen) stays out of the request. The server then keeps the profile's saved list as it is.
+    const blocked = browser
+      ? {
+          browserBlockedHosts: blockedSites
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
+        }
+      : {};
 
     const body: CreateProfileBody = {
       name: name.trim(),
@@ -177,7 +190,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, ...sandboxFields }
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, ...blocked, ...sandboxFields }
         : {
             fs,
             shell,
@@ -185,6 +198,8 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             mcpServerIds,
             artifacts,
             recall,
+            browser,
+            ...blocked,
             ...sandboxFields,
             ...(subagents || profile?.toolPolicy.subagents !== undefined ? { subagents } : {}),
           },
@@ -444,6 +459,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
               Sub-agents
             </label>
           )}
+          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title="The model's own browser, with no logins. Asks before each new website.">
+            <input type="checkbox" aria-label="Browser" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+            Browser
+          </label>
           {isClaudeCode && (
             <>
               <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
@@ -503,6 +522,24 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
                 )}
               </>
             )}
+          </div>
+        )}
+        {browser && (
+          <div className="mt-2 flex w-full flex-col gap-1 text-xs text-[var(--text)]">
+            <p className="text-[var(--text-muted)]">The model's own browser, with no logins. Asks before each new website.</p>
+            <label className="flex flex-col gap-1">
+              <span>
+                Blocked sites <span className="text-[var(--text-muted)]">(one per line; each also blocks its subdomains)</span>
+              </span>
+              <textarea
+                aria-label="Blocked sites"
+                rows={3}
+                value={blockedSites}
+                onChange={(e) => setBlockedSites(e.target.value)}
+                placeholder="example.com"
+                className="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1 font-mono text-xs text-[var(--text)]"
+              />
+            </label>
           </div>
         )}
       </div>

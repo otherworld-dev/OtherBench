@@ -1,4 +1,4 @@
-/** Something the viewer shows (Deck #826): a file from the chat's folders, or an artifact (Deck #896). */
+/** Something the viewer shows (Deck #826): a file from the chat's folders, an artifact (Deck #896), or the model's browser (spec 2026-10-12-model-browser-design). */
 export type ViewItem =
   | {
       kind: 'file';
@@ -12,10 +12,12 @@ export type ViewItem =
       title: string;
       /** A pinned version; absent = the current version on the chat's branch. */
       versionId?: string;
-    };
+    }
+  | { kind: 'browser' };
 
 /** A stable key for an item (history, React keys). */
 export function itemKey(item: ViewItem): string {
+  if (item.kind === 'browser') return 'browser';
   return item.kind === 'file' ? `file:${item.path}` : `artifact:${item.artifactId}:${item.versionId ?? ''}`;
 }
 
@@ -38,6 +40,7 @@ export function parseViewTab(id: string): { chatId: string; item: ViewItem } | n
     const value = JSON.parse(decodeURIComponent(id.slice(VIEW_TAB_PREFIX.length))) as { chatId?: unknown; item?: Record<string, unknown> | null };
     const item = value.item;
     if (typeof value.chatId !== 'string' || typeof item !== 'object' || item === null) return null;
+    if (item['kind'] === 'browser') return { chatId: value.chatId, item: { kind: 'browser' } };
     if (item['kind'] === 'file' && typeof item['path'] === 'string') return { chatId: value.chatId, item: { kind: 'file', path: item['path'] } };
     if (item['kind'] === 'artifact' && typeof item['artifactId'] === 'string' && typeof item['title'] === 'string' && (item['versionId'] === undefined || typeof item['versionId'] === 'string')) {
       const versionId = item['versionId'];
@@ -51,6 +54,7 @@ export function parseViewTab(id: string): { chatId: string; item: ViewItem } | n
 
 /** The item's file name (an artifact's title), for tabs and titles. */
 export function itemName(item: ViewItem): string {
+  if (item.kind === 'browser') return 'Browser';
   if (item.kind === 'artifact') return item.title;
   return item.path.split(/[\\/]/).filter(Boolean).pop() ?? item.path;
 }

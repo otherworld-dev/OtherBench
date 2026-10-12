@@ -20,8 +20,9 @@ import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
-import { buildRelay, currentRelayed, relayServerTool, type Relay } from './relay.js';
+import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
+import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
@@ -65,9 +66,12 @@ export interface ClaudeCodeEngineDeps {
   /**
    * What Grunt relays to Claude Code through its own server for this policy,
    * as an API model gets it but ungated (GruntToolProvider.relayTools): the
-   * allowlisted MCP servers' tools (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2)
-   * and the sandboxed run_command when the shell runs in the sandbox (spec
-   * 2026-10-12-sandbox-design). The gate approves each call first. Without it, no relay.
+   * allowlisted MCP servers' tools (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2),
+   * the sandboxed run_command when the shell runs in the sandbox (spec
+   * 2026-10-12-sandbox-design), and the browser when the profile turns it on
+   * (spec 2026-10-12-model-browser-design §4). The gate approves each call
+   * first, and a tool that describes its calls (the browser) runs only with
+   * the arguments the gate approved. Without it, no relay.
    */
   relayTools?: (policy: ToolPolicy) => ToolSpec[];
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
@@ -217,9 +221,10 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // process's Grunt server has each tool or not from its start, so the
     // switches are part of the process key.
     const { artifactTool, recallTool } = this.deps;
-    // The profile's MCP servers, and the sandboxed run_command when its shell
-    // runs in the sandbox, relayed through the same server (relay.ts). A clean
-    // chat has no folder for a command to run in, so it gets no run_command.
+    // The profile's MCP servers, the sandboxed run_command when its shell
+    // runs in the sandbox, and the browser when it is on, relayed through the
+    // same server (relay.ts). A clean chat has no folder for a command to run
+    // in, so it gets no run_command; it does get the browser, which needs none.
     const relayed = this.deps.relayTools ? this.deps.relayTools(profile.toolPolicy).filter((s) => !(clean && s.source === 'sandbox')) : [];
     const relay = buildRelay(relayed);
     const own: GruntServerSwitches = {
@@ -228,16 +233,27 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       plan: req.plan !== undefined && askUser !== undefined,
       relay: relay.hash,
     };
+    const tickets = new ApprovalTickets();
     const binding: TurnBinding = {
-      gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
+      gate: createGate({
+        approvals: this.deps.approvals,
+        policy: profile.toolPolicy,
+        ctx: gateCtx,
+        autoMode,
+        onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
+      }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
       ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: profile.toolPolicy.mcpServerIds }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
       ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
       // The current reply's spec for that tool, not the one the process started
-      // with (an edit to the sandbox allowlist applies without a new process),
-      // and only if it is the kind of tool the gate approved: see currentRelayed.
-      ...(relay.tools.size > 0 ? { relay: (approved: ToolSpec, args: unknown) => currentRelayed(relay, approved).execute(args, gateCtx) } : {}),
+      // with (an edit to the sandbox allowlist or the browser's blocked sites
+      // applies without a new process), and only if it is the kind of tool the
+      // gate approved: see currentRelayed, which fails closed (the browser
+      // branch's `?? spec` fallback to the old spec is not kept). A tool that
+      // describes its calls then runs only with its approval ticket: runRelayed.
+      ...(relay.tools.size > 0 ? { relay: async (approved: ToolSpec, args: unknown) => runRelayed(currentRelayed(relay, approved), args, gateCtx, tickets) } : {}),
+      tickets,
     };
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
@@ -307,6 +323,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
+      tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       // Only a cleanly finished reply leaves its process waiting for the next message.
       if (finished && !req.signal.aborted && !live.isClosed) this.pool.release(live);

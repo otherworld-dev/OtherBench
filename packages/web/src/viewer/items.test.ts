@@ -26,4 +26,11 @@ describe('viewer items', () => {
     expect(itemName({ kind: 'file', path: 'C:\\Work\\a.md' })).toBe('a.md');
     expect(itemName({ kind: 'file', path: 'src/b.ts' })).toBe('b.ts');
   });
+
+  it('round-trips the browser item, named Browser', () => {
+    const item = { kind: 'browser' as const };
+    expect(parseViewTab(viewTabId('c1', item))).toEqual({ chatId: 'c1', item });
+    expect(itemKey(item)).toBe('browser');
+    expect(itemName(item)).toBe('Browser');
+  });
 });

@@ -89,6 +89,14 @@ export interface ToolContext {
   subagent?: SubagentTag;
 }
 
+/**
+ * What `ToolSpec.describeCall` makes of a call before the broker decides
+ * (spec 2026-10-12-model-browser-design §1): the arguments the broker, the
+ * card, the audit and `execute` all see, and this call's risk; or a refusal,
+ * which ends the call with no card.
+ */
+export type DescribedCall = { args: Record<string, unknown>; risk: RiskClass } | { refuse: string };
+
 export interface ToolSpec {
   name: string;
   description: string;
@@ -105,6 +113,15 @@ export interface ToolSpec {
    * Undefined for built-in fs/shell tools, which have no server.
    */
   serverId?: string;
+  /**
+   * Works out what a call will act on before the broker decides. The provider
+   * calls it first (provider.ts `gate()` and `requestApproval()`); the broker
+   * then decides on `{ ...spec, risk }` with the described arguments, and
+   * `execute` receives those, never the raw ones. Specs without it are
+   * decided on their raw arguments, as before. The browser uses it to name
+   * the website a call touches; a `host` the model sent is thrown away.
+   */
+  describeCall?(args: unknown, ctx: ToolContext): Promise<DescribedCall>;
   execute(args: unknown, ctx: ToolContext): Promise<unknown>;
 }
 
@@ -160,7 +177,8 @@ export type ToolApprovalEvent =
 
 /** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
 export type ApprovalOutcome =
-  | { allowed: true; grantedBy: string }
+  /** `args`: the described arguments, when the spec has `describeCall` (the Claude Code gate keeps them as a ticket). */
+  | { allowed: true; grantedBy: string; args?: unknown }
   | { allowed: false; reason: string }
   | { deferred: true };
 

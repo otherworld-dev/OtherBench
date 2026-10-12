@@ -13,6 +13,7 @@ import { QuestionCard } from './QuestionCard.js';
 import { SubagentCard } from './SubagentCard.js';
 import { TodoChecklist } from './TodoChecklist.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
+import { browserCallLabel, browserPageOf, displayLines, oneLine } from '../viewer/browser.js';
 import { useViewer } from '../viewer/ViewerContext.js';
 
 function NoticeBlock({ text }: { text: string }): JSX.Element {
@@ -63,6 +64,14 @@ function ReasoningBlock({ text }: { text: string }): JSX.Element {
 function ToolCallBlock({ name, args }: { name: string; args: unknown }): JSX.Element {
   const viewer = useViewer();
   const path = viewer ? toolPath(name, args) : null;
+  // After the hook above, so the hooks run in the same order for every tool.
+  if (name === 'browser') {
+    return (
+      <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+        <span className="font-medium">🔧 browser: {browserCallLabel(args)}</span>
+      </div>
+    );
+  }
   return (
     <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <span className="font-medium">🔧 {name}</span>
@@ -77,6 +86,24 @@ function ToolCallBlock({ name, args }: { name: string; args: unknown }): JSX.Ele
 }
 
 function ToolResultBlock({ name, result, isError }: { name: string; result: unknown; isError: boolean }): JSX.Element {
+  const page = name === 'browser' && !isError ? browserPageOf(result) : null;
+  if (page) {
+    // Page-derived text: plain, sanitised, and the snapshot folded away (what the model saw is unchanged).
+    return (
+      <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+        <div className="font-medium">
+          ↳ <bdi>{oneLine(page.title) || 'Untitled page'}</bdi>
+        </div>
+        <div className="truncate font-mono text-[var(--text-muted)]">
+          <bdi>{oneLine(page.url)}</bdi>
+        </div>
+        <details className="mt-1">
+          <summary className="cursor-pointer text-[var(--text-muted)] select-none">Page snapshot</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap">{displayLines(page.snapshot)}</pre>
+        </details>
+      </div>
+    );
+  }
   return (
     <div className={`my-1 rounded border px-2 py-1 text-xs ${isError ? 'border-[var(--danger)]' : 'border-[var(--border)]'} bg-[var(--bg-sunken)]`}>
       <span className="font-medium">{isError ? '⚠️' : '↳'} {name} result</span>

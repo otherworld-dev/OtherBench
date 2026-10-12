@@ -8,6 +8,8 @@ vi.mock('../state/api.js', async (importOriginal) => ({
   api: { view: { open: vi.fn(), text: vi.fn() } },
 }));
 
+vi.mock('./BrowserView.js', () => ({ BrowserView: ({ chatId }: { chatId: string }) => <p>browser of {chatId}</p> }));
+
 import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened } from '../state/api.js';
 import { ItemView, languageOf } from './ItemView.js';
@@ -124,5 +126,10 @@ describe('ItemView, Markdown files', () => {
     expect(actions.openPath).toHaveBeenLastCalledWith('C:\\ws\\top.md');
     await user.click(screen.getByRole('link', { name: 'Site' }));
     expect(actions.openLink).toHaveBeenCalledWith('https://example.com', { external: false });
+  });
+
+  it("shows the chat's browser for the browser item", () => {
+    render(<ItemView chatId="c1" item={{ kind: 'browser' }} />);
+    expect(screen.getByText('browser of c1')).toBeInTheDocument();
   });
 });

@@ -1,7 +1,9 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
+import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
 import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
+import { oneLine, revealHidden } from '../viewer/browser.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -67,6 +69,12 @@ function deriveAlwaysConstraint(
   const network = networkTarget(request);
   if (network) return { host: network.host };
   const args = request.args as Record<string, unknown> | null;
+  // A browser grant is for the one site the card names (spec 2026-10-12-model-browser-design §6), by the same rule as
+  // the network's: exactly `{ host }`, the card's own, in its canonical spelling. The broker refuses anything else.
+  if (request.source === 'browser') {
+    const site = args && typeof args['host'] === 'string' ? args['host'] : null;
+    return site === null ? null : { host: normaliseHost(site) ?? site };
+  }
   if ((request.source === 'shell' || request.source === 'sandbox' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
     return allowAnyArgs ? { commandPrefix: args['command'] } : { commandExact: args['command'] };
   }
@@ -112,7 +120,17 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
   const [allowAnyArgs, setAllowAnyArgs] = useState(false);
   const isShellCommand = isShellCommandRequest(request);
   const network = networkTarget(request);
-  const labels = network ? { once: 'Once', chat: 'This chat', always: 'Always' } : { once: 'Allow once', chat: 'Allow for this chat', always: 'Always allow' };
+  // A browser card names the site (`args.host`, which the server takes from the page's committed address). Everything else
+  // it shows from the page (`target`, the address in the summary) is untrusted text, so it is shown as plain, labelled lines.
+  const browserArgs = request.source === 'browser' && request.args && typeof request.args === 'object' ? (request.args as Record<string, unknown>) : null;
+  const browserHost = browserArgs && typeof browserArgs['host'] === 'string' ? browserArgs['host'] : null;
+  const typedText = browserArgs && browserArgs['command'] === 'type' && typeof browserArgs['text'] === 'string' ? browserArgs['text'] : null;
+  const browserTarget = browserArgs ? oneLine(browserArgs['target']) : '';
+  const labels = network
+    ? { once: 'Once', chat: 'This chat', always: 'Always' }
+    : browserHost !== null
+      ? { once: 'Allow once', chat: 'Allow for this chat (this site)', always: `Always allow ${browserHost}` }
+      : { once: 'Allow once', chat: 'Allow for this chat', always: 'Always allow' };
 
   async function choose(choice: ApprovalChoice): Promise<void> {
     setPending(true);
@@ -149,6 +167,10 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
             Let the sandbox reach <strong>{network.host}</strong>
             {network.port !== null ? ` (port ${network.port})` : ''}?
           </span>
+        ) : browserHost !== null ? (
+          <span>
+            Let the model use <strong>{browserHost}</strong>?
+          </span>
         ) : (
           <span>
             Wants to run <strong>{request.toolName}</strong>
@@ -157,7 +179,25 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           </span>
         )}
       </div>
-      {!network && <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{request.summary}</p>}
+      {/* A network card's question already says it all. Every browser card's summary can carry the page's or the model's text (an address), whether or not a site was named. */}
+      {!network && (
+        <p data-testid="approval-summary" className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">
+          {browserArgs !== null ? <bdi>{oneLine(request.summary)}</bdi> : request.summary}
+        </p>
+      )}
+      {browserTarget !== '' && (
+        <p data-testid="approval-browser-target" className="text-xs text-[var(--text-muted)] break-all">
+          Element on the page: &ldquo;<bdi>{browserTarget}</bdi>&rdquo;
+        </p>
+      )}
+      {typedText !== null && (
+        <div className="text-xs">
+          <span className="text-[var(--text-muted)]">It will type:</span>
+          <pre data-testid="approval-typed-text" className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono">
+            {revealHidden(typedText)}
+          </pre>
+        </div>
+      )}
       {isShellCommand && (
         <div className="space-y-1">
           <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">

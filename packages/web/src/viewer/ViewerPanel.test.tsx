@@ -87,4 +87,12 @@ describe('ViewerPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Close viewer' }));
     expect(viewer().open).toBe(false);
   });
+
+  it('offers a Browser button once the model has used the browser in this chat, opening its live view', async () => {
+    const { rerender } = render(<ViewerPanel chat={chat} />);
+    expect(screen.queryByRole('button', { name: 'Browser' })).toBeNull();
+    rerender(<ViewerPanel chat={chat} browserUsed />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Browser' }));
+    expect(viewer()).toMatchObject({ mode: 'item', history: [{ kind: 'browser' }] });
+  });
 });

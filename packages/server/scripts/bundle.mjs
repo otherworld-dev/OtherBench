@@ -21,9 +21,10 @@ const out = join(serverDir, 'dist-bundle', 'server');
 /**
  * Left out of the bundle and copied as packages: the Claude Agent SDK starts
  * its own Claude Code runtime (a per-platform native package), and unpdf
- * loads PDF.js from its own folder.
+ * loads PDF.js from its own folder, and playwright-core reads its own files
+ * at run time (the model's browser).
  */
-const EXTERNAL = ['@anthropic-ai/claude-agent-sdk', 'unpdf'];
+const EXTERNAL = ['@anthropic-ai/claude-agent-sdk', 'unpdf', 'playwright-core'];
 const NATIVE_CLAUDE = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
 
 async function exists(p) {

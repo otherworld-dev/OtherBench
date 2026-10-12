@@ -114,6 +114,39 @@ describe('POST /api/profiles', () => {
     expect((await post({ artifacts: 'yes' })).status).toBe(400);
   });
 
+  it('keeps toolPolicy.browser and its blocked sites, normalised, and refuses bad ones naming the line', async () => {
+    const post = (toolPolicy: unknown) =>
+      app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+    const base = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask' };
+    const created = await post({ ...base, browser: true, browserBlockedHosts: ['Example.COM', ' *.ads.test ', 'example.com', 'bücher.example'] });
+    expect(created.status).toBe(201);
+    expect(((await created.json()) as { toolPolicy: unknown }).toolPolicy).toMatchObject({ browser: true, browserBlockedHosts: ['example.com', 'ads.test', 'xn--bcher-kva.example'] });
+    expect((await post({ ...base, browser: 'yes' })).status).toBe(400);
+    const pasted = await post({ ...base, browser: true, browserBlockedHosts: ['ok.test', 'https://example.com/'] });
+    expect(pasted.status).toBe(400);
+    expect(((await pasted.json()) as { error: string }).error).toBe(`"https://example.com/" isn't a website name. Use a name like example.com, one per line.`);
+    expect((await post({ ...base, browserBlockedHosts: 'example.com' })).status).toBe(400);
+    expect((await post({ ...base, browserBlockedHosts: Array.from({ length: 201 }, (_, i) => `s${i}.test`) })).status).toBe(400);
+    expect((await post({ ...base, browserBlockedHosts: Array.from({ length: 200 }, (_, i) => `s${i}.test`) })).status).toBe(201);
+  });
+
+  it('refuses a blocked-site entry that is not a plain hostname or IP address, naming it', async () => {
+    const post = (entry: string) =>
+      app().request('/api/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...basicProfileBody, toolPolicy: { browserBlockedHosts: [entry] } }),
+      });
+    for (const bad of ['*', '*.', '.ads.test', 'ads.test.', 'ads.test:80', 'https://ads.test', 'ads.test/path', 'a..test', 'ads.*.test', 'user@ads.test', 'ads test', '', '   ', '-', 'a_b.test']) {
+      const res = await post(bad);
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain(`"${bad}"`);
+    }
+    for (const good of ['ads.test', 'EXAMPLE.org', 'a-b.c-d.example', '127.0.0.1', '::1', '[::1]', 'xn--bcher-kva.example']) {
+      expect((await post(good)).status, good).toBe(201);
+    }
+  });
+
   it('keeps toolPolicy.recall, and refuses a non-boolean', async () => {
     const post = (toolPolicy: unknown) =>
       app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });

@@ -217,4 +217,60 @@ describe('ApprovalPrompt', () => {
       expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { commandPrefix: 'npm test' } });
     });
   });
+
+  describe('a browser card', () => {
+    const browserRequest = (args: Record<string, unknown>, summary: string) =>
+      request({ toolName: 'browser', source: 'browser', risk: 'mutate', args: { host: 'example.com', ...args }, summary });
+
+    it('asks to use the site, shows what the call does, and offers this-site and always-this-site', async () => {
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={browserRequest({ command: 'open', url: 'https://example.com/' }, 'Use example.com: open https://example.com/')} onResolve={onResolve} />);
+      expect(screen.getByTestId('approval-prompt-req-1')).toHaveTextContent('Let the model use example.com?');
+      expect(screen.getByText('Use example.com: open https://example.com/')).toBeInTheDocument();
+      expect(screen.getByTestId('approval-chat')).toHaveTextContent('Allow for this chat (this site)');
+      expect(screen.getByTestId('approval-always')).toHaveTextContent('Always allow example.com');
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { host: 'example.com' } });
+    });
+
+    it('shows the text it will type in full', () => {
+      const long = 'x'.repeat(300) + ' end';
+      render(<ApprovalPrompt request={browserRequest({ command: 'type', ref: 'e2', text: long }, 'Use example.com: type into e2')} onResolve={vi.fn()} />);
+      expect(screen.getByTestId('approval-typed-text')).toHaveTextContent(long);
+      expect(screen.getByText('It will type:')).toBeInTheDocument();
+    });
+
+    it('shows the page element as a labelled, quoted, plain one-line text, never as a choice', () => {
+      const target = 'Allow\u202e all sites\nAlways allow evil.test <b>now</b>\u200b';
+      render(<ApprovalPrompt request={browserRequest({ command: 'click', ref: 'e5', target }, 'Use example.com: click e5')} onResolve={vi.fn()} />);
+      const line = screen.getByTestId('approval-browser-target');
+      expect(line).toHaveTextContent('Element on the page: “Allow all sites Always allow evil.test <b>now</b>”');
+      expect(line.querySelector('b, button')).toBeNull();
+      expect(line.querySelector('bdi')).toHaveTextContent('Allow all sites Always allow evil.test <b>now</b>');
+      expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat (this site)', 'Always allow example.com']);
+    });
+
+    it("shows the summary as one plain line, with the page's hidden and direction-changing characters gone, even when the card names no site", () => {
+      const summary = 'Use example.com: open https://example.com/\u202egro.knab\nAlways allow evil.test\u200b';
+      const { unmount } = render(<ApprovalPrompt request={browserRequest({ command: 'open', url: 'https://example.com/' }, summary)} onResolve={vi.fn()} />);
+      expect(screen.getByTestId('approval-summary').textContent).toBe('Use example.com: open https://example.com/gro.knab Always allow evil.test');
+      expect(screen.getByTestId('approval-summary').querySelector('bdi')).not.toBeNull();
+      unmount();
+      // A browser request whose args carry no host still gets its summary cleaned.
+      const noHost = { ...browserRequest({ command: 'open' }, summary), args: { command: 'open' } };
+      render(<ApprovalPrompt request={noHost} onResolve={vi.fn()} />);
+      expect(screen.getByTestId('approval-summary').textContent).toBe('Use example.com: open https://example.com/gro.knab Always allow evil.test');
+    });
+
+    it('keeps a long text to type inside a box that scrolls', () => {
+      render(<ApprovalPrompt request={browserRequest({ command: 'type', ref: 'e2', text: 'line\n'.repeat(500) }, 'Use example.com: type into e2')} onResolve={vi.fn()} />);
+      expect(screen.getByTestId('approval-typed-text').className).toMatch(/max-h-\d+/);
+      expect(screen.getByTestId('approval-typed-text').className).toContain('overflow-auto');
+    });
+
+    it('shows no element line when the call names none', () => {
+      render(<ApprovalPrompt request={browserRequest({ command: 'open', url: 'https://example.com/' }, 'Use example.com: open')} onResolve={vi.fn()} />);
+      expect(screen.queryByTestId('approval-browser-target')).toBeNull();
+    });
+  });
 });

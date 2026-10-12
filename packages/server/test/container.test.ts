@@ -9,7 +9,7 @@ import type { GruntToolProvider } from '@grunt/tools/provider.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
-import { createContainer, realFolderPath, resolveSecretsPassphrase } from '../src/container.js';
+import { createContainer, loopbackPortsFromEnv, realFolderPath, resolveSecretsPassphrase, withoutOwnPorts } from '../src/container.js';
 
 let dir: string;
 
@@ -77,7 +77,49 @@ describe('resolveSecretsPassphrase', () => {
   });
 });
 
+describe('loopbackPortsFromEnv', () => {
+  it('reads comma-separated ports and drops anything that is not one', () => {
+    expect(loopbackPortsFromEnv(undefined)).toEqual([]);
+    expect(loopbackPortsFromEnv('')).toEqual([]);
+    expect(loopbackPortsFromEnv('4766, 5000,abc,0,70000,12.5')).toEqual([4766, 5000]);
+    expect(loopbackPortsFromEnv('0x1F90,1e3,+80,-80, ,8080')).toEqual([8080]);
+  });
+});
+
+describe('withoutOwnPorts', () => {
+  it("drops Grunt's own API and peer ports, and says which", () => {
+    expect(withoutOwnPorts([4797, 4796, 4748], [4796, 4748])).toEqual({ ports: [4797], dropped: [4796, 4748] });
+    expect(withoutOwnPorts([4797], [undefined, 0])).toEqual({ ports: [4797], dropped: [] });
+  });
+});
+
 describe('createContainer', () => {
+  it("leaves Grunt's own ports out of GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS, with a warning", async () => {
+    const before = process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'];
+    process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'] = '4797,4796,4790';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), apiPort: 4796, peerPort: 4790 });
+      container.close();
+      const lines = warn.mock.calls.map((c) => String(c[0]));
+      expect(lines).toContainEqual(expect.stringContaining("names Grunt's own port(s) 4796, 4790"));
+      expect(lines).toContainEqual(expect.stringContaining('may reach 127.0.0.1 on port(s) 4797. This is for tests only.'));
+    } finally {
+      warn.mockRestore();
+      if (before === undefined) delete process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'];
+      else process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS'] = before;
+    }
+  });
+
+  it("makes the model's browser (nothing launches until a call) and closes it with the container", async () => {
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    expect(container.browser).toBeDefined();
+    expect(container.browser!.state('no-such-chat')).toMatchObject({ open: false });
+    const closeAll = vi.spyOn(container.browser!, 'closeAll');
+    container.close();
+    expect(closeAll).toHaveBeenCalledTimes(1);
+  });
+
   it('wires a working store, secrets, and engine over a real (temp-file) SQLite database', async () => {
     const dbPath = join(dir, 'grunt.db');
     const secretsPath = join(dir, 'secrets.json');

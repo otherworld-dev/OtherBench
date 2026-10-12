@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
+import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
 import { canonicalHost, isLocalOrPrivateHost } from './network-hosts.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, LiveCallRef, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
-import { runsShellInSandbox, type ToolPolicy } from '../types/config.js';
+import { runsShellInSandbox, type ToolPolicy, type ToolSource } from '../types/config.js';
 import { PLAN_REFUSAL } from './thread-tools.js';
 
 export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
@@ -18,6 +19,8 @@ export type Decision =
 export interface PermissionBrokerOptions {
   /** Hard cap on simultaneously pending approvals; the oldest is evicted past it. Default 200. */
   maxPending?: number;
+  /** Tests only (`GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS`): the browser may use 127.0.0.1; the proxy holds it to these ports. */
+  allowLoopbackPorts?: readonly number[];
 }
 
 /** Generous: a person answers a handful of cards at a time, so reaching this means requests are leaking. */
@@ -99,11 +102,13 @@ function isShellTool(tool: ToolSpec): boolean {
  *
  *   - A constraint is checked against the tool when it is stored and when it
  *     is matched. `resolve()` stores only what `alwaysConstraintFor` derives
- *     (a shell tool: exactly one command key; the network: exactly the
- *     card's own host; anything else: a `pathPrefix` or nothing) and throws
- *     on anything else. Matching needs EVERY key present to match, a `host`
- *     key matches only a network call, and a shell or network call never
- *     matches a constraint-less grant. Matching on the first key present let
+ *     (a shell tool: exactly one command key; the network and the browser:
+ *     exactly the card's own host; anything else: a `pathPrefix` or nothing)
+ *     and throws on anything else. Matching needs EVERY key present to match,
+ *     a `host` key matches only a network or browser call and only a grant
+ *     of that same source (a browser grant never covers the sandbox's
+ *     network, nor the other way round), and a shell, network or browser call
+ *     never matches a constraint-less grant. Matching on the first key present let
  *     `{commandExact: 'ls', pathPrefix: '.'}` approve any command with a
  *     `path` argument.
  *   - A `pathPrefix` constraint is matched against the RESOLVED path, using
@@ -136,17 +141,25 @@ function isShellTool(tool: ToolSpec): boolean {
  * there is no turn to raise a card in, and the declaration approval was the
  * decision. It never takes the ask-on-mutate read pass or any other grant,
  * and no other call ever matches a live grant.
+ *
+ * The browser (`source: 'browser'`) is refused for blocked, local and private
+ * sites before any card; its reads (`snapshot`, `scroll`, `close`) skip the
+ * card under ask_on_mutate; its grants are always pinned to one `host`, by
+ * the same rules as the sandbox's network grants (`alwaysConstraintFor`,
+ * every-key matching, the canonical host) and never interchangeable with them.
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
   private readonly evictListeners = new Set<(requestId: string) => void>();
   private readonly maxPending: number;
+  private readonly allowLoopbackPorts: readonly number[];
 
   constructor(
     private readonly store: Store,
     options: PermissionBrokerOptions = {}
   ) {
     this.maxPending = options.maxPending ?? DEFAULT_MAX_PENDING;
+    this.allowLoopbackPorts = options.allowLoopbackPorts ?? [];
   }
 
   /** How many approval requests are currently waiting for an answer. */
@@ -221,6 +234,20 @@ export class PermissionBroker {
       const path = stringField(args, 'path');
       if (path !== null && inReadOnlyFolder(ctx, path)) {
         return { kind: 'deny', reason: `"${tool.name}" can't change ${path}: it's in a read-only folder.` };
+      }
+    }
+
+    // The browser (spec 2026-10-12-model-browser-design): a call is about one
+    // website, the `host` its describeCall worked out (a host the model sent
+    // is thrown away before this). A blocked, local or private site is
+    // refused before any card, and so is a call that names no site at all.
+    if (tool.source === 'browser') {
+      const denial = browserHostDenial(stringField(args, 'host'), policy, { allowLoopbackPorts: this.allowLoopbackPorts });
+      if (denial) return { kind: 'deny', reason: denial };
+      // Reading the open page needs no card under "ask on mutate". By command
+      // name, never by declared risk (as for Claude Code's file reads).
+      if (policy.approvalMode === 'ask_on_mutate' && BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '')) {
+        return { kind: 'allow', grantedBy: 'auto_read' };
       }
     }
 
@@ -305,7 +332,14 @@ export class PermissionBroker {
       risk: tool.risk,
       source: tool.source,
       args,
-      summary: tool.source === 'recall' ? this.recallSummary(args) : tool.source === 'network' ? networkSummary(args) : summarize(tool, args),
+      summary:
+        tool.source === 'recall'
+          ? this.recallSummary(args)
+          : tool.source === 'network'
+            ? networkSummary(args)
+            : tool.source === 'browser'
+              ? browserSummary(args)
+              : summarize(tool, args),
       ...(ctx.subagent ? { subagent: ctx.subagent } : {}),
     };
     this.enforceBound(ctx.messageId);
@@ -445,7 +479,7 @@ export class PermissionBroker {
       // approved; anything else asks again.
       const constraint = isShellTool(pending.tool)
         ? { commandExact: exactCommandForGrant(pending) }
-        : pending.tool.source === 'network'
+        : isHostKeyed(pending.tool.source)
           ? { host: hostForGrant(pending) }
           : null;
       this.store.grants.create({
@@ -473,8 +507,10 @@ export class PermissionBroker {
     // calls itself `run_command` must not be able to mint the very grant the
     // real shell tool is forbidden from having (see SHELL_TOOL_NAMES).
     // A network grant is for one host, like a shell grant is for one command:
-    // "always let the sandbox reach anything" is never one click. Neither
-    // constraint is stored as sent: see alwaysConstraintFor.
+    // "always let the sandbox reach anything" is never one click. A browser
+    // grant is the same: the one site the card named, never blanket and never
+    // a different site than the one the person was shown. No constraint is
+    // stored as sent: see alwaysConstraintFor.
     const constraint = alwaysConstraintFor(pending, choice.constraint);
 
     this.store.grants.create({
@@ -714,6 +750,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return null;
     case 'subagent':
       return policy.subagents === true ? null : 'Sub-agents are turned off for this profile.';
+    case 'browser':
+      return policy.browser === true ? null : 'The browser is turned off for this profile.';
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;
@@ -744,32 +782,40 @@ function constraintKeys(constraint: object): ConstraintKey[] | null {
  * Whether a stored grant's constraint covers this call. EVERY key the
  * constraint sets must match (an earlier version stopped at the first key it
  * found, so `{commandExact: 'ls', pathPrefix: '.'}` matched any command with
- * an in-workspace `path`). A `host` key matches only a network call, and a
- * network call needs one; a shell call needs a command key. A grant with no
- * constraint never covers a shell or network call, and one with no key Grunt
- * knows covers nothing. A key whose stored value isn't a string never matches
- * (and never throws).
+ * an in-workspace `path`). A `host` key matches only a network or browser
+ * call, and such a call needs one; a shell call needs a command key. A grant
+ * with no constraint never covers a shell, network or browser call, and one
+ * with no key Grunt knows covers nothing. A key whose stored value isn't a
+ * string never matches (and never throws).
+ *
+ * The grant's source is part of the match: `findMatchingGrant` already skips
+ * a grant of another source, and this refuses one again, so a host grant made
+ * for the browser can never cover the sandbox's network, or the other way
+ * round, whatever host they share.
  */
 function grantConstraintMatches(grant: Grant, tool: ToolSpec, args: unknown, ctx: ToolContext): boolean {
   const shell = isShellTool(tool);
-  const network = tool.source === 'network';
+  const hostKeyed = isHostKeyed(tool.source);
+  if (hostKeyed && grant.source !== tool.source) return false;
   const constraint = grant.constraint;
-  if (!constraint) return !shell && !network;
+  if (!constraint) return !shell && !hostKeyed;
   // A live grant is for one live call (decideLive), never an ordinary one.
   // (constraintKeys would refuse the unknown key anyway; this says so.)
   if (constraint.live !== undefined) return false;
   const keys = constraintKeys(constraint);
   if (keys === null || keys.length === 0) return false;
-  if (network !== keys.includes('host')) return false;
+  if (hostKeyed !== keys.includes('host')) return false;
   if (shell && !keys.includes('commandExact') && !keys.includes('commandPrefix')) return false;
-  return keys.every((key) => constraintKeyMatches(key, constraint[key], args, ctx));
+  return keys.every((key) => constraintKeyMatches(key, constraint[key], tool, args, ctx));
 }
 
-function constraintKeyMatches(key: ConstraintKey, wanted: unknown, args: unknown, ctx: ToolContext): boolean {
+function constraintKeyMatches(key: ConstraintKey, wanted: unknown, tool: ToolSpec, args: unknown, ctx: ToolContext): boolean {
   if (key === 'host') {
-    // canonicalHost is null for a non-string, so a corrupt row can't throw here.
-    const granted = canonicalHost(wanted);
-    return granted !== null && granted === canonicalHost(stringField(args, 'host'));
+    // Exact on the canonical host (so case, a trailing dot, an IDN or an IP
+    // spelling can't differ): a grant never covers a subdomain. hostOfCall is
+    // null for a non-string, so a corrupt row can't throw here.
+    const granted = hostOfCall(tool.source, wanted);
+    return granted !== null && granted === hostOfCall(tool.source, stringField(args, 'host'));
   }
   if (typeof wanted !== 'string') return false;
   if (key === 'pathPrefix') {
@@ -794,9 +840,11 @@ function constraintKeyMatches(key: ConstraintKey, wanted: unknown, args: unknown
  * client sent and checked against the pending card's tool; throws (and so
  * stores nothing) for anything else. Never the client's object as sent:
  *
- *   - the network: exactly `{host}`, naming the card's OWN host in any
- *     spelling, stored canonical -- answering a `pypi.org` card with
- *     `{host: 'evil.com'}` must not mint a grant for evil.com;
+ *   - the network and the browser: exactly `{host}`, naming the card's OWN
+ *     host in any spelling, stored canonical -- answering a `pypi.org` card
+ *     with `{host: 'evil.com'}` must not mint a grant for evil.com, and a
+ *     browser card's "always" covers the site the person was shown and no
+ *     other;
  *   - a shell tool (`isShellTool`, which covers the sandboxed `run_command`):
  *     exactly one of `commandExact`/`commandPrefix`, non-empty, trimmed;
  *   - anything else: a `pathPrefix`, or nothing (an unconstrained grant, as
@@ -816,13 +864,14 @@ function alwaysConstraintFor(pending: PendingRequest, sent: Grant['constraint'])
     return v.trim();
   };
 
-  if (tool.source === 'network') {
-    if (keys.length !== 1 || keys[0] !== 'host') {
-      throw new Error('Refusing to create an "always" grant for the sandbox network that does not name exactly one host, and nothing else.');
-    }
+  if (isHostKeyed(tool.source)) {
+    const what = tool.source === 'browser' ? 'the browser' : 'the sandbox network';
     const own = hostForGrant(pending);
-    if (canonicalHost(value('host')) !== own) {
-      throw new Error(`Refusing to create an "always" grant for the sandbox network: it must name the card's own host (${own}).`);
+    if (keys.length !== 1 || keys[0] !== 'host') {
+      throw new Error(`Refusing to create an "always" grant for ${what} that does not name exactly one host, the card's own (${own}), and nothing else.`);
+    }
+    if (hostOfCall(tool.source, value('host')) !== own) {
+      throw new Error(`Refusing to create an "always" grant for ${what}: it must name the card's own host (${own}).`);
     }
     return { host: own };
   }
@@ -989,11 +1038,33 @@ function exactCommandForGrant(pending: PendingRequest): string {
   return command.trim();
 }
 
-/** The canonical host a network grant is pinned to; throws (no grant) when the call named none. */
+/** The sources whose grants are pinned to one `host`: the sandbox's network and the browser. */
+function isHostKeyed(source: ToolSource): source is 'network' | 'browser' {
+  return source === 'network' || source === 'browser';
+}
+
+/**
+ * The canonical host a call or a grant names, or null when it names none.
+ * One spelling per host for both host-keyed sources, so a grant and a call
+ * are always compared like for like. `canonicalHost` (the sandbox) is built on
+ * `normaliseHost` (the browser) and so agrees with it on every host both
+ * accept; the sandbox takes fewer: it has no IPv6 literals, which a website
+ * may be.
+ */
+function hostOfCall(source: ToolSource, raw: unknown): string | null {
+  if (source === 'browser') return typeof raw === 'string' ? normaliseHost(raw) : null;
+  return canonicalHost(raw);
+}
+
+/** The canonical host a network or browser grant is pinned to. Throws when the call named none, so no unpinned grant is ever stored. */
 function hostForGrant(pending: PendingRequest): string {
-  const host = canonicalHost(stringField(pending.args, 'host'));
+  const host = hostOfCall(pending.tool.source, stringField(pending.args, 'host'));
   if (host === null) {
-    throw new Error('Refusing to create a grant for the sandbox network: the approved call named no valid host.');
+    throw new Error(
+      pending.tool.source === 'browser'
+        ? 'Refusing to create a grant for the browser: the approved call named no website to pin it to.'
+        : 'Refusing to create a grant for the sandbox network: the approved call named no valid host.'
+    );
   }
   return host;
 }
@@ -1016,6 +1087,39 @@ function networkSummary(args: unknown): string {
   const host = canonicalHost(stringField(args, 'host')) ?? '?';
   const port = typeof args === 'object' && args !== null ? (args as Record<string, unknown>)['port'] : undefined;
   return `sandbox_network: ${host}${typeof port === 'number' ? `:${port}` : ''}`;
+}
+
+/** A browser card's line: `Use <host>: <what the call does>`. */
+function browserSummary(args: unknown): string {
+  const host = stringField(args, 'host') ?? '?';
+  const ref = stringField(args, 'ref');
+  const target = stringField(args, 'target');
+  const on = ref !== null ? ` ${ref}${target !== null ? ` (${target})` : ''}` : '';
+  const record = (typeof args === 'object' && args !== null ? args : {}) as Record<string, unknown>;
+  switch (stringField(args, 'command')) {
+    case 'open':
+      return `Use ${host}: open ${stringField(args, 'url') ?? ''}`;
+    case 'click':
+      return `Use ${host}: ${record['double'] === true ? 'double-click' : 'click'}${on}`;
+    case 'type':
+      return `Use ${host}: type into${on}`;
+    case 'select': {
+      const values = Array.isArray(record['values']) ? record['values'].filter((v): v is string => typeof v === 'string').join(', ') : '';
+      return `Use ${host}: choose ${values} in${on}`;
+    }
+    case 'press':
+      return `Use ${host}: press ${stringField(args, 'key') ?? ''}`;
+    case 'scroll':
+      return `Use ${host}: scroll ${stringField(args, 'direction') ?? 'down'}${ref !== null ? ` to${on}` : ''}`;
+    case 'back':
+      return `Use ${host}: go back`;
+    case 'snapshot':
+      return `Use ${host}: read the page`;
+    case 'close':
+      return `Use ${host}: close the browser`;
+    default:
+      return `Use ${host}: ${stringField(args, 'command') ?? '?'}`;
+  }
 }
 
 function stringField(args: unknown, key: string): string | null {

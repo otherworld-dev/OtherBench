@@ -8,6 +8,7 @@ import type { PlanGate } from '../types/thread.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 import { classifyProviderError } from '../types/errors.js';
 import { availableOn } from './availability.js';
+import { normaliseHost } from './browser-hosts.js';
 import { applySubagentEvent, foldSubagentContent, type SubagentEndStatus, type SubagentEvent } from './parts.js';
 import { RECALL_GUIDANCE } from './recall.js';
 import { sandboxFoldersPrompt } from './sandbox-paths.js';
@@ -167,6 +168,24 @@ function effectiveSandboxHosts(policy: ToolPolicy): string[] {
   return Array.isArray(hosts) ? hosts.filter((h): h is string => typeof h === 'string') : [];
 }
 
+/** A policy's blocked sites for the browser (absent = none), or null when the field is there but isn't a list of names. */
+function blockedHostsOf(policy: ToolPolicy): string[] | null {
+  const hosts: unknown = policy.browserBlockedHosts;
+  if (hosts === undefined || hosts === null) return [];
+  return Array.isArray(hosts) && hosts.every((h) => typeof h === 'string') ? (hosts as string[]) : null;
+}
+
+/** Both blocked lists as one: the first list's entries, then the second's that it doesn't already hold (compared by canonical host). */
+function allBlockedHosts(a: readonly string[], b: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return [...a, ...b].filter((h) => {
+    const key = normaliseHost(h) ?? h.trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Where a policy's `run_command` runs, read the way the provider and broker read it (`runsShellInSandbox`): anything but 'sandbox' is this machine. */
 function shellRunsOf(policy: ToolPolicy): 'host' | 'sandbox' {
   return policy.shellRuns === 'sandbox' ? 'sandbox' : 'host';
@@ -239,6 +258,13 @@ export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]
   subagents: () => false,
   // On only when both have it on (absent = on, as the policy defines it).
   recall: ({ parent, chosen }) => parent.recall !== false && chosen.recall !== false,
+  // The browser (spec 2026-10-12-model-browser-design): only when both have it
+  // on (absent = off), and only when both blocked lists can be read. A list
+  // that isn't a list can't be added to the other, so the browser is off.
+  browser: ({ parent, chosen }) => parent.browser === true && chosen.browser === true && blockedHostsOf(parent) !== null && blockedHostsOf(chosen) !== null,
+  // Every site either profile blocks: the union, so the sub-agent can reach no
+  // site its parent can't. Always named.
+  browserBlockedHosts: ({ parent, chosen }) => allBlockedHosts(blockedHostsOf(parent) ?? [], blockedHostsOf(chosen) ?? []),
 };
 
 /**

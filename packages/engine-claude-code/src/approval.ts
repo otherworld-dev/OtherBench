@@ -139,6 +139,8 @@ export function createGate(deps: {
   policy: ToolPolicy;
   ctx: ToolContext;
   autoMode?: boolean;
+  /** Keeps what the broker approved for a relayed call whose spec describes its calls (an approval ticket, spec 2026-10-12-model-browser-design §4). */
+  onApproved?: (spec: ToolSpec, input: Record<string, unknown>, args: unknown) => void;
 }): Gate {
   /** AskUserQuestion: the question card, answered through `updatedInput` (spec 2026-10-12-thread-cards-design section 6). */
   const askQuestion = async (input: Record<string, unknown>, signal: AbortSignal): Promise<GateDecision> => {
@@ -200,6 +202,8 @@ export function createGate(deps: {
       }
       if (!('allowed' in outcome)) return { allow: false, reason: 'Grunt could not check this tool call: unrecognised approval outcome.' };
       if (!outcome.allowed) return { allow: false, reason: outcome.reason };
+      // A relayed tool that describes its calls (the browser): keep what was approved, so only that runs.
+      if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
       // Allowed (internal, by policy): Claude Code's question now goes to the user as a card.
       if (!own && toolName === AGENT_ASK_TOOL) return await askQuestion(normalised.args, signal);
       return { allow: true };

@@ -4,6 +4,7 @@ import { isDesktop, revealPath } from '../desktop/bridge.js';
 import { ApiError, api, type ViewOpened, type ViewText } from '../state/api.js';
 import { serverUrl } from '../state/transport.js';
 import { ArtifactView } from './ArtifactView.js';
+import { BrowserView } from './BrowserView.js';
 import { CodeView } from './CodeView.js';
 import type { ViewItem } from './items.js';
 import { dirOf } from './paths.js';
@@ -54,8 +55,9 @@ function TextBody({ chatId, opened, as }: { chatId: string; opened: ViewOpened; 
   );
 }
 
-/** What the viewer shows for an item: a file, or an artifact (Deck #896). */
+/** What the viewer shows for an item: a file, an artifact (Deck #896), or the model's browser. */
 export function ItemView({ chatId, item }: { chatId: string; item: ViewItem }): JSX.Element {
+  if (item.kind === 'browser') return <BrowserView chatId={chatId} />;
   return item.kind === 'artifact' ? <ArtifactView chatId={chatId} item={item} /> : <FileView chatId={chatId} path={item.path} />;
 }
 

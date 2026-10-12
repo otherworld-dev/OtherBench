@@ -594,6 +594,7 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
             <span className="ml-1.5 text-xs text-[var(--text-muted)]">
               {g.scope === 'always' ? 'always' : 'this chat'}
               {g.constraint?.pathPrefix ? ` · ${g.constraint.pathPrefix}` : ''}
+              {g.constraint?.host ? ` · ${g.constraint.host}` : ''}
               {g.constraint?.commandExact ? ` · ${g.constraint.commandExact}` : ''}
               {g.constraint?.commandPrefix ? ` · ${g.constraint.commandPrefix} (any arguments)` : ''}
               {g.constraint?.host ? ` · ${g.constraint.host}` : ''}

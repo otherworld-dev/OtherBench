@@ -225,6 +225,9 @@ export function chatsRoutes(container: Container): Hono {
     // Its sandbox agent, mounts and home folder in the VM go with it (spec 2026-10-12-sandbox-design). Best effort,
     // and before the sweep below, which can fail the request on purpose.
     await container.sandbox?.release(id).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${id}:`, err));
+    // The chat's browser goes with it (spec 2026-10-12-model-browser-design §5).
+    // Not awaited: a browser still starting would hold the response up.
+    void container.browser?.close(id).catch((err: unknown) => console.error(`[grunt-server] couldn't close the browser of chat ${id}:`, err));
     // Deleting a chat cascades its attachment rows away in SQLite (ON
     // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
     // `sweepOrphanedBlobs` swallows filesystem-level failures (a locked
