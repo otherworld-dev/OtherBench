@@ -92,7 +92,7 @@ function reconstructEvents(message: CanonMessage): TurnEvent[] {
  * execution means no event can land in the middle of that synchronous
  * snapshot-then-subscribe pair).
  *
- * `registerTurn` must be called (by the turns route, immediately after
+ * `registerTurn` must be called (by `startTurn`, immediately after
  * `TurnRunner.run()` resolves) before any event for those message ids can
  * arrive -- it seeds an empty 'streaming' buffer so a subscriber connecting
  * before the first token still sees the turn as in-flight, and so

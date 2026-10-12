@@ -364,3 +364,55 @@ describe('Message', () => {
     });
   });
 });
+
+describe('Message thread cards', () => {
+  afterEach(cleanup);
+  const todos = (status: string) => ({ todos: [{ content: 'Read', status, activeForm: 'Reading' }, { content: 'Write', status: 'pending', activeForm: 'Writing' }] });
+
+  it('shows the checklist from the latest todo call and leaves todo calls out of the tool group', () => {
+    render(<Message message={base({ status: 'streaming', parts: [
+      { type: 'tool-call', id: 't1', name: 'update_todos', args: todos('in_progress') },
+      { type: 'tool-result', id: 't1', name: 'update_todos', result: 'Checklist updated.', isError: false },
+      { type: 'tool-call', id: 't2', name: 'read_file', args: { path: 'a.txt' } },
+      { type: 'tool-result', id: 't2', name: 'read_file', result: 'x', isError: false },
+      { type: 'tool-call', id: 't3', name: 'TodoWrite', args: todos('completed') },
+      { type: 'text', text: 'Working' },
+    ] })} />);
+    expect(screen.getByTestId('todo-checklist')).toHaveTextContent('1 of 2 done');
+    expect(screen.getByText('Used 1 tool: read_file')).toBeInTheDocument();
+    expect(screen.queryByText(/update_todos|TodoWrite/)).toBeNull();
+  });
+
+  it('shows an answered question and a decided plan as records, and nothing for one still waiting', () => {
+    render(<Message message={base({ parts: [
+      { type: 'tool-call', id: 'q1', name: 'ask_user', args: { questions: [{ question: 'Which colour?', header: 'C', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] } },
+      { type: 'tool-result', id: 'q1', name: 'ask_user', result: 'User has answered your questions: "Which colour?"="Blue".', isError: false },
+      { type: 'tool-call', id: 'p1', name: 'propose_plan', args: { plan: '1. Paint' } },
+      { type: 'tool-result', id: 'p1', name: 'propose_plan', result: 'The user approved the plan.', isError: false },
+      { type: 'tool-call', id: 'q2', name: 'AskUserQuestion', args: { questions: [] } },
+    ] })} />);
+    expect(screen.getByTestId('question-record')).toHaveTextContent('Which colour?');
+    expect(screen.getByTestId('question-record')).toHaveTextContent('"Which colour?"="Blue"');
+    expect(screen.getByTestId('plan-record')).toHaveTextContent('Plan · The user approved the plan.');
+    expect(screen.getAllByTestId('question-record')).toHaveLength(1);
+    expect(screen.queryByText(/Used \d+ tool/)).toBeNull();
+  });
+
+  it('still renders a plan record when the plan call has no result value', () => {
+    render(<Message message={base({ parts: [
+      { type: 'tool-call', id: 'p1', name: 'propose_plan', args: { plan: '1. Paint' } },
+      { type: 'tool-result', id: 'p1', name: 'propose_plan', result: undefined, isError: false },
+    ] })} />);
+    expect(screen.getByTestId('plan-record')).toBeInTheDocument();
+  });
+
+  it('renders pending question and plan cards after any approval cards, wired to onAnswerAsk', async () => {
+    const onAnswerAsk = vi.fn(async () => {});
+    const question = { kind: 'question' as const, toolName: 'ask_user', id: 'a1', chatId: 'c1', messageId: 'm1', questions: [{ question: 'Which?', header: '', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] };
+    const plan = { kind: 'plan' as const, toolName: 'propose_plan', id: 'a2', chatId: 'c1', messageId: 'm1', plan: '1. x' };
+    render(<Message message={base({ status: 'streaming' })} pendingAsks={[question, plan]} onAnswerAsk={onAnswerAsk} />);
+    expect(screen.getByTestId('ask-card-a1')).toHaveAttribute('data-kind', 'question');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Approve plan' }));
+    expect(onAnswerAsk).toHaveBeenCalledWith('a2', { approve: true });
+  });
+});

@@ -1,6 +1,8 @@
 import type { Grant } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
+import type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
+export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
@@ -26,9 +28,19 @@ export interface ToolContext {
    */
   folders?: ResolvedFolder[];
   /**
-   * Nobody is watching this run (a scheduled task, spec 2026-10-12-sandbox-design
-   * "Unattended runs"), so a call that would need an approval card is refused
-   * instead of waiting for an answer that can't come. Absent = someone is watching.
+   * This reply's plan approval (spec 2026-10-12-thread-cards-design §4), set
+   * only while the chat's Plan mode is on. Until it is approved,
+   * `PermissionBroker.decide` refuses anything that could change something.
+   */
+  plan?: PlanGate;
+  /**
+   * Nobody can answer a card for this call: a scheduled run (spec
+   * 2026-10-12-scheduled-tasks-design). Questions and plans are answered for
+   * the model and never raise a card; any other call that would ask is refused
+   * with `approval_unavailable` instead of waiting (the sandbox's network
+   * cards included, spec 2026-10-12-sandbox-design "Unattended runs"). Set
+   * only by the schedule service, through `TurnInput.unattended`; it can only
+   * take permissions away.
    */
   unattended?: boolean;
   signal: AbortSignal;
@@ -95,7 +107,11 @@ export type ApprovalChoice =
  */
 export type ToolApprovalEvent =
   | { type: 'request'; request: ApprovalRequest }
-  | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] };
+  | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] }
+  /** A question or plan card for the user (spec 2026-10-12-thread-cards-design), tied to `ask.messageId`. */
+  | { type: 'ask'; ask: UserAsk }
+  /** That ask ended, however: answered, the turn stopped, or the backstop dropped it. */
+  | { type: 'ask-resolved'; askId: string; messageId: string };
 
 /** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
 export type ApprovalOutcome =
@@ -142,4 +158,13 @@ export interface ToolProvider {
    * classifier's reason as the summary. Changes no decision. Never throws.
    */
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void;
+  /**
+   * Puts a question or a plan to the user and waits (spec
+   * 2026-10-12-thread-cards-design): raises an `ask` event, then settles on
+   * `answerAsk`, on the turn's signal, or at once with `{ unattended: true }`
+   * when `ctx.unattended` is set (no event at all then).
+   */
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome>;
+  /** Answers a pending ask: `'unknown'` for an unknown or settled id, `{ invalid }` for a reply that doesn't fit it. Never throws. */
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult;
 }

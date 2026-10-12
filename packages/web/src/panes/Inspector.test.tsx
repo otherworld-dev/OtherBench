@@ -611,7 +611,7 @@ describe('Inspector audit trail', () => {
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     const list = await within(auditSection()).findByTestId('audit-trail');
     await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (13)' }));
-    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'refused (nobody watching)', 'weird:thing'];
+    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'refused: nobody to approve (scheduled run)', 'weird:thing'];
     raws.forEach((raw, i) => {
       const label = within(within(list).getByTestId(`audit-g${i}`)).getByText(labels[i]!);
       expect(label).toHaveAttribute('title', raw);
@@ -857,5 +857,34 @@ describe('Inspector other folders', () => {
     render(<Inspector chat={{ ...withFolders([]), runsOn: 'node-pc' }} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(foldersSection()).queryByRole('button', { name: 'Choose…' })).toBeNull();
     mockedIsDesktop.mockReturnValue(false);
+  });
+});
+
+describe('Inspector Progress', () => {
+  beforeEach(() => {
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+  const todoCall = { type: 'tool-call' as const, id: 't1', name: 'update_todos', args: { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }] } };
+
+  it("lists each running reply's checklist, named by profile in a compare, and hides once none is running", () => {
+    useGruntStore.setState({ messages: {
+      a: makeMessage('a', { parts: [todoCall] }),
+      b: makeMessage('b', { parts: [todoCall], producedBy: { profileId: 'p2', profileName: 'Beta', connectionId: 'c1', modelId: 'm' } }),
+    } });
+    const { rerender } = render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Progress' })).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    expect(screen.getAllByTestId('todo-checklist')).toHaveLength(2);
+    useGruntStore.setState({ messages: { a: makeMessage('a', { parts: [todoCall], status: 'complete' }) } });
+    rerender(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.queryByRole('heading', { name: 'Progress' })).toBeNull();
+  });
+
+  it('words a plan refusal in the audit trail', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'x', chatId: 'chat-1', messageId: 'm', toolName: 'write_file', argsRedacted: {}, resultSummary: 'error: plan_mode', durationMs: 1, grantedBy: 'deny:plan', createdAt: Date.now() }] as never);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(await screen.findByText('refused: no plan approved yet')).toBeInTheDocument();
   });
 });

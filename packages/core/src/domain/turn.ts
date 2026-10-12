@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
@@ -18,6 +18,7 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { sandboxFoldersPrompt } from './sandbox-paths.js';
+import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 
 /**
@@ -37,6 +38,9 @@ export type TurnEvent = { messageId: string } & (
   | { type: 'status'; status: MessageStatus }
   | { type: 'approval-request'; request: ApprovalRequest }
   | { type: 'approval-resolved'; requestId: string; choice: ApprovalChoice['choice'] }
+  /** A question or plan card raised by this reply's tool call (spec 2026-10-12-thread-cards-design), relayed like approvals. */
+  | { type: 'ask-request'; ask: UserAsk }
+  | { type: 'ask-resolved'; askId: string }
   /**
    * The capability-fallback disclosure (task 21 decision #3), synthesised by
    * `runVariant` itself -- like `approval-request`/`approval-resolved`, this
@@ -57,6 +61,14 @@ export interface TurnInput {
   parentId: string | null;
   userParts: Part[];
   profiles: ResolvedProfile[];
+  /**
+   * A scheduled run with nobody watching (spec 2026-10-12-scheduled-tasks-design):
+   * the request is marked unattended, so tool calls that would raise a card are
+   * refused, and Claude Code's auto mode is off whatever the chat says. Only
+   * the schedule service sets it; no route reads it from a request body.
+   * `retry` and `regenerate` never set it: a person is pressing the button.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -290,10 +302,19 @@ export class TurnRunner {
     this.pathExists = options.pathExists ?? existsSync;
     this.canonicalPath = options.canonicalPath ?? ((p) => p);
     this.toolProvider?.onApprovalEvent((event) => {
-      if (event.type === 'request') {
-        this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
-      } else {
-        this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+      switch (event.type) {
+        case 'request':
+          this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
+          break;
+        case 'resolved':
+          this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+          break;
+        case 'ask':
+          this.emit({ messageId: event.ask.messageId, type: 'ask-request', ask: event.ask });
+          break;
+        case 'ask-resolved':
+          this.emit({ messageId: event.messageId, type: 'ask-resolved', askId: event.askId });
+          break;
       }
     });
   }
@@ -390,7 +411,7 @@ export class TurnRunner {
     // `.catch` here is a last-resort backstop against a bug in that catch
     // logic turning into an unhandled rejection.
     for (const { message, profile } of variants) {
-      void this.runVariant(input.chatId, userMessage.id, message.id, profile).catch((err: unknown) => {
+      void this.runVariant(input.chatId, userMessage.id, message.id, profile, input.unattended === true).catch((err: unknown) => {
         console.error(`[TurnRunner] variant ${message.id} failed outside its own error handling:`, err);
       });
     }
@@ -532,7 +553,8 @@ export class TurnRunner {
     chatId: string,
     userMessageId: string,
     messageId: string,
-    profile: ResolvedProfile
+    profile: ResolvedProfile,
+    unattended = false
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
@@ -581,6 +603,7 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
+      const planMode = chat?.planMode === true;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -589,10 +612,14 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      // Artifacts and recall are on by default, so a model that can't use
-      // tools (as its model row says) isn't sent a tool it would refuse the
-      // whole request over.
-      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall') : listed;
+      // Artifacts, recall and the thread tools are on by default, so a model
+      // that can't use tools (as its model row says) isn't sent a tool it
+      // would refuse the whole request over.
+      const usable = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread') : listed;
+      // propose_plan only while the chat's Plan mode is on (spec 2026-10-12-thread-cards-design §4).
+      const tools = planMode ? usable : usable.filter((t) => !(t.source === 'thread' && t.name === PLAN_TOOL));
+      // One gate per reply: compare variants, retries and the next message each start closed.
+      const plan = planMode && tools.some((t) => t.source === 'thread' && t.name === PLAN_TOOL) ? createPlanGate() : undefined;
       const canRecall = tools.some((t) => t.source === 'recall');
       const requestProfile = this.withRecall(
         this.withArtifacts(this.withTools(this.withSandbox(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), workspaceRoot, folders), tools), tools),
@@ -600,7 +627,11 @@ export class TurnRunner {
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
+      const history = this.withPlanNote(
+        this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId),
+        plan !== undefined,
+        userMessageId
+      );
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -648,8 +679,12 @@ export class TurnRunner {
         ...(folders.length > 0 ? { folders } : {}),
         loadAttachment: this.loadAttachment,
         purpose: 'turn',
-        autoMode,
+        // Nobody can catch what auto mode's classifier allows in a scheduled
+        // run, so it is never used there (the classifier isn't a security boundary).
+        autoMode: unattended ? false : autoMode,
+        ...(unattended ? { unattended: true } : {}),
         ...(effort ? { effort } : {}),
+        ...(plan ? { plan } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 
@@ -749,8 +784,16 @@ export class TurnRunner {
       status = 'cancelled';
     }
 
-    checkpoint(true);
-    this.store.messages.updateStatus(messageId, status, error);
+    // The end is announced even when these writes fail -- above all when the
+    // chat was deleted mid-reply and its messages cascaded away. Listeners
+    // (the stream registry, the schedule service) wait on this event to let
+    // the reply go; without it they would wait until a restart.
+    try {
+      checkpoint(true);
+      this.store.messages.updateStatus(messageId, status, error);
+    } catch (err) {
+      console.error(`[TurnRunner] variant ${messageId} could not record its end:`, err);
+    }
     this.emit({ messageId, type: 'status', status });
 
     // Usage is recorded whenever the engine reported it, regardless of the
@@ -948,6 +991,12 @@ export class TurnRunner {
     if (!tools.some((t) => t.source === 'artifact')) return messages;
     const note = artifactsListNote(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
     return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: note }] } : m));
+  }
+
+  /** While Plan mode is on, a note at the end of the user's message in this request only (the stored message is untouched). */
+  private withPlanNote(messages: CanonMessage[], planning: boolean, userMessageId: string): CanonMessage[] {
+    if (!planning) return messages;
+    return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: PLAN_MODE_NOTE }] } : m));
   }
 
   /**

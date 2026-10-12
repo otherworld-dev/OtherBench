@@ -88,13 +88,24 @@ describe('DesktopPanel', () => {
     const user = userEvent.setup();
     render(<DesktopPanel />);
     const replies = screen.getByRole('checkbox', { name: 'When a reply finishes' });
-    const approvals = screen.getByRole('checkbox', { name: 'When a tool call needs approval' });
+    const approvals = screen.getByRole('checkbox', { name: 'Approvals, questions and plans' });
     expect(replies).toBeChecked();
     expect(approvals).toBeChecked();
 
     await user.click(replies);
     expect(replies).not.toBeChecked();
-    expect(JSON.parse(window.localStorage.getItem('grunt.notifications')!)).toEqual({ replies: false, approvals: true });
+    expect(JSON.parse(window.localStorage.getItem('grunt.notifications')!)).toEqual({ replies: false, approvals: true, scheduled: true });
+  });
+
+  it('has a Scheduled runs toggle, on by default, saved when turned off', async () => {
+    window.localStorage.clear();
+    mockedIsEnabled.mockResolvedValue(false);
+    const user = userEvent.setup();
+    render(<DesktopPanel />);
+    const scheduled = screen.getByRole('checkbox', { name: 'Scheduled runs' });
+    expect(scheduled).toBeChecked();
+    await user.click(scheduled);
+    expect(JSON.parse(window.localStorage.getItem('grunt.notifications')!)).toEqual({ replies: true, approvals: true, scheduled: false });
   });
 
   it('explains that closing the window keeps Grunt running in the tray', () => {

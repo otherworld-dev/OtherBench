@@ -318,6 +318,21 @@ describe('chats CRUD', () => {
     expect((await json(off))['autoMode']).toBe(false);
   });
 
+  it('turns plan mode on and off via PATCH planMode, without moving the chat in the list, and refuses a non-boolean', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    expect(created['planMode']).toBe(false);
+    const before = container.store.chats.get(id)!.updatedAt;
+    const on = await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planMode: true }) });
+    expect(on.status).toBe(200);
+    const onBody = await json(on);
+    expect(onBody['planMode']).toBe(true);
+    expect(onBody['updatedAt']).toBe(before);
+    const bad = await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planMode: 'yes' }) });
+    expect(bad.status).toBe(400);
+    expect(container.store.chats.get(id)!.planMode).toBe(true);
+  });
+
   it('rejects a non-boolean autoMode with 400 and leaves the chat unchanged', async () => {
     const created = await createChat();
     const id = created['id'] as string;
@@ -682,6 +697,25 @@ describe('GET /api/search', () => {
 // ---------------------------------------------------------------------------
 
 describe('auto-title', () => {
+  it("leaves alone the title of a chat a scheduled run made", async () => {
+    const created = await createChat();
+    const chatId = created['id'] as string;
+    container.store.projects.create({ id: 'proj-s', name: 'Sched', workspace: null, defaultProfileId: null });
+    container.store.schedules.create({
+      id: 'sched', name: 'Weekly', prompt: 'p', profileId: 'profile-1', target: { kind: 'project', projectId: 'proj-s' },
+      rule: { cadence: 'daily', time: '09:00' }, timezone: 'UTC', enabled: false, nextRunAt: null,
+    });
+    container.store.schedules.addRun({ id: 'run', scheduleId: 'sched', trigger: 'manual', dueAt: null, startedAt: 1, status: 'running', chatId, createdChat: true });
+    const titleBefore = container.store.chats.get(chatId)!.title;
+
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'hello');
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+
+    expect(requests.filter((r) => r.messageId !== assistantMessageIds[0])).toEqual([]);
+    expect(container.store.chats.get(chatId)!.title).toBe(titleBefore);
+  });
+
   it('generates a title from the same profile after the first assistant message completes', async () => {
     const created = await createChat();
     const chatId = created['id'] as string;

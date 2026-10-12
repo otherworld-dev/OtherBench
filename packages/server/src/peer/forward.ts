@@ -5,7 +5,7 @@ import type { ChangeRow, SyncRow } from '@grunt/core/domain/sync.js';
 import { appendDelta } from '@grunt/core/domain/turn.js';
 import type { Part, ProducedBy, SerializedError } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
-import { parseApprovalChoice } from '../routes/tools.js';
+import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
 import { PeerError } from './service.js';
@@ -261,9 +261,11 @@ async function relayStream(container: Container, c: Context, nodeId: string, cha
         sink.send('hello', data);
         return;
       }
-      const e = data as { messageId?: string; type?: string; status?: string; request?: { id: string }; requestId?: string };
+      const e = data as { messageId?: string; type?: string; status?: string; request?: { id: string }; requestId?: string; ask?: { id: string }; askId?: string };
       if (e.type === 'approval-request' && e.request) runs.noteApproval(e.request.id, nodeId);
       if (e.type === 'approval-resolved' && e.requestId) runs.resolved(e.requestId);
+      if (e.type === 'ask-request' && e.ask) runs.noteApproval(e.ask.id, nodeId);
+      if (e.type === 'ask-resolved' && e.askId) runs.resolved(e.askId);
       if (e.messageId && e.type !== 'status') {
         inFlight.add(e.messageId);
         seen.set(e.messageId, withEvent(seen.get(e.messageId) ?? [], data as Record<string, unknown>));
@@ -399,13 +401,23 @@ export function forwardingRoutes(container: Container, runs: RemoteRuns): Hono {
     return res;
   });
 
+  /** A question or plan from a reply running on a paired machine is answered there. */
+  app.post('/asks/:id/answer', async (c, next) => {
+    const askId = c.req.param('id');
+    const nodeId = runs.approvalNode(askId);
+    if (!nodeId) return next();
+    const res = await forward(container, c, nodeId, `/asks/${askId}/answer`);
+    if (res.status === 200) runs.resolved(askId);
+    return res;
+  });
+
   return app;
 }
 
 /**
  * What a paired machine may call on this one's API over the peer listener:
  * running, steering and watching a chat that runs here, and answering its
- * approvals. Nothing else -- no settings, no folder browsing, no attaching
+ * approvals, questions and plans. Nothing else -- no settings, no folder browsing, no attaching
  * files by path. The approving machine is the caller's authenticated
  * identity, never a header.
  */
@@ -431,6 +443,14 @@ export function forwardedApi(container: Container): Hono<ForwardedEnv> {
     const resolved = container.toolProvider.resolveApproval(c.req.param('id'), choice, c.env.peerNodeId);
     if (!resolved) return c.json({ error: `Approval request "${c.req.param('id')}" is unknown or was already resolved.` }, 404);
     return c.json({ resolved: true });
+  });
+
+  app.post('/asks/:id/answer', async (c) => {
+    const reply = parseAskReply(await c.req.json().catch(() => ({})));
+    const result = container.toolProvider.answerAsk(c.req.param('id'), reply);
+    if (result === 'unknown') return c.json({ error: `Question or plan "${c.req.param('id')}" is unknown or was already answered.` }, 404);
+    if (typeof result === 'object') return c.json({ error: result.invalid }, 400);
+    return c.json({ answered: true });
   });
 
   // Running, steering and watching the chat: the same routes this machine's own UI uses.

@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool } from './artifact-tool.js';
 import { recallTool } from './recall-tool.js';
-import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@grunt/core/domain/permissions.js';
+import { UserAsks } from '@grunt/core/domain/user-asks.js';
 import type {
   ApprovalChoice,
   ApprovalOptions,
   ApprovalOutcome,
+  AskAnswerResult,
+  AskInput,
+  AskOutcome,
+  AskReply,
   RiskClass,
   ToolApprovalEvent,
   ToolContext,
@@ -21,6 +26,7 @@ import type { McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
 import { SANDBOX_NETWORK_SPEC, SANDBOX_NETWORK_TOOL, sandboxRunCommandTool } from './sandbox-tool.js';
 import { runCommandTool, toolError } from './shell-tool.js';
+import { threadTools } from './thread-tools.js';
 
 export interface GruntToolProviderOptions {
   /** Overridable id generator for audit row ids; defaults to `randomUUID`. */
@@ -37,9 +43,9 @@ type Authorization = (
   | { ok: true; grantedBy: string }
   | {
       ok: false;
-      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'unattended';
+      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'plan_mode' | 'approval_unavailable';
       reason: string;
-      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:unattended';
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan' | 'deny:unattended';
     }
 ) & {
   /** The machine a person answered on, when it wasn't this one (v2 spec §3). */
@@ -51,8 +57,6 @@ type SettleCause = 'user' | 'turn-ended' | 'dropped';
 
 const CANCELLED_REASON = 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.';
 const DROPPED_REASON = 'This approval request was dropped by the server (too many were pending), so the tool call did not run. Nobody denied it.';
-
-const UNATTENDED_REASON = "Nobody is watching this run, so a call that needs approval was refused instead of waiting for an answer that can't come.";
 
 function cancelledAuth(): Authorization {
   return { ok: false, code: 'cancelled', reason: CANCELLED_REASON, grantedBy: 'deny:cancelled' };
@@ -158,6 +162,7 @@ export class GruntToolProvider implements ToolProvider {
   private readonly generateId: () => string;
   private readonly now: () => number;
   private readonly sandbox: Sandbox | null;
+  private readonly asks: UserAsks;
 
   constructor(
     private readonly store: Store,
@@ -169,6 +174,7 @@ export class GruntToolProvider implements ToolProvider {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
     this.sandbox = options.sandbox ?? null;
+    this.asks = new UserAsks((event) => this.notify(event));
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
     // knowing it): settle it as a denial, which also emits `resolved` so the
@@ -197,6 +203,10 @@ export class GruntToolProvider implements ToolProvider {
     if (policy.artifacts !== false) raw.push(artifactTool(this.store));
     // Recall (spec 2026-10-09-recall-design): on unless the profile turns it off.
     if (policy.recall !== false) raw.push(recallTool(this.store));
+    // Thread tools (spec 2026-10-12-thread-cards-design): offered to every
+    // profile; TurnRunner drops propose_plan when the chat's Plan mode is off,
+    // and all three for a model that can't use tools.
+    raw.push(...threadTools((ctx, input) => this.askUser(ctx, input)));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
@@ -340,7 +350,7 @@ export class GruntToolProvider implements ToolProvider {
       }
     }
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
       // Auto mode: Claude Code's classifier decides this call. No card, no
       // event and nothing stored -- the pending request is dropped unanswered.
       this.broker.discard(decision.request.id);
@@ -356,6 +366,15 @@ export class GruntToolProvider implements ToolProvider {
     return { allowed: true, grantedBy: auth.grantedBy };
   }
 
+  /** Questions and plans for the user (spec 2026-10-12-thread-cards-design): raised on the same event channel as approval cards. */
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome> {
+    return this.asks.ask(ctx, input);
+  }
+
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult {
+    return this.asks.answer(askId, reply);
+  }
+
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void {
     const text = reason.trim().length > 0 ? reason.trim() : 'Blocked by Claude Code auto mode.';
     // redact() truncates a long string exactly as it does audit args.
@@ -368,7 +387,11 @@ export class GruntToolProvider implements ToolProvider {
 
   /** Turns a broker decision into an authorisation, raising (and waiting on) an approval card for 'ask'. */
   private async settle(decision: Decision, ctx: ToolContext): Promise<Authorization> {
-    if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
+    if (decision.kind === 'deny') {
+      return decision.plan
+        ? { ok: false, code: 'plan_mode', reason: decision.reason, grantedBy: 'deny:plan' }
+        : { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
+    }
     if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
 
     const { request } = decision;
@@ -378,11 +401,14 @@ export class GruntToolProvider implements ToolProvider {
       this.broker.discard(request.id);
       return cancelledAuth();
     }
-    // Nobody is watching an unattended run (scheduled tasks): a card would
-    // wait forever, so the call is refused and no card is raised.
+    // A scheduled run (spec 2026-10-12-scheduled-tasks-design §2): nobody can
+    // answer a card, so the request is dropped unanswered -- no waiter, no
+    // event -- and the call is refused with a reason the model can act on.
+    // Every card path comes through here (gated tools, Claude Code's gate,
+    // the sandbox's network ask), so this one check covers them all.
     if (ctx.unattended === true) {
       this.broker.discard(request.id);
-      return { ok: false, code: 'unattended', reason: UNATTENDED_REASON, grantedBy: 'deny:unattended' };
+      return { ok: false, code: 'approval_unavailable', reason: UNATTENDED_REASON, grantedBy: 'deny:unattended' };
     }
     // Register the waiter BEFORE notifying so a listener that answers
     // synchronously from inside the 'request' event still reaches it.

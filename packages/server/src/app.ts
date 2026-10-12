@@ -20,6 +20,7 @@ import { profilesRoutes } from './routes/profiles.js';
 import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
 import { sandboxRoutes } from './routes/sandbox.js';
+import { schedulesRoutes } from './routes/schedules.js';
 import { settingsRoutes } from './routes/settings.js';
 import { mcpSignInRoutes, oauthRedirectUri } from './routes/mcp-sign-in.js';
 import { oauthCallbackRoutes } from './routes/oauth-callback.js';
@@ -137,6 +138,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // owns /chats/:id itself and nothing under /artifacts.
   authed.route('/', artifactsRoutes(container));
   authed.route('/usage', usageRoutes(container));
+  authed.route('/schedules', schedulesRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));
   // This machine's sandbox VM (spec 2026-10-12-sandbox-design). Never on the peer listener.

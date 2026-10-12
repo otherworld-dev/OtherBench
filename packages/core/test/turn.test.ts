@@ -5,7 +5,9 @@ import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config
 import type { CanonMessage, Part } from '../src/types/messages.js';
 import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
+import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -438,6 +440,34 @@ describe('TurnRunner.run', () => {
     // The still-streaming sibling has no usage row yet -- it hasn't finished
     // or been cancelled, so nothing should have been written for it.
     expect(usageRows.some((u) => u.messageId === otherId)).toBe(false);
+  });
+
+  it("still announces the reply's end when its chat was deleted mid-stream and the final writes throw", async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const backstop = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'Go' }], profiles: [makeResolvedProfile()] });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+    push(messageId, { type: 'text-delta', text: 'Partial' });
+    await flush();
+
+    // DELETE /api/chats/:id: the message cascades away, so writing to it throws (as SQLite's repo does).
+    const gone = (): never => {
+      throw new Error(`message: not found: ${messageId}`);
+    };
+    vi.spyOn(store.messages, 'updateParts').mockImplementation(gone);
+    vi.spyOn(store.messages, 'updateStatus').mockImplementation(gone);
+    runner.cancel(messageId);
+    await flush();
+
+    expect(events.filter((e) => e.type === 'status')).toEqual([{ messageId, type: 'status', status: 'cancelled' }]);
+    expect(backstop.mock.calls.some((call) => String(call[0]).includes('failed outside its own error handling'))).toBe(false);
+    backstop.mockRestore();
   });
 
   it('a throwing listener does not corrupt the variant or block other listeners from receiving every event', async () => {
@@ -2031,5 +2061,144 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
     const system = await systemPromptFor('sandbox', { root: 'e:\\git\\grunt', canonicalPath: (p) => onDisk[p.toLowerCase()] ?? p });
     expect(system).toContain('The workspace e:\\git\\grunt is /mnt/e/Git/Grunt in the sandbox');
     expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
+  });
+});
+
+describe('TurnRunner relays asks', () => {
+  it("relays a tool's ask and its end as TurnEvents tagged with the reply", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const provider = new FakeToolProvider();
+    const engine: ChatEngine = {
+      async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+        const outcome = await provider.askUser(toolContextFor(req), {
+          kind: 'question',
+          toolName: 'ask_user',
+          questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }],
+        });
+        yield { type: 'text-delta', text: JSON.stringify(outcome) };
+        yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+      },
+      async listModels() {
+        return [];
+      },
+      async testConnection() {
+        return { ok: true, message: 'ok', latencyMs: 0 };
+      },
+    };
+    const runner = new TurnRunner(store, engine, { toolProvider: provider });
+    const events: TurnEvent[] = [];
+    runner.on((e) => {
+      events.push(e);
+      if (e.type === 'ask-request') provider.answerAsk(e.ask.id, { answers: ['Blue'] });
+    });
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'ask me' }], profiles: [makeResolvedProfile()] });
+    const id = assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    const request = events.find((e) => e.type === 'ask-request') as Extract<TurnEvent, { type: 'ask-request' }>;
+    expect(request).toMatchObject({ messageId: id, ask: { kind: 'question', chatId: 'chat-1', messageId: id } });
+    expect(events).toContainEqual({ messageId: id, type: 'ask-resolved', askId: request.ask.id });
+    expect(store.messages.get(id)!.parts).toEqual([{ type: 'text', text: JSON.stringify({ reply: { answers: ['Blue'] } }) }]);
+  });
+});
+
+describe('TurnRunner plan mode', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const stub = (name: string) => ({ name, description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'thread' as const, execute: async () => null });
+  const thread = [stub('update_todos'), stub('ask_user'), stub('propose_plan')];
+  const textOf = (m: CanonMessage): string => m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+
+  function setup(planMode: boolean) {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: thread }) });
+    return { store, engine, runner };
+  }
+  async function send(runner: TurnRunner, store: InMemoryStore, profiles: ResolvedProfile[] = [makeResolvedProfile()]): Promise<string[]> {
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'write it' }], profiles });
+    for (const id of assistantMessageIds) await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    return assistantMessageIds;
+  }
+
+  it('with plan mode off, offers no propose_plan, makes no gate and adds no note', async () => {
+    const { store, engine, runner } = setup(false);
+    await send(runner, store);
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toEqual(['update_todos', 'ask_user']);
+    expect(req.plan).toBeUndefined();
+    expect(textOf(req.messages.at(-1)!)).toBe('write it');
+  });
+
+  it('with plan mode on, offers propose_plan, gives the reply a closed gate and notes it on the request only', async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store);
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toContain('propose_plan');
+    expect(req.plan?.approved).toBe(false);
+    expect(textOf(req.messages.at(-1)!)).toBe(`write it\n${PLAN_MODE_NOTE}`);
+    expect(store.messages.get(req.messages.at(-1)!.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
+  });
+
+  it('gives each compare variant its own gate, and the next message a fresh closed one', async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store, [makeResolvedProfile(), makeResolvedProfile({ id: 'profile-2', name: 'Two' })]);
+    const [a, b] = engine.requests;
+    expect(a!.plan).not.toBe(b!.plan);
+    a!.plan!.approve();
+    expect(b!.plan!.approved).toBe(false);
+    await send(runner, store);
+    expect(engine.requests[2]!.plan!.approved).toBe(false);
+  });
+
+  it("offers no thread tools to a model that can't use tools, and so no gate", async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store, [makeResolvedProfile({ model: makeModel({ supportsTools: false }) })]);
+    expect(engine.requests[0]!.tools).toEqual([]);
+    expect(engine.requests[0]!.plan).toBeUndefined();
+    expect(textOf(engine.requests[0]!.messages.at(-1)!)).toBe('write it');
+  });
+});
+
+describe('unattended turns (scheduled runs)', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+  const newChat = (store: InMemoryStore) =>
+    store.chats.create({ id: 'chat-1', title: 't', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+  it('marks the request unattended and turns auto mode off, even in a chat with Auto on', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+    store.chats.update('chat-1', { autoMode: true });
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()], unattended: true });
+
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.unattended).toBe(true);
+    expect(engine.requests[0]!.autoMode).toBe(false);
+  });
+
+  it('leaves an ordinary run, a retry and a regenerate attended', async () => {
+    const store = new InMemoryStore();
+    let calls = 0;
+    const engine = new FakeChatEngine(() =>
+      calls++ === 0
+        ? [{ type: 'error', error: { kind: 'transient', message: 'boom', retryable: true } }]
+        : [{ type: 'finish', usage, finishReason: 'stop' }]
+    );
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('error'));
+    await runner.retry('chat-1', id, makeResolvedProfile());
+    expect(store.messages.get(id)!.status).toBe('complete');
+    const regenerated = await runner.regenerate({ chatId: 'chat-1', messageId: id, profile: makeResolvedProfile() });
+    await vi.waitFor(() => expect(store.messages.get(regenerated.assistantMessageId)!.status).toBe('complete'));
+
+    expect(engine.requests).toHaveLength(3);
+    expect(engine.requests.map((r) => r.unattended)).toEqual([undefined, undefined, undefined]);
   });
 });

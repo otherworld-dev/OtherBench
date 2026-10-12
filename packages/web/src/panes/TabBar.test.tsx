@@ -107,6 +107,14 @@ describe('TabBar (#824)', () => {
     expect(screen.getByTestId('tab-status-b')).toHaveAttribute('data-status', 'waiting');
   });
 
+  it('marks a tab waiting for you when its reply asks a question', () => {
+    useGruntStore.getState().openTab('a');
+    useGruntStore.setState({ appPendingApprovals: { a1: { chatId: 'a', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' } } });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByTestId('tab-status-a')).toHaveAttribute('data-status', 'waiting');
+    expect(screen.getByRole('img', { name: 'waiting for you' })).toBeInTheDocument();
+  });
+
   it('a chat dragged from the sidebar onto a tab opens as a tab there; a dragged tab moves', () => {
     useGruntStore.getState().openTab('a');
     useGruntStore.getState().openTab('b');

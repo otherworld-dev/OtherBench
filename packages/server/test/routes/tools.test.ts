@@ -638,5 +638,41 @@ describe('parseApprovalChoice: sandbox network grants', () => {
   it('still takes a single path or command key, and an empty constraint as none', () => {
     expect(parseApprovalChoice({ choice: 'always', constraint: { commandExact: 'ls' } })).toMatchObject({ constraint: { commandExact: 'ls' } });
     expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toMatchObject({ choice: 'always', constraint: null });
+
+describe('Ask routes', () => {
+  const post = (path: string, body: unknown) => app().request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const ctx = () => ({ chatId: 'chat-1', messageId: 'msg-1', profileId: 'p1', workspaceRoot: null, signal: new AbortController().signal });
+
+  async function pendingQuestion(): Promise<{ id: string; outcome: Promise<unknown> }> {
+    let id = '';
+    const off = toolProvider.onApprovalEvent((e) => {
+      if (e.type === 'ask') id = e.ask.id;
+    });
+    const outcome = toolProvider.askUser(ctx(), { kind: 'question', toolName: 'ask_user', questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] });
+    off();
+    return { id, outcome };
+  }
+
+  it('answers a pending question, then 404s the same id', async () => {
+    const { id, outcome } = await pendingQuestion();
+    const res = await post(`/api/asks/${id}/answer`, { answers: ['Blue'] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ answered: true });
+    expect(await outcome).toEqual({ reply: { answers: ['Blue'] } });
+    expect((await post(`/api/asks/${id}/answer`, { answers: ['Blue'] })).status).toBe(404);
+  });
+
+  it('400s a reply of the wrong kind with its reason, and a body of the wrong shape', async () => {
+    const { id } = await pendingQuestion();
+    const wrongKind = await post(`/api/asks/${id}/answer`, { approve: true });
+    expect(wrongKind.status).toBe(400);
+    expect(JSON.stringify(await wrongKind.json())).toContain('question');
+    for (const bad of [{}, { answers: 'Blue' }, { declined: false }, { approve: true, changes: 'x' }, { changes: 3 }]) {
+      expect((await post(`/api/asks/${id}/answer`, bad)).status).toBe(400);
+    }
+  });
+
+  it('404s an unknown id', async () => {
+    expect((await post('/api/asks/never-existed/answer', { declined: true })).status).toBe(404);
   });
 });

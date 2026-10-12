@@ -57,13 +57,23 @@ import type {
   UsageRepo,
   NewArtifactVersion,
   ArtifactVersionInfo,
+  NewSchedule,
+  NewScheduleRun,
+  Schedule,
+  SchedulePatch,
+  ScheduleRepo,
+  ScheduleRun,
+  ScheduleRunPatch,
 } from '../ports/store.js';
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
+import { UserAsks } from '../domain/user-asks.js';
+import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
-import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
+import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
 import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
 import { normaliseWindowsPath, toSandboxPath } from '../domain/sandbox-paths.js';
@@ -285,6 +295,9 @@ const FAKE_CANCELLED = {
   reason: 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.',
 };
 
+/** What GruntToolProvider returns when an unattended run's call would need a card. */
+const FAKE_UNATTENDED = { ok: false as const, code: 'approval_unavailable' as const, reason: UNATTENDED_REASON };
+
 export class FakeToolProvider implements ToolProvider {
   readonly refreshed: string[] = [];
   readonly denials: { toolName: string; reason: string }[] = [];
@@ -294,6 +307,8 @@ export class FakeToolProvider implements ToolProvider {
   private readonly broker: PermissionBroker;
   private readonly tools: ToolSpec[];
   private readonly mcpServers: FakeMcpServer[];
+  /** The real ask bookkeeping, so the fake behaves exactly as GruntToolProvider does. */
+  private readonly asks = new UserAsks((event) => this.notify(event));
 
   constructor(options: FakeToolProviderOptions = {}) {
     this.broker = new PermissionBroker(new InMemoryStore());
@@ -314,6 +329,7 @@ export class FakeToolProvider implements ToolProvider {
     if (policy.shell) raw.push(...this.tools.filter((t) => t.source === (runsShellInSandbox(policy) ? 'sandbox' : 'shell')));
     if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
     if (policy.recall !== false) raw.push(...this.tools.filter((t) => t.source === 'recall'));
+    raw.push(...this.tools.filter((t) => t.source === 'thread'));
     for (const id of policy.mcpServerIds) {
       const server = this.mcpServers.find((s) => s.id === id);
       if (!server) continue;
@@ -360,7 +376,7 @@ export class FakeToolProvider implements ToolProvider {
 
   async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
       this.broker.discard(decision.request.id);
       return { deferred: true };
     }
@@ -370,6 +386,14 @@ export class FakeToolProvider implements ToolProvider {
 
   recordAgentDenial(_ctx: ToolContext, toolName: string, _args: unknown, reason: string): void {
     this.denials.push({ toolName, reason });
+  }
+
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome> {
+    return this.asks.ask(ctx, input);
+  }
+
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult {
+    return this.asks.answer(askId, reply);
   }
 
   private gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec {
@@ -388,7 +412,7 @@ export class FakeToolProvider implements ToolProvider {
   private async settle(
     decision: ReturnType<PermissionBroker['decide']>,
     ctx: ToolContext
-  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'unattended'; reason: string }> {
+  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_unavailable'; reason: string }> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
     if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
 
@@ -398,10 +422,10 @@ export class FakeToolProvider implements ToolProvider {
       this.broker.discard(request.id);
       return FAKE_CANCELLED;
     }
-    // Mirrors GruntToolProvider: nobody can answer an unattended run's card, so refuse and raise none.
+    // Nobody can answer this run's cards: drop the request, raise none.
     if (ctx.unattended === true) {
       this.broker.discard(request.id);
-      return { ok: false, code: 'unattended', reason: "Nobody is watching this run, so a call that needs approval was refused instead of waiting for an answer that can't come." };
+      return FAKE_UNATTENDED;
     }
     // Waiter registered BEFORE notifying so a listener may answer synchronously.
     const pending = new Promise<{ choice: ApprovalChoice; cancelled: boolean }>((resolve) => {
@@ -538,7 +562,10 @@ class InMemoryModelRepo implements ModelRepo {
 
 class InMemoryProfileRepo implements ProfileRepo {
   private readonly repo = new InMemoryCrudRepo<Profile>();
-  constructor(private readonly projects: ProjectRepo) {}
+  constructor(
+    private readonly projects: ProjectRepo,
+    private readonly onDelete: (profileId: string) => void = () => {}
+  ) {}
   create(p: Profile): Profile {
     return this.repo.create({ ...p, useGlobalMemory: p.useGlobalMemory ?? true });
   }
@@ -557,6 +584,7 @@ class InMemoryProfileRepo implements ProfileRepo {
       if (project.defaultProfileId === id) this.projects.update(project.id, { defaultProfileId: null });
     }
     this.repo.delete(id);
+    this.onDelete(id);
   }
 }
 
@@ -647,7 +675,10 @@ class InMemoryPeerRepo implements PeerRepo {
 
 class InMemoryChatRepo implements ChatRepo {
   private readonly repo = new InMemoryCrudRepo<Chat>();
-  constructor(private readonly selfNodeId: string) {}
+  constructor(
+    private readonly selfNodeId: string,
+    private readonly onDelete: (chatId: string) => void = () => {}
+  ) {}
   /** A deleted location takes its chats' folders with it (the SQL schema's ON DELETE SET NULL). */
   clearLocation(locationId: string): void {
     for (const chat of this.repo.list()) {
@@ -662,6 +693,7 @@ class InMemoryChatRepo implements ChatRepo {
       workspace: fields.workspace ?? null,
       runsOn: c.runsOn ?? this.selfNodeId,
       autoMode: c.autoMode ?? false,
+      planMode: c.planMode ?? false,
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
@@ -688,6 +720,7 @@ class InMemoryChatRepo implements ChatRepo {
   }
   delete(id: string): void {
     this.repo.delete(id);
+    this.onDelete(id);
   }
 }
 
@@ -1132,6 +1165,122 @@ class InMemoryArtifactRepo implements ArtifactRepo {
   }
 }
 
+/** Mirrors SqliteScheduleRepo, including the foreign keys' cascades (called by the chat, project and profile repos). */
+class InMemoryScheduleRepo implements ScheduleRepo {
+  private readonly rows = new Map<string, Schedule>();
+  /** Every run with the order it was added, for ties on `startedAt` (SQLite: rowid). */
+  private runRows: { run: ScheduleRun; seq: number }[] = [];
+  private seq = 0;
+
+  create(s: NewSchedule): Schedule {
+    if (this.rows.has(s.id)) throw new Error(`Duplicate id: ${s.id}`);
+    const now = Date.now();
+    const full: Schedule = { ...structuredClone(s), createdAt: s.createdAt ?? now, updatedAt: s.updatedAt ?? now };
+    this.rows.set(full.id, full);
+    return structuredClone(full);
+  }
+
+  get(id: string): Schedule | null {
+    const s = this.rows.get(id);
+    return s ? structuredClone(s) : null;
+  }
+
+  list(): Schedule[] {
+    return [...this.rows.values()]
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((s) => structuredClone(s));
+  }
+
+  update(id: string, patch: SchedulePatch): Schedule {
+    const current = this.rows.get(id);
+    if (!current) throw new Error(`schedule: not found: ${id}`);
+    const next: Schedule = { ...current, ...structuredClone(patch) };
+    this.rows.set(id, next);
+    return structuredClone(next);
+  }
+
+  delete(id: string): void {
+    this.rows.delete(id);
+    this.runRows = this.runRows.filter((r) => r.run.scheduleId !== id);
+  }
+
+  due(now: number): Schedule[] {
+    return this.list()
+      .filter((s) => s.enabled && s.nextRunAt !== null && s.nextRunAt <= now)
+      .sort((a, b) => (a.nextRunAt ?? 0) - (b.nextRunAt ?? 0) || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  addRun(r: NewScheduleRun): ScheduleRun {
+    // Mirrors schedule_run.schedule_id's foreign key and its primary key.
+    if (!this.rows.has(r.scheduleId)) throw new Error(`schedule_run: no schedule ${r.scheduleId}`);
+    if (this.runRows.some((x) => x.run.id === r.id)) throw new Error(`Duplicate id: ${r.id}`);
+    const full: ScheduleRun = {
+      finishedAt: null,
+      detail: null,
+      chatId: null,
+      createdChat: false,
+      userMessageId: null,
+      messageId: null,
+      refusedCalls: 0,
+      ...structuredClone(r),
+    };
+    this.runRows.push({ run: full, seq: this.seq++ });
+    const keep = new Set(this.newestFirst(r.scheduleId).slice(0, SCHEDULE_RUNS_KEPT).map((x) => x.id));
+    this.runRows = this.runRows.filter((x) => x.run.scheduleId !== r.scheduleId || keep.has(x.run.id));
+    return structuredClone(full);
+  }
+
+  updateRun(id: string, patch: ScheduleRunPatch): ScheduleRun | null {
+    const row = this.runRows.find((x) => x.run.id === id);
+    if (!row) return null;
+    row.run = { ...row.run, ...structuredClone(patch) };
+    return structuredClone(row.run);
+  }
+
+  runs(scheduleId: string): ScheduleRun[] {
+    return this.newestFirst(scheduleId).map((r) => structuredClone(r));
+  }
+
+  lastRun(scheduleId: string): ScheduleRun | null {
+    return this.runs(scheduleId)[0] ?? null;
+  }
+
+  lastCompleted(scheduleId: string): ScheduleRun | null {
+    return this.runs(scheduleId).find((r) => r.status === 'complete') ?? null;
+  }
+
+  runningRuns(): ScheduleRun[] {
+    return this.runRows.filter((x) => x.run.status === 'running').map((x) => structuredClone(x.run));
+  }
+
+  madeChat(chatId: string): boolean {
+    return this.runRows.some((x) => x.run.chatId === chatId && x.run.createdChat);
+  }
+
+  /** Mirrors schedule.chat_id's ON DELETE CASCADE and schedule_run.chat_id's ON DELETE SET NULL. */
+  chatDeleted(chatId: string): void {
+    for (const s of [...this.rows.values()]) if (s.target.kind === 'chat' && s.target.chatId === chatId) this.delete(s.id);
+    for (const x of this.runRows) if (x.run.chatId === chatId) x.run = { ...x.run, chatId: null };
+  }
+
+  /** Mirrors schedule.project_id's ON DELETE CASCADE. */
+  projectDeleted(projectId: string): void {
+    for (const s of [...this.rows.values()]) if (s.target.kind === 'project' && s.target.projectId === projectId) this.delete(s.id);
+  }
+
+  /** Mirrors schedule.profile_id's ON DELETE CASCADE. */
+  profileDeleted(profileId: string): void {
+    for (const s of [...this.rows.values()]) if (s.profileId === profileId) this.delete(s.id);
+  }
+
+  private newestFirst(scheduleId: string): ScheduleRun[] {
+    return this.runRows
+      .filter((x) => x.run.scheduleId === scheduleId)
+      .sort((a, b) => b.run.startedAt - a.run.startedAt || b.seq - a.seq)
+      .map((x) => x.run);
+  }
+}
+
 /** A `Store` test double backed entirely by in-memory `Map`s. No SQL, no I/O. */
 export class InMemoryStore implements Store {
   readonly nodes: NodeRepo;
@@ -1152,24 +1301,34 @@ export class InMemoryStore implements Store {
   readonly grants: GrantRepo = new InMemoryGrantRepo();
   readonly artifacts: ArtifactRepo = new InMemoryArtifactRepo();
   readonly audit: AuditRepo;
+  readonly schedules: ScheduleRepo;
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {
     this.nodes = new InMemoryNodeRepo(selfNodeId);
-    const chats = new InMemoryChatRepo(selfNodeId);
+    const schedules = new InMemoryScheduleRepo();
+    this.schedules = schedules;
+    const chats = new InMemoryChatRepo(selfNodeId, (id) => schedules.chatDeleted(id));
     this.chats = chats;
     this.messages = new InMemoryMessageRepo(selfNodeId);
     this.audit = new InMemoryAuditRepo(selfNodeId);
     // The project and memory repos refer to each other lazily (existence check, cascade on delete).
     const memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
     this.projectMemory = memoryRepo;
-    const projects = new InMemoryProjectRepo(this.chats, (id) => memoryRepo.removeProject(id), selfNodeId);
+    const projects = new InMemoryProjectRepo(
+      this.chats,
+      (id) => {
+        memoryRepo.removeProject(id);
+        schedules.projectDeleted(id);
+      },
+      selfNodeId
+    );
     this.projects = projects;
     this.locations = new InMemoryLocationRepo((id) => {
       chats.clearLocation(id);
       projects.clearLocation(id);
     });
-    this.profiles = new InMemoryProfileRepo(this.projects);
+    this.profiles = new InMemoryProfileRepo(this.projects, (id) => schedules.profileDeleted(id));
   }
 
   /** Just runs `fn`: there is nothing to roll back to. */

@@ -122,15 +122,20 @@ export function DesktopPanel(): JSX.Element {
         )}
       </div>
       <fieldset className="space-y-2">
-        <legend className="mb-1 font-medium">Notifications while Grunt isn't focused</legend>
+        <legend className="mb-1 font-medium">Desktop notifications</legend>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={notify.replies} onChange={(e) => setNotifyPref('replies', e.target.checked)} />
           When a reply finishes
         </label>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={notify.approvals} onChange={(e) => setNotifyPref('approvals', e.target.checked)} />
-          When a tool call needs approval
+          Approvals, questions and plans
         </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={notify.scheduled} onChange={(e) => setNotifyPref('scheduled', e.target.checked)} />
+          Scheduled runs
+        </label>
+        <p className="text-[var(--text-muted)]">Scheduled runs notify even while Grunt is focused, since nobody was watching them.</p>
         <p className="text-[var(--text-muted)]">Clicking the tray icon afterwards opens the chat you were last notified about.</p>
       </fieldset>
       {error && (

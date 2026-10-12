@@ -53,8 +53,10 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * and `'network'` the `sandbox_network` approval a sandboxed command raises
  * for a host that isn't on its allowlist: new sources rather than flags, so
  * nothing but Grunt's own sandbox tool can claim to be sandboxed.
+ * `'thread'` is Grunt's own checklist, question and plan tools (spec
+ * 2026-10-12-thread-cards-design), allowed by policy and audited.
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'sandbox' | 'network';
+export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'sandbox' | 'network' | 'thread';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;

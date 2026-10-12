@@ -6,6 +6,7 @@ import type { Part } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
 import { appDefaultProfileId, resolveProfile } from '../profile-resolution.js';
 import { sseStream, STREAM_KEEPALIVE_MS } from '../stream/sse.js';
+import { startTurn } from '../turn-start.js';
 import { requireNonEmptyString } from '../validation.js';
 import { chatView, workspaceResolver } from '../workspace-view.js';
 
@@ -139,14 +140,12 @@ export function turnsRoutes(container: Container): Hono {
 
     const profiles = await Promise.all(profileIds.map((id) => resolveProfile(container, id)));
 
-    // The chat isn't quiet any more (project memory, spec §2). Before run(), so a fast reply's new timer is never cancelled.
-    container.memory?.noteTurnStarted(chatId);
+    // Only these four fields reach the runner: `unattended` is set by the
+    // schedule service alone and is never read from a request body.
     let result;
     try {
-      result = await container.turnRunner.run({ chatId, parentId, userParts: parts, profiles });
+      result = await startTurn(container, { chatId, parentId, userParts: parts, profiles });
     } catch (err) {
-      // Nothing started, so the chat is quiet again: re-arm its memory timer.
-      container.memory?.noteTurnCompleted(chatId);
       // A part naming an attachment that doesn't exist, or belongs to a
       // DIFFERENT chat, is a client-supplied bad reference -- 400, not the
       // 500 an uncaught throw here would otherwise become. See
@@ -156,16 +155,6 @@ export function turnsRoutes(container: Container): Hono {
       }
       throw err;
     }
-    // Seeds the registry's buffers *before* any client can subscribe, so a
-    // `GET /stream` racing this response never sees "unknown message" --
-    // see the StreamRegistry class doc for why this ordering matters.
-    container.streamRegistry.registerTurn(chatId, result.assistantMessageIds);
-    // The head goes to the new user message (what every client does next
-    // anyway) in the same update that marks the chat active, so the
-    // chat-updated event this sends never carries a stale head that would
-    // undo a client's own move (Task 34).
-    container.store.chats.update(chatId, { headMessageId: result.userMessageId, updatedAt: Date.now() });
-    container.events?.emit({ type: 'turn-started', chatId, messageIds: result.assistantMessageIds });
 
     return c.json(result, 202);
   });

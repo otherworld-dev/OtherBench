@@ -14,10 +14,18 @@ const FILE_WRITE = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const SHELL = ['Bash', 'BashOutput', 'KillShell', 'PowerShell', 'Monitor'];
 const MCP_RESOURCE = ['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool'];
 const WEB = ['WebFetch', 'WebSearch'];
-// No side effects of their own; a Task/Agent subagent's own tool calls are gated individually.
-const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ExitPlanMode', 'EnterPlanMode', 'ToolSearch', 'Skill'];
-// Grunt has no UI to answer it; Claude asks in plain text instead.
-const ALWAYS_DISALLOWED = ['AskUserQuestion'];
+// No side effects of their own; a Task/Agent subagent's own tool calls are gated
+// individually. AskUserQuestion is answered through Grunt's question card (the
+// engine's gate, spec 2026-10-12-thread-cards-design section 6).
+const INTERNAL = ['TodoWrite', 'Task', 'Agent', 'ToolSearch', 'Skill', 'AskUserQuestion'];
+// Claude Code's own plan mode writes its plan outside the workspace and switches
+// the session's permission mode, which Grunt doesn't track; Grunt's Plan mode
+// (propose_plan) replaces it. Out of INTERNAL too, so a call that somehow
+// arrives is `other` and gets a card.
+const ALWAYS_DISALLOWED = ['EnterPlanMode', 'ExitPlanMode'];
+
+/** The internal tools a clean chat (no folder) is given besides web search and fetch. */
+export const CLEAN_CHAT_AGENT_TOOLS: readonly string[] = ['TodoWrite', 'AskUserQuestion'];
 
 /** Argument keys Claude Code tools use for a filesystem path. */
 export const AGENT_PATH_ARG_KEYS: readonly string[] = ['file_path', 'notebook_path', 'path'];

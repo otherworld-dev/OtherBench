@@ -1,5 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
-import { ChartIcon, GearIcon, SignOutIcon } from './components/icons.js';
+import { ChartIcon, ClockIcon, GearIcon, SignOutIcon } from './components/icons.js';
 import { isQuickView } from './desktop/bridge.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
@@ -19,6 +19,7 @@ import { usePaneShortcuts } from './state/usePaneShortcuts.js';
 import { QuickChat } from './views/QuickChat.js';
 import { ProjectView } from './views/ProjectView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { SchedulesView } from './views/SchedulesView.js';
 import { UsageView } from './views/UsageView.js';
 
 /** The quick-chat window gets its own small view (`?view=quick`); everything else is the main app. */
@@ -34,6 +35,9 @@ function MainApp(): JSX.Element {
   const setInspectorCollapsed = useGruntStore((s) => s.setInspectorCollapsed);
   const projectPage = useGruntStore((s) => s.projectPage);
   const closeProjectPage = useGruntStore((s) => s.closeProjectPage);
+  const schedulesPage = useGruntStore((s) => s.schedulesPage);
+  const openSchedules = useGruntStore((s) => s.openSchedules);
+  const closeSchedules = useGruntStore((s) => s.closeSchedules);
 
   const setConnections = useGruntStore((s) => s.setConnections);
   const setModels = useGruntStore((s) => s.setModels);
@@ -151,6 +155,9 @@ function MainApp(): JSX.Element {
               <button type="button" onClick={() => setUsageViewOpen(true)} aria-label="Usage" title="Usage" className="btn px-2 py-1.5">
                 <ChartIcon />
               </button>
+              <button type="button" onClick={() => openSchedules()} aria-label="Scheduled tasks" title="Scheduled tasks" className="btn px-2 py-1.5">
+                <ClockIcon />
+              </button>
               {signedInRemotely && (
                 <button type="button" onClick={() => void signOut()} aria-label="Sign out" title="Sign out" className="btn px-2 py-1.5">
                   <SignOutIcon />
@@ -203,6 +210,13 @@ function MainApp(): JSX.Element {
 
       {usageViewOpen && <UsageView onClose={() => setUsageViewOpen(false)} />}
       {settingsViewOpen && <SettingsView onClose={() => setSettingsViewOpen(false)} />}
+      {schedulesPage && (
+        <SchedulesView
+          key={schedulesPage.prefill ? `${schedulesPage.prefill.kind}:${schedulesPage.prefill.kind === 'chat' ? schedulesPage.prefill.chatId : schedulesPage.prefill.projectId}` : 'list'}
+          {...(schedulesPage.prefill ? { prefill: schedulesPage.prefill } : {})}
+          onClose={closeSchedules}
+        />
+      )}
       {projectPage && (
         <ProjectView key={projectPage.mode === 'edit' ? projectPage.projectId : 'new'} page={projectPage} onClose={closeProjectPage} />
       )}

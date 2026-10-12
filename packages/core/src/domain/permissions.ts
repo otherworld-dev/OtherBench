@@ -6,12 +6,13 @@ import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
 import { runsShellInSandbox, type ToolPolicy } from '../types/config.js';
+import { PLAN_REFUSAL } from './thread-tools.js';
 
 export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js';
 
 export type Decision =
   | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox'; grantId?: string }
-  | { kind: 'deny'; reason: string }
+  | { kind: 'deny'; reason: string; plan?: true }
   | { kind: 'ask'; request: ApprovalRequest };
 
 export interface PermissionBrokerOptions {
@@ -162,6 +163,14 @@ export class PermissionBroker {
     const policyDenial = checkPolicy(tool, policy);
     if (policyDenial) return { kind: 'deny', reason: policyDenial };
 
+    // Plan mode (spec 2026-10-12-thread-cards-design §4): until the user
+    // approves this reply's plan, anything that could change something is
+    // refused, with no card. This only adds refusals: an allowed call still
+    // goes on to its grants or card below.
+    if (ctx.plan && !ctx.plan.approved && !allowedWhilePlanning(tool)) {
+      return { kind: 'deny', reason: PLAN_REFUSAL, plan: true };
+    }
+
     // fs/shell tools act ON a workspace; without one configured for this
     // chat there is nothing for them to legitimately operate on (shell's
     // cwd is forced to workspace_root -- task 24 -- agent (Claude Code) tools run in it too, and every fs tool call
@@ -169,11 +178,14 @@ export class PermissionBroker {
     // null root). mcp tools carry no such requirement, and neither do Claude
     // Code's web tools, which reach nothing local: a clean Claude Code chat
     // (spec 2026-10-11-claude-code-clean-chat-and-mcp-design) may use them.
+    // Claude Code's internal tools (TodoWrite, AskUserQuestion) touch nothing
+    // local either, so a clean chat may use them.
+    const agentCategory = tool.source === 'agent' ? classifyAgentTool(tool.name).category : null;
     const needsWorkspace =
       tool.source === 'fs' ||
       tool.source === 'shell' ||
       tool.source === 'sandbox' ||
-      (tool.source === 'agent' && classifyAgentTool(tool.name).category !== 'web');
+      (agentCategory !== null && agentCategory !== 'web' && agentCategory !== 'internal');
     if (needsWorkspace && !ctx.workspaceRoot) {
       return {
         kind: 'deny',
@@ -199,7 +211,7 @@ export class PermissionBroker {
       }
     }
 
-    // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, ExitPlanMode)
+    // Claude Code's bookkeeping tools (TodoWrite, Task/Agent, AskUserQuestion)
     // have no side effects of their own; a subagent's real tool calls come
     // back through here individually.
     if (tool.source === 'agent' && classifyAgentTool(tool.name).category === 'internal') {
@@ -222,6 +234,13 @@ export class PermissionBroker {
     // shell. Its network requests (source 'network') never take this pass.
     if (tool.source === 'sandbox' && policy.approvalMode === 'ask_on_mutate') {
       return { kind: 'allow', grantedBy: 'sandbox' };
+    }
+
+    // Thread tools (spec 2026-10-12-thread-cards-design): a checklist, a
+    // question or a plan for the user. They change nothing, so they never
+    // need a card; they are still audited like every call.
+    if (tool.source === 'thread') {
+      return { kind: 'allow', grantedBy: 'policy' };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
@@ -465,6 +484,15 @@ export class PermissionBroker {
 // ---------------------------------------------------------------------------
 
 /**
+ * What an unattended (scheduled) run's tool call gets instead of a card
+ * (spec 2026-10-12-scheduled-tasks-design §2): the model reads it, so it says
+ * what happened and how to let the call run next time.
+ */
+export const UNATTENDED_REASON =
+  'Nobody is watching this scheduled run, so this tool call needed an approval that nobody can give. It did not run. ' +
+  'To let it run unattended, allow it ahead of time with an Always grant, or for shell commands use a profile whose shell runs in the sandbox.';
+
+/**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go
  * to Claude Code's own classifier instead of a Grunt card (spec
  * 2026-10-03-claude-code-auto-mode-design section 3). Only Claude Code tools
@@ -476,6 +504,31 @@ export function isDeferrableInAutoMode(tool: ToolSpec, args: unknown): boolean {
   if (tool.source !== 'agent') return false;
   if (classifyAgentTool(tool.name).category === 'other') return false;
   return !isProtectedAgentWrite(tool, args);
+}
+
+/**
+ * Whether a call may run while its reply's plan is still unapproved (spec
+ * 2026-10-12-thread-cards-design §2): Grunt's own thread, artifact and
+ * recall tools; read-risk fs and MCP tools; and Claude Code's file-read,
+ * web and internal tools. Everything else, including any source added
+ * later, is refused: the default is false on purpose.
+ */
+export function allowedWhilePlanning(tool: ToolSpec): boolean {
+  switch (tool.source) {
+    case 'thread':
+    case 'artifact':
+    case 'recall':
+      return true;
+    case 'fs':
+    case 'mcp':
+      return tool.risk === 'read';
+    case 'agent': {
+      const category = classifyAgentTool(tool.name).category;
+      return category === 'file-read' || category === 'web' || category === 'internal';
+    }
+    default:
+      return false;
+  }
 }
 
 /**
@@ -536,6 +589,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.artifacts === false ? 'Artifacts are turned off for this profile.' : null;
     case 'recall':
       return policy.recall === false ? 'Searching past chats is turned off for this profile.' : null;
+    case 'thread':
+      return null;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;

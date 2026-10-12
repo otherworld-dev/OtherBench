@@ -142,6 +142,23 @@ describe('running a chat on the machine it runs on', () => {
     expect(audit[0]).toMatchObject({ grantedBy: 'ask:once', decidedOnNode: laptop.id });
   });
 
+  it("the laptop answers a question asked by the PC's reply; the answer reaches the PC's model", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: '#ask' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await readStream(stream, async (e) => {
+      const ask = (e.data as { type?: string; ask?: { id: string } }).ask;
+      if (e.data.type === 'ask-request' && ask) {
+        const answered = await laptop.api('POST', `/api/asks/${ask.id}/answer`, { answers: ['Blue'] });
+        expect(answered.status).toBe(200);
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'complete';
+    });
+    const parts = pc.container.store.messages.get(replyId)!.parts;
+    expect(JSON.stringify(parts)).toContain('Blue');
+  });
+
   it('a cancel from the laptop stops the reply on the PC', async () => {
     const { laptop, chatId, profileId, pc } = await setup();
     const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);

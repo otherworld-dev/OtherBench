@@ -228,6 +228,19 @@ describe('sync (Task 50)', () => {
     for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ projectPinned: true, pinned: true });
   });
 
+  it('plan mode is a field of its own: turned on on one machine while the other renames the chat, both stand', () => {
+    const a = node('a');
+    const b = node('b');
+    const s = pair(a, b);
+    seedProfile(a);
+    chat(a, 'c');
+    s.both();
+    a.store.chats.update('c', { planMode: true });
+    b.store.chats.update('c', { title: 'Renamed on B' });
+    s.both();
+    for (const n of [a, b]) expect(n.store.chats.get('c')).toMatchObject({ planMode: true, title: 'Renamed on B' });
+  });
+
   it("a chat's effort is a field of its own: set on one machine while the other renames the chat, both stand", () => {
     const a = node('a');
     const b = node('b');

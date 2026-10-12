@@ -5,6 +5,20 @@ import { HISTORY_CHAR_LIMIT, renderHistory } from '../src/history.js';
 const m = (id: string, role: CanonMessage['role'], parts: Part[], producedBy: CanonMessage['producedBy'] = null): CanonMessage => ({ id, chatId: 'c', parentId: null, role, parts, status: 'complete', error: null, producedBy, createdAt: 0 });
 
 describe('renderHistory', () => {
+  it('keeps questions and plans with their outcomes in a seeded history', () => {
+    const out = renderHistory([
+      m('u1', 'user', [{ type: 'text', text: 'paint it' }]),
+      m('a1', 'assistant', [
+        { type: 'tool-call', id: 'q1', name: 'AskUserQuestion', args: { questions: [{ question: 'Which colour?', header: 'C', options: [], multiSelect: false }] } },
+        { type: 'tool-result', id: 'q1', name: 'AskUserQuestion', result: 'User has answered your questions: "Which colour?"="Blue".', isError: false },
+        { type: 'tool-call', id: 'p1', name: 'propose_plan', args: { plan: '1. Paint it blue' } },
+        { type: 'tool-result', id: 'p1', name: 'propose_plan', result: 'The user approved the plan. Go ahead with it.\nmore', isError: false },
+      ]),
+      m('u2', 'user', [{ type: 'text', text: 'next' }]),
+    ]);
+    expect(out).toContain('[asked: Which colour? -> User has answered your questions: "Which colour?"="Blue".]');
+    expect(out).toContain('[plan -> The user approved the plan. Go ahead with it.]');
+  });
   it('is empty for a first message', () => {
     expect(renderHistory([m('u1', 'user', [{ type: 'text', text: 'hi' }])])).toBe('');
   });

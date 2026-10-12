@@ -1,11 +1,15 @@
 import { useState, type JSX } from 'react';
-import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@grunt/core/ports/tool-provider.js';
+import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@grunt/core/domain/thread-tools.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
 import { MarkdownBody } from './MarkdownBody.js';
+import { PlanCard } from './PlanCard.js';
+import { QuestionCard } from './QuestionCard.js';
+import { TodoChecklist } from './TodoChecklist.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
 import { useViewer } from '../viewer/ViewerContext.js';
 
@@ -151,6 +155,40 @@ function ToolGroup({ run }: { run: ToolPart[] }): JSX.Element {
   );
 }
 
+type ToolCallPart = Extract<Part, { type: 'tool-call' }>;
+type ToolResultPart = Extract<Part, { type: 'tool-result' }>;
+
+/** An answered question or a decided plan (spec 2026-10-12-thread-cards-design §7), outside the tool fold like an artifact card. */
+function ThreadRecord({ call, result }: { call: ToolCallPart; result: ToolResultPart }): JSX.Element {
+  const text = typeof result.result === 'string' ? result.result : (JSON.stringify(result.result) ?? '');
+  if (isPlanTool(call.name)) {
+    const plan = parsePlan(call.args);
+    return (
+      <details data-testid="plan-record" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-xs">
+        <summary className="cursor-pointer font-medium select-none">Plan · {text.split('\n')[0]}</summary>
+        {typeof plan === 'string' && (
+          <div className="mt-1">
+            <MarkdownBody text={plan} />
+          </div>
+        )}
+      </details>
+    );
+  }
+  const questions = parseQuestions(call.args);
+  return (
+    <div data-testid="question-record" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-xs">
+      {Array.isArray(questions) && (
+        <ul className="font-medium">
+          {questions.map((q, i) => (
+            <li key={i}>{q.question}</li>
+          ))}
+        </ul>
+      )}
+      <p className={`mt-1 whitespace-pre-wrap ${result.isError ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>{text}</p>
+    </div>
+  );
+}
+
 /**
  * Renders a message's parts, folding each run of consecutive tool-call/tool-result parts into one `ToolGroup`.
  * An artifact call that made a version (Deck #896) is a card instead, outside the fold; one still running,
@@ -171,8 +209,18 @@ function renderParts(parts: Part[]): JSX.Element[] {
     cards = [];
   };
   const carded = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isArtifactTool(p.name) && artifactOutcomeOf(p.result) ? [p.id] : [])));
+  // Todo calls are shown as the checklist, never as tools. Question and plan
+  // calls show as their record once answered; while waiting, only the card shows.
+  const results = new Map(parts.flatMap((p) => (p.type === 'tool-result' ? [[p.id, p] as const] : [])));
+  const recorded = new Set(parts.flatMap((p) => (p.type === 'tool-call' && (isAskTool(p.name) || isPlanTool(p.name)) ? [p.id] : [])));
   parts.forEach((p, i) => {
     if (p.type === 'tool-call' || p.type === 'tool-result') {
+      if (isTodoTool(p.name)) return;
+      if (recorded.has(p.id)) {
+        const result = p.type === 'tool-call' ? results.get(p.id) : undefined;
+        if (p.type === 'tool-call' && result) (run.length > 0 ? cards : out).push(<ThreadRecord key={i} call={p} result={result} />);
+        return;
+      }
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
         if (p.type === 'tool-result') (run.length > 0 ? cards : out).push(<ArtifactCard key={i} result={p.result} />);
@@ -325,6 +373,10 @@ export interface MessageProps {
   pendingApprovals?: ApprovalRequest[];
   /** Required whenever `pendingApprovals` is non-empty; omitted (with an empty array) everywhere a message can never have one, e.g. read-only historical views. */
   onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
+  /** Questions and plans this message's tool calls are waiting on (spec 2026-10-12-thread-cards-design). Rendered after the approval cards. */
+  pendingAsks?: UserAsk[];
+  /** Required whenever `pendingAsks` is non-empty. */
+  onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
   /** Shows the `‹ 2 / 3 ›` switcher: this message has non-compare siblings (a regenerated reply, an edited prompt). */
   branch?: BranchInfo;
   /** Offers "Regenerate" (assistant messages). Omit where it doesn't apply, e.g. a compare turn's variants. */
@@ -361,6 +413,8 @@ export function Message({
   onReopenVariants,
   pendingApprovals = [],
   onResolveApproval,
+  pendingAsks = [],
+  onAnswerAsk,
   branch,
   onRegenerate,
   onEdit,
@@ -378,6 +432,7 @@ export function Message({
   const userAttachmentParts = isUser
     ? message.parts.filter((p): p is Extract<Part, { type: 'image' | 'file' }> => p.type === 'image' || p.type === 'file')
     : [];
+  const todos = isUser ? null : latestTodos(message.parts);
 
   return (
     <article
@@ -430,6 +485,8 @@ export function Message({
       </div>
       )}
 
+      {todos && <TodoChecklist todos={todos} streaming={message.status === 'streaming'} />}
+
       {userAttachmentParts.length > 0 && !editing && (
         <div className="flex flex-wrap gap-1.5">
           {userAttachmentParts.map((p, i) => (
@@ -446,6 +503,18 @@ export function Message({
           {pendingApprovals.map((request) => (
             <ApprovalPrompt key={request.id} request={request} onResolve={onResolveApproval} />
           ))}
+        </div>
+      )}
+
+      {pendingAsks.length > 0 && onAnswerAsk && (
+        <div className="space-y-1">
+          {pendingAsks.map((ask) =>
+            ask.kind === 'question' ? (
+              <QuestionCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
+            ) : (
+              <PlanCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
+            )
+          )}
         </div>
       )}
 

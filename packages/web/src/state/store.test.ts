@@ -485,6 +485,23 @@ describe('app-wide events (Task 34)', () => {
     s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
     expect(selectPendingApprovalCount(s())).toBe(0);
   });
+
+  it('bumps the schedules version on each schedule event, and opens and closes the Scheduled overlay', () => {
+    const s = () => useGruntStore.getState();
+    expect(s().schedulesVersion).toBe(0);
+    s().applyAppEvent({ type: 'schedules-changed' });
+    s().applyAppEvent({ type: 'schedule-run-started', scheduleId: 's', scheduleName: 'S', runId: 'r', chatId: 'c', messageId: 'm' });
+    s().applyAppEvent({ type: 'schedule-run-finished', scheduleId: 's', scheduleName: 'S', runId: 'r', chatId: 'c', messageId: 'm', status: 'complete', detail: null });
+    expect(s().schedulesVersion).toBe(3);
+
+    expect(s().schedulesPage).toBeNull();
+    s().openSchedules({ kind: 'chat', chatId: 'c' });
+    expect(s().schedulesPage).toEqual({ prefill: { kind: 'chat', chatId: 'c' } });
+    s().openSchedules();
+    expect(s().schedulesPage).toEqual({});
+    s().closeSchedules();
+    expect(s().schedulesPage).toBeNull();
+  });
 });
 
 describe('running replies from app-wide events (#824)', () => {
@@ -596,5 +613,22 @@ describe('the project page slot', () => {
     expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p1' });
     useGruntStore.getState().closeProjectPage();
     expect(useGruntStore.getState().projectPage).toBeNull();
+  });
+});
+
+describe('asks and the app-wide pending list', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+  it('dropAsk removes a dead card from whichever message holds it', () => {
+    const ask = { kind: 'plan' as const, toolName: 'propose_plan', plan: '1. x', id: 'a1', chatId: 'c1', messageId: 'm1' };
+    useGruntStore.setState({ extras: { m1: { usage: null, pendingApprovals: [], pendingAsks: [ask] } } });
+    useGruntStore.getState().dropAsk('a1');
+    expect(useGruntStore.getState().extras['m1']!.pendingAsks).toEqual([]);
+  });
+  it('keeps the kind of a pending question, and the tray counts tool approvals only', () => {
+    const s = useGruntStore.getState();
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
+    expect(useGruntStore.getState().appPendingApprovals['a1']).toMatchObject({ kind: 'question' });
+    expect(selectPendingApprovalCount(useGruntStore.getState())).toBe(1);
   });
 });

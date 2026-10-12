@@ -837,3 +837,43 @@ describe('Composer auto mode toggle', () => {
     vi.mocked(api.claude.planUsage).mockResolvedValue({ usage: null });
   });
 });
+
+describe('Composer plan mode pill', () => {
+  beforeEach(() => {
+    reset();
+    useGruntStore.getState().setProfiles([makeProfile()]);
+  });
+  afterEach(cleanup);
+  const pill = () => screen.getByRole('button', { name: 'Plan mode' });
+
+  it('shows for every profile, off by default, saying what it does', () => {
+    const chat = makeChat();
+    useGruntStore.getState().setChats([chat]);
+    render(<Composer chat={chat} />);
+    expect(pill()).toHaveAttribute('aria-pressed', 'false');
+    expect(pill()).toHaveAttribute('title', 'Plan first: the model sets out a plan and waits for your approval before it changes anything (from the next message)');
+  });
+
+  it('turns on optimistically and saves', async () => {
+    let resolvePatch!: (c: Chat) => void;
+    mockedChatsPatch.mockReturnValue(new Promise<Chat>((r) => { resolvePatch = r; }));
+    const chat = makeChat();
+    useGruntStore.getState().setChats([chat]);
+    render(<Composer chat={chat} />);
+    await userEvent.setup().click(pill());
+    expect(mockedChatsPatch).toHaveBeenCalledWith('chat-1', { planMode: true });
+    expect(pill()).toHaveAttribute('aria-pressed', 'true');
+    resolvePatch({ ...chat, planMode: true });
+    await waitFor(() => expect(pill()).toBeEnabled());
+  });
+
+  it('reverts only planMode and shows the error when saving fails', async () => {
+    mockedChatsPatch.mockRejectedValue(new ApiError(500, 'Database is locked.'));
+    const chat = makeChat();
+    useGruntStore.getState().setChats([chat]);
+    render(<Composer chat={chat} />);
+    await userEvent.setup().click(pill());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Database is locked.');
+    expect(pill()).toHaveAttribute('aria-pressed', 'false');
+  });
+});

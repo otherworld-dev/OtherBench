@@ -856,6 +856,14 @@ session and transcript ids that could make a path are refused, every path
 goes through `containPath`, and transcripts are capped at 512 MiB each and
 2 GiB for each folder read.
 
+**Scheduled runs act with nobody watching.** What still runs unattended is
+exactly what needs no card: existing Always grants (exact host-shell commands
+included), read-only tools and read-only MCP tools under "Ask on changes",
+artifacts, web tools a profile allows and, once the sandbox (#935) lands,
+sandboxed commands. A prompt injection in a scheduled run is limited to
+those. The editor's warnings list what will be refused, not what will run.
+There's no spend cap; usage rows are written as normal.
+
 ### Claude Code engine
 
 - Live processes (`engine-claude-code/src/live.ts`). A reply's Claude Code
@@ -1064,6 +1072,67 @@ These follow spec 2026-10-12-mcp-oauth-design (Deck #931).
   - Sign-in mode (`--public-url`): a real provider accepts `<public url>/oauth/callback`, and a browser on another device finishes the sign-in with no paste-back.
   - A provider without dynamic registration (GitHub's MCP server with a hand-registered OAuth app, callback `http://127.0.0.1/oauth/callback`): the Sign-in app path.
 
+### Thread cards: checklists, questions and plan mode
+
+These follow spec `docs/superpowers/specs/2026-10-12-thread-cards-design.md` (git-ignored, like the other specs here). They put three things in the thread: a progress checklist, question cards and a Plan mode.
+
+- **Checklist.** It is built from the reply's last `update_todos` call (API profiles) or `TodoWrite` call (Claude Code). Each call carries the whole list, so the newest one replaces the rest. The thread shows it as a checklist in place of a tool row, and the Inspector has a Progress section for the open chat. `parseTodos` is the strict check for `update_todos` input and `readTodos` the lenient one used for display.
+- **Question cards.** The model asks one to four questions of two to four options each. The card always offers a free-text "Other", multi-select answers are joined with ", ", and the user can decline. Option previews are not shown. API profiles get the answers back as `User has answered your questions: "Q"="A". You can now continue with the user's answers in mind.` Claude Code's own tool result reads `Your questions have been answered ...` instead (see the probe notes below).
+- **Plan mode.**
+  - **Switch.** It is per chat (`chat.plan_mode`, migration `022-chat-plan-mode`, `PATCH /api/chats/:id` with `planMode`; 021 is reserved by other work). The composer has a **Plan** pill (`aria-label="Plan mode"`), saved optimistically and reverted if the save fails. It applies from the next message.
+  - **Flow.** While it is on, the model sets out a plan with `propose_plan` and waits. The card offers Approve or "Ask for changes" with a note.
+  - **Lifetime.** An approval lasts for the rest of that one reply. A compare variant, a retry and the next message each start closed again.
+  - **Scope.** Approving a plan approves no tool call. Anything that changes something still gets its usual card or grant afterwards.
+- **Sources and tools.**
+  - **API profiles.** `ToolSource` has a new member, `'thread'`, with three tools: `update_todos`, `ask_user` and `propose_plan` (`core/src/domain/thread-tools.ts`, run by `tools/src/thread-tools.ts`). The policy allows them with no card and no grants after the policy check, and every call is audited like any other.
+  - **Claude Code.** It keeps its own `TodoWrite` and `AskUserQuestion`. `AskUserQuestion` is answered inside the PreToolUse hook: the hook returns `allow` with the answers in `updatedInput.answers`, keyed by question text, so Grunt's card is the answer. `propose_plan` lives on Grunt's per-process server (`mcp__grunt_<16 hex>__propose_plan`) only while the reply is planning, and is reported as `propose_plan`. `EnterPlanMode` and `ExitPlanMode` are always disallowed (`agentDisallowedTools`), as Grunt's plan mode replaces them.
+  - **Todo flag.** Newer models such as Sonnet are not offered `TodoWrite` in SDK sessions by default, so `buildChildEnv` sets `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` for every Claude Code process.
+- **What the probe found** (Task 1, `engine-claude-code/test/fixtures/README.md`, section "Thread tools"; decision `ASK_PATH=hook, TODO_FLAG=env`).
+  - **Hook answer.** It worked live. The model got `Your questions have been answered: ...` and replied with the answer, and `canUseTool` was never called, so the hook gets there first as it does for other tools.
+  - **Hook refusal.** A `deny` with a reason reaches the model wrapped as `PreToolUse:AskUserQuestion hook error: <reason>`. The turn still finishes `success`.
+  - **Todos.** Sonnet lists `TodoWrite` with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`. Haiku lists it anyway.
+  - **Clean chat.** The tools check (`tools: ['WebSearch', 'WebFetch', 'TodoWrite', 'AskUserQuestion']`) ran on Haiku only. A clean chat on Sonnet is unprobed.
+  - **Fallbacks.** Task F (fallback ask and todo tools on Grunt's own server) was not needed and was not built.
+- **The route.** `POST /api/asks/:id/answer` takes exactly one of `{ answers: string[] }`, `{ declined: true }`, `{ approve: true }` or `{ changes: string }`.
+  - **Statuses.** 200 `{ answered: true }`; 404 when the ask is unknown or already settled; 400 when the body has the wrong shape, or doesn't fit the ask (an `approve` sent to a question, a `declined` sent to a plan, the wrong number of answers, a blank or over-long answer or change note).
+  - **Paired machines.** It is forwarded to the machine running the chat, like `/approvals/:id/resolve`. The peer listener allows it for a paired machine.
+  - **Limits.** At most 50 asks are pending at once. Past that the oldest is settled as cancelled and logged. Each answer is at most 4,000 characters, a change note 8,000 and a plan 20,000.
+- **The planning rule.** Until the reply's plan is approved, `decide` (`core/src/domain/permissions.ts`) refuses any call that `allowedWhilePlanning` rejects. The refusal is "Plan mode is on: set out your plan with propose_plan and wait for the user's approval before changing anything.", with no card, audited `deny:plan`.
+  - **Allowed while planning.** `thread`, `artifact` and `recall` tools. `fs` and `mcp` tools with risk `read`. Claude Code tools in the categories `file-read`, `web` and `internal`.
+  - **Everything else is refused.** That includes any source added later, so the rule fails closed. It only adds refusals: an allowed call still goes on to its grants or card.
+  - **Parallel calls.** On the AI SDK path a call made alongside `propose_plan` is refused, as the gate is still closed when it is decided. Claude Code runs Grunt's server tools one at a time and its PreToolUse hook runs just before each tool, so a Write sent in the same message as `propose_plan` reaches the gate after the user approves, and goes on to its normal card. That is not a bypass, the card still applies.
+- **Unattended runs.** `ToolContext.unattended` and `EngineRequest.unattended` are added by this feature, and the schedule service now sets them (see Scheduled tasks below). When set, there is no card, no event, no notification and no tab dot. A question gets "Nobody is here to answer: this run is unattended. Use your judgement, carry on, and say in your reply what you assumed." A plan gets "Nobody can approve a plan in this run, so nothing may be changed. Don't propose it again; finish by setting out your plan in your reply.", and the gate stays closed. Unit tests cover both, and the scheduled-tasks e2e runs a refused tool call for real.
+- **Telling you.** A pending question or plan counts like a pending tool approval: the tab dot (label "waiting for you") and a desktop notification, "Waiting for your answer" or "Plan waiting for your approval". The approvals toggle in Settings is now "Approvals, questions and plans".
+- **Known gaps** (the first six are Phase 2 in the spec).
+  - Cowork's `TaskCreate` and `TaskUpdate` are not folded into the checklist.
+  - Option previews are not shown.
+  - The tray's count is tool approvals only.
+  - The quick-chat window has no cards.
+  - There is no per-profile switch for any of this.
+  - There is no "Approve, and allow file edits for this reply" shortcut on the plan card, so every write still gets its own card after the approval.
+  - A subagent's `TodoWrite` replaces the reply's checklist.
+  - The model can do something other than the plan it had approved. Each call's own card or grant is still the control.
+  - On a paired machine, a reply that runs on the other machine asks for you there, but the question or plan is not announced app-wide on this one (no tab dot, no notification). The card itself shows in the thread through the relayed stream. Remote tool approvals already behave this way.
+  - Clean chats on Sonnet have not been probed for `TodoWrite` and `AskUserQuestion` (see the probe notes above).
+- **Live check (manual)** (spec section 9). Not done yet, these need a real Claude Code and a desktop window. Run it with a scratch data folder, not your real one, until the migration number is settled. This branch uses 022 while 021 is reserved for other work, and a database that runs 022 first would skip 021 for good.
+  1. A Claude Code folder chat on Sonnet shows a checklist.
+  2. Claude Code asks through the card, in a folder chat and in a clean chat (the clean chat on Sonnet is the unprobed case).
+  3. With Plan on: a write is refused, the model proposes a plan, you ask for changes, it proposes again, you approve, and the write then gets its own card.
+  4. A question while the window is unfocused raises a desktop notification.
+  5. An API profile uses `ask_user` and `update_todos` sensibly.
+
+### Scheduled tasks
+
+Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925). A schedule runs a prompt on a profile daily, on chosen weekdays or monthly, at a set time in the zone of the machine it was made on. It either adds a reply to a fixed chat or starts a new chat in a project (`<name> · 12 Oct 2026`, never auto-titled). The clock button in the sidebar footer opens the Scheduled overlay. "Schedule…" in a chat's or a project's menu opens the editor on that target.
+
+- **Where it lives.** `schedule` and `schedule_run` (migration `023-schedules`) are local. They have no sync triggers, so a schedule runs only on the machine that holds it. Deleting its chat, project or profile deletes it. Archiving its profile leaves it, and its runs record "Didn't run" until the profile is changed.
+- **When it runs.** `ScheduleService` (`packages/server/src/schedule/service.ts`) re-arms one timer for the earliest next run, never more than 30 s away, so sleep and clock changes are caught within 30 s. A schedule that missed slots runs once, marked late if more than 5 minutes past due. At most two scheduled runs go at once. A busy target chat makes its schedule wait, and a schedule still running at its next slot records that slot as "Didn't run". Runs stop after 30 minutes ("Timed out"). On start, a run left running by the previous process is marked as an error. `nextRunAt` moves before a run starts, so a crash never repeats a slot.
+- **Unattended.** Every scheduled run (and Run now) is unattended: `TurnInput.unattended` → `EngineRequest.unattended` → `ToolContext.unattended`. The last two came from thread cards and nothing set them until now. The schedule service sets them, and `TurnInput.unattended` is new. `GruntToolProvider.settle` refuses any call that would raise a card with `approval_unavailable`, audited `deny:unattended` (the Inspector says "refused: nobody to approve (scheduled run)"), and the run's history counts them. Grants, read-only tools under "Ask on changes", artifacts and allowed web tools still run. Thread cards already answer for the model in an unattended run: a question gets the unattended text and a plan stays closed. Claude Code's auto mode is never used in a scheduled run. The flag is only ever set by the service, never from a request body, so the peer listener can't set it.
+- **Sandbox.** The sandbox (#935) is not on this branch. Once it lands, sandboxed commands will run unattended as well. Until then `unattendedWarnings` reads `shellRuns` through a widened type (`ToolPolicy & { shellRuns?: string }`), so every shell command is listed as one that will be refused.
+- **Notifications.** Desktop only, shown even while Grunt is focused (Settings → Desktop → "Scheduled runs"). The run's own "Reply finished" is suppressed.
+- **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
+- **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
@@ -1213,6 +1282,7 @@ this on startup.
     blockquote lose the quote styling; link targets with spaces aren't
     percent-encoded; the preview loads remote images through `MarkdownBody`
     while the .docx writes `[Image: alt]`.
+- **Scheduled tasks phase 2 isn't built.** Schedules don't sync or move between machines, there are no browser or phone notifications, no "every N hours" or cron rules, no per-schedule timeout and no attachments in the prompt. Deleting a chat or project removes its schedules without a mention in the delete dialog.
 
 ## Deviations from the v2 spec and plan
 

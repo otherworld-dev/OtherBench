@@ -24,7 +24,7 @@ export class AppEventBus {
 
   emit(e: AppEvent): void {
     if (e.type === 'approval-requested') {
-      this.pending.set(e.requestId, { chatId: e.chatId, messageId: e.messageId, requestId: e.requestId, toolName: e.toolName });
+      this.pending.set(e.requestId, { chatId: e.chatId, messageId: e.messageId, requestId: e.requestId, toolName: e.toolName, ...(e.kind ? { kind: e.kind } : {}) });
     } else if (e.type === 'approval-resolved') {
       this.pending.delete(e.requestId);
     } else if (e.type === 'turn-started') {
@@ -68,6 +68,11 @@ export class AppEventBus {
       } else if (e.type === 'approval-resolved') {
         const chatId = this.pending.get(e.requestId)?.chatId ?? store.messages.get(e.messageId)?.chatId;
         if (chatId) this.emit({ type: 'approval-resolved', chatId, requestId: e.requestId });
+      } else if (e.type === 'ask-request') {
+        this.emit({ type: 'approval-requested', chatId: e.ask.chatId, messageId: e.messageId, requestId: e.ask.id, toolName: e.ask.toolName, kind: e.ask.kind });
+      } else if (e.type === 'ask-resolved') {
+        const chatId = this.pending.get(e.askId)?.chatId ?? store.messages.get(e.messageId)?.chatId;
+        if (chatId) this.emit({ type: 'approval-resolved', chatId, requestId: e.askId });
       } else if (e.type === 'status' && e.status !== 'streaming') {
         const chatId = store.messages.get(e.messageId)?.chatId;
         if (chatId) this.emit({ type: 'turn-finished', chatId, messageId: e.messageId, status: e.status });
