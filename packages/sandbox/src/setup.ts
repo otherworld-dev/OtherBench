@@ -297,6 +297,8 @@ const installRuntime: SetupStep = {
     });
     // What the 2026-10-12 probe left behind.
     await ctx.runner.exec('root', ['/bin/rm', '-rf', '/opt/grunt-probe']);
+    // The runtime's version is pinned in resources/package.json (and its lock). When it is bumped, re-run the live address case
+    // (GRUNT_SANDBOX_LIVE=1, test/live.test.ts: "resolved-address guard"), which holds Grunt's ranges to what that runtime really dials.
     // The runtime is plain JavaScript: install scripts (which would run as root) have no business here.
     await must(
       ctx,

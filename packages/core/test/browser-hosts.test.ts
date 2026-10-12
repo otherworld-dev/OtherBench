@@ -11,6 +11,8 @@ import {
   normaliseHost,
   ownAddresses,
   siteOf,
+  V4_NOT_PUBLIC,
+  V6_GLOBAL_NOT_PUBLIC,
 } from '../src/domain/browser-hosts.js';
 
 describe('siteOf', () => {
@@ -75,6 +77,24 @@ describe('the shared host vectors (also run through the egress proxy in @grunt/t
     expect(sites).toBeGreaterThanOrEqual(25);
     expect(BROWSER_HOST_VECTORS.filter((v) => v.denied && v.site !== null).length).toBeGreaterThanOrEqual(40);
     expect(BROWSER_HOST_VECTORS.filter((v) => !v.denied).length).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('the range tables', () => {
+  // samePrefix shifts a 32-bit mask by (32 - prefix): outside 0..32 that count is negative and JavaScript wraps it
+  // (0xffffffff << (32 - 48) is a /16), so a bad row would silently match the wrong block.
+  it('give every IPv4 row a prefix of 1..32', () => {
+    for (const [a, b, c, d, prefix] of V4_NOT_PUBLIC) {
+      expect(Number.isInteger(prefix) && prefix >= 1 && prefix <= 32, `${a}.${b}.${c}.${d}/${prefix}`).toBe(true);
+    }
+  });
+
+  it('give every IPv6 row, which compares only the first 32 bits, a prefix of 3..32 inside 2000::/3', () => {
+    for (const [a, b, prefix] of V6_GLOBAL_NOT_PUBLIC) {
+      const row = `${a.toString(16)}:${b.toString(16)}::/${prefix}`;
+      expect(Number.isInteger(prefix) && prefix >= 3 && prefix <= 32, row).toBe(true);
+      expect(a & 0xe000, row).toBe(0x2000);
+    }
   });
 });
 

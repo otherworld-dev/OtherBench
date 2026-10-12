@@ -192,7 +192,7 @@ export const V4_NOT_PUBLIC: readonly (readonly [number, number, number, number, 
 
 /**
  * Blocks of global unicast (2000::/3) that are not the public internet either:
- * [first word, second word, prefix length], the prefix 32 at most. 6to4
+ * [first word, second word, prefix length], the prefix 3..32 (only the first two words are compared; browser-hosts.test.ts enforces it). 6to4
  * (2002::/16) isn't one of them: it is judged by the IPv4 address it carries.
  */
 export const V6_GLOBAL_NOT_PUBLIC: readonly (readonly [number, number, number])[] = [
@@ -205,7 +205,11 @@ function v4Int(o: readonly number[]): number {
   return ((o[0]! << 24) | (o[1]! << 16) | (o[2]! << 8) | o[3]!) >>> 0;
 }
 
-/** Whether two 32-bit numbers have the same first `prefix` bits. */
+/**
+ * Whether two 32-bit numbers have the same first `prefix` bits (0..32). A V6_GLOBAL_NOT_PUBLIC row compares only the
+ * address's first 32 bits, so its prefix must be 32 at most: a longer one would shift by a negative amount (JavaScript
+ * shifts by the count mod 32, so /48 would act as /16). browser-hosts.test.ts holds every row of both tables to its range.
+ */
 function samePrefix(x: number, y: number, prefix: number): boolean {
   const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
   return ((x & mask) >>> 0) === ((y & mask) >>> 0);
