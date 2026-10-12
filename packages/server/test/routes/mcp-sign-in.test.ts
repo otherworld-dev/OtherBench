@@ -445,6 +445,34 @@ describe('editing and deleting a signed-in server', () => {
     }
   });
 
+  it.each([
+    ['the unchanged save first', 0],
+    ['the URL change first', 1],
+  ])('an unchanged-form save and a URL change sent together end consistent (%s)', async (_label, changeFirst) => {
+    const id = await signedIn();
+    const second = await startOAuthEchoServer();
+    try {
+      const unchangedForm = () => app().request(`/api/mcp-servers/${id}`, patchJson({ name: 'Hosted Docs', transport: 'http', command: null, args: [], url: fixture.url, enabled: true }));
+      const urlChange = () => app().request(`/api/mcp-servers/${id}`, patchJson({ url: second.url }));
+      const sends = changeFirst ? [urlChange, unchangedForm] : [unchangedForm, urlChange];
+      const results = await Promise.all(sends.map((send) => send()));
+      expect(results.map((r) => r.status)).toEqual([200, 200]);
+
+      // Whichever the lock ran last decides the URL; the connection and the sign-in state must agree with it.
+      await waitFor(() => healthOf(id).status === 'needs_auth');
+      await pause(200);
+      const finalUrl = store.mcpServers.get(id)!.url;
+      expect([fixture.url, second.url]).toContain(finalUrl);
+      expect(liveUrl(id)).toBe(finalUrl);
+      expect(store.mcpServers.get(id)!.oauth).toBeNull();
+      expect(await secrets.get(oauthRefs(id).tokens)).toBeNull();
+      expect(healthOf(id)).toMatchObject({ status: 'needs_auth', auth: { state: 'needs_sign_in', signedInAt: null } });
+      for (const header of second.mcpAuthHeaders) expect(header).toBe('');
+    } finally {
+      await second.close();
+    }
+  });
+
   it('a hand-registered client survives a URL change, while the tokens and the registered client go', async () => {
     const manualFx = await startOAuthEchoServer({ dcr: false, staticClients: { 'manual-1': 'manual-secret' }, idTokenEmail: 'alice@example.com' });
     try {

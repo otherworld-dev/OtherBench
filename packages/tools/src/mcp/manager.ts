@@ -123,18 +123,26 @@ export class McpServerManager {
    * sign-in meanwhile.
    */
   async reconfigure(serverId: string, opts: { forget: 'none' | 'keepManualClient' | 'all' }, apply: () => void | Promise<void>): Promise<void> {
-    await this.withLock(serverId, async () => {
-      const client = this.clients.get(serverId);
-      if (client) {
-        this.teardown(serverId);
-        await client.disconnect();
-      }
-      this.signIns.forget(serverId);
-      await this.forgetAsked(serverId, opts.forget);
-      await apply();
-      await this.forgetAsked(serverId, opts.forget);
-      await this.sync();
-    });
+    await this.withLock(serverId, () => this.reconfigureHeld(serverId, opts, apply));
+  }
+
+  /** Runs `fn` under this server's lock (the same lock restart, sign-out, sign-in completion and `reconfigure` take). Not reentrant: inside `fn`, use `reconfigureHeld`, never `reconfigure`. */
+  withServerLock<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+    return this.withLock(serverId, fn);
+  }
+
+  /** `reconfigure` for a caller that already holds the lock through `withServerLock`, so it can read the row and decide inside it. */
+  async reconfigureHeld(serverId: string, opts: { forget: 'none' | 'keepManualClient' | 'all' }, apply: () => void | Promise<void>): Promise<void> {
+    const client = this.clients.get(serverId);
+    if (client) {
+      this.teardown(serverId);
+      await client.disconnect();
+    }
+    this.signIns.forget(serverId);
+    await this.forgetAsked(serverId, opts.forget);
+    await apply();
+    await this.forgetAsked(serverId, opts.forget);
+    await this.sync();
   }
 
   private async forgetAsked(serverId: string, forget: 'none' | 'keepManualClient' | 'all'): Promise<void> {

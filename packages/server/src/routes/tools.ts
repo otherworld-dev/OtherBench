@@ -346,95 +346,105 @@ export function toolsRoutes(container: Container): Hono {
 
   app.patch('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
-    const existing = getMcpServerOrThrow(container, id);
+    getMcpServerOrThrow(container, id); // a plain 404 without waiting for the lock
     const body = (await c.req.json().catch(() => ({}))) as McpServerBody;
 
-    const patch: Partial<Omit<McpServer, 'id'>> = {};
-    if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');
-    if (body.transport !== undefined) patch.transport = parseTransport(body.transport);
-    if (body.command !== undefined) patch.command = optionalNullableString(body.command, 'command') ?? null;
-    if (body.args !== undefined) patch.args = optionalStringArray(body.args, 'args');
-    if (body.url !== undefined) patch.url = optionalNullableString(body.url, 'url') ?? null;
-    if (body.enabled !== undefined) patch.enabled = optionalBoolean(body.enabled, 'enabled', existing.enabled);
+    // Everything from reading the row to reconnecting runs under the server's
+    // lock, and the row is read inside it: what a PATCH changed is judged
+    // against the row as it is when this PATCH's turn comes, not as it was
+    // when the request arrived (another PATCH may have landed in between).
+    return container.mcpManager.withServerLock(id, async () => {
+      const existing = getMcpServerOrThrow(container, id);
+      const patch: Partial<Omit<McpServer, 'id'>> = {};
+      if (body.name !== undefined) patch.name = requireNonEmptyString(body.name, 'name');
+      if (body.transport !== undefined) patch.transport = parseTransport(body.transport);
+      if (body.command !== undefined) patch.command = optionalNullableString(body.command, 'command') ?? null;
+      if (body.args !== undefined) patch.args = optionalStringArray(body.args, 'args');
+      if (body.url !== undefined) patch.url = optionalNullableString(body.url, 'url') ?? null;
+      if (body.enabled !== undefined) patch.enabled = optionalBoolean(body.enabled, 'enabled', existing.enabled);
 
-    // A transport switch makes the OTHER transport's fields irrelevant --
-    // `POST` never lets them exist together in the first place (only the
-    // matching transport's fields are ever populated, see above), so a
-    // PATCH that flips transport must clean up the side that no longer
-    // applies rather than leaving it stale: `envRefs`/`headerRefs` orphaned
-    // in `SecretStore` with nothing left pointing at them, or a `url`/
-    // `command` that silently starts applying again if the transport is
-    // flipped back later. A transport is a MODE, not two independent field
-    // sets: `env` only ever applies to the RESULTING transport being
-    // `stdio`, `headers` only to it being `http` -- enforced below by
-    // gating each on `newTransport`, not merely on whether the caller also
-    // set `transport` in this same request. Without that gate, an explicit
-    // `env`/`headers` in the very request that flips transport (e.g.
-    // `{"transport":"http","env":{"LEFTOVER":"x"}}`) would still be applied
-    // and store env refs on an http row -- meaningless, and not what a
-    // transport switch's cleanup below is supposed to guarantee.
-    const newTransport = patch.transport ?? existing.transport;
-    const transportChanged = patch.transport !== undefined && patch.transport !== existing.transport;
+      // A transport switch makes the OTHER transport's fields irrelevant --
+      // `POST` never lets them exist together in the first place (only the
+      // matching transport's fields are ever populated, see above), so a
+      // PATCH that flips transport must clean up the side that no longer
+      // applies rather than leaving it stale: `envRefs`/`headerRefs` orphaned
+      // in `SecretStore` with nothing left pointing at them, or a `url`/
+      // `command` that silently starts applying again if the transport is
+      // flipped back later. A transport is a MODE, not two independent field
+      // sets: `env` only ever applies to the RESULTING transport being
+      // `stdio`, `headers` only to it being `http` -- enforced below by
+      // gating each on `newTransport`, not merely on whether the caller also
+      // set `transport` in this same request. Without that gate, an explicit
+      // `env`/`headers` in the very request that flips transport (e.g.
+      // `{"transport":"http","env":{"LEFTOVER":"x"}}`) would still be applied
+      // and store env refs on an http row -- meaningless, and not what a
+      // transport switch's cleanup below is supposed to guarantee.
+      const newTransport = patch.transport ?? existing.transport;
+      const transportChanged = patch.transport !== undefined && patch.transport !== existing.transport;
 
-    if (newTransport === 'stdio' && body.env !== undefined) {
-      patch.envRefs = await applySecretPatch(container, id, 'env', existing.envRefs, optionalSecretPatchRecord(body.env, 'env'));
-    } else if (transportChanged && newTransport === 'http') {
-      await deleteSecretRefs(container, existing.envRefs);
-      patch.envRefs = {};
-    }
-    if (newTransport === 'http' && body.headers !== undefined) {
-      patch.headerRefs = await applySecretPatch(container, id, 'header', existing.headerRefs, optionalSecretPatchRecord(body.headers, 'headers'));
-    } else if (transportChanged && newTransport === 'stdio') {
-      await deleteSecretRefs(container, existing.headerRefs);
-      patch.headerRefs = {};
-    }
-    if (transportChanged && newTransport === 'stdio' && body.url === undefined) {
-      patch.url = null;
-    }
-    if (transportChanged && newTransport === 'http') {
-      if (body.command === undefined) patch.command = null;
-      if (body.args === undefined) patch.args = [];
-    }
+      if (newTransport === 'stdio' && body.env !== undefined) {
+        patch.envRefs = await applySecretPatch(container, id, 'env', existing.envRefs, optionalSecretPatchRecord(body.env, 'env'));
+      } else if (transportChanged && newTransport === 'http') {
+        await deleteSecretRefs(container, existing.envRefs);
+        patch.envRefs = {};
+      }
+      if (newTransport === 'http' && body.headers !== undefined) {
+        patch.headerRefs = await applySecretPatch(container, id, 'header', existing.headerRefs, optionalSecretPatchRecord(body.headers, 'headers'));
+      } else if (transportChanged && newTransport === 'stdio') {
+        await deleteSecretRefs(container, existing.headerRefs);
+        patch.headerRefs = {};
+      }
+      if (transportChanged && newTransport === 'stdio' && body.url === undefined) {
+        patch.url = null;
+      }
+      if (transportChanged && newTransport === 'http') {
+        if (body.command === undefined) patch.command = null;
+        if (body.args === undefined) patch.args = [];
+      }
 
-    // Sign-in (spec 2026-10-12-mcp-oauth-design, "Edits"). Values are
-    // compared, not presence: the web form re-sends url/command/args on
-    // every save, and an unchanged save must not sign the server out.
-    // env/headers are only sent when edited, so their presence counts.
-    const urlChanged = newTransport === 'http' && patch.url !== undefined && patch.url !== existing.url;
-    const connectionChanged =
-      transportChanged ||
-      urlChanged ||
-      (patch.command !== undefined && patch.command !== existing.command) ||
-      (patch.args !== undefined && JSON.stringify(patch.args) !== JSON.stringify(existing.args)) ||
-      patch.envRefs !== undefined ||
-      patch.headerRefs !== undefined;
-    if (!connectionChanged) {
-      // A rename, an enable/disable or an unchanged save: the live client is not touched.
-      container.store.mcpServers.update(id, patch);
-      await container.mcpManager.sync();
+      // Sign-in (spec 2026-10-12-mcp-oauth-design, "Edits"). Values are
+      // compared, not presence: the web form re-sends url/command/args on
+      // every save, and an unchanged save must not sign the server out.
+      // env/headers are only sent when edited, so their presence counts.
+      const urlChanged = newTransport === 'http' && patch.url !== undefined && patch.url !== existing.url;
+      const connectionChanged =
+        transportChanged ||
+        urlChanged ||
+        (patch.command !== undefined && patch.command !== existing.command) ||
+        (patch.args !== undefined && JSON.stringify(patch.args) !== JSON.stringify(existing.args)) ||
+        patch.envRefs !== undefined ||
+        patch.headerRefs !== undefined;
+      if (!connectionChanged) {
+        // A rename, an enable/disable or an unchanged save: the live client is not touched.
+        container.store.mcpServers.update(id, patch);
+        await container.mcpManager.sync();
+        return c.json(getMcpServerOrThrow(container, id));
+      }
+
+      // The connection changes: stop the old client (and wait for it), forget what
+      // its URL earned, update the row, reconnect -- one step under the server's lock,
+      // so an in-flight refresh can't write tokens back or send them to the new URL.
+      // Tokens are bound to the resource; a hand-registered client belongs to the
+      // provider, so a URL change keeps it. A switch to stdio forgets everything.
+      const toStdio = transportChanged && newTransport === 'stdio';
+      if (toStdio) patch.oauth = null;
+      await container.mcpManager.reconfigureHeld(id, { forget: toStdio ? 'all' : urlChanged ? 'keepManualClient' : 'none' }, () => {
+        container.store.mcpServers.update(id, patch);
+      });
       return c.json(getMcpServerOrThrow(container, id));
-    }
-
-    // The connection changes: stop the old client (and wait for it), forget what
-    // its URL earned, update the row, reconnect -- one step under the server's lock,
-    // so an in-flight refresh can't write tokens back or send them to the new URL.
-    // Tokens are bound to the resource; a hand-registered client belongs to the
-    // provider, so a URL change keeps it. A switch to stdio forgets everything.
-    const toStdio = transportChanged && newTransport === 'stdio';
-    if (toStdio) patch.oauth = null;
-    await container.mcpManager.reconfigure(id, { forget: toStdio ? 'all' : urlChanged ? 'keepManualClient' : 'none' }, () => {
-      container.store.mcpServers.update(id, patch);
     });
-    return c.json(getMcpServerOrThrow(container, id));
   });
 
   app.delete('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
-    const existing = getMcpServerOrThrow(container, id);
-    // Stop the client, forget every OAuth secret, delete the row, all under the server's lock; the manager forgets once more after the delete.
-    await container.mcpManager.reconfigure(id, { forget: 'all' }, async () => {
-      await deleteAllMcpSecrets(container, existing);
-      container.store.mcpServers.delete(id);
+    getMcpServerOrThrow(container, id); // a plain 404 without waiting for the lock
+    // Stop the client, forget every OAuth secret, delete the row, all under the server's lock (the row is re-read inside it); the manager forgets once more after the delete.
+    await container.mcpManager.withServerLock(id, async () => {
+      const existing = getMcpServerOrThrow(container, id);
+      await container.mcpManager.reconfigureHeld(id, { forget: 'all' }, async () => {
+        await deleteAllMcpSecrets(container, existing);
+        container.store.mcpServers.delete(id);
+      });
     });
     return c.body(null, 204);
   });
