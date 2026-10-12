@@ -311,6 +311,44 @@ describe('AiSdkChatEngine.stream', () => {
     }
   });
 
+  it('lets a reply show the model no more tool images than it may store (count and bytes, across tool calls), and stores exactly what the model saw', async () => {
+    const png = (size: number) => Buffer.concat([FAKE_PNG, Buffer.alloc(size - FAKE_PNG.length)]).toString('base64');
+    const small = png(FAKE_PNG.length);
+    const big = png(4 * 1024 * 1024);
+    const vision = { id: 'model-1', connectionId: 'conn-1', modelId: 'claude-test-model', displayName: 'Test', source: 'manual' as const, supportsVision: true, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
+    // [tool results (one per call), images the model may get]
+    const table: [string, unknown[][], number][] = [
+      ['60 images in one result', [Array.from({ length: 60 }, () => ({ type: 'image', data: small, mimeType: 'image/png' }))], 50],
+      ['8 big images over 8 calls (20 MB together)', Array.from({ length: 8 }, () => [{ type: 'image', data: big, mimeType: 'image/png' }]), 5],
+    ];
+    for (const [label, perCall, allowed] of table) {
+      const specs: ToolSpec[] = perCall.map((result, i) => ({
+        name: `tool${i}`,
+        description: 'x',
+        parameters: { type: 'object', properties: {} },
+        risk: 'read',
+        source: 'mcp',
+        execute: async () => result,
+      }));
+      const calls = perCall.map((_, i) => ({ type: 'tool-call', toolCallId: `call-${i}`, toolName: `tool${i}`, input: '{}' }));
+      const mock = new MockLanguageModelV3({
+        doStream: stepsForModel(
+          [{ type: 'stream-start', warnings: [] }, ...calls, { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage: ZERO_USAGE }],
+          [{ type: 'stream-start', warnings: [] }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE }]
+        ),
+      });
+      const events = await drain(new AiSdkChatEngine(resolverFor(mock)).stream(makeRequest({ tools: specs, profile: makeResolvedProfile({ model: vision }) })));
+
+      const seen = mock.doStreamCalls[1]!.prompt.filter((m) => m.role === 'tool').flatMap((m) => m.content as { output: { value: { type: string; text?: string }[] } }[]);
+      const modelItems = seen.flatMap((r) => r.output.value);
+      const emitted = events.flatMap((e) => (e.type === 'tool-result' ? (e.result as { type: string; text?: string }[]) : []));
+      expect(modelItems.filter((v) => v.type === 'image-data'), label).toHaveLength(allowed);
+      // What is emitted (and so stored) is the same thing, item by item: an image only where the model got one.
+      expect(emitted.map((v) => v.type === 'image'), label).toEqual(modelItems.map((v) => v.type === 'image-data'));
+      expect(emitted.filter((v) => v.type === 'text').every((v) => v.text === '[image not kept: too many or too large]'), label).toBe(true);
+    }
+  });
+
   it('replays a stored tool image only through the chat-scoped loader, never through loadAttachment', async () => {
     const history: CanonMessage[] = [
       userMessage('look'),

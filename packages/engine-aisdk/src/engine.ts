@@ -14,6 +14,7 @@ import type { Connection } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
 import { toModelMessages } from './convert.js';
+import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
 import { liveToolOutput, toolImagesSupported } from './tool-images.js';
 import { MockChatEngine } from './mock-provider.js';
 import { DEFAULT_OLLAMA_BASE_URL, type ProviderHandle } from './registry.js';
@@ -135,7 +136,9 @@ export class AiSdkChatEngine implements ChatEngine {
         req.loadAttachment ?? loadAttachmentUnavailable,
         req.loadToolImage ? { chatId, load: req.loadToolImage } : undefined
       );
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk);
+      // One budget for the whole reply: images a tool returns are screened against it as they come, across every step.
+      const imageBudget: ToolImageBudget = { images: 0, bytes: 0 };
+      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk, imageBudget);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -443,7 +446,8 @@ function buildToolSet(
   profileId: string,
   workspaceRoot: string | null,
   folders: ResolvedFolder[] | undefined,
-  imagesOk: boolean
+  imagesOk: boolean,
+  imageBudget: ToolImageBudget
 ): ToolSet {
   const toolSet: ToolSet = {};
   for (const spec of specs) {
@@ -464,7 +468,12 @@ function buildToolSet(
           ...(folders && folders.length > 0 ? { folders } : {}),
           signal: opts.abortSignal ?? signal,
         };
-        return spec.execute(input, ctx);
+        // What the model is shown and what is stored are one thing: the output is
+        // screened here, once, so an image that is not let through is the same note
+        // in both, and bulk base64 never goes on to either.
+        const screened = screenToolResult(await spec.execute(input, ctx), imageBudget, LIVE_IMAGE_LIMITS);
+        if (screened.forged) console.warn(`[AiSdkChatEngine] a "${spec.name}" result carried a reference to a stored image; removed.`);
+        return screened.result;
       },
     });
   }

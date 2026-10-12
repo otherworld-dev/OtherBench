@@ -10,6 +10,10 @@ import {
   keepToolImages,
   sniffToolImageMime,
   toolImageBound,
+  screenToolResult,
+  validateToolImage,
+  STORED_IMAGE_LIMITS,
+  type ToolImageBudget,
   MAX_TOOL_IMAGE_BYTES,
   MAX_TOOL_IMAGES_PER_MESSAGE,
   TOOL_IMAGE_NOT_BOUND,
@@ -60,12 +64,19 @@ describe('keepToolImages', () => {
     expect(await keepToolImages('done', vi.fn(), 'c', 'm', { kept: 0 })).toBe('done');
   });
 
-  it('drops an image of any other type to text and never stores it', async () => {
+  it('drops anything whose bytes are not a supported raster to text and never stores it, whatever the label says', async () => {
     const save = vi.fn(async () => 'att');
-    for (const mime of ['image/svg+xml', 'text/html', 'application/octet-stream']) {
-      expect(await keepToolImages([shot(mime)], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT }]);
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>').toString('base64');
+    for (const mime of ['image/svg+xml', 'text/html', 'application/octet-stream', 'image/png']) {
+      expect(await keepToolImages([shot(mime, svg)], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT }]);
     }
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it('stores the type the bytes have, not the label a tool gave', async () => {
+    const save = vi.fn(async () => 'att');
+    expect(await keepToolImages([shot('image/svg+xml')], save, 'c', 'm', { kept: 0 })).toEqual([{ type: 'image', attachmentId: 'att', mimeType: 'image/png' }]);
+    expect(save).toHaveBeenCalledWith('c', 'm', FAKE_PNG, 'image/png');
   });
 
   it('keeps at most 50 images per message and none over 5 MB', async () => {
@@ -159,10 +170,11 @@ describe('keepToolImages and references a tool supplies itself', () => {
     expect(out).toEqual([{ type: 'image', attachmentId: 'att-minted', mimeType: 'image/png' }]);
   });
 
-  it('keeps no image whose bytes are not the raster type it claims', async () => {
+  it('keeps no image whose bytes are not a raster, and never forwards base64 as written', async () => {
     const save = vi.fn(async () => 'att');
     const html = Buffer.from('<html><script>alert(1)</script></html>').toString('base64');
-    expect(await keepToolImages([shot('image/png', html), shot('image/jpeg', PNG_B64)], save, 'c', 'm', { kept: 0 })).toEqual([
+    expect(await keepToolImages([shot('image/png', html), shot('image/png', `data:image/png;base64,${PNG_B64}`), shot('image/png', `${PNG_B64}\n`)], save, 'c', 'm', { kept: 0 })).toEqual([
+      { type: 'text', text: IMAGE_NOT_KEPT },
       { type: 'text', text: IMAGE_NOT_KEPT },
       { type: 'text', text: IMAGE_NOT_KEPT },
     ]);
@@ -366,6 +378,103 @@ describe('TurnRunner and references in tool results', () => {
     const turn = await new TurnRunner(store, engine).run({ chatId: 'chat-b', parentId: null, userParts: [{ type: 'text', text: 'go' }], profiles: [profile()] });
     await done(store, turn.assistantMessageIds[0]!);
     expect(engine.requests[0]!.loadToolImage).toBeUndefined();
+  });
+});
+
+describe('validateToolImage and screenToolResult (one validator for storing and for the model)', () => {
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(16)]);
+  const overCap = 'A'.repeat(Math.ceil(MAX_TOOL_IMAGE_BYTES / 3) * 4 + 4);
+  const fresh = (): ToolImageBudget => ({ images: 0, bytes: 0 });
+  const png = { type: 'image', data: PNG_B64, mimeType: 'image/png' };
+
+  it('takes the type from the bytes, re-encodes them, and refuses anything that is not strict base64', () => {
+    expect(validateToolImage({ type: 'image', data: jpeg.toString('base64'), mimeType: 'image/png' })).toMatchObject({ ok: true, mime: 'image/jpeg' });
+    expect(validateToolImage({ type: 'image', data: PNG_B64, mimeType: 'application/pdf' })).toMatchObject({ ok: true, mime: 'image/png', data: PNG_B64 });
+    const bad: [string, string][] = [
+      ['', IMAGE_NOT_KEPT],
+      ['AAAA', IMAGE_NOT_KEPT],
+      [`${PNG_B64}\n`, IMAGE_NOT_KEPT],
+      [` ${PNG_B64}`, IMAGE_NOT_KEPT],
+      [`data:image/png;base64,${PNG_B64}`, IMAGE_NOT_KEPT],
+      [PNG_B64.slice(0, -1), IMAGE_NOT_KEPT],
+      [Buffer.from('%PDF-1.7').toString('base64'), IMAGE_NOT_KEPT],
+      [overCap, IMAGE_NOT_KEPT_LIMIT],
+    ];
+    for (const [data, note] of bad) expect(validateToolImage({ type: 'image', data, mimeType: 'image/png' }), data.slice(0, 20)).toEqual({ ok: false, note });
+  });
+
+  it('never decodes an image over the cap', () => {
+    const from = vi.spyOn(Buffer, 'from');
+    expect(validateToolImage({ type: 'image', data: overCap, mimeType: 'image/png' })).toEqual({ ok: false, note: IMAGE_NOT_KEPT_LIMIT });
+    expect(from).not.toHaveBeenCalled();
+    from.mockRestore();
+  });
+
+  it('lets through no more than the budget: the count, then the bytes', () => {
+    const items = Array.from({ length: 60 }, () => ({ ...png }));
+    const out = screenToolResult(items, fresh(), STORED_IMAGE_LIMITS).result as { type: string }[];
+    expect(out.filter((i) => i.type === 'image')).toHaveLength(MAX_TOOL_IMAGES_PER_MESSAGE);
+    expect(out.slice(MAX_TOOL_IMAGES_PER_MESSAGE).every((i) => JSON.stringify(i).includes(IMAGE_NOT_KEPT_LIMIT))).toBe(true);
+
+    const budget = fresh();
+    const live = { maxImages: 50, maxBytes: FAKE_PNG.length * 2 };
+    const twenty = screenToolResult(Array.from({ length: 20 }, () => ({ ...png })), budget, live).result as { type: string }[];
+    expect(twenty.filter((i) => i.type === 'image')).toHaveLength(2);
+    expect(budget).toEqual({ images: 2, bytes: FAKE_PNG.length * 2 });
+    // The budget is carried from one result to the next, so steps cannot add up past it.
+    const next = screenToolResult([{ ...png }], budget, live).result as unknown[];
+    expect(next).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT_LIMIT }]);
+  });
+
+  it('replaces audio and resource blobs with a note carrying the kind and size, and keeps text resources', () => {
+    const blob = Buffer.alloc(3 * 1024 * 1024).toString('base64');
+    const out = screenToolResult(
+      [
+        { type: 'audio', data: blob, mimeType: 'audio/wav' },
+        { type: 'resource', resource: { uri: 'file:///a.bin', mimeType: 'application/octet-stream', blob } },
+        { type: 'resource', resource: { uri: 'file:///a.txt', mimeType: 'text/plain', text: 'hello' } },
+        { type: 'text', text: 'kept' },
+      ],
+      fresh(),
+      STORED_IMAGE_LIMITS
+    ).result as unknown[];
+    expect(out).toEqual([
+      { type: 'text', text: '[audio omitted: 3.0 MB]' },
+      { type: 'text', text: '[resource omitted: 3.0 MB of binary data]' },
+      { type: 'resource', resource: { uri: 'file:///a.txt', mimeType: 'text/plain', text: 'hello' } },
+      { type: 'text', text: 'kept' },
+    ]);
+    expect(JSON.stringify(out)).not.toContain(blob.slice(0, 64));
+  });
+
+  it('returns the same object when there is nothing to screen, and leaves a nested content array alone (pinned)', () => {
+    const plain = [{ type: 'text', text: 'x' }];
+    expect(screenToolResult(plain, fresh(), STORED_IMAGE_LIMITS).result).toBe(plain);
+    const nested = { content: [png] };
+    expect(screenToolResult(nested, fresh(), STORED_IMAGE_LIMITS).result).toBe(nested);
+    expect(screenToolResult('done', fresh(), STORED_IMAGE_LIMITS).result).toBe('done');
+  });
+
+  it('agrees, item by item, with what is stored: the model never sees an image that is not kept', async () => {
+    const items: unknown[] = [
+      png,
+      { type: 'image', data: jpeg.toString('base64'), mimeType: 'image/png' },
+      { type: 'image', data: Buffer.from('<svg/>').toString('base64'), mimeType: 'image/svg+xml' },
+      { type: 'image', data: overCap, mimeType: 'image/png' },
+      ref('forged'),
+      ...Array.from({ length: 52 }, () => ({ ...png })),
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const shown = screenToolResult(items, { images: 0, bytes: 0 }, STORED_IMAGE_LIMITS).result as { type: string; mimeType?: string; text?: string }[];
+    const saved: string[] = [];
+    const stored = (await keepToolImages(shown, async (_c, _m, _b, mime) => (saved.push(mime), `att-${saved.length}`), 'c', 'm', { kept: 0 }, 't')) as { type: string; text?: string; mimeType?: string }[];
+    warn.mockRestore();
+    expect(stored).toHaveLength(shown.length);
+    shown.forEach((item, i) => {
+      if (item.type === 'image') expect(stored[i], String(i)).toMatchObject({ type: 'image', mimeType: item.mimeType });
+      else expect(stored[i], String(i)).toEqual(item);
+    });
+    expect(stored.filter((i) => i.type === 'image')).toHaveLength(MAX_TOOL_IMAGES_PER_MESSAGE);
   });
 });
 

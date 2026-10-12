@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ConnectionKind } from '@grunt/core/types/config.js';
 import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
+import { IMAGE_NOT_KEPT, IMAGE_NOT_KEPT_LIMIT } from '@grunt/core/domain/tool-images.js';
 import { toModelMessages } from '../src/convert.js';
 import {
   EARLIER_SCREENSHOT_NOTE,
@@ -45,25 +46,30 @@ describe('liveToolOutput', () => {
     expect(liveToolOutput(undefined, true)).toEqual({ type: 'json', value: null });
   });
 
-  it('tells the model the type the bytes have, never the label a tool gave', () => {
+  it('tells the model the type the bytes have, never the label a tool gave, and re-encodes what it sends', () => {
     const jpeg = JPEG.toString('base64');
     const html = Buffer.from('<html><script>alert(1)</script></html>').toString('base64');
+    const gif = Buffer.from('GIF89a....').toString('base64');
     const table: [string, string, unknown][] = [
       ['image/svg+xml', PNG_B64, { type: 'image-data', data: PNG_B64, mediaType: 'image/png' }],
-      ['image/png', jpeg, { type: 'image-data', data: jpeg, mediaType: 'image/jpeg' }],
-      ['image/png', html, text(IMAGE_UNSUPPORTED_NOTE)],
-      ['image/png', 'AAAA', text(IMAGE_UNSUPPORTED_NOTE)],
-      ['text/html', Buffer.from('GIF89a').toString('base64'), { type: 'image-data', data: Buffer.from('GIF89a').toString('base64'), mediaType: 'image/gif' }],
+      ['image/png; charset=x', PNG_B64, { type: 'image-data', data: PNG_B64, mediaType: 'image/png' }],
+      ['IMAGE/PNG', jpeg, { type: 'image-data', data: jpeg, mediaType: 'image/jpeg' }],
+      ['text/html', gif, { type: 'image-data', data: gif, mediaType: 'image/gif' }],
+      ['application/pdf', Buffer.from('%PDF-1.7 ....').toString('base64'), text(IMAGE_NOT_KEPT)],
+      ['image/png', html, text(IMAGE_NOT_KEPT)],
+      ['image/png', 'AAAA', text(IMAGE_NOT_KEPT)],
+      ['image/png', `data:image/png;base64,${PNG_B64}`, text(IMAGE_NOT_KEPT)],
+      ['image/png', `${PNG_B64}\n`, text(IMAGE_NOT_KEPT)],
     ];
     for (const [label, data, expected] of table) {
-      expect(liveToolOutput([{ type: 'image', data, mimeType: label }], true)).toEqual({ type: 'content', value: [expected] });
+      expect(liveToolOutput([{ type: 'image', data, mimeType: label }], true), `${label} ${data.slice(0, 12)}`).toEqual({ type: 'content', value: [expected] });
     }
   });
 
   it('never decodes an image over the cap', () => {
     const huge = 'A'.repeat(Math.ceil(REPLAYED_IMAGE_MAX_BYTES / 3) * 4 + 4);
     const from = vi.spyOn(Buffer, 'from');
-    expect(liveToolOutput([{ type: 'image', data: huge, mimeType: 'image/png' }], true)).toEqual({ type: 'content', value: [text(IMAGE_TOO_LARGE_NOTE)] });
+    expect(liveToolOutput([{ type: 'image', data: huge, mimeType: 'image/png' }], true)).toEqual({ type: 'content', value: [text(IMAGE_NOT_KEPT_LIMIT)] });
     expect(from).not.toHaveBeenCalled();
     from.mockRestore();
   });

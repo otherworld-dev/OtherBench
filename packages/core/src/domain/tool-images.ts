@@ -119,19 +119,109 @@ export function toolImageBound(row: ToolImageRow, chatId: string, messageId: str
   );
 }
 
+/** What one inline image comes to: the bytes and the canonical form of them, or the note that stands in for it. */
+export type ValidatedToolImage = { ok: true; bytes: Buffer; mime: string; data: string } | { ok: false; note: string };
+
+const STRICT_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
 /**
- * `result` with every inline image stored through `save` and replaced by a
- * reference. A result with no image item comes back as the same object.
- * An image of another type (or whose bytes aren't that type), or with nowhere
- * to store it, or that fails to store, becomes `[image not kept]`; past
- * `MAX_TOOL_IMAGES_PER_MESSAGE` for the message (`budget` counts them across
- * the reply) or over `MAX_TOOL_IMAGE_BYTES`, `[image not kept: too many or
- * too large]`.
- *
- * An image item that is NOT an inline image (a reference to a stored image,
- * or anything else shaped like one) is a forgery: a tool can't make a
- * reference, only this function can. It becomes `TOOL_IMAGE_REF_REMOVED` and
- * the rest of the result stays. `toolName` is all that is logged about it.
+ * The ONE test an inline image from a tool has to pass, used both for what is
+ * stored and for what the model is shown, so the two can't disagree. The size
+ * is checked on the base64 text before anything is decoded; the text must be
+ * strict base64; the type comes from the bytes (png, jpeg, gif or webp), never
+ * from the tool's label; and `data` is the canonical base64 of those bytes,
+ * which is what goes on. A failure is the note that replaces the image.
+ */
+export function validateToolImage(item: InlineToolImage): ValidatedToolImage {
+  const text = item.data;
+  if (text.length > MAX_TOOL_IMAGE_BASE64) return { ok: false, note: IMAGE_NOT_KEPT_LIMIT };
+  if (text.length === 0 || text.length % 4 !== 0 || !STRICT_BASE64.test(text)) return { ok: false, note: IMAGE_NOT_KEPT };
+  const bytes = Buffer.from(text, 'base64');
+  if (bytes.length > MAX_TOOL_IMAGE_BYTES) return { ok: false, note: IMAGE_NOT_KEPT_LIMIT };
+  const mime = sniffToolImageMime(bytes);
+  if (mime === null) return { ok: false, note: IMAGE_NOT_KEPT };
+  return { ok: true, bytes, mime, data: bytes.toString('base64') };
+}
+
+/** How many images and bytes a stream of tool results has used so far. */
+export interface ToolImageBudget {
+  images: number;
+  bytes: number;
+}
+
+export interface ToolImageLimits {
+  maxImages: number;
+  maxBytes: number;
+}
+
+/** What is stored: up to 50 images per reply, each within 5 MB. */
+export const STORED_IMAGE_LIMITS: ToolImageLimits = { maxImages: MAX_TOOL_IMAGES_PER_MESSAGE, maxBytes: Number.POSITIVE_INFINITY };
+/** What one reply may show a model live: the same count, and 20 MB together (every later step sends them again). */
+export const LIVE_IMAGE_LIMITS: ToolImageLimits = { maxImages: MAX_TOOL_IMAGES_PER_MESSAGE, maxBytes: 4 * MAX_TOOL_IMAGE_BYTES };
+
+function sizeText(base64Length: number): string {
+  const bytes = Math.floor((base64Length * 3) / 4);
+  return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** An MCP item that carries binary data as base64 and is not an image: audio, or a resource with a blob. */
+function binaryItemNote(item: unknown): string | null {
+  if (typeof item !== 'object' || item === null) return null;
+  const v = item as Record<string, unknown>;
+  if (v['type'] === 'audio' && typeof v['data'] === 'string') return `[audio omitted: ${sizeText(v['data'].length)}]`;
+  if (v['type'] === 'resource' && typeof v['resource'] === 'object' && v['resource'] !== null) {
+    const blob = (v['resource'] as Record<string, unknown>)['blob'];
+    if (typeof blob === 'string') return `[resource omitted: ${sizeText(blob.length)} of binary data]`;
+  }
+  return null;
+}
+
+/**
+ * A tool result with everything that can carry bulk base64 made safe, the same
+ * way wherever it is used (the engine before the model sees it, the runner
+ * before it is stored): each inline image is validated (`validateToolImage`)
+ * and rewritten in canonical form, or replaced by its note; one past the
+ * budget is `[image not kept: too many or too large]`; an image item that is
+ * not inline (a reference to a stored image) is a forgery and becomes
+ * `TOOL_IMAGE_REF_REMOVED`; audio and resource blobs become a short note with
+ * their size. `budget` is advanced for every image let through. A result with
+ * none of these comes back as the same object.
+ */
+export function screenToolResult(result: unknown, budget: ToolImageBudget, limits: ToolImageLimits): { result: unknown; forged: boolean } {
+  if (!Array.isArray(result)) return { result, forged: false };
+  let changed = false;
+  let forged = false;
+  const out = result.map((item): unknown => {
+    if (isImageItem(item)) {
+      changed = true;
+      if (!isInlineToolImage(item)) {
+        forged = true;
+        return { type: 'text', text: TOOL_IMAGE_REF_REMOVED };
+      }
+      const checked = validateToolImage(item);
+      if (!checked.ok) return { type: 'text', text: checked.note };
+      if (budget.images >= limits.maxImages || budget.bytes + checked.bytes.length > limits.maxBytes) return { type: 'text', text: IMAGE_NOT_KEPT_LIMIT };
+      budget.images += 1;
+      budget.bytes += checked.bytes.length;
+      return { type: 'image', data: checked.data, mimeType: checked.mime };
+    }
+    const note = binaryItemNote(item);
+    if (note !== null) {
+      changed = true;
+      return { type: 'text', text: note };
+    }
+    return item;
+  });
+  return { result: changed ? out : result, forged };
+}
+
+/**
+ * `result` screened (see `screenToolResult`, stored limits) with every image
+ * that is let through stored through `save` and replaced by a reference. A
+ * result with nothing to screen comes back as the same object. An image that
+ * has nowhere to go, or fails to store, becomes `[image not kept]`. `budget`
+ * counts the images kept across the reply. `toolName` is all that is logged
+ * about a forged reference.
  */
 export async function keepToolImages(
   result: unknown,
@@ -141,49 +231,34 @@ export async function keepToolImages(
   budget: { kept: number },
   toolName?: string
 ): Promise<unknown> {
-  if (!Array.isArray(result) || !result.some(isImageItem)) return result;
+  const used: ToolImageBudget = { images: budget.kept, bytes: 0 };
+  const screened = screenToolResult(result, used, STORED_IMAGE_LIMITS);
+  if (screened.forged) console.warn(`[TurnRunner] a "${toolName ?? 'tool'}" result carried a reference to a stored image; removed.`);
+  if (!Array.isArray(screened.result) || !screened.result.some(isInlineToolImage)) {
+    budget.kept = used.images;
+    return screened.result;
+  }
   const out: unknown[] = [];
-  let forged = false;
-  for (const item of result) {
-    if (!isImageItem(item)) {
+  for (const item of screened.result) {
+    if (!isInlineToolImage(item)) {
       out.push(item);
       continue;
     }
-    if (!isInlineToolImage(item)) {
-      forged = true;
-      out.push({ type: 'text', text: TOOL_IMAGE_REF_REMOVED });
-      continue;
-    }
-    const mime = baseMime(item.mimeType);
-    if (!save || !TOOL_IMAGE_MIMES.includes(mime)) {
-      out.push({ type: 'text', text: IMAGE_NOT_KEPT });
-      continue;
-    }
-    // Checked on the text first, so an oversized image is never decoded.
-    if (budget.kept >= MAX_TOOL_IMAGES_PER_MESSAGE || item.data.length > MAX_TOOL_IMAGE_BASE64) {
-      out.push({ type: 'text', text: IMAGE_NOT_KEPT_LIMIT });
-      continue;
-    }
-    const bytes = Buffer.from(item.data, 'base64');
-    if (bytes.length > MAX_TOOL_IMAGE_BYTES) {
-      out.push({ type: 'text', text: IMAGE_NOT_KEPT_LIMIT });
-      continue;
-    }
-    // What is stored, and later served as an image, has to be one.
-    if (!hasToolImageSignature(bytes, mime)) {
+    if (!save) {
+      used.images -= 1;
       out.push({ type: 'text', text: IMAGE_NOT_KEPT });
       continue;
     }
     try {
-      const attachmentId = await save(chatId, messageId, bytes, mime);
-      budget.kept += 1;
-      out.push({ type: 'image', attachmentId, mimeType: mime });
+      const attachmentId = await save(chatId, messageId, Buffer.from(item.data, 'base64'), item.mimeType);
+      out.push({ type: 'image', attachmentId, mimeType: item.mimeType });
     } catch (err) {
+      used.images -= 1;
       console.error(`[TurnRunner] couldn't keep a tool image for message ${messageId}:`, err);
       out.push({ type: 'text', text: IMAGE_NOT_KEPT });
     }
   }
-  if (forged) console.warn(`[TurnRunner] a "${toolName ?? 'tool'}" result carried a reference to a stored image; removed.`);
+  budget.kept = used.images;
   return out;
 }
 

@@ -1,5 +1,5 @@
 import type { JSONValue, ToolResultPart } from 'ai';
-import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
+import { isInlineToolImage, isToolImageRef, MAX_TOOL_IMAGE_BYTES, sniffToolImageMime, validateToolImage, type InlineToolImage, type ValidatedToolImage } from '@grunt/core/domain/tool-images.js';
 import type { ToolImageLoader } from '@grunt/core/ports/chat-engine.js';
 import type { ConnectionKind } from '@grunt/core/types/config.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
@@ -31,9 +31,6 @@ export const REPLAYED_IMAGE_MAX_BYTES = MAX_TOOL_IMAGE_BYTES;
 /** All images replayed in one request together. */
 export const REPLAYED_IMAGES_MAX_TOTAL_BYTES = 2 * MAX_TOOL_IMAGE_BYTES;
 
-/** The longest base64 text that can decode to `REPLAYED_IMAGE_MAX_BYTES`. */
-const MAX_IMAGE_BASE64 = Math.ceil(REPLAYED_IMAGE_MAX_BYTES / 3) * 4;
-
 type Output = ToolResultPart['output'];
 type ContentItem = Extract<Output, { type: 'content' }>['value'][number];
 
@@ -51,13 +48,27 @@ export function toolImagesSupported(kind: ConnectionKind): boolean {
   return kind === 'anthropic' || kind === 'openai' || kind === 'google';
 }
 
-/** The raster type of a live tool image, from its own bytes, or null (too big, or not a supported image). */
-function liveImageType(data: string): string | null {
-  if (data.length > MAX_IMAGE_BASE64) return null;
-  return sniffToolImageMime(Buffer.from(data.slice(0, 32), 'base64'));
+const validated = new WeakMap<object, ValidatedToolImage>();
+
+/** `validateToolImage`, remembered per item: the SDK may ask for the same output on every later step. */
+function checkLive(item: InlineToolImage): ValidatedToolImage {
+  let v = validated.get(item);
+  if (!v) {
+    v = validateToolImage(item);
+    validated.set(item, v);
+  }
+  return v;
 }
 
-/** A tool's live output as the model gets it; anything without an inline image goes as the SDK would send it. */
+/**
+ * A tool's live output as the model gets it. An inline image goes through the
+ * same validator that decides what is stored (`validateToolImage`): the type
+ * comes from its bytes and the base64 sent is the canonical form of them, and
+ * what fails is the same note the stored copy gets. (The engine has already
+ * screened the output against its budget, see `screenToolResult`; this is the
+ * check at the point of use.) Anything without an inline image goes as the SDK
+ * would send it.
+ */
 export function liveToolOutput(output: unknown, imagesOk: boolean): Output {
   if (Array.isArray(output) && output.some(isInlineToolImage)) {
     return {
@@ -65,9 +76,8 @@ export function liveToolOutput(output: unknown, imagesOk: boolean): Output {
       value: output.map((item): ContentItem => {
         if (isInlineToolImage(item)) {
           if (!imagesOk) return { type: 'text', text: IMAGE_OMITTED_NOTE };
-          if (item.data.length > MAX_IMAGE_BASE64) return { type: 'text', text: IMAGE_TOO_LARGE_NOTE };
-          const mediaType = liveImageType(item.data);
-          return mediaType ? { type: 'image-data', data: item.data, mediaType } : { type: 'text', text: IMAGE_UNSUPPORTED_NOTE };
+          const checked = checkLive(item);
+          return checked.ok ? { type: 'image-data', data: checked.data, mediaType: checked.mime } : { type: 'text', text: checked.note };
         }
         if (isTextItem(item)) return { type: 'text', text: item.text };
         return { type: 'text', text: JSON.stringify(item) };
