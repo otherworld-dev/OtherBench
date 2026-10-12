@@ -150,6 +150,13 @@ export interface TurnRunnerOptions {
   loadAttachment?: (id: string) => Promise<Buffer>;
   /** Whether a folder exists, for resolving a chat's workspace. Defaults to `fs.existsSync`. */
   pathExists?: (path: string) => boolean;
+  /**
+   * A folder's real path (its on-disk case, and a mapped drive's UNC path),
+   * for naming where the sandbox mounts it in the system prompt; it should
+   * hand back the path unchanged when it can't tell. Defaults to the path as
+   * it is. The server wires `realpathSync.native`, as the sandbox mounts by.
+   */
+  canonicalPath?: (path: string) => string;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -231,6 +238,7 @@ export class TurnRunner {
   private readonly toolProvider?: ToolProvider;
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly pathExists: (path: string) => boolean;
+  private readonly canonicalPath: (path: string) => string;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
@@ -247,6 +255,7 @@ export class TurnRunner {
     this.toolProvider = options.toolProvider;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
+    this.canonicalPath = options.canonicalPath ?? ((p) => p);
     this.toolProvider?.onApprovalEvent((event) => {
       if (event.type === 'request') {
         this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
@@ -856,7 +865,7 @@ export class TurnRunner {
    */
   private withSandbox(profile: ResolvedProfile, workspaceRoot: string | null, folders: ResolvedFolder[]): ResolvedProfile {
     if (workspaceRoot === null || !runsShellInSandbox(profile.toolPolicy)) return profile;
-    const block = sandboxFoldersPrompt(workspaceRoot, folders);
+    const block = sandboxFoldersPrompt(workspaceRoot, folders, this.canonicalPath);
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 

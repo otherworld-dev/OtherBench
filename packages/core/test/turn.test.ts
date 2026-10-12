@@ -1890,15 +1890,15 @@ describe('TurnRunner.regenerate', () => {
 describe('TurnRunner tells a sandboxed shell where the folders are', () => {
   const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
 
-  async function systemPromptFor(shellRuns: 'host' | 'sandbox'): Promise<string> {
+  async function systemPromptFor(shellRuns: 'host' | 'sandbox', options: { root?: string; canonicalPath?: (path: string) => string } = {}): Promise<string> {
     const store = new InMemoryStore('node-pc');
     store.chats.create({
       id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null,
-      workspace: { kind: 'machine', nodeId: 'node-pc', root: 'E:\\Git\\Grunt' },
+      workspace: { kind: 'machine', nodeId: 'node-pc', root: options.root ?? 'E:\\Git\\Grunt' },
       folders: [{ workspace: { kind: 'machine', nodeId: 'node-pc', root: 'D:\\Refs' }, access: 'read' }],
     });
     const engine = new FakeChatEngine([finish]);
-    const runner = new TurnRunner(store, engine, { pathExists: () => true });
+    const runner = new TurnRunner(store, engine, { pathExists: () => true, ...(options.canonicalPath ? { canonicalPath: options.canonicalPath } : {}) });
     const profile = makeResolvedProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
     const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile] });
     await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
@@ -1914,5 +1914,12 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
 
   it('adds nothing when the shell runs on this machine', async () => {
     expect(await systemPromptFor('host')).not.toContain('# Sandbox');
+  });
+
+  it('names a folder typed in another case at its real path, which is where the sandbox mounts it', async () => {
+    const onDisk: Record<string, string> = { 'e:\\git\\grunt': 'E:\\Git\\Grunt', 'd:\\refs': 'D:\\Refs' };
+    const system = await systemPromptFor('sandbox', { root: 'e:\\git\\grunt', canonicalPath: (p) => onDisk[p.toLowerCase()] ?? p });
+    expect(system).toContain('The workspace e:\\git\\grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
   });
 });

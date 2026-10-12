@@ -134,11 +134,14 @@ export function planMounts(chats: readonly (readonly MountNeed[])[]): PlannedMou
 /**
  * The system-prompt block for a profile whose shell runs in the sandbox: what
  * run_command is, and where the workspace and each extra folder are in it.
+ * `canonical` gives a folder's real path (its on-disk case), which is where
+ * the sandbox mounts it: the VM's paths are case-sensitive, so a folder typed
+ * in another case must still be announced at the path that exists there.
  */
-export function sandboxFoldersPrompt(workspaceRoot: string, folders: readonly ResolvedFolder[]): string {
+export function sandboxFoldersPrompt(workspaceRoot: string, folders: readonly ResolvedFolder[], canonical: (path: string) => string = (p) => p): string {
   const where = (root: string): string => {
     try {
-      return `is ${toSandboxPath(normaliseWindowsPath(root))} in the sandbox`;
+      return `is ${toSandboxPath(normaliseWindowsPath(canonical(root)))} in the sandbox`;
     } catch (err) {
       return `is not available in the sandbox (${err instanceof SandboxPathError ? err.reason : String(err)})`;
     }

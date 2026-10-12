@@ -133,6 +133,12 @@ describe('sandboxFoldersPrompt', () => {
     expect(text).toContain('D:\\Out is /mnt/d/Out in the sandbox.');
   });
 
+  it("maps each folder's real path when given a way to find it, and still names the folder as it was given", () => {
+    const text = sandboxFoldersPrompt('e:\\git\\grunt', [{ root: 'Z:\\Docs', access: 'read' }], (p) => (p === 'e:\\git\\grunt' ? 'E:\\Git\\Grunt' : '\\\\nas\\docs'));
+    expect(text).toContain('The workspace e:\\git\\grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(text).toMatch(/Z:\\Docs is not available in the sandbox \(network/);
+  });
+
   it('says when a folder cannot be used there, and why', () => {
     expect(sandboxFoldersPrompt('\\\\nas\\share', [])).toMatch(/not available in the sandbox \(network/);
   });
