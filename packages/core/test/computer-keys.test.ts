@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, parseKeys } from '../src/domain/computer-keys.js';
+import { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, parseKeys, SHORTCUTS_UNKNOWN_REASON } from '../src/domain/computer-keys.js';
 
-function canonical(text: unknown, reserved?: readonly unknown[] | null): string | null {
+function canonical(text: unknown, reserved: unknown = []): string | null {
   const parsed = parseKeys(text, reserved);
   return parsed.ok ? parsed.text : null;
 }
 
-function reason(text: unknown, reserved?: readonly unknown[] | null): string {
+function reason(text: unknown, reserved: unknown = []): string {
   const parsed = parseKeys(text, reserved);
   if (parsed.ok) throw new Error(`Expected a refusal for ${JSON.stringify(text)}, got ${parsed.text}`);
   return parsed.reason;
@@ -14,8 +14,8 @@ function reason(text: unknown, reserved?: readonly unknown[] | null): string {
 
 describe('computer keys', () => {
   it('reads one combination and writes it one way: lower case, modifiers first in a fixed order', () => {
-    expect(parseKeys('ctrl+s')).toEqual({ ok: true, combos: [['ctrl', 's']], text: 'ctrl+s' });
-    expect(parseKeys('ctrl+shift+s')).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
+    expect(parseKeys('ctrl+s', [])).toEqual({ ok: true, combos: [['ctrl', 's']], text: 'ctrl+s' });
+    expect(parseKeys('ctrl+shift+s', [])).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
     const same: Record<string, string> = {
       Return: 'return',
       Enter: 'return',
@@ -127,20 +127,34 @@ describe('computer keys', () => {
     expect(canonical('ctrl+s', ['Super+Space', 'PrintScreen', '', '  '])).toBe('ctrl+s');
   });
 
-  it('sends no combination with a modifier while it has not been told what the shortcuts are', () => {
-    const unknown = "Grunt doesn't know its own shortcuts yet, so it sends no key combination with a modifier. A single key such as Return still works.";
-    for (const keys of ['ctrl+s', 'shift+Tab', 'alt+Left', 'ctrl+shift+s', 'Shift_R+F10', 's+CONTROL']) expect(reason(keys, null), keys).toBe(unknown);
-    // A key on its own can be nobody's global shortcut that Grunt registered: those all have a modifier.
-    for (const [keys, want] of Object.entries({ Return: 'return', F5: 'f5', Escape: 'escape', a: 'a', Tab: 'tab', Delete: 'delete' })) {
-      expect(canonical(keys, null), keys).toBe(want);
+  it('sends no key at all while it has not been told what the shortcuts are', () => {
+    const unknown = "Grunt doesn't know the desktop app's shortcuts yet; no key was pressed.";
+    expect(SHORTCUTS_UNKNOWN_REASON).toBe(unknown);
+    // A modifier combination and a bare key alike: the quick-chat hotkey is free text and can be a bare F9.
+    for (const keys of ['ctrl+s', 'shift+Tab', 'alt+Left', 'ctrl+shift+s', 'Shift_R+F10', 's+CONTROL', 'Return', 'F5', 'F9', 'Escape', 'a', 'Tab', 'Delete']) {
+      expect(reason(keys, null), keys).toBe(unknown);
     }
     // What is refused anyway is refused for its own reason.
     expect(reason('super+r', null)).toBe('Key combinations with the Windows key are never sent.');
     expect(canonical('Print', null)).toBeNull();
-    expect(canonical('shift', null)).toBeNull();
-    // Leaving the list out is not the same as not knowing it: that is the caller saying there are none.
-    expect(canonical('ctrl+s')).toBe('ctrl+s');
+    expect(reason('shift', null)).not.toBe(unknown);
+    expect(reason('alt+f4', null)).not.toBe(unknown);
+    // An empty list is the caller saying there are none, which is not the same as not knowing.
     expect(canonical('ctrl+s', [])).toBe('ctrl+s');
+    expect(canonical('F9', [])).toBe('f9');
+  });
+
+  it('takes anything that is not an array as no list: undefined, a string, an object, a number', () => {
+    const unknown = SHORTCUTS_UNKNOWN_REASON;
+    const odd: unknown[] = [undefined, '', 'Ctrl+Shift+Space', {}, { length: 0 }, { 0: 'F9', length: 1 }, 0, 1, false, true, NaN, Symbol('x'), () => [], new Set<string>(), new Map<string, string>()];
+    for (const reserved of odd) {
+      for (const keys of ['F9', 'Return', 'ctrl+s', 'a']) {
+        // Must refuse, and must not throw ("reserved is not iterable").
+        expect(parseKeys(keys, reserved), `${String(reserved)} ${keys}`).toEqual({ ok: false, reason: unknown });
+      }
+    }
+    // Leaving the argument out is the same as not knowing.
+    expect((parseKeys as (text: unknown) => ReturnType<typeof parseKeys>)('ctrl+s')).toEqual({ ok: false, reason: unknown });
   });
 
   it('sends no keys at all while it cannot read one of its own shortcuts', () => {
@@ -175,12 +189,12 @@ describe('computer keys', () => {
     expect(canonical(`${' '.repeat(58)}ctrl+s`)).toBe('ctrl+s');
     // Keys per combination: three modifiers and one key.
     expect(canonical('ctrl+shift+s')).toBe('ctrl+shift+s');
-    expect(parseKeys('shift+ctrl+shift+F5')).toEqual({ ok: true, combos: [['ctrl', 'shift', 'f5']], text: 'ctrl+shift+f5' });
+    expect(parseKeys('shift+ctrl+shift+F5', [])).toEqual({ ok: true, combos: [['ctrl', 'shift', 'f5']], text: 'ctrl+shift+f5' });
     for (const keys of ['ctrl+shift+ctrl+shift+s', 'ctrl+ctrl+ctrl+ctrl+s', 'a+b+c+d+e', 'shift+shift+shift+shift+shift']) {
       expect(reason(keys), keys).toBe('A key combination is at most 4 keys: up to three modifiers and one key.');
     }
     // One combination per action.
-    for (const parsed of [parseKeys('ctrl+s'), parseKeys('Return'), parseKeys('ctrl+shift+F5')]) {
+    for (const parsed of [parseKeys('ctrl+s', []), parseKeys('Return', []), parseKeys('ctrl+shift+F5', [])]) {
       expect(parsed.ok && parsed.combos.length).toBe(KEY_LIMITS.combosPerAction);
       expect(parsed.ok && parsed.combos.every((combo) => combo.length <= KEY_LIMITS.keysPerCombo)).toBe(true);
     }
@@ -190,7 +204,7 @@ describe('computer keys', () => {
 describe('a key combination stands on its own', () => {
   it('is always exactly one key with its modifiers, pressed and released as one thing', () => {
     for (const text of ['ctrl+s', 'Return', 'shift+Tab', 'ctrl+shift+F12', 'a', 'alt+Left', 'S+CTRL+SHIFT']) {
-      const parsed = parseKeys(text);
+      const parsed = parseKeys(text, []);
       if (!parsed.ok) throw new Error(`Expected ${text} to parse`);
       expect(parsed.combos, text).toHaveLength(1);
       const combo = parsed.combos[0] ?? [];
@@ -204,27 +218,27 @@ describe('a key combination stands on its own', () => {
 
   it('remembers nothing from one call to the next: no modifier carries over', () => {
     // A refused modifier on its own, then a key: the key is not sent with it.
-    expect(parseKeys('shift').ok).toBe(false);
-    expect(parseKeys('ctrl').ok).toBe(false);
-    expect(parseKeys('a')).toEqual({ ok: true, combos: [['a']], text: 'a' });
+    expect(parseKeys('shift', []).ok).toBe(false);
+    expect(parseKeys('ctrl', []).ok).toBe(false);
+    expect(parseKeys('a', [])).toEqual({ ok: true, combos: [['a']], text: 'a' });
     // A combination, then a key on its own, then the same combination again: each is read alone.
-    expect(parseKeys('ctrl+shift+s')).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
-    expect(parseKeys('s')).toEqual({ ok: true, combos: [['s']], text: 's' });
-    expect(parseKeys('escape')).toEqual({ ok: true, combos: [['escape']], text: 'escape' });
-    expect(parseKeys('ctrl+shift+s')).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
+    expect(parseKeys('ctrl+shift+s', [])).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
+    expect(parseKeys('s', [])).toEqual({ ok: true, combos: [['s']], text: 's' });
+    expect(parseKeys('escape', [])).toEqual({ ok: true, combos: [['escape']], text: 'escape' });
+    expect(parseKeys('ctrl+shift+s', [])).toEqual({ ok: true, combos: [['ctrl', 'shift', 's']], text: 'ctrl+shift+s' });
     // What it gives back is a fresh value each time: changing one result changes no later one.
-    const first = parseKeys('ctrl+s');
+    const first = parseKeys('ctrl+s', []);
     if (first.ok) first.combos[0]?.push('alt', 'tab');
-    expect(parseKeys('ctrl+s')).toEqual({ ok: true, combos: [['ctrl', 's']], text: 'ctrl+s' });
+    expect(parseKeys('ctrl+s', [])).toEqual({ ok: true, combos: [['ctrl', 's']], text: 'ctrl+s' });
   });
 
   it('has no way to hold a key down or let one go', () => {
     for (const text of ['keydown ctrl', 'keyup ctrl', 'hold+ctrl', 'ctrl+down+s', 'press+a', 'release+a', 'ctrl_down', 'shift_up', 'ctrl+', '+ctrl']) {
-      const parsed = parseKeys(text);
+      const parsed = parseKeys(text, []);
       // `down` is the arrow key and nothing else: ctrl+down+s is two keys, which is refused.
       expect(parsed.ok, text).toBe(false);
     }
-    expect(parseKeys('ctrl+down')).toEqual({ ok: true, combos: [['ctrl', 'down']], text: 'ctrl+down' });
-    expect(parseKeys('up')).toEqual({ ok: true, combos: [['up']], text: 'up' });
+    expect(parseKeys('ctrl+down', [])).toEqual({ ok: true, combos: [['ctrl', 'down']], text: 'ctrl+down' });
+    expect(parseKeys('up', [])).toEqual({ ok: true, combos: [['up']], text: 'up' });
   });
 });

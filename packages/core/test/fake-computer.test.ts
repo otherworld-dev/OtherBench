@@ -310,6 +310,7 @@ describe('FakeComputerDriver', () => {
     expect(await driver.act('c1', { action: 'key', text: 'ctrl+shift+s' }, EXPECT)).toEqual({ ok: true });
     expect(seen).toEqual([['ctrl', 'shift']]);
     // ...and up again afterwards.
+    expect(driver.pressed).toEqual([]);
     expect(driver.held).toEqual([]);
 
     // The action fails half-way: nothing is left down, and the next action is not refused for it.
@@ -317,6 +318,7 @@ describe('FakeComputerDriver', () => {
       throw new Error('the shell fell over mid-combination');
     };
     await expect(driver.act('c1', { action: 'key', text: 'ctrl+shift+z' }, EXPECT)).rejects.toThrow('the shell fell over mid-combination');
+    expect(driver.pressed).toEqual([]);
     expect(driver.held).toEqual([]);
     driver.midAction = null;
     expect(await driver.act('c1', { action: 'key', text: 'return' }, EXPECT)).toEqual({ ok: true });
@@ -330,16 +332,63 @@ describe('FakeComputerDriver', () => {
     expect(during).toEqual([[], [], []]);
   });
 
-  it('lets go of everything when the session stops or ends', async () => {
+  it('lets go of what it pressed itself when the session stops or ends mid-action', async () => {
+    const driver = await started();
+    const seen: string[][] = [];
+    driver.midAction = () => {
+      seen.push([...driver.pressed]);
+      driver.stop('c1', 'hotkey');
+      seen.push([...driver.pressed]);
+    };
+    await driver.act('c1', { action: 'key', text: 'ctrl+shift+s' }, EXPECT);
+    expect(seen).toEqual([['ctrl', 'shift'], []]);
+    expect(driver.pressed).toEqual([]);
+
+    await driver.ensureSession('c1', 'Chat one');
+    const ended: string[][] = [];
+    driver.midAction = () => {
+      // endSession has no await in it: its release has happened by the time the call returns.
+      void driver.endSession('c1');
+      ended.push([...driver.pressed]);
+    };
+    await driver.act('c1', { action: 'key', text: 'alt+left' }, EXPECT);
+    expect(ended).toEqual([[]]);
+    expect(driver.pressed).toEqual([]);
+  });
+
+  it('never lets go of a modifier the person is holding: not on stop, not on end, not after a refusal', async () => {
     const driver = await started();
     driver.held = ['ctrl', 'shift'];
+    // A refused action leaves it as it was.
+    expect(await driver.act('c1', { action: 'key', text: 'return' }, EXPECT)).toEqual({ ok: false, reason: FAKE_MODIFIER_HELD_REASON });
+    expect(driver.held).toEqual(['ctrl', 'shift']);
+    expect(driver.pressed).toEqual([]);
+
     driver.stop('c1', 'hotkey');
-    expect(driver.held).toEqual([]);
+    expect(driver.held).toEqual(['ctrl', 'shift']);
 
     await driver.ensureSession('c1', 'Chat one');
     driver.held = ['alt'];
     await driver.endSession('c1');
+    expect(driver.held).toEqual(['alt']);
+
+    // A new session still refuses to act until the person lets go.
+    await driver.ensureSession('c1', 'Chat one');
+    expect(await driver.act('c1', { action: 'left_click', coordinate: [1, 1] }, EXPECT)).toEqual({ ok: false, reason: FAKE_MODIFIER_HELD_REASON });
+    expect(driver.actions).toEqual([]);
+    driver.held = [];
+    expect(await driver.act('c1', { action: 'left_click', coordinate: [1, 1] }, EXPECT)).toEqual({ ok: true });
+  });
+
+  it("keeps what the driver pressed apart from what the person holds, and counts only the first as its own", async () => {
+    const driver = await started();
+    const seen: { pressed: string[]; held: string[] }[] = [];
+    driver.midAction = () => seen.push({ pressed: [...driver.pressed], held: [...driver.held] });
+    await driver.act('c1', { action: 'key', text: 'ctrl+s' }, EXPECT);
+    expect(seen).toEqual([{ pressed: ['ctrl'], held: [] }]);
+    // Its own modifiers never end up in the person's state, and nothing of the person's in its own.
     expect(driver.held).toEqual([]);
+    expect(driver.pressed).toEqual([]);
   });
 
   it('has no call that presses without releasing', () => {
@@ -358,12 +407,14 @@ describe('FakeComputerDriver', () => {
     expect(driver.reservedKeys()).toBeNull();
   });
 
-  it('sends no combination with a modifier while the shortcuts are not known', async () => {
+  it('sends no key at all while the shortcuts are not known', async () => {
     const driver = await started();
     driver.reserved = null;
     await expect(driver.act('c1', { action: 'key', text: 'ctrl+s' }, EXPECT)).rejects.toThrow(/core would not send/);
     await expect(driver.act('c1', { action: 'key', text: 'shift+tab' }, EXPECT)).rejects.toThrow(/core would not send/);
-    expect(await driver.act('c1', { action: 'key', text: 'return' }, EXPECT)).toEqual({ ok: true });
+    await expect(driver.act('c1', { action: 'key', text: 'return' }, EXPECT)).rejects.toThrow(/core would not send/);
+    await expect(driver.act('c1', { action: 'key', text: 'f9' }, EXPECT)).rejects.toThrow(/core would not send/);
     expect(await driver.act('c1', { action: 'type', text: 'hello' }, EXPECT)).toEqual({ ok: true });
+    expect(await driver.act('c1', { action: 'left_click', coordinate: [1, 1] }, EXPECT)).toEqual({ ok: true });
   });
 });

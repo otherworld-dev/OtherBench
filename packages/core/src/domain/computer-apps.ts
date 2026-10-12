@@ -21,7 +21,7 @@ import { asciiLower, cardLine, hasHiddenCharacter, isWellFormedText, revealAllHi
 import { KEY_LIMITS, parseKeys } from './computer-keys.js';
 import type { ComputerAction, ComputerExpectation } from '../ports/computer.js';
 
-export { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, type ParsedKeys } from './computer-keys.js';
+export { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, SHORTCUTS_UNKNOWN_REASON, type ParsedKeys } from './computer-keys.js';
 export { cardLine } from './card-text.js';
 
 export const COMPUTER_TOOL = 'computer';
@@ -458,10 +458,16 @@ export function appArgs(target: DescribedTarget): Record<(typeof APP_ARG_FIELDS)
  * nothing else. Nothing the model sent is copied across, so a field it
  * forged (`appShellView: false`, another `app`) cannot survive. Frozen: the
  * card, the grant, the risk and the expectation are all read from this one
- * object, which nothing changes between the decision and the action.
+ * object, which nothing changes between the decision and the action. Frozen
+ * all the way down: the coordinate is a copy that is frozen too, so code in
+ * the same process can't change a point after the person approved it.
  */
 export function describedCallArgs(action: ComputerAction, target: DescribedTarget): Readonly<Record<string, unknown>> {
-  return Object.freeze({ ...action, ...appArgs(target) });
+  const described: Record<string, unknown> = { ...action, ...appArgs(target) };
+  for (const [name, value] of Object.entries(described)) {
+    if (Array.isArray(value)) described[name] = Object.freeze([...(value as unknown[])]);
+  }
+  return Object.freeze(described);
 }
 
 /**
@@ -558,6 +564,11 @@ export function coordinateOf(args: unknown, bounds?: { width: number; height: nu
   return [x, y];
 }
 
+/** A coordinate that can't be changed afterwards (typed as the port's mutable pair; writing to it throws). */
+function frozenPoint(point: [number, number]): [number, number] {
+  return Object.freeze([...point]) as unknown as [number, number];
+}
+
 const SCROLL_DIRECTIONS = ['up', 'down', 'left', 'right'] as const;
 
 /** An action that only looks, in the one form it is carried out in. A wait's `duration` (seconds) is already held to the cap. */
@@ -613,18 +624,24 @@ void NO_ACTION_OUTSIDE_THE_LIST;
  *     (3 when left out);
  *   - typed text is 1 to 4000 characters, well-formed, with no control
  *     character but line breaks and tabs;
- *   - a key passes `parseKeys` (with `reserved`; `null` when the shell has
- *     not reported its shortcuts, which holds back every combination with a
- *     modifier) and is sent as the canonical combination, never as the model
- *     wrote it;
+ *   - a key passes `parseKeys` (with `reserved`, which must be an array: the
+ *     shell's shortcuts, or `[]` for "none to hold back"; `null`, a missing
+ *     `reserved` and anything else that isn't an array mean the shell has not
+ *     reported them, and then NO key action is allowed) and is sent as the
+ *     canonical combination, never as the model wrote it;
  *   - a wait is a finite number of seconds, zero or more, cut to 10 (1 when
  *     left out).
+ *
+ * An action with a coordinate comes back frozen, the coordinate included.
  *
  * There is no action that holds a key or a button down: every action here
  * presses and releases.
  */
-export function parseAction(args: unknown, options: { bounds?: { width: number; height: number }; reserved?: readonly unknown[] | null } = {}): ParsedAction {
+export function parseAction(args: unknown, options: { bounds?: { width: number; height: number }; reserved?: unknown } = {}): ParsedAction {
   const no = (reason: string): ParsedAction => ({ ok: false, reason });
+  const bounds = typeof options === 'object' && options !== null ? options.bounds : undefined;
+  // Only an explicit array lists shortcuts; a missing, odd or null `reserved` is "not known".
+  const reserved: unknown = typeof options === 'object' && options !== null ? options.reserved : null;
   const a = recordOf(args);
   const action = a?.['action'];
   if (a === null || !isComputerAction(action)) {
@@ -647,23 +664,23 @@ export function parseAction(args: unknown, options: { bounds?: { width: number; 
     case 'double_click':
     case 'triple_click':
     case 'scroll': {
-      const coordinate = coordinateOf(a, options.bounds);
+      const coordinate = coordinateOf(a, bounds);
       if (coordinate === null) {
-        const inside = options.bounds !== undefined && coordinateOf(a) !== null;
+        const inside = bounds !== undefined && coordinateOf(a) !== null;
         return no(
           inside
             ? 'That point is outside the last screenshot. Take a screenshot and use a point inside it.'
             : `A ${action} action needs "coordinate": [x, y], two numbers in the last screenshot's pixels.`
         );
       }
-      if (action !== 'scroll') return { ok: true, action: { action, coordinate } };
+      if (action !== 'scroll') return { ok: true, action: Object.freeze({ action, coordinate: frozenPoint(coordinate) }) };
       const direction = SCROLL_DIRECTIONS.find((d) => d === a['scroll_direction']);
       if (direction === undefined) return no('A scroll action needs "scroll_direction": up, down, left or right.');
       const amount = a['scroll_amount'] ?? COMPUTER_LIMITS.scrollAmountDefault;
       if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < COMPUTER_LIMITS.scrollAmountMin || amount > COMPUTER_LIMITS.scrollAmountMax) {
         return no(`"scroll_amount" is a whole number from ${COMPUTER_LIMITS.scrollAmountMin} to ${COMPUTER_LIMITS.scrollAmountMax}.`);
       }
-      return { ok: true, action: { action, coordinate, scroll_direction: direction, scroll_amount: amount } };
+      return { ok: true, action: Object.freeze({ action, coordinate: frozenPoint(coordinate), scroll_direction: direction, scroll_amount: amount }) };
     }
     case 'type': {
       const text = a['text'];
@@ -672,7 +689,7 @@ export function parseAction(args: unknown, options: { bounds?: { width: number; 
       return problem === null ? { ok: true, action: { action, text } } : no(problem);
     }
     case 'key': {
-      const parsed = parseKeys(a['text'], options.reserved);
+      const parsed = parseKeys(a['text'], reserved);
       return parsed.ok ? { ok: true, action: { action, text: parsed.text } } : no(parsed.reason);
     }
   }
@@ -715,7 +732,8 @@ const VERBS: Readonly<Record<ComputerActionName, string>> = {
 export function actionSummary(args: unknown): string {
   const name = recordOf(args)?.['action'];
   if (!isComputerAction(name)) return '?';
-  const parsed = parseAction(args);
+  // Nothing to hold back here: the tool has already checked a key against the shell's real list.
+  const parsed = parseAction(args, { reserved: [] });
   if (!parsed.ok) return `${VERBS[name]} ?`;
   const action = parsed.action;
   switch (action.action) {

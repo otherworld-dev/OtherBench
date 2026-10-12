@@ -149,7 +149,8 @@ export interface ComputerDriver {
    * hotkey), as it reported them in its hello and in every change since.
    * `parseKeys` refuses a `key` action that would press one. `null` when the
    * shell has not reported a list: never an empty list standing in for one,
-   * so that no combination with a modifier is sent until the list is known.
+   * so that no `key` action at all is sent until the list is known (the
+   * quick-chat hotkey is free text and can be a bare `F9`).
    * The shell is the source of truth for its own shortcuts and refuses them
    * itself when it acts; this list lets the tool say so before a card.
    */

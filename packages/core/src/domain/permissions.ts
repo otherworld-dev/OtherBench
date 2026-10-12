@@ -253,7 +253,8 @@ export class PermissionBroker {
       // number. The tool's describeCall refuses these first, with a fuller
       // reason; this is the backstop, so neither a look nor a grant ever
       // covers one.
-      const valid = parseAction(args).ok;
+      // `reserved: []`: nothing to hold back here; the tool checked a key against the shell's real list.
+      const valid = parseAction(args, { reserved: [] }).ok;
       if (isReadAction(action)) return valid ? { kind: 'allow', grantedBy: 'policy' } : { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
       // The app's key must be valid as it stands. One that isn't is no app.
       if (appKey(rawField(args, 'app')) === null) return { kind: 'deny', reason: COMPUTER_NO_APP_REASON };

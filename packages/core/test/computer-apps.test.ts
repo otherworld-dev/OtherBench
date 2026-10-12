@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   actionSummary,
+  SHORTCUTS_UNKNOWN_REASON,
   APP_ARG_FIELDS,
   appArgs,
   appKey,
@@ -495,13 +496,14 @@ describe('computer actions', () => {
 });
 
 describe('parsing a whole action', () => {
+  // A key action needs a list of the shell's shortcuts: these helpers give an empty one unless a test says otherwise.
   function parsed(args: unknown, options?: Parameters<typeof parseAction>[1]): unknown {
-    const result = parseAction(args, options);
+    const result = parseAction(args, { reserved: [], ...options });
     return result.ok ? result.action : null;
   }
 
   function refused(args: unknown, options?: Parameters<typeof parseAction>[1]): string {
-    const result = parseAction(args, options);
+    const result = parseAction(args, { reserved: [], ...options });
     if (result.ok) throw new Error(`Expected a refusal for ${JSON.stringify(args)}, got ${JSON.stringify(result.action)}`);
     return result.reason;
   }
@@ -590,10 +592,59 @@ describe('parsing a whole action', () => {
     expect(refused({ action: 'key', text: 'super+r' })).toBe('Key combinations with the Windows key are never sent.');
     expect(parsed({ action: 'key', text: 'ctrl+shift+space' })).toEqual({ action: 'key', text: 'ctrl+shift+space' });
     expect(refused({ action: 'key', text: 'ctrl+shift+space' }, { reserved: ['Ctrl+Shift+Space'] })).toMatch(/Grunt's own shortcuts/);
-    // The shell has not said what its shortcuts are: nothing with a modifier goes out.
-    expect(refused({ action: 'key', text: 'ctrl+s' }, { reserved: null })).toMatch(/doesn't know its own shortcuts yet/);
-    expect(parsed({ action: 'key', text: 'Return' }, { reserved: null })).toEqual({ action: 'key', text: 'return' });
+    // The shell has not said what its shortcuts are: no key goes out, a bare one included.
+    expect(refused({ action: 'key', text: 'ctrl+s' }, { reserved: null })).toBe(SHORTCUTS_UNKNOWN_REASON);
+    expect(refused({ action: 'key', text: 'Return' }, { reserved: null })).toBe(SHORTCUTS_UNKNOWN_REASON);
+    expect(refused({ action: 'key', text: 'F9' }, { reserved: null })).toBe(SHORTCUTS_UNKNOWN_REASON);
+    // Everything else is untouched by it.
     expect(parsed({ action: 'type', text: 'x' }, { reserved: null })).toEqual({ action: 'type', text: 'x' });
+    expect(parsed({ action: 'left_click', coordinate: [1, 2] }, { reserved: null })).toEqual({ action: 'left_click', coordinate: [1, 2] });
+    expect(parsed({ action: 'screenshot' }, { reserved: null })).toEqual({ action: 'screenshot' });
+  });
+
+  it('treats a list that is not an array as no list, whatever shape it has, and a missing one too', () => {
+    const odd: unknown[] = [undefined, '', 'Ctrl+Shift+Space', {}, { length: 0 }, 0, 1, false, true, NaN, Symbol('x'), () => [], new Set<string>(), new Map<string, string>()];
+    for (const reserved of odd) {
+      for (const text of ['F9', 'Return', 'ctrl+s']) {
+        const result = parseAction({ action: 'key', text }, { reserved });
+        expect(result.ok, `${String(reserved)} ${text}`).toBe(false);
+        expect(!result.ok && result.reason, `${String(reserved)} ${text}`).toBe(SHORTCUTS_UNKNOWN_REASON);
+      }
+    }
+    // A caller that leaves the key out altogether, or hands over no options at all, gets the same answer for a key action.
+    expect(parseAction({ action: 'key', text: 'F9' }, {})).toEqual({ ok: false, reason: SHORTCUTS_UNKNOWN_REASON });
+    expect(parseAction({ action: 'key', text: 'F9' })).toEqual({ ok: false, reason: SHORTCUTS_UNKNOWN_REASON });
+    expect(parseAction({ action: 'key', text: 'F9' }, null as never)).toEqual({ ok: false, reason: SHORTCUTS_UNKNOWN_REASON });
+    expect(parseAction({ action: 'key', text: 'F9' }, 'x' as never)).toEqual({ ok: false, reason: SHORTCUTS_UNKNOWN_REASON });
+    // Looks and typed text never needed a list.
+    for (const reserved of odd) {
+      expect(parseAction({ action: 'type', text: 'x' }, { reserved }).ok).toBe(true);
+      expect(parseAction({ action: 'wait' }, { reserved }).ok).toBe(true);
+    }
+    // Only an explicit array lists shortcuts, and an empty one means none to hold back.
+    expect(parsed({ action: 'key', text: 'F9' }, { reserved: [] })).toEqual({ action: 'key', text: 'f9' });
+    expect(refused({ action: 'key', text: 'F9' }, { reserved: ['F9'] })).toMatch(/Grunt's own shortcuts/);
+    // The summary and the broker, which only run after the tool checked the real list, still read a key action.
+    expect(actionSummary({ action: 'key', text: 'F9' })).toBe('press f9');
+    expect(actionSummary({ action: 'key', text: 'ctrl+s' })).toBe('press ctrl+s');
+  });
+
+  it('freezes the point of an action it parses, and the point of the described arguments', () => {
+    const result = parseAction({ action: 'left_click', coordinate: [10, 20] });
+    if (!result.ok || !('coordinate' in result.action)) throw new Error('expected a click');
+    expect(Object.isFrozen(result.action.coordinate)).toBe(true);
+    expect(() => {
+      (result.action as { coordinate: number[] }).coordinate[0] = 999;
+    }).toThrow(TypeError);
+    const scroll = parseAction({ action: 'scroll', coordinate: [3, 4], scroll_direction: 'up' });
+    if (!scroll.ok || !('coordinate' in scroll.action)) throw new Error('expected a scroll');
+    expect(Object.isFrozen(scroll.action.coordinate)).toBe(true);
+    // It is a fresh array each time, never the model's own.
+    const given = [5, 6];
+    const again = parseAction({ action: 'mouse_move', coordinate: given });
+    if (!again.ok || !('coordinate' in again.action)) throw new Error('expected a move');
+    expect(again.action.coordinate).not.toBe(given);
+    expect(Object.isFrozen(given)).toBe(false);
   });
 
   it('cuts a wait to ten seconds, and refuses one that is not a length of time', () => {
@@ -621,7 +672,7 @@ describe('parsing a whole action', () => {
       { action: 'left_click', coordinate: [32767.99, 0] },
     ];
     for (const input of inputs) {
-      const result = parseAction(input);
+      const result = parseAction(input, { reserved: [] });
       if (!result.ok) throw new Error(`Expected ${JSON.stringify(input)} to parse`);
       const action = result.action;
       if (action.action === 'wait') expect(action.duration).toBeLessThanOrEqual(COMPUTER_LIMITS.waitMax);
@@ -633,7 +684,7 @@ describe('parsing a whole action', () => {
         expect(action.text.split('+').length).toBeLessThanOrEqual(COMPUTER_LIMITS.keysPerCombo);
       }
       // What comes back parses to itself: it is the canonical form.
-      expect(parseAction(action)).toEqual({ ok: true, action });
+      expect(parseAction(action, { reserved: [] })).toEqual({ ok: true, action });
     }
   });
 });
@@ -932,6 +983,16 @@ describe('round 2: one described target for the card, the grant, the risk and th
       appStarted: '2026-10-12T09:00:00.000Z',
     });
     expect(Object.isFrozen(args)).toBe(true);
+    // Frozen all the way down: code in this process can't move the point once the person has approved it.
+    const point = args['coordinate'] as number[];
+    expect(Object.isFrozen(point)).toBe(true);
+    expect(() => {
+      point[0] = 999;
+    }).toThrow(TypeError);
+    expect(() => point.push(5)).toThrow(TypeError);
+    expect(actionSummary(args)).toBe('click at 10, 20');
+    // It is a copy: the parsed action's own point is not the described one.
+    expect(point).not.toBe(parsed.action.coordinate);
     // Every reader takes its answer from those same fields.
     expect(isHighRiskApp(args)).toBe(true);
     expect(expectationOf(args)).toEqual({ app: NOTEPAD, shellView: true, windowId: 'hwnd-dialog', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' });
@@ -973,7 +1034,7 @@ describe('round 2: nothing can hold a key or a button down', () => {
       key: ['action', 'text'],
     };
     for (const [action, fields] of Object.entries(whole)) {
-      const result = parseAction({ action, coordinate: [1, 2], scroll_direction: 'down', text: action === 'key' ? 'ctrl+s' : 'x', duration: 5, hold: true, down: true, release: false });
+      const result = parseAction({ action, coordinate: [1, 2], scroll_direction: 'down', text: action === 'key' ? 'ctrl+s' : 'x', duration: 5, hold: true, down: true, release: false }, { reserved: [] });
       if (!result.ok) throw new Error(`Expected ${action} to parse`);
       expect(Object.keys(result.action).sort(), action).toEqual(fields);
     }

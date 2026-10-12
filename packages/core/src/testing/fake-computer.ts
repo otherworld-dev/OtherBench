@@ -83,14 +83,15 @@ function sameAction(a: object, b: object): boolean {
  * `cursorPosition` reject, `target` answers a refusal, `act` does nothing.
  * So a layer that forgot to start the session fails its test.
  *
- * And it models the keyboard as the shell must treat it. `held` is the
- * modifier keys that are down right now, as the machine reports them (the
- * person holding Ctrl, or a key something left down): while any is down,
- * or while `keyboardKnown` is false, `act` does nothing. It never releases
- * a key it did not press in order to carry on. A `key` action holds its own
- * modifiers only inside the call and lets go on every way out, a throw
- * included (`midAction` runs half-way, to look or to throw); stopping or
- * ending a session lets go of everything.
+ * And it models the keyboard as the shell must treat it, in two separate
+ * pieces of state. `held` is a modifier the PERSON is holding (or something
+ * else left down): a test sets it, the fake never clears it, and while any
+ * is down, or while `keyboardKnown` is false, `act` does nothing. It never
+ * releases a key it did not press in order to carry on. `pressed` is what
+ * the driver itself pressed: a `key` action presses its own modifiers only
+ * inside the call and lets go on every way out, a throw included
+ * (`midAction` runs half-way, to look or to throw); stopping or ending a
+ * session lets go of everything it pressed, and of nothing else.
  */
 export class FakeComputerDriver implements ComputerDriver {
   isAvailable = true;
@@ -102,11 +103,13 @@ export class FakeComputerDriver implements ComputerDriver {
   actAnswer: ComputerAnswer = { ok: true };
   screenSize = { width: 1366, height: 768 };
   cursor = { x: 0, y: 0 };
-  /** Modifier keys that are down right now, as the machine reports them. A test sets this to model a held or stuck key. */
+  /** Modifier keys the PERSON is holding (or that something else left down), as the machine reports them. A test sets this; the fake never clears it, and `act` refuses while any is down. */
   held: string[] = [];
+  /** Modifier keys the driver itself pressed and has not released yet: down only inside a `key` action, and always released on every way out. */
+  pressed: string[] = [];
   /** False when the state of the keyboard cannot be read: then nothing is done. */
   keyboardKnown = true;
-  /** Runs half-way through every action that is carried out, with the modifiers down at that moment. May throw. */
+  /** Runs half-way through every action that is carried out, with the modifiers the driver has pressed at that moment. May throw. */
   midAction: ((held: readonly string[]) => void) | null = null;
   /** The shell's own global shortcuts (`reservedKeys`); `null` for a shell that has not reported any list. */
   reserved: string[] | null = [];
@@ -134,7 +137,7 @@ export class FakeComputerDriver implements ComputerDriver {
   }
 
   async endSession(chatId: string): Promise<void> {
-    this.held = [];
+    this.pressed = [];
     if (this.sessions.delete(chatId)) this.ended.push(chatId);
   }
 
@@ -198,13 +201,13 @@ export class FakeComputerDriver implements ComputerDriver {
     }
     // Its own modifiers go down for the length of this one action and come up on every way out of it.
     const modifiers = action.action === 'key' ? action.text.split('+').filter((name) => KEY_MODIFIERS.includes(name)) : [];
-    this.held = modifiers;
+    this.pressed = modifiers;
     try {
-      this.midAction?.(this.held);
+      this.midAction?.([...this.pressed]);
       this.actions.push({ chatId, action, expect });
       return this.actAnswer;
     } finally {
-      this.held = [];
+      this.pressed = [];
     }
   }
 
@@ -226,7 +229,7 @@ export class FakeComputerDriver implements ComputerDriver {
 
   /** As if the person pressed Stop: the session ends and listeners hear why. */
   stop(chatId: string, why: ComputerStopReason = 'button'): void {
-    this.held = [];
+    this.pressed = [];
     this.sessions.delete(chatId);
     for (const cb of this.stopListeners) cb(chatId, why);
   }

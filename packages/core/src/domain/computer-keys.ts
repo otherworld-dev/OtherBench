@@ -116,6 +116,8 @@ const ACCELERATOR_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
 export const KEY_LIMITS = Object.freeze({ textLength: 64, keysPerCombo: 4, combosPerAction: 1 });
 
 export const KEYS_WINDOWS_REASON = 'Key combinations with the Windows key are never sent.';
+/** What a `key` action is refused with while the shell has not reported its shortcuts (or the caller gave no list). */
+export const SHORTCUTS_UNKNOWN_REASON = "Grunt doesn't know the desktop app's shortcuts yet; no key was pressed.";
 const ONE_COMBO_REASON = 'Grunt sends one key combination per action. Send each one as its own action.';
 const NO_TEXT_REASON = 'A key action needs one key combination as its text, such as "ctrl+s" or "Return".';
 
@@ -168,14 +170,18 @@ function reservedCombo(entry: unknown): string | null | undefined {
 /**
  * Reads the text of a `key` action. `reserved` is Grunt's own global
  * shortcuts as the shell registered them (`ComputerDriver.reservedKeys()`):
- * the model may not press them. While one of them can't be read, no
- * combination is sent at all. `null` means the shell has not said what they
- * are: until it does, no combination with a modifier is sent (every global
- * shortcut has one), and a key on its own still is. Leaving `reserved` out
- * means there are none to hold back (the broker and the summary, which only
- * ever run after the tool has checked against the real list).
+ * the model may not press them. It is a required argument and only an array
+ * is a list: `[]` says there are none to hold back (the broker and the
+ * summary say so, since they only ever run after the tool has checked
+ * against the real list), and an array with an entry that can't be read as a
+ * shortcut sends no combination at all.
+ *
+ * Anything else is "the shell has not said what they are": `null`, but also
+ * `undefined`, `''`, `0`, `false`, an object. Then NO key is sent, not even
+ * a single one: the quick-chat hotkey is free text, so it can be a bare
+ * `F9`, and nothing is known about it until the shell reports it.
  */
-export function parseKeys(text: unknown, reserved: readonly unknown[] | null = []): ParsedKeys {
+export function parseKeys(text: unknown, reserved: unknown): ParsedKeys {
   if (typeof text !== 'string') return refuse(NO_TEXT_REASON);
   // The length first, on the text as it came: nothing longer is trimmed, split or searched.
   if (text.length > KEY_LIMITS.textLength) return refuse(`That is too long to be one key combination (at most ${KEY_LIMITS.textLength} characters).`);
@@ -217,13 +223,8 @@ export function parseKeys(text: unknown, reserved: readonly unknown[] | null = [
     return refuse(`Grunt never sends ${canonical}: it leaves the app this action was approved for.`);
   }
 
-  if (reserved === null) {
-    if (combo.modifiers.size > 0) {
-      return refuse("Grunt doesn't know its own shortcuts yet, so it sends no key combination with a modifier. A single key such as Return still works.");
-    }
-    return { ok: true, combos: [[...combo.keys]], text: canonical };
-  }
-  for (const entry of reserved) {
+  if (!Array.isArray(reserved)) return refuse(SHORTCUTS_UNKNOWN_REASON);
+  for (const entry of reserved as readonly unknown[]) {
     const held = reservedCombo(entry);
     if (held === undefined) {
       return refuse(`Grunt couldn't read one of its own shortcuts ("${cardLine(entry, 40)}"), so it sends no key combinations until that is fixed.`);
