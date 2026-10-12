@@ -1,5 +1,5 @@
 import { createPrivateKey, generateKeyPairSync, X509Certificate } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -64,6 +64,26 @@ describe('loadOrCreateAutoTls', () => {
     expect(fresh.created).toBe(false);
     expect(make(['grunt.test', 'grunt.lan'], now + (AUTO_CERT_DAYS - 31) * DAY).created).toBe(false);
     expect(make(['grunt.test', 'grunt.lan'], now + (AUTO_CERT_DAYS - 29) * DAY).created).toBe(true);
+  });
+
+  it('makes new ones when a file is garbage, and refuses to touch the files when one cannot be read', () => {
+    const now = Date.now();
+    make(['grunt.test'], now);
+    writeFileSync(join(dir, 'https', 'server.crt'), 'not a certificate');
+    expect(make(['grunt.test'], now).created).toBe(true);
+
+    // A directory where the certificate should be: reading it fails with EISDIR, not ENOENT.
+    const crt = join(dir, 'https', 'server.crt');
+    rmSync(crt);
+    mkdirSync(crt);
+    const caBefore = readFileSync(join(dir, 'https', 'grunt-ca.crt'), 'utf8');
+    const keyBefore = readFileSync(join(dir, 'https', 'server.key'), 'utf8');
+
+    expect(() => make(['grunt.test'], now)).toThrow(TlsFilesError);
+    expect(() => make(['grunt.test'], now)).toThrow(/couldn't read .*server\.crt.*left as they are/);
+    expect(readFileSync(join(dir, 'https', 'grunt-ca.crt'), 'utf8')).toBe(caBefore);
+    expect(readFileSync(join(dir, 'https', 'server.key'), 'utf8')).toBe(keyBefore);
+    expect(statSync(crt).isDirectory()).toBe(true);
   });
 });
 

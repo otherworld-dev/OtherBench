@@ -1,5 +1,5 @@
 import { createPrivateKey, generateKeyPairSync, X509Certificate, type KeyObject } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import {
@@ -61,11 +61,29 @@ function reuse(dir: string, names: string[], now: number): AutoTls | null {
   const caPath = join(dir, 'grunt-ca.crt');
   const certPath = join(dir, 'server.crt');
   const keyPath = join(dir, 'server.key');
-  if (![caPath, certPath, keyPath].every((p) => existsSync(p))) return null;
+  // Reading is the only step whose failure says nothing about the files'
+  // content (an antivirus scan holding one at boot, a permissions slip).
+  // Remaking the CA on such an error can't be undone: every device would have
+  // to trust it again. So only a missing file means "make new ones"; any
+  // other read error refuses to start and leaves the files as they are.
+  const text = new Map<string, string>();
+  let missing = false;
+  for (const p of [caPath, certPath, keyPath]) {
+    try {
+      text.set(p, readFileSync(p, 'utf8'));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        missing = true;
+        continue;
+      }
+      throw new TlsFilesError(`Refusing to start: couldn't read ${p}: ${(err as Error).message}. Grunt's certificate files were left as they are.`);
+    }
+  }
+  if (missing) return null;
   try {
-    const keyPem = readFileSync(keyPath, 'utf8');
-    const certPem = readFileSync(certPath, 'utf8');
-    const ca = new X509Certificate(readFileSync(caPath, 'utf8'));
+    const keyPem = text.get(keyPath) as string;
+    const certPem = text.get(certPath) as string;
+    const ca = new X509Certificate(text.get(caPath) as string);
     const cert = new X509Certificate(certPem);
     if (!cert.checkPrivateKey(createPrivateKey(keyPem))) return null;
     if (!cert.checkIssued(ca) || !cert.verify(ca.publicKey)) return null;
@@ -81,7 +99,9 @@ function reuse(dir: string, names: string[], now: number): AutoTls | null {
 /**
  * `--tls auto` (spec §4): `<dir>/grunt-ca.crt`, `server.crt` and `server.key`.
  * Reused when they match each other, name exactly `names` and have more
- * than 30 days left; otherwise a new CA and certificate are made. The CA's
+ * than 30 days left; otherwise a new CA and certificate are made. A file
+ * that can't be read for any reason but being absent stops the start with a
+ * `TlsFilesError` instead, so a transient error never remakes the CA. The CA's
  * private key is never written and is dropped once the certificate is
  * signed, so a copy of this disk can't mint certificates that devices
  * trusting the CA would accept. Not the node certificate: that one has no
