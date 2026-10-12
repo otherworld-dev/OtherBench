@@ -1,4 +1,5 @@
-import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@grunt/core/ports/store.js';
+import type { ScheduleRule } from '@grunt/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
 import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
@@ -37,6 +38,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** `POST /api/schedules` (spec 2026-10-12-scheduled-tasks-design). The server sets the time zone. */
+export interface CreateScheduleBody {
+  name: string;
+  prompt: string;
+  profileId: string;
+  target: { chatId: string } | { projectId: string };
+  rule: ScheduleRule;
+  enabled?: boolean;
+}
+
+/** `PATCH /api/schedules/:id`: any of these; the target can't change. */
+export interface PatchScheduleBody {
+  name?: string;
+  prompt?: string;
+  profileId?: string;
+  rule?: ScheduleRule;
+  enabled?: boolean;
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {
@@ -470,6 +490,17 @@ export const api = {
   usage: {
     /** Omit `chatId` for the global (every-chat) rollup the usage/pricing settings view shows. */
     get: (chatId?: string) => request<UsageRollup>(`/usage${chatId ? `?chatId=${encodeURIComponent(chatId)}` : ''}`),
+  },
+
+  /** Scheduled tasks: local to the server machine. Run now answers 409 with a reason when it can't start. */
+  schedules: {
+    list: () => request<ScheduleView[]>('/schedules'),
+    create: (body: CreateScheduleBody) => post<ScheduleView>('/schedules', body),
+    patch: (id: string, body: PatchScheduleBody) => patch<ScheduleView>(`/schedules/${id}`, body),
+    delete: (id: string) => del(`/schedules/${id}`),
+    /** Newest first. */
+    runs: (id: string) => request<ScheduleRun[]>(`/schedules/${id}/runs`),
+    run: (id: string) => post<ScheduleRun>(`/schedules/${id}/run`),
   },
 
   claude: {

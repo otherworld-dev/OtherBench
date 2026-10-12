@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ScheduleTarget } from '@grunt/core/domain/schedule.js';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
@@ -38,6 +39,9 @@ export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnect
  * is gone by then (a menu item).
  */
 export type ProjectPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
+
+/** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
+export type SchedulesPageState = { prefill?: ScheduleTarget };
 
 export interface GruntState {
   // --- reference data (connections/models/profiles CRUD) -------------------
@@ -212,6 +216,12 @@ export interface GruntState {
   projectPage: ProjectPageState | null;
   openProjectPage(page: ProjectPageState): void;
   closeProjectPage(): void;
+  /** The open Scheduled overlay, or null. App renders it. */
+  schedulesPage: SchedulesPageState | null;
+  openSchedules(prefill?: ScheduleTarget): void;
+  closeSchedules(): void;
+  /** Bumped by every schedule event, so the overlay re-reads the list. */
+  schedulesVersion: number;
 }
 
 /**
@@ -429,6 +439,10 @@ export const useGruntStore = create<GruntState>()((set) => ({
         }
         case 'sync-applied':
           return { syncRevision: state.syncRevision + 1 };
+        case 'schedules-changed':
+        case 'schedule-run-started':
+        case 'schedule-run-finished':
+          return { schedulesVersion: state.schedulesVersion + 1 };
         default:
           return state;
       }
@@ -596,6 +610,10 @@ export const useGruntStore = create<GruntState>()((set) => ({
   projectPage: null,
   openProjectPage: (page) => set({ projectPage: page }),
   closeProjectPage: () => set({ projectPage: null }),
+  schedulesPage: null,
+  openSchedules: (prefill) => set({ schedulesPage: prefill ? { prefill } : {} }),
+  closeSchedules: () => set({ schedulesPage: null }),
+  schedulesVersion: 0,
 }));
 
 /** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */

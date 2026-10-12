@@ -485,6 +485,23 @@ describe('app-wide events (Task 34)', () => {
     s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
     expect(selectPendingApprovalCount(s())).toBe(0);
   });
+
+  it('bumps the schedules version on each schedule event, and opens and closes the Scheduled overlay', () => {
+    const s = () => useGruntStore.getState();
+    expect(s().schedulesVersion).toBe(0);
+    s().applyAppEvent({ type: 'schedules-changed' });
+    s().applyAppEvent({ type: 'schedule-run-started', scheduleId: 's', scheduleName: 'S', runId: 'r', chatId: 'c', messageId: 'm' });
+    s().applyAppEvent({ type: 'schedule-run-finished', scheduleId: 's', scheduleName: 'S', runId: 'r', chatId: 'c', messageId: 'm', status: 'complete', detail: null });
+    expect(s().schedulesVersion).toBe(3);
+
+    expect(s().schedulesPage).toBeNull();
+    s().openSchedules({ kind: 'chat', chatId: 'c' });
+    expect(s().schedulesPage).toEqual({ prefill: { kind: 'chat', chatId: 'c' } });
+    s().openSchedules();
+    expect(s().schedulesPage).toEqual({});
+    s().closeSchedules();
+    expect(s().schedulesPage).toBeNull();
+  });
 });
 
 describe('running replies from app-wide events (#824)', () => {
