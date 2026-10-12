@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool } from './artifact-tool.js';
 import { recallTool } from './recall-tool.js';
+import { COMPUTER_OFF_REASON, COMPUTER_UNATTENDED_REASON, parseKeys } from '@grunt/core/domain/computer-apps.js';
 import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import type {
   ApprovalChoice,
   ApprovalOptions,
   ApprovalOutcome,
+  ApprovalRequest,
   RiskClass,
   ToolApprovalEvent,
   ToolContext,
@@ -16,6 +19,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import type { BrowserManager } from './browser/manager.js';
 import { browserTool } from './browser/tool.js';
+import { computerTool, isUnattendedRun } from './computer-tool.js';
 import { fsTools } from './fs-tools.js';
 import type { McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
@@ -28,6 +32,8 @@ export interface GruntToolProviderOptions {
   now?: () => number;
   /** The model's browser (spec 2026-10-12-model-browser-design). Without it, no profile gets the browser tool. */
   browser?: BrowserManager;
+  /** The desktop shell's computer-use driver (spec 2026-10-12-computer-use-design); absent everywhere but the desktop app on Windows. */
+  computer?: ComputerDriver;
 }
 
 const BUILTIN_FS_TOOLS: ToolSpec[] = fsTools;
@@ -43,23 +49,43 @@ type Authorization = (
   | { ok: true; grantedBy: string }
   | {
       ok: false;
-      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped';
+      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'approval_unavailable';
       reason: string;
-      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled';
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:unattended';
     }
 ) & {
   /** The machine a person answered on, when it wasn't this one (v2 spec §3). */
   decidedOnNode?: string;
 };
 
-/** Why a pending approval ended: a person answered it, its turn ended, or the broker's backstop dropped it. */
-type SettleCause = 'user' | 'turn-ended' | 'dropped';
+type Denied = Extract<Authorization, { ok: false }>;
+
+/**
+ * Why a pending approval ended: a person answered it, its turn ended, the
+ * broker's backstop dropped it, or the broker refused the answer itself
+ * (computer use only: see `awaitApproval`).
+ */
+type SettleCause = 'user' | 'turn-ended' | 'dropped' | 'answer-refused';
+
+/** A call that was refused before the broker decided. `unattended`: because nobody is there to watch it. */
+interface Refused {
+  refuse: string;
+  unattended?: true;
+}
 
 const CANCELLED_REASON = 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.';
 const DROPPED_REASON = 'This approval request was dropped by the server (too many were pending), so the tool call did not run. Nobody denied it.';
+const ANSWER_REFUSED_REASON = "Grunt couldn't accept that answer to the approval, so the tool call did not run and nothing was stored.";
 
 function cancelledAuth(): Authorization {
   return { ok: false, code: 'cancelled', reason: CANCELLED_REASON, grantedBy: 'deny:cancelled' };
+}
+
+/** A refusal by the rules. One made because the run is unattended keeps its own name in the audit. */
+function deniedAuth(reason: string, unattended: boolean): Denied {
+  return unattended
+    ? { ok: false, code: 'approval_unavailable', reason, grantedBy: 'deny:unattended' }
+    : { ok: false, code: 'permission_denied', reason, grantedBy: 'deny:policy' };
 }
 
 function toolError(code: string, message: string): ToolError {
@@ -93,21 +119,42 @@ function redact(value: unknown, depth = 0): unknown {
 }
 
 /**
- * The arguments as the audit keeps them. For the browser, the text typed is
- * redacted like file content: it may be something the user asked the model
- * to type (spec 2026-10-12-model-browser-design §3).
+ * The arguments as the audit keeps them. For the browser and for computer
+ * use, the text typed is redacted like file content: it may be something the
+ * user asked the model to type (spec 2026-10-12-model-browser-design §3,
+ * spec 2026-10-12-computer-use-design).
  */
 function auditArgs(tool: ToolSpec, args: unknown): unknown {
-  return tool.source === 'browser' ? withoutTypedText(args) : args;
+  return tool.source === 'browser' || tool.source === 'computer' ? withoutTypedText(args, tool.source) : args;
 }
 
-function withoutTypedText(args: unknown): unknown {
+/**
+ * `args` without the text a call would type. The browser's `text` is always
+ * typed text. The computer tool's `text` is typed text or one key
+ * combination: only its length is kept, unless the call is a `key` action
+ * whose text really is one combination (`ctrl+s`), which says what was
+ * pressed and holds nothing typed. Anything else under `text` (a `key`
+ * action carrying a sentence, a click carrying text) is treated as typed.
+ */
+function withoutTypedText(args: unknown, source: 'browser' | 'computer'): unknown {
   if (typeof args !== 'object' || args === null || !('text' in args)) return args;
-  return { ...(args as Record<string, unknown>), text: '[redacted]' };
+  const a = args as Record<string, unknown>;
+  if (source === 'browser') return { ...a, text: '[redacted]' };
+  const text = a['text'];
+  // `[]`: nothing to hold back here, only "is this one key combination".
+  if (a['action'] === 'key' && parseKeys(text, []).ok) return args;
+  if (typeof text !== 'string') return { ...a, text: '[redacted]' };
+  let characters = 0;
+  for (const _ of text) characters += 1;
+  return { ...a, text: `[redacted: ${characters} ${characters === 1 ? 'character' : 'characters'}]` };
 }
 
-/** Claude Code's name for the browser relayed on its per-process Grunt server (`mcp__grunt_<hex>__browser`), or the tool's own name. */
-const RELAYED_BROWSER_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?browser$/;
+/**
+ * Claude Code's name for a Grunt tool that types, relayed on its per-process
+ * Grunt server (`mcp__grunt_<hex>__browser`, `mcp__grunt_<hex>__computer`),
+ * or the tool's own name. The group is which of the two it is.
+ */
+const RELAYED_TYPING_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?(browser|computer)$/;
 
 function summarizeResult(result: unknown): string {
   if (result && typeof result === 'object' && (result as { error?: unknown }).error === true) {
@@ -183,6 +230,7 @@ export class GruntToolProvider implements ToolProvider {
   private readonly generateId: () => string;
   private readonly now: () => number;
   private readonly browser: BrowserManager | null;
+  private readonly computer: ComputerDriver | null;
 
   constructor(
     private readonly store: Store,
@@ -194,6 +242,7 @@ export class GruntToolProvider implements ToolProvider {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
     this.browser = options.browser ?? null;
+    this.computer = options.computer ?? null;
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
     // knowing it): settle it as a denial, which also emits `resolved` so the
@@ -223,6 +272,9 @@ export class GruntToolProvider implements ToolProvider {
     if (policy.recall !== false) raw.push(recallTool(this.store));
     // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
     if (policy.browser === true && this.browser) raw.push(browserTool(this.browser, policy));
+    // Computer use (spec 2026-10-12-computer-use-design section 4): only when the
+    // profile turns it on AND the desktop shell on this machine can carry it out.
+    if (policy.computer === true && this.computer?.available()) raw.push(computerTool(this.computer, this.store));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
@@ -241,12 +293,16 @@ export class GruntToolProvider implements ToolProvider {
 
   /**
    * Grunt's own tools for the Claude Code relay, ungated like
-   * `relayMcpTools`: today the browser, when the profile turns it on. The
-   * Claude Code gate approves each call through `requestApproval` and the
+   * `relayMcpTools`: the browser and the computer tool, each when the profile
+   * turns it on (and, for computer use, the desktop shell can carry it out).
+   * The Claude Code gate approves each call through `requestApproval` and the
    * engine runs only the arguments it approved (an approval ticket).
    */
   relayGruntTools(policy: ToolPolicy): ToolSpec[] {
-    return policy.browser === true && this.browser ? [browserTool(this.browser, policy)] : [];
+    const specs: ToolSpec[] = [];
+    if (policy.browser === true && this.browser) specs.push(browserTool(this.browser, policy));
+    if (policy.computer === true && this.computer?.available()) specs.push(computerTool(this.computer, this.store));
+    return specs;
   }
 
   async refreshMcp(serverId: string): Promise<void> {
@@ -339,9 +395,10 @@ export class GruntToolProvider implements ToolProvider {
       }
     }
     // What the call is about, before the broker decides (describeCall).
-    const call = await this.described(tool, args, ctx);
+    const call = await this.described(tool, args, policy, ctx);
     if ('refuse' in call) {
-      this.audit(ctx, tool.name, auditArgs(tool, args), toolError('permission_denied', call.refuse), this.now() - startedAt, 'deny:policy');
+      const denied = deniedAuth(call.refuse, call.unattended === true);
+      this.audit(ctx, tool.name, auditArgs(tool, args), toolError(denied.code, denied.reason), this.now() - startedAt, denied.grantedBy);
       return { allowed: false, reason: call.refuse };
     }
     // The turn ended while the call was being described: nobody is there to answer, and nothing may be approved.
@@ -372,8 +429,9 @@ export class GruntToolProvider implements ToolProvider {
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void {
     const text = reason.trim().length > 0 ? reason.trim() : 'Blocked by Claude Code auto mode.';
     // redact() truncates a long string exactly as it does audit args.
-    // The relayed browser's typed text is redacted here too, like auditArgs does for the calls Grunt runs.
-    const audited = RELAYED_BROWSER_NAME.test(toolName) ? withoutTypedText(args) : args;
+    // The relayed browser's and computer tool's typed text is redacted here too, like auditArgs does for the calls Grunt runs.
+    const typing = RELAYED_TYPING_TOOL_NAME.exec(toolName)?.[1];
+    const audited = typing === 'browser' || typing === 'computer' ? withoutTypedText(args, typing) : args;
     this.audit(ctx, toolName, audited, null, 0, 'deny:auto', redact(text) as string);
   }
 
@@ -382,8 +440,18 @@ export class GruntToolProvider implements ToolProvider {
    * §3): `describeCall`'s arguments and risk when the spec has one. A throw
    * is a refusal, never an unchecked call.
    */
-  private async described(tool: ToolSpec, args: unknown, ctx: ToolContext): Promise<{ tool: ToolSpec; args: unknown } | { refuse: string }> {
+  private async described(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Promise<{ tool: ToolSpec; args: unknown } | Refused> {
     if (!tool.describeCall) return { tool, args };
+    // Computer use that can't go ahead whatever the call is: refused here,
+    // before the tool is asked anything, because its describeCall starts the
+    // control session (the shell's native dialog). The broker refuses both
+    // too, but it only decides after the call was described. A spec can
+    // outlive the policy it was listed under (the Claude Code relay keeps its
+    // specs for the life of a process), so being listed is not enough.
+    if (tool.source === 'computer') {
+      if (policy.computer !== true) return { refuse: COMPUTER_OFF_REASON };
+      if (isUnattendedRun(ctx)) return { refuse: COMPUTER_UNATTENDED_REASON, unattended: true };
+    }
     try {
       const d = await tool.describeCall(args, ctx);
       return 'refuse' in d ? { refuse: d.refuse } : { tool: { ...tool, risk: d.risk }, args: d.args };
@@ -398,7 +466,7 @@ export class GruntToolProvider implements ToolProvider {
 
   /** Turns a broker decision into an authorisation, raising (and waiting on) an approval card for 'ask'. */
   private async settle(decision: Decision, ctx: ToolContext): Promise<Authorization> {
-    if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason, grantedBy: 'deny:policy' };
+    if (decision.kind === 'deny') return deniedAuth(decision.reason, decision.unattended === true);
     if (decision.kind === 'allow') return { ok: true, grantedBy: describeGrantedBy(decision) };
 
     const { request } = decision;
@@ -410,12 +478,13 @@ export class GruntToolProvider implements ToolProvider {
     }
     // Register the waiter BEFORE notifying so a listener that answers
     // synchronously from inside the 'request' event still reaches it.
-    const pending = this.awaitApproval(request.id, ctx.signal);
+    const pending = this.awaitApproval(request, ctx.signal);
     this.notify({ type: 'request', request });
-    const { choice, cause, decidedOnNode } = await pending;
+    const { choice, cause, refusal, decidedOnNode } = await pending;
     this.notify({ type: 'resolved', requestId: request.id, messageId: request.messageId, choice: choice.choice });
     const on = decidedOnNode ? { decidedOnNode } : {};
     if (cause === 'turn-ended') return cancelledAuth();
+    if (cause === 'answer-refused') return { ...deniedAuth(refusal ?? ANSWER_REFUSED_REASON, false), ...on };
     if (cause === 'dropped') return { ok: false, code: 'approval_dropped', reason: DROPPED_REASON, grantedBy: 'deny:cancelled', ...on };
     if (choice.choice === 'deny') return { ok: false, code: 'approval_denied', reason: 'The user denied this tool call.', grantedBy: 'deny:user', ...on };
     return { ok: true, grantedBy: `ask:${choice.choice}`, ...on };
@@ -434,10 +503,11 @@ export class GruntToolProvider implements ToolProvider {
           auth = cancelledAuth();
         } else {
           // What the call is about, before the broker decides (describeCall).
-          const call = await this.described(tool, args, ctx);
+          const call = await this.described(tool, args, policy, ctx);
           if ('refuse' in call) {
-            const result = toolError('permission_denied', call.refuse);
-            this.audit(ctx, tool.name, auditArgs(tool, args), result, this.now() - startedAt, 'deny:policy');
+            const denied = deniedAuth(call.refuse, call.unattended === true);
+            const result = toolError(denied.code, denied.reason);
+            this.audit(ctx, tool.name, auditArgs(tool, args), result, this.now() - startedAt, denied.grantedBy);
             return result;
           }
           callArgs = call.args;
@@ -476,8 +546,21 @@ export class GruntToolProvider implements ToolProvider {
    * twice (the broker throws on a duplicate resolve of the same request
    * id). An abort is treated as an implicit denial: 'deny' persists no
    * grant, so this is always safe to do without asking anyone.
+   *
+   * When the broker refuses the answer itself (it throws): for computer use
+   * the call is DENIED (cause `answer-refused`, with the broker's reason).
+   * Such an answer is a "for this chat" or "always" for an app that only
+   * ever gets "allow once", or an "always" naming another app than the card
+   * did; the card offers neither, so nothing a person was shown stands
+   * behind it, and the call must not run on its strength. Every other source
+   * keeps what it always did: the failure is logged and the call goes ahead
+   * on the answer, with no grant stored.
    */
-  private awaitApproval(requestId: string, signal: AbortSignal): Promise<{ choice: ApprovalChoice; cause: SettleCause; decidedOnNode?: string }> {
+  private awaitApproval(
+    request: ApprovalRequest,
+    signal: AbortSignal
+  ): Promise<{ choice: ApprovalChoice; cause: SettleCause; refusal?: string; decidedOnNode?: string }> {
+    const requestId = request.id;
     return new Promise((resolve) => {
       let done = false;
       const settle = (choice: ApprovalChoice, cause: SettleCause, decidedOnNode?: string): void => {
@@ -486,6 +569,7 @@ export class GruntToolProvider implements ToolProvider {
         signal.removeEventListener('abort', onAbort);
         this.waiters.delete(requestId);
         let final = choice;
+        let refusal: string | undefined;
         if (cause === 'dropped' || !this.broker.hasPending(requestId)) {
           // The broker no longer knows this request, so it can neither record
           // a grant nor vouch for the call. Fail closed.
@@ -495,11 +579,16 @@ export class GruntToolProvider implements ToolProvider {
             this.broker.resolve(requestId, choice);
           } catch (err) {
             console.error(`[GruntToolProvider] broker.resolve("${requestId}") failed:`, err);
+            if (request.source === 'computer') {
+              final = { choice: 'deny' };
+              refusal = `${ANSWER_REFUSED_REASON} ${err instanceof Error ? err.message : String(err)}`;
+            }
           }
         }
         resolve({
           choice: final,
-          cause: cause === 'user' && final.choice === 'deny' && choice.choice !== 'deny' ? 'dropped' : cause,
+          cause: refusal !== undefined ? 'answer-refused' : cause === 'user' && final.choice === 'deny' && choice.choice !== 'deny' ? 'dropped' : cause,
+          ...(refusal !== undefined ? { refusal } : {}),
           ...(decidedOnNode ? { decidedOnNode } : {}),
         });
       };

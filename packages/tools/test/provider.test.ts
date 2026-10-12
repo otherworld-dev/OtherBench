@@ -529,6 +529,19 @@ describe('recordAgentDenial', () => {
     expect(rows.find((r) => r.messageId === 'msg-c')!.argsRedacted).toEqual({ text: 'kept' });
   });
 
+  it('keeps the text typed in a relayed computer call out of the audit too, and keeps a key combination', () => {
+    const { provider, store } = makeProvider();
+    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__computer', { action: 'type', text: 'my password' }, 'Types a password');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-b' }), 'computer', { action: 'type', text: 'my password' }, 'Types a password');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'computer', { action: 'key', text: 'ctrl+s' }, 'Saves the file');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-d' }), 'mcp__grunt_0123456789abcdef__other__computer', { text: 'kept' }, 'Not the computer tool');
+    const rows = store.audit.list('chat-1');
+    expect(rows.find((r) => r.messageId === 'msg-a')!.argsRedacted).toEqual({ action: 'type', text: '[redacted: 11 characters]' });
+    expect(rows.find((r) => r.messageId === 'msg-b')!.argsRedacted).toEqual({ action: 'type', text: '[redacted: 11 characters]' });
+    expect(rows.find((r) => r.messageId === 'msg-c')!.argsRedacted).toEqual({ action: 'key', text: 'ctrl+s' });
+    expect(rows.find((r) => r.messageId === 'msg-d')!.argsRedacted).toEqual({ text: 'kept' });
+  });
+
   it('truncates a long reason and fills in a blank one', () => {
     const { provider, store } = makeProvider();
     provider.recordAgentDenial(ctx({ messageId: 'msg-long' }), 'Bash', { command: 'x' }, 'r'.repeat(500));
