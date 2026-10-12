@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
 import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
@@ -34,6 +35,38 @@ function parseParams(value: unknown): ModelParams {
   return value as ModelParams;
 }
 
+const MAX_BLOCKED_HOSTS = 200;
+
+/** A hostname: dot-separated labels of letters, digits and hyphens (any script: an IDN is stored as its punycode). */
+const LABEL = String.raw`[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?`;
+const HOSTNAME = new RegExp(`^${LABEL}(?:\\.${LABEL})*$`, 'u');
+/** An IP literal's characters: IPv4 dotted, or IPv6 (with or without brackets, at least one colon). */
+const IPV6_LITERAL = /^\[?[0-9a-f]*:[0-9a-f:.]*\]?$/i;
+
+/**
+ * The browser's blocked sites (spec 2026-10-12-model-browser-design §3): each
+ * entry must be a bare hostname or IP literal, stored in the canonical form the
+ * broker and the proxy compare. A leading "*." is dropped (subdomains are
+ * blocked anyway); any other `*`, a port, scheme, path, empty label or leading
+ * or trailing dot is refused, naming the entry as typed.
+ */
+function parseBlockedHosts(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+    throw new HTTPException(400, { message: '"toolPolicy.browserBlockedHosts" must be a list of website names.' });
+  }
+  if (value.length > MAX_BLOCKED_HOSTS) {
+    throw new HTTPException(400, { message: `"toolPolicy.browserBlockedHosts" can hold at most ${MAX_BLOCKED_HOSTS} sites.` });
+  }
+  const out: string[] = [];
+  for (const raw of value as string[]) {
+    const entry = raw.trim().replace(/^\*\./, '');
+    const host = HOSTNAME.test(entry) || IPV6_LITERAL.test(entry) ? normaliseHost(entry) : null;
+    if (host === null) throw new HTTPException(400, { message: `"${raw}" isn't a website name. Use a name like example.com, one per line.` });
+    if (!out.includes(host)) out.push(host);
+  }
+  return out;
+}
+
 /**
  * Parses a `toolPolicy` body. Omitted fields fall back to `base`: the defaults
  * on POST, the profile's EXISTING policy on PATCH -- so a partial PATCH such as
@@ -54,7 +87,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'browser'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
@@ -74,6 +107,12 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : base.agentMcp !== undefined ? { agentMcp: base.agentMcp } : {}),
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
+    ...(typeof v['browser'] === 'boolean' ? { browser: v['browser'] } : base.browser !== undefined ? { browser: base.browser } : {}),
+    ...(v['browserBlockedHosts'] !== undefined
+      ? { browserBlockedHosts: parseBlockedHosts(v['browserBlockedHosts']) }
+      : base.browserBlockedHosts !== undefined
+        ? { browserBlockedHosts: base.browserBlockedHosts }
+        : {}),
   };
 }
 

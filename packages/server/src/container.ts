@@ -22,9 +22,12 @@ import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations, SCHEMA_VERSION } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { ChromiumSessions } from '@grunt/tools/browser/chromium.js';
+import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { acquireDbLock } from './db-lock.js';
+import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ClaudeImportService } from './import/claude-import.js';
 import { defaultCoworkRoot } from './import/cowork-reader.js';
@@ -99,7 +102,22 @@ export interface Container {
   peers?: PeerService;
   /** Keepalive and idle limits for streams; unset means the defaults in stream/sse.ts. */
   streamTimings?: StreamTimings;
+  /**
+   * The model's browsers (spec 2026-10-12-model-browser-design): always set
+   * by `createContainer` (nothing launches until a call); optional so route
+   * tests can leave it out or pass a fake.
+   */
+  browser?: BrowserPort;
   close(): void;
+}
+
+/** `GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS` (tests only): ports on 127.0.0.1 the model's browser may reach. */
+export function loopbackPortsFromEnv(value: string | undefined): number[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535);
 }
 
 export interface ContainerOptions {
@@ -275,9 +293,16 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const registry = new ProviderRegistry();
   const aisdkEngine = new AiSdkChatEngine(registry);
 
-  const broker = new PermissionBroker(store);
+  // Read once at start; set only by the e2e run (spec 2026-10-12-model-browser-design §5).
+  const allowLoopbackPorts = loopbackPortsFromEnv(process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS']);
+  if (allowLoopbackPorts.length > 0) {
+    console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS is set: the model's browser may reach 127.0.0.1 on port(s) ${allowLoopbackPorts.join(', ')}. This is for tests only.`);
+  }
+  const broker = new PermissionBroker(store, { allowLoopbackPorts });
   const mcpManager = new McpServerManager(store, secrets);
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  // Lazy: no Chromium starts until the first browser call.
+  const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
+  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { browser });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
@@ -292,6 +317,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // Clean chats, and the profile's MCP servers relayed through Grunt's own server.
       scratchRoot: claudeScratchRoot,
       relayTools: (serverIds) => toolProvider.relayMcpTools(serverIds),
+      // Grunt's own relayed tools: the browser, when the profile turns it on.
+      relayGruntTools: (policy) => toolProvider.relayGruntTools(policy),
     })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
@@ -389,6 +416,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     streamRegistry,
     toolProvider,
     mcpManager,
+    browser,
     claudeScratchRoot,
     blobStore,
     memory,
@@ -400,6 +428,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
       claudeImport.dispose();
       memory.dispose();
+      // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
+      void browser.closeAll().catch((err: unknown) => console.error('[grunt-server] error closing the model browser:', err));
       // Claude Code processes kept alive between replies.
       engine.dispose();
       store.close();

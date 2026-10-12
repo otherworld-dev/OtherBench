@@ -7,7 +7,7 @@ import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
-import { createContainer, resolveSecretsPassphrase } from '../src/container.js';
+import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase } from '../src/container.js';
 
 let dir: string;
 
@@ -75,7 +75,24 @@ describe('resolveSecretsPassphrase', () => {
   });
 });
 
+describe('loopbackPortsFromEnv', () => {
+  it('reads comma-separated ports and drops anything that is not one', () => {
+    expect(loopbackPortsFromEnv(undefined)).toEqual([]);
+    expect(loopbackPortsFromEnv('')).toEqual([]);
+    expect(loopbackPortsFromEnv('4766, 5000,abc,0,70000,12.5')).toEqual([4766, 5000]);
+  });
+});
+
 describe('createContainer', () => {
+  it("makes the model's browser (nothing launches until a call) and closes it with the container", async () => {
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    expect(container.browser).toBeDefined();
+    expect(container.browser!.state('no-such-chat')).toMatchObject({ open: false });
+    const closeAll = vi.spyOn(container.browser!, 'closeAll');
+    container.close();
+    expect(closeAll).toHaveBeenCalledTimes(1);
+  });
+
   it('wires a working store, secrets, and engine over a real (temp-file) SQLite database', async () => {
     const dbPath = join(dir, 'grunt.db');
     const secretsPath = join(dir, 'secrets.json');

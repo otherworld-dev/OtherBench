@@ -7,9 +7,12 @@ import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { FakeFactory, fakeProxy } from '../../../tools/test/browser/fakes.js';
 import { createApp } from '../../src/app.js';
+import { parseApprovalChoice } from '../../src/routes/tools.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -603,6 +606,46 @@ describe('Approval routes', () => {
       body: JSON.stringify({ choice: 'once' }),
     });
     expect(unknown.status).toBe(404);
+  });
+
+  it("keeps a browser site's host through an 'always' answer, and refuses a host that is not a string", () => {
+    expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } })).toEqual({
+      choice: 'always',
+      constraint: { host: 'example.com' },
+    });
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 42 } })).toThrow(/constraint\.host/);
+    expect(parseApprovalChoice({ choice: 'always', constraint: { commandExact: 'npm test' } })).toMatchObject({
+      constraint: { commandExact: 'npm test' },
+    });
+  });
+
+  it("an 'always' answer with a host stores a browser grant for that site", async () => {
+    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
+    const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
+    const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
+    container.toolProvider = provider;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const tool = (await provider.listTools(policy)).find((t) => t.name === 'browser')!;
+    const run = tool.execute(
+      { command: 'open', url: 'https://example.com/page' },
+      { chatId: 'chat-b', messageId: 'msg-b', profileId: 'profile-b', workspaceRoot: '/x', signal: new AbortController().signal }
+    );
+    for (let i = 0; i < 20 && requests.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(requests).toHaveLength(1);
+    const res = await app().request(`/api/approvals/${requests[0]!.id}/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ choice: 'always', constraint: { host: 'example.com' } }),
+    });
+    expect(res.status).toBe(200);
+    await run.catch(() => {});
+    const grants = store.grants.list().filter((g) => g.source === 'browser');
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({ toolName: 'browser', scope: 'always', constraint: { host: 'example.com' } });
   });
 
   it('rejects a malformed choice with 400', async () => {

@@ -172,6 +172,7 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   const pathPrefix = v['pathPrefix'];
   const commandPrefix = v['commandPrefix'];
   const commandExact = v['commandExact'];
+  const host = v['host'];
   if (pathPrefix !== undefined && typeof pathPrefix !== 'string') {
     throw new HTTPException(400, { message: '"constraint.pathPrefix" must be a string.' });
   }
@@ -181,11 +182,16 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   if (commandExact !== undefined && typeof commandExact !== 'string') {
     throw new HTTPException(400, { message: '"constraint.commandExact" must be a string.' });
   }
-  if (pathPrefix === undefined && commandPrefix === undefined && commandExact === undefined) return null;
+  // A browser grant's website (spec 2026-10-12-model-browser-design §3); the broker checks it against the call.
+  if (host !== undefined && typeof host !== 'string') {
+    throw new HTTPException(400, { message: '"constraint.host" must be a string.' });
+  }
+  if (pathPrefix === undefined && commandPrefix === undefined && commandExact === undefined && host === undefined) return null;
   return {
     pathPrefix: pathPrefix as string | undefined,
     commandPrefix: commandPrefix as string | undefined,
     commandExact: commandExact as string | undefined,
+    ...(host !== undefined ? { host } : {}),
   };
 }
 

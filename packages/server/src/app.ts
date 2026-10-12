@@ -6,6 +6,7 @@ import { corsAllowlist, hostCheck } from './desktop.js';
 import { authGate, authRoutes } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { browserRoutes } from './routes/browser.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { eventsRoutes } from './routes/events.js';
 import { fsRoutes } from './routes/fs.js';
@@ -135,6 +136,10 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // Artifacts (Deck #896): full paths under /chats/:id/artifacts; chatsRoutes
   // owns /chats/:id itself and nothing under /artifacts.
   authed.route('/', artifactsRoutes(container));
+  // The model's browser (spec 2026-10-12-model-browser-design §5): full paths
+  // under /chats/:id/browser; nothing else owns them. Behind the auth gate and
+  // the cross-site write check like the rest; never on the peer listener.
+  authed.route('/', browserRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));
