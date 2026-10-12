@@ -70,6 +70,14 @@ describe('createWslRunner', () => {
     expect(await running).toMatchObject({ code: null, timedOut: false });
   });
 
+  it('does not start a command whose signal is already aborted', async () => {
+    const { calls, runner } = recorder(() => undefined);
+    const ac = new AbortController();
+    ac.abort();
+    expect(await runner.wsl(['--install', 'Ubuntu-24.04'], { signal: ac.signal })).toEqual({ code: null, stdout: '', stderr: '', timedOut: false });
+    expect(calls).toHaveLength(0);
+  });
+
   it('reports a wsl.exe that cannot start as code null with the reason', async () => {
     const runner = createWslRunner(() => {
       throw new Error('spawn wsl.exe ENOENT');

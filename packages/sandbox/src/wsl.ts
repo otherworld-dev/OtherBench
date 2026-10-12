@@ -35,7 +35,7 @@ export interface WslRunner {
   wsl(args: string[], opts?: WslRunOptions): Promise<WslResult>;
   /** A program in the distro as `user`, its arguments passed as they are. */
   exec(user: WslUser, argv: string[], opts?: WslRunOptions): Promise<WslResult>;
-  /** A long-lived program in the distro with piped stdio (the agent). */
+  /** A long-lived program in the distro with piped stdio (the agent). Unlike wsl()/exec(), this can throw synchronously if wsl.exe can't start. */
   spawn(user: WslUser, argv: string[]): ChildProcessWithoutNullStreams;
 }
 
@@ -68,6 +68,11 @@ export function createWslRunner(spawn: SpawnFn = nodeSpawn as SpawnFn, exe: stri
 
   const wsl = (args: string[], opts: WslRunOptions = {}): Promise<WslResult> =>
     new Promise((resolve) => {
+      // An already-aborted signal never fires 'abort' again, so don't start the command at all.
+      if (opts.signal?.aborted) {
+        resolve({ code: null, stdout: '', stderr: '', timedOut: false });
+        return;
+      }
       let child: ChildProcessWithoutNullStreams;
       try {
         child = spawn(exe, args, { windowsHide: true, env });
