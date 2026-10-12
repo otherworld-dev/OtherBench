@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
-import type { Connection, Profile, ToolPolicy } from '../src/types/config.js';
+import { DEFAULT_SANDBOX_HOSTS, runsShellInSandbox, type Connection, type Profile, type ToolPolicy } from '../src/types/config.js';
 import type { Part } from '../src/types/messages.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
 import { RECALL_GUIDANCE } from '../src/domain/recall.js';
@@ -121,6 +121,86 @@ describe('subagentPolicy', () => {
       expect(rank[r.policy.fs]).toBeLessThanOrEqual(Math.min(rank[a], rank[b]));
       expect(r.policy.shell).toBe(shellA && shellB);
       expect(r.policy.mcpServerIds).toEqual(['s1']);
+    }
+  });
+});
+
+// Integration with the sandbox (spec 2026-10-12-sandbox-design): a sub-agent never gets a wider shell than its parent.
+describe('subagentPolicy and the sandbox', () => {
+  type Shell = 'none' | 'host' | 'sandbox';
+  const withShell = (shell: Shell, hosts?: string[]): ToolPolicy =>
+    policy({ shell: shell !== 'none', ...(shell === 'sandbox' ? { shellRuns: 'sandbox' as const } : {}), ...(hosts ? { sandboxHosts: hosts } : {}) });
+  const narrowed = (parent: ToolPolicy, chosen: ToolPolicy, ask: { shell?: boolean } = {}): ToolPolicy => {
+    const r = subagentPolicy(parent, chosen, ask, servers);
+    if (!r.ok) throw new Error(r.message);
+    return r.policy;
+  };
+  /** Where the narrowed policy's run_command runs, as the provider reads it. */
+  const shellOf = (p: ToolPolicy): Shell => (!p.shell ? 'none' : runsShellInSandbox(p) ? 'sandbox' : 'host');
+
+  it('runs the shell on this machine only when both run theirs here, in the sandbox when either does, and not at all without both', () => {
+    const matrix: [parent: Shell, chosen: Shell, result: Shell][] = [
+      ['host', 'host', 'host'],
+      ['host', 'sandbox', 'sandbox'],
+      ['sandbox', 'host', 'sandbox'],
+      ['sandbox', 'sandbox', 'sandbox'],
+      ['none', 'host', 'none'],
+      ['none', 'sandbox', 'none'],
+      ['host', 'none', 'none'],
+      ['sandbox', 'none', 'none'],
+      ['none', 'none', 'none'],
+    ];
+    for (const [parent, chosen, result] of matrix) {
+      expect(shellOf(narrowed(withShell(parent), withShell(chosen))), `${parent} parent, ${chosen} profile`).toBe(result);
+      // The call can turn the shell off, never on or onto this machine.
+      expect(shellOf(narrowed(withShell(parent), withShell(chosen), { shell: false }))).toBe('none');
+      expect(shellOf(narrowed(withShell(parent), withShell(chosen), { shell: true }))).toBe(result);
+    }
+  });
+
+  it("a sandboxed parent's sub-agent is sandboxed even as its own profile, and a host one carries no sandbox fields", () => {
+    const own = withShell('sandbox', ['pypi.org']);
+    expect(narrowed(own, own)).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org'] });
+    const host = narrowed(withShell('host'), withShell('host'));
+    expect(host).not.toHaveProperty('shellRuns');
+    expect(host).not.toHaveProperty('sandboxHosts');
+    // `shellRuns: 'sandbox'` left on a profile whose shell is off doesn't count as sandboxed, and gives no shell.
+    const off = narrowed(policy({ shell: false, shellRuns: 'sandbox' }), withShell('host'));
+    expect(off.shell).toBe(false);
+    expect(off).not.toHaveProperty('shellRuns');
+  });
+
+  it('may reach only the hosts on both allowlists, with the defaults standing in for a list that is absent', () => {
+    const hosts = (parent: ToolPolicy, chosen: ToolPolicy): string[] | undefined => narrowed(parent, chosen).sandboxHosts;
+    // Both name lists: what they share, in the parent's order and spelling.
+    expect(hosts(withShell('sandbox', ['PyPI.org', 'github.com', 'a.example.com']), withShell('sandbox', ['github.com', 'pypi.org', 'b.example.com']))).toEqual(['PyPI.org', 'github.com']);
+    // Nothing shared: an empty list (every host asks), never the defaults.
+    expect(hosts(withShell('sandbox', ['a.example.com']), withShell('sandbox', ['b.example.com']))).toEqual([]);
+    // An absent list is the defaults.
+    expect(hosts(withShell('sandbox'), withShell('sandbox'))).toEqual([...DEFAULT_SANDBOX_HOSTS]);
+    expect(hosts(withShell('sandbox'), withShell('sandbox', ['pypi.org', 'internal.example.com']))).toEqual(['pypi.org']);
+    expect(hosts(withShell('sandbox', ['pypi.org', 'internal.example.com']), withShell('sandbox'))).toEqual(['pypi.org']);
+    // An empty list on either side leaves nothing.
+    expect(hosts(withShell('sandbox', []), withShell('sandbox'))).toEqual([]);
+    expect(hosts(withShell('sandbox'), withShell('sandbox', []))).toEqual([]);
+    // A host-shell side counts with its effective list too: a profile that runs on this machine can't lend a sandboxed one more hosts.
+    expect(hosts(withShell('host'), withShell('sandbox', ['pypi.org', 'internal.example.com']))).toEqual(['pypi.org']);
+    expect(hosts(withShell('sandbox', ['pypi.org', 'internal.example.com']), withShell('host'))).toEqual(['pypi.org']);
+    // Entries are compared whole: a wildcard and a name under it share nothing, a port must match, and a repeat is kept once.
+    expect(hosts(withShell('sandbox', ['*.example.com', 'pypi.org:443', 'github.com', 'GitHub.com']), withShell('sandbox', ['api.example.com', 'pypi.org', 'github.com']))).toEqual(['github.com']);
+  });
+
+  it('is never wider than either list, for every pair of lists', () => {
+    const lists: (string[] | undefined)[] = [undefined, [], ['pypi.org'], ['pypi.org', 'a.example.com'], ['*.example.com'], [...DEFAULT_SANDBOX_HOSTS, 'extra.example.com']];
+    const effective = (l: string[] | undefined): string[] => (l ?? [...DEFAULT_SANDBOX_HOSTS]).map((h) => h.toLowerCase());
+    for (const a of lists) for (const b of lists) for (const [pa, pb] of [['sandbox', 'sandbox'], ['host', 'sandbox'], ['sandbox', 'host']] as [Shell, Shell][]) {
+      const got = narrowed(withShell(pa, a), withShell(pb, b));
+      expect(got.shellRuns).toBe('sandbox');
+      expect(got.sandboxHosts).toBeDefined();
+      for (const h of got.sandboxHosts!) {
+        expect(effective(a)).toContain(h.toLowerCase());
+        expect(effective(b)).toContain(h.toLowerCase());
+      }
     }
   });
 });

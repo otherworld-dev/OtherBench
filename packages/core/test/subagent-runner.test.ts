@@ -121,6 +121,47 @@ describe('SubagentRunner', () => {
     await h.runner.settled();
   });
 
+  // Integration with the sandbox: the narrowed policy decides which run_command the sub-agent is offered.
+  it("offers a sandboxed parent's sub-agent the sandboxed run_command, never the host one, even as a host-shell profile", async () => {
+    const store = seeded();
+    store.profiles.update('p-main', { toolPolicy: policy({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org', 'github.com'] }) });
+    store.profiles.update('p-cheap', { toolPolicy: policy({ shell: true, sandboxHosts: ['pypi.org', 'internal.example.com'] }) });
+    const provider = new FakeToolProvider();
+    const listed: ToolPolicy[] = [];
+    const listTools = provider.listTools.bind(provider);
+    provider.listTools = async (p) => {
+      listed.push(p);
+      return listTools(p);
+    };
+    const engine = childEngine(() => answer('ok'));
+    const h = harness(engine, { store }, provider);
+
+    await h.runner.run({ description: 'As Cheap', prompt: 'Run it.', profile: 'Cheap' }, h.ctx('call-1'));
+    await h.runner.run({ description: 'As me', prompt: 'Run it.' }, h.ctx('call-2'));
+
+    for (const req of engine.requests) {
+      expect(req.tools.filter((t) => t.name === 'run_command').map((t) => t.source)).toEqual(['sandbox']);
+      // Told where its folders are in the sandbox, as the parent is.
+      expect(req.profile.systemPrompt).toContain('# Sandbox');
+    }
+    expect(listed[0]).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org'] });
+    expect(listed[1]).toMatchObject({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['pypi.org', 'github.com'] });
+  });
+
+  it("a host-shell parent's sub-agent run as a sandboxed profile is sandboxed, and one with no shell gets none", async () => {
+    const store = seeded();
+    store.profiles.update('p-main', { toolPolicy: policy({ shell: true }) });
+    store.profiles.update('p-cheap', { toolPolicy: policy({ shell: true, shellRuns: 'sandbox' }) });
+    const engine = childEngine(() => answer('ok'));
+    const h = harness(engine, { store }, new FakeToolProvider());
+    await h.runner.run({ description: 'As Cheap', prompt: 'Run it.', profile: 'Cheap' }, h.ctx('call-1'));
+    await h.runner.run({ description: 'As me', prompt: 'Run it.' }, h.ctx('call-2'));
+    await h.runner.run({ description: 'No shell', prompt: 'Run it.', tools: { shell: false } }, h.ctx('call-3'));
+    const sources = engine.requests.map((req) => req.tools.filter((t) => t.name === 'run_command').map((t) => t.source));
+    expect(sources).toEqual([['sandbox'], ['shell'], []]);
+    expect(engine.requests.map((req) => req.profile.systemPrompt!.includes('# Sandbox'))).toEqual([true, false, false]);
+  });
+
   it('refuses bad input without starting anything', async () => {
     const engine = childEngine(() => answer('x'));
     const h = harness(engine);

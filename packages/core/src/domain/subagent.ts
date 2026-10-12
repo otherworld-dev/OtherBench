@@ -1,7 +1,7 @@
 import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
 import type { Store } from '../ports/store.js';
 import type { SubagentHost, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
-import type { FsMode, Profile, ResolvedProfile, ToolPolicy } from '../types/config.js';
+import { runsShellInSandbox, sandboxHostsOf, type FsMode, type Profile, type ResolvedProfile, type ToolPolicy } from '../types/config.js';
 import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
 import type { Usage } from '../types/usage.js';
 import type { ResolvedFolder } from '../types/workspace.js';
@@ -9,6 +9,7 @@ import { classifyProviderError } from '../types/errors.js';
 import { availableOn } from './availability.js';
 import { applySubagentEvent, foldSubagentContent, type SubagentEndStatus, type SubagentEvent } from './parts.js';
 import { RECALL_GUIDANCE } from './recall.js';
+import { sandboxFoldersPrompt } from './sandbox-paths.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { extraFoldersPrompt } from './workspace.js';
 
@@ -126,9 +127,34 @@ function mcpSegment(name: string): string {
 }
 
 /**
+ * The sandbox allowlist entries both lists hold, in the first list's order
+ * and spelling. Entries are compared whole (ignoring case): a `*.example.com`
+ * on one side and `api.example.com` on the other share nothing, so that host
+ * raises a card. That is narrower than either list, never wider.
+ */
+function sharedSandboxHosts(a: readonly string[], b: readonly string[]): string[] {
+  const key = (h: string): string => h.trim().toLowerCase();
+  const inB = new Set(b.map(key));
+  const seen = new Set<string>();
+  return a.filter((h) => {
+    const k = key(h);
+    if (!inB.has(k) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/**
  * A sub-agent's tool policy: what BOTH the parent's and the chosen
  * profile's policies allow, narrowed further by the call. Never wider than
  * either. `serverNames` maps MCP server ids to names, for `ask.mcpServers`.
+ *
+ * The shell is narrowed the same way (spec 2026-10-12-sandbox-design): it is
+ * on only when both have it, and it runs on this machine only when BOTH run
+ * theirs here. If either runs its shell in the sandbox, so does the
+ * sub-agent, and it may reach only the hosts on both allowlists (each with
+ * its defaults applied). A sandboxed parent can therefore never get a host
+ * shell, or a wider allowlist, by picking another profile.
  */
 export function subagentPolicy(
   parent: ToolPolicy,
@@ -163,6 +189,9 @@ export function subagentPolicy(
     mcpServerIds = shared.filter((id) => picked.has(id));
   }
 
+  // `shell` is true only when both have it, so each side's `runsShellInSandbox` is just its `shellRuns`.
+  const sandboxed = shell && (runsShellInSandbox(parent) || runsShellInSandbox(chosen));
+
   const policy: ToolPolicy = {
     fs,
     shell,
@@ -171,6 +200,8 @@ export function subagentPolicy(
     artifacts: false,
     recall: parent.recall !== false && chosen.recall !== false,
     subagents: false,
+    // Always named when sandboxed (an absent list would mean the defaults, which could be wider than what both share).
+    ...(sandboxed ? { shellRuns: 'sandbox' as const, sandboxHosts: sharedSandboxHosts(sandboxHostsOf(parent), sandboxHostsOf(chosen)) } : {}),
   };
   return { ok: true, policy };
 }
@@ -233,19 +264,23 @@ export async function runSubagentTool(args: unknown, ctx: ToolContext): Promise<
 
 /**
  * A sub-agent's system prompt: its profile's own prompt, the role, the
- * folders note, the tools note and recall guidance when recall is offered.
- * No memory and no project text: the parent puts what it needs in the prompt.
+ * folders note, the sandbox note when its run_command is the sandboxed one
+ * (`sandboxNote`, from `sandboxFoldersPrompt`), the tools note and recall
+ * guidance when recall is offered. No memory and no project text: the parent
+ * puts what it needs in the prompt.
  */
 export function subagentSystemPrompt(
   profile: Pick<ResolvedProfile, 'systemPrompt' | 'connection'>,
   tools: readonly ToolSpec[],
   folders: readonly ResolvedFolder[],
-  canRecall: boolean
+  canRecall: boolean,
+  sandboxNote: string | null = null
 ): string {
   const blocks = [
     profile.systemPrompt?.trim() || null,
     SUBAGENT_ROLE_PROMPT,
     folders.length > 0 ? extraFoldersPrompt(folders) : null,
+    sandboxNote,
     tools.length > 0 && namesItsTools(profile.connection.kind) ? availableToolsPrompt(tools.map((t) => t.name)) : null,
     canRecall ? RECALL_GUIDANCE : null,
   ];
@@ -343,6 +378,8 @@ export interface SubagentRunnerDeps {
   toolProvider: ToolProvider;
   /** Resolves another profile by id; without it only the parent's own profile can be chosen. */
   resolveProfile?: (id: string) => Promise<ResolvedProfile>;
+  /** A folder's real path, as the sandbox mounts it (`TurnRunnerOptions.canonicalPath`); the sandbox note names that one. */
+  canonicalPath?: (path: string) => string;
   now: () => number;
   generateId: () => string;
   chatId: string;
@@ -588,7 +625,9 @@ export class SubagentRunner implements SubagentHost {
 
   private requestFor(chosen: ResolvedProfile, label: string, prompt: string, callId: string, tools: ToolSpec[], signal: AbortSignal): EngineRequest {
     const { chatId, messageId, workspaceRoot, folders } = this.deps;
-    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'));
+    // Its run_command is the sandboxed one (the narrowed policy decides): say where the folders are in there, as the parent's prompt does.
+    const sandboxNote = workspaceRoot !== null && tools.some((t) => t.source === 'sandbox') ? sandboxFoldersPrompt(workspaceRoot, folders, this.deps.canonicalPath) : null;
+    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), sandboxNote);
     // Synthetic, never stored: the sub-agent sees no chat history.
     const message = (id: string, role: 'system' | 'user', text: string): CanonMessage => ({
       id,

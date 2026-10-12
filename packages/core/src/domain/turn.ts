@@ -682,6 +682,7 @@ export class TurnRunner {
           engine: this.engine,
           toolProvider: this.toolProvider,
           ...(this.resolveProfile ? { resolveProfile: this.resolveProfile } : {}),
+          canonicalPath: this.canonicalPath,
           now: this.now,
           generateId: this.generateId,
           chatId,
