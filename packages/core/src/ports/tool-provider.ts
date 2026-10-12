@@ -6,6 +6,9 @@ export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
 
+/** Which declared call of which artifact version a live call is, by its declaration's hash (spec 2026-10-12-live-artifacts). */
+export type LiveCallRef = NonNullable<NonNullable<Grant['constraint']>['live']>;
+
 export interface ToolContext {
   chatId: string;
   messageId: string;
@@ -41,6 +44,13 @@ export interface ToolContext {
    * service, through `TurnInput.unattended`; it can only take permissions away.
    */
   unattended?: boolean;
+  /**
+   * Set only by `GruntToolProvider.runLiveCall`, never by an engine or
+   * `toolContextFor`: this call is one a live artifact's page asked for (spec
+   * 2026-10-12-live-artifacts). `PermissionBroker.decide` then takes its live
+   * branch, which allows only a live grant for exactly this call.
+   */
+  live?: LiveCallRef;
   signal: AbortSignal;
 }
 

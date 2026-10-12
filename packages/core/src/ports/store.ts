@@ -497,10 +497,14 @@ export interface Grant {
    *   surrounding whitespace). What a `'chat'`-scope shell approval is
    *   stored as.
    *
+   * - `live`: a live artifact's call (spec 2026-10-12-live-artifacts): only
+   *   `PermissionBroker.grantLive` makes one, only a live call
+   *   (`ToolContext.live`) can match it, and it matches nothing else.
+   *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string } | null;
+  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string; live?: { artifactId: string; callId: string; hash: string } } | null;
   expiresAt: number | null;
 }
 

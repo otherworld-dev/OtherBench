@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { containPathIn } from './paths.js';
-import type { ApprovalChoice, ApprovalRequest, ToolContext, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, LiveCallRef, ToolContext, ToolSpec } from '../ports/tool-provider.js';
 import type { Grant, Store } from '../ports/store.js';
 import type { ToolPolicy } from '../types/config.js';
 import { PLAN_REFUSAL } from './thread-tools.js';
@@ -11,7 +11,7 @@ export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js'
 
 export type Decision =
   | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant'; grantId?: string }
-  | { kind: 'deny'; reason: string; plan?: true }
+  | { kind: 'deny'; reason: string; plan?: true; code?: 'not_approved' }
   | { kind: 'ask'; request: ApprovalRequest };
 
 export interface PermissionBrokerOptions {
@@ -104,6 +104,16 @@ function isShellTool(tool: ToolSpec): boolean {
  *     unsandboxed), so the approval gate is the only control that exists for
  *     it; "approve this command for the rest of the chat" must therefore
  *     never widen into "approve any command for the rest of the chat".
+ *
+ * Live artifacts (spec 2026-10-12-live-artifacts) take a separate branch,
+ * before all three: a call with `ctx.live` is one a page asked for while
+ * someone has it open, never a model's. It gets the policy ceiling plus
+ * "MCP, read-only, artifacts on", and then only a live grant for exactly that
+ * call (tool, chat, profile, artifact, call id and declaration hash), made
+ * by `grantLive` when the user allowed the page in the viewer. It never asks:
+ * there is no turn to raise a card in, and the declaration approval was the
+ * decision. It never takes the ask-on-mutate read pass or any other grant,
+ * and no other call ever matches a live grant.
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
@@ -139,6 +149,8 @@ export class PermissionBroker {
   }
 
   decide(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext): Decision {
+    if (ctx.live) return this.decideLive(tool, policy, ctx, ctx.live);
+
     const policyDenial = checkPolicy(tool, policy);
     if (policyDenial) return { kind: 'deny', reason: policyDenial };
 
@@ -248,6 +260,79 @@ export class PermissionBroker {
     return { kind: 'ask', request };
   }
 
+  /** Why `tool` can't feed a live artifact under `policy`, or null when it can. Also what the viewer shows for an unavailable call. */
+  liveIneligibility(tool: ToolSpec, policy: ToolPolicy): string | null {
+    const denial = checkPolicy(tool, policy);
+    if (denial) return denial;
+    if (policy.artifacts === false) return 'Artifacts are turned off for this profile.';
+    if (tool.source !== 'mcp') return 'Only MCP tools can feed a live artifact.';
+    if (tool.risk !== 'read') return `"${tool.name}" can change things; live artifacts can only use tools their server marks read-only.`;
+    return null;
+  }
+
+  /** The live grant for exactly this call in this chat under this profile, or null. */
+  liveGrant(tool: ToolSpec, ctx: { chatId: string; profileId: string; live: LiveCallRef }): Grant | null {
+    const now = Date.now();
+    for (const grant of this.store.grants.list(ctx.chatId)) {
+      const live = grant.constraint?.live;
+      if (!live || grant.toolName !== tool.name || grant.source !== 'mcp' || grant.chatId !== ctx.chatId || grant.profileId !== ctx.profileId) continue;
+      if (grant.expiresAt !== null && grant.expiresAt <= now) continue;
+      if (live.artifactId === ctx.live.artifactId && live.callId === ctx.live.callId && live.hash === ctx.live.hash) return grant;
+    }
+    return null;
+  }
+
+  private decideLive(tool: ToolSpec, policy: ToolPolicy, ctx: ToolContext, live: LiveCallRef): Decision {
+    const why = this.liveIneligibility(tool, policy);
+    if (why) return { kind: 'deny', reason: why };
+    const grant = this.liveGrant(tool, { chatId: ctx.chatId, profileId: ctx.profileId, live });
+    if (grant) return { kind: 'allow', grantedBy: 'grant', grantId: grant.id };
+    return { kind: 'deny', code: 'not_approved', reason: "You haven't allowed this live artifact's calls on this machine." };
+  }
+
+  /**
+   * The user allowed a live page's calls in the viewer: one chat grant per
+   * call, bound to its declaration's hash. Every call must be eligible, or
+   * none is granted (an Error names the first that isn't), so this can never
+   * mint a grant the live branch would then deny. A call that already has
+   * its grant is skipped. Returns the grants it made.
+   */
+  grantLive(input: { chatId: string; profileId: string; artifactId: string; policy: ToolPolicy; calls: { tool: ToolSpec; callId: string; hash: string }[] }): Grant[] {
+    for (const call of input.calls) {
+      const why = this.liveIneligibility(call.tool, input.policy);
+      if (why) throw new Error(`Live call "${call.callId}" can't be allowed: ${why}`);
+    }
+    const made: Grant[] = [];
+    for (const call of input.calls) {
+      const live = { artifactId: input.artifactId, callId: call.callId, hash: call.hash };
+      if (this.liveGrant(call.tool, { chatId: input.chatId, profileId: input.profileId, live })) continue;
+      made.push(
+        this.store.grants.create({
+          id: randomUUID(),
+          chatId: input.chatId,
+          profileId: input.profileId,
+          toolName: call.tool.name,
+          source: 'mcp',
+          scope: 'chat',
+          constraint: { live },
+          expiresAt: null,
+        })
+      );
+    }
+    return made;
+  }
+
+  /** Stop live data: deletes the chat's live grants for that artifact. Returns how many. */
+  revokeLive(chatId: string, artifactId: string): number {
+    let removed = 0;
+    for (const grant of this.store.grants.list(chatId)) {
+      if (grant.constraint?.live?.artifactId !== artifactId) continue;
+      this.store.grants.delete(grant.id);
+      removed += 1;
+    }
+    return removed;
+  }
+
   /**
    * Records the human's answer to a previously-issued `ApprovalRequest`.
    * Persists a durable `Grant` for `'chat'`/`'always'` choices so a later
@@ -267,6 +352,12 @@ export class PermissionBroker {
       throw new Error(`PermissionBroker.resolve: unknown or already-resolved approval request "${requestId}".`);
     }
     this.pending.delete(requestId);
+
+    // Only grantLive makes live grants (spec 2026-10-12-live-artifacts). The
+    // route already drops unknown constraint keys; this is defence in depth.
+    if (choice.choice === 'always' && choice.constraint?.live !== undefined) {
+      throw new Error('Refusing to create an "always" grant with a live constraint: only PermissionBroker.grantLive makes live grants.');
+    }
 
     if (choice.choice === 'deny' || choice.choice === 'once') return;
 
@@ -556,6 +647,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
 function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): boolean {
   const constraint = grant.constraint;
   if (!constraint) return true;
+  // A live grant is for one live call (decideLive), never an ordinary one.
+  if (constraint.live !== undefined) return false;
   if (constraint.pathPrefix !== undefined) {
     const path = stringField(args, 'path');
     if (path === null) return false;
