@@ -22,7 +22,7 @@ function failure(err: unknown): string {
  * An artifact in the viewer (spec 2026-10-07-artifacts): the branch's current
  * version unless one is pinned or picked, rendered by kind (pages and Mermaid
  * in the sandbox, SVG as an image, Markdown by React, code highlighted, Word and
- * Excel files drawn from their source (OfficePreview)), with
+ * Excel and PowerPoint files drawn from their source (OfficePreview)), with
  * Source, Edit, Copy, Download and Save to workspace. It reloads when the
  * reply the chat shows changes (a new reply, a branch switch, a part
  * streaming in), so an unpinned artifact follows the branch in the panel
@@ -40,6 +40,8 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState<{ path: string; exists: string | null; done: string | null } | null>(null);
   const [reload, setReload] = useState(0);
+  /** An Office download is being made by the server: Download waits, so repeat clicks don't queue more renders. */
+  const [downloading, setDownloading] = useState(false);
   const workspaceHere = useGruntStore((s) => s.chats.find((c) => c.id === chatId)?.workspaceStatus?.status === 'ok');
   const stamp = useArtifactsStamp(chatId);
 
@@ -116,24 +118,29 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
   }
 
   async function download(): Promise<void> {
-    if (!version || !shown) return;
+    if (!version || !shown || downloading) return;
     setActionError(null);
     // Office kinds download as the file the server makes; the rest as their text.
     if (!isOfficeKind(version.kind)) {
       saveFile(new Blob([version.content], { type: 'text/plain' }), shown.fileName);
       return;
     }
+    setDownloading(true);
     try {
       saveFile(await api.artifacts.file(chatId, item.artifactId, version.id), shown.fileName);
     } catch (err) {
       failAction(version.id, err);
+    } finally {
+      setDownloading(false);
     }
   }
 
   async function saveToWorkspace(replace: boolean): Promise<void> {
     if (!saving || !versionId) return;
+    setActionError(null);
     try {
       const done = await api.artifacts.save(chatId, item.artifactId, { versionId, path: saving.path, ...(replace ? { replace: true } : {}) });
+      setActionError(null);
       setSaving({ ...saving, exists: null, done: done.path });
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) setSaving({ ...saving, exists: err.message, done: null });
@@ -191,7 +198,7 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
           <button type="button" onClick={() => void navigator.clipboard.writeText(version.content).catch(() => setError("Couldn't copy to the clipboard."))} className={BUTTON}>Copy</button>
         )}
         {version && (
-          <button type="button" onClick={() => void download()} className={BUTTON}>Download</button>
+          <button type="button" onClick={() => void download()} disabled={downloading} aria-busy={downloading} className={BUTTON}>{downloading ? 'Making file…' : 'Download'}</button>
         )}
         {workspaceHere && version && (
           <button type="button" onClick={() => setSaving({ path: shown.fileName, exists: null, done: null })} className={BUTTON}>Save to workspace</button>

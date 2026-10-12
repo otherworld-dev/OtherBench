@@ -356,8 +356,8 @@ Ollama instance.
   scanner and the three readers are linear in the size of a hostile part and
   stop appending at the character cap (a paragraph, cell or table is never
   held past it); the hostile cases are tests with time bounds. A
-  near-cap hostile part can still hold the upload request for a few seconds
-  (the scanner runs at about 6 MB/s). `.txt .tsv .json .log` and
+  hostile file can still hold the upload request for about 10-15 seconds
+  (the scanner runs at about 4-6 MB/s and the parts total can reach 64 MB). `.txt .tsv .json .log` and
   `application/json` are plain text now too. Every attached file that isn't
   a PDF reaches the model as that text, fenced as `<attached-file
   name="…">`, for every engine (`TurnRunner.filesForModel`); API models
@@ -1105,8 +1105,9 @@ this on startup.
   - Known limits meanwhile: no charts or images in made files, no templates,
     no .doc/.xls/.ppt or OpenDocument, no previews of Office files already
     in the workspace, no argument-count check on formulas (`=ROUND(1)` is
-    accepted and may make Excel complain), and a hostile near-cap part in an
-    uploaded file can hold the upload request for a few seconds.
+    accepted and may make Excel complain), and a hostile uploaded file can
+    hold the upload request for about 10-15 seconds (up to 64 MB of parts at
+    4-6 MB/s).
   - Word fidelity gaps: an ordered list's start number is ignored; a
     reference-style link loses its URL; lists, tables and headings inside a
     blockquote lose the quote styling; link targets with spaces aren't

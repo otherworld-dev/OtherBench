@@ -295,6 +295,53 @@ describe('ArtifactView', () => {
     expect(screen.getByRole('textbox', { name: 'Save as' })).toBeInTheDocument();
   });
 
+  it('clears a failed save once a later save works', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.save).mockReset().mockRejectedValueOnce(new ApiError(422, "Couldn't make budget.xlsx: bad")).mockResolvedValueOnce({ path: 'C:\\ws\\budget.xlsx' });
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Save to workspace' }));
+    await user.click(screen.getByRole('button', { name: 'Save file' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't make budget.xlsx");
+    await user.click(screen.getByRole('button', { name: 'Save file' }));
+    expect(await screen.findByText('Saved to C:\\ws\\budget.xlsx')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows an Office download is being made and waits, so a second click queues nothing, then works again', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    let finish: (blob: Blob) => void = () => {};
+    vi.mocked(api.artifacts.file).mockReset().mockReturnValueOnce(new Promise<Blob>((resolve) => { finish = resolve; }));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    const busy = await screen.findByRole('button', { name: 'Making file…' });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    await user.click(busy);
+    expect(api.artifacts.file).toHaveBeenCalledTimes(1);
+    const blob = new Blob(['PK']);
+    await act(async () => finish(blob));
+    expect(await screen.findByRole('button', { name: 'Download' })).toBeEnabled();
+    expect(saveFile).toHaveBeenLastCalledWith(blob, 'budget.xlsx');
+  });
+
+  it('enables Download again after a download fails', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.file).mockReset().mockRejectedValue(new ApiError(422, "Couldn't make budget.xlsx: bad"));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    await screen.findByRole('alert');
+    expect(screen.getByRole('button', { name: 'Download' })).toBeEnabled();
+  });
+
   it("doesn't redraw the sheet when something else in the viewer changes", async () => {
     vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
     vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
