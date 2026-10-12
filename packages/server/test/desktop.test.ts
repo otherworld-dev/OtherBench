@@ -6,7 +6,7 @@ import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/test
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
 import { refuseCrossSiteWrites } from '../src/cross-site.js';
-import { announceLine,corsAllowlist, exitOnStdinClose, hostCheck } from '../src/desktop.js';
+import { announceLine, corsAllowlist, exitOnStdinClose, hostCheck } from '../src/desktop.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 
 function makeContainer(): Container {

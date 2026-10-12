@@ -3,6 +3,8 @@ import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
 import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
+import { authGate, authRoutes } from './remote/auth.js';
+import type { RemoteAccess } from './remote/index.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { eventsRoutes } from './routes/events.js';
@@ -58,36 +60,41 @@ export interface AppOptions {
    * loopback; unset (tests, non-loopback binds) checks nothing.
    */
   hostCheckPort?: () => number;
+  /**
+   * Sign-in mode (`--public-url`, spec 2026-10-12-remote-access): the
+   * password, sessions, limiter and public URLs. When set, `/api` also takes
+   * the session cookie, the Host check also accepts the public hosts, and
+   * `/view/` links only work from the address that made them. Unset (null)
+   * in open and token modes, which behave exactly as before.
+   */
+  remote?: RemoteAccess | null;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
   const app = new Hono();
 
+  const remote = options.remote ?? null;
+  const token = options.token ?? null;
+
   if (options.hostCheckPort) {
-    app.use('*', hostCheck(options.hostCheckPort));
+    app.use('*', hostCheck(options.hostCheckPort, remote?.publicHosts ?? []));
   }
   if (options.corsOrigins && options.corsOrigins.length > 0) {
     app.use('/api/*', corsAllowlist(options.corsOrigins));
   }
   // Every mode (Deck #897): browser mode has no token to stop another site's form.
-  app.use('/api/*', refuseCrossSiteWrites(options.corsOrigins ?? []));
+  app.use('/api/*', refuseCrossSiteWrites([...(options.corsOrigins ?? []), ...(remote?.publicOrigins ?? [])]));
 
   app.route('/api', healthRoutes());
+  // Sign-in, sign-out and what mode this is (every mode); before the gated routes.
+  app.route('/api/auth', authRoutes({ token, remote }));
 
   // One store of viewer links per server (Deck #826): the authed route makes them, the open /view route serves them.
   const viewLinks = new ViewLinks();
 
   const authed = new Hono();
-  if (options.token) {
-    const token = options.token;
-    authed.use('*', async (c, next) => {
-      const header = c.req.header('Authorization');
-      if (header !== `Bearer ${token}`) {
-        throw new HTTPException(401, { message: 'Missing or invalid bearer token.' });
-      }
-      await next();
-    });
-  }
+  // Open mode (no token, no sign-in) mounts no gate, as before.
+  if (token || remote) authed.use('*', authGate({ token, remote }));
   authed.route('/connections', connectionsRoutes(container));
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));
