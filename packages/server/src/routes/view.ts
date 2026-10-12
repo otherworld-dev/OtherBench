@@ -1,5 +1,5 @@
 import { basename, join } from 'node:path';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { versionFileName } from '@grunt/core/domain/artifacts.js';
 import type { Chat } from '@grunt/core/ports/store.js';
@@ -30,7 +30,7 @@ function pathOf(raw: unknown): string {
  * Files tree. Every path is a chat's, contained to its folders on this
  * machine. Not mounted on the peer listener.
  */
-export function viewRoutes(container: Container, links: ViewLinks): Hono {
+export function viewRoutes(container: Container, links: ViewLinks, clientOf?: (c: Context) => string): Hono {
   const app = new Hono();
 
   app.post('/links', async (c) => {
@@ -50,7 +50,7 @@ export function viewRoutes(container: Container, links: ViewLinks): Hono {
       const linked = version.kind === 'html' || version.kind === 'svg' || version.kind === 'mermaid';
       const name = version.kind === 'mermaid' ? 'diagram.html' : versionFileName(artifact, version);
       const kinds: Record<typeof version.kind, ViewKind> = { html: 'html', mermaid: 'html', svg: 'image', markdown: 'markdown', code: 'text' };
-      const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id })}/${encodeURIComponent(name)}` : null;
+      const url = linked ? `/view/${links.create({ chatId: chat.id, scope: 'artifact', versionId: version.id, ...(clientOf ? { client: clientOf(c) } : {}) })}/${encodeURIComponent(name)}` : null;
       return c.json({ path: '', name, kind: kinds[version.kind], url, size: Buffer.byteLength(version.content, 'utf8') });
     }
     const path = pathOf(body.path);
@@ -68,7 +68,7 @@ export function viewRoutes(container: Container, links: ViewLinks): Hono {
     }
     const name = basename(resolved);
     const linked = kind === 'image' || kind === 'video' || kind === 'pdf' || kind === 'html';
-    const url = linked ? `/view/${links.create({ chatId: chat.id, root, target: resolved, scope: kind === 'html' ? 'folder' : 'file' })}/${encodeURIComponent(name)}` : null;
+    const url = linked ? `/view/${links.create({ chatId: chat.id, root, target: resolved, scope: kind === 'html' ? 'folder' : 'file', ...(clientOf ? { client: clientOf(c) } : {}) })}/${encodeURIComponent(name)}` : null;
     return c.json({ path: resolved, name, kind, url, size });
   });
 

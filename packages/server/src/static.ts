@@ -71,6 +71,11 @@ export function mountStatic(app: Hono, { webDistDir }: StaticOptions): void {
       await next();
       return;
     }
+    // No other site may frame Grunt's UI (spec 2026-10-12-remote-access §3):
+    // that would let it trick a click on an approval button. Every mode. The
+    // viewer's iframes load /view/, which sets its own headers.
+    c.header('Content-Security-Policy', "frame-ancestors 'none'");
+    c.header('X-Frame-Options', 'DENY');
     if (!serveAsset || !serveIndex) {
       return c.html(placeholder);
     }

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
 import { refuseCrossSiteWrites } from './cross-site.js';
@@ -91,6 +91,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
 
   // One store of viewer links per server (Deck #826): the authed route makes them, the open /view route serves them.
   const viewLinks = new ViewLinks();
+  // Sign-in mode: a /view/ link only works from the address that made it.
+  const clientOf = remote ? (c: Context): string => remote.clientAddress(c) ?? 'unknown' : undefined;
 
   const authed = new Hono();
   // Open mode (no token, no sign-in) mounts no gate, as before.
@@ -127,7 +129,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));
-  authed.route('/view', viewRoutes(container, viewLinks));
+  authed.route('/view', viewRoutes(container, viewLinks, clientOf));
   authed.route('/events', eventsRoutes(container));
   authed.route('/fs', fsRoutes());
   // toolsRoutes, like turnsRoutes, defines full paths under several
@@ -145,7 +147,21 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
   // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
-  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts));
+  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts, clientOf));
+
+  // Sign-in with --tls auto: the CA a device installs to trust Grunt (spec §4). No sign-in needed:
+  // it's public, and the device checks its fingerprint against what `grunt serve` printed.
+  const caDer = remote?.tls.mode === 'auto' ? remote.tls.caDer : undefined;
+  if (caDer) {
+    app.get('/grunt-ca.crt', (c) =>
+      c.body(new Uint8Array(caDer), 200, {
+        'Content-Type': 'application/x-x509-ca-cert',
+        'Content-Disposition': 'attachment; filename="grunt-ca.crt"',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+      })
+    );
+  }
 
   if (options.webDistDir) {
     mountStatic(app, { webDistDir: options.webDistDir });
