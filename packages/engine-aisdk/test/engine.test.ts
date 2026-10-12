@@ -260,6 +260,64 @@ describe('AiSdkChatEngine.stream', () => {
     }
   });
 
+  it('starts every tool call of one step at once, without waiting for the one before (sub-agents run in parallel)', async () => {
+    let started = 0;
+    let bothStarted!: () => void;
+    const allIn = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
+    const execute = vi.fn(async () => {
+      started += 1;
+      if (started === 2) bothStarted();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          allIn,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('the calls ran one after another')), 2_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      return 'ok';
+    });
+    const spec: ToolSpec = {
+      name: 'wait_for_sibling',
+      description: 'Waits until its sibling call has started too.',
+      parameters: { type: 'object', properties: {} },
+      risk: 'read',
+      source: 'mcp',
+      execute,
+    };
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'wait_for_sibling', input: '{}' },
+          { type: 'tool-call', toolCallId: 'call-2', toolName: 'wait_for_sibling', input: '{}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'Both done.' },
+          { type: 'text-end', id: 't1' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      ),
+    });
+
+    const events = await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec] })));
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    const results = events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');
+    expect(results.map((r) => [r.id, r.isError])).toEqual([
+      ['call-1', false],
+      ['call-2', false],
+    ]);
+  });
+
   it('maps a 429 APICallError to a single error event with kind rate_limit, retryable true', async () => {
     const model = new MockLanguageModelV3({
       doStream: async () => {
