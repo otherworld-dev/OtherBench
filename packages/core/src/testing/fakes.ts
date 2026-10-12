@@ -17,7 +17,7 @@ import type {
   ToolProvider,
   ToolSpec,
 } from '../ports/tool-provider.js';
-import type { ToolPolicy } from '../types/config.js';
+import { runsShellInSandbox, type ToolPolicy } from '../types/config.js';
 import type {
   AppSettings,
   Artifact,
@@ -65,6 +65,8 @@ import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
+import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
+import { toSandboxPath } from '../domain/sandbox-paths.js';
 import type { ModelInfo, Profile } from '../types/config.js';
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 
@@ -143,6 +145,98 @@ export class FakeSecretStore implements SecretStore {
 }
 
 // ---------------------------------------------------------------------------
+// FakeSandbox
+// ---------------------------------------------------------------------------
+
+export interface FakeSandboxOptions {
+  /** Start ready, as if set up. Default: not set up, like a fresh machine. */
+  ready?: boolean;
+  /** This machine's name, for the "isn't set up on <machine>" refusal. */
+  machine?: () => string;
+  /** Hosts every run asks about (through `req.askHost`) before it finishes. */
+  askHosts?: { host: string; port?: number }[];
+  /** Changes to the result a run returns. */
+  result?: (req: SandboxRunRequest) => Partial<SandboxRunResult>;
+}
+
+export const FAKE_SANDBOX_VERSIONS: SandboxVersions = { distro: 'Fake Linux 1.0', runtime: '0.0.79', node: 'v24.21.0' };
+
+function fakeSandboxCwd(root: string): string {
+  try {
+    return toSandboxPath(root);
+  } catch {
+    return root;
+  }
+}
+
+/**
+ * A `Sandbox` test double, and the e2e server's (GRUNT_SANDBOX=fake): records
+ * every request, runs nothing, and answers like a sandbox that worked.
+ */
+export class FakeSandbox implements Sandbox {
+  readonly requests: SandboxRunRequest[] = [];
+  readonly released: string[] = [];
+  readonly asked: { host: string; port: number | undefined; allowed: boolean }[] = [];
+  setupCalls = 0;
+  closed = false;
+  private state: 'not_set_up' | 'ready';
+  private packages: string[] = [];
+  private readonly machine: () => string;
+
+  constructor(private readonly options: FakeSandboxOptions = {}) {
+    this.state = options.ready === true ? 'ready' : 'not_set_up';
+    this.machine = options.machine ?? (() => 'This machine');
+  }
+
+  async status(): Promise<SandboxStatus> {
+    const base = { packages: [...this.packages], machine: this.machine() };
+    return this.state === 'ready' ? { state: 'ready', versions: { ...FAKE_SANDBOX_VERSIONS }, ...base } : { state: 'not_set_up', ...base };
+  }
+
+  async setup(): Promise<void> {
+    this.setupCalls += 1;
+    this.state = 'ready';
+  }
+
+  async remove(): Promise<void> {
+    this.state = 'not_set_up';
+  }
+
+  async setPackages(packages: string[]): Promise<void> {
+    this.packages = [...packages];
+  }
+
+  async run(req: SandboxRunRequest): Promise<SandboxRunResult> {
+    this.requests.push(req);
+    if (this.state !== 'ready') throw new SandboxError('not_set_up', `The sandbox isn't set up on ${this.machine()}.`);
+    for (const { host, port } of this.options.askHosts ?? []) {
+      const allowed = await req.askHost(host, port);
+      this.asked.push({ host, port, allowed });
+    }
+    return {
+      command: req.command,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      truncated: false,
+      timeoutMsUsed: req.timeoutMs,
+      output: `fake sandbox ran: ${req.command}\n`,
+      sandbox: true,
+      cwd: fakeSandboxCwd(req.workspaceRoot),
+      ...this.options.result?.(req),
+    };
+  }
+
+  async release(chatId: string): Promise<void> {
+    this.released.push(chatId);
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // FakeToolProvider
 // ---------------------------------------------------------------------------
 
@@ -165,7 +259,7 @@ export interface FakeMcpServer {
 }
 
 export interface FakeToolProviderOptions {
-  /** Built-in (fs/shell) tools. Defaults to one read fs tool, one mutate fs tool and a shell tool. */
+  /** Built-in (fs/shell) tools. Defaults to one read fs tool, one mutate fs tool, the host shell tool and the sandboxed one. */
   tools?: ToolSpec[];
   /** MCP servers whose tools are offered when the policy enables their id. */
   mcpServers?: FakeMcpServer[];
@@ -207,6 +301,7 @@ export class FakeToolProvider implements ToolProvider {
       stubTool('read_file', 'read', 'fs'),
       stubTool('write_file', 'mutate', 'fs'),
       stubTool('run_command', 'execute', 'shell'),
+      stubTool('run_command', 'execute', 'sandbox'),
     ];
     this.mcpServers = options.mcpServers ?? [];
   }
@@ -215,7 +310,8 @@ export class FakeToolProvider implements ToolProvider {
     const raw: ToolSpec[] = [];
     if (policy.fs === 'readwrite') raw.push(...this.tools.filter((t) => t.source === 'fs'));
     else if (policy.fs === 'read') raw.push(...this.tools.filter((t) => t.source === 'fs' && t.risk === 'read'));
-    if (policy.shell) raw.push(...this.tools.filter((t) => t.source === 'shell'));
+    // One run_command, never both: the sandboxed one when the shell runs there.
+    if (policy.shell) raw.push(...this.tools.filter((t) => t.source === (runsShellInSandbox(policy) ? 'sandbox' : 'shell')));
     if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
     if (policy.recall !== false) raw.push(...this.tools.filter((t) => t.source === 'recall'));
     for (const id of policy.mcpServerIds) {

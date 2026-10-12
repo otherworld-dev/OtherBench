@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
 import type { ResolvedProfile } from '../src/types/config.js';
-import { FakeChatEngine, InMemoryStore, FakeSecretStore, FakeToolProvider } from '../src/testing/fakes.js';
+import { FakeChatEngine, InMemoryStore, FakeSecretStore, FakeToolProvider, FakeSandbox } from '../src/testing/fakes.js';
+import type { SandboxRunRequest } from '../src/ports/sandbox.js';
 import { runSecretStoreContract } from '../src/testing/secret-store-contract.js';
 import { runToolProviderContract } from '../src/testing/tool-provider-contract.js';
 import { runStoreContract } from '../src/testing/store-contract.js';
@@ -144,6 +145,59 @@ describe('FakeSecretStore', () => {
     await secrets.set('ref', 'first');
     await secrets.set('ref', 'second');
     expect(await secrets.get('ref')).toBe('second');
+  });
+});
+
+describe('FakeSandbox', () => {
+  const req = (over: Partial<SandboxRunRequest> = {}): SandboxRunRequest => ({
+    chatId: 'c1',
+    command: 'ls',
+    timeoutMs: 120_000,
+    workspaceRoot: 'E:\\Git\\Grunt',
+    folders: [],
+    writable: true,
+    allowedHosts: [],
+    signal: new AbortController().signal,
+    askHost: async () => true,
+    ...over,
+  });
+
+  it('refuses to run until set up, naming the machine, then answers with a sandbox result', async () => {
+    const sandbox = new FakeSandbox({ machine: () => 'Gigabyte' });
+    expect((await sandbox.status()).state).toBe('not_set_up');
+    await expect(sandbox.run(req())).rejects.toMatchObject({ name: 'SandboxError', code: 'not_set_up', message: "The sandbox isn't set up on Gigabyte." });
+    await sandbox.setup();
+    expect(sandbox.setupCalls).toBe(1);
+    expect(await sandbox.status()).toMatchObject({ state: 'ready', machine: 'Gigabyte', versions: { runtime: '0.0.79' } });
+    expect(await sandbox.run(req())).toMatchObject({ command: 'ls', exitCode: 0, sandbox: true, cwd: '/mnt/e/Git/Grunt', timeoutMsUsed: 120_000 });
+    expect(sandbox.requests).toHaveLength(2);
+  });
+
+  it('asks about the scripted hosts through the request and records the answers', async () => {
+    const sandbox = new FakeSandbox({ ready: true, askHosts: [{ host: 'example.com', port: 443 }] });
+    await sandbox.run(req({ askHost: async (host) => host === 'example.com' }));
+    expect(sandbox.asked).toEqual([{ host: 'example.com', port: 443, allowed: true }]);
+  });
+
+  it('keeps packages, and records releases and close', async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    await sandbox.setPackages(['ffmpeg']);
+    expect((await sandbox.status()).packages).toEqual(['ffmpeg']);
+    await sandbox.release('c1');
+    await sandbox.close();
+    expect(sandbox.released).toEqual(['c1']);
+    expect(sandbox.closed).toBe(true);
+    await sandbox.remove();
+    expect((await sandbox.status()).state).toBe('not_set_up');
+  });
+});
+
+describe('FakeToolProvider and the sandboxed shell', () => {
+  it('offers the sandboxed run_command instead of the host one when the shell runs in the sandbox', async () => {
+    const provider = new FakeToolProvider();
+    const base = { fs: 'off' as const, shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const, artifacts: false, recall: false };
+    expect((await provider.listTools({ ...base, shellRuns: 'sandbox' })).map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox']]);
+    expect((await provider.listTools(base)).map((t) => [t.name, t.source])).toEqual([['run_command', 'shell']]);
   });
 });
 
