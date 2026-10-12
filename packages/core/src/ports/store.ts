@@ -604,6 +604,32 @@ export interface SyncRepo {
   observe(hlc: string): void;
 }
 
+/**
+ * A value a live artifact's page may choose for one of its calls (spec
+ * 2026-10-12-live-artifacts): one of a fixed list, or a whole number in a
+ * range. Never free text.
+ */
+export type LiveParam =
+  | { enum: (string | number | boolean)[]; default: string | number | boolean }
+  | { type: 'integer'; minimum: number; maximum: number; default: number };
+
+/**
+ * One data call a live html artifact declares: a read-only MCP tool
+ * (`mcp__<server>__<tool>`) with fixed arguments, where an argument that is
+ * exactly `{ "$param": name }` takes that parameter's value.
+ */
+export interface LiveCall {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  params: Record<string, LiveParam>;
+}
+
+/** The data calls an html artifact version declares; see `parseLiveSpec`. */
+export interface LiveSpec {
+  calls: LiveCall[];
+}
+
 /** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, or a code file. */
 export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code';
 
