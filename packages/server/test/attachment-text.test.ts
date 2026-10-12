@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { classifyForExtraction, extractAttachmentText, MAX_EXTRACTED_TEXT_CHARS } from '../src/attachment-text.js';
+import { makeZip } from './import/make-zip.js';
 
 // A minimal, hand-written PDF containing the literal text "Hello PDF world"
 // via a bare content stream -- verified against `unpdf` directly while
@@ -80,8 +81,86 @@ describe('extractAttachmentText', () => {
     expect(text).toContain('Hello PDF world');
   });
 
+  it('reads a PDF sent with an empty or generic MIME type, by its .pdf extension', async () => {
+    expect(classifyForExtraction('', 'report.pdf')).toBe('pdf');
+    expect(classifyForExtraction('application/octet-stream', 'REPORT.PDF')).toBe('pdf');
+    expect(await extractAttachmentText(MINIMAL_PDF, 'application/octet-stream', 'report.pdf')).toContain('Hello PDF world');
+  });
+
   it('degrades to null (not a thrown error) for bytes that are not actually a valid PDF', async () => {
     const text = await extractAttachmentText(Buffer.from('not a pdf at all'), 'application/pdf', 'fake.pdf');
     expect(text).toBeNull();
+  });
+});
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const WORD_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const memoDocx = (doc = `<w:document ${WORD_NS}><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Intro</w:t></w:r></w:p><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>`) =>
+  makeZip([{ name: 'word/document.xml', content: doc }]);
+
+describe('classifyForExtraction: Office and more plain text', () => {
+  it('classifies the three OOXML types by MIME and by extension, macro-enabled ones included', () => {
+    expect(classifyForExtraction(DOCX_MIME, 'a.bin')).toBe('office');
+    expect(classifyForExtraction('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'a')).toBe('office');
+    expect(classifyForExtraction('application/vnd.openxmlformats-officedocument.presentationml.presentation', 'a')).toBe('office');
+    for (const name of ['a.DOCX', 'a.docm', 'b.xlsx', 'b.xlsm', 'c.pptx', 'c.pptm']) expect(classifyForExtraction('application/octet-stream', name)).toBe('office');
+  });
+
+  it('reads .tsv, .txt, .json and .log, and application/json, as plain text', () => {
+    for (const name of ['a.tsv', 'a.txt', 'a.json', 'a.log']) expect(classifyForExtraction('application/octet-stream', name)).toBe('plain-text');
+    expect(classifyForExtraction('application/json', 'data')).toBe('plain-text');
+  });
+
+  it('leaves legacy .doc and plain ZIPs alone', () => {
+    expect(classifyForExtraction('application/msword', 'old.doc')).toBeNull();
+    expect(classifyForExtraction('application/zip', 'a.zip')).toBeNull();
+  });
+});
+
+describe('extractAttachmentText: Office files', () => {
+  it("reads a Word file's text", async () => {
+    expect(await extractAttachmentText(memoDocx(), DOCX_MIME, 'memo.docx')).toBe('# Intro\nBody');
+  });
+
+  it('gives null, without failing the upload, for a non-ZIP called .docx or a part with a DOCTYPE', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(await extractAttachmentText(Buffer.from('not a zip at all, honestly'), DOCX_MIME, 'fake.docx')).toBeNull();
+      expect(await extractAttachmentText(memoDocx(`<!DOCTYPE w:document [<!ENTITY x "y">]><w:document ${WORD_NS}/>`), DOCX_MIME, 'evil.docx')).toBeNull();
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('stops at the character cap and says so', async () => {
+    const big = `<w:document ${WORD_NS}><w:body>${Array.from({ length: 3000 }, () => `<w:p><w:r><w:t>${'word '.repeat(20)}</w:t></w:r></w:p>`).join('')}</w:body></w:document>`;
+    const text = (await extractAttachmentText(memoDocx(big), DOCX_MIME, 'big.docx'))!;
+    expect(text).toMatch(/\[\.\.\.truncated at 100000 characters\]$/);
+  });
+});
+
+describe('extractAttachmentText: what the file really is decides', () => {
+  const workbook = () =>
+    makeZip([
+      { name: 'xl/workbook.xml', content: '<workbook xmlns:r="r"><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', content: '<Relationships><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/></Relationships>' },
+      { name: 'xl/worksheets/sheet1.xml', content: '<worksheet><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>' },
+    ]);
+
+  it('reads an .xlsx sent as application/octet-stream', async () => {
+    expect(await extractAttachmentText(workbook(), 'application/octet-stream', 'book.xlsx')).toBe('Sheet "S" (A1:A1) as CSV:\n7');
+  });
+
+  it('reads a .docx that is really a workbook as a workbook', async () => {
+    expect(await extractAttachmentText(workbook(), DOCX_MIME, 'misnamed.docx')).toBe('Sheet "S" (A1:A1) as CSV:\n7');
+  });
+
+  it('reads a PowerPoint file by its MIME type', async () => {
+    const deck = makeZip([
+      { name: 'ppt/presentation.xml', content: '<p:presentation xmlns:p="p" xmlns:r="r"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst></p:presentation>' },
+      { name: 'ppt/_rels/presentation.xml.rels', content: '<Relationships><Relationship Id="rId1" Type="x/slide" Target="slides/slide1.xml"/></Relationships>' },
+      { name: 'ppt/slides/slide1.xml', content: '<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Hello deck</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>' },
+    ]);
+    expect(await extractAttachmentText(deck, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'd.pptx')).toBe('Slide 1: Hello deck');
   });
 });

@@ -3,7 +3,8 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import { MockChatEngine } from '../src/mock-provider.js';
+import { checkOfficeContent } from '@grunt/core/domain/office-spec.js';
+import { MockChatEngine, OFFICE_SAMPLES } from '../src/mock-provider.js';
 
 function makeResolvedProfile(): ResolvedProfile {
   return {
@@ -382,5 +383,58 @@ describe('MockChatEngine', () => {
       const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
       expect(text).toBe('No system prompt.');
     });
+  });
+});
+
+const replyText = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+describe('#office trigger', () => {
+  const artifactTool = () => {
+    const execute = vi.fn(async () => ({ ok: true, command: 'create', slug: 'x', number: 1 }));
+    const tool: ToolSpec = { name: 'artifact', description: '', parameters: {}, risk: 'read', source: 'artifact', execute };
+    return { tool, execute };
+  };
+
+  it('#office spreadsheet makes the budget through the real artifact tool, then answers', async () => {
+    const { tool, execute } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office spreadsheet', { tools: [tool] })));
+    const call = events.find((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call')!;
+    expect(call.args).toMatchObject({ command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Mock budget' });
+    expect(JSON.parse((call.args as { content: string }).content).sheets[0].rows[3]).toEqual(['Total', '=SUM(B2:B3)']);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(replyText(events)).toBe('I made the file.');
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('#office document makes the memo', async () => {
+    const { tool } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office document', { tools: [tool] })));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', args: expect.objectContaining({ id: 'memo', kind: 'document', title: 'Mock memo', content: expect.stringContaining('# Quarterly memo') }) }));
+  });
+
+  it('#office presentation makes the deck', async () => {
+    const { tool } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office presentation', { tools: [tool] })));
+    const call = events.find((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call')!;
+    expect(call.args).toMatchObject({ id: 'deck', kind: 'presentation', title: 'Mock deck' });
+    expect(JSON.parse((call.args as { content: string }).content).slides.map((s: { title: string }) => s.title)).toEqual(['Mock review', 'Highlights']);
+  });
+
+  it('#office with a kind it has no sample for falls through to the usual reply', async () => {
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office banana')));
+    expect(events.some((e) => e.type === 'tool-call')).toBe(false);
+  });
+
+  it('every sample passes the checks the artifact tool runs', () => {
+    for (const [kind, sample] of Object.entries(OFFICE_SAMPLES)) expect(checkOfficeContent(kind, sample.content), kind).toBeNull();
+  });
+});
+
+describe('#echo-user trigger', () => {
+  it("replies with the latest user message's text as the request carries it, an attached file's text included", async () => {
+    const req = makeRequest('#echo-user');
+    req.messages[0]!.parts.push({ type: 'text', text: '<attached-file name="memo.docx">\nGrunt reads this memo\n</attached-file>' });
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(req));
+    expect(replyText(events)).toContain('Grunt reads this memo');
   });
 });

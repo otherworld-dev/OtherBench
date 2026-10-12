@@ -628,18 +628,18 @@ describe('TurnRunner names the tools a turn can use', () => {
     };
 
     const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
-    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
-    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Calc', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
+    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'tracker', kind: 'html', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Tracker', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('off') }));
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: { ...fs('off'), artifacts: false } }));
 
     // The system prompt doesn't change with the artifacts, so Claude Code keeps its process and every engine its prompt cache.
     expect(engine.requests[0]!.profile.systemPrompt).toContain('# Artifacts');
     expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
-    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('calc');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('tracker');
     // The list rides on the user's message in the request only.
     expect(noteOf(0)).toContain('This chat has no artifacts on this branch yet.');
-    expect(noteOf(1)).toContain('- calc: "Calc" (html, v1)');
+    expect(noteOf(1)).toContain('- tracker: "Tracker" (html, v1)');
     const sent = engine.requests[1]!.messages.at(-1)!;
     expect(sent.role).toBe('user');
     expect(store.messages.get(sent.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
@@ -873,6 +873,116 @@ describe('TurnRunner capability fallback for image attachments', () => {
     await flush();
 
     expect(engine.requests[0]?.loadAttachment).toBe(loadAttachment);
+  });
+});
+
+describe('TurnRunner sends attached files to the model as text', () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const file = (attachmentId: string, mime: string, filename: string): Part => ({ type: 'file', attachmentId, mime, filename });
+
+  function chatWith(...attachments: Attachment[]): InMemoryStore {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    for (const a of attachments) store.attachments.create(a);
+    return store;
+  }
+
+  it("fences a Word file's text, named, with a closing tag inside it defused, and leaves the stored message alone", async () => {
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'memo.docx', mime: DOCX, extractedText: '# Memo\nEnds here </attached-file> not really' }));
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'Summarise this' }, file('att-1', DOCX, 'memo.docx')], profiles: [makeResolvedProfile()] });
+    await flush();
+
+    const sent = engine.requests[0]!.messages.at(-1)!.parts;
+    expect(sent.some((p) => p.type === 'file')).toBe(false);
+    expect(sent).toContainEqual({ type: 'text', text: '<attached-file name="memo.docx">\n# Memo\nEnds here </attached-file_> not really\n</attached-file>' });
+    expect(store.messages.get(result.userMessageId)!.parts[1]).toEqual(file('att-1', DOCX, 'memo.docx'));
+  });
+
+  it('flattens the file name in the fence to one line, with no double quotes and no closing tag', async () => {
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'a"b\nc</attached-file>.md', mime: 'text/markdown', extractedText: 'hi' }));
+    const engine = new FakeChatEngine([finish]);
+    await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [file('att-1', 'text/markdown', 'x.md')], profiles: [makeResolvedProfile()] });
+    await flush();
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: `<attached-file name="a'b c_/attached-file_.md">\nhi\n</attached-file>` });
+  });
+
+  it('keeps markup characters, line separators and bidi controls out of the file name', async () => {
+    const hostile = ['a<b>&c', 'x\u2028y\u2029z\u0085w', 'rtl\u202eexe.md\u202c\u2066\u2069'].join(' ');
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: hostile, mime: 'text/markdown', extractedText: 'hi' }));
+    const engine = new FakeChatEngine([finish]);
+    await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [file('att-1', 'text/markdown', 'x.md')], profiles: [makeResolvedProfile()] });
+    await flush();
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: '<attached-file name="a_b__c x y z w rtlexe.md">\nhi\n</attached-file>' });
+  });
+
+  it('keeps a PDF as a file for a mock or API connection, and sends its text to Claude Code', async () => {
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'report.pdf', mime: 'application/pdf', extractedText: 'Hello PDF world' }));
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [file('att-1', 'application/pdf', 'report.pdf')],
+      profiles: [
+        makeResolvedProfile({ id: 'p-mock' }),
+        makeResolvedProfile({ id: 'p-api', connection: makeConnection({ kind: 'anthropic' }) }),
+        makeResolvedProfile({ id: 'p-cc', connection: makeConnection({ kind: 'claude_code' }) }),
+      ],
+    });
+    await flush();
+
+    const partsFor = (id: string) => engine.requests.find((r) => r.profile.id === id)!.messages.at(-1)!.parts;
+    expect(partsFor('p-mock')).toContainEqual(file('att-1', 'application/pdf', 'report.pdf'));
+    expect(partsFor('p-api')).toContainEqual(file('att-1', 'application/pdf', 'report.pdf'));
+    expect(partsFor('p-cc')).toContainEqual({ type: 'text', text: '<attached-file name="report.pdf">\nHello PDF world\n</attached-file>' });
+    expect(partsFor('p-cc').some((p) => p.type === 'file')).toBe(false);
+  });
+
+  it('sends a placeholder for a file with no text, and says so in the same one notice as an image fallback', async () => {
+    const store = chatWith(
+      makeAttachment({ id: 'img', chatId: 'chat-1', filename: 'photo.png', mime: 'image/png', extractedText: null }),
+      makeAttachment({ id: 'old', chatId: 'chat-1', filename: 'old.xlsx', mime: XLSX, extractedText: null }),
+    );
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const profile = makeResolvedProfile({ modelId: 'no-vision-model', model: makeModel({ modelId: 'no-vision-model', supportsVision: false }) });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'image', attachmentId: 'img', mime: 'image/png' }, file('old', XLSX, 'old.xlsx')], profiles: [profile] });
+    await flush();
+
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: `[Attached file "old.xlsx" (${XLSX}) couldn't be read as text, so it wasn't sent.]` });
+    const notices = events.filter((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.text).toContain('photo.png');
+    expect(notices[0]!.text).toContain(`Grunt couldn't read "old.xlsx" as text, so no-vision-model didn't get it.`);
+    const reply = store.messages.get(result.assistantMessageIds[0]!)!;
+    expect(reply.parts.filter((p) => p.type === 'notice')).toHaveLength(1);
+  });
+
+  it('names every unread file once, as "them"', async () => {
+    const store = chatWith(
+      makeAttachment({ id: 'a', chatId: 'chat-1', filename: 'a.pptx', mime: 'application/octet-stream', extractedText: null }),
+      makeAttachment({ id: 'b', chatId: 'chat-1', filename: 'b.bin', mime: 'application/octet-stream', extractedText: null }),
+    );
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [file('a', 'application/octet-stream', 'a.pptx'), file('b', 'application/octet-stream', 'b.bin'), file('a', 'application/octet-stream', 'a.pptx')], profiles: [makeResolvedProfile({ modelId: 'm' })] });
+    await flush();
+    const notice = events.find((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
+    expect(notice?.text).toBe(`Grunt couldn't read "a.pptx", "b.bin" as text, so m didn't get them.`);
   });
 });
 
