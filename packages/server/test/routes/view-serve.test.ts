@@ -237,7 +237,7 @@ describe('relativeOf and parseRange', () => {
 describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
   const LIVE = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} }] };
   const STRICT = (id: string) =>
-    `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://127.0.0.1:4747/view/${id}/; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'`;
+    `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://127.0.0.1:4747/view/${id}/grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
 
   async function artifactLink(app: ReturnType<typeof createApp>, versionId: string): Promise<string> {
     const res = await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c1', artifactVersionId: versionId }) });
@@ -265,6 +265,35 @@ describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
     expect(helper.headers.get('Content-Type')).toBe('text/javascript; charset=utf-8');
     expect(helper.headers.get('Content-Security-Policy')).toBe(STRICT(id));
     expect(await helper.text()).toBe(LIVE_CLIENT_JS);
+  });
+
+  it('sends a policy with every response under a live link: refusals are sandboxed with no sources, and the helper headers are fixed', async () => {
+    const app = createApp(container);
+    const url = await artifactLink(app, 'live');
+    const id = url.split('/')[2]!;
+    for (const path of [`/view/${id}/other.js`, `/view/${id}/dash.html/x`, `/view/${id}/..%2Fdash.html`, `/view/${id}/sub/grunt-live.js`, '/view/not-a-link/grunt-live.js']) {
+      const res = await app.request(`http://127.0.0.1:4747${path}`);
+      expect(res.status, path).toBe(404);
+      expect(res.headers.get('Content-Security-Policy'), path).toBe("default-src 'none'; sandbox");
+      expect(res.headers.get('X-Content-Type-Options'), path).toBe('nosniff');
+    }
+    // Nothing a request carries changes what the helper is served with.
+    const plain = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js`);
+    const odd = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js?x=1`, {
+      headers: { Range: 'bytes=0-3', Origin: 'https://exfil.invalid', Accept: 'text/html', Cookie: 'a=b', 'Content-Security-Policy': "script-src *", 'Sec-Fetch-Dest': 'document' },
+    });
+    expect(odd.status).toBe(200);
+    expect([...odd.headers.entries()]).toEqual([...plain.headers.entries()]);
+    expect(Object.fromEntries(plain.headers.entries())).toEqual({
+      'cache-control': 'no-store',
+      'content-disposition': 'inline',
+      'content-security-policy': STRICT(id),
+      'content-type': 'text/javascript; charset=utf-8',
+      'referrer-policy': 'no-referrer',
+      'x-content-type-options': 'nosniff',
+      'x-dns-prefetch-control': 'off',
+    });
+    expect(await odd.text()).toBe(LIVE_CLIENT_JS);
   });
 
   it('keeps the ordinary sandbox for a plain version, which has no helper', async () => {

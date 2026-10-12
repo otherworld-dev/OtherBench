@@ -28,15 +28,42 @@ export function sandboxPolicy(folderUrl: string): string {
 
 /**
  * The policy for a live artifact's page and its helper (spec
- * 2026-10-12-live-artifacts): no network of any kind. connect-src, frame-src
- * and worker-src fall back to 'none', so fetch, XHR, WebSocket, EventSource,
- * beacons, frames and workers are closed; images, fonts and media only from
- * data: and blob:; scripts inline or from the link's own folder (the helper);
- * no eval. allow-forms stays so submit handlers fire, and form-action 'none'
- * stops the submission itself. Data only arrives by postMessage.
+ * 2026-10-12-live-artifacts): no network of any kind, so tool results shown
+ * in the page have no way out through a fetch or a load. Refusals under the
+ * link get refuse()'s `default-src 'none'; sandbox`, stricter still.
+ *
+ * - `sandbox allow-scripts allow-forms`: an opaque origin, so nothing of
+ *   Grunt's (cookies, storage, the API) is in reach; no popups, no top-level
+ *   navigation, no same-origin. allow-forms only so submit handlers fire.
+ * - `default-src 'none'` closes whatever isn't named below, and each fetch
+ *   directive is also set to 'none' outright rather than left to the
+ *   fallback, so the closing doesn't hang on fallback rules (worker-src, for
+ *   one, falls back to child-src and then script-src, not to default-src, so
+ *   leaving it out would have let a worker load from wherever scripts may).
+ * - `script-src`: inline (the model's own scripts) and the one helper URL,
+ *   not the link's folder, so no `<script src>` reaches any other file; no
+ *   eval. `style-src` inline only, so no `@import` or stylesheet `<link>`.
+ * - `img-src`, `font-src`, `media-src`: data: and blob: only, so images, CSS
+ *   `url()`, `@font-face` and video can't name a host.
+ * - `connect-src 'none'`: fetch, XHR, WebSocket, EventSource, sendBeacon and
+ *   `<a ping>`; default-src 'none' takes `<link rel=prefetch>` (a preload is
+ *   checked as what it preloads). `frame-src`, `child-src`, `worker-src`,
+ *   `object-src`, `manifest-src` 'none': frames, workers, plugins, manifests.
+ * - `form-action 'none'`: doesn't fall back to default-src; it stops the
+ *   submission itself. `base-uri 'none'`: no `<base>` to redirect relative
+ *   URLs.
+ *
+ * What it can't close (spec §12): the page navigating its own frame with
+ * data in the URL (`location=`, a meta refresh), which no shipped directive
+ * governs; the viewer's navigation guard notices on the second `load` and
+ * closes the page, but the request has already gone. WebRTC to a STUN/TURN
+ * host, which CSP doesn't govern in Chromium. DNS lookups that slip past
+ * `X-DNS-Prefetch-Control: off`. A `<meta>` policy in the page can only add
+ * restrictions: a second policy is enforced alongside this header, never
+ * instead of it.
  */
 export function livePolicy(folderUrl: string): string {
-  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'`;
+  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}${LIVE_CLIENT_FILE}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
 }
 
 function refuse(c: Context, status: 404 | 415, text: string): Response {

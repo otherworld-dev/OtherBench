@@ -13,8 +13,10 @@ import { expect, test } from '@playwright/test';
  * Tasks 9, 11 and 12).
  */
 
+// A copy of the server's livePolicy (packages/server/src/routes/view-serve.ts);
+// live-exfil.spec.ts checks the real one.
 function livePolicy(folderUrl: string): string {
-  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'`;
+  return `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' ${folderUrl}grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
 }
 
 const APP = `<!doctype html><meta charset="utf-8"><title>probe app</title>
@@ -53,7 +55,7 @@ const HELPER = `(function () {
 })();`;
 
 const FRAME = `<!doctype html><meta charset="utf-8">
-<script src="helper.js"></script>
+<script src="grunt-live.js"></script>
 <pre id="csp"></pre><pre id="out">waiting</pre><pre id="submitted"></pre>
 <form id="form" action="https://example.invalid/collect"><input name="q" value="secret"><button id="go">Send</button></form>
 <button id="leave" type="button">Leave</button>
@@ -73,7 +75,7 @@ test.beforeAll(async () => {
     const live = { 'Content-Security-Policy': livePolicy(`${origin}/frame/`), 'X-DNS-Prefetch-Control': 'off', 'Cache-Control': 'no-store' };
     if (req.url === '/app.html') return void res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(APP);
     if (req.url === '/frame/page.html') return void res.writeHead(200, { ...live, 'Content-Type': 'text/html; charset=utf-8' }).end(FRAME);
-    if (req.url === '/frame/helper.js') return void res.writeHead(200, { ...live, 'Content-Type': 'text/javascript; charset=utf-8' }).end(HELPER);
+    if (req.url === '/frame/grunt-live.js') return void res.writeHead(200, { ...live, 'Content-Type': 'text/javascript; charset=utf-8' }).end(HELPER);
     res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
