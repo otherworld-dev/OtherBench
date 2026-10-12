@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
 import { createPlanGate, PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ApprovalRequest, ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
@@ -733,5 +733,34 @@ describe('GruntToolProvider plan mode', () => {
     expect(events).toEqual([]);
     expect(existsSync(join(ws, 'planned.txt'))).toBe(false);
     expect(store.audit.list('chat-1')[0]).toMatchObject({ toolName: 'write_file', grantedBy: 'deny:plan' });
+  });
+});
+
+describe('unattended (scheduled) runs', () => {
+  it('refuses a call that would ask, audits it as deny:unattended, and leaves nothing pending', async () => {
+    const { provider, store, broker } = makeProvider();
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => events.push(e));
+    const shell = (await provider.listTools(policy())).find((t) => t.name === 'run_command')!;
+
+    const out = await shell.execute({ command: 'echo hi' }, ctx({ unattended: true }));
+
+    expect(out).toEqual({ error: true, code: 'approval_unavailable', message: UNATTENDED_REASON });
+    expect(events).toEqual([]);
+    expect(broker.pendingCount).toBe(0);
+    expect(store.audit.list('chat-1')).toEqual([
+      expect.objectContaining({ toolName: 'run_command', grantedBy: 'deny:unattended', resultSummary: 'error: approval_unavailable' }),
+    ]);
+  });
+
+  it("requestApproval refuses Claude Code's ask the same way and never hands it to auto mode", async () => {
+    const { provider, store, broker } = makeProvider();
+    const bash = { name: 'Bash', description: '', parameters: {}, risk: 'execute' as const, source: 'agent' as const, execute: async () => undefined };
+
+    const out = await provider.requestApproval(bash, { command: 'npm test' }, policy(), ctx({ unattended: true }), { deferAsk: true });
+
+    expect(out).toEqual({ allowed: false, reason: UNATTENDED_REASON });
+    expect(broker.pendingCount).toBe(0);
+    expect(store.audit.list('chat-1').map((a) => a.grantedBy)).toEqual(['deny:unattended']);
   });
 });

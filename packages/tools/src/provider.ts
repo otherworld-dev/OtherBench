@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool } from './artifact-tool.js';
 import { recallTool } from './recall-tool.js';
-import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON, type Decision } from '@grunt/core/domain/permissions.js';
 import { UserAsks } from '@grunt/core/domain/user-asks.js';
 import type {
   ApprovalChoice,
@@ -45,9 +45,9 @@ type Authorization = (
   | { ok: true; grantedBy: string }
   | {
       ok: false;
-      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'plan_mode';
+      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'plan_mode' | 'approval_unavailable';
       reason: string;
-      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan';
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:plan' | 'deny:unattended';
     }
 ) & {
   /** The machine a person answered on, when it wasn't this one (v2 spec §3). */
@@ -316,7 +316,7 @@ export class GruntToolProvider implements ToolProvider {
       }
     }
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
       // Auto mode: Claude Code's classifier decides this call. No card, no
       // event and nothing stored -- the pending request is dropped unanswered.
       this.broker.discard(decision.request.id);
@@ -366,6 +366,15 @@ export class GruntToolProvider implements ToolProvider {
     if (ctx.signal.aborted) {
       this.broker.discard(request.id);
       return cancelledAuth();
+    }
+    // A scheduled run (spec 2026-10-12-scheduled-tasks-design §2): nobody can
+    // answer a card, so the request is dropped unanswered -- no waiter, no
+    // event -- and the call is refused with a reason the model can act on.
+    // Every card path comes through here (gated tools, Claude Code's gate,
+    // the sandbox's network ask), so this one check covers them all.
+    if (ctx.unattended === true) {
+      this.broker.discard(request.id);
+      return { ok: false, code: 'approval_unavailable', reason: UNATTENDED_REASON, grantedBy: 'deny:unattended' };
     }
     // Register the waiter BEFORE notifying so a listener that answers
     // synchronously from inside the 'request' event still reaches it.
