@@ -1397,49 +1397,67 @@ this on startup.
 ## Integration (feat/cowork-parity-all)
 
 The sandbox, Office files, remote access with MCP sign-in, thread cards,
-scheduled tasks and live artifacts were built on separate branches from
-8dcbd36 and merged here. Each took the next free migration number on its own
-branch, so they were renumbered once merged. The final order is:
+scheduled tasks, live artifacts and API sub-agents were built on separate
+branches from 8dcbd36 and merged here. Each took the next free migration
+number on its own branch, so they were renumbered once merged. The final
+order is:
 
 - 022 `chat-plan-mode`
 - 023 `schedules`
 - 024 `artifact-version-live`
 - 025 `mcp-oauth`
+- 026 `usage-subagent`
 
 **021 is a trap.** It is kept free for the chat-unread migration, but the
 runner only applies versions above the database's `user_version`. A database
-that this branch, or any feature branch here, has taken to 22-25 would skip a
+that this branch, or any feature branch here, has taken to 22-26 would skip a
 021 committed later: silently, with no error. So chat-unread must land on dev
 and be merged in here before this branch runs on a database that matters. If
-it can't, give it a number after 025, or add its column by hand to every
+it can't, give it a number after 026, or add its column by hand to every
 database already past 21. A dev database at 20, or at 21 with chat-unread,
-runs 022 to 025 normally.
+runs 022 to 026 normally.
 
 The runner trusts `user_version`, so a dev database that a feature branch
-migrated under another numbering can't come here as it is. Migration 025
-checks for that: if `mcp_server.oauth` is already there, it stops with an
+migrated under another numbering can't come here as it is. Migrations 025
+and 026 check for that: if `mcp_server.oauth` (025) or
+`usage.subagent_call_id` (026) is already there, the migration stops with an
 error that points here, rather than skipping or failing on a bare
 duplicate-column error. Each migration commits on its own, so the ones before
-025 still run. Check `PRAGMA user_version` first, with Grunt stopped:
+the one that stopped still run. Check `PRAGMA user_version` first, with Grunt
+stopped:
 
 - **From `feat/remote-access-build`** (022 was `mcp-oauth`: it has
   `mcp_server.oauth` but no `chat.plan_mode`):
   - At 22 (not yet opened here): `ALTER TABLE mcp_server DROP COLUMN oauth;`
-    then `PRAGMA user_version = 20;`. The runner then adds 022 to 025. The
+    then `PRAGMA user_version = 20;`. The runner then adds 022 to 026. The
     sign-in summaries (account, time, a hand-registered client ID) go with
     the column, so a signed-in MCP server may need signing in again.
   - At 24 (opened here once: 023 and 024 ran, then 025 stopped):
     `ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;` then
-    `PRAGMA user_version = 25;`. This keeps the sign-in data. Don't use the
-    first fix here: the runner would then try to create `schedule` again.
+    `PRAGMA user_version = 25;`. This keeps the sign-in data, and the runner
+    then adds 026. Don't use the first fix here: the runner would then try to
+    create `schedule` again.
 - **From this branch before live artifacts were merged** (commits b4bc881 to
   5013bb6, where 024 was `mcp-oauth`): at 24, with `mcp_server.oauth` but no
   `artifact_version.live`, whether or not it has been opened since (025 stops
   before changing anything). Run `ALTER TABLE artifact_version ADD COLUMN live
-  TEXT;` then `PRAGMA user_version = 25;`.
+  TEXT;` then `PRAGMA user_version = 25;`. The runner then adds 026.
+- **From `feat/office-files-build` once sub-agents landed** (0a76225 on,
+  where 022 was `usage-subagent`: it has `usage.subagent_call_id` but no
+  `chat.plan_mode`):
+  - At 22 (not yet opened here): `ALTER TABLE usage DROP COLUMN
+    subagent_call_id;` then `PRAGMA user_version = 20;`. The runner then adds
+    022 to 026. The marks on sub-agent usage rows go with the column, so
+    those rows can no longer be told apart from the reply's own.
+  - At 25 (opened here once: 023 to 025 ran, then 026 stopped):
+    `ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0;` then
+    `PRAGMA user_version = 26;`. This keeps the marks. Don't use the first
+    fix here: the runner would then try to create `schedule` again.
 - **Fine as it is:**
   - From `dev`, `feat/cowork-parity` (the sandbox) or
-    `feat/office-files-build`: 20, or 21 with chat-unread.
+    `feat/office-files-build` before sub-agents (up to 91a0af4): 20, or 21
+    with chat-unread.
+  - From this branch before sub-agents were merged: 25. It runs 026.
   - From `feat/thread-cards-build`: 23 if migrated before b55da3e, or 24 from
     b55da3e on (that commit added `024-artifact-version-live`). Those numbers
     mean the same here, and it runs the rest.

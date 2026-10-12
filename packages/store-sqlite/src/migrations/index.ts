@@ -53,7 +53,7 @@ export const MIGRATIONS: Migration[] = [
   MIGRATION_023_SCHEDULES,
   { version: 24, name: '024-artifact-version-live', sql: MIGRATION_024_ARTIFACT_VERSION_LIVE },
   MIGRATION_025_MCP_OAUTH,
-  { version: 26, name: '026-usage-subagent', sql: MIGRATION_026_USAGE_SUBAGENT },
+  MIGRATION_026_USAGE_SUBAGENT,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
 import { runMigrations, MIGRATIONS, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
 import { MCP_OAUTH_ALREADY_THERE } from '../src/migrations/025-mcp-oauth.js';
+import { USAGE_SUBAGENT_ALREADY_THERE } from '../src/migrations/026-usage-subagent.js';
 import type { DatabaseSync } from 'node:sqlite';
 
 function freshDb(): DatabaseSync {
@@ -97,6 +98,53 @@ describe('runMigrations', () => {
         expect(userVersion(db)).toBe(26);
         expect(columns(db, 'artifact_version')).toContain('live');
         expect(columns(db, 'chat')).toContain('plan_mode');
+      } finally {
+        db.close();
+      }
+    });
+
+    /** A database as feat/office-files-build left it once sub-agents landed: dev's 20, plus usage.subagent_call_id, at 22. */
+    function subagentsDb(): DatabaseSync {
+      const db = freshDb();
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
+      db.exec('ALTER TABLE usage ADD COLUMN subagent_call_id TEXT');
+      db.exec('PRAGMA user_version = 22');
+      return db;
+    }
+
+    it('refuses a sub-agents database at 22 with the pointer, not a bare duplicate-column error, after committing 023 to 025', () => {
+      const db = subagentsDb();
+      try {
+        expect(() => runMigrations(db)).toThrow(USAGE_SUBAGENT_ALREADY_THERE);
+        expect(USAGE_SUBAGENT_ALREADY_THERE).toMatch(/"Integration \(feat\/cowork-parity-all\)" in docs\/HANDOVER\.md/);
+        // Each migration commits on its own: it is left at 25, plan_mode still missing.
+        expect(userVersion(db)).toBe(25);
+        expect(columns(db, 'chat')).not.toContain('plan_mode');
+        // Opening it again changes nothing and refuses the same way.
+        expect(() => runMigrations(db)).toThrow(USAGE_SUBAGENT_ALREADY_THERE);
+        expect(userVersion(db)).toBe(25);
+        // The hand fix for that state keeps the sub-agent usage rows' marks.
+        db.exec('ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 26;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(SCHEMA_VERSION);
+        expect(columns(db, 'chat')).toContain('plan_mode');
+        expect(columns(db, 'usage')).toContain('subagent_call_id');
+        expect(columns(db, 'artifact_version')).toContain('live');
+        expect(columns(db, 'mcp_server')).toContain('oauth');
+        expect(tableNames(db)).toContain('schedule');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('a sub-agents database never opened here is fixed by dropping the column and going back to 20', () => {
+      const db = subagentsDb();
+      try {
+        db.exec('ALTER TABLE usage DROP COLUMN subagent_call_id; PRAGMA user_version = 20;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(26);
+        expect(columns(db, 'chat')).toContain('plan_mode');
+        expect(columns(db, 'usage')).toContain('subagent_call_id');
       } finally {
         db.close();
       }
