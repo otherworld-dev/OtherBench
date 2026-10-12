@@ -214,15 +214,81 @@ describe('AgentPool', () => {
 
   it("does not start a chat's next agent until the old one has finished closing", async () => {
     const order: string[] = [];
-    const { pool, started } = poolWith({ onClosed: (chatId) => order.push(`closed ${chatId}`) }, {});
+    const { pool } = poolWith({
+      start: (chatId) => {
+        order.push(`start ${chatId}`);
+        return scriptedAgent().client;
+      },
+      onClosed: (chatId) => order.push(`closed ${chatId}`),
+    });
     await pool.run('c1', run());
     const releasing = pool.release('c1');
     const next = pool.run('c1', run());
-    await releasing;
-    await next;
-    order.push(`started ${started.length}`);
-    expect(order).toEqual(['closed c1', 'started 2']);
-    expect(started[1]!.channel.runs()).toHaveLength(1);
+    await Promise.all([releasing, next]);
+    expect(order).toEqual(['start c1', 'closed c1', 'start c1']);
+  });
+
+  it('gives a fresh command its own start when the one it would join was cancelled and is still waiting', async () => {
+    const scripts: AgentScript[] = [{ ignoreClose: true }, {}];
+    const started: FakeChannel[] = [];
+    const pool = new AgentPool({
+      idleMs: 10,
+      start: () => {
+        const agent = scriptedAgent(scripts[started.length]);
+        started.push(agent.channel);
+        return agent.client;
+      },
+    });
+    await pool.run('c1', run());
+    // The idle timer closes the first agent, which ignores the close for its whole grace period.
+    await vi.waitFor(() => expect(started[0]!.sent.at(-1)).toEqual({ type: 'close' }));
+    const stop = new AbortController();
+    const stopped = pool.run('c1', run({ signal: stop.signal }));
+    stop.abort();
+    await expect(stopped).rejects.toMatchObject({ code: 'aborted' });
+    const fresh = pool.run('c1', run());
+    started[0]!.emitExit(0);
+    expect((await fresh).exitCode).toBe(0);
+    expect(started).toHaveLength(2);
+  });
+
+  it('survives callbacks that throw', async () => {
+    const { pool, started } = poolWith({
+      idleMs: 10,
+      onClosed: () => {
+        throw new Error('onClosed broke');
+      },
+      onDied: () => {
+        throw new Error('onDied broke');
+      },
+    });
+    await pool.run('c1', run());
+    await pool.run('c2', run());
+    started[1]!.channel.emitExit(137, 'crashed');
+    // c1 idles out (onClosed throws), c2 died (onDied throws): neither may take the pool down.
+    await vi.waitFor(() => expect(pool.size).toBe(0));
+    expect((await pool.run('c3', run())).exitCode).toBe(0);
+  });
+
+  it('treats a start that throws like one that fails: once more, then agent_failed', async () => {
+    let calls = 0;
+    const pool = new AgentPool({
+      start: () => {
+        calls += 1;
+        throw new Error('spawn wsl.exe ENOENT');
+      },
+    });
+    await expect(pool.run('c1', run())).rejects.toThrow('ENOENT');
+    expect(calls).toBe(2);
+    expect(pool.has('c1')).toBe(false);
+  });
+
+  it('refuses commands once closeAll has run', async () => {
+    const { pool, started } = poolWith();
+    await pool.run('c1', run());
+    await pool.closeAll();
+    await expect(pool.run('c2', run())).rejects.toMatchObject({ code: 'agent_failed' });
+    expect(started).toHaveLength(1);
   });
 
   it('release of a chat whose agent has not been started yet cancels the start', async () => {

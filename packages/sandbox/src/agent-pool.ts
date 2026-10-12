@@ -57,6 +57,8 @@ export class AgentPool {
   /** Agents being closed, by chat, until their close has finished and `onClosed` has run. */
   private readonly closing = new Map<string, Promise<void>>();
   private readonly waiters = new Set<() => void>();
+  /** Set by closeAll (Grunt is stopping): nothing may start an agent that would outlive it. */
+  private shutDown = false;
   private readonly maxAgents: number;
   private readonly idleMs: number;
   private readonly busyWaitMs: number;
@@ -76,6 +78,7 @@ export class AgentPool {
   }
 
   async run(chatId: string, run: AgentRun): Promise<AgentOutcome> {
+    if (this.shutDown) throw new SandboxError('agent_failed', 'The sandbox is shutting down.');
     const lease = {};
     const entry = await this.acquire(chatId, run.signal, lease);
     try {
@@ -104,6 +107,7 @@ export class AgentPool {
   }
 
   async closeAll(): Promise<void> {
+    this.shutDown = true;
     for (const starting of this.starting.values()) starting.cancel.abort();
     await Promise.all([...this.starting.values()].map((s) => s.promise.catch(() => undefined)));
     await Promise.all([...this.agents].map(([chatId, entry]) => this.closeEntry(chatId, entry)));
@@ -121,6 +125,8 @@ export class AgentPool {
     // Died since its last command: say so, and start afresh.
     if (existing) this.died(chatId, existing);
     let start = this.starting.get(chatId);
+    // A start nobody wants any more (and that hasn't begun an agent) stays cancelled: this command needs a fresh one.
+    if (start?.cancel.signal.aborted && !start.spawned) start = undefined;
     if (!start) {
       const created: Starting = { promise: undefined as unknown as Promise<Entry>, interested: new Set(), cancel: new AbortController(), spawned: false };
       created.promise = this.startAgent(chatId, created);
@@ -147,6 +153,7 @@ export class AgentPool {
             // Stopped while the agent started: it stays, idle, for the chat's next command.
             entry.leases.delete(lease);
             this.scheduleIdle(chatId, entry);
+            this.wake();
           } else {
             resolve(entry);
           }
@@ -165,18 +172,19 @@ export class AgentPool {
       await this.makeRoom(start);
       let failure: unknown = null;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const client = this.opts.start(chatId);
+        let client: AgentClient | undefined;
         try {
+          client = this.opts.start(chatId);
           await client.ready;
           const entry: Entry = { client, idleTimer: undefined, leases: new Set(start.interested) };
           this.agents.set(chatId, entry);
           this.starting.delete(chatId);
-          void client.exited.then(() => this.died(chatId, entry));
+          void client.exited.then(() => this.died(chatId, entry)).catch(() => undefined);
           this.scheduleIdle(chatId, entry);
           return entry;
         } catch (err) {
           failure = err;
-          await client.close(0).catch(() => undefined);
+          await client?.close(0).catch(() => undefined);
         }
       }
       throw failure instanceof Error ? failure : new SandboxError('agent_failed', String(failure));
@@ -233,21 +241,19 @@ export class AgentPool {
     this.agents.delete(chatId);
     if (!entry.client.alive) {
       // Already gone: that is a death, not a close.
-      this.opts.onDied?.(chatId);
+      this.notify(() => this.opts.onDied?.(chatId));
       this.wake();
       return Promise.resolve();
     }
     const done = (async (): Promise<void> => {
       try {
         await entry.client.close();
-      } finally {
-        this.closing.delete(chatId);
-        try {
-          this.opts.onClosed?.(chatId);
-        } finally {
-          this.wake();
-        }
+      } catch {
+        // Closing a client doesn't fail in practice; if it did, the agent is gone or killed all the same.
       }
+      this.closing.delete(chatId);
+      this.notify(() => this.opts.onClosed?.(chatId));
+      this.wake();
     })();
     this.closing.set(chatId, done);
     return done;
@@ -258,8 +264,17 @@ export class AgentPool {
     if (this.agents.get(chatId) !== entry) return;
     clearTimeout(entry.idleTimer);
     this.agents.delete(chatId);
-    this.opts.onDied?.(chatId);
+    this.notify(() => this.opts.onDied?.(chatId));
     this.wake();
+  }
+
+  /** Tells the owner a chat's agent went; whatever the callback does, it can't break the pool or another chat's command. */
+  private notify(callback: () => void): void {
+    try {
+      callback();
+    } catch {
+      // The pool has nobody to report a failing callback to.
+    }
   }
 
   private scheduleIdle(chatId: string, entry: Entry): void {
@@ -267,7 +282,7 @@ export class AgentPool {
     clearTimeout(entry.idleTimer);
     entry.idleTimer = setTimeout(() => {
       if (entry.client.busy || entry.leases.size > 0) return;
-      void this.closeEntry(chatId, entry);
+      void this.closeEntry(chatId, entry).catch(() => undefined);
     }, this.idleMs);
     entry.idleTimer.unref?.();
   }
