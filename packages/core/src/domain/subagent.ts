@@ -271,7 +271,13 @@ export function cutToolResultForCopy(result: unknown): unknown {
   try {
     text = JSON.stringify(result) ?? String(result);
   } catch {
-    // A circular object or a BigInt: JSON can't hold it, so store it as text.
+    // A BigInt somewhere inside: keep the content, with the BigInts as strings.
+    try {
+      const shown = JSON.stringify(result, (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value));
+      if (shown !== undefined) return shown.length <= SUBAGENT_RESULT_COPY_MAX_CHARS ? (JSON.parse(shown) as unknown) : cutText(shown);
+    } catch {
+      // Circular: fall through to plain text.
+    }
     try {
       return cutText(String(result));
     } catch {
@@ -428,6 +434,7 @@ export class SubagentRunner implements SubagentHost {
     if (this.started >= MAX_SUBAGENTS_PER_REPLY) {
       return subagentError('subagent_limit', `This reply has already started ${MAX_SUBAGENTS_PER_REPLY} sub-agents, the most one reply may. Do the rest of the work yourself.`);
     }
+    // Deliberate: a refusal below (bad profile, bad tools, Stop before start) still counts toward the limit.
     this.started += 1;
     const { description: label, prompt } = parsed.input;
     const callId = ctx.toolCallId !== undefined && !this.callIds.has(ctx.toolCallId) ? ctx.toolCallId : this.deps.generateId();
@@ -491,11 +498,32 @@ export class SubagentRunner implements SubagentHost {
       ? failure.kind === 'cancelled' ? 'cancelled' : 'error'
       : finishReason !== null ? 'complete' : aborted || !slot ? 'cancelled' : 'complete';
     const result = subagentResult({ status, error: failure, finishReason, parts });
-    if (usage) this.deps.writeUsage(chosen, usage, this.deps.now() - startedAt, callId);
+    // The usage row is a synchronous store write that can throw; the card must close either way.
+    if (usage) {
+      try {
+        this.deps.writeUsage(chosen, usage, this.deps.now() - startedAt, callId);
+      } catch (err) {
+        console.error('[SubagentRunner] could not write a sub-agent usage row:', err);
+      }
+    }
     const endStatus: SubagentEndStatus = status === 'complete' && typeof result !== 'string' ? 'error' : status;
     const endError = endStatus === 'error' ? (failure?.message ?? (typeof result === 'string' ? undefined : result.message)) : undefined;
-    this.send(callId, { type: 'end', status: endStatus, ...(endError !== undefined ? { error: endError } : {}), ...(usage ? { usage } : {}) }, true);
+    this.sendEnd(callId, { type: 'end', status: endStatus, ...(endError !== undefined ? { error: endError } : {}), ...(usage ? { usage } : {}) });
     return result;
+  }
+
+  /** The closing event, forced: the broadcast and the stored card each get their try, so one failing can't stop the other. */
+  private sendEnd(callId: string, event: SubagentEvent): void {
+    try {
+      this.deps.emit(callId, event);
+    } catch (err) {
+      console.error('[SubagentRunner] could not broadcast a sub-agent end:', err);
+    }
+    try {
+      this.deps.updateParts((parts) => applySubagentEvent(parts, callId, event), true);
+    } catch (err) {
+      console.error('[SubagentRunner] could not store a sub-agent end:', err);
+    }
   }
 
   private send(callId: string, event: SubagentEvent, force: boolean): void {

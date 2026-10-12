@@ -240,13 +240,18 @@ describe('subagentResult and cutToolResultForCopy', () => {
   it('never throws on a result JSON cannot show: a circular object, a BigInt, a null-prototype object', () => {
     const circular: Record<string, unknown> = {};
     circular['self'] = circular;
-    for (const odd of [circular, 10n, Object.create(null), Object.assign(Object.create(null), { n: 1n })]) {
+    const nullCircular = Object.create(null) as Record<string, unknown>;
+    nullCircular['self'] = nullCircular;
+    for (const odd of [circular, 10n, Object.create(null), nullCircular, Object.assign(Object.create(null), { n: 1n })]) {
       expect(() => cutToolResultForCopy(odd)).not.toThrow();
     }
     // What can't be written as JSON is stored as text, so the stored part stays serialisable.
     expect(typeof cutToolResultForCopy(circular)).toBe('string');
     expect(typeof cutToolResultForCopy(10n)).toBe('string');
-    expect(cutToolResultForCopy(Object.assign(Object.create(null), { n: 1n }))).toBe("[a result Grunt couldn't show]");
+    expect(cutToolResultForCopy(nullCircular)).toBe("[a result Grunt couldn't show]");
     expect(cutToolResultForCopy(Object.create(null))).toEqual({});
+    // A BigInt inside an otherwise normal object keeps the rest of the content, with the BigInt as a string.
+    expect(cutToolResultForCopy({ n: 1n, name: 'x' })).toEqual({ n: '1', name: 'x' });
+    expect(cutToolResultForCopy(Object.assign(Object.create(null), { n: 1n }))).toEqual({ n: '1' });
   });
 });

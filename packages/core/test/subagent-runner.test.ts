@@ -295,4 +295,87 @@ describe('SubagentRunner', () => {
     await h.runner.run({ description: 'C', prompt: 'p' }, h.ctx('same'));
     expect(h.parts().map((p) => (p as SubagentPart).callId)).toEqual(['gen-1', 'same', 'gen-2']);
   });
+
+  it("closes the card even when the usage row can't be written", async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const engine = childEngine(() => answer('Done.'));
+      const h = harness(engine, {
+        writeUsage: () => {
+          throw new Error('SQLITE_BUSY');
+        },
+      });
+      expect(await h.runner.run({ description: 'A', prompt: 'p' }, h.ctx('call-1'))).toBe('Done.');
+      expect(sub(h.parts(), 'call-1')).toMatchObject({ status: 'complete', usage: USAGE });
+      expect(h.events.filter((e) => e.event.type === 'end')).toHaveLength(1);
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('settled() waits for a run that is still going, until its end has been sent', async () => {
+    let release!: () => void;
+    const engine = childEngine(async function* () {
+      await new Promise<void>((resolve) => (release = resolve));
+      yield* answer('late');
+    });
+    const h = harness(engine);
+    const run = h.runner.run({ description: 'A', prompt: 'p' }, h.ctx('call-1'));
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    let settled = false;
+    const waiting = h.runner.settled().then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    release();
+    await waiting;
+    expect(settled).toBe(true);
+    expect(h.events.at(-1)?.event.type).toBe('end');
+    expect(await run).toBe('late');
+  });
+
+  it('frees its slot when listing the tools throws, so the fifth sub-agent still starts', async () => {
+    class FlakyProvider extends FakeToolProvider {
+      calls = 0;
+      override async listTools(policy: ToolPolicy): Promise<ToolSpec[]> {
+        this.calls += 1;
+        if (this.calls === 1) throw new Error('mcp is down');
+        return super.listTools(policy);
+      }
+    }
+    const releases: (() => void)[] = [];
+    let open = 0;
+    let most = 0;
+    const engine = childEngine(async function* () {
+      open += 1;
+      most = Math.max(most, open);
+      await new Promise<void>((resolve) => releases.push(resolve));
+      open -= 1;
+      yield* answer('ok');
+    });
+    const h = harness(engine, {}, new FlakyProvider({ tools: [readFile] }));
+    const runs = Array.from({ length: 5 }, (_, i) => h.runner.run({ description: `Job ${i}`, prompt: 'p' }, h.ctx(`call-${i}`)));
+
+    // The first failed at once, so the other four all run together; with its slot leaked only three would.
+    await vi.waitFor(() => expect(releases).toHaveLength(4));
+    for (const release of releases.splice(0)) release();
+    const results = await Promise.all(runs);
+
+    expect(results[0]).toMatchObject({ error: true, code: 'subagent_failed' });
+    expect(results.slice(1)).toEqual(Array(4).fill('ok'));
+    expect(most).toBeLessThanOrEqual(4);
+    expect(sub(h.parts(), 'call-0')).toMatchObject({ status: 'error' });
+  });
+
+  it("passes the call's tools narrowing on to the tool list", async () => {
+    const engine = childEngine(() => answer('x'));
+    const h = harness(engine);
+    await h.runner.run({ description: 'A', prompt: 'p', tools: { files: 'off' } }, h.ctx('call-1'));
+    expect(engine.requests[0]!.tools.map((t) => t.name)).not.toContain('read_file');
+    await h.runner.run({ description: 'B', prompt: 'p' }, h.ctx('call-2'));
+    expect(engine.requests[1]!.tools.map((t) => t.name)).toContain('read_file');
+  });
 });
