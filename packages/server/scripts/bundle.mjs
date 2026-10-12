@@ -70,5 +70,9 @@ const require_ = createRequire(join(serverDir, 'package.json'));
 await mkdir(join(out, 'assets'), { recursive: true });
 await cp(require_.resolve('mermaid/dist/mermaid.min.js'), join(out, 'assets', 'mermaid.min.js'));
 
+// The sandbox's in-VM files (spec 2026-10-12-sandbox-design): sandbox/ beside
+// cli.js, where @grunt/sandbox's sandboxResourcesDir() looks first.
+await cp(join(repoRoot, 'packages', 'sandbox', 'resources'), join(out, 'sandbox'), { recursive: true });
+
 const { version } = JSON.parse(await readFile(join(serverDir, 'package.json'), 'utf8'));
 console.log(`[bundle] grunt-server ${version} -> ${out} (${copies.join(', ')} alongside)`);

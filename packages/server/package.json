@@ -17,6 +17,7 @@
     "@grunt/core": "*",
     "@grunt/engine-aisdk": "*",
     "@grunt/engine-claude-code": "*",
+    "@grunt/sandbox": "*",
     "@grunt/store-sqlite": "*",
     "@grunt/tools": "*",
     "@hono/node-server": "2.1.3",

@@ -235,6 +235,8 @@ export function chatsRoutes(container: Container): Hono {
         console.error(`[grunt-server] couldn't remove the scratch folder of chat ${id}:`, err)
       );
     }
+    // Its sandbox agent, mounts and home folder in the VM go with it (spec 2026-10-12-sandbox-design). Best effort.
+    await container.sandbox?.release(id).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${id}:`, err));
     return c.body(null, 204);
   });
 

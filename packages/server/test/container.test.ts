@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
+import { FakeSandbox } from '@grunt/core/testing/fakes.js';
+import type { GruntToolProvider } from '@grunt/tools/provider.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
@@ -378,6 +380,39 @@ describe('project memory on startup (final review)', () => {
       await container.memory!.idle();
       expect(container.memory!.lastError('proj')).toBeNull();
       expect(container.store.projectMemory.get('proj')).toBeNull();
+    } finally {
+      container.close();
+    }
+  });
+});
+
+describe('createContainer and the sandbox', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('builds one sandbox, hands it to the tool provider, never sets it up by itself, and closes it with the container', async () => {
+    vi.stubEnv('GRUNT_SANDBOX', 'fake');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    try {
+      const sandbox = container.sandbox as FakeSandbox;
+      expect(sandbox).toBeInstanceOf(FakeSandbox);
+      expect(sandbox.setupCalls).toBe(0);
+      // The provider got it: the sandboxed run_command is relayed for a profile whose shell runs there.
+      const policy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' } as const;
+      expect((container.toolProvider as GruntToolProvider).relayTools(policy).map((t) => t.name)).toEqual(['run_command']);
+      container.close();
+      await vi.waitFor(() => expect(sandbox.closed).toBe(true));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('is unsupported off Windows, so a sandboxed profile gets a refusal rather than a host shell', async () => {
+    const container = await createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json') });
+    try {
+      expect((await container.sandbox!.status()).state).toBe('unsupported');
     } finally {
       container.close();
     }

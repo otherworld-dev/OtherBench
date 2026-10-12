@@ -149,6 +149,8 @@ export function profilesRoutes(container: Container): Hono {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getProfileOrThrow(container, id);
+    // Its chats go with it (ON DELETE CASCADE): so do their sandboxes.
+    const chatIds = container.store.chats.list().filter((chat) => chat.profileId === id).map((chat) => chat.id);
     container.store.profiles.delete(id);
     clearMemoryProfile(container.store, id);
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
@@ -158,6 +160,9 @@ export function profilesRoutes(container: Container): Hono {
     // request; a programming/wiring error is NOT swallowed and surfaces as
     // a 500 on purpose.
     await sweepOrphanedBlobs(container.store, container.blobStore);
+    for (const chatId of chatIds) {
+      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
+    }
     return c.body(null, 204);
   });
 

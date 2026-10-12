@@ -145,7 +145,7 @@ export class AnnounceWithoutTokenError extends Error {
 }
 
 export interface ServeDeps {
-  createContainer: (opts: { dbPath: string; secretsPath: string; peerPort?: number; peerHosts?: string[] }) => Promise<Container>;
+  createContainer: (opts: { dbPath: string; secretsPath: string; peerPort?: number; peerHosts?: string[]; serverPort?: () => number | null }) => Promise<Container>;
   createApp: typeof createApp;
   serve: typeof nodeServe;
   /** Where the announce line goes. Defaults to `process.stdout`. */
@@ -197,16 +197,18 @@ export async function runServe(
   const options = parseServeArgs(argv, env);
   assertServeSecurity(options);
 
+  // Filled in by the listening callback; the Host check reads it per request,
+  // and no request can arrive before the port is bound. The sandbox's
+  // self-test reads it too (0 asks the OS for a port: not known until bound).
+  let boundPort = options.port;
   const container = await buildContainer({
     dbPath: options.dbPath,
     secretsPath: defaultSecretsPath(options.dbPath),
     ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
     peerHosts: options.peerHosts,
+    serverPort: () => (boundPort > 0 ? boundPort : null),
   });
 
-  // Filled in by the listening callback; the Host check reads it per request,
-  // and no request can arrive before the port is bound.
-  let boundPort = options.port;
   const app = buildApp(container, {
     token: options.token,
     webDistDir: defaultWebDistDir(),

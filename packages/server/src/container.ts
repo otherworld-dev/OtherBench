@@ -10,6 +10,7 @@ import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
+import type { Sandbox } from '@grunt/core/ports/sandbox.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
@@ -39,6 +40,7 @@ import { forwardedApi, RemoteRuns } from './peer/forward.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
+import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
 import { AppEventBus, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
@@ -56,6 +58,12 @@ export interface Container {
   streamRegistry: StreamRegistry;
   /** Assembles fs/shell/MCP tools and gates every call behind `PermissionBroker` (task 26) -- shared by `turnRunner` (via `TurnRunnerOptions.toolProvider`) and routes/tools.ts (approval resolution, MCP refresh). */
   toolProvider: ToolProvider;
+  /**
+   * This machine's sandbox for profiles whose shell runs there (spec
+   * 2026-10-12-sandbox-design). Always set by `createContainer`; optional so
+   * route tests can build a Container without one.
+   */
+  sandbox?: Sandbox;
   /** Owns live MCP server connections; `toolProvider` reads its cached tools, routes/tools.ts calls `sync()` after any write to the `mcp_server` table. */
   mcpManager: McpServerManager;
   /**
@@ -111,6 +119,8 @@ export interface ContainerOptions {
   peerHosts?: string[];
   /** Keepalive and idle limits for streams (defaults in stream/sse.ts); tests shorten them. */
   streamTimings?: StreamTimings;
+  /** The port the API ends up on (cli.ts knows it after binding); the sandbox's self-test checks the VM can't reach it. */
+  serverPort?: () => number | null;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -277,7 +287,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   const broker = new PermissionBroker(store);
   const mcpManager = new McpServerManager(store, secrets);
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  // Next to the database, like its attachments; a :memory: database (tests) uses the temp folder.
+  const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `grunt-data-${process.pid}`) : dirname(options.dbPath);
+  const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });
+  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { sandbox });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
@@ -388,6 +401,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     turnRunner,
     streamRegistry,
     toolProvider,
+    sandbox,
     mcpManager,
     claudeScratchRoot,
     blobStore,
@@ -402,6 +416,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       memory.dispose();
       // Claude Code processes kept alive between replies.
       engine.dispose();
+      // The sandbox's agents and mounts. Not awaited, like the tool provider below. Before the store closes: it may still write its state.
+      void sandbox.close().catch((err: unknown) => console.error('[grunt-server] error closing the sandbox:', err));
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting

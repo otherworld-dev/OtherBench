@@ -17,6 +17,7 @@ import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
 import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
+import { sandboxRoutes } from './routes/sandbox.js';
 import { settingsRoutes } from './routes/settings.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
@@ -120,6 +121,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));
+  // This machine's sandbox VM (spec 2026-10-12-sandbox-design). Never on the peer listener.
+  authed.route('/sandbox', sandboxRoutes(container));
   authed.route('/view', viewRoutes(container, viewLinks));
   authed.route('/events', eventsRoutes(container));
   authed.route('/fs', fsRoutes());
