@@ -761,6 +761,14 @@ session and transcript ids that could make a path are refused, every path
 goes through `containPath`, and transcripts are capped at 512 MiB each and
 2 GiB for each folder read.
 
+**Scheduled runs act with nobody watching.** What still runs unattended is
+exactly what needs no card: existing Always grants (exact host-shell commands
+included), read-only tools and read-only MCP tools under "Ask on changes",
+artifacts, web tools a profile allows and, once the sandbox (#935) lands,
+sandboxed commands. A prompt injection in a scheduled run is limited to
+those. The editor's warnings list what will be refused, not what will run.
+There's no spend cap; usage rows are written as normal.
+
 ### Claude Code engine
 
 - Live processes (`engine-claude-code/src/live.ts`). A reply's Claude Code
@@ -944,7 +952,7 @@ These follow spec `docs/superpowers/specs/2026-10-12-thread-cards-design.md` (gi
   - **Allowed while planning.** `thread`, `artifact` and `recall` tools. `fs` and `mcp` tools with risk `read`. Claude Code tools in the categories `file-read`, `web` and `internal`.
   - **Everything else is refused.** That includes any source added later, so the rule fails closed. It only adds refusals: an allowed call still goes on to its grants or card.
   - **Parallel calls.** On the AI SDK path a call made alongside `propose_plan` is refused, as the gate is still closed when it is decided. Claude Code runs Grunt's server tools one at a time and its PreToolUse hook runs just before each tool, so a Write sent in the same message as `propose_plan` reaches the gate after the user approves, and goes on to its normal card. That is not a bypass, the card still applies.
-- **Unattended runs.** `ToolContext.unattended` and `EngineRequest.unattended` are added by this feature, and nothing sets them yet. #925 (scheduled tasks) will. When set, there is no card, no event, no notification and no tab dot. A question gets "Nobody is here to answer: this run is unattended. Use your judgement, carry on, and say in your reply what you assumed." A plan gets "Nobody can approve a plan in this run, so nothing may be changed. Don't propose it again; finish by setting out your plan in your reply.", and the gate stays closed. Unit tests cover both, nothing has run it for real.
+- **Unattended runs.** `ToolContext.unattended` and `EngineRequest.unattended` are added by this feature, and the schedule service now sets them (see Scheduled tasks below). When set, there is no card, no event, no notification and no tab dot. A question gets "Nobody is here to answer: this run is unattended. Use your judgement, carry on, and say in your reply what you assumed." A plan gets "Nobody can approve a plan in this run, so nothing may be changed. Don't propose it again; finish by setting out your plan in your reply.", and the gate stays closed. Unit tests cover both, and the scheduled-tasks e2e runs a refused tool call for real.
 - **Telling you.** A pending question or plan counts like a pending tool approval: the tab dot (label "waiting for you") and a desktop notification, "Waiting for your answer" or "Plan waiting for your approval". The approvals toggle in Settings is now "Approvals, questions and plans".
 - **Known gaps** (the first six are Phase 2 in the spec).
   - Cowork's `TaskCreate` and `TaskUpdate` are not folded into the checklist.
@@ -963,6 +971,18 @@ These follow spec `docs/superpowers/specs/2026-10-12-thread-cards-design.md` (gi
   3. With Plan on: a write is refused, the model proposes a plan, you ask for changes, it proposes again, you approve, and the write then gets its own card.
   4. A question while the window is unfocused raises a desktop notification.
   5. An API profile uses `ask_user` and `update_todos` sensibly.
+
+### Scheduled tasks
+
+Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925). A schedule runs a prompt on a profile daily, on chosen weekdays or monthly, at a set time in the zone of the machine it was made on. It either adds a reply to a fixed chat or starts a new chat in a project (`<name> · 12 Oct 2026`, never auto-titled). The clock button in the sidebar footer opens the Scheduled overlay. "Schedule…" in a chat's or a project's menu opens the editor on that target.
+
+- **Where it lives.** `schedule` and `schedule_run` (migration `023-schedules`) are local. They have no sync triggers, so a schedule runs only on the machine that holds it. Deleting its chat, project or profile deletes it. Archiving its profile leaves it, and its runs record "Didn't run" until the profile is changed.
+- **When it runs.** `ScheduleService` (`packages/server/src/schedule/service.ts`) re-arms one timer for the earliest next run, never more than 30 s away, so sleep and clock changes are caught within 30 s. A schedule that missed slots runs once, marked late if more than 5 minutes past due. At most two scheduled runs go at once. A busy target chat makes its schedule wait, and a schedule still running at its next slot records that slot as "Didn't run". Runs stop after 30 minutes ("Timed out"). On start, a run left running by the previous process is marked as an error. `nextRunAt` moves before a run starts, so a crash never repeats a slot.
+- **Unattended.** Every scheduled run (and Run now) is unattended: `TurnInput.unattended` → `EngineRequest.unattended` → `ToolContext.unattended`. The last two came from thread cards and nothing set them until now. The schedule service sets them, and `TurnInput.unattended` is new. `GruntToolProvider.settle` refuses any call that would raise a card with `approval_unavailable`, audited `deny:unattended` (the Inspector says "refused: nobody to approve (scheduled run)"), and the run's history counts them. Grants, read-only tools under "Ask on changes", artifacts and allowed web tools still run. Thread cards already answer for the model in an unattended run: a question gets the unattended text and a plan stays closed. Claude Code's auto mode is never used in a scheduled run. The flag is only ever set by the service, never from a request body, so the peer listener can't set it.
+- **Sandbox.** The sandbox (#935) is not on this branch. Once it lands, sandboxed commands will run unattended as well. Until then `unattendedWarnings` reads `shellRuns` through a widened type (`ToolPolicy & { shellRuns?: string }`), so every shell command is listed as one that will be refused.
+- **Notifications.** Desktop only, shown even while Grunt is focused (Settings → Desktop → "Scheduled runs"). The run's own "Reply finished" is suppressed.
+- **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
+- **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
 
 ## Encryption at rest
 
@@ -1066,6 +1086,7 @@ this on startup.
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
+- **Scheduled tasks phase 2 isn't built.** Schedules don't sync or move between machines, there are no browser or phone notifications, no "every N hours" or cron rules, no per-schedule timeout and no attachments in the prompt. Deleting a chat or project removes its schedules without a mention in the delete dialog.
 
 ## Deviations from the v2 spec and plan
 
