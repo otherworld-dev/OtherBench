@@ -35,6 +35,10 @@ describe('browser display helpers', () => {
 
   it('revealHidden spells out hidden characters but keeps line breaks and tabs', () => {
     expect(revealHidden('a\u202eb\u200bc\nd\te')).toBe('a<U+202E>b<U+200B>c\nd\te');
+    // Half of a surrogate pair is no character: it is spelled out too, and a whole pair is left alone.
+    expect(revealHidden('a\ud800b')).toBe('a<U+D800>b');
+    expect(revealHidden('\ude00 tail')).toBe('<U+DE00> tail');
+    expect(revealHidden('ok \u{1f600}')).toBe('ok \u{1f600}');
   });
 
   it('displayLines sanitises each line but keeps the line structure and indentation', () => {
