@@ -198,9 +198,12 @@ export function screenToolResult(result: unknown, budget: ToolImageBudget, limit
         forged = true;
         return { type: 'text', text: TOOL_IMAGE_REF_REMOVED };
       }
+      // Past the budget (by count, or by the least the text can decode to) an image is never decoded.
+      const leastBytes = Math.max(0, Math.floor(item.data.length / 4) * 3 - 2);
+      if (budget.images >= limits.maxImages || budget.bytes + leastBytes > limits.maxBytes) return { type: 'text', text: IMAGE_NOT_KEPT_LIMIT };
       const checked = validateToolImage(item);
       if (!checked.ok) return { type: 'text', text: checked.note };
-      if (budget.images >= limits.maxImages || budget.bytes + checked.bytes.length > limits.maxBytes) return { type: 'text', text: IMAGE_NOT_KEPT_LIMIT };
+      if (budget.bytes + checked.bytes.length > limits.maxBytes) return { type: 'text', text: IMAGE_NOT_KEPT_LIMIT };
       budget.images += 1;
       budget.bytes += checked.bytes.length;
       return { type: 'image', data: checked.data, mimeType: checked.mime };

@@ -439,6 +439,17 @@ describe('validateToolImage and screenToolResult (one validator for storing and 
     from.mockRestore();
   });
 
+  it('never decodes an image that is already over the budget', () => {
+    const from = vi.spyOn(Buffer, 'from');
+    const full = { images: MAX_TOOL_IMAGES_PER_MESSAGE, bytes: 0 };
+    expect(screenToolResult([png], full, STORED_IMAGE_LIMITS).result).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT_LIMIT }]);
+    // 4 MB of base64 against 1 KB left: refused on its length alone.
+    const big = { type: 'image', data: 'A'.repeat(4 * 1024 * 1024), mimeType: 'image/png' };
+    expect(screenToolResult([big], { images: 0, bytes: 0 }, { maxImages: 5, maxBytes: 1024 }).result).toEqual([{ type: 'text', text: IMAGE_NOT_KEPT_LIMIT }]);
+    expect(from).not.toHaveBeenCalled();
+    from.mockRestore();
+  });
+
   it('lets through no more than the budget: the count, then the bytes', () => {
     const items = Array.from({ length: 60 }, () => ({ ...png }));
     const out = screenToolResult(items, fresh(), STORED_IMAGE_LIMITS).result as { type: string }[];
