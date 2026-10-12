@@ -920,7 +920,7 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
 These follow spec `docs/superpowers/specs/2026-10-12-thread-cards-design.md` (git-ignored, like the other specs here). They put three things in the thread: a progress checklist, question cards and a Plan mode.
 
 - **Checklist.** It is built from the reply's last `update_todos` call (API profiles) or `TodoWrite` call (Claude Code). Each call carries the whole list, so the newest one replaces the rest. The thread shows it as a checklist in place of a tool row, and the Inspector has a Progress section for the open chat. `parseTodos` is the strict check for `update_todos` input and `readTodos` the lenient one used for display.
-- **Question cards.** The model asks one to four questions of two to four options each. The card always offers a free-text "Other", multi-select answers are joined with ", ", and the user can decline. Option previews are not shown. Answers come back to the model as `User has answered your questions: "Q"="A". You can now continue with the user's answers in mind.`
+- **Question cards.** The model asks one to four questions of two to four options each. The card always offers a free-text "Other", multi-select answers are joined with ", ", and the user can decline. Option previews are not shown. API profiles get the answers back as `User has answered your questions: "Q"="A". You can now continue with the user's answers in mind.` Claude Code's own tool result reads `Your questions have been answered ...` instead (see the probe notes below).
 - **Plan mode.**
   - **Switch.** It is per chat (`chat.plan_mode`, migration `022-chat-plan-mode`, `PATCH /api/chats/:id` with `planMode`; 021 is reserved by other work). The composer has a **Plan** pill (`aria-label="Plan mode"`), saved optimistically and reverted if the save fails. It applies from the next message.
   - **Flow.** While it is on, the model sets out a plan with `propose_plan` and waits. The card offers Approve or "Ask for changes" with a note.
@@ -943,19 +943,21 @@ These follow spec `docs/superpowers/specs/2026-10-12-thread-cards-design.md` (gi
 - **The planning rule.** Until the reply's plan is approved, `decide` (`core/src/domain/permissions.ts`) refuses any call that `allowedWhilePlanning` rejects. The refusal is "Plan mode is on: set out your plan with propose_plan and wait for the user's approval before changing anything.", with no card, audited `deny:plan`.
   - **Allowed while planning.** `thread`, `artifact` and `recall` tools. `fs` and `mcp` tools with risk `read`. Claude Code tools in the categories `file-read`, `web` and `internal`.
   - **Everything else is refused.** That includes any source added later, so the rule fails closed. It only adds refusals: an allowed call still goes on to its grants or card.
+  - **Parallel calls.** On the AI SDK path a call made alongside `propose_plan` is refused, as the gate is still closed when it is decided. Claude Code runs Grunt's server tools one at a time and its PreToolUse hook runs just before each tool, so a Write sent in the same message as `propose_plan` reaches the gate after the user approves, and goes on to its normal card. That is not a bypass, the card still applies.
 - **Unattended runs.** `ToolContext.unattended` and `EngineRequest.unattended` are added by this feature, and nothing sets them yet. #925 (scheduled tasks) will. When set, there is no card, no event, no notification and no tab dot. A question gets "Nobody is here to answer: this run is unattended. Use your judgement, carry on, and say in your reply what you assumed." A plan gets "Nobody can approve a plan in this run, so nothing may be changed. Don't propose it again; finish by setting out your plan in your reply.", and the gate stays closed. Unit tests cover both, nothing has run it for real.
 - **Telling you.** A pending question or plan counts like a pending tool approval: the tab dot (label "waiting for you") and a desktop notification, "Waiting for your answer" or "Plan waiting for your approval". The approvals toggle in Settings is now "Approvals, questions and plans".
-- **Known gaps** (the first five are Phase 2 in the spec).
+- **Known gaps** (the first six are Phase 2 in the spec).
   - Cowork's `TaskCreate` and `TaskUpdate` are not folded into the checklist.
   - Option previews are not shown.
   - The tray's count is tool approvals only.
   - The quick-chat window has no cards.
   - There is no per-profile switch for any of this.
+  - There is no "Approve, and allow file edits for this reply" shortcut on the plan card, so every write still gets its own card after the approval.
   - A subagent's `TodoWrite` replaces the reply's checklist.
   - The model can do something other than the plan it had approved. Each call's own card or grant is still the control.
   - On a paired machine, a reply that runs on the other machine asks for you there, but the question or plan is not announced app-wide on this one (no tab dot, no notification). The card itself shows in the thread through the relayed stream. Remote tool approvals already behave this way.
   - Clean chats on Sonnet have not been probed for `TodoWrite` and `AskUserQuestion` (see the probe notes above).
-- **Live check (manual)** (spec section 9). Not done yet, these need a real Claude Code and a desktop window.
+- **Live check (manual)** (spec section 9). Not done yet, these need a real Claude Code and a desktop window. Run it with a scratch data folder, not your real one, until the migration number is settled. This branch uses 022 while 021 is reserved for other work, and a database that runs 022 first would skip 021 for good.
   1. A Claude Code folder chat on Sonnet shows a checklist.
   2. Claude Code asks through the card, in a folder chat and in a clean chat (the clean chat on Sonnet is the unprobed case).
   3. With Plan on: a write is refused, the model proposes a plan, you ask for changes, it proposes again, you approve, and the write then gets its own card.
