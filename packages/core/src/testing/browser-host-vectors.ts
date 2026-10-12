@@ -122,8 +122,8 @@ export const BROWSER_HOST_VECTORS: readonly BrowserHostVector[] = [
   refused('newline', 'http://example.com/\n'),
   refused('carriage return', 'http://example.com\r/'),
   refused('NUL', 'http://exam\u0000ple.com/'),
-  refused('no-break space', 'http://example.com/ '),
-  refused('line separator', 'http://example.com/ '),
+  refused('no-break space', 'http://example.com/\u00a0'),
+  refused('line separator', 'http://example.com/\u2028'),
   refused('file scheme', 'file:///etc/passwd'),
   refused('ftp scheme', 'ftp://example.com/'),
   refused('websocket scheme', 'ws://example.com/'),
