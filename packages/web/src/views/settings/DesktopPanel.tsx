@@ -122,7 +122,7 @@ export function DesktopPanel(): JSX.Element {
         )}
       </div>
       <fieldset className="space-y-2">
-        <legend className="mb-1 font-medium">Notifications while Grunt isn't focused</legend>
+        <legend className="mb-1 font-medium">Desktop notifications</legend>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={notify.replies} onChange={(e) => setNotifyPref('replies', e.target.checked)} />
           When a reply finishes
