@@ -9,7 +9,7 @@ import type { GruntToolProvider } from '@grunt/tools/provider.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
-import { createContainer, resolveSecretsPassphrase } from '../src/container.js';
+import { createContainer, realFolderPath, resolveSecretsPassphrase } from '../src/container.js';
 
 let dir: string;
 
@@ -439,5 +439,15 @@ describe('createContainer and the sandbox', () => {
     } finally {
       container.close();
     }
+  });
+});
+
+describe('realFolderPath', () => {
+  it('gives a folder its on-disk case where the file system ignores case, and a path it cannot read back unchanged', async () => {
+    await writeFile(join(dir, 'probe.txt'), '');
+    const upper = join(dir, 'PROBE.TXT');
+    if (process.platform === 'win32') expect(realFolderPath(upper)).toBe(join(realFolderPath(dir), 'probe.txt'));
+    const missing = join(dir, 'Not-There');
+    expect(realFolderPath(missing)).toBe(missing);
   });
 });

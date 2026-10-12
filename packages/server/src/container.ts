@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -126,6 +126,15 @@ export interface ContainerOptions {
   streamTimings?: StreamTimings;
   /** The port the API ends up on (cli.ts knows it after binding); the sandbox's self-test checks the VM can't reach it. */
   serverPort?: () => number | null;
+}
+
+/** A folder's real path (on-disk case, a mapped drive as its UNC path), as the sandbox mounts it; the path itself when that can't be read. */
+export function realFolderPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
 }
 
 function isEnoent(err: unknown): boolean {
@@ -323,6 +332,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   const turnRunner = new TurnRunner(store, engine, {
     toolProvider,
+    // The sandbox mounts a folder at its real path (on-disk case), so the prompt names that one.
+    canonicalPath: realFolderPath,
     // Closes the gap `engine.ts`'s own docstring calls out (task 14):
     // `AiSdkChatEngine` has no filesystem/store access of its own, so
     // without this every real (vision-on) image/file part would fail with
