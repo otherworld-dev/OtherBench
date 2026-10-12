@@ -290,6 +290,7 @@ export async function runServe(
     webDistDir: defaultWebDistDir(),
     corsOrigins: options.corsOrigins,
     hostCheckPort: isLoopbackHost(options.host) || remote ? () => boundPort : undefined,
+    oauthCallbackPort: () => boundPort,
     remote,
   });
 

@@ -20,6 +20,8 @@ import { profilesRoutes } from './routes/profiles.js';
 import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
 import { settingsRoutes } from './routes/settings.js';
+import { mcpSignInRoutes, oauthRedirectUri } from './routes/mcp-sign-in.js';
+import { oauthCallbackRoutes } from './routes/oauth-callback.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
@@ -68,6 +70,13 @@ export interface AppOptions {
    * in open and token modes, which behave exactly as before.
    */
   remote?: RemoteAccess | null;
+  /**
+   * The port the server actually bound, for MCP sign-in's redirect address
+   * `http://127.0.0.1:<port>/oauth/callback` (spec 2026-10-12-mcp-oauth-design §5).
+   * Unset (most tests): sign-in answers 503. In sign-in mode the redirect is
+   * the first public origin instead, and this port is not used.
+   */
+  oauthCallbackPort?: () => number;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
@@ -139,6 +148,12 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // chatsRoutes/turnsRoutes: those own /chats, /chats/:id, /chats/:id/messages,
   // /chats/:id/turns, /chats/:id/stream, /chats/:id/head, /messages/:id/cancel.
   authed.route('/', toolsRoutes(container));
+  // MCP sign-in (spec 2026-10-12-mcp-oauth-design §5): full paths under /mcp-servers/:id/sign-in… and /mcp-servers/sign-in/redirect-uri. No collisions with toolsRoutes: GET /mcp-servers/:id matches two segments only.
+  // In sign-in mode Grunt's own port may speak only HTTPS, so the loopback http address wouldn't load: the redirect is the public origin (it passes the Host check, and works behind a trusted proxy).
+  const publicOrigin = remote?.publicOrigins[0] ?? null;
+  const redirectUri = (): string | null =>
+    remote ? (publicOrigin ? `${publicOrigin}/oauth/callback` : null) : oauthRedirectUri(options.oauthCallbackPort?.());
+  authed.route('/', mcpSignInRoutes(container, redirectUri));
   // attachmentsRoutes, like turnsRoutes/toolsRoutes, defines full paths under
   // two different prefixes (/chats/:id/attachments, /attachments/:id[/content])
   // rather than one fixed one, so it also mounts at the authed app's own
@@ -148,6 +163,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   app.route('/api', authed);
   // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
   app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts, clientOf));
+
+  // MCP sign-in's redirect lands here, in every mode: no token or session (the system browser has none), Host check still applies, its own headers. Before the static UI, which would answer every other path.
+  app.route('/oauth', oauthCallbackRoutes(container));
 
   // Sign-in with --tls auto: the CA a device installs to trust Grunt (spec §4). No sign-in needed:
   // it's public, and the device checks its fingerprint against what `grunt serve` printed.

@@ -225,10 +225,11 @@ describe('runServe desktop mode', () => {
 
     await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
 
-    const appOptions = deps.createApp.mock.calls[0]![1] as { token: string; corsOrigins: string[]; hostCheckPort?: () => number };
+    const appOptions = deps.createApp.mock.calls[0]![1] as { token: string; corsOrigins: string[]; hostCheckPort?: () => number; oauthCallbackPort?: () => number };
     expect(appOptions.token).toBe('tok');
     expect(appOptions.corsOrigins).toEqual(['http://tauri.localhost']);
     expect(appOptions.hostCheckPort?.()).toBe(EPHEMERAL_PORT);
+    expect(appOptions.oauthCallbackPort?.()).toBe(EPHEMERAL_PORT);
   });
 
   it('applies no Host check when bound to a non-loopback address', async () => {
@@ -237,8 +238,9 @@ describe('runServe desktop mode', () => {
 
     await runServe(['--host', '0.0.0.0', '--token', 'secret'], { ...deps, ...io }, {});
 
-    const appOptions = deps.createApp.mock.calls[0]![1] as { hostCheckPort?: () => number };
+    const appOptions = deps.createApp.mock.calls[0]![1] as { hostCheckPort?: () => number; oauthCallbackPort?: () => number };
     expect(appOptions.hostCheckPort).toBeUndefined();
+    expect(appOptions.oauthCallbackPort).toBeDefined(); // the callback still works when 127.0.0.1 is among the bound addresses
   });
 
   it('writes nothing to stdout and ignores stdin outside announce mode (browser mode unchanged)', async () => {
