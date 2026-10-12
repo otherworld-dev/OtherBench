@@ -1364,6 +1364,47 @@ this on startup.
   chat making one with relayed tool names; viewing from the paired laptop.
 - **Scheduled tasks phase 2 isn't built.** Schedules don't sync or move between machines, there are no browser or phone notifications, no "every N hours" or cron rules, no per-schedule timeout and no attachments in the prompt. Deleting a chat or project removes its schedules without a mention in the delete dialog.
 
+## Integration (feat/cowork-parity-all)
+
+The sandbox, Office files, remote access with MCP sign-in, thread cards,
+scheduled tasks and live artifacts were built on separate branches from
+8dcbd36 and merged here. Each took the next free migration number on its own
+branch, so they were renumbered once merged. The final order is:
+
+- 022 `chat-plan-mode`
+- 023 `schedules`
+- 024 `artifact-version-live`
+- 025 `mcp-oauth`
+
+021 stays free for the chat-unread migration. The runner applies every
+version above the database's `user_version` in order, so the gap needs
+nothing.
+
+The runner trusts `user_version`, so a dev database that a feature branch
+migrated with a different number can't come here as it is:
+
+- **Recreate it (or fix it by hand):**
+  - A database from `feat/remote-access-build`: `user_version` 22, with
+    `mcp_server.oauth` but no `chat.plan_mode`. Here it skips 022, so plan
+    mode is missing, and 025 then fails ("duplicate column name: oauth").
+  - A database from this branch before live artifacts were merged (commits
+    b4bc881 to 5013bb6, where 024 was `mcp-oauth`): `user_version` 24, with
+    `mcp_server.oauth` but no `artifact_version.live`. Here it skips 024, so
+    live declarations are missing, and 025 fails the same way.
+- **Fine as it is:**
+  - A database from `dev`, `feat/cowork-parity` (the sandbox) or
+    `feat/office-files-build`: `user_version` 20, or 21 with the chat-unread
+    migration. It runs 022 to 025.
+  - A database from `feat/thread-cards-build`: 23 at ec65b4a, or 24 from
+    eb31223 on. Those numbers mean the same here, and it runs the rest.
+
+To fix one by hand instead, with Grunt stopped, take the MCP sign-in column
+out and wind the version back to the last migration the two numberings
+agree on, so the runner adds everything after it: `ALTER TABLE mcp_server
+DROP COLUMN oauth;` then `PRAGMA user_version = 20;` (from the remote-access
+branch) or `PRAGMA user_version = 23;` (from this branch before live
+artifacts). The sign-in summaries (account, time, a hand-registered client ID) go with the column, so a signed-in MCP server may need signing in again.
+
 ## Deviations from the v2 spec and plan
 
 | Plan or spec said | Built | Why |
