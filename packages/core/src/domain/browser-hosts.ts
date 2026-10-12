@@ -163,8 +163,16 @@ export function isIpLiteral(host: string): boolean {
   return parseIPv4(host) !== null || parseIPv6(host) !== null;
 }
 
+/*
+ * The two tables below are the whole of "not the public internet", with the
+ * three IPv6 forms that carry an IPv4 address (see isPublicV6). The sandbox's
+ * agent in the VM can't import core, so it keeps a copy of both
+ * (sandbox/resources/agent-core.mjs): sandbox/test/agent-addresses.test.ts
+ * fails when the copy differs. Change a range here and there together.
+ */
+
 /** IPv4 ranges that are not the public internet: [a, b, c, d, prefix length]. */
-const V4_NOT_PUBLIC: readonly (readonly [number, number, number, number, number])[] = [
+export const V4_NOT_PUBLIC: readonly (readonly [number, number, number, number, number])[] = [
   [0, 0, 0, 0, 8], // "this network"
   [10, 0, 0, 0, 8],
   [100, 64, 0, 0, 10], // CGNAT
@@ -182,17 +190,30 @@ const V4_NOT_PUBLIC: readonly (readonly [number, number, number, number, number]
   [240, 0, 0, 0, 4], // reserved, broadcast
 ];
 
+/**
+ * Blocks of global unicast (2000::/3) that are not the public internet either:
+ * [first word, second word, prefix length], the prefix 32 at most. 6to4
+ * (2002::/16) isn't one of them: it is judged by the IPv4 address it carries.
+ */
+export const V6_GLOBAL_NOT_PUBLIC: readonly (readonly [number, number, number])[] = [
+  [0x2001, 0x0000, 23], // IETF protocol assignments (Teredo, ORCHID, ...)
+  [0x2001, 0x0db8, 32], // documentation
+  [0x3fff, 0x0000, 20], // documentation (RFC 9637)
+];
+
 function v4Int(o: readonly number[]): number {
   return ((o[0]! << 24) | (o[1]! << 16) | (o[2]! << 8) | o[3]!) >>> 0;
 }
 
+/** Whether two 32-bit numbers have the same first `prefix` bits. */
+function samePrefix(x: number, y: number, prefix: number): boolean {
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return ((x & mask) >>> 0) === ((y & mask) >>> 0);
+}
+
 function isPublicV4(o: readonly number[]): boolean {
   const ip = v4Int(o);
-  for (const [a, b, c, d, prefix] of V4_NOT_PUBLIC) {
-    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
-    if (((ip & mask) >>> 0) === ((v4Int([a, b, c, d]) & mask) >>> 0)) return false;
-  }
-  return true;
+  return !V4_NOT_PUBLIC.some(([a, b, c, d, prefix]) => samePrefix(ip, v4Int([a, b, c, d]), prefix));
 }
 
 function v4Of(w: readonly number[], at: number): number[] {
@@ -207,9 +228,8 @@ function isPublicV6(w: readonly number[]): boolean {
   // Only 2000::/3 is global unicast: this also refuses ::, ::1, ::a.b.c.d,
   // 100::/64, 64:ff9b:1::/48, fc00::/7, fe80::/10, fec0::/10 and ff00::/8.
   if ((w[0]! & 0xe000) !== 0x2000) return false;
-  if (w[0] === 0x2001 && w[1]! < 0x0200) return false; // 2001::/23 IETF assignments (Teredo, ORCHID, ...)
-  if (w[0] === 0x2001 && w[1] === 0x0db8) return false; // documentation
-  if (w[0] === 0x3fff && w[1]! < 0x1000) return false; // documentation (RFC 9637)
+  const top = ((w[0]! << 16) | w[1]!) >>> 0;
+  if (V6_GLOBAL_NOT_PUBLIC.some(([a, b, prefix]) => samePrefix(top, ((a << 16) | b) >>> 0, prefix))) return false;
   if (w[0] === 0x2002) return isPublicV4(v4Of(w, 1)); // 6to4: as its IPv4 address
   return true;
 }
