@@ -6,6 +6,7 @@
     { "path": "packages/engine-aisdk" },
     { "path": "packages/engine-claude-code" },
     { "path": "packages/tools" },
+    { "path": "packages/sandbox" },
     { "path": "packages/server" },
     { "path": "packages/web" }
   ]
