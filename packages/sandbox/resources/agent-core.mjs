@@ -68,7 +68,12 @@ export const DENY_READ = ['/mnt', '/home', '/tmp'];
  * `deniedResolvedAddresses`: the private-use ranges (RFC 1918, CGNAT, unique
  * local), multicast, the reserved block and benchmarking. Loopback and
  * link-local are listed too, though the runtime refuses them anyway. Mirrors
- * isPrivateAddress below and the ranges in core's network-hosts.ts.
+ * isPrivateAddress below. This script can't import core, so both are its own
+ * copy of the ranges, which in core now live in browser-hosts.ts
+ * (isPublicAddress; network-hosts.ts uses that). The copy is looser for a few
+ * special ranges: core's testing/shared-host-vectors.ts pins each one, and
+ * sandbox/test/shared-address-vectors.test.ts runs that table against
+ * isPrivateAddress.
  */
 export const DENIED_RESOLVED_ADDRESSES = [
   '10.0.0.0/8',
