@@ -22,28 +22,79 @@ export function browserCommandRisk(command: BrowserCommand): RiskClass {
   return BROWSER_READ_COMMANDS.has(command) ? 'read' : 'mutate';
 }
 
-/** A hostname as the broker and the proxy compare it: trimmed, lower-case, no trailing dot, an IPv6 literal without brackets. Null when nothing is left. */
-export function normaliseHost(hostname: string): string | null {
-  let host = hostname.trim().toLowerCase();
+/*
+ * One parser, the one Chromium uses. Every host Grunt compares (a card's site,
+ * a grant, the blocklist, the private-address refusal, the proxy) comes out of
+ * WHATWG `new URL()` and the single normalisation in `hostOf`: IDNA/punycode,
+ * lower case, IPv4 in any spelling as a dotted quad (`2130706433`, `0x7f.1`,
+ * `0177.0.0.1`), IPv6 compressed (v4-mapped as hex words), then one trailing
+ * dot dropped and brackets removed. Nothing here hand-parses a host out of a
+ * string, and nothing compares raw text. Input that parsers could read
+ * differently (userinfo, backslashes, whitespace, control characters, other
+ * schemes, empty hosts) is refused, never repaired.
+ */
+
+/** Whitespace (any Unicode kind), control characters and backslashes: refused anywhere in raw input. */
+const UNSAFE_RAW = /[\s\u0000-\u001f\u007f-\u009f\\]/;
+
+/** The canonical host of a parsed http(s) URL: brackets off, one trailing dot off. Null when nothing sensible is left. */
+function hostOf(url: URL): string | null {
+  let host = url.hostname;
   if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
-  while (host.endsWith('.')) host = host.slice(0, -1);
-  return host.length > 0 ? host : null;
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  if (host === '' || host.startsWith('.') || host.endsWith('.') || host.includes('..')) return null;
+  return host;
 }
 
 /**
- * The website an address is on: its normalised hostname (WHATWG `URL`, so an
- * IDN comes back as punycode and `http://2130706433/` as `127.0.0.1`), port
- * dropped. Null for anything but http and https.
+ * A bare host (no scheme, port or path) as the broker and the proxy compare
+ * it: the host Chromium would connect to for `http://<host>/`, canonical (see
+ * above). Null for anything that isn't exactly a hostname or IP address:
+ * whitespace, control characters, `\`, `/ ? # @`, a port, userinfo, nothing.
+ * An IPv6 address may be given with or without brackets.
  */
-export function siteOf(url: string): string | null {
-  let parsed: URL;
+export function normaliseHost(hostname: string): string | null {
+  if (typeof hostname !== 'string' || hostname === '' || UNSAFE_RAW.test(hostname) || /[/?#@]/.test(hostname)) return null;
+  const bracketed = hostname.startsWith('[') && hostname.endsWith(']');
+  const authority = !bracketed && hostname.includes(':') ? `[${hostname}]` : hostname;
+  let url: URL;
   try {
-    parsed = new URL(url);
+    url = new URL(`http://${authority}`);
   } catch {
     return null;
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-  return normaliseHost(parsed.hostname);
+  if (url.username !== '' || url.password !== '' || url.port !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '') return null;
+  return hostOf(url);
+}
+
+/**
+ * The website an address is on: the canonical host of an http or https URL
+ * (see above), port dropped. Null for anything else, and for an address with
+ * userinfo (an `@` anywhere in the raw authority), a backslash, whitespace or
+ * a control character: those are refused, not repaired.
+ */
+export function siteOf(raw: string): string | null {
+  return parseBrowserUrl(raw)?.site ?? null;
+}
+
+function parseBrowserUrl(raw: string): { site: string; port: number } | null {
+  if (typeof raw !== 'string' || raw === '' || UNSAFE_RAW.test(raw)) return null;
+  // An `@` before the path: userinfo, however empty. (The scheme and slashes
+  // are skipped only to find where the authority starts; the host itself
+  // always comes from the parser.)
+  const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/*/i, '').split(/[/?#]/, 1)[0] ?? '';
+  if (authority.includes('@')) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (url.username !== '' || url.password !== '') return null;
+  const site = hostOf(url);
+  if (site === null) return null;
+  return { site, port: url.port !== '' ? Number(url.port) : url.protocol === 'https:' ? 443 : 80 };
 }
 
 function parseIPv4(s: string): number[] | null {
@@ -97,7 +148,11 @@ function parseIPv6(input: string): number[] | null {
   return head.length === total ? [...head, ...v4Tail] : null;
 }
 
-/** True for an IPv4 or IPv6 address (no brackets). */
+/**
+ * True for an IPv4 dotted quad or an IPv6 address (no brackets). Strict: it
+ * judges the CANONICAL host only (`normaliseHost` / `siteOf` output), where
+ * every IPv4 spelling is already a dotted quad; `0x7f.1` is not a literal here.
+ */
 export function isIpLiteral(host: string): boolean {
   return parseIPv4(host) !== null || parseIPv6(host) !== null;
 }
@@ -198,6 +253,23 @@ export function browserHostDenial(
   }
   if (isLocalName(h)) return `${h} is a local network name. The model's browser can't reach it.`;
   return null;
+}
+
+/**
+ * The whole judgement of one address: its site (`siteOf`), the port it is on
+ * (80 or 443 when the address names none), and why it is refused (null when
+ * it may be used). An address with no usable site is refused. The proxy and
+ * the shared test vectors (`testing/browser-host-vectors.ts`) go through
+ * this, so a card, a grant and a connection can never disagree about a host.
+ */
+export function browserUrlCheck(
+  raw: string,
+  policy: { browserBlockedHosts?: readonly string[] },
+  opts: Omit<HostCheckOptions, 'port'> = {}
+): { site: string | null; port: number | null; denial: string | null } {
+  const parsed = parseBrowserUrl(raw);
+  if (!parsed) return { site: null, port: null, denial: browserHostDenial(null, policy, opts) };
+  return { site: parsed.site, port: parsed.port, denial: browserHostDenial(parsed.site, policy, { ...opts, port: parsed.port }) };
 }
 
 function loopbackEscape(opts: HostCheckOptions): boolean {

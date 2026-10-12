@@ -3,6 +3,7 @@ import { PermissionBroker, type Decision } from '../src/domain/permissions.js';
 import type { RiskClass, ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
+import { BROWSER_HOST_VECTORS } from '../src/testing/browser-host-vectors.js';
 
 const tool = (o: Partial<ToolSpec> = {}): ToolSpec => ({ name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => null, ...o });
 const BROWSER = (risk: RiskClass = 'mutate') => tool({ risk });
@@ -95,6 +96,29 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
   it('never lets a browser grant without a site match anything', () => {
     store.grants.create({ id: 'g', chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: null, expiresAt: null });
     expect(broker.decide(BROWSER(), open(), policy(), ctx())).toMatchObject({ kind: 'ask' });
+  });
+
+  it('stores an "always" grant under the canonical host, and matches it across spellings', () => {
+    const ask = expectAsk(broker.decide(BROWSER(), open('bücher.example'), policy(), ctx()));
+    broker.resolve(ask.request.id, { choice: 'always', constraint: { host: 'BÜCHER.example.' } });
+    expect(store.grants.list()).toEqual([expect.objectContaining({ scope: 'always', constraint: { host: 'xn--bcher-kva.example' } })]);
+    expect(broker.decide(BROWSER(), open('xn--bcher-kva.example'), policy(), ctx({ chatId: 'chat-9' }))).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    // A stored grant is compared by canonical host too, so an older spelling still matches.
+    store.grants.create({ id: 'old', chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'Example.COM.' }, expiresAt: null });
+    expect(broker.decide(BROWSER(), open('example.com'), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+  });
+
+  it('decides every shared host vector the way the rest of Grunt does (a refused address names no host)', () => {
+    const always = policy({ approvalMode: 'always_ask' });
+    for (const v of BROWSER_HOST_VECTORS) {
+      // The broker knows no port, so a row about the loopback escape is the proxy's to judge.
+      if (v.allowLoopbackPorts) continue;
+      const args: Record<string, unknown> = { command: 'open', url: v.input };
+      if (v.site !== null) args['host'] = v.site;
+      const decision = broker.decide(BROWSER(), args, { ...always, browserBlockedHosts: v.blockedHosts }, ctx());
+      expect(decision.kind === 'deny', `${v.note}: ${JSON.stringify(v.input)}`).toBe(v.denied);
+      if (decision.kind === 'ask') broker.discard(decision.request.id);
+    }
   });
 
   it('lets 127.0.0.1 through only when the test escape is configured', () => {

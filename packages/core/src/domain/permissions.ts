@@ -334,11 +334,15 @@ export class PermissionBroker {
 
     // A browser grant is for the one site the card named, never blanket and
     // never a different site than the one the person was shown.
+    // The stored constraint is the canonical host alone, so a stored grant
+    // matches exactly whatever spelling the answer came in.
+    let constraint = choice.constraint;
     if (pending.tool.source === 'browser') {
       const host = hostForGrant(pending);
       if (normaliseHost(choice.constraint?.host ?? '') !== host) {
         throw new Error(`Refusing an "always" grant for the browser that doesn't name the site the card asked about (${host}).`);
       }
+      constraint = { host };
     }
 
     this.store.grants.create({
@@ -348,7 +352,7 @@ export class PermissionBroker {
       toolName: pending.tool.name,
       source: pending.tool.source,
       scope: 'always',
-      constraint: choice.constraint,
+      constraint,
       expiresAt: null,
     });
   }
@@ -561,9 +565,11 @@ function grantConstraintMatches(grant: Grant, args: unknown, ctx: ToolContext): 
     return command !== null && commandPrefixMatches(constraint.commandPrefix, command);
   }
   if (constraint.host !== undefined) {
-    // Exact, ignoring case: a grant never covers a subdomain.
-    const host = stringField(args, 'host');
-    return host !== null && host.toLowerCase() === constraint.host.toLowerCase();
+    // Exact on the canonical host (so case, a trailing dot, an IDN or an IP
+    // spelling can't differ): a grant never covers a subdomain.
+    const want = normaliseHost(constraint.host);
+    const got = normaliseHost(stringField(args, 'host') ?? '');
+    return want !== null && got !== null && want === got;
   }
   return false;
 }

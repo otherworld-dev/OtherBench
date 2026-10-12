@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { BROWSER_HOST_VECTORS } from '../src/testing/browser-host-vectors.js';
 import {
   BROWSER_COMMANDS,
   browserCommandRisk,
   browserHostDenial,
+  browserUrlCheck,
   isLocalName,
   isPublicAddress,
   normaliseHost,
@@ -36,11 +38,41 @@ describe('siteOf', () => {
 });
 
 describe('normaliseHost', () => {
-  it('lower-cases, strips brackets and trailing dots, and is null when nothing is left', () => {
-    expect(normaliseHost(' Example.COM. ')).toBe('example.com');
+  it('gives the canonical host: lower case, one trailing dot and brackets dropped, IDN as punycode', () => {
+    expect(normaliseHost('Example.COM.')).toBe('example.com');
     expect(normaliseHost('[::1]')).toBe('::1');
-    expect(normaliseHost('.')).toBeNull();
-    expect(normaliseHost('')).toBeNull();
+    expect(normaliseHost('::1')).toBe('::1');
+    expect(normaliseHost('BÜCHER.example')).toBe('xn--bcher-kva.example');
+  });
+
+  it('writes IPv4 in any spelling as a dotted quad, and IPv6 compressed', () => {
+    for (const h of ['2130706433', '0x7f.1', '0177.0.0.1', '127.1', '127.0.0.1.']) expect(normaliseHost(h), h).toBe('127.0.0.1');
+    expect(normaliseHost('[0:0:0:0:0:0:0:1]')).toBe('::1');
+    expect(normaliseHost('::FFFF:192.168.1.1')).toBe('::ffff:c0a8:101');
+  });
+
+  it('is null for anything that is not exactly a hostname or address', () => {
+    for (const h of ['', '.', '..', ' example.com', 'example.com ', 'exa mple.com', 'a\tb', 'example.com\n', 'a\\b', 'a@b.com', 'good@evil.com', 'example.com/x', 'example.com?x', 'example.com#x', 'example.com:80', 'example.com..', '[::1', 'a%zz']) {
+      expect(normaliseHost(h), JSON.stringify(h)).toBeNull();
+    }
+  });
+});
+
+describe('the shared host vectors (also run through the egress proxy in @grunt/tools)', () => {
+  it.each(BROWSER_HOST_VECTORS.map((v) => [v.note, v] as const))('%s', (_note, v) => {
+    const check = browserUrlCheck(v.input, { browserBlockedHosts: v.blockedHosts }, { allowLoopbackPorts: v.allowLoopbackPorts });
+    expect(check.site, JSON.stringify(v.input)).toBe(v.site);
+    expect(check.denial !== null, JSON.stringify(v.input)).toBe(v.denied);
+    expect(siteOf(v.input)).toBe(v.site);
+    // A refused address never has a port, and a usable one always does.
+    expect(check.port === null).toBe(v.site === null);
+  });
+
+  it('covers every kind of case the review asked for', () => {
+    const sites = BROWSER_HOST_VECTORS.filter((v) => v.site === null).length;
+    expect(sites).toBeGreaterThanOrEqual(25);
+    expect(BROWSER_HOST_VECTORS.filter((v) => v.denied && v.site !== null).length).toBeGreaterThanOrEqual(40);
+    expect(BROWSER_HOST_VECTORS.filter((v) => !v.denied).length).toBeGreaterThanOrEqual(10);
   });
 });
 
