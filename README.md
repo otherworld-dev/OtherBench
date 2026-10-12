@@ -142,6 +142,81 @@ sync both ways. Grants, MCP servers and the audit log stay on each machine.
 `grunt serve` takes `--peer-port` and `--peer-host` to choose where it
 listens for paired machines.
 
+## Use it from another device
+
+`grunt serve` can run on an always-on box and be used from a laptop's or a
+phone's browser, behind a password and HTTPS. The desktop app and the
+loopback browser mode don't change.
+
+1. **Set a password** on the box, at least 12 characters:
+
+   ```sh
+   grunt password            # or: node packages/server/dist/cli.js password
+   ```
+
+   It goes in `login.json` beside `secrets.json` (`~/.grunt/` by default; pass
+   the same `--db` as `serve`). Run it again any time, even while the server
+   runs, to change it; every signed-in device is then signed out.
+
+2. **Start the server with the address the browser will type**, and an HTTPS
+   route. With Grunt's own certificate:
+
+   ```sh
+   grunt serve --host 0.0.0.0 --public-url https://192.168.1.20:4747 --public-url https://box.lan:4747 --tls auto
+   ```
+
+   `--public-url` can be given more than once; each is `https://host[:port]`.
+   The other routes are your own certificate files (`--tls-cert <file>
+   --tls-key <file>`, for example from mkcert or `tailscale cert`) or an
+   HTTPS proxy in front (`--trust-proxy <its IP>`).
+
+3. **Trust the certificate** on each device (with `--tls auto`). First, on
+   the box, note the SHA-256 fingerprint `grunt serve` prints. Then:
+   - **Windows:** open `https://<public url>/grunt-ca.crt` (accept the one
+     warning), open the file, *Install Certificate* → *Current User* →
+     *Trusted Root Certification Authorities*. Edge and Chrome use it. If
+     Firefox still warns, import the file under its own *Settings* →
+     *Certificates* → *Authorities*.
+   - **macOS:** open the file in Keychain Access and set it to *Always Trust*.
+   - **iPhone/iPad:** open the URL in Safari, tap through the warning and
+     allow the profile download; *Settings* → *Profile Downloaded* →
+     *Install*; then *Settings* → *General* → *About* → *Certificate Trust
+     Settings* and turn it on. Check the SHA-256 under the profile's *More
+     Details*.
+   - **Android:** download it in Chrome, then *Settings* → *Security* →
+     *Encryption & credentials* → *Install a certificate* → *CA certificate*
+     (the path varies by phone). Firefox for Android needs *Use third party
+     CA certificates* in its secret settings.
+
+   Check the fingerprint on the device against the one the server printed,
+   never against a web page: on a network someone else controls, the page
+   could be theirs. Clicking through the warning instead works in desktop
+   browsers, but then the password goes to a server the browser hasn't
+   checked. The certificate lasts about two years, and changing the public
+   URLs makes a new one; each device has to trust it again then.
+
+4. **Sign in** at the public URL. *Keep me signed in on this device* keeps
+   the session for 30 days, otherwise 12 hours. Restarting the server signs
+   every device out. Settings → Remote access shows the addresses and the
+   certificate and has *Sign out everywhere*.
+
+Behind a proxy, Grunt listens in plain HTTP and the proxy does TLS. It must
+pass the original `Host` (or `127.0.0.1:<port>`) and set `X-Forwarded-For`:
+
+- **Caddy:** `grunt.example.com { reverse_proxy 127.0.0.1:4747 }`, with
+  `--public-url https://grunt.example.com --trust-proxy 127.0.0.1`.
+- **nginx:** `proxy_set_header Host $host; proxy_set_header X-Forwarded-For
+  $proxy_add_x_forwarded_for; proxy_buffering off;`.
+- **Tailscale:** `tailscale serve --bg http://127.0.0.1:4747`, with
+  `--public-url https://<box>.<tailnet>.ts.net --trust-proxy 127.0.0.1`.
+
+**What a signed-in browser can do is everything the local UI can:** approve
+shell commands, browse folders anywhere on the box, attach a file by path.
+Use a long password you use nowhere else, and prefer a LAN or a tailnet to
+the open internet. Five wrong passwords from one address lock it out for 15
+minutes; a hundred in an hour close sign-in for everyone for the rest of the
+hour.
+
 ## Claude Code
 
 A **Claude Code** connection runs turns through your local Claude Code install

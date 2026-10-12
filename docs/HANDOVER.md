@@ -255,6 +255,10 @@ of work landed after that plan closed out:
   (`open_chat`); `Esc` hides the window, keeping the chat. Settings →
   Desktop changes the hotkey (stored per device); a key another app holds is
   reported there and the previous one put back.
+- **Remote access** (Deck #936). `grunt serve --public-url https://… --tls auto`
+  (or `--tls-cert/--tls-key`, or `--trust-proxy`) runs Grunt for other
+  devices' browsers behind a password set with `grunt password`; see the
+  README's *Use it from another device*.
 
 ## Settings UI
 
@@ -483,6 +487,26 @@ by path; immediate revocation; approvals never delegated (each tool call
 still needs an approval or a grant on the machine running it); every
 approval audited with the machine it came from. Pairing codes are
 single-use, last ten minutes, and are cancelled after five wrong guesses.
+
+**Sign-in mode is the whole UI on the network, by design** (`--public-url`,
+spec 2026-10-12-remote-access). A signed-in browser is the box's user
+account: it can approve shell commands, browse any folder (`GET
+/api/fs/dirs`), attach a file by path and import from a folder. The
+defences: a password (scrypt, at least 12 characters, in `login.json`, not
+the database) and a session cookie (`__Host-`, `HttpOnly; Secure;
+SameSite=Strict`, counted only when `Sec-Fetch-Site` says same-origin);
+HTTPS only (no plain-HTTP sign-in, no HSTS, no redirect); a Host check
+against the public URLs; the cross-site write check; 5 wrong passwords lock
+an address out for 15 minutes and 100 in an hour close sign-in for everyone,
+which trades guessing for denial of service; `/view/` links work only from
+the address that made them (weak behind shared NAT, nothing behind a proxy
+that sends no `X-Forwarded-For`); and `frame-ancestors 'none'` on the UI in
+every mode. With `--tls auto` the first visit is trust-on-first-use: only
+checking the CA's fingerprint against `grunt serve`'s own output stops a
+man in the middle. The CA's private key is thrown away after it signs the
+one server certificate, so a stolen disk can't mint certificates that
+devices trusting it would accept. Sessions live in memory: a restart signs
+everyone out.
 
 **The shell tool (`run_command`) is unsandboxed by design.** It executes
 whatever command string the model produces on the real OS with the real
@@ -1016,6 +1040,13 @@ this on startup.
   conversations (about 54 MB for 486 conversations) and inflating the ZIPs
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
+- **Remote access, phase 1** (spec 2026-10-12-remote-access): no passkeys,
+  no list of signed-in devices (only *Sign out everywhere*), sessions don't
+  survive a restart, certificate files aren't reloaded without a restart,
+  no Web Push for approvals, and no phone layout work beyond the sidebar
+  footer wrapping so Sign out stays reachable (the spec's §7 lists the other
+  gaps at 390 px). iOS and Android trust of the hand-made CA is checked only
+  on real devices.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
 
 ## Deviations from the v2 spec and plan
@@ -1023,7 +1054,7 @@ this on startup.
 | Plan or spec said | Built | Why |
 | --- | --- | --- |
 | Migrations numbered from 005 | 011-013 | v1 work after the plan was written had already used up to 010 |
-| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`) | Avoids a new dependency for one fixed certificate shape; Node signs and parses certificates, it just can't build one |
+| `@peculiar/x509` for the node certificate | A small hand-written DER encoder (`peer/x509.ts`), which since remote access also makes `--tls auto`'s local CA and server certificate (SANs, key usages, key ids) | Avoids a new dependency for a few fixed certificate shapes; Node signs and parses certificates, it just can't build one |
 | `undici` Agent for the pinned client | `node:tls` + `node:http` with `createConnection` (`peer/client.ts`) | No new dependency, and the fingerprint is checked before any byte (the token included) is written |
 | Pairing MAC: `HMAC(code, fpA ‖ fpB)` | HMAC with a key derived by scrypt (N=2^14, r=8) from the code, salted with both fingerprints; the answer must come within 15 s | A security review showed a captured MAC of an 8-character code (2^40 guesses) falls to a GPU well inside the code's 10 minutes; the spec's "impractical" was wrong |
 | Messages are insert-only | Last writer wins by stamp | A retried reply and *keep* marks change a message in place; insert-only would never deliver them |
