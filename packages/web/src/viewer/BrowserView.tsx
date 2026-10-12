@@ -2,18 +2,11 @@ import { useEffect, useState, type JSX } from 'react';
 import { api, type BrowserLiveEvent, type BrowserLiveState } from '../state/api.js';
 import { SseClient, type SseConnect } from '../state/sse.js';
 import { apiUrl } from '../state/transport.js';
+import { oneLine } from './browser.js';
 
 /** A frame is shown only as plain base64 under the fixed inert type below, never anything else. */
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
-/** Control characters, line breaks, and the bidi, zero-width, tag, variation-selector and Hangul-filler marks that can make text read differently from what it is. */
-// eslint-disable-next-line no-control-regex
-const HIDDEN = /[\u0000-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u180E\u200B-\u200F\u2028-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]+/gu;
-
-/** Page-derived text (the title, the address) as one plain line: React escapes it, this strips what escaping can't. */
-function oneLine(text: unknown): string {
-  return typeof text === 'string' ? text.replace(HIDDEN, (m) => (/[\n\r\t\u2028\u2029]/.test(m) ? ' ' : '')).replace(/\s+/g, ' ').trim() : '';
-}
 
 /**
  * The model's browser in a chat's viewer (spec 2026-10-12-model-browser-design

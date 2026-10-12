@@ -185,9 +185,33 @@ describe('ProfilesPanel', () => {
           name: 'Fast local',
           connectionId: 'conn-1',
           modelId: 'llama3.2',
-          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true },
+          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true, browser: false, browserBlockedHosts: [] },
         })
       )
+    );
+  });
+
+  it('saves the Browser switch, off by default, and its blocked sites one per line', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Researcher');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Browser' });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByLabelText('Blocked sites')).toBeNull();
+    await user.click(box);
+    expect(screen.getByText("The model's own browser, with no logins. Asks before each new website.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Blocked sites'), 'ads.test{enter}{enter} tracker.example ');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ browser: true, browserBlockedHosts: ['ads.test', 'tracker.example'] }) }))
     );
   });
 
@@ -428,7 +452,7 @@ describe('ProfilesPanel', () => {
       await user.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() =>
-        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true } }))
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true, browser: false, browserBlockedHosts: [] } }))
       );
     });
 

@@ -73,6 +73,9 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [artifacts, setArtifacts] = useState(profile?.toolPolicy.artifacts ?? true);
   // Recall (spec 2026-10-09-recall-design): on unless the profile turned it off.
   const [recall, setRecall] = useState(profile?.toolPolicy.recall ?? true);
+  // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
+  const [browser, setBrowser] = useState(profile?.toolPolicy.browser ?? false);
+  const [blockedSites, setBlockedSites] = useState((profile?.toolPolicy.browserBlockedHosts ?? []).join('\n'));
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
@@ -129,6 +132,11 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     if (maxOutputTokens !== undefined) params.maxOutputTokens = maxOutputTokens as number;
     if (thinkingBudgetTokens !== undefined) params.thinkingBudgetTokens = thinkingBudgetTokens as number;
 
+    const browserBlockedHosts = blockedSites
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
     const body: CreateProfileBody = {
       name: name.trim(),
       description: description.trim().length > 0 ? description.trim() : null,
@@ -137,7 +145,9 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       modelId,
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
-      toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall } : { fs, shell, approvalMode, mcpServerIds, artifacts, recall },
+      toolPolicy: isClaudeCode
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, browserBlockedHosts }
+        : { fs, shell, approvalMode, mcpServerIds, artifacts, recall, browser, browserBlockedHosts },
       isDefault,
       useGlobalMemory,
     };
@@ -388,6 +398,10 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             <input type="checkbox" aria-label="Search past chats" checked={recall} onChange={(e) => setRecall(e.target.checked)} />
             Search past chats
           </label>
+          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title="The model's own browser, with no logins. Asks before each new website.">
+            <input type="checkbox" aria-label="Browser" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+            Browser
+          </label>
           {isClaudeCode && (
             <>
               <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
@@ -406,6 +420,24 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             </>
           )}
         </div>
+        {browser && (
+          <div className="mt-2 flex w-full flex-col gap-1 text-xs text-[var(--text)]">
+            <p className="text-[var(--text-muted)]">The model's own browser, with no logins. Asks before each new website.</p>
+            <label className="flex flex-col gap-1">
+              <span>
+                Blocked sites <span className="text-[var(--text-muted)]">(one per line; each also blocks its subdomains)</span>
+              </span>
+              <textarea
+                aria-label="Blocked sites"
+                rows={3}
+                value={blockedSites}
+                onChange={(e) => setBlockedSites(e.target.value)}
+                placeholder="example.com"
+                className="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1 font-mono text-xs text-[var(--text)]"
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Claude Code profiles too: Grunt relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}

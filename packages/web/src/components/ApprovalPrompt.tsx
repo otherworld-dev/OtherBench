@@ -1,6 +1,7 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
+import { oneLine, revealHidden } from '../viewer/browser.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -52,6 +53,10 @@ function deriveAlwaysConstraint(
   if ((request.source === 'fs' || isAgentFileTool(request)) && args && typeof args['path'] === 'string') {
     return { pathPrefix: args['path'] };
   }
+  // A browser grant is for the one site the card names (spec 2026-10-12-model-browser-design §6).
+  if (request.source === 'browser' && args && typeof args['host'] === 'string') {
+    return { host: args['host'] };
+  }
   return null;
 }
 
@@ -90,6 +95,12 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
   // meaningless (and hidden) otherwise.
   const [allowAnyArgs, setAllowAnyArgs] = useState(false);
   const isShellCommand = isShellCommandRequest(request);
+  // A browser card names the site (`args.host`, which the server takes from the page's committed address). Everything else
+  // it shows from the page (`target`, the address in the summary) is untrusted text, so it is shown as plain, labelled lines.
+  const browserArgs = request.source === 'browser' && request.args && typeof request.args === 'object' ? (request.args as Record<string, unknown>) : null;
+  const browserHost = browserArgs && typeof browserArgs['host'] === 'string' ? browserArgs['host'] : null;
+  const typedText = browserArgs && browserArgs['command'] === 'type' && typeof browserArgs['text'] === 'string' ? browserArgs['text'] : null;
+  const browserTarget = browserArgs ? oneLine(browserArgs['target']) : '';
 
   async function choose(choice: ApprovalChoice): Promise<void> {
     setPending(true);
@@ -115,12 +126,31 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
     >
       <div className="flex items-center gap-2">
         <span aria-hidden="true">🔒</span>
-        <span>
-          Wants to run <strong>{request.toolName}</strong>
-          <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
-        </span>
+        {browserHost !== null ? (
+          <span>
+            Let the model use <strong>{browserHost}</strong>?
+          </span>
+        ) : (
+          <span>
+            Wants to run <strong>{request.toolName}</strong>
+            <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
+          </span>
+        )}
       </div>
-      <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{request.summary}</p>
+      <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{browserHost !== null ? oneLine(request.summary) : request.summary}</p>
+      {browserTarget !== '' && (
+        <p data-testid="approval-browser-target" className="text-xs text-[var(--text-muted)] break-all">
+          Element on the page: &ldquo;{browserTarget}&rdquo;
+        </p>
+      )}
+      {typedText !== null && (
+        <div className="text-xs">
+          <span className="text-[var(--text-muted)]">It will type:</span>
+          <pre data-testid="approval-typed-text" className="mt-1 whitespace-pre-wrap break-all rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono">
+            {revealHidden(typedText)}
+          </pre>
+        </div>
+      )}
       {isShellCommand && (
         <div className="space-y-1">
           <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
@@ -167,7 +197,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'chat' })}
           className="btn px-2 py-1"
         >
-          Allow for this chat
+          {browserHost !== null ? 'Allow for this chat (this site)' : 'Allow for this chat'}
         </button>
         <button
           type="button"
@@ -176,7 +206,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
           className="btn px-2 py-1"
         >
-          Always allow
+          {browserHost !== null ? `Always allow ${browserHost}` : 'Always allow'}
         </button>
       </div>
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
