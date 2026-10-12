@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { InMemoryStore, FakeChatEngine } from '../src/testing/fakes.js';
 import { TurnRunner } from '../src/domain/turn.js';
-import { reconcileInterruptedTurns, INTERRUPTED_BY_RESTART_ERROR } from '../src/domain/reconcile.js';
+import { reconcileInterruptedTurns, INTERRUPTED_BY_RESTART_ERROR, SUBAGENT_INTERRUPTED_MESSAGE } from '../src/domain/reconcile.js';
 import type { Connection, ModelInfo, Profile, ResolvedProfile } from '../src/types/config.js';
 import type { Part } from '../src/types/messages.js';
 
@@ -129,6 +129,25 @@ describe('reconcileInterruptedTurns', () => {
     // The partial content already checkpointed before the crash survives
     // untouched -- reconciliation only ever changes status/error.
     expect(after?.parts).toEqual(parts);
+  });
+
+  it("turns a sub-agent that was queued or running when Grunt died into an error, leaving finished ones alone", () => {
+    const store = new InMemoryStore();
+    seedChatChain(store, 'chat-a');
+    const card = (callId: string, status: 'queued' | 'running' | 'complete'): Part => ({
+      type: 'subagent', callId, label: callId, prompt: 'p', profileId: 'p', profileName: 'P', modelId: 'm', status, parts: [],
+    });
+    store.messages.create({ id: 'user-1', chatId: 'chat-a', parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    store.messages.create({ id: 'reply-1', chatId: 'chat-a', parentId: 'user-1', role: 'assistant', parts: [card('a', 'queued'), card('b', 'running'), card('c', 'complete')], status: 'streaming', error: null, producedBy: null });
+
+    reconcileInterruptedTurns(store);
+
+    const parts = store.messages.get('reply-1')!.parts as Extract<Part, { type: 'subagent' }>[];
+    expect(parts.map((p) => [p.callId, p.status, p.error])).toEqual([
+      ['a', 'error', SUBAGENT_INTERRUPTED_MESSAGE],
+      ['b', 'error', SUBAGENT_INTERRUPTED_MESSAGE],
+      ['c', 'complete', undefined],
+    ]);
   });
 
   it('leaves complete, error, and cancelled messages alone', () => {

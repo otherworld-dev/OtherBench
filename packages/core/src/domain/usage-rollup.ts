@@ -17,6 +17,8 @@ export interface ProfileRollup {
   cancelledCount: number;
   /** Assistant messages with status 'error' and NO usage row at all -- the engine never reported a `finish`, so there is genuinely nothing to sum, but the call must not vanish from the report. */
   unmeasuredErrorCount: number;
+  /** Sub-agents that ran as this profile and finished (spec 2026-10-12-api-subagents-design). Their tokens and cost are in the totals above. */
+  subagentCount: number;
 }
 
 export interface ChatRollup {
@@ -99,7 +101,7 @@ export function buildUsageRollup(
   function profileRollup(id: string, name: string, modelId: string, currency: string): ProfileRollup {
     let entry = profiles.get(id);
     if (!entry) {
-      entry = { profileId: id, profileName: name, modelId, currency, measuredCost: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, completeCount: 0, cancelledCount: 0, unmeasuredErrorCount: 0 };
+      entry = { profileId: id, profileName: name, modelId, currency, measuredCost: 0, tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0, completeCount: 0, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 };
       profiles.set(id, entry);
     }
     return entry;
@@ -117,6 +119,31 @@ export function buildUsageRollup(
   for (const row of usageRows) {
     const message = messagesById.get(row.messageId);
     if (!message) continue; // out of the caller's declared scope -- nothing to attribute this to.
+
+    // A sub-agent's own row: its profile and model, always measured (it
+    // really finished, whatever became of the reply), and it never marks
+    // the reply as measured, so a failed reply with no row of its own still
+    // shows as an unmeasured error.
+    if (row.subagentCallId) {
+      const card = message.parts.find((p): p is Extract<CanonMessage['parts'][number], { type: 'subagent' }> => p.type === 'subagent' && p.callId === row.subagentCallId);
+      // Its card is gone after a retry clears the parts; then the reply's own
+      // profile name still fits when it ran as the reply's profile.
+      const fallbackName = message.producedBy?.profileId === row.profileId ? message.producedBy.profileName : 'Unknown profile';
+      const pr = profileRollup(row.profileId, card?.profileName ?? fallbackName, card?.modelId ?? row.modelId, row.pricingSnapshot.currency);
+      const cr = chatRollup(message.chatId);
+      const cost = row.costEstimate ?? 0;
+      pr.measuredCost += cost;
+      pr.tokensIn += row.tokensIn;
+      pr.tokensOut += row.tokensOut;
+      pr.tokensCached += row.tokensCached;
+      pr.tokensReasoning += row.tokensReasoning;
+      pr.subagentCount += 1;
+      cr.measuredCost += cost;
+      totalMeasuredCost += cost;
+      const subKey = dateKey(message.createdAt);
+      bucketCosts.set(subKey, (bucketCosts.get(subKey) ?? 0) + cost);
+      continue;
+    }
     measuredMessageIds.add(message.id);
 
     const profileId = message.producedBy?.profileId ?? row.profileId;

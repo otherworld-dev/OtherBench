@@ -1,5 +1,19 @@
 import type { Store } from '../ports/store.js';
-import type { CanonMessage, SerializedError } from '../types/messages.js';
+import type { CanonMessage, Part, SerializedError } from '../types/messages.js';
+
+/** Written on a sub-agent card that was still queued or running when Grunt's process died. */
+export const SUBAGENT_INTERRUPTED_MESSAGE = 'Grunt restarted while this sub-agent was working.';
+
+/** The parts with every unfinished sub-agent card turned into an error, or null when there is none. */
+function interruptSubagents(parts: Part[]): Part[] | null {
+  let changed = false;
+  const next = parts.map((p): Part => {
+    if (p.type !== 'subagent' || (p.status !== 'queued' && p.status !== 'running')) return p;
+    changed = true;
+    return { ...p, status: 'error', error: SUBAGENT_INTERRUPTED_MESSAGE };
+  });
+  return changed ? next : null;
+}
 
 /**
  * Recorded on every message `reconcileInterruptedTurns` moves out of
@@ -72,7 +86,8 @@ export const INTERRUPTED_BY_RESTART_ERROR: SerializedError = {
  * every 500ms while streaming and unconditionally right before its own
  * terminal `updateStatus`, so an interrupted turn typically has SOME partial
  * text/tool-call content already persisted) are left completely untouched --
- * only `status` and `error` change.
+ * only `status` and `error` change. A `subagent` card still queued or running
+ * in such a message becomes an error too (spec 2026-10-12-api-subagents-design).
  *
  * @returns Every message that was reconciled, in their new (post-update)
  *   state -- for startup logging; callers that don't care can ignore it.
@@ -81,6 +96,8 @@ export function reconcileInterruptedTurns(store: Store): CanonMessage[] {
   const orphaned = store.messages.listByStatus('streaming');
   const reconciled: CanonMessage[] = [];
   for (const message of orphaned) {
+    const parts = interruptSubagents(message.parts);
+    if (parts) store.messages.updateParts(message.id, parts);
     store.messages.updateStatus(message.id, 'error', INTERRUPTED_BY_RESTART_ERROR);
     const updated = store.messages.get(message.id);
     if (updated) reconciled.push(updated);
