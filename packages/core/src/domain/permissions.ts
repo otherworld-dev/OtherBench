@@ -589,7 +589,8 @@ export class PermissionBroker {
  */
 export const UNATTENDED_REASON =
   'Nobody is watching this scheduled run, so this tool call needed an approval that nobody can give. It did not run. ' +
-  'To let it run unattended, allow it ahead of time with an Always grant, or for shell commands use a profile whose shell runs in the sandbox.';
+  'To let it run unattended, allow it ahead of time with an Always grant. Shell commands run unattended in the sandbox ' +
+  '(a profile whose shell runs there, with "Ask on changes"); a host the sandbox needs must be on that profile\'s list or have an Always grant.';
 
 /**
  * Whether, in Claude Code auto mode, a call the broker would ask about may go

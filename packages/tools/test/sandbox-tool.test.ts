@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { PermissionBroker, UNATTENDED_REASON } from '@grunt/core/domain/permissions.js';
 import { PLAN_REFUSAL } from '@grunt/core/domain/thread-tools.js';
 import { toolContextFor } from '@grunt/core/domain/tool-context.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
@@ -332,6 +332,11 @@ describe('a turn reaching the sandboxed shell', () => {
     const sandbox = new FakeSandbox({ ready: true });
     const { events, results } = await turn(sandbox, { unattended: true, approvalMode: 'always_ask' });
     expect(isError(results[0], 'approval_unavailable')).toBe(true);
+    // The reason says how a sandboxed command does run unattended: "Ask on changes", and hosts on the list.
+    const message = (results[0] as { message: string }).message;
+    expect(message).toBe(UNATTENDED_REASON);
+    expect(message).toContain('"Ask on changes"');
+    expect(message).toContain("on that profile's list");
     expect(sandbox.requests).toHaveLength(0);
     expect(events).toEqual([]);
   });
