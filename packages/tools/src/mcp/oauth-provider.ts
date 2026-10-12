@@ -3,6 +3,7 @@ import { UnauthorizedError, type OAuthClientProvider, type OAuthDiscoveryState }
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
 import type { McpOAuthStore, RegisteredClient } from './oauth-store.js';
+import { parseHttpUrl, resourceCovers, sameIssuer } from './url.js';
 
 /**
  * Background mode's redirect address. Never sent anywhere: refresh doesn't
@@ -40,6 +41,19 @@ export function isSignInRequired(err: unknown): boolean {
 /** A configured `Authorization` header (any case) means a fixed credential: no OAuth for that server. */
 export function hasAuthorizationHeader(row: Pick<McpServer, 'headerRefs'>): boolean {
   return Object.keys(row.headerRefs).some((name) => name.toLowerCase() === 'authorization');
+}
+
+/** An http server Grunt may sign in to: it has a URL `url.ts` accepts (no userinfo, no backslash) and no fixed Authorization header. */
+export function signInCapable(row: Pick<McpServer, 'transport' | 'url' | 'headerRefs'>): boolean {
+  return row.transport === 'http' && row.url !== null && parseHttpUrl(row.url) !== null && !hasAuthorizationHeader(row);
+}
+
+/** Discovery or metadata a sign-in won't trust. Its message is plain and safe to show. */
+export class McpOAuthMetadataError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpOAuthMetadataError';
+  }
 }
 
 /**
@@ -157,7 +171,7 @@ export class GruntOAuthProvider implements OAuthClientProvider {
       if (this.flowClient) return this.flowClient.entry.info;
       // A registration made for another redirect address (the desktop app's port changes every launch) can't be used: register again.
       const usable = (entry: RegisteredClient | null | undefined): entry is RegisteredClient =>
-        !!entry && issuer !== undefined && entry.issuer === issuer && entry.redirectUri === mode.redirectUri;
+        !!entry && issuer !== undefined && sameIssuer(entry.issuer, issuer) && entry.redirectUri === mode.redirectUri; // redirect URIs match by exact string at the provider (RFC 6749 3.1.2), so here too
       const stored = this.skipStored ? null : await this.oauth.registeredClient(this.serverId);
       if (usable(stored)) {
         this.flowClient = { entry: stored, stored: true };
@@ -171,8 +185,20 @@ export class GruntOAuthProvider implements OAuthClientProvider {
       return undefined;
     }
     const registered = await this.oauth.registeredClient(this.serverId);
-    if (registered && issuer !== undefined && registered.issuer === issuer) return registered.info;
+    if (registered && issuer !== undefined && sameIssuer(registered.issuer, issuer)) return registered.info;
     throw new McpSignInRequiredError();
+  }
+
+  /**
+   * Lets the SDK use the protected-resource metadata's `resource` only when it
+   * speaks for this server (`resourceCovers`: same origin, and this server's
+   * path at or under it). The SDK's own check is the same rule; this one runs
+   * through `url.ts`, so every URL comparison here parses the same way.
+   */
+  async validateResourceURL(serverUrl: string | URL, resource?: string): Promise<URL | undefined> {
+    if (resource === undefined) return undefined; // no metadata: no resource parameter, as the SDK does
+    if (!resourceCovers(serverUrl, resource)) throw new McpOAuthMetadataError("This server's sign-in metadata names a different resource than the server's own address.");
+    return new URL(resource);
   }
 
   /** Sign-in: holds the new registration on the flow (and for the next start). It is saved only when this sign-in completes. */
@@ -260,7 +286,20 @@ export class GruntOAuthProvider implements OAuthClientProvider {
     return this.discovery;
   }
 
+  /**
+   * The SDK hands over what discovery found before it uses any of it.
+   * Refused: an authorization server address `url.ts` won't parse (userinfo,
+   * a backslash), and metadata whose `issuer` isn't the address it was
+   * discovered from (RFC 8414 §3.3); SDK 1.30.0 checks neither.
+   */
   saveDiscoveryState(state: OAuthDiscoveryState): void {
+    if (parseHttpUrl(String(state.authorizationServerUrl)) === null) {
+      throw new McpOAuthMetadataError("This server's sign-in provider has an address Grunt won't use.");
+    }
+    const issuer = state.authorizationServerMetadata?.issuer;
+    if (issuer !== undefined && !sameIssuer(issuer, String(state.authorizationServerUrl))) {
+      throw new McpOAuthMetadataError("This server's sign-in provider describes itself as another provider (its issuer doesn't match its address).");
+    }
     this.discovery = state;
   }
 }

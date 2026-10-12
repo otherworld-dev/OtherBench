@@ -457,6 +457,14 @@ describe('Import from Claude Desktop', () => {
     expect(JSON.stringify(row)).not.toContain('very-secret-token');
   });
 
+  it('skips an http server whose address holds a user name or password', async () => {
+    writeConfig(JSON.stringify({ mcpServers: { sneaky: { type: 'http', url: 'https://good.example@evil.example/mcp' } } }));
+    const body = (await (await postImport({ names: ['sneaky'] })).json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
+    expect(body.imported).toEqual([]);
+    expect(body.skipped).toEqual([{ name: 'sneaky', reason: "A server address can't hold a user name or password. Send credentials in a header instead." }]);
+    expect(store.mcpServers.list()).toEqual([]);
+  });
+
   const profile = (id: string, mcpServerIds: string[]) =>
     store.profiles.create({
       id,

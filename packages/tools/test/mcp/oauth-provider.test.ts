@@ -7,6 +7,7 @@ import { McpOAuthStore, oauthRefs } from '../../src/mcp/oauth-store.js';
 import {
   BACKGROUND_REDIRECT_URI,
   GruntOAuthProvider,
+  McpOAuthMetadataError,
   McpSignInRequiredError,
   accountFromIdToken,
   clientMetadataFor,
@@ -253,6 +254,34 @@ describe('GruntOAuthProvider in background mode', () => {
     expect(await oauth.manualClient('srv-1')).toEqual({ client_id: 'manual-1' });
   });
 
+  it('refuses discovery whose issuer is not the address it was found at, or whose address has userinfo', () => {
+    const { oauth } = setup();
+    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const state = (authorizationServerUrl: string, issuer?: string) =>
+      ({ authorizationServerUrl, ...(issuer !== undefined ? { authorizationServerMetadata: { issuer } } : {}) }) as unknown as OAuthDiscoveryState;
+
+    expect(() => provider.saveDiscoveryState(state('https://auth.example.com/', 'https://evil.example'))).toThrow(McpOAuthMetadataError);
+    expect(() => provider.saveDiscoveryState(state('https://auth.example.com/tenant', 'https://auth.example.com/other'))).toThrow(McpOAuthMetadataError);
+    expect(() => provider.saveDiscoveryState(state('https://good@auth.example.com/'))).toThrow(McpOAuthMetadataError);
+    expect(provider.discoveryState()).toBeUndefined();
+
+    provider.saveDiscoveryState(state('https://auth.example.com/', 'https://Auth.Example.com'));
+    expect(issuerOf(provider.discoveryState())).toBe('https://Auth.Example.com');
+    provider.saveDiscoveryState(state('https://auth.example.com/')); // no metadata found: nothing to compare
+  });
+
+  it('validateResourceURL accepts metadata for this server or its root, and refuses a sibling path or another origin', async () => {
+    const { oauth } = setup();
+    const provider = new GruntOAuthProvider('srv-1', oauth, { kind: 'background' });
+    const server = new URL('https://mcp.example.com/mcp');
+    expect(await provider.validateResourceURL(server, undefined)).toBeUndefined();
+    expect((await provider.validateResourceURL(server, 'https://mcp.example.com/mcp'))?.href).toBe('https://mcp.example.com/mcp');
+    expect((await provider.validateResourceURL(server, 'https://mcp.example.com/'))?.href).toBe('https://mcp.example.com/');
+    await expect(provider.validateResourceURL(server, 'https://mcp.example.com/mcp-evil')).rejects.toBeInstanceOf(McpOAuthMetadataError);
+    await expect(provider.validateResourceURL(server, 'https://evil.example/mcp')).rejects.toBeInstanceOf(McpOAuthMetadataError);
+    await expect(provider.validateResourceURL(server, 'https://mcp.example.com@evil.example/mcp')).rejects.toBeInstanceOf(McpOAuthMetadataError);
+  });
+
   it('codeVerifier throws: no browser flow ever runs in the background', () => {
     const { oauth } = setup();
     expect(() => new GruntOAuthProvider('srv-1', oauth, { kind: 'background' }).codeVerifier()).toThrow();
@@ -297,6 +326,47 @@ describe('McpOAuthStore', () => {
       expect(await cold.tokens('srv-1')).toBeUndefined();
       store.mcpServers.update('srv-1', { url: OLD_URL });
       expect(await cold.tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
+    });
+
+    it('compares the resource by its parsed, normalised parts, and an older raw entry still matches', async () => {
+      const { store, secrets, oauth } = setup();
+      await signInProvider(oauth).saveTokens(TOKENS);
+
+      store.mcpServers.update('srv-1', { url: 'https://MCP.Example.com.:443/m%63p' });
+      expect(await oauth.tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
+
+      // An entry written before resources were normalised, in another spelling of the same address.
+      await secrets.set(oauthRefs('srv-1').tokens, JSON.stringify({ tokens: TOKENS, savedAt: 1, resource: 'https://mcp.example.com:443/mcp' }));
+      store.mcpServers.update('srv-1', { url: OLD_URL });
+      expect(await new McpOAuthStore(store, secrets).tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
+    });
+
+    it('tokens bound to /mcp are never used for /mcp-evil, or for the same address with userinfo', async () => {
+      const { store, oauth } = setup();
+      await signInProvider(oauth).saveTokens(TOKENS);
+
+      store.mcpServers.update('srv-1', { url: 'https://mcp.example.com/mcp-evil' });
+      expect(await oauth.tokens('srv-1')).toBeUndefined();
+      store.mcpServers.update('srv-1', { url: 'https://user@mcp.example.com/mcp' });
+      expect(await oauth.tokens('srv-1')).toBeUndefined();
+      store.mcpServers.update('srv-1', { url: OLD_URL });
+      // A connection built for /mcp-evil gets nothing even while the row says /mcp, and can't save for it.
+      const sibling = new GruntOAuthProvider('srv-1', oauth, { kind: 'background', resource: 'https://mcp.example.com/mcp-evil' });
+      expect(await sibling.tokens()).toBeUndefined();
+      await sibling.saveTokens({ access_token: 'at-evil', token_type: 'Bearer' });
+      expect(await oauth.tokens('srv-1')).toMatchObject({ access_token: 'at-1' });
+    });
+
+    it('stores the resource normalised, and saves nothing for an address with userinfo', async () => {
+      const { store, secrets, oauth } = setup();
+      store.mcpServers.update('srv-1', { url: 'https://MCP.example.com:443/mcp' });
+      await signInProvider(oauth).saveTokens(TOKENS);
+      expect(JSON.parse((await secrets.get(oauthRefs('srv-1').tokens))!)).toMatchObject({ resource: 'https://mcp.example.com/mcp' });
+
+      await oauth.forgetTokens('srv-1');
+      store.mcpServers.update('srv-1', { url: 'https://good@mcp.example.com/mcp' });
+      await signInProvider(oauth).saveTokens(TOKENS);
+      expect(await secrets.get(oauthRefs('srv-1').tokens)).toBeNull();
     });
 
     it('treats an entry with no resource as a mismatch', async () => {

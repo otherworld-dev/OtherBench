@@ -113,6 +113,21 @@ describe('MCP sign-in routes', { timeout: 20_000 }, () => {
     expect((await app({}).request(`/api/mcp-servers/${id}/sign-in`, { method: 'POST' })).status).toBe(503);
   });
 
+  it('refuses a server address with userinfo or a backslash on POST and PATCH, with a plain message', async () => {
+    const userinfo = fixture.url.replace('http://', 'http://good@');
+    const post = await app().request('/api/mcp-servers', json({ name: 'Userinfo', transport: 'http', url: userinfo }));
+    expect(post.status).toBe(400);
+    expect(await post.json()).toEqual({ error: "A server address can't hold a user name or password. Send credentials in a header instead." });
+    const backslash = await app().request('/api/mcp-servers', json({ name: 'Backslash', transport: 'http', url: 'http://127.0.0.1:9\\@evil.example/mcp' }));
+    expect(backslash.status).toBe(400);
+    expect(store.mcpServers.list().map((r) => r.name)).not.toContain('Userinfo');
+
+    const id = await createServer();
+    const patch = await app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'https://user:pw@evil.example/mcp' }) });
+    expect(patch.status).toBe(400);
+    expect(store.mcpServers.get(id)!.url).toBe(fixture.url);
+  });
+
   it('GET redirect-uri reports the redirect address, or null without a port', async () => {
     expect(await (await app().request('/api/mcp-servers/sign-in/redirect-uri')).json()).toEqual({ redirectUri: REDIRECT });
     expect(await (await app({}).request('/api/mcp-servers/sign-in/redirect-uri')).json()).toEqual({ redirectUri: null });

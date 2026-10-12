@@ -77,6 +77,9 @@ export async function startOAuthEchoServer(opts = {}) {
   let origin = '';
   /** The authorization server's origin: `origin` unless `separateAuthServer`. */
   let authOrigin = '';
+  /** Overrides for the metadata: an issuer other than the authorization server's address, a protected-resource `resource` other than /mcp. */
+  let issuerOverride = null;
+  let prmResourceOverride = null;
 
   const redirectAllowed = (client, redirectUri) =>
     client.redirectUris === null ? /^http:\/\/127\.0\.0\.1(:\d+)?\/oauth\/callback$/.test(redirectUri) : client.redirectUris.includes(redirectUri);
@@ -117,9 +120,9 @@ export async function startOAuthEchoServer(opts = {}) {
     return body;
   }
 
-  const protectedResource = () => ({ resource: `${origin}/mcp`, authorization_servers: [authOrigin] });
+  const protectedResource = () => ({ resource: prmResourceOverride ?? `${origin}/mcp`, authorization_servers: [authOrigin] });
   const authorizationServer = () => ({
-    issuer: authOrigin,
+    issuer: issuerOverride ?? authOrigin,
     authorization_endpoint: `${authOrigin}/authorize`,
     token_endpoint: `${authOrigin}/token`,
     ...(dcr ? { registration_endpoint: `${authOrigin}/register` } : {}),
@@ -332,6 +335,14 @@ export async function startOAuthEchoServer(opts = {}) {
     },
     setTokenDown: (value) => {
       tokenDown = value;
+    },
+    /** The issuer the authorization-server metadata claims (null: its real address). */
+    setIssuer: (value) => {
+      issuerOverride = value;
+    },
+    /** The `resource` the protected-resource metadata claims (null: the real /mcp URL). */
+    setPrmResource: (value) => {
+      prmResourceOverride = value;
     },
     close: async () => {
       await closeServer(httpServer);

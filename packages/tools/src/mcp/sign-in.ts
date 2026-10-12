@@ -5,7 +5,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServer } from '@grunt/core/ports/store.js';
 import { fetchWithServerHeaders } from './client.js';
-import { GruntOAuthProvider, hasAuthorizationHeader, type HeldRegistration } from './oauth-provider.js';
+import { GruntOAuthProvider, hasAuthorizationHeader, McpOAuthMetadataError, signInCapable, type HeldRegistration } from './oauth-provider.js';
+import { hostOf, parseHttpUrl } from './url.js';
 import type { McpOAuthStore } from './oauth-store.js';
 import { redactMessage } from './redact.js';
 
@@ -34,8 +35,10 @@ export function sanitiseErrorCode(code: string): string {
 
 /** The browser is only ever sent to https, or to http on this machine (tests and local development). */
 export function checkAuthorizationUrl(url: URL): void {
-  if (url.protocol === 'https:') return;
-  if (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)) return;
+  // Parsed again from its text by `url.ts`, so userinfo or a backslash is refused like anywhere else.
+  const parsed = parseHttpUrl(url.href);
+  if (parsed?.protocol === 'https:') return;
+  if (parsed?.protocol === 'http:' && LOOPBACK_HOSTS.has(hostOf(parsed))) return;
   throw new SignInError(502, "The sign-in provider gave an address Grunt won't open: it must be https.");
 }
 
@@ -49,6 +52,7 @@ function fetchWithTimeout(ms: number): FetchLike {
 export { redactMessage };
 
 function startFailureMessage(err: unknown, redirectUri: string, secrets: Iterable<string | null | undefined>): string {
+  if (err instanceof McpOAuthMetadataError) return `Couldn't start the sign-in: ${err.message}`;
   const message = err instanceof Error ? err.message : String(err);
   if (/does not support dynamic client registration/i.test(message)) {
     return `This server's sign-in provider doesn't let apps register themselves. Register Grunt with it (redirect address: ${redirectUri}) and enter the client ID under Sign-in app.`;
@@ -120,6 +124,7 @@ export class McpSignIns {
     if (hasAuthorizationHeader(row)) {
       throw new SignInError(409, 'This server sends a fixed Authorization header. Remove it to sign in with a browser instead.');
     }
+    if (!signInCapable(row)) throw new SignInError(400, "This server's address can't be used to sign in: it holds a user name, a password or a backslash.");
     this.sweep();
     this.cancel(row.id);
     this.errors.delete(row.id);

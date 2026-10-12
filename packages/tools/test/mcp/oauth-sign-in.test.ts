@@ -355,6 +355,61 @@ describe('configured headers', { timeout: 20_000 }, () => {
   });
 });
 
+describe('metadata and addresses the sign-in checks', { timeout: 20_000 }, () => {
+  it('authorization-server metadata whose issuer is not its address stops the sign-in before anything is registered', async () => {
+    const { fixture, manager } = await setup();
+    fixture.setIssuer('http://127.0.0.1:1'); // RFC 8414 §3.3; SDK 1.30.0 doesn't check it
+    const err = await manager.startSignIn('srv-1', REDIRECT).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ status: 502 });
+    expect((err as SignInError).message).toBe("Couldn't start the sign-in: This server's sign-in provider describes itself as another provider (its issuer doesn't match its address).");
+    expect(fixture.registrations).toEqual([]);
+  });
+
+  it('a signed-in server whose provider starts claiming another issuer sends it no refresh token', async () => {
+    const { fixture, manager, clock } = await setup();
+    await signIn(manager);
+    const tokenRequests = fixture.tokenRequests.length;
+    clock.t += 2 * 60 * 60_000;
+    fixture.setIssuer('http://127.0.0.1:1');
+    fixture.expireAccessTokens();
+
+    await expect(manager.listFor(['srv-1'])[0]!.client.callTool('echo', { text: 'x' })).rejects.toThrow();
+    expect(fixture.tokenRequests.length).toBe(tokenRequests);
+  });
+
+  it('protected-resource metadata naming another origin or a sibling path stops the sign-in', async () => {
+    const { fixture, manager } = await setup();
+    for (const resource of ['http://127.0.0.1:1/mcp', `${fixture.origin}/mcp-evil`, `${fixture.origin}/mcp/deeper`]) {
+      fixture.setPrmResource(resource);
+      const err = await manager.startSignIn('srv-1', REDIRECT).then(() => null, (e: unknown) => e);
+      expect(err).toMatchObject({ status: 502, message: "Couldn't start the sign-in: This server's sign-in metadata names a different resource than the server's own address." });
+    }
+    expect(fixture.registrations).toEqual([]);
+  });
+
+  it("protected-resource metadata for the server's origin root is accepted, and that is the resource asked for", async () => {
+    const { fixture, manager } = await setup();
+    fixture.setPrmResource(`${fixture.origin}/`);
+    const { authorizationUrl } = await manager.startSignIn('srv-1', REDIRECT);
+    expect(new URL(authorizationUrl).searchParams.get('resource')).toBe(`${fixture.origin}/`);
+  });
+
+  it('a stored server address with userinfo gets no sign-in: no provider, no auth health, start refused', async () => {
+    const fixture = await startOAuthEchoServer();
+    cleanups.push(() => fixture.close());
+    const store = new InMemoryStore();
+    store.mcpServers.create(httpRow(fixture.url.replace('http://', 'http://someone@')));
+    const manager = new McpServerManager(store, new FakeSecretStore(), { initialBackoffMs: 50, maxBackoffMs: 100 });
+    cleanups.push(() => manager.shutdown());
+    await manager.sync();
+
+    await waitFor(() => health(manager).status === 'error');
+    expect(health(manager).auth).toBeNull();
+    await expect(manager.startSignIn('srv-1', REDIRECT)).rejects.toMatchObject({ status: 400 });
+    expect(fixture.registrations).toEqual([]);
+  });
+});
+
 describe('sign-in helpers', () => {
   it('sanitiseErrorCode keeps [A-Za-z0-9_.-] and at most 64 characters', () => {
     expect(sanitiseErrorCode('access_denied<script>alert(1)</script>')).toBe('access_deniedscriptalert1script');

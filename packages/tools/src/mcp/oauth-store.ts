@@ -2,6 +2,7 @@ import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprot
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { McpServerOAuth, Store } from '@grunt/core/ports/store.js';
 import { accountFromIdToken } from './oauth-provider.js';
+import { normaliseResource, sameResource } from './url.js';
 
 /** The SecretStore references one server's sign-in lives under. */
 export function oauthRefs(serverId: string): { tokens: string; client: string; clientSecret: string } {
@@ -15,7 +16,7 @@ export function oauthRefs(serverId: string): { tokens: string; client: string; c
 export interface StoredTokens {
   tokens: OAuthTokens;
   savedAt: number;
-  /** The server URL these tokens were issued for. They are only ever used while the row's URL is exactly this; an entry without one (older builds) is never used. */
+  /** The server URL these tokens were issued for, normalised (`url.ts`). They are only ever used while the row's URL names the same resource (both sides normalised when compared, so older raw entries still match); an entry without one is never used. */
   resource: string;
 }
 
@@ -85,7 +86,7 @@ export class McpOAuthStore {
   async tokens(serverId: string, resource?: string): Promise<OAuthTokens | undefined> {
     const entry = this.boundTo(serverId, await this.loadTokens(serverId));
     // A connection built for another URL than the row's current one (replaced mid-request) gets nothing either.
-    if (entry && resource !== undefined && resource !== entry.resource) return undefined;
+    if (entry && resource !== undefined && !sameResource(resource, entry.resource)) return undefined;
     return entry?.tokens;
   }
 
@@ -116,15 +117,15 @@ export class McpOAuthStore {
       const row = this.store.mcpServers.get(serverId);
       if (!row) return false; // deleted while a sign-in or refresh was in flight
       if (opts.generation !== undefined && opts.generation !== this.generation(serverId)) return false; // signed out, or signed in again, since
-      const resource = opts.resource ?? row.url;
-      if (resource === null || resource !== row.url) return false; // the URL changed while a sign-in or refresh was in flight
+      const resource = normaliseResource(opts.resource ?? row.url ?? '');
+      if (resource === null || !sameResource(resource, row.url)) return false; // the URL changed while a sign-in or refresh was in flight (or it is refused)
       const entry: StoredTokens = { tokens, savedAt: this.now(), resource };
       if (opts.signIn) this.bump(serverId);
       // Cached before the write, so a request racing this one already sends the new token.
       this.tokenCache.set(serverId, entry);
       await this.secrets.set(oauthRefs(serverId).tokens, JSON.stringify(entry));
       // The row was deleted or re-pointed while the write was in flight: take the entry back out rather than leave it behind.
-      if (this.store.mcpServers.get(serverId)?.url !== resource) {
+      if (!sameResource(this.store.mcpServers.get(serverId)?.url, resource)) {
         if (this.tokenCache.get(serverId) === entry) this.tokenCache.set(serverId, null);
         await this.secrets.delete(oauthRefs(serverId).tokens);
         return false;
@@ -220,7 +221,7 @@ export class McpOAuthStore {
   private boundTo(serverId: string, entry: StoredTokens | null): StoredTokens | null {
     if (!entry) return null;
     const url = this.store.mcpServers.get(serverId)?.url;
-    return typeof entry.resource === 'string' && entry.resource === url ? entry : null;
+    return typeof entry.resource === 'string' && sameResource(entry.resource, url) ? entry : null;
   }
 
   private async loadTokens(serverId: string): Promise<StoredTokens | null> {

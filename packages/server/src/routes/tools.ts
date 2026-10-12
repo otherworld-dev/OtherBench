@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import type { Grant, McpServer } from '@grunt/core/ports/store.js';
+import { mcpServerUrlProblem } from '@grunt/tools/mcp/url.js';
 import type { Container } from '../container.js';
 import { ClaudeDesktopConfigError, claudeDesktopConfigPath, readClaudeDesktopServers } from '../mcp-import.js';
 import {
@@ -318,6 +319,7 @@ export function toolsRoutes(container: Container): Hono {
       if (!s) skipped.push({ name, reason: "It isn't in Claude Desktop's config." });
       else if (existing.has(name)) skipped.push({ name, reason: `Grunt already has a server called "${name}".` });
       else if (!s.supported || !s.transport) skipped.push({ name, reason: s.reason ?? "Grunt can't use it." });
+      else if (s.transport === 'http' && mcpServerUrlProblem(s.url)) skipped.push({ name, reason: mcpServerUrlProblem(s.url)! });
       else {
         const created = await createMcpServer(container, { name, transport: s.transport, command: s.command, args: s.args, env: s.env, url: s.url, headers: s.headers, enabled: true });
         existing.add(name);
@@ -354,13 +356,17 @@ export function toolsRoutes(container: Container): Hono {
     const env = optionalNonEmptySecretRecord(body.env, 'env');
     const headers = optionalNonEmptySecretRecord(body.headers, 'headers');
     const signInApp = parseSignInApp(body, transport, null);
+    const url = transport === 'http' ? (optionalNullableString(body.url, 'url') ?? null) : null;
+    // A URL with userinfo or a backslash reads differently to different parsers (packages/tools/src/mcp/url.ts).
+    const urlProblem = mcpServerUrlProblem(url);
+    if (urlProblem) throw new HTTPException(400, { message: urlProblem });
     const created = await createMcpServer(container, {
       name,
       transport,
       command: transport === 'stdio' ? (optionalNullableString(body.command, 'command') ?? null) : null,
       args: transport === 'stdio' ? optionalStringArray(body.args, 'args') : [],
       env,
-      url: transport === 'http' ? (optionalNullableString(body.url, 'url') ?? null) : null,
+      url,
       headers,
       enabled: optionalBoolean(body.enabled, 'enabled', true),
     });
@@ -410,6 +416,8 @@ export function toolsRoutes(container: Container): Hono {
       const transportChanged = patch.transport !== undefined && patch.transport !== existing.transport;
       // Checked before anything is written, so a bad sign-in app leaves the row and its secrets alone.
       const signInApp = parseSignInApp(body, newTransport, existing.oauth?.clientId ?? null);
+      const urlProblem = newTransport === 'http' && patch.url !== undefined ? mcpServerUrlProblem(patch.url) : null;
+      if (urlProblem) throw new HTTPException(400, { message: urlProblem });
 
       if (newTransport === 'stdio' && body.env !== undefined) {
         patch.envRefs = await applySecretPatch(container, id, 'env', existing.envRefs, optionalSecretPatchRecord(body.env, 'env'));

@@ -5,6 +5,7 @@ import type { FetchLike, Transport } from '@modelcontextprotocol/sdk/shared/tran
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js';
 import { looksSecret, redactMessage } from './redact.js';
+import { sameOrigin } from './url.js';
 import { resolveExecutable } from './spawn.js';
 
 export type McpTransportConfig =
@@ -65,9 +66,9 @@ const DEFAULT_MAX_BACKOFF_MS = 60_000;
  */
 export function fetchWithServerHeaders(serverUrl: string, headers: Record<string, string>, base: FetchLike = (url, init) => fetch(url, init)): FetchLike {
   if (Object.keys(headers).length === 0) return base;
-  const origin = new URL(serverUrl).origin;
   return (url, init) => {
-    if (new URL(url).origin !== origin) return base(url, init);
+    // Compared by `url.ts` (parsed, normalised; userinfo refused): origin is origin, whatever the path.
+    if (!sameOrigin(url, serverUrl)) return base(url, init);
     const merged = new Headers(init?.headers);
     for (const [name, value] of Object.entries(headers)) merged.set(name, value);
     return base(url, { ...init, headers: merged });

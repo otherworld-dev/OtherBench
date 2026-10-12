@@ -1,7 +1,7 @@
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { McpServer, Store } from '@grunt/core/ports/store.js';
 import { McpClient, type McpClientOptions, type McpTransportConfig } from './client.js';
-import { GruntOAuthProvider, hasAuthorizationHeader } from './oauth-provider.js';
+import { GruntOAuthProvider, signInCapable } from './oauth-provider.js';
 import { McpOAuthStore } from './oauth-store.js';
 import { McpSignIns, SignInError } from './sign-in.js';
 
@@ -26,7 +26,7 @@ export interface McpServerHealth {
   status: 'unknown' | 'connecting' | 'ok' | 'error' | 'needs_auth';
   lastError: string | null;
   toolCount: number;
-  /** Null for stdio servers and for http servers with a fixed Authorization header. */
+  /** Null for stdio servers, http servers with a fixed Authorization header, and http servers whose address can't sign in (userinfo, a backslash). */
   auth: McpServerAuthHealth | null;
 }
 
@@ -318,7 +318,7 @@ export class McpServerManager {
   }
 
   private authHealth(row: McpServer, status: McpServerHealth['status']): McpServerAuthHealth | null {
-    if (row.transport !== 'http' || hasAuthorizationHeader(row)) return null;
+    if (!signInCapable(row)) return null;
     const signedInAt = row.oauth?.signedInAt ?? null;
     return {
       state: status === 'needs_auth' ? 'needs_sign_in' : signedInAt !== null ? 'signed_in' : 'none',
@@ -384,7 +384,8 @@ export class McpServerManager {
     // Connection.secretRef already follows (see profile-resolution.ts).
     const headers = await this.resolveSecretRefs(row.headerRefs);
     // Sign-in is detected, not switched on: every http server without a fixed Authorization header gets the provider. A server that never answers 401 never asks it for anything.
-    if (hasAuthorizationHeader(row)) return { transport: 'http', url: row.url, headers };
+    // A fixed Authorization header, or an address with userinfo or a backslash (`url.ts`): no sign-in.
+    if (!signInCapable(row)) return { transport: 'http', url: row.url, headers };
     return {
       transport: 'http',
       url: row.url,
