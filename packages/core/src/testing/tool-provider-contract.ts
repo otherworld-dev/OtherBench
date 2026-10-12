@@ -33,7 +33,10 @@ const MCP_SERVERS: ContractMcpServer[] = [
  * and must return a provider that exposes exactly those as connected MCP servers, plus
  * Grunt's built-in tools (named `read_file`, `write_file`, `run_command`; fs read:
  * read-risk `source: 'fs'`; fs write: mutate-risk `source: 'fs'`; shell: a
- * `source: 'shell'` tool). Listing assertions discover tools by `source`/`risk`;
+ * `source: 'shell'` tool). When the policy's `shellRuns` is `'sandbox'`, `run_command`
+ * must be the provider's sandboxed one (`source: 'sandbox'`) backed by a sandbox that
+ * runs every command successfully (the real provider's factory passes a ready
+ * `FakeSandbox`). Listing assertions discover tools by `source`/`risk`;
  * the execution assertions use those three names with real arguments against a real
  * temp workspace, so the real provider genuinely runs them.
  *
@@ -476,6 +479,40 @@ export function runToolProviderContract(
       const [shell] = await provider.listTools(policy({ shell: true }));
       expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
       expect(w.requests).toHaveLength(1);
+    });
+
+    // ---- The sandboxed shell (spec 2026-10-12-sandbox-design) ----
+
+    it('shellRuns "sandbox" swaps the host run_command for the sandboxed one: exactly one, never both', async () => {
+      for (const [shellRuns, source] of [['sandbox', 'sandbox'], ['host', 'shell'], [undefined, 'shell']] as const) {
+        const tools = (await provider.listTools(policy({ shell: true, shellRuns }))).filter((t) => t.name === 'run_command');
+        expect(tools.map((t) => t.source)).toEqual([source]);
+      }
+      expect(await provider.listTools(policy({ shell: false, shellRuns: 'sandbox' }))).toEqual([]);
+    });
+
+    it('a sandboxed command runs with no card under ask_on_mutate, and asks under always_ask', async () => {
+      const w = watch({ choice: 'once' });
+      const quiet = await tool(policy({ shell: true, shellRuns: 'sandbox' }), 'run_command');
+      expect(isToolError(await quiet.execute(SHELL_ARGS, ctx()))).toBe(false);
+      expect(w.requests).toHaveLength(0);
+      const asking = await tool(policy({ shell: true, shellRuns: 'sandbox', approvalMode: 'always_ask' }), 'run_command');
+      expect(isToolError(await asking.execute(SHELL_ARGS, ctx()))).toBe(false);
+      expect(w.requests[0]?.request).toMatchObject({ toolName: 'run_command', source: 'sandbox', risk: 'execute' });
+    });
+
+    it('a sandboxed command with no workspace is refused without a card', async () => {
+      const w = watch();
+      const t = await tool(policy({ shell: true, shellRuns: 'sandbox' }), 'run_command');
+      expect(isToolError(await t.execute(SHELL_ARGS, ctx({ workspaceRoot: null })), 'permission_denied')).toBe(true);
+      expect(w.requests).toHaveLength(0);
+    });
+
+    it('an unattended run refuses a call that would need a card, and raises none', async () => {
+      const w = watch({ choice: 'once' });
+      const t = await tool(policy({ shell: true }), 'run_command');
+      expect(isToolError(await t.execute(SHELL_ARGS, ctx({ unattended: true })), 'unattended')).toBe(true);
+      expect(w.requests).toHaveLength(0);
     });
   });
 }

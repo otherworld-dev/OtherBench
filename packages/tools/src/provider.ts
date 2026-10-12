@@ -12,36 +12,34 @@ import type {
   ToolProvider,
   ToolSpec,
 } from '@grunt/core/ports/tool-provider.js';
+import type { Sandbox } from '@grunt/core/ports/sandbox.js';
 import type { Store } from '@grunt/core/ports/store.js';
-import type { ToolPolicy } from '@grunt/core/types/config.js';
+import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
+import { runsShellInSandbox, type ToolPolicy } from '@grunt/core/types/config.js';
 import { fsTools } from './fs-tools.js';
 import type { McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
-import { runCommandTool } from './shell-tool.js';
+import { SANDBOX_NETWORK_SPEC, SANDBOX_NETWORK_TOOL, sandboxRunCommandTool } from './sandbox-tool.js';
+import { runCommandTool, toolError } from './shell-tool.js';
 
 export interface GruntToolProviderOptions {
   /** Overridable id generator for audit row ids; defaults to `randomUUID`. */
   generateId?: () => string;
   /** Overridable clock, for deterministic duration assertions in tests. */
   now?: () => number;
+  /** Where `run_command` runs for a profile whose shell runs in the sandbox (spec 2026-10-12-sandbox-design). Absent: such a run_command refuses. */
+  sandbox?: Sandbox;
 }
 
 const BUILTIN_FS_TOOLS: ToolSpec[] = fsTools;
-const BUILTIN_SHELL_TOOLS: ToolSpec[] = [runCommandTool];
-
-interface ToolError {
-  error: true;
-  code: string;
-  message: string;
-}
 
 type Authorization = (
   | { ok: true; grantedBy: string }
   | {
       ok: false;
-      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped';
+      code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_dropped' | 'unattended';
       reason: string;
-      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled';
+      grantedBy: 'deny:policy' | 'deny:user' | 'deny:cancelled' | 'deny:unattended';
     }
 ) & {
   /** The machine a person answered on, when it wasn't this one (v2 spec §3). */
@@ -54,12 +52,10 @@ type SettleCause = 'user' | 'turn-ended' | 'dropped';
 const CANCELLED_REASON = 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.';
 const DROPPED_REASON = 'This approval request was dropped by the server (too many were pending), so the tool call did not run. Nobody denied it.';
 
+const UNATTENDED_REASON = "Nobody is watching this run, so a call that needs approval was refused instead of waiting for an answer that can't come.";
+
 function cancelledAuth(): Authorization {
   return { ok: false, code: 'cancelled', reason: CANCELLED_REASON, grantedBy: 'deny:cancelled' };
-}
-
-function toolError(code: string, message: string): ToolError {
-  return { error: true, code, message };
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +157,7 @@ export class GruntToolProvider implements ToolProvider {
   private readonly waiters = new Map<string, (choice: ApprovalChoice, cause: SettleCause, decidedOnNode?: string) => void>();
   private readonly generateId: () => string;
   private readonly now: () => number;
+  private readonly sandbox: Sandbox | null;
 
   constructor(
     private readonly store: Store,
@@ -171,6 +168,7 @@ export class GruntToolProvider implements ToolProvider {
   ) {
     this.generateId = options.generateId ?? randomUUID;
     this.now = options.now ?? Date.now;
+    this.sandbox = options.sandbox ?? null;
     // The broker's backstop dropped a request nobody ended. Its waiter must
     // not hang (or, worse, later be approved with the broker no longer
     // knowing it): settle it as a denial, which also emits `resolved` so the
@@ -193,7 +191,8 @@ export class GruntToolProvider implements ToolProvider {
     // (defense in depth: nothing here relies on this filtering alone).
     if (policy.fs === 'readwrite') raw.push(...BUILTIN_FS_TOOLS);
     else if (policy.fs === 'read') raw.push(...BUILTIN_FS_TOOLS.filter((t) => t.risk === 'read'));
-    if (policy.shell) raw.push(...BUILTIN_SHELL_TOOLS);
+    // One run_command, never both: the sandboxed one when the shell runs there.
+    if (policy.shell) raw.push(runsShellInSandbox(policy) ? this.sandboxTool(policy) : runCommandTool);
     // Artifacts (Deck #896): on unless the profile turns them off.
     if (policy.artifacts !== false) raw.push(artifactTool(this.store));
     // Recall (spec 2026-10-09-recall-design): on unless the profile turns it off.
@@ -212,6 +211,54 @@ export class GruntToolProvider implements ToolProvider {
    */
   relayMcpTools(serverIds: string[]): ToolSpec[] {
     return serverIds.length === 0 ? [] : this.deduplicateNames(this.mcpToolSpecs(serverIds));
+  }
+
+  /**
+   * Everything the Claude Code engine relays through its per-process Grunt
+   * server for this policy, ungated (the engine's gate approves each call
+   * with the very same spec first): the allowlisted MCP servers' tools, and
+   * the sandboxed run_command when the shell runs in the sandbox and this
+   * Grunt has one (spec 2026-10-12-sandbox-design, "Claude Code"). Never the
+   * host run_command: a profile that wants the sandbox gets it or nothing.
+   */
+  relayTools(policy: ToolPolicy): ToolSpec[] {
+    const shell = runsShellInSandbox(policy) && this.sandbox !== null ? [this.sandboxTool(policy)] : [];
+    const mcp = policy.mcpServerIds.length === 0 ? [] : this.mcpToolSpecs(policy.mcpServerIds);
+    return this.deduplicateNames([...shell, ...mcp]);
+  }
+
+  /** The sandboxed run_command for this policy; its network questions become sandbox_network cards. */
+  private sandboxTool(policy: ToolPolicy): ToolSpec {
+    return sandboxRunCommandTool(this.sandbox, policy, (host, port, ctx, signal) => this.approveNetwork(host, port, policy, ctx, signal));
+  }
+
+  /**
+   * A sandboxed command wants a host that isn't on the allowlist: the broker
+   * decides (a host grant, else a card; never automatic), and the outcome gets
+   * its own audit row under sandbox_network. The card names the host in its
+   * canonical spelling, so what a grant covers is what the card said. It is
+   * taken down, and the answer is no, when the turn ends or the sandbox
+   * withdraws the question (`askSignal`).
+   */
+  private async approveNetwork(host: string, port: number | undefined, policy: ToolPolicy, ctx: ToolContext, askSignal?: AbortSignal): Promise<boolean> {
+    const startedAt = this.now();
+    const canonical = canonicalHost(host);
+    const asked: ToolContext = { ...ctx, signal: askSignal ? AbortSignal.any([ctx.signal, askSignal]) : ctx.signal };
+    const args = canonical === null ? { host } : port === undefined ? { host: canonical } : { host: canonical, port };
+    let auth: Authorization;
+    if (canonical === null) {
+      auth = { ok: false, code: 'permission_denied', reason: `The sandbox can't reach ${JSON.stringify(host)}: it isn't a valid host name.`, grantedBy: 'deny:policy' };
+    } else if (asked.signal.aborted) {
+      auth = cancelledAuth();
+    } else {
+      auth = await this.authorize(SANDBOX_NETWORK_SPEC, args, policy, asked);
+    }
+    if (auth.ok) {
+      this.audit(ctx, SANDBOX_NETWORK_TOOL, args, null, this.now() - startedAt, auth.grantedBy, `allowed ${canonical}${port === undefined ? '' : `:${port}`}`, auth.decidedOnNode);
+    } else {
+      this.audit(ctx, SANDBOX_NETWORK_TOOL, args, toolError(auth.code, auth.reason), this.now() - startedAt, auth.grantedBy, undefined, auth.decidedOnNode);
+    }
+    return auth.ok;
   }
 
   async refreshMcp(serverId: string): Promise<void> {
@@ -341,6 +388,12 @@ export class GruntToolProvider implements ToolProvider {
     if (ctx.signal.aborted) {
       this.broker.discard(request.id);
       return cancelledAuth();
+    }
+    // Nobody is watching an unattended run (scheduled tasks): a card would
+    // wait forever, so the call is refused and no card is raised.
+    if (ctx.unattended === true) {
+      this.broker.discard(request.id);
+      return { ok: false, code: 'unattended', reason: UNATTENDED_REASON, grantedBy: 'deny:unattended' };
     }
     // Register the waiter BEFORE notifying so a listener that answers
     // synchronously from inside the 'request' event still reaches it.

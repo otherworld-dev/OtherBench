@@ -21,13 +21,13 @@ const KILL_GRACE_MS = 2000;
 // about rather than an uncaught exception reaching the engine.
 // ---------------------------------------------------------------------------
 
-interface ToolError {
+export interface ToolError {
   error: true;
   code: string;
   message: string;
 }
 
-function toolError(code: string, message: string): ToolError {
+export function toolError(code: string, message: string): ToolError {
   return { error: true, code, message };
 }
 
@@ -44,7 +44,6 @@ async function runTool<T>(fn: () => Promise<T>): Promise<T | ToolError> {
   try {
     return await fn();
   } catch (err) {
-    if (err instanceof ArgsError) return toolError('bad_args', err.message);
     if (err instanceof AlreadyAbortedError) return toolError('aborted', err.message);
     const message = err instanceof Error ? err.message : String(err);
     return toolError('spawn_failed', message);
@@ -73,6 +72,28 @@ function optionalPositiveInt(args: unknown, key: string): number | undefined {
     throw new ArgsError(`"${key}" must be a positive integer when present.`);
   }
   return value;
+}
+
+/** run_command's JSON schema, shared by the host and the sandboxed tool. */
+export const RUN_COMMAND_PARAMETERS: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    command: { type: 'string', description: 'The command line to run.' },
+    timeoutMs: { type: 'integer', minimum: 1, description: 'Timeout in milliseconds (default 120000, hard cap 600000).' },
+  },
+  required: ['command'],
+};
+
+/** run_command's arguments, checked, with the timeout defaulted and capped. Shared with the sandboxed run_command. */
+export function parseRunCommandArgs(args: unknown): { command: string; timeoutMsUsed: number } | ToolError {
+  try {
+    const command = requireString(args, 'command');
+    const requested = optionalPositiveInt(args, 'timeoutMs');
+    return { command, timeoutMsUsed: Math.min(requested ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS) };
+  } catch (err) {
+    if (err instanceof ArgsError) return toolError('bad_args', err.message);
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -184,22 +205,14 @@ export const runCommandTool: ToolSpec = {
     'combined stdout+stderr is captured up to 100KB. On timeout the command and its process tree are killed ' +
     'on a best-effort basis, but a process that fully detaches itself (its own process group, or a Windows ' +
     'DETACHED_PROCESS/START-launched child) survives and keeps running after this tool returns.',
-  parameters: {
-    type: 'object',
-    properties: {
-      command: { type: 'string', description: 'The command line to run.' },
-      timeoutMs: { type: 'integer', minimum: 1, description: 'Timeout in milliseconds (default 120000, hard cap 600000).' },
-    },
-    required: ['command'],
-  },
+  parameters: RUN_COMMAND_PARAMETERS,
   risk: 'execute',
   source: 'shell',
   async execute(args: unknown, ctx: ToolContext): Promise<unknown> {
+    const parsed = parseRunCommandArgs(args);
+    if ('error' in parsed) return parsed;
+    const { command, timeoutMsUsed } = parsed;
     return runTool(async () => {
-      const command = requireString(args, 'command');
-      const requestedTimeout = optionalPositiveInt(args, 'timeoutMs');
-      const timeoutMsUsed = Math.min(requestedTimeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-
       if (!ctx.workspaceRoot) {
         throw new Error('run_command requires a workspace root, and none is configured for this chat.');
       }

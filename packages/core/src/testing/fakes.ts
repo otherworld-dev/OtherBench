@@ -388,7 +388,7 @@ export class FakeToolProvider implements ToolProvider {
   private async settle(
     decision: ReturnType<PermissionBroker['decide']>,
     ctx: ToolContext
-  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled'; reason: string }> {
+  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'unattended'; reason: string }> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
     if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
 
@@ -397,6 +397,11 @@ export class FakeToolProvider implements ToolProvider {
     if (ctx.signal.aborted) {
       this.broker.discard(request.id);
       return FAKE_CANCELLED;
+    }
+    // Mirrors GruntToolProvider: nobody can answer an unattended run's card, so refuse and raise none.
+    if (ctx.unattended === true) {
+      this.broker.discard(request.id);
+      return { ok: false, code: 'unattended', reason: "Nobody is watching this run, so a call that needs approval was refused instead of waiting for an answer that can't come." };
     }
     // Waiter registered BEFORE notifying so a listener may answer synchronously.
     const pending = new Promise<{ choice: ApprovalChoice; cancelled: boolean }>((resolve) => {
