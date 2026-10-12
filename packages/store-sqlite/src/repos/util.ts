@@ -1,3 +1,5 @@
+import type { DatabaseSync } from 'node:sqlite';
+
 // Small conversion helpers shared by every repo below. SQLite has no native
 // boolean or JSON type: booleans round-trip through INTEGER 0/1, and any
 // column typed as a JSON blob in the schema (see migrations/001-initial.ts)
@@ -28,4 +30,25 @@ export function toBool(value: boolean): number {
 
 export function fromBool(value: number): boolean {
   return value !== 0;
+}
+
+/**
+ * Runs `fn` so that its writes all happen or none do, wherever it is called
+ * from. With no transaction open it is one (as `SqliteStore.transaction` is).
+ * Inside a caller's transaction it is a savepoint: a failure takes back `fn`'s
+ * own writes only, and the caller's transaction is still open, to go on (if
+ * it catches the error) or to roll back as a whole (if it lets it through).
+ */
+export function atomic<T>(db: DatabaseSync, fn: () => T): T {
+  const nested = db.isTransaction;
+  db.exec(nested ? 'SAVEPOINT grunt_atomic' : 'BEGIN');
+  try {
+    const result = fn();
+    db.exec(nested ? 'RELEASE grunt_atomic' : 'COMMIT');
+    return result;
+  } catch (err) {
+    // SQLite may have rolled back already (a full disk, an I/O error): a second ROLLBACK would hide `err`.
+    if (db.isTransaction) db.exec(nested ? 'ROLLBACK TO grunt_atomic; RELEASE grunt_atomic' : 'ROLLBACK');
+    throw err;
+  }
 }

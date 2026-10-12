@@ -942,6 +942,66 @@ describe('a reply that stores files while it streams (tool screenshots)', () => 
     a.store.messages.updateStatus('r1', 'complete');
     expect((a.db.prepare("SELECT row_id FROM change_log WHERE seq > ? AND tbl = 'attachment'").all(mid) as { row_id: string }[]).map((r) => r.row_id)).toEqual(['shot']);
   });
+
+  /** The reply's row and the whole change log, to compare before and after. */
+  const state = (n: Node): unknown => ({
+    reply: n.db.prepare("SELECT status, error, hlc FROM message WHERE id = 'r1'").get(),
+    log: n.db.prepare('SELECT seq, tbl, row_id, op FROM change_log ORDER BY seq').all(),
+  });
+  /** Makes logging a file fail from now on, as a full disk would between the statements of `updateStatus`. */
+  const breakFileLog = (n: Node): void => n.db.exec("CREATE TRIGGER break_file_log BEFORE INSERT ON change_log WHEN NEW.tbl = 'attachment' BEGIN SELECT RAISE(ABORT, 'log is broken'); END");
+
+  it('stopping a reply is all or nothing: when its files cannot be logged again, its status and the change log stay as they were', () => {
+    const a = streaming();
+    const before = state(a);
+    breakFileLog(a);
+
+    expect(() => a.store.messages.updateStatus('r1', 'complete')).toThrow('log is broken');
+
+    expect(state(a)).toEqual(before);
+    expect(a.store.messages.get('r1')!.status).toBe('streaming');
+    expect(a.db.isTransaction).toBe(false);
+    // Once logging works again the same call goes through, and the peer gets the reply and its file.
+    a.db.exec('DROP TRIGGER break_file_log');
+    a.store.messages.updateStatus('r1', 'complete');
+    const b = node('b');
+    pull(a, b, { seq: 0 });
+    expect(b.store.attachments.get('shot')).toMatchObject({ messageId: 'r1' });
+  });
+
+  it('stopping a reply inside a transaction the caller already has open: it joins it, and a failure undoes only its own writes', () => {
+    const a = streaming();
+    // Joined: committed with the caller's own write...
+    a.store.transaction(() => {
+      message(a, 'u2', 'c', 'u');
+      a.store.messages.updateStatus('r1', 'complete');
+      expect(a.db.isTransaction).toBe(true);
+    });
+    expect(a.store.messages.get('r1')!.status).toBe('complete');
+    expect(a.store.messages.get('u2')).not.toBeNull();
+    // ...and rolled back with it.
+    expect(() =>
+      a.store.transaction(() => {
+        a.store.messages.updateStatus('r1', 'cancelled');
+        throw new Error('caller gave up');
+      })
+    ).toThrow('caller gave up');
+    expect(a.store.messages.get('r1')!.status).toBe('complete');
+
+    // A failure the caller catches leaves the caller's writes and takes back all of this call's.
+    a.store.messages.updateStatus('r1', 'streaming');
+    const before = state(a);
+    breakFileLog(a);
+    a.store.transaction(() => {
+      message(a, 'u3', 'c', 'u');
+      expect(() => a.store.messages.updateStatus('r1', 'error', { kind: 'unknown', message: 'x', retryable: true })).toThrow('log is broken');
+      expect(a.db.isTransaction).toBe(true);
+    });
+    expect(a.store.messages.get('u3')).not.toBeNull();
+    const after = state(a) as { reply: unknown; log: { tbl: string; row_id: string }[] };
+    expect(after.reply).toEqual((before as { reply: unknown }).reply);
+    expect(after.log.filter((r) => r.row_id !== 'u3')).toEqual((before as { log: unknown[] }).log);
+  });
 });
 
 describe('a synced reference passes only when its file is here and bound (nothing passes on a null, a missing row or a wrong type)', () => {

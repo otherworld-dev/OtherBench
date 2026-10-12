@@ -9,7 +9,7 @@ import type {
   Role,
   SerializedError,
 } from '@grunt/core/types/messages.js';
-import { fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
+import { atomic, fromJson, fromJsonNullable, toJson, toJsonNullable } from './util.js';
 import { selfIdOf } from './nodes.js';
 import { clockOf, type SyncClock } from './clock.js';
 
@@ -226,22 +226,28 @@ export class SqliteMessageRepo implements MessageRepo {
 
   // `error` omitted means "clear it" rather than "leave it": a message moving
   // to `complete` after a failed attempt must not keep the stale error.
+  //
+  // The status and the change log move together (`atomic`): a failure part way
+  // leaves the reply as it was and its files' log entries where they were, so
+  // a reply is never stopped with its files dropped from what a peer is sent.
   updateStatus(id: string, status: MessageStatus, error?: SerializedError | null): void {
-    const result = this.db
-      .prepare(`UPDATE message SET status = ?, error = ?, hlc = ? WHERE id = ?`)
-      .run(status, toJsonNullable(error ?? null), this.clock.stamp(), id);
-    if (Number(result.changes) === 0) {
-      throw new Error(`message: not found: ${id}`);
-    }
-    if (status !== 'streaming') {
-      // The files of a reply (a tool's screenshots) are rows made while it was still
-      // streaming, so they were logged before the message could be sent and a peer
-      // had to turn them down. Now that the message follows, they do too: logged
-      // again, after it (the old entries go first, so their place in the log is
-      // behind the message's, even when a batch ends between the two).
-      this.db.prepare(`DELETE FROM change_log WHERE tbl = 'attachment' AND row_id IN (SELECT id FROM attachment WHERE message_id = ?)`).run(id);
-      this.db.prepare(`INSERT INTO change_log (tbl, row_id, op) SELECT 'attachment', id, 'upsert' FROM attachment WHERE message_id = ?`).run(id);
-    }
+    atomic(this.db, () => {
+      const result = this.db
+        .prepare(`UPDATE message SET status = ?, error = ?, hlc = ? WHERE id = ?`)
+        .run(status, toJsonNullable(error ?? null), this.clock.stamp(), id);
+      if (Number(result.changes) === 0) {
+        throw new Error(`message: not found: ${id}`);
+      }
+      if (status !== 'streaming') {
+        // The files of a reply (a tool's screenshots) are rows made while it was still
+        // streaming, so they were logged before the message could be sent and a peer
+        // had to turn them down. Now that the message follows, they do too: logged
+        // again, after it (the old entries go first, so their place in the log is
+        // behind the message's, even when a batch ends between the two).
+        this.db.prepare(`DELETE FROM change_log WHERE tbl = 'attachment' AND row_id IN (SELECT id FROM attachment WHERE message_id = ?)`).run(id);
+        this.db.prepare(`INSERT INTO change_log (tbl, row_id, op) SELECT 'attachment', id, 'upsert' FROM attachment WHERE message_id = ?`).run(id);
+      }
+    });
   }
 
   listByStatus(status: MessageStatus): CanonMessage[] {
