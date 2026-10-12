@@ -18,6 +18,7 @@ import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
+import { keepToolImages, type SaveToolImage } from './tool-images.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -149,6 +150,14 @@ export interface TurnRunnerOptions {
   loadAttachment?: (id: string) => Promise<Buffer>;
   /** Whether a folder exists, for resolving a chat's workspace. Defaults to `fs.existsSync`. */
   pathExists?: (path: string) => boolean;
+  /**
+   * Stores an image a tool returned (spec 2026-10-12-computer-use-design
+   * section 6) and returns its attachment id. The container wires it to the
+   * blob store plus an attachment row on the reply, so blob GC keeps it.
+   * Without it, images in tool results are dropped to a text note: base64 is
+   * never broadcast or stored either way.
+   */
+  saveToolImage?: SaveToolImage;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -230,6 +239,7 @@ export class TurnRunner {
   private readonly toolProvider?: ToolProvider;
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly pathExists: (path: string) => boolean;
+  private readonly saveToolImage?: SaveToolImage;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
@@ -246,6 +256,7 @@ export class TurnRunner {
     this.toolProvider = options.toolProvider;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
+    this.saveToolImage = options.saveToolImage;
     this.toolProvider?.onApprovalEvent((event) => {
       if (event.type === 'request') {
         this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
@@ -496,6 +507,7 @@ export class TurnRunner {
     const startedAt = this.now();
 
     let parts: Part[] = [];
+    const imageBudget = { kept: 0 };
     let lastCheckpointAt = this.now();
     let status: MessageStatus = 'complete';
     let error: SerializedError | null = null;
@@ -635,38 +647,45 @@ export class TurnRunner {
           this.store.messages.updateEngineMeta(messageId, event.meta);
           continue;
         }
-        this.emit({ messageId, ...event });
+        // Images in a tool result go to the blob store before anyone sees
+        // the result (spec 2026-10-12-computer-use-design section 6): base64
+        // never reaches an SSE client or a message row.
+        const out: EngineEvent =
+          event.type === 'tool-result'
+            ? { ...event, result: await keepToolImages(event.result, this.saveToolImage, chatId, messageId, imageBudget) }
+            : event;
+        this.emit({ messageId, ...out });
 
-        switch (event.type) {
+        switch (out.type) {
           case 'notice':
-            parts = [...parts, { type: 'notice', text: event.text }];
+            parts = [...parts, { type: 'notice', text: out.text }];
             checkpoint(true);
             break;
           case 'text-delta':
-            parts = appendDelta(parts, 'text', event.text);
+            parts = appendDelta(parts, 'text', out.text);
             checkpoint(false);
             break;
           case 'reasoning-delta':
-            parts = appendDelta(parts, 'reasoning', event.text);
+            parts = appendDelta(parts, 'reasoning', out.text);
             checkpoint(false);
             break;
           case 'tool-call':
-            parts = [...parts, { type: 'tool-call', id: event.id, name: event.name, args: event.args }];
+            parts = [...parts, { type: 'tool-call', id: out.id, name: out.name, args: out.args }];
             checkpoint(true);
             break;
           case 'tool-result':
             parts = [
               ...parts,
-              { type: 'tool-result', id: event.id, name: event.name, result: event.result, isError: event.isError },
+              { type: 'tool-result', id: out.id, name: out.name, result: out.result, isError: out.isError },
             ];
             checkpoint(true);
             break;
           case 'finish':
-            usage = event.usage;
+            usage = out.usage;
             break;
           case 'error':
-            status = event.error.kind === 'cancelled' ? 'cancelled' : 'error';
-            error = event.error;
+            status = out.error.kind === 'cancelled' ? 'cancelled' : 'error';
+            error = out.error;
             break;
           default:
             break;
