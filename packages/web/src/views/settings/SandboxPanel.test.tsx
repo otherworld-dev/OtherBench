@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
@@ -87,15 +87,93 @@ describe('SandboxPanel', () => {
     await user.type(field, 'ffmpeg, pandoc');
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(sandbox.setPackages).toHaveBeenCalledWith(['ffmpeg', 'pandoc']);
+    // Back to the server's own list once it took it.
+    await waitFor(() => expect(field).toHaveValue('ffmpeg pandoc'));
+  });
+
+  it('shows the server refusing the packages, and keeps what was typed', async () => {
+    sandbox.status.mockResolvedValue(READY);
+    sandbox.setPackages.mockRejectedValue(new ApiError(400, '"packages": "nope!" isn\'t a Debian package name.'));
+    render(<SandboxPanel />);
+    const user = userEvent.setup();
+    const field = await screen.findByLabelText('Extra packages');
+    await user.type(field, 'nope!');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("isn't a Debian package name");
+    expect(field).toHaveValue('nope!');
+  });
+
+  it('announces its state and progress, and ties the help text to the packages field', async () => {
+    sandbox.status.mockResolvedValue(status({ state: 'setting_up', log: ['▶ Check WSL'] }));
+    render(<SandboxPanel />);
+    expect(await screen.findByRole('status')).toHaveTextContent('Setting up…');
+    expect(screen.getByRole('log', { name: 'Setup progress' })).toHaveTextContent('▶ Check WSL');
+    expect(screen.getByLabelText('Extra packages')).toHaveAccessibleDescription(/Ubuntu \(apt\) package names/);
+  });
+
+  it('moves focus to the progress log when Set up takes its own button away', async () => {
+    sandbox.status.mockResolvedValue(status());
+    sandbox.setup.mockResolvedValue(status({ state: 'setting_up', log: ['▶ Check WSL'] }));
+    render(<SandboxPanel />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Set up' }));
+    expect(await screen.findByRole('log', { name: 'Setup progress' })).toHaveFocus();
   });
 
   it('shows warnings, and a refusal from the server', async () => {
     sandbox.status.mockResolvedValue({ ...READY, warnings: ["WSL's mirrored networking is on"] });
     sandbox.setup.mockRejectedValue(new ApiError(409, 'The sandbox is being set up.'));
     render(<SandboxPanel />);
-    expect(await screen.findByTestId('sandbox-warning')).toHaveTextContent('mirrored networking');
+    expect(await screen.findByTestId('sandbox-warning')).toHaveTextContent("Warning: WSL's mirrored networking is on");
     await userEvent.setup().click(screen.getByRole('button', { name: 'Repair' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('The sandbox is being set up.');
+  });
+});
+
+describe('SandboxPanel polling', () => {
+  // Only the interval is faked, so the promises and findBy* waits keep running on real time.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const tick = () =>
+    act(async () => {
+      vi.advanceTimersByTime(SANDBOX_POLL_MS);
+    });
+  const SETTING_UP = status({ state: 'setting_up', log: ['▶ Check WSL'] });
+
+  it('shows a failed poll and clears it on the next good one', async () => {
+    sandbox.status.mockResolvedValue(SETTING_UP);
+    render(<SandboxPanel />);
+    await screen.findByTestId('sandbox-log');
+    sandbox.status.mockRejectedValueOnce(new Error('network'));
+    await tick();
+    expect(await screen.findByRole('alert')).toHaveTextContent("That didn't work");
+    await tick();
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('stops polling once the state leaves setting_up', async () => {
+    sandbox.status.mockResolvedValueOnce(SETTING_UP).mockResolvedValue(READY);
+    render(<SandboxPanel />);
+    await screen.findByTestId('sandbox-log');
+    await tick();
+    await screen.findByTestId('sandbox-versions');
+    expect(sandbox.status).toHaveBeenCalledTimes(2);
+    await tick();
+    await tick();
+    expect(sandbox.status).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops polling when the panel goes away', async () => {
+    sandbox.status.mockResolvedValue(SETTING_UP);
+    const { unmount } = render(<SandboxPanel />);
+    await screen.findByTestId('sandbox-log');
+    unmount();
+    await tick();
+    await tick();
+    expect(sandbox.status).toHaveBeenCalledTimes(1);
   });
 });
 

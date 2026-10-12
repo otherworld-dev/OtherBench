@@ -1,4 +1,4 @@
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useRef, useState, type JSX } from 'react';
 import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
 import { ApiError, api } from '../../state/api.js';
 
@@ -36,6 +36,9 @@ export function SandboxPanel(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [packagesText, setPackagesText] = useState<string | null>(null);
+  const stateRef = useRef<HTMLParagraphElement>(null);
+  const logRef = useRef<HTMLPreElement>(null);
+  const previousState = useRef<SandboxStatus['state'] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,22 +62,50 @@ export function SandboxPanel(): JSX.Element {
     const timer = setInterval(() => {
       api.sandbox
         .status()
-        .then(setStatus)
-        .catch((err: unknown) => console.error('[grunt-web] failed to load the sandbox status:', err));
+        .then((s) => {
+          setStatus(s);
+          setError(null);
+        })
+        .catch((err: unknown) => setError(errorText(err)));
     }, SANDBOX_POLL_MS);
     return () => clearInterval(timer);
   }, [settingUp]);
 
-  async function act(fn: () => Promise<SandboxStatus>): Promise<void> {
+  // The newest progress line stays in view.
+  const logLength = status?.log?.length ?? 0;
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logLength, status?.log?.[logLength - 1]]);
+
+  // Set up, Repair and Remove take their own button away when the state changes; keep keyboard focus on the panel.
+  const state = status?.state ?? null;
+  useEffect(() => {
+    const before = previousState.current;
+    previousState.current = state;
+    if (before !== null && state !== before && (document.activeElement === null || document.activeElement === document.body)) {
+      (logRef.current ?? stateRef.current)?.focus();
+    }
+  }, [state]);
+
+  /** Runs a button's call; true when it went through. */
+  async function act(fn: () => Promise<SandboxStatus>): Promise<boolean> {
     setBusy(true);
     setError(null);
     try {
       setStatus(await fn());
+      return true;
     } catch (err) {
       setError(errorText(err));
+      return false;
     } finally {
       setBusy(false);
     }
+  }
+
+  async function applyPackages(list: string[]): Promise<void> {
+    // Back to showing the server's list, which is what it now holds.
+    if (await act(() => api.sandbox.setPackages(list))) setPackagesText(null);
   }
 
   function remove(): void {
@@ -112,7 +143,7 @@ export function SandboxPanel(): JSX.Element {
         Each command sees only its chat&rsquo;s folders and reaches only the hosts its profile allows; any other host asks you first. Under
         &ldquo;ask on mutate&rdquo; those commands need no approval.
       </p>
-      <p data-testid="sandbox-state" className="text-sm">
+      <p ref={stateRef} role="status" tabIndex={-1} data-testid="sandbox-state" className="text-sm outline-none">
         <strong>{STATE_LABEL[status.state]}</strong>
         {status.state === 'not_set_up' ? ` on ${status.machine}.` : ''}
       </p>
@@ -134,7 +165,7 @@ export function SandboxPanel(): JSX.Element {
       )}
       {(status.warnings ?? []).map((w) => (
         <p key={w} data-testid="sandbox-warning" className="text-xs text-[var(--warn)]">
-          {w}
+          <span className="font-medium">Warning:</span> {w}
         </p>
       ))}
       <div className="flex flex-wrap gap-2">
@@ -155,7 +186,14 @@ export function SandboxPanel(): JSX.Element {
         )}
       </div>
       {status.log && status.log.length > 0 && (
-        <pre data-testid="sandbox-log" className="max-h-64 overflow-y-auto rounded-sm bg-[var(--bg-sunken)] p-2 text-xs whitespace-pre-wrap">
+        <pre
+          ref={logRef}
+          role="log"
+          aria-label="Setup progress"
+          tabIndex={0}
+          data-testid="sandbox-log"
+          className="max-h-64 overflow-y-auto rounded-sm bg-[var(--bg-sunken)] p-2 text-xs whitespace-pre-wrap"
+        >
           {status.log.join('\n')}
         </pre>
       )}
@@ -165,16 +203,17 @@ export function SandboxPanel(): JSX.Element {
         </label>
         <input
           id="sandbox-packages"
+          aria-describedby="sandbox-packages-help"
           value={packages}
           onChange={(e) => setPackagesText(e.target.value)}
           placeholder="ffmpeg pandoc"
           className="w-full rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-sm"
         />
-        <p className="text-xs text-[var(--text-muted)]">
+        <p id="sandbox-packages-help" className="text-xs text-[var(--text-muted)]">
           Ubuntu (apt) package names. Grunt installs them as root when you press Apply; commands in the sandbox can&rsquo;t install system packages
           themselves. Taking one off the list doesn&rsquo;t uninstall it.
         </p>
-        <button type="button" disabled={busy || settingUp} onClick={() => void act(() => api.sandbox.setPackages(splitPackages(packages)))} className="btn px-3 py-1.5">
+        <button type="button" disabled={busy || settingUp} onClick={() => void applyPackages(splitPackages(packages))} className="btn px-3 py-1.5">
           Apply
         </button>
       </div>
