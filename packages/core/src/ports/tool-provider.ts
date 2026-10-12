@@ -25,6 +25,12 @@ export interface ToolContext {
    * path always means the workspace. Absent means none.
    */
   folders?: ResolvedFolder[];
+  /**
+   * Nobody is watching this run (a scheduled task, spec 2026-10-12-sandbox-design
+   * "Unattended runs"), so a call that would need an approval card is refused
+   * instead of waiting for an answer that can't come. Absent = someone is watching.
+   */
+  unattended?: boolean;
   signal: AbortSignal;
 }
 

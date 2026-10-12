@@ -60,6 +60,9 @@ export function isClaudeEffort(value: unknown): value is ClaudeEffort {
   return typeof value === 'string' && (CLAUDE_EFFORTS as readonly string[]).includes(value);
 }
 
+/** Where a profile's shell commands run (spec 2026-10-12-sandbox-design): on this machine, or in Grunt's sandbox. */
+export type ShellRuns = 'host' | 'sandbox';
+
 export interface ToolPolicy {
   fs: FsMode;
   shell: boolean;
@@ -73,6 +76,35 @@ export interface ToolPolicy {
   artifacts?: boolean;
   /** Search past chats (spec 2026-10-09-recall-design): the `recall` tool, for both engines. Absent = on. */
   recall?: boolean;
+  /** Where `run_command` runs when `shell` is on (spec 2026-10-12-sandbox-design). Absent = 'host'. */
+  shellRuns?: ShellRuns;
+  /**
+   * Hosts a sandboxed command may reach without asking, as the sandbox
+   * runtime takes them (`pypi.org`, `*.example.com`, optional `:port`).
+   * Absent = DEFAULT_SANDBOX_HOSTS. Any other host raises a card.
+   */
+  sandboxHosts?: string[];
+}
+
+/** What a sandboxed command may reach when the profile names no hosts of its own (spec 2026-10-12-sandbox-design). */
+export const DEFAULT_SANDBOX_HOSTS: readonly string[] = [
+  'registry.npmjs.org',
+  'pypi.org',
+  'files.pythonhosted.org',
+  'github.com',
+  'codeload.github.com',
+  'objects.githubusercontent.com',
+  'raw.githubusercontent.com',
+];
+
+/** Whether this policy's `run_command` is the sandboxed one: shell on and set to run in the sandbox. */
+export function runsShellInSandbox(policy: ToolPolicy): boolean {
+  return policy.shell && policy.shellRuns === 'sandbox';
+}
+
+/** The hosts a sandboxed command may reach without asking, as a fresh array. */
+export function sandboxHostsOf(policy: ToolPolicy): string[] {
+  return [...(policy.sandboxHosts ?? DEFAULT_SANDBOX_HOSTS)];
 }
 
 export interface ModelParams {
