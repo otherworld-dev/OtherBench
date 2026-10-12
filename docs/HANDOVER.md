@@ -650,6 +650,31 @@ extension comes from a fixed list of languages, else `.txt`, so a download
 is never a `.bat` or `.hta`. The web must never import
 `@grunt/core/domain/artifacts.js`: it pulls in `node:crypto`. Schemas 16 and 17.
 
+**Live artifacts can read MCP data while a page is open** (spec
+2026-10-12-live-artifacts, Deck #929; schema 24, see "Live artifacts" below).
+An html artifact may declare up to 10 calls to read-only MCP tools
+(`readOnlyHint: true`; a tool that declares nothing is refused), with only
+enum and bounded-integer parameters. You allow them once in the viewer, and
+each approval is a `chat` grant with a `live` constraint bound to the call's
+declaration hash, the chat's profile and this machine. Changing a call's args
+asks again, and a model rewrite that leaves the calls alone doesn't. Only
+`PermissionBroker.grantLive` makes those grants, `resolve()` refuses one, an
+ordinary call never matches one, and the broker's live branch never asks and
+never takes the ask-on-mutate read pass. The page has an opaque origin and no
+token. It posts to the app frame, which checks the message came from that
+frame, and the server builds every argument from the stored declaration. Live
+pages are served with no network at all (`default-src 'none'`, `connect-src`,
+`frame-src`, `child-src`, `worker-src`, `object-src` and `manifest-src` all
+`'none'`, no `'unsafe-eval'`, `form-action 'none'`, DNS prefetch off). What
+that can't stop: the page navigating its own frame with data in the address
+(the viewer closes it on the next `load`, but the request has gone), WebRTC to
+a STUN or TURN host, and DNS lookups that slip past the prefetch header. That
+is the same leak HTML artifacts and read-only MCP tools under ask-on-mutate
+already have, and the approval panel says so. Calls run on the machine serving
+the UI, never forwarded, and grants don't sync. Every call the broker decides
+is audited (`live:<grant id>` or `deny:policy`), cache hits (30 s, memory only)
+are not.
+
 **Recall asks once per chat before it reads other chats** (spec
 2026-10-09-recall-design). The `recall` tool searches past chats and projects
 and reads one, through `runRecallCommand` in core for both engines. It has
@@ -984,6 +1009,31 @@ Spec: `docs/superpowers/specs/2026-10-12-scheduled-tasks-design.md` (Deck #925).
 - **API.** `/api/schedules` (list, create, PATCH, DELETE, `/:id/runs`, `/:id/run` → 409 `{ kind: 'running' | 'busy' | 'full' }`). Not mounted on the peer listener.
 - **Tests.** `packages/web/e2e/schedules.spec.ts` makes a chat schedule from the chat menu and a project schedule from the project menu, runs both with Run now, checks a refused `#recall` call shows no card, and pauses and resumes a schedule. Every schedule is set for twelve hours ahead so nothing fires on its own.
 
+### Live artifacts
+
+Spec: `docs/superpowers/specs/2026-10-12-live-artifacts-design.md` (Deck #929). An html artifact can declare calls to read-only MCP tools, and its page fetches the results with `grunt.live(callId, params?)` while it is open in the viewer. The point is a dashboard that stays current (tasks, calendar) without the model rewriting it each time. The page must include `<script src="grunt-live.js"></script>` itself, Grunt never rewrites the model's HTML.
+
+- **Where it lives.** Migration `024-artifact-version-live` adds a `live` column to `artifact_version` (JSON or NULL), and it syncs with the row. 022 (chat plan mode) and 023 (schedules) come before it on this branch, and 021 is still reserved. A stored declaration that no longer parses reads as none (`storedLive` in `store-sqlite/src/repos/artifacts.ts`), so the page is then served with the ordinary artifact policy, which is looser than the live one. No tool call is possible from it, as there is no declaration to match.
+- **The declaration.** At most 10 calls and 32 KB in all, `args` at most 4 KB, at most 5 params a call. Params are an enum (1-50 values) or a bounded integer, so there is no free text and no dates. `parseLiveSpec` in core is the one check. `update` keeps the declaration, `rewrite` replaces or drops it, and a user edit copies it.
+- **Approval.** One grant per call, bound to the SHA-256 of `{ tool, args, params }`. `PermissionBroker.decideLive` is the only branch that sees a live call, and it is the first thing `decide()` does. The viewer answers `not_approved` itself for a call that isn't allowed yet, without calling the server.
+- **The live CSP**, as shipped in `livePolicy` (`packages/server/src/routes/view-serve.ts`), with `X-DNS-Prefetch-Control: off` beside it:
+
+  ```
+  sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' <link folder>grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'
+  ```
+
+  The spec had a shorter list that left `connect-src`, `frame-src` and `worker-src` to fall back to `default-src`. A security review asked for them to be written out, and for `script-src` to name the exact helper URL rather than the whole folder. Other versions still get `sandboxPolicy`.
+- **What the tests prove.** `packages/web/e2e/live-exfil.spec.ts` serves a page under the real `livePolicy` that tries about 35 ways of sending a result out (fetch, XHR, WebSocket, forms, images, fonts, workers and so on), and none of them makes a request. A control run with no policy shows the watches do see them. `packages/web/e2e/live-probe.spec.ts` pins what Chromium does with the frame: `event.source` is the page's frame, so the bridge needs no nonce.
+- **Limits.** Per artifact on the server: 4 calls in flight and 30 uncached calls in a rolling minute, else `rate_limited`. Per frame in the viewer: 8 outstanding requests, else `busy`, and requests over 16 KB of JSON are ignored. Each call times out after 30 s (the helper gives up at 45 s). A result is text and structured JSON only, up to 1 MB, else `too_large`. Results are cached for 30 s in memory, at most 100 entries, and a `fresh` request skips the cache.
+- **Names, not server ids.** A live grant is bound to the namespaced tool name (`mcp__<server>__<tool>`), not to the MCP server's id. If two servers of the profile share a name, or sanitising makes two names equal, the call is unavailable ("names more than one tool"). The other direction isn't closed: a server renamed, or replaced by another, to take over a granted name inherits its grants. Phase 2 should bind grants to the server id.
+- **What an approval trusts.** It binds to the declaration, not to the page's code, so a rewrite that keeps the same calls keeps the approval and can do anything with the results that the sandbox allows. `readOnlyHint` is the server's own claim, Grunt can't check it. Calls run on the machine serving the UI and grants don't sync, so a paired laptop is approved on its own.
+- **Residual leaks** (spec section 12). All of them are known, and the approval panel says so.
+  - **Navigating its own frame.** The page can put data in the address (`location=`, a meta refresh). The viewer counts `load` events, and a second one closes the page ("This page went to another address, so Grunt closed it."), but the request has already gone.
+  - **Navigating before the first load.** A page that does it before its first `load` event is never closed, as counting loads can't see it. A call it makes in that time can have its answer delivered to the new document (noted in `live-bridge.ts`), and the address has been fetched anyway.
+  - **WebRTC** to a STUN or TURN host, which CSP doesn't govern in Chromium.
+  - **DNS** lookups that slip past `X-DNS-Prefetch-Control: off`. `preconnect` and `dns-prefetch` open no socket in Playwright's Chromium even with no policy, so the exfil spec can't speak for them.
+- **Tests.** Unit tests in core (`live-artifacts.test.ts`, `permissions.test.ts`), tools (`live-calls.test.ts`, `provider-live.test.ts`), the viewer's `live-bridge.test.ts`, `LiveBar.test.tsx` and `ArtifactView.test.tsx` in web, and the e2e specs `live-artifacts.spec.ts` (a live page through the Mock model and a fixture MCP server), `live-exfil.spec.ts` and `live-probe.spec.ts`.
+
 ## Encryption at rest
 
 Provider API keys and other secrets live in `secrets.json` next to the
@@ -1086,6 +1136,17 @@ this on startup.
   run on the main thread, about a third of a second here; a much larger
   export would hold up other requests for longer. A worker would fix it.
 - **Dependency advisories** -- cleared: `npm audit --omit=dev` reports 0 after upgrading to the latest v6 line (`ai@6.0.300`, `@ai-sdk/provider-utils@4.0.57` -> `undici@6.29.0`), `hono@4.13.12` and a plain `npm audit fix` for the MCP SDK's transitive deps. `ai` stays pinned to v6; never `npm audit fix --force`.
+- **Live artifacts in the desktop window are unchecked.** The probe
+  (`packages/web/e2e/live-probe.spec.ts`) covers Chromium only; run its
+  checks by hand in WebView2. Phase 2: forward live calls to the chat's *Runs
+  on* machine, bind live grants to the MCP server id rather than its name, a
+  bundled chart library, free-text and date parameters. Phase 3: WebView2
+  `FrameNavigationStarting` to stop a live page leaving.
+- **Live artifacts by hand:** a dashboard from the real Nextcloud server
+  (`tasks_list`, `cal_list` with `from: 'today'`, `to: '+7d'`) written from
+  the guidance alone; an `update` that leaves the calls alone keeps the
+  approval and one that changes args asks for that call only; a Claude Code
+  chat making one with relayed tool names; viewing from the paired laptop.
 - **Scheduled tasks phase 2 isn't built.** Schedules don't sync or move between machines, there are no browser or phone notifications, no "every N hours" or cron rules, no per-schedule timeout and no attachments in the prompt. Deleting a chat or project removes its schedules without a mention in the delete dialog.
 
 ## Deviations from the v2 spec and plan
