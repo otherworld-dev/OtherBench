@@ -14,8 +14,14 @@ const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 /** Matches core's LIVE_CALL_ID (the web can't import core's domain). */
 const CALL_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const MAX_REQUEST_BYTES = 16 * 1024;
-/** Requests a page may have waiting at once. */
-export const MAX_OUTSTANDING = 8;
+/** Requests a page may have waiting at once, sent or queued; past this it gets `busy`. */
+export const MAX_OUTSTANDING = 16;
+/**
+ * Requests sent to the server at once; the rest wait in order. Matches the
+ * server's in-flight limit per artifact (tools' live-calls.ts), so a page
+ * that asks for many calls together isn't refused as asking too often.
+ */
+export const MAX_IN_FLIGHT = 4;
 
 export interface LiveRequest {
   requestId: string;
@@ -63,7 +69,15 @@ const NOT_APPROVED: LiveOutcome = { ok: false, code: 'not_approved', message: "L
 const BUSY: LiveOutcome = { ok: false, code: 'busy', message: 'The page has too many live requests waiting.' };
 
 export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { source: unknown; data: unknown }): void } {
+  interface Pending {
+    frame: HTMLIFrameElement;
+    loadsAtAsk: number;
+    req: LiveRequest;
+  }
+  /** Sent and queued requests together. */
   let outstanding = 0;
+  let inFlight = 0;
+  const queue: Pending[] = [];
   /**
    * Only to the frame that asked, and only while it still shows the page that
    * asked: never after a second document load. A page that asks from its
@@ -73,10 +87,40 @@ export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { 
    * navigates itself before its first load event could receive the reply in
    * the new document, which is within the documented self-navigation residual.
    */
-  const reply = (frame: HTMLIFrameElement, loadsAtAsk: number, requestId: string, outcome: LiveOutcome): void => {
+  const current = (frame: HTMLIFrameElement, loadsAtAsk: number): boolean => {
     const now = opts.loads();
-    if (opts.frame() !== frame || now > 1 || (loadsAtAsk !== 0 && now !== loadsAtAsk)) return;
-    frame.contentWindow?.postMessage({ grunt: 'live-result', v: 1, requestId, ...outcome }, '*');
+    return opts.frame() === frame && now <= 1 && (loadsAtAsk === 0 || now === loadsAtAsk);
+  };
+  const reply = (frame: HTMLIFrameElement, loadsAtAsk: number, requestId: string, outcome: LiveOutcome): void => {
+    if (!current(frame, loadsAtAsk)) return;
+    frame.contentWindow?.postMessage({ ...outcome, grunt: 'live-result', v: 1, requestId }, '*');
+  };
+  const send = ({ frame, loadsAtAsk, req }: Pending): void => {
+    const key = `${req.call}|${JSON.stringify(req.params)}`;
+    let fresh = false;
+    if (opts.fresh.current && !opts.fresh.current.has(key)) {
+      opts.fresh.current.add(key);
+      fresh = true;
+    }
+    inFlight += 1;
+    void opts
+      .call(req.call, req.params, fresh)
+      .catch((err: unknown): LiveOutcome => ({ ok: false, code: 'failed', message: err instanceof Error ? err.message : "Couldn't reach Grunt." }))
+      .then((outcome) => {
+        inFlight -= 1;
+        outstanding -= 1;
+        opts.onOutcome(req.call, outcome);
+        reply(frame, loadsAtAsk, req.requestId, outcome);
+        drain();
+      });
+  };
+  /** Sends queued requests while there's room; one whose frame or page has gone is dropped unsent and unanswered. */
+  const drain = (): void => {
+    while (inFlight < MAX_IN_FLIGHT && queue.length > 0) {
+      const next = queue.shift()!;
+      if (current(next.frame, next.loadsAtAsk)) send(next);
+      else outstanding -= 1;
+    }
   };
   return {
     onMessage(event) {
@@ -95,21 +139,9 @@ export function createLiveBridge(opts: LiveBridgeOptions): { onMessage(event: { 
         reply(frame, loadsAtAsk, req.requestId, BUSY);
         return;
       }
-      const key = `${req.call}|${JSON.stringify(req.params)}`;
-      let fresh = false;
-      if (opts.fresh.current && !opts.fresh.current.has(key)) {
-        opts.fresh.current.add(key);
-        fresh = true;
-      }
       outstanding += 1;
-      void opts
-        .call(req.call, req.params, fresh)
-        .catch((err: unknown): LiveOutcome => ({ ok: false, code: 'failed', message: err instanceof Error ? err.message : "Couldn't reach Grunt." }))
-        .then((outcome) => {
-          outstanding -= 1;
-          opts.onOutcome(req.call, outcome);
-          reply(frame, loadsAtAsk, req.requestId, outcome);
-        });
+      queue.push({ frame, loadsAtAsk, req });
+      drain();
     },
   };
 }

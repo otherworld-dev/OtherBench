@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LiveOutcome } from '../state/api.js';
-import { createLiveBridge, MAX_OUTSTANDING, parseLiveRequest } from './live-bridge.js';
+import { createLiveBridge, MAX_IN_FLIGHT, MAX_OUTSTANDING, parseLiveRequest } from './live-bridge.js';
 
 const ask = (requestId = 'r1', call = 'value', params: unknown = { key: 'b' }) => ({ grunt: 'live-call', v: 1, requestId, call, params });
 const OK: LiveOutcome = { ok: true, text: '{}', json: {}, cached: false, at: 5 };
@@ -57,6 +57,13 @@ describe('createLiveBridge', () => {
     expect(h.onOutcome).toHaveBeenCalledWith('value', OK);
   });
 
+  it("keeps the envelope's own fields over anything in the outcome", async () => {
+    const h = harness({ call: async () => ({ ...OK, grunt: 'other', v: 9, requestId: 'forged' }) as LiveOutcome });
+    h.fromPage(ask());
+    await vi.waitFor(() => expect(h.posted).toHaveLength(1));
+    expect(h.posted[0]).toMatchObject({ grunt: 'live-result', v: 1, requestId: 'r1' });
+  });
+
   it('ignores a message from another source, one after a second load, and one that is malformed', async () => {
     const h = harness();
     h.bridge.onMessage({ source: { postMessage: vi.fn() }, data: ask() });
@@ -76,11 +83,76 @@ describe('createLiveBridge', () => {
     expect(h.posted).toEqual([{ grunt: 'live-result', v: 1, requestId: 'r1', ok: false, code: 'not_approved', message: expect.stringContaining('allow it') }]);
   });
 
-  it(`answers busy past ${MAX_OUTSTANDING} outstanding requests`, () => {
+  it('answers busy past 16 outstanding requests, counting the queued ones', () => {
+    expect(MAX_OUTSTANDING).toBe(16);
     const h = harness({ call: () => new Promise<LiveOutcome>(() => {}) });
-    for (let i = 1; i <= MAX_OUTSTANDING + 1; i++) h.fromPage(ask(`r${i}`));
-    expect(h.call).toHaveBeenCalledTimes(MAX_OUTSTANDING);
-    expect(h.posted).toEqual([expect.objectContaining({ requestId: `r${MAX_OUTSTANDING + 1}`, ok: false, code: 'busy' })]);
+    for (let i = 1; i <= 17; i++) h.fromPage(ask(`r${i}`));
+    expect(h.call).toHaveBeenCalledTimes(MAX_IN_FLIGHT);
+    expect(h.posted).toEqual([expect.objectContaining({ requestId: 'r17', ok: false, code: 'busy' })]);
+  });
+
+  it('sends at most 4 calls at once and queues the rest in order, answering all of them', async () => {
+    expect(MAX_IN_FLIGHT).toBe(4);
+    const pending: ((o: LiveOutcome) => void)[] = [];
+    let running = 0;
+    let peak = 0;
+    const h = harness({
+      call: () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        return new Promise<LiveOutcome>((r) =>
+          pending.push((o) => {
+            running -= 1;
+            r(o);
+          }),
+        );
+      },
+    });
+    for (let i = 1; i <= 6; i++) h.fromPage(ask(`r${i}`, 'value', { n: i }));
+    expect(h.call).toHaveBeenCalledTimes(4);
+    while (pending.length > 0) {
+      pending.shift()!(OK);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    await vi.waitFor(() => expect(h.posted).toHaveLength(6));
+    expect(peak).toBe(4);
+    expect(h.call.mock.calls.map((c) => c[1])).toEqual([1, 2, 3, 4, 5, 6].map((n) => ({ n })));
+    expect(h.posted).toEqual([1, 2, 3, 4, 5, 6].map((n) => ({ grunt: 'live-result', v: 1, requestId: `r${n}`, ...OK })));
+  });
+
+  it('drops queued requests, without calling the server, once the bridge is disposed, the frame replaced or the page navigates away', async () => {
+    for (const leave of ['dispose', 'replace', 'navigate'] as const) {
+      const pending: ((o: LiveOutcome) => void)[] = [];
+      const h = harness({ call: () => new Promise<LiveOutcome>((r) => pending.push(r)) });
+      for (let i = 1; i <= 6; i++) h.fromPage(ask(`r${i}`));
+      expect(h.call).toHaveBeenCalledTimes(4);
+      // useLiveBridge disposes a bridge by making its frame() return null.
+      if (leave === 'dispose') h.state.frame = null;
+      else if (leave === 'replace') h.state.frame = { contentWindow: { postMessage: vi.fn() } } as unknown as HTMLIFrameElement;
+      else h.state.loads = 2;
+      for (const finish of pending.splice(0)) finish(OK);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(h.call).toHaveBeenCalledTimes(4);
+      expect(h.posted).toEqual([]);
+    }
+  });
+
+  it('frees the slots of dropped requests', async () => {
+    const pending: ((o: LiveOutcome) => void)[] = [];
+    const h = harness({ call: () => new Promise<LiveOutcome>((r) => pending.push(r)) });
+    for (let i = 1; i <= MAX_OUTSTANDING; i++) h.fromPage(ask(`r${i}`));
+    h.state.frame = { contentWindow: h.win } as unknown as HTMLIFrameElement;
+    for (const finish of pending.splice(0)) finish(OK);
+    await new Promise((r) => setTimeout(r, 0));
+    h.fromPage(ask('again'));
+    expect(h.call).toHaveBeenCalledTimes(5);
+  });
+
+  it('still answers a call that is not allowed at once while others are queued', () => {
+    const h = harness({ allowed: ['value'], call: () => new Promise<LiveOutcome>(() => {}) });
+    for (let i = 1; i <= 6; i++) h.fromPage(ask(`r${i}`));
+    h.fromPage(ask('no', 'other'));
+    expect(h.posted).toEqual([expect.objectContaining({ requestId: 'no', code: 'not_approved' })]);
   });
 
   it('sends fresh once per call and params after a Refresh', async () => {
