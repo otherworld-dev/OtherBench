@@ -136,10 +136,12 @@ export class PasswordFile {
   }
 
   /**
-   * The current epoch, or null when there's no usable file. Looks at the file
-   * at most once a second and re-reads it only when its mtime, size or inode
-   * changed, so `grunt password` against a live server takes effect within a
-   * second and a busy server doesn't read the file on every request.
+   * The current epoch, or null when there's no usable file (missing, or not a
+   * password record). Looks at the file at most once a second and re-reads it
+   * only when its mtime, size or inode changed, so `grunt password` against a
+   * live server takes effect within a second and a busy server doesn't read
+   * the file on every request. A transient I/O error (EBUSY, EPERM) keeps the
+   * last good epoch, so it doesn't end every session.
    */
   epoch(): string | null {
     const t = this.now();
@@ -149,7 +151,9 @@ export class PasswordFile {
     try {
       const st = statSync(this.path);
       sig = `${st.mtimeMs}:${st.size}:${st.ino}`;
-    } catch {
+    } catch (err) {
+      // Anything but a missing file is an I/O error: see above.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return this.cache?.record?.epoch ?? null;
       this.cache = { sig: 'missing', record: null };
       return null;
     }
@@ -158,14 +162,18 @@ export class PasswordFile {
       try {
         record = parseRecord(readFileSync(this.path, 'utf8'), this.path);
       } catch (err) {
-        if (!(err instanceof LoginFileError)) {
-          // An I/O error (EBUSY, EPERM, a racing rename) says nothing about the
-          // file's content: don't pin it to this signature. A signature no real
-          // file has makes the next check, a second on, read it again.
-          this.cache = { sig: 'unreadable', record: null };
+        if (err instanceof LoginFileError) {
+          record = null;
+        } else if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          // Gone between the stat and the read.
+          this.cache = { sig: 'missing', record: null };
           return null;
+        } else {
+          // An I/O error says nothing about the file's content. Keep the last
+          // good epoch and don't record this signature, so the next check, a
+          // second on, reads the file again.
+          return this.cache?.record?.epoch ?? null;
         }
-        record = null;
       }
       this.cache = { sig, record };
     }

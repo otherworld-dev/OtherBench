@@ -94,7 +94,26 @@ describe('PasswordFile', () => {
     expect(server.epoch()).not.toBe(before);
   });
 
-  it('retries a read that failed with an I/O error instead of remembering it, so sessions survive a busy file', async () => {
+  it('keeps the last good epoch through an I/O error on a read, and looks again a second later', async () => {
+    let now = 1_000_000;
+    const path = join(dir, 'login.json');
+    const writer = new PasswordFile(path, () => now, FAST);
+    const first = await writer.write('first password 1');
+    const server = new PasswordFile(path, () => now, FAST);
+    expect(server.epoch()).toBe(first.epoch);
+
+    const second = await writer.write('second password 2');
+    vi.mocked(readFileSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+    });
+    now += 1001;
+    expect(server.epoch()).toBe(first.epoch);
+
+    now += 1001;
+    expect(server.epoch()).toBe(second.epoch);
+  });
+
+  it('has no epoch to keep when the first read fails with an I/O error, and retries a second later', async () => {
     let now = 1_000_000;
     const path = join(dir, 'login.json');
     const written = await new PasswordFile(path, () => now, FAST).write('correct horse battery');
