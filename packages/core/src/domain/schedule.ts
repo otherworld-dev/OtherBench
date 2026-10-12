@@ -311,7 +311,7 @@ export function unattendedWarnings(policy: ToolPolicy, connectionKind: Connectio
   if (claudeCode && hasFolder && hostShell(policy)) lines.push("Claude Code's shell commands need approval.");
   // A sandboxed command needs no card under "Ask on changes", but a host off its list is a card (never automatic).
   // Claude Code with no folder gets no sandboxed run_command at all.
-  if (runsShellInSandbox(policy) && (!claudeCode || hasFolder)) lines.push("Sandboxed commands can't reach hosts that aren't on the profile's list: those requests are refused.");
+  if (runsShellInSandbox(policy) && (!claudeCode || hasFolder)) lines.push("Sandboxed commands' requests for hosts that aren't on the profile's list are refused, unless a grant already covers the host (an Always grant, or one for the schedule's own chat).");
   if (policy.mcpServerIds.length > 0) lines.push('MCP tools not marked read-only need approval.');
   if (policy.recall !== false) lines.push('Searching past chats asks first in each chat, so it will be refused.');
   return lines;

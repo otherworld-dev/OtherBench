@@ -190,7 +190,7 @@ describe('unattendedWarnings', () => {
   });
 
   it('gives a sandboxed shell no "needs approval" line, only the refused hosts, on either engine; a host shell keeps its line', () => {
-    const hosts = "Sandboxed commands can't reach hosts that aren't on the profile's list: those requests are refused.";
+    const hosts = "Sandboxed commands' requests for hosts that aren't on the profile's list are refused, unless a grant already covers the host (an Always grant, or one for the schedule's own chat).";
     expect(unattendedWarnings(policy({ shell: true, shellRuns: 'sandbox' }), 'anthropic', true)).toEqual([hosts]);
     expect(unattendedWarnings(policy({ shell: true, shellRuns: 'sandbox' }), 'claude_code', true)).toEqual([hosts]);
     // Claude Code with no folder gets no run_command at all.
