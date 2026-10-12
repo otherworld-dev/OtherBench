@@ -86,6 +86,42 @@ async function withResources(ctx: SetupContext, step: string, fn: () => Promise<
   }
 }
 
+/**
+ * The fresh, root-only folder this setup builds the new INSTALL_DIR in, by context. It is under /opt (the
+ * same file system as INSTALL_DIR, so the finished tree is moved into place with one rename) and
+ * mode 0700, so the grunt user can neither see nor change what root downloads, unpacks and installs there.
+ * runSetup() removes it however setup ends.
+ */
+const stagings = new WeakMap<SetupContext, string>();
+const STAGING_PATTERN = /^\/opt\/\.grunt-sandbox\.[A-Za-z0-9]{6,}$/;
+
+async function makeStaging(ctx: SetupContext, step: string): Promise<string> {
+  // Leftovers of a setup that was interrupted.
+  await ctx.runner.exec('root', ['/usr/bin/find', '/opt', '-mindepth', '1', '-maxdepth', '1', '-name', '.grunt-sandbox.*', '-exec', '/bin/rm', '-rf', '{}', '+']);
+  const made = await must(ctx, step, 'Making a private build folder', ['/usr/bin/mktemp', '-d', '/opt/.grunt-sandbox.XXXXXX']);
+  const path = made.stdout.trim();
+  // Registered before it is checked: a path that doesn't look right is still removed by runSetup.
+  stagings.set(ctx, path);
+  if (!STAGING_PATTERN.test(path)) throw new SetupError(step, `mktemp returned an unexpected folder: ${path}`);
+  return path;
+}
+
+function stagingOf(ctx: SetupContext, step: string): string {
+  const path = stagings.get(ctx);
+  if (path === undefined || !STAGING_PATTERN.test(path)) throw new SetupError(step, 'The build folder from "Install Node" is missing.');
+  return path;
+}
+
+async function removeStaging(ctx: SetupContext): Promise<void> {
+  const path = stagings.get(ctx);
+  if (path === undefined) return;
+  stagings.delete(ctx);
+  // Only ever a folder directly under /opt; anything else mktemp might have said is left alone.
+  if (!STAGING_PATTERN.test(path)) return;
+  const r = await ctx.runner.exec('root', ['/bin/rm', '-rf', path]);
+  if (r.code !== 0) ctx.log(`Couldn't remove ${path}: ${textOf(r)}`);
+}
+
 export function parseWslVersion(text: string): [number, number, number] | null {
   const m = /(\d+)\.(\d+)\.(\d+)/.exec(text);
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
@@ -114,7 +150,8 @@ const apt = (args: string[]): string[] => ['/usr/bin/env', 'DEBIAN_FRONTEND=noni
 /** A Debian package name (lower case letters, digits, + - .; starts with a letter or digit). apt runs as root, so a name that looks like an option (`-o ...`) must never reach it. */
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9+.-]*$/;
 export function assertPackageNames(packages: readonly string[]): void {
-  const bad = packages.find((p) => !PACKAGE_NAME.test(p));
+  // A trailing `-` tells apt to remove the package, and a `.deb` name is a file to install.
+  const bad = packages.find((p) => !PACKAGE_NAME.test(p) || p.endsWith('-') || p.endsWith('.deb'));
   if (bad !== undefined) throw new Error(`"${bad}" is not an apt package name.`);
 }
 
@@ -155,9 +192,15 @@ const configureDistro: SetupStep = {
     const t = await ctx.runner.wsl(['--terminate', DISTRO], { timeoutMs: MINUTE });
     if (t.code !== 0) throw new SetupError(this.name, `Restarting the distro failed: ${textOf(t)}`);
     // The next command starts it again with the new wsl.conf: no WSLInterop entry means no Windows programs.
-    const interop = await ctx.runner.exec('root', ['/usr/bin/test', '-e', '/proc/sys/fs/binfmt_misc/WSLInterop'], { timeoutMs: 2 * MINUTE });
-    if (interop.code === 0) {
-      throw new SetupError(this.name, 'Windows interop is still on inside the distro after restarting it, so a command could start Windows programs. Check /etc/wsl.conf in the grunt-sandbox distro, then press Repair.');
+    // `test -e` exits 1 for "not there": any other outcome (on, timed out, couldn't run) is not proof that interop is off.
+    for (const entry of ['WSLInterop', 'WSLInterop-late']) {
+      const interop = await ctx.runner.exec('root', ['/usr/bin/test', '-e', `/proc/sys/fs/binfmt_misc/${entry}`], { timeoutMs: 2 * MINUTE });
+      if (interop.code === 0) {
+        throw new SetupError(this.name, 'Windows interop is still on inside the distro after restarting it, so a command could start Windows programs. Check /etc/wsl.conf in the grunt-sandbox distro, then press Repair.');
+      }
+      if (interop.code !== 1 || interop.timedOut) {
+        throw new SetupError(this.name, `Couldn't confirm that Windows interop is off in the distro (${entry}: ${interop.timedOut ? 'timed out' : `exit ${String(interop.code)}`}): ${textOf(interop)}`);
+      }
     }
   },
 };
@@ -181,24 +224,25 @@ const installPackages: SetupStep = {
 const installNode: SetupStep = {
   name: 'Install Node',
   async run(ctx) {
-    const node = `${INSTALL_DIR}/node/bin/node`;
-    const have = await ctx.runner.exec('root', [node, '--version']);
-    if (have.code === 0 && have.stdout.trim() === NODE_VERSION) {
-      ctx.log(`Node ${NODE_VERSION} is already installed.`);
-      return;
-    }
-    const tarball = '/tmp/grunt-node.tar.xz';
-    await must(ctx, this.name, `Downloading ${NODE_TARBALL}`, ['/usr/bin/curl', '-fsSL', '--retry', '3', '-o', tarball, NODE_URL], 15 * MINUTE);
+    // Always rebuilt: nothing under an existing INSTALL_DIR is trusted, since the grunt user may have written there.
+    const staging = await makeStaging(ctx, this.name);
+    const tree = `${staging}/tree`;
+    const tarball = `${staging}/node.tar.xz`;
+    await must(ctx, this.name, 'Making the Node folder', ['/bin/mkdir', '-p', `${tree}/node`]);
+    await must(
+      ctx,
+      this.name,
+      `Downloading ${NODE_TARBALL}`,
+      ['/usr/bin/curl', '-fsSL', '--proto', '=https', '--tlsv1.2', '--retry', '3', '-o', tarball, NODE_URL],
+      15 * MINUTE
+    );
     const sum = await must(ctx, this.name, 'Checking the download', ['/usr/bin/sha256sum', tarball]);
     if (sum.stdout.trim().split(/\s+/)[0] !== NODE_SHA256) {
-      await ctx.runner.exec('root', ['/bin/rm', '-f', tarball]);
       throw new SetupError(this.name, `The Node download didn't match its pinned SHA-256 (${NODE_SHA256}), so it wasn't installed.`);
     }
-    await must(ctx, this.name, 'Removing the old Node', ['/bin/rm', '-rf', `${INSTALL_DIR}/node`]);
-    await must(ctx, this.name, 'Making the Node folder', ['/bin/mkdir', '-p', `${INSTALL_DIR}/node`]);
-    await must(ctx, this.name, 'Unpacking Node', ['/bin/tar', '-xJf', tarball, '-C', `${INSTALL_DIR}/node`, '--strip-components=1'], 10 * MINUTE);
-    await ctx.runner.exec('root', ['/bin/rm', '-f', tarball]);
-    const v = await must(ctx, this.name, 'Checking Node', [node, '--version']);
+    // --no-same-owner: the files belong to root, not to the uids in the archive.
+    await must(ctx, this.name, 'Unpacking Node', ['/bin/tar', '--no-same-owner', '-xJf', tarball, '-C', `${tree}/node`, '--strip-components=1'], 10 * MINUTE);
+    const v = await must(ctx, this.name, 'Checking Node', [`${tree}/node/bin/node`, '--version']);
     if (v.stdout.trim() !== NODE_VERSION) throw new SetupError(this.name, `Node reports ${v.stdout.trim()}, not ${NODE_VERSION}.`);
   },
 };
@@ -206,24 +250,75 @@ const installNode: SetupStep = {
 const installRuntime: SetupStep = {
   name: 'Install the sandbox runtime',
   async run(ctx) {
-    await must(ctx, this.name, `Making ${INSTALL_DIR}`, ['/usr/bin/install', '-d', '-o', 'root', '-g', 'root', '-m', '0755', INSTALL_DIR]);
+    const staging = stagingOf(ctx, this.name);
+    const tree = `${staging}/tree`;
     await withResources(ctx, this.name, async () => {
       for (const f of RESOURCE_FILES) {
-        await must(ctx, this.name, `Copying ${f.name}`, ['/usr/bin/install', '-o', 'root', '-g', 'root', '-m', f.mode, `${SETUP_MOUNT}/${f.name}`, `${INSTALL_DIR}/${f.name}`]);
+        await must(ctx, this.name, `Copying ${f.name}`, ['/usr/bin/install', '-o', 'root', '-g', 'root', '-m', f.mode, `${SETUP_MOUNT}/${f.name}`, `${tree}/${f.name}`]);
       }
     });
     // What the 2026-10-12 probe left behind.
     await ctx.runner.exec('root', ['/bin/rm', '-rf', '/opt/grunt-probe']);
+    // The runtime is plain JavaScript: install scripts (which would run as root) have no business here.
     await must(
       ctx,
       this.name,
       'npm ci',
-      ['/usr/bin/env', `PATH=${INSTALL_DIR}/node/bin:/usr/bin:/bin`, `${INSTALL_DIR}/node/bin/npm`, 'ci', '--omit=dev', '--no-audit', '--no-fund', '--prefix', INSTALL_DIR],
+      [
+        '/usr/bin/env',
+        `PATH=${tree}/node/bin:/usr/bin:/bin`,
+        `HOME=${staging}`,
+        `${tree}/node/bin/npm`,
+        'ci',
+        '--omit=dev',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--cache',
+        `${staging}/npm-cache`,
+        '--prefix',
+        tree,
+      ],
       15 * MINUTE
     );
-    // Not writable by grunt: a command that broke out as grunt can't change the agent or mount.sh.
-    await must(ctx, this.name, `Handing ${INSTALL_DIR} to root`, ['/bin/chown', '-R', 'root:root', INSTALL_DIR]);
-    await must(ctx, this.name, `Locking ${INSTALL_DIR}`, ['/bin/chmod', '-R', 'go-w', INSTALL_DIR]);
+    // Everything in the tree was made by root in a folder only root can enter; this just takes group/other write away from what archives and packages brought.
+    await must(ctx, this.name, 'Locking the new install', ['/bin/chmod', '-R', 'go-w,a+rX', tree]);
+    await must(ctx, this.name, 'Replacing the old install', ['/bin/rm', '-rf', INSTALL_DIR]);
+    await must(ctx, this.name, `Moving the new install to ${INSTALL_DIR}`, ['/bin/mv', '-T', tree, INSTALL_DIR]);
+    await must(ctx, this.name, `Opening ${INSTALL_DIR}`, ['/bin/chmod', '0755', INSTALL_DIR]);
+    // Nothing in it may belong to anyone but root or be writable by anyone else (symbolic links are always 0777 and are checked for their owner only).
+    const odd = await must(ctx, this.name, `Checking who owns ${INSTALL_DIR}`, [
+      '/usr/bin/find',
+      INSTALL_DIR,
+      '(',
+      '(',
+      '-type',
+      'l',
+      '!',
+      '-user',
+      'root',
+      ')',
+      '-o',
+      '(',
+      '!',
+      '-type',
+      'l',
+      '(',
+      '!',
+      '-user',
+      'root',
+      '-o',
+      '-perm',
+      '/022',
+      ')',
+      ')',
+      ')',
+      '-print',
+    ]);
+    const offenders = odd.stdout.split(/\r?\n/).filter((line) => line.trim() !== '');
+    if (offenders.length > 0) {
+      throw new SetupError(this.name, `${offenders.length} item(s) in ${INSTALL_DIR} belong to someone other than root or are writable by others, e.g. ${offenders.slice(0, 5).join(', ')}.`);
+    }
   },
 };
 
@@ -260,6 +355,7 @@ export async function readVersions(runner: WslRunner): Promise<SandboxVersions> 
 /** Settings > Sandbox > Packages > Apply: installs them as root. Throws with apt's message. */
 export async function installExtraPackages(runner: WslRunner, packages: string[], log: (line: string) => void): Promise<void> {
   assertPackageNames(packages);
+  if (packages.length === 0) return;
   for (const [label, argv, timeoutMs] of [
     ['apt-get update', apt(['update', '-q']), 15 * MINUTE],
     ['apt-get install', apt(['install', '-y', '-q', ...packages]), 45 * MINUTE],
@@ -275,16 +371,20 @@ export async function runSetup(
   ctx: SetupContext,
   steps: readonly SetupStep[] = SETUP_STEPS
 ): Promise<{ ok: true; versions: SandboxVersions } | { ok: false; step: string; message: string }> {
-  for (const step of steps) {
-    ctx.log(`▶ ${step.name}`);
-    try {
-      await step.run(ctx);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      ctx.log(`✖ ${step.name}: ${message}`);
-      return { ok: false, step: step.name, message };
+  try {
+    for (const step of steps) {
+      ctx.log(`▶ ${step.name}`);
+      try {
+        await step.run(ctx);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        ctx.log(`✖ ${step.name}: ${message}`);
+        return { ok: false, step: step.name, message };
+      }
+      ctx.log(`✔ ${step.name}`);
     }
-    ctx.log(`✔ ${step.name}`);
+  } finally {
+    await removeStaging(ctx);
   }
   return { ok: true, versions: await readVersions(ctx.runner) };
 }

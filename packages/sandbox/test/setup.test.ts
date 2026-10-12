@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WslResult } from '../src/wsl.js';
 import { BASE_PACKAGES, distroNames, installExtraPackages, NODE_URL, parseWslVersion, runSetup } from '../src/setup.js';
-import { FakeWsl, happyWsl, type WslCall } from './helpers.js';
+import { FakeWsl, happyWsl, STAGING, type WslCall } from './helpers.js';
 
 const RESOURCES = 'E:\\Grunt\\packages\\sandbox\\resources';
 
@@ -33,34 +33,59 @@ describe('runSetup', () => {
     at(`root: /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q ${[...BASE_PACKAGES, 'ffmpeg'].join(' ')}`);
     at('root: /usr/sbin/useradd -m -s /bin/bash grunt');
     at('root: /usr/bin/install -d -o grunt -g grunt -m 0700 /home/grunt/chats');
-    at(`root: /usr/bin/curl -fsSL --retry 3 -o /tmp/grunt-node.tar.xz ${NODE_URL}`);
-    expect(at('root: /usr/bin/sha256sum /tmp/grunt-node.tar.xz')).toBeLessThan(at('root: /bin/tar -xJf /tmp/grunt-node.tar.xz -C /opt/grunt-sandbox/node --strip-components=1'));
-    at('root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/agent.mjs /opt/grunt-sandbox/agent.mjs');
-    at('root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/agent-core.mjs /opt/grunt-sandbox/agent-core.mjs');
-    at('root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/package-lock.json /opt/grunt-sandbox/package-lock.json');
-    at('root: /usr/bin/install -o root -g root -m 0755 /mnt/grunt-setup/mount.sh /opt/grunt-sandbox/mount.sh');
+    // Everything root downloads, unpacks and installs happens in a private build folder under /opt, never in /tmp or in the old install.
+    const tree = `${STAGING}/tree`;
+    const mktemp = at('root: /usr/bin/mktemp -d /opt/.grunt-sandbox.XXXXXX');
+    expect(at('root: /usr/bin/find /opt -mindepth 1 -maxdepth 1 -name .grunt-sandbox.* -exec /bin/rm -rf {} +')).toBeLessThan(mktemp);
+    const curl = at(`root: /usr/bin/curl -fsSL --proto =https --tlsv1.2 --retry 3 -o ${STAGING}/node.tar.xz ${NODE_URL}`);
+    expect(mktemp).toBeLessThan(curl);
+    const sha = at(`root: /usr/bin/sha256sum ${STAGING}/node.tar.xz`);
+    const tar = at(`root: /bin/tar --no-same-owner -xJf ${STAGING}/node.tar.xz -C ${tree}/node --strip-components=1`);
+    expect(curl).toBeLessThan(sha);
+    expect(sha).toBeLessThan(tar);
+    const copy = at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/agent.mjs ${tree}/agent.mjs`);
+    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/agent-core.mjs ${tree}/agent-core.mjs`);
+    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/package-lock.json ${tree}/package-lock.json`);
+    at(`root: /usr/bin/install -o root -g root -m 0755 /mnt/grunt-setup/mount.sh ${tree}/mount.sh`);
     at('root: /bin/rm -rf /opt/grunt-probe');
-    expect(at('root: /usr/bin/env PATH=/opt/grunt-sandbox/node/bin:/usr/bin:/bin /opt/grunt-sandbox/node/bin/npm ci --omit=dev --no-audit --no-fund --prefix /opt/grunt-sandbox')).toBeLessThan(
-      at('root: /bin/chown -R root:root /opt/grunt-sandbox')
+    const npm = at(
+      `root: /usr/bin/env PATH=${tree}/node/bin:/usr/bin:/bin HOME=${STAGING} ${tree}/node/bin/npm ci --omit=dev --ignore-scripts --no-audit --no-fund --cache ${STAGING}/npm-cache --prefix ${tree}`
     );
-    at('root: /bin/chmod -R go-w /opt/grunt-sandbox');
-    // Each of the two steps that copy files clears a leftover mount first and unmounts after.
-    expect(c.filter((line) => line === 'root: /bin/umount /mnt/grunt-setup')).toHaveLength(4);
+    expect(tar).toBeLessThan(copy);
+    expect(copy).toBeLessThan(npm);
+    // Locked, swapped in whole (the old install is never reused), checked, and the build folder removed last.
+    const lock = at(`root: /bin/chmod -R go-w,a+rX ${tree}`);
+    const swap = [at('root: /bin/rm -rf /opt/grunt-sandbox'), at(`root: /bin/mv -T ${tree} /opt/grunt-sandbox`), at('root: /bin/chmod 0755 /opt/grunt-sandbox')];
+    const verify = c.findIndex((line) => line.startsWith('root: /usr/bin/find /opt/grunt-sandbox '));
+    const cleanup = c.lastIndexOf(`root: /bin/rm -rf ${STAGING}`);
+    expect([npm, lock, ...swap, verify, cleanup]).toEqual([...[npm, lock, ...swap, verify, cleanup]].sort((a, b) => a - b));
+    expect(new Set([npm, lock, ...swap, verify, cleanup]).size).toBe(7);
+    expect(verify).toBeGreaterThan(0);
+    expect(c.some((line) => line.includes('chown'))).toBe(false);
+    expect(c.some((line) => line.includes('/tmp/grunt'))).toBe(false);
+    // The resource folder is mounted before it is read and unmounted after, by each of the two steps that copy from it.
+    const mounts = c.flatMap((line, i) => (line === `root: /bin/mount -t drvfs ${RESOURCES} /mnt/grunt-setup -o ro` ? [i] : []));
+    const unmounts = c.flatMap((line, i) => (line === 'root: /bin/umount /mnt/grunt-setup' ? [i] : []));
+    expect(mounts).toHaveLength(2);
+    for (const m of mounts) expect(unmounts.some((u) => u > m)).toBe(true);
+    expect(unmounts.filter((u) => u < mounts[0]!).length).toBeGreaterThan(0);
+    expect(unmounts.at(-1)).toBeGreaterThan(mounts[1]!);
     expect(selfTest).toHaveBeenCalledTimes(1);
     expect(log).toEqual(expect.arrayContaining(['▶ Check WSL', '✔ Check WSL', '▶ Self-test', '✔ Self-test']));
     // Nothing is ever run through a Linux shell.
     expect(wsl.calls.every((call) => call.kind === 'wsl' || !call.argv.includes('--'))).toBe(true);
   });
 
-  it('repairs an existing distro: no new distro, no new user, no Node download when the pinned one is there', async () => {
+  it('repairs an existing distro: no new distro, no new user, and the install is rebuilt rather than reused', async () => {
     const wsl = happyWsl({ distros: 'Ubuntu\r\ngrunt-sandbox\r\n', user: true, node: true });
     const { outcome, log } = await setUp(wsl);
     expect(outcome.ok).toBe(true);
     expect(wsl.commands.some((l) => l.startsWith('wsl --install'))).toBe(false);
     expect(wsl.commands.some((l) => l.includes('useradd'))).toBe(false);
-    expect(wsl.commands.some((l) => l.includes('/usr/bin/curl'))).toBe(false);
+    // An existing /opt/grunt-sandbox may have been written by the grunt user: it is replaced, never trusted.
+    expect(wsl.commands.some((l) => l.includes('/usr/bin/curl'))).toBe(true);
+    expect(wsl.commands).toContain('root: /bin/rm -rf /opt/grunt-sandbox');
     expect(log).toContain('grunt-sandbox already exists: repairing it.');
-    expect(log).toContain('Node v24.21.0 is already installed.');
   });
 
   it('stops at "Check WSL" with how to install it when WSL is missing', async () => {
@@ -80,17 +105,57 @@ describe('runSetup', () => {
     expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('interop') });
   });
 
+  it('stops when the late interop entry is on, or when the check itself did not give a clear "not there"', async () => {
+    const late = await failing((c) => (isProgram(c, '/usr/bin/test') && c.kind === 'exec' && c.argv.includes('/proc/sys/fs/binfmt_misc/WSLInterop-late') ? { code: 0 } : undefined));
+    expect(late).toMatchObject({ outcome: { ok: false, step: 'Configure the distro', message: expect.stringContaining('interop') } });
+    for (const odd of [{ code: 2 }, { code: null, timedOut: true }, { code: 127 }]) {
+      const { outcome } = await failing((c) => (isProgram(c, '/usr/bin/test') ? odd : undefined));
+      expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining("Couldn't confirm") });
+    }
+  });
+
   it("stops at \"Install packages\" with the end of apt's output", async () => {
     const { outcome } = await failing((c) => (isProgram(c, '/usr/bin/env', 'install') ? { code: 100, stderr: 'E: Unable to locate package ffmpegg' } : undefined));
     expect(outcome).toMatchObject({ ok: false, step: 'Install packages', message: expect.stringContaining('Unable to locate package ffmpegg') });
   });
 
-  it("refuses a Node download that doesn't match its checksum, and deletes it", async () => {
-    const wsl = happyWsl({ override: (c) => (isProgram(c, '/usr/bin/sha256sum') ? { stdout: 'deadbeef  /tmp/grunt-node.tar.xz\n' } : undefined) });
+  it("refuses a Node download that doesn't match its checksum, and removes the build folder", async () => {
+    const wsl = happyWsl({ override: (c) => (isProgram(c, '/usr/bin/sha256sum') ? { stdout: `deadbeef  ${STAGING}/node.tar.xz\n` } : undefined) });
     const { outcome } = await setUp(wsl);
     expect(outcome).toMatchObject({ ok: false, step: 'Install Node', message: expect.stringContaining('SHA-256') });
-    expect(wsl.commands).toContain('root: /bin/rm -f /tmp/grunt-node.tar.xz');
+    expect(wsl.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
     expect(wsl.commands.some((l) => l.startsWith('root: /bin/tar'))).toBe(false);
+  });
+
+  it('removes the build folder when a later step fails, and when the self-test does', async () => {
+    const unpack = happyWsl({ override: (c) => (isProgram(c, '/bin/tar') ? { code: 2, stderr: 'tar: Unexpected EOF' } : undefined) });
+    expect((await setUp(unpack)).outcome).toMatchObject({ ok: false, step: 'Install Node' });
+    expect(unpack.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
+    const npm = happyWsl({ override: (c) => (isProgram(c, '/usr/bin/env', 'ci') ? { code: 1, stderr: 'npm ERR! network' } : undefined) });
+    expect((await setUp(npm)).outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('npm ci failed') });
+    expect(npm.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
+    // Nothing was swapped into place.
+    expect(npm.commands).not.toContain('root: /bin/rm -rf /opt/grunt-sandbox');
+    const selfTest = happyWsl();
+    await setUp(selfTest, { selfTest: async () => { throw new Error('surprise'); } });
+    expect(selfTest.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
+  });
+
+  it('does not delete a build folder that is not where mktemp should have put it', async () => {
+    const wsl = happyWsl({ override: (c) => (isProgram(c, '/usr/bin/mktemp') ? { stdout: '/etc\n' } : undefined) });
+    const { outcome } = await setUp(wsl);
+    expect(outcome).toMatchObject({ ok: false, step: 'Install Node', message: expect.stringContaining('unexpected folder') });
+    expect(wsl.commands.some((l) => l.includes('rm -rf /etc'))).toBe(false);
+  });
+
+  it('fails the install when something in it is not root-owned or is writable by others, naming the first few', async () => {
+    const found = Array.from({ length: 8 }, (_, i) => `/opt/grunt-sandbox/node_modules/x${i}`).join('\n');
+    const wsl = happyWsl({ override: (c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === '/opt/grunt-sandbox' ? { stdout: `${found}\n` } : undefined) });
+    const { outcome } = await setUp(wsl);
+    expect(outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('8 item(s)') });
+    expect(outcome).toMatchObject({ message: expect.stringContaining('x4') });
+    expect((outcome as { message: string }).message).not.toContain('x5');
+    expect(wsl.commands.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
   });
 
   it('marks setup failed when the self-test finds a surprise, and logs each step up to it', async () => {
@@ -137,6 +202,14 @@ describe('setup helpers', () => {
     const wsl = new FakeWsl();
     await expect(installExtraPackages(wsl, ['ffmpeg', '-oAPT::Update::Pre-Invoke::=id'], () => {})).rejects.toThrow(/not an apt package name/);
     expect(wsl.calls).toHaveLength(0);
+    for (const name of ['ffmpeg-', 'foo.deb', '../x', 'A']) {
+      await expect(installExtraPackages(new FakeWsl(), [name], () => {})).rejects.toThrow(/not an apt package name/);
+    }
+    const none = new FakeWsl();
+    const log: string[] = [];
+    await installExtraPackages(none, [], (l) => log.push(l));
+    expect(none.calls).toHaveLength(0);
+    expect(log).toEqual([]);
     const setup = happyWsl();
     const { outcome } = await setUp(setup, { packages: ['--reinstall'] });
     expect(outcome).toMatchObject({ ok: false, step: 'Install packages', message: expect.stringContaining('not an apt package name') });

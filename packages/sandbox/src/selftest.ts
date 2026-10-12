@@ -7,7 +7,15 @@ export interface SelfTestCase {
   /** 'ok': must exit 0. 'blocked': must not. */
   expect: 'ok' | 'blocked';
   allowedHosts: string[];
+  /**
+   * 'blocked' cases only: the output must also match, so a command that fails for another reason
+   * (a missing folder, a typo) doesn't count as the sandbox blocking it.
+   */
+  expectOutput?: RegExp;
 }
+
+/** What bash prints when a write is refused because the place is read-only or not ours. */
+const WRITE_REFUSED = /Read-only file system|Permission denied/;
 
 /** Where the self-test's folders are in the sandbox, and how to reach Grunt from the VM. */
 export interface SelfTestPlaces {
@@ -41,19 +49,31 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     { name: 'an allowlisted host is reachable', command: 'curl -sS -m 30 -o /dev/null https://registry.npmjs.org/', expect: 'ok', allowedHosts: ['registry.npmjs.org'] },
     { name: "a path outside the chat's folders is unreadable", command: 'ls /mnt/c/Windows', expect: 'blocked', allowedHosts: none },
     { name: 'the rest of /home is unreadable', command: 'cat /home/grunt/.bashrc', expect: 'blocked', allowedHosts: none },
-    { name: "the read-only folder can't be written", command: `echo no > ${shellQuote(`${p.roLinux}/nope.txt`)}`, expect: 'blocked', allowedHosts: none },
-    { name: "a read-only folder inside a writable one can't be written", command: `echo no > ${shellQuote(`${p.lockedLinux}/nope.txt`)}`, expect: 'blocked', allowedHosts: none },
+    // A positive control for the case below: the folder is there, so a refused write is the sandbox's doing and not a missing path.
+    { name: 'the read-only folder inside the writable one is there', command: `test -d ${shellQuote(p.lockedLinux)}`, expect: 'ok', allowedHosts: none },
+    { name: "the read-only folder can't be written", command: `echo no > ${shellQuote(`${p.roLinux}/nope.txt`)}`, expect: 'blocked', allowedHosts: none, expectOutput: WRITE_REFUSED },
+    {
+      name: "a read-only folder inside a writable one can't be written",
+      command: `echo no > ${shellQuote(`${p.lockedLinux}/nope.txt`)}`,
+      expect: 'blocked',
+      allowedHosts: none,
+      expectOutput: WRITE_REFUSED,
+    },
     { name: "cmd.exe isn't there", command: 'cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
     { name: "Windows programs by path aren't there", command: '/mnt/c/Windows/System32/cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
     { name: '/etc/shadow is unreadable', command: 'cat /etc/shadow', expect: 'blocked', allowedHosts: none },
     { name: "a host that isn't allowlisted is refused", command: 'curl -sS -m 15 -o /dev/null https://example.com/', expect: 'blocked', allowedHosts: none },
   ];
   if (p.gateway !== null && p.gruntPort !== null) {
+    // Straight at the machine, not through the runtime's proxy (which would answer 403 and prove nothing about the
+    // network boundary). curl exits 0 on any HTTP status, so "blocked" is: the connection failed (non-zero exit) and
+    // no HTTP status came back (http_code=000), whatever Grunt would have answered.
     cases.push({
       name: "Grunt's own API on this machine is unreachable",
-      command: `curl -sS -m 10 -o /dev/null http://${p.gateway}:${p.gruntPort}/api/health`,
+      command: `curl -sS --noproxy '*' -m 10 -o /dev/null -w 'http_code=%{http_code}' http://${p.gateway}:${p.gruntPort}/api/health`,
       expect: 'blocked',
       allowedHosts: none,
+      expectOutput: /http_code=000/,
     });
   }
   return cases;
@@ -64,10 +84,11 @@ export async function runSelfTest(cases: SelfTestCase[], run: (c: SelfTestCase) 
   for (const c of cases) {
     const r = await run(c);
     const succeeded = r.exitCode === 0 && !r.timedOut;
-    const passed = c.expect === 'ok' ? succeeded : !succeeded;
+    const wrongWay = c.expect === 'blocked' && !succeeded && c.expectOutput !== undefined && !c.expectOutput.test(r.output);
+    const passed = c.expect === 'ok' ? succeeded : !succeeded && !wrongWay;
     log(`${passed ? '✔' : '✖'} ${c.name}`);
     if (!passed) {
-      const what = c.expect === 'ok' ? 'failed' : 'was not blocked';
+      const what = c.expect === 'ok' ? 'failed' : wrongWay ? `failed, but not the way a block does (expected ${String(c.expectOutput)})` : 'was not blocked';
       throw new Error(`Self-test "${c.name}" ${what} (exit ${String(r.exitCode)}): ${r.output.trim().slice(-500)}`);
     }
   }

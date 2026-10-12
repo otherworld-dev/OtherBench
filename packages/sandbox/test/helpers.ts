@@ -83,6 +83,9 @@ export class FakeWsl implements WslRunner {
   }
 }
 
+/** The build folder happyWsl's mktemp makes. */
+export const STAGING = '/opt/.grunt-sandbox.AbC123';
+
 /** A distro where every setup step works. `override` answers first, for the step a test wants to fail. */
 export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolean; override?: (call: WslCall) => Partial<WslResult> | undefined } = {}): FakeWsl {
   let nodeInstalled = opts.node === true;
@@ -97,12 +100,14 @@ export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolea
     const [program, ...rest] = call.argv;
     if (program === '/usr/bin/test') return { code: 1 }; // no WSLInterop entry: interop is off
     if (program === '/usr/bin/id') return opts.user === true ? { stdout: '1000\n' } : { code: 1, stderr: "id: 'grunt': no such user" };
-    if (program === '/usr/bin/sha256sum') return { stdout: `${NODE_SHA256}  /tmp/grunt-node.tar.xz\n` };
+    if (program === '/usr/bin/mktemp') return { stdout: `${STAGING}\n` };
+    if (program === '/usr/bin/find' && rest[0] === INSTALL_DIR) return { stdout: '' }; // nothing in the install belongs to anyone but root
+    if (program === '/usr/bin/sha256sum') return { stdout: `${NODE_SHA256}  ${rest[0] ?? ''}\n` };
     if (program === '/bin/tar') {
       nodeInstalled = true;
       return undefined;
     }
-    if (program === `${INSTALL_DIR}/node/bin/node`) return nodeInstalled ? { stdout: `${NODE_VERSION}\n` } : { code: 127, stderr: 'No such file or directory' };
+    if (program?.endsWith('/node/bin/node')) return nodeInstalled ? { stdout: `${NODE_VERSION}\n` } : { code: 127, stderr: 'No such file or directory' };
     if (program === '/bin/cat' && rest[0] === '/etc/os-release') return { stdout: 'NAME="Ubuntu"\nPRETTY_NAME="Ubuntu 24.04.5 LTS"\n' };
     if (program === '/bin/cat') return { stdout: '{"name":"@anthropic-ai/sandbox-runtime","version":"0.0.79"}' };
     if (program === '/usr/sbin/ip') return { stdout: 'default via 172.20.48.1 dev eth0 proto kernel\n' };
