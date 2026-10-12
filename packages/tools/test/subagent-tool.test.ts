@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import type { ToolApprovalEvent, ToolContext } from '@grunt/core/ports/tool-provider.js';
+import type { Connection, Profile, ToolPolicy } from '@grunt/core/types/config.js';
+import { GruntToolProvider } from '../src/provider.js';
+
+const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
+const policy = (over: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', artifacts: false, recall: false, ...over });
+const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({ chatId: 'chat-1', messageId: 'msg-1', profileId: 'p-a', workspaceRoot: null, signal: new AbortController().signal, ...over });
+
+function connection(id: string, over: Partial<Connection> = {}): Connection {
+  return { id, name: id, kind: 'openai', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'ok', statusMessage: null, checkedAt: null, ...over };
+}
+function profile(id: string, name: string, connectionId: string, over: Partial<Profile> = {}): Profile {
+  return { id, name, description: null, colour: null, connectionId, modelId: `${id}-model`, systemPrompt: null, params: {}, toolPolicy: policy(), isDefault: false, archivedAt: null, ...over };
+}
+
+function setup() {
+  const store = new InMemoryStore('node-self');
+  store.connections.create(connection('api'));
+  store.connections.create(connection('cc', { kind: 'claude_code' }));
+  store.connections.create(connection('pc', { kind: 'ollama', availability: 'node-pc' }));
+  store.profiles.create(profile('p-a', 'Writer', 'api'));
+  store.profiles.create(profile('p-cc', 'Coder', 'cc'));
+  store.profiles.create(profile('p-old', 'Old one', 'api', { archivedAt: 1 }));
+  store.profiles.create(profile('p-pc', 'PC Llama', 'pc'));
+  const provider = new GruntToolProvider(store, new PermissionBroker(store), emptyMcp);
+  return { store, provider };
+}
+
+describe('the subagent tool', () => {
+  it('is offered only with the switch on', async () => {
+    const { provider } = setup();
+    expect((await provider.listTools(policy())).map((t) => t.name)).toEqual([]);
+    expect((await provider.listTools(policy({ subagents: false }))).map((t) => t.name)).toEqual([]);
+    const tools = await provider.listTools(policy({ subagents: true }));
+    expect(tools.map((t) => [t.name, t.source, t.risk])).toEqual([['subagent', 'subagent', 'read']]);
+    expect(tools[0]!.parameters).toMatchObject({ required: ['description', 'prompt'] });
+  });
+
+  it('lists only the profiles a sub-agent can run as in its description', async () => {
+    const { provider } = setup();
+    const [tool] = await provider.listTools(policy({ subagents: true }));
+    expect(tool!.description).toContain('"Writer" (p-a-model)');
+    for (const name of ['Coder', 'Old one', 'PC Llama']) expect(tool!.description).not.toContain(name);
+  });
+
+  it('says sub-agents are unavailable when the turn gives no host, audited with no card', async () => {
+    const { provider, store } = setup();
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => events.push(e));
+    const [tool] = await provider.listTools(policy({ subagents: true }));
+    expect(await tool!.execute({ description: 'a', prompt: 'b' }, ctx())).toMatchObject({ error: true, code: 'subagents_unavailable' });
+    expect(events).toEqual([]);
+    expect(store.audit.list('chat-1')).toHaveLength(1);
+  });
+
+  it("runs through the gate to the turn's host: allowed by policy, no card, one audit row", async () => {
+    const { provider, store } = setup();
+    const events: ToolApprovalEvent[] = [];
+    provider.onApprovalEvent((e) => events.push(e));
+    const [tool] = await provider.listTools(policy({ subagents: true }));
+    const result = await tool!.execute({ description: 'a', prompt: 'b' }, ctx({ subagents: { run: async () => 'The answer.' } }));
+    expect(result).toBe('The answer.');
+    expect(events).toEqual([]);
+    expect(store.audit.list('chat-1')).toEqual([expect.objectContaining({ toolName: 'subagent', grantedBy: 'policy', messageId: 'msg-1' })]);
+  });
+
+  it('is refused by the gate inside a sub-agent', async () => {
+    const { provider } = setup();
+    const [tool] = await provider.listTools(policy({ subagents: true }));
+    const result = await tool!.execute({ description: 'a', prompt: 'b' }, ctx({ subagent: { callId: 'c', label: 'L' }, subagents: { run: async () => 'nope' } }));
+    expect(result).toMatchObject({ error: true, code: 'permission_denied', message: "A sub-agent can't start another sub-agent." });
+  });
+});

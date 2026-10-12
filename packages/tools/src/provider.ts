@@ -18,6 +18,7 @@ import { fsTools } from './fs-tools.js';
 import type { McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
 import { runCommandTool } from './shell-tool.js';
+import { subagentTool } from './subagent-tool.js';
 
 export interface GruntToolProviderOptions {
   /** Overridable id generator for audit row ids; defaults to `randomUUID`. */
@@ -198,6 +199,8 @@ export class GruntToolProvider implements ToolProvider {
     if (policy.artifacts !== false) raw.push(artifactTool(this.store));
     // Recall (spec 2026-10-09-recall-design): on unless the profile turns it off.
     if (policy.recall !== false) raw.push(recallTool(this.store));
+    // Sub-agents (spec 2026-10-12-api-subagents-design): off unless the profile turns them on.
+    if (policy.subagents === true) raw.push(subagentTool(this.store));
     raw.push(...this.mcpToolSpecs(policy.mcpServerIds));
 
     return this.deduplicateNames(raw).map((spec) => this.gate(spec, policy));
