@@ -32,7 +32,9 @@ describe('runSetup', () => {
     expect(at('root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/wsl.conf /etc/wsl.conf')).toBeLessThan(at('wsl --terminate grunt-sandbox'));
     at(`root: /usr/bin/env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q ${[...BASE_PACKAGES, 'ffmpeg'].join(' ')}`);
     at('root: /usr/sbin/useradd -m -s /bin/bash grunt');
-    at('root: /usr/bin/install -d -o grunt -g grunt -m 0700 /home/grunt/chats');
+    // Created by the grunt user, so a link grunt planted at `chats` is never followed by a root chown.
+    at('grunt: /bin/mkdir -p -m 0700 /home/grunt/chats');
+    expect(c.filter((line) => line.startsWith('root:') && line.includes('/home/grunt'))).toEqual([]);
     // Everything root downloads, unpacks and installs happens in a private build folder under /opt, never in /tmp or in the old install.
     const tree = `${STAGING}/tree`;
     const mktemp = at('root: /usr/bin/mktemp -d /opt/.grunt-sandbox.XXXXXX');
@@ -55,12 +57,19 @@ describe('runSetup', () => {
     expect(copy).toBeLessThan(npm);
     // Locked, swapped in whole (the old install is never reused), checked, and the build folder removed last.
     const lock = at(`root: /bin/chmod -R go-w,a+rX ${tree}`);
-    const swap = [at('root: /bin/rm -rf /opt/grunt-sandbox'), at(`root: /bin/mv -T ${tree} /opt/grunt-sandbox`), at('root: /bin/chmod 0755 /opt/grunt-sandbox')];
+    // The tree is checked before it is swapped in, and again where it ends up.
+    const before = c.findIndex((line) => line.startsWith(`root: /usr/bin/find ${tree} `));
+    const swap = [at('root: /usr/bin/test -e /opt/grunt-sandbox'), at(`root: /bin/mv -T ${tree} /opt/grunt-sandbox`), at('root: /bin/chmod 0755 /opt/grunt-sandbox')];
     const verify = c.findIndex((line) => line.startsWith('root: /usr/bin/find /opt/grunt-sandbox '));
     const cleanup = c.lastIndexOf(`root: /bin/rm -rf ${STAGING}`);
-    expect([npm, lock, ...swap, verify, cleanup]).toEqual([...[npm, lock, ...swap, verify, cleanup]].sort((a, b) => a - b));
-    expect(new Set([npm, lock, ...swap, verify, cleanup]).size).toBe(7);
+    const order = [npm, lock, before, ...swap, verify, cleanup];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(new Set(order).size).toBe(order.length);
+    expect(before).toBeGreaterThan(0);
     expect(verify).toBeGreaterThan(0);
+    // Nothing there to set aside on a fresh machine, and nothing deleted outside the build folder.
+    expect(c.some((line) => line.startsWith('root: /bin/mv -T /opt/grunt-sandbox '))).toBe(false);
+    expect(c.some((line) => line === 'root: /bin/rm -rf /opt/grunt-sandbox')).toBe(false);
     expect(c.some((line) => line.includes('chown'))).toBe(false);
     expect(c.some((line) => line.includes('/tmp/grunt'))).toBe(false);
     // The resource folder is mounted before it is read and unmounted after, by each of the two steps that copy from it.
@@ -77,14 +86,23 @@ describe('runSetup', () => {
   });
 
   it('repairs an existing distro: no new distro, no new user, and the install is rebuilt rather than reused', async () => {
-    const wsl = happyWsl({ distros: 'Ubuntu\r\ngrunt-sandbox\r\n', user: true, node: true });
+    const wsl = happyWsl({
+      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      user: true,
+      node: true,
+      override: (c) => (isProgram(c, '/usr/bin/test', '/opt/grunt-sandbox') ? { code: 0 } : undefined),
+    });
     const { outcome, log } = await setUp(wsl);
     expect(outcome.ok).toBe(true);
     expect(wsl.commands.some((l) => l.startsWith('wsl --install'))).toBe(false);
     expect(wsl.commands.some((l) => l.includes('useradd'))).toBe(false);
     // An existing /opt/grunt-sandbox may have been written by the grunt user: it is replaced, never trusted.
     expect(wsl.commands.some((l) => l.includes('/usr/bin/curl'))).toBe(true);
-    expect(wsl.commands).toContain('root: /bin/rm -rf /opt/grunt-sandbox');
+    // ... set aside inside the build folder (removed with it), not deleted up front.
+    const aside = wsl.commands.indexOf(`root: /bin/mv -T /opt/grunt-sandbox ${STAGING}/old`);
+    expect(aside).toBeGreaterThan(0);
+    expect(aside).toBeLessThan(wsl.commands.indexOf(`root: /bin/mv -T ${STAGING}/tree /opt/grunt-sandbox`));
+    expect(wsl.commands).not.toContain('root: /bin/rm -rf /opt/grunt-sandbox');
     expect(log).toContain('grunt-sandbox already exists: repairing it.');
   });
 
@@ -146,6 +164,34 @@ describe('runSetup', () => {
     const { outcome } = await setUp(wsl);
     expect(outcome).toMatchObject({ ok: false, step: 'Install Node', message: expect.stringContaining('unexpected folder') });
     expect(wsl.commands.some((l) => l.includes('rm -rf /etc'))).toBe(false);
+  });
+
+  it('never swaps in a tree whose ownership check fails', async () => {
+    const wsl = happyWsl({
+      distros: 'Ubuntu\r\ngrunt-sandbox\r\n',
+      override: (c) => (c.kind === 'exec' && c.argv[0] === '/usr/bin/find' && c.argv[1] === `${STAGING}/tree` ? { stdout: `${STAGING}/tree/node_modules/evil\n` } : undefined),
+    });
+    const { outcome } = await setUp(wsl);
+    expect(outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('evil') });
+    expect(wsl.commands.some((l) => l.startsWith('root: /bin/mv'))).toBe(false);
+  });
+
+  it('puts the old install back when the new one cannot be moved in', async () => {
+    const wsl = happyWsl({
+      override: (c) => {
+        if (isProgram(c, '/usr/bin/test', '/opt/grunt-sandbox')) return { code: 0 };
+        if (isProgram(c, '/bin/mv', `${STAGING}/tree`)) return { code: 1, stderr: 'mv: cannot move' };
+        return undefined;
+      },
+    });
+    const { outcome } = await setUp(wsl);
+    expect(outcome).toMatchObject({ ok: false, step: 'Install the sandbox runtime', message: expect.stringContaining('cannot move') });
+    const c = wsl.commands;
+    const aside = c.indexOf(`root: /bin/mv -T /opt/grunt-sandbox ${STAGING}/old`);
+    const back = c.indexOf(`root: /bin/mv -T ${STAGING}/old /opt/grunt-sandbox`);
+    expect(aside).toBeGreaterThan(0);
+    expect(back).toBeGreaterThan(aside);
+    expect(c.at(-1)).toBe(`root: /bin/rm -rf ${STAGING}`);
   });
 
   it('fails the install when something in it is not root-owned or is writable by others, naming the first few', async () => {

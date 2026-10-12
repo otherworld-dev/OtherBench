@@ -217,7 +217,8 @@ const installPackages: SetupStep = {
     await must(ctx, this.name, 'apt-get install', apt(['install', '-y', '-q', ...BASE_PACKAGES, ...ctx.packages]), 45 * MINUTE);
     const id = await ctx.runner.exec('root', ['/usr/bin/id', '-u', 'grunt']);
     if (id.code !== 0) await must(ctx, this.name, 'Adding the grunt user', ['/usr/sbin/useradd', '-m', '-s', '/bin/bash', 'grunt']);
-    await must(ctx, this.name, "Making the chats' home folder", ['/usr/bin/install', '-d', '-o', 'grunt', '-g', 'grunt', '-m', '0700', '/home/grunt/chats']);
+    // As grunt, never root: grunt owns /home/grunt and could plant a link at `chats`, which a root `install -d` would follow and chown.
+    await must(ctx, this.name, "Making the chats' home folder", ['/bin/mkdir', '-p', '-m', '0700', '/home/grunt/chats'], 2 * MINUTE, 'grunt');
   },
 };
 
@@ -283,44 +284,34 @@ const installRuntime: SetupStep = {
     );
     // Everything in the tree was made by root in a folder only root can enter; this just takes group/other write away from what archives and packages brought.
     await must(ctx, this.name, 'Locking the new install', ['/bin/chmod', '-R', 'go-w,a+rX', tree]);
-    await must(ctx, this.name, 'Replacing the old install', ['/bin/rm', '-rf', INSTALL_DIR]);
-    await must(ctx, this.name, `Moving the new install to ${INSTALL_DIR}`, ['/bin/mv', '-T', tree, INSTALL_DIR]);
-    await must(ctx, this.name, `Opening ${INSTALL_DIR}`, ['/bin/chmod', '0755', INSTALL_DIR]);
-    // Nothing in it may belong to anyone but root or be writable by anyone else (symbolic links are always 0777 and are checked for their owner only).
-    const odd = await must(ctx, this.name, `Checking who owns ${INSTALL_DIR}`, [
-      '/usr/bin/find',
-      INSTALL_DIR,
-      '(',
-      '(',
-      '-type',
-      'l',
-      '!',
-      '-user',
-      'root',
-      ')',
-      '-o',
-      '(',
-      '!',
-      '-type',
-      'l',
-      '(',
-      '!',
-      '-user',
-      'root',
-      '-o',
-      '-perm',
-      '/022',
-      ')',
-      ')',
-      ')',
-      '-print',
-    ]);
-    const offenders = odd.stdout.split(/\r?\n/).filter((line) => line.trim() !== '');
-    if (offenders.length > 0) {
-      throw new SetupError(this.name, `${offenders.length} item(s) in ${INSTALL_DIR} belong to someone other than root or are writable by others, e.g. ${offenders.slice(0, 5).join(', ')}.`);
+    // A bad tree is never swapped in.
+    await checkOwnership(ctx, this.name, tree);
+    // The old install is set aside (and removed with the build folder), not deleted first, so a failed move can put it back.
+    const old = `${staging}/old`;
+    const there = await ctx.runner.exec('root', ['/usr/bin/test', '-e', INSTALL_DIR]);
+    if (there.code === 0) await must(ctx, this.name, 'Setting the old install aside', ['/bin/mv', '-T', INSTALL_DIR, old]);
+    else if (there.code !== 1 || there.timedOut) throw new SetupError(this.name, `Couldn't tell whether ${INSTALL_DIR} exists (${textOf(there) || `exit ${String(there.code)}`}).`);
+    try {
+      await must(ctx, this.name, `Moving the new install to ${INSTALL_DIR}`, ['/bin/mv', '-T', tree, INSTALL_DIR]);
+    } catch (err) {
+      if (there.code === 0) await ctx.runner.exec('root', ['/bin/mv', '-T', old, INSTALL_DIR]);
+      throw err;
     }
+    await must(ctx, this.name, `Opening ${INSTALL_DIR}`, ['/bin/chmod', '0755', INSTALL_DIR]);
+    await checkOwnership(ctx, this.name, INSTALL_DIR);
   },
 };
+
+/** Nothing under `dir` may belong to anyone but root or be writable by anyone else (symbolic links are always 0777 and are checked for their owner only). */
+async function checkOwnership(ctx: SetupContext, step: string, dir: string): Promise<void> {
+  // prettier-ignore
+  const find = ['/usr/bin/find', dir, '(', '(', '-type', 'l', '!', '-user', 'root', ')', '-o', '(', '!', '-type', 'l', '(', '!', '-user', 'root', '-o', '-perm', '/022', ')', ')', ')', '-print'];
+  const odd = await must(ctx, step, `Checking who owns ${dir}`, find);
+  const offenders = odd.stdout.split(/\r?\n/).filter((line) => line.trim() !== '');
+  if (offenders.length > 0) {
+    throw new SetupError(step, `${offenders.length} item(s) in ${dir} belong to someone other than root or are writable by others, e.g. ${offenders.slice(0, 5).join(', ')}.`);
+  }
+}
 
 export const SELF_TEST_STEP: SetupStep = {
   name: 'Self-test',
