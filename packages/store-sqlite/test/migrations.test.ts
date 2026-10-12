@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
 import { runMigrations, MIGRATIONS, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
+import { MCP_OAUTH_ALREADY_THERE } from '../src/migrations/025-mcp-oauth.js';
 import type { DatabaseSync } from 'node:sqlite';
 
 function freshDb(): DatabaseSync {
@@ -38,6 +39,65 @@ describe('runMigrations', () => {
     } finally {
       db.close();
     }
+  });
+
+  describe('databases migrated under an older numbering (docs/HANDOVER.md, "Integration")', () => {
+    const columns = (db: DatabaseSync, table: string): string[] =>
+      (db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]).map((r) => r.name);
+    /** A database as a branch left it: migrated to `version` here, plus mcp_server.oauth, at `userVersionThen`. */
+    function oldDb(version: number, userVersionThen: number): DatabaseSync {
+      const db = freshDb();
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= version));
+      db.exec('ALTER TABLE mcp_server ADD COLUMN oauth TEXT');
+      db.exec(`PRAGMA user_version = ${userVersionThen}`);
+      return db;
+    }
+
+    it('refuses a remote-access database at 22 with the pointer, not a bare duplicate-column error, after committing 023 and 024', () => {
+      const db = oldDb(20, 22);
+      try {
+        expect(() => runMigrations(db)).toThrow(MCP_OAUTH_ALREADY_THERE);
+        expect(MCP_OAUTH_ALREADY_THERE).toMatch(/"Integration \(feat\/cowork-parity-all\)" in docs\/HANDOVER\.md/);
+        // Each migration commits on its own: it is left at 24, plan_mode still missing.
+        expect(userVersion(db)).toBe(24);
+        expect(columns(db, 'chat')).not.toContain('plan_mode');
+        // The hand fix for that state keeps the sign-in data.
+        db.exec('ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 25;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(25);
+        expect(columns(db, 'artifact_version')).toContain('live');
+        expect(tableNames(db)).toContain('schedule');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('a remote-access database never opened here is fixed by dropping oauth and going back to 20', () => {
+      const db = oldDb(20, 22);
+      try {
+        db.exec('ALTER TABLE mcp_server DROP COLUMN oauth; PRAGMA user_version = 20;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(25);
+        expect(columns(db, 'chat')).toContain('plan_mode');
+        expect(columns(db, 'mcp_server')).toContain('oauth');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('refuses a pre-live integration database at 24, and its hand fix adds the live column', () => {
+      const db = oldDb(23, 24);
+      try {
+        expect(() => runMigrations(db)).toThrow(MCP_OAUTH_ALREADY_THERE);
+        expect(userVersion(db)).toBe(24);
+        db.exec('ALTER TABLE artifact_version ADD COLUMN live TEXT; PRAGMA user_version = 25;');
+        runMigrations(db);
+        expect(columns(db, 'artifact_version')).toContain('live');
+        expect(columns(db, 'chat')).toContain('plan_mode');
+      } finally {
+        db.close();
+      }
+    });
   });
 
   it('mcp-oauth adds mcp_server.oauth, empty for every existing server', () => {

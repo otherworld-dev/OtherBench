@@ -51,7 +51,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 22, name: '022-chat-plan-mode', sql: MIGRATION_022_CHAT_PLAN_MODE },
   MIGRATION_023_SCHEDULES,
   { version: 24, name: '024-artifact-version-live', sql: MIGRATION_024_ARTIFACT_VERSION_LIVE },
-  { version: 25, name: '025-mcp-oauth', sql: MIGRATION_025_MCP_OAUTH },
+  MIGRATION_025_MCP_OAUTH,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */
