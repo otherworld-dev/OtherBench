@@ -175,6 +175,22 @@ describe('toModelMessages', () => {
     });
   });
 
+  it("drops a subagent part and keeps the parent's own subagent call and result", async () => {
+    const messages: CanonMessage[] = [
+      makeMessage('assistant', [
+        { type: 'tool-call', id: 'call-1', name: 'subagent', args: { description: 'Helper', prompt: 'Look around.' } },
+        { type: 'subagent', callId: 'call-1', label: 'Helper', prompt: 'Look around.', profileId: 'p', profileName: 'P', modelId: 'm', status: 'complete', parts: [{ type: 'text', text: 'INNER TRANSCRIPT' }] },
+        { type: 'tool-result', id: 'call-1', name: 'subagent', result: 'Found it.', isError: false },
+      ]),
+    ];
+    const result = await toModelMessages(messages, VISION_AND_TOOLS, noAttachments);
+    expect(result).toEqual([
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'subagent', input: { description: 'Helper', prompt: 'Look around.' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call-1', toolName: 'subagent', output: { type: 'json', value: 'Found it.' } }] },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('INNER TRANSCRIPT');
+  });
+
   it('drops an orphaned tool-result that has no matching tool-call, even when tools are supported', async () => {
     const messages: CanonMessage[] = [
       makeMessage('assistant', [

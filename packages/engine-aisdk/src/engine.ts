@@ -8,8 +8,7 @@ import type {
   EngineEvent,
   EngineRequest,
 } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
+import { toolContextFor } from '@grunt/core/domain/tool-context.js';
 import type { Connection } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
@@ -108,12 +107,6 @@ export class AiSdkChatEngine implements ChatEngine {
       return;
     }
 
-    // Tool executions need a ToolContext, which wants a chatId and a
-    // messageId -- both now carried directly on EngineRequest (task 16
-    // decision #1), supplied by the TurnRunner, which allocates and
-    // persists the assistant message row before calling stream().
-    const { chatId, messageId } = req;
-
     try {
       const caps = {
         // Conservative defaults when a model's capabilities are unknown
@@ -126,7 +119,7 @@ export class AiSdkChatEngine implements ChatEngine {
         tools: req.profile.model?.supportsTools ?? true,
       };
       const messages = await toModelMessages(req.messages, caps, req.loadAttachment ?? loadAttachmentUnavailable);
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders);
+      const tools = buildToolSet(req);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -426,34 +419,16 @@ function resolveLanguageModel(handle: Extract<ProviderHandle, { kind: 'aisdk' }>
   return (handle.provider as unknown as (id: string) => LanguageModel)(modelId);
 }
 
-function buildToolSet(
-  specs: ToolSpec[],
-  signal: AbortSignal,
-  chatId: string,
-  messageId: string,
-  profileId: string,
-  workspaceRoot: string | null,
-  folders: ResolvedFolder[] | undefined
-): ToolSet {
+function buildToolSet(req: EngineRequest): ToolSet {
   const toolSet: ToolSet = {};
-  for (const spec of specs) {
+  for (const spec of req.tools) {
     toolSet[spec.name] = tool({
       description: spec.description,
       inputSchema: jsonSchema(spec.parameters as JSONSchema7),
-      execute: async (input: unknown, opts) => {
-        const ctx: ToolContext = {
-          chatId,
-          messageId,
-          // The profile decides what tools may do (ToolPolicy) AND scopes
-          // the grants recorded for them, so every tool execution has to
-          // carry it -- see ToolContext.profileId.
-          profileId,
-          workspaceRoot,
-          ...(folders && folders.length > 0 ? { folders } : {}),
-          signal: opts.abortSignal ?? signal,
-        };
-        return spec.execute(input, ctx);
-      },
+      // toolContextFor is the one place a ToolContext is built: ids, profile
+      // (it scopes grants, see ToolContext.profileId), workspace, folders,
+      // the call id, and the reply's sub-agent host and tag.
+      execute: async (input: unknown, opts) => spec.execute(input, toolContextFor(req, opts.abortSignal ?? req.signal, opts.toolCallId)),
     });
   }
   return toolSet;

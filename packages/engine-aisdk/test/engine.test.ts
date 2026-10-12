@@ -159,6 +159,37 @@ describe('AiSdkChatEngine.stream', () => {
     expect(events).toContainEqual({ type: 'reasoning-delta', text: 'thinking...' });
   });
 
+  it("gives each tool call its call id, the reply's sub-agent host and the sub-agent tag", async () => {
+    const seen: ToolContext[] = [];
+    const spec: ToolSpec = {
+      name: 'probe',
+      description: '',
+      parameters: { type: 'object', properties: {} },
+      risk: 'read',
+      source: 'mcp',
+      execute: async (_args, ctx) => {
+        seen.push(ctx);
+        return 'ok';
+      },
+    };
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-42', toolName: 'probe', input: '{}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      ),
+    });
+    const host = { run: async () => 'x' };
+    await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec], subagents: host, subagent: { callId: 'parent-call', label: 'Helper' } })));
+    expect(seen[0]).toMatchObject({ toolCallId: 'call-42', subagents: host, subagent: { callId: 'parent-call', label: 'Helper' }, chatId: 'chat-1', profileId: 'profile-1' });
+  });
+
   it('round-trips a tool call: tool-call event, then tool-result event with the real return value, then the follow-up answer', async () => {
     const toolExecute = vi.fn(async (args: unknown, ctx: ToolContext) => {
       expect(ctx.chatId).toBe('chat-1');
