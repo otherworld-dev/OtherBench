@@ -1662,6 +1662,16 @@ them.
   The browser and computer use have separate grants (`host` and `app`) and
   separate stops (the viewer's close and the banner's Stop).
 
+### Confirmed by Adam (2026-10-14)
+
+No code change; recorded so they aren't asked again.
+
+- Protected files are put back after every sandboxed command.
+- A sub-agent's grants are matched and stored under the parent reply's profile.
+- This branch will be merged into dev in one go, after his checks.
+- He will commit the chat-unread migration (021) on dev first, which is what the 021 note above waits on.
+- The test type errors are Deck #954; the CI step stays `continue-on-error` until they are fixed.
+
 ### Follow-ups from the integration
 
 Left as they are on purpose; each is written down so it isn't found again by
