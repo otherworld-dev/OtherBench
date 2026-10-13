@@ -18,7 +18,7 @@ vi.mock('../state/api.js', () => ({
       regenerate: vi.fn(),
       create: vi.fn(),
     },
-    chats: { patch: vi.fn() },
+    chats: { patch: vi.fn(), stopComputer: vi.fn(async () => {}) },
     attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
     approvals: { resolve: vi.fn() },
     asks: { answer: vi.fn() },
@@ -549,6 +549,43 @@ describe('Thread question and plan cards', () => {
 
     await waitFor(() => expect(screen.queryByTestId('ask-card-ask-1')).not.toBeInTheDocument());
     expect(screen.queryByText(/Could not send/)).not.toBeInTheDocument();
+  });
+
+  it("shows a question card, a plan card, a computer card and the computer banner together, each answered on its own (integration)", async () => {
+    setup();
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'ask-request',
+      ask: { kind: 'plan', toolName: 'propose_plan', id: 'plan-1', chatId: 'chat-1', messageId: 'reply', plan: '1. Open the sheet' },
+    });
+    const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'approval-request',
+      request: {
+        id: 'req-c', chatId: 'chat-1', messageId: 'reply', toolName: 'computer', risk: 'mutate', source: 'computer', summary: 'Use FakeApp.exe: click at 10, 20',
+        args: { action: 'left_click', coordinate: [10, 20], app, appName: 'FakeApp.exe', appTitle: 'Fake', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' },
+      },
+    });
+    useGruntStore.setState({ chats: [makeChat({ headMessageId: 'reply' })] });
+    render(<ThreadForChat chatId="chat-1" />);
+    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'screenshot' }));
+
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
+    expect(screen.getByTestId('ask-card-plan-1')).toHaveAttribute('data-kind', 'plan');
+    expect(screen.getByTestId('approval-prompt-req-c')).toBeInTheDocument();
+    expect(screen.getByTestId('computer-headline')).toBeInTheDocument();
+    expect(screen.getByTestId('computer-banner')).toBeInTheDocument();
+
+    // The banner's Stop is the chat's own: the cards stay until their own events take them down.
+    await userEvent.click(within(screen.getByTestId('computer-banner')).getByRole('button', { name: /Stop/ }));
+    expect(api.chats.stopComputer).toHaveBeenCalledWith('chat-1');
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-prompt-req-c')).toBeInTheDocument();
+    // And the question card still answers its own question.
+    vi.mocked(api.asks.answer).mockResolvedValue({ answered: true });
+    await userEvent.click(within(screen.getByTestId('ask-card-ask-1')).getByRole('button', { name: 'Skip' }));
+    expect(api.asks.answer).toHaveBeenCalledWith('ask-1', { declined: true });
   });
 
   it('keeps the card (and lets the user retry) on any other failure', async () => {
