@@ -32,6 +32,10 @@ const SERVER_NAMES = new Map([['srv-1', 'GitHub'], ['srv-2', 'Notes'], ['srv-3',
 const HOST_POOL = ['pypi.org', 'PyPI.org', 'github.com', 'registry.npmjs.org', '*.example.com', 'api.example.com', 'internal.example.com:443', 'files.pythonhosted.org'];
 /** Sites a profile may block for the browser; the browser calls below use the first two and a site nobody blocks. */
 const BLOCK_POOL = ['ads.test', 'Tracker.Example.', 'casino.test', 'social.test'];
+const EXCEL = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE';
+const NOTEPAD = 'C:\\Windows\\System32\\notepad.exe';
+/** The fields the computer tool's describeCall adds for an action on an ordinary app's window. */
+const computerApp = (app: string): Record<string, unknown> => ({ app, appName: 'App', appTitle: 'Window', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' });
 const PARENT = 'p-parent';
 const CHOSEN = 'p-chosen';
 
@@ -60,6 +64,7 @@ function randomPolicy(next: () => number): ToolPolicy {
     ...optional('recall'),
     ...optional('subagents'),
     ...optional('browser'),
+    ...optional('computer'),
     ...(blocked === undefined ? {} : { browserBlockedHosts: blocked === 'empty' ? [] : subset(BLOCK_POOL) }),
     ...(runs === undefined ? {} : { shellRuns: runs }),
     ...(hosts === undefined ? {} : { sandboxHosts: hosts === 'empty' ? [] : subset(HOST_POOL) }),
@@ -122,6 +127,17 @@ const CALLS: [ToolSpec, unknown][] = [
   // No site, and a local one: refused whatever the policy.
   [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'https://example.com/' }],
   [tool('browser', 'browser', 'mutate'), { command: 'open', url: 'http://192.168.1.1/', host: '192.168.1.1' }],
+  // Computer use, as the provider hands its calls to the broker: the looks with no app, and actions described with
+  // the app's key and the window they are about. A sub-agent never gets any of them, whatever either profile has.
+  [tool('computer', 'computer', 'read'), { action: 'screenshot', app: null }],
+  [tool('computer', 'computer', 'read'), { action: 'cursor_position', app: null }],
+  [tool('computer', 'computer', 'read'), { action: 'wait', duration: 1, app: null }],
+  [tool('computer', 'computer', 'mutate'), { action: 'left_click', coordinate: [10, 20], ...computerApp(EXCEL) }],
+  [tool('computer', 'computer', 'mutate'), { action: 'type', text: 'hello', ...computerApp(EXCEL) }],
+  [tool('computer', 'computer', 'mutate'), { action: 'left_click', coordinate: [10, 20], ...computerApp(NOTEPAD) }],
+  // A look that calls itself an action and an action that calls itself a look: the action's name decides.
+  [tool('computer', 'computer', 'mutate'), { action: 'screenshot', app: null }],
+  [tool('computer', 'computer', 'read'), { action: 'left_click', coordinate: [10, 20], ...computerApp(EXCEL) }],
 ];
 
 /** Every grant that could let one of CALLS through with no card, for one profile. */
@@ -154,6 +170,10 @@ function grantsFor(profileId: string, prefix: string): Grant[] {
     // A network grant for a browser site and a browser grant for a sandbox host: neither may count for the other.
     always('network-for-browser-site', 'sandbox_network', 'network', { host: 'other.test' }),
     always('browser-for-network-host', 'browser', 'browser', { host: 'pypi.org' }),
+    // Computer grants for both apps, and an app grant made for another source: none may count for a sub-agent.
+    always('computer-excel', 'computer', 'computer', { app: EXCEL }),
+    chat('computer-notepad', 'computer', 'computer', { app: NOTEPAD }),
+    always('browser-with-app', 'browser', 'browser', { app: EXCEL } as Grant['constraint']),
   ];
 }
 
@@ -185,6 +205,8 @@ const WITHIN: Record<keyof typeof SUBAGENT_POLICY_RULES, (sub: Required<ToolPoli
   browser: (sub, other) => !sub.browser || other.browser === true,
   // The other way round from an allowlist: every site the other blocks, the sub-agent blocks too.
   browserBlockedHosts: (sub, other) => (other.browserBlockedHosts ?? []).every((h) => sub.browserBlockedHosts.map(siteKey).includes(siteKey(h))),
+  // Never, whatever either side has.
+  computer: (sub) => sub.computer === false,
 };
 
 /** The context of a sub-agent's call, built the way every engine builds it: under the PARENT's profile, whatever profile it runs as. */
@@ -237,6 +259,8 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
     let allowed = 0;
     let checked = 0;
     const browserAllowed = { grant: 0, read: 0 };
+    let computerChecked = 0;
+    let parentComputerAllowed = 0;
     for (let i = 0; i < CASES; i++) {
       const parent = randomPolicy(next);
       const chosen = randomPolicy(next);
@@ -266,6 +290,12 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
         checked += 1;
         // The broker keeps the thread tools and the subagent tool from a sub-agent whatever the policies say.
         if (spec.source === 'thread' || spec.source === 'subagent') expect(subKind, context).toBe('deny');
+        // And computer use, looks included: its policy never has it on.
+        if (spec.source === 'computer') {
+          expect(subKind, context).toBe('deny');
+          computerChecked += 1;
+          if (parentKind === 'allow') parentComputerAllowed += 1;
+        }
         if (subKind === 'allow') {
           allowed += 1;
           if (spec.source === 'browser' && asSub.kind === 'allow') browserAllowed[asSub.grantedBy === 'grant' ? 'grant' : 'read'] += 1;
@@ -295,6 +325,10 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
     // The browser's calls among them, by a grant for the site and by the ask-on-mutate read pass.
     expect(browserAllowed.grant).toBeGreaterThan(10);
     expect(browserAllowed.read).toBeGreaterThan(10);
+    // Computer calls were checked in every case, and the parent's own policy did let some through (a look, or its
+    // grant), so a sub-agent's refusal is the rule's doing, not a policy that never had computer use on.
+    expect(computerChecked).toBe(CASES * CALLS.filter(([spec]) => spec.source === 'computer').length);
+    expect(parentComputerAllowed).toBeGreaterThan(10);
   });
 
   it('the grants of the profile a sub-agent runs as never count, of any scope or kind; the same grants under the parent do', () => {
@@ -304,7 +338,8 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
     const ctx = subagentContext(() => 0.5);
     // A browser call for no site, or for a local one, is refused whatever grants there are.
     const refusedOutright = (args: unknown): boolean => [undefined, '192.168.1.1'].includes((args as { host?: string }).host);
-    const gated = CALLS.filter(([spec, args]) => !['thread', 'subagent', 'artifact', 'agent', 'shell'].includes(spec.source) && !(spec.source === 'browser' && refusedOutright(args)));
+    // Computer use is off for every sub-agent, so it has no grants to borrow (the property test above checks it is refused).
+    const gated = CALLS.filter(([spec, args]) => !['thread', 'subagent', 'artifact', 'agent', 'shell', 'computer'].includes(spec.source) && !(spec.source === 'browser' && refusedOutright(args)));
     expect(gated.filter(([spec]) => spec.source === 'browser').length).toBeGreaterThan(8);
 
     const chosenOnly = new InMemoryStore();

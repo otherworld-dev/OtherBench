@@ -176,7 +176,7 @@ describe('subagentPolicy and the sandbox', () => {
   });
 
   it('writes out every ToolPolicy field, with a rule for each', () => {
-    const fields = ['agentMcp', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
+    const fields = ['agentMcp', 'agentWeb', 'approvalMode', 'artifacts', 'browser', 'browserBlockedHosts', 'computer', 'fs', 'mcpServerIds', 'recall', 'sandboxHosts', 'shell', 'shellRuns', 'subagents'];
     expect(Object.keys(SUBAGENT_POLICY_RULES).sort()).toEqual(fields);
     for (const [parent, chosen] of [[policy(), policy()], [withShell('sandbox'), withShell('none')], [policy({ fs: 'off', mcpServerIds: [] }), policy({ approvalMode: 'always_ask' })]] as const) {
       const got = narrowed(parent, chosen);
@@ -194,14 +194,14 @@ describe('subagentPolicy and the sandbox', () => {
     expect(narrowed({ ...policy(), mcpServerIds: 's1' as never }, policy()).mcpServerIds).toEqual([]);
     expect(narrowed({ ...withShell('sandbox'), sandboxHosts: 'pypi.org' as never }, withShell('sandbox')).sandboxHosts).toEqual([]);
     expect(narrowed({ ...policy(), shell: 'yes' as never }, policy()).shell).toBe(false);
-    // Claude Code's tools, artifacts and sub-agents are off whatever both profiles say.
-    const open = policy({ agentWeb: true, agentMcp: true, artifacts: true, subagents: true, recall: true });
-    expect(narrowed(open, open)).toMatchObject({ agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: true });
+    // Claude Code's tools, artifacts, sub-agents and computer use are off whatever both profiles say.
+    const open = policy({ agentWeb: true, agentMcp: true, artifacts: true, subagents: true, recall: true, computer: true });
+    expect(narrowed(open, open)).toMatchObject({ agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: true, computer: false });
     // A locked-down parent gets nothing from a wide-open profile.
     const locked = policy({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', recall: false });
     expect(narrowed(locked, { ...open, shellRuns: 'sandbox', sandboxHosts: ['evil.example.com'], browser: true })).toEqual({
       fs: 'off', shell: false, shellRuns: 'sandbox', sandboxHosts: [], mcpServerIds: [], approvalMode: 'always_ask',
-      agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: false, browser: false, browserBlockedHosts: [],
+      agentWeb: false, agentMcp: false, artifacts: false, subagents: false, recall: false, browser: false, browserBlockedHosts: [], computer: false,
     });
   });
 
@@ -289,6 +289,18 @@ describe('subagentPolicy and the browser', () => {
       expect(narrowed(broken, browsing(['casino.test'])), JSON.stringify(bad)).toMatchObject({ browser: false, browserBlockedHosts: ['casino.test'] });
       expect(narrowed(browsing(['casino.test']), broken), JSON.stringify(bad)).toMatchObject({ browser: false, browserBlockedHosts: ['casino.test'] });
     }
+  });
+});
+
+describe('subagentPolicy and computer use', () => {
+  it('never gives a sub-agent computer use, whatever the parent and the chosen profile have, and always writes it out', () => {
+    const states: (boolean | undefined)[] = [true, false, undefined, 'yes' as never];
+    for (const parent of states) for (const chosen of states) {
+      const got = subagentPolicy(policy(parent === undefined ? {} : { computer: parent }), policy(chosen === undefined ? {} : { computer: chosen }));
+      if (!got.ok) throw new Error(got.message);
+      expect(got.policy.computer, `parent ${String(parent)}, chosen ${String(chosen)}`).toBe(false);
+    }
+    expect(SUBAGENT_POLICY_RULES.computer({ parent: policy({ computer: true }), chosen: policy({ computer: true }), ask: {}, mcpServerIds: [] })).toBe(false);
   });
 });
 
