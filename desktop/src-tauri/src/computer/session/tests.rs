@@ -59,6 +59,17 @@ struct Fake {
     in_send: AtomicUsize,
     overlap: AtomicBool,
     moves: Mutex<Vec<(i32, i32)>>,
+    /// A slow window lookup, and what happens in the world while it is slow (after the delay).
+    identity_delay: Mutex<Duration>,
+    on_identity: Mutex<Option<Box<dyn Fn(&Fake) + Send + Sync>>>,
+    /// The shell's own UI (hotkey, indicator) takes this long.
+    ui_delay: Mutex<Duration>,
+    /// How many sends were under way when each dialog was shown.
+    in_send_at_dialog: Mutex<Vec<usize>>,
+    /// Every send call's events, as taken.
+    batches: Mutex<Vec<Vec<Input>>>,
+    indicator_fails: AtomicBool,
+    channel_off: AtomicBool,
 }
 
 impl Fake {
@@ -91,6 +102,13 @@ impl Fake {
             in_send: AtomicUsize::new(0),
             overlap: AtomicBool::new(false),
             moves: Mutex::new(Vec::new()),
+            identity_delay: Mutex::new(Duration::ZERO),
+            on_identity: Mutex::new(None),
+            ui_delay: Mutex::new(Duration::ZERO),
+            in_send_at_dialog: Mutex::new(Vec::new()),
+            batches: Mutex::new(Vec::new()),
+            indicator_fails: AtomicBool::new(false),
+            channel_off: AtomicBool::new(false),
         })
     }
 
@@ -115,6 +133,7 @@ impl Fake {
 impl Desktop for Fake {
     fn consent(&self, text: &str, dialog: &Dialog) -> Consent {
         self.dialogs.lock().unwrap().push(text.to_string());
+        self.in_send_at_dialog.lock().unwrap().push(self.in_send.load(Ordering::SeqCst));
         let mode = *self.mode.lock().unwrap();
         let answer = match mode {
             Mode::Yes => Consent::Yes,
@@ -134,14 +153,27 @@ impl Desktop for Fake {
         answer
     }
     fn stop_hotkey(&self, on: bool) -> Result<(), String> {
+        thread::sleep(*self.ui_delay.lock().unwrap());
         if on && self.hotkey_fails.load(Ordering::SeqCst) {
             return Err("taken".into());
         }
         self.hotkey.lock().unwrap().push(on);
         Ok(())
     }
-    fn indicator(&self, title: Option<&str>) {
-        self.indicator.lock().unwrap().push(title.map(str::to_string));
+    fn indicator(&self, title: &str) -> Result<(), String> {
+        thread::sleep(*self.ui_delay.lock().unwrap());
+        if self.indicator_fails.load(Ordering::SeqCst) {
+            return Err("no window".into());
+        }
+        self.indicator.lock().unwrap().push(Some(title.to_string()));
+        Ok(())
+    }
+    fn hide_indicator(&self) {
+        thread::sleep(*self.ui_delay.lock().unwrap());
+        self.indicator.lock().unwrap().push(None);
+    }
+    fn channel_off(&self) {
+        self.channel_off.store(true, Ordering::SeqCst);
     }
     fn indicator_action(&self, label: &str) {
         self.labels.lock().unwrap().push(label.to_string());
@@ -192,7 +224,12 @@ impl Desktop for Fake {
         if let Where::Window(id) = at {
             return self.window.lock().unwrap().clone().filter(|w| &w.window_id == id).ok_or_else(|| "gone".into());
         }
-        Ok(self.lookup(at))
+        let looked = self.lookup(at);
+        thread::sleep(*self.identity_delay.lock().unwrap());
+        if let Some(hook) = self.on_identity.lock().unwrap().as_ref() {
+            hook(self);
+        }
+        Ok(looked)
     }
     fn activate(&self, window_id: &str) -> bool {
         self.activated.lock().unwrap().push(window_id.to_string());
@@ -209,6 +246,7 @@ impl Desktop for Fake {
     }
     fn move_to(&self, x: i32, y: i32) -> Result<(), String> {
         self.moves.lock().unwrap().push((x, y));
+        *self.cursor.lock().unwrap() = (x, y);
         Ok(())
     }
     fn send(&self, inputs: &[Input]) -> usize {
@@ -219,6 +257,12 @@ impl Desktop for Fake {
         thread::sleep(delay);
         let n = self.take.lock().unwrap().pop_front().map_or(inputs.len(), |t| t.min(inputs.len()));
         self.sent.lock().unwrap().extend_from_slice(&inputs[..n]);
+        self.batches.lock().unwrap().push(inputs[..n].to_vec());
+        for event in &inputs[..n] {
+            if let Input::MoveTo { x, y } = event {
+                *self.cursor.lock().unwrap() = (*x, *y);
+            }
+        }
         self.sends.fetch_add(1, Ordering::SeqCst);
         self.in_send.fetch_sub(1, Ordering::SeqCst);
         n
@@ -328,6 +372,11 @@ fn wait_for(what: &str, ok: impl Fn() -> bool) {
         assert!(Instant::now() < until, "timed out waiting for {what}");
         thread::sleep(Duration::from_millis(2));
     }
+}
+
+/// A left click's batch: each button event right after an absolute move to the point.
+fn click_at(x: i32, y: i32) -> Vec<Input> {
+    vec![Input::MoveTo { x, y }, Input::Button { right: false, up: false }, Input::MoveTo { x, y }, Input::Button { right: false, up: true }]
 }
 
 /// Every key or button down in `sent` has its up after it, and nothing is left down.
@@ -606,7 +655,7 @@ fn an_end_stops_a_running_act_and_nothing_is_pressed_after_its_answer() {
     assert_eq!(h.fake.sent().len(), pressed, "something was pressed after the end's answer");
     assert!(h.fake.sends.load(Ordering::SeqCst) < 20, "typing went on");
     assert!(balanced(&h.fake.sent()));
-    assert_eq!(*h.fake.hotkey.lock().unwrap(), [true, false]);
+    wait_for("the stop hotkey to go", || *h.fake.hotkey.lock().unwrap() == [true, false]);
 }
 
 #[test]
@@ -636,7 +685,7 @@ fn an_act_presses_what_it_is_told_and_says_so_on_the_indicator() {
     let t = h.start("a");
     h.shot("a", &t);
     assert_eq!(h.act("a", &t, json!({ "action": "left_click", "coordinate": [10, 20] })), json!({ "ok": true }));
-    assert_eq!(h.fake.sent(), [Input::Button { right: false, up: false }, Input::Button { right: false, up: true }]);
+    assert_eq!(h.fake.sent(), click_at(10, 20));
     assert_eq!(*h.fake.moves.lock().unwrap(), [(10, 20)]);
     assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "ctrl+s" })), json!({ "ok": true }));
     assert_eq!(h.act("a", &t, json!({ "action": "type", "text": "hi\n" })), json!({ "ok": true }));
@@ -719,7 +768,7 @@ fn a_double_click_sends_no_second_click_once_the_window_changed() {
     *h.fake.change_after.lock().unwrap() = Some((1, grunt()));
     let r = h.act("a", &t, json!({ "action": "triple_click", "coordinate": [10, 10] }));
     assert_eq!(r, json!({ "ok": false, "reason": act::WINDOW_CHANGED }));
-    assert_eq!(h.fake.sent(), [Input::Button { right: false, up: false }, Input::Button { right: false, up: true }]);
+    assert_eq!(h.fake.sent(), click_at(10, 10));
     // The same for a scroll's notches.
     let h = H::new();
     h.hello();
@@ -827,12 +876,20 @@ fn the_shells_own_stop_is_told_after_everything_an_end_does() {
     let h = H::new();
     h.hello();
     let t = h.start("a");
+    // An act is stopped and has answered before the server is told.
+    *h.fake.send_delay.lock().unwrap() = Duration::from_millis(30);
+    let act = h.send("computer.act", json!({ "chatId": "a", "session": t, "action": { "action": "type", "text": "x".repeat(200) }, "expect": expect(&app()) }));
+    wait_for("typing to start", || h.fake.sends.load(Ordering::SeqCst) >= 1);
     h.shell.stop("button");
     let messages = h.sink.messages();
     let stopped_at = messages.iter().position(|m| m["event"] == json!("computer.stopped")).expect("stopped");
     assert_eq!(messages[stopped_at]["params"], json!({ "chatId": "a", "why": "button" }));
+    let (act_at, act) = h.answer_at(act);
+    assert_eq!(act["result"]["ok"], json!(false));
+    assert!(act_at < stopped_at);
+    // Then the UI is put away and the list reported, as after an end's answer.
     let last_shortcuts = messages.iter().rposition(|m| m["event"] == json!("computer.shortcuts")).unwrap();
-    assert!(last_shortcuts < stopped_at);
+    assert!(last_shortcuts > stopped_at);
     assert_eq!(messages[last_shortcuts]["params"], json!({ "shortcuts": [QUICK] }));
     assert_eq!(*h.fake.hotkey.lock().unwrap(), [true, false]);
     assert!(no_session(&h.shot("a", &t)));
@@ -881,9 +938,11 @@ fn idle_counts_from_the_last_look_or_act_never_from_a_start() {
     let h = H::with(Fake::new(), Limits { idle: Duration::from_millis(400), ..limits() });
     h.hello();
     let t = h.start("a");
+    // A small screen, so each look is quick to encode however loaded the machine is.
+    *h.fake.screen.lock().unwrap() = (200, 100);
     for _ in 0..6 {
         thread::sleep(Duration::from_millis(80));
-        assert_eq!(h.shot("a", &t)["result"]["width"], json!(1366));
+        assert_eq!(h.shot("a", &t)["result"]["width"], json!(200));
     }
     assert!(h.events("computer.stopped").is_empty(), "looks keep it alive");
     for _ in 0..6 {
@@ -947,4 +1006,184 @@ fn the_cursor_and_a_point_are_checked_against_the_last_screenshot_never_clamped(
     assert!(ask("computer.target", json!({ "x": 5, "y": 6 }))["result"]["refuse"].is_string());
     *h.fake.cursor.lock().unwrap() = (10, 20);
     assert!(ask("computer.cursor", json!({}))["error"].is_object());
+}
+
+// Fix round 1 ------------------------------------------------------------------
+
+#[test]
+fn a_click_is_refused_when_the_cursor_moved_after_the_check() {
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    h.shot("a", &t);
+    *h.fake.on_identity.lock().unwrap() = Some(Box::new(|f: &Fake| *f.cursor.lock().unwrap() = (500, 500)));
+    let r = h.act("a", &t, json!({ "action": "left_click", "coordinate": [10, 20] }));
+    assert_eq!(r["ok"], json!(false), "{r}");
+    assert!(h.fake.sent().is_empty(), "a click went to wherever the cursor was");
+}
+
+#[test]
+fn nothing_is_pressed_once_an_end_comes_during_a_slow_lookup() {
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    *h.fake.identity_delay.lock().unwrap() = Duration::from_millis(300);
+    let looks = h.fake.looks.load(Ordering::SeqCst);
+    let act = h.send("computer.act", json!({ "chatId": "a", "session": t, "action": { "action": "type", "text": "x" }, "expect": expect(&app()) }));
+    wait_for("the lookup", || h.fake.looks.load(Ordering::SeqCst) > looks);
+    let end = h.send("computer.end", json!({ "chatId": "a" }));
+    assert_eq!(h.result(end), json!({ "ok": true }));
+    assert_eq!(h.result(act)["ok"], json!(false));
+    thread::sleep(Duration::from_millis(100));
+    assert!(h.fake.sent().is_empty(), "a key went out after the end was read");
+}
+
+#[test]
+fn nothing_is_pressed_once_the_deadline_passes_during_a_slow_lookup() {
+    let h = H::with(Fake::new(), Limits { act: Duration::from_millis(100), ..limits() });
+    h.hello();
+    let t = h.start("a");
+    *h.fake.identity_delay.lock().unwrap() = Duration::from_millis(250);
+    assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "return" })), json!({ "ok": false, "reason": act::TOO_LONG }));
+    assert!(h.fake.sent().is_empty());
+}
+
+#[test]
+fn a_modifier_pressed_during_the_lookup_is_seen_before_the_send() {
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    h.shot("a", &t);
+    *h.fake.on_identity.lock().unwrap() = Some(Box::new(|f: &Fake| *f.keyboard.lock().unwrap() = Keyboard::Held));
+    for action in [json!({ "action": "key", "text": "ctrl+s" }), json!({ "action": "type", "text": "x" }), json!({ "action": "left_click", "coordinate": [1, 1] })] {
+        *h.fake.keyboard.lock().unwrap() = Keyboard::Clear;
+        assert_eq!(h.act("a", &t, action.clone()), json!({ "ok": false, "reason": act::MODIFIER_HELD }), "{action}");
+    }
+    assert!(h.fake.sent().is_empty());
+}
+
+#[test]
+fn an_end_answers_without_waiting_for_the_shells_own_ui() {
+    let h = H::new();
+    h.hello();
+    h.start("a");
+    *h.fake.ui_delay.lock().unwrap() = Duration::from_secs(2);
+    let asked = Instant::now();
+    assert_eq!(h.result(h.send("computer.end", json!({ "chatId": "a" }))), json!({ "ok": true }));
+    assert!(asked.elapsed() < Duration::from_millis(800), "{:?}", asked.elapsed());
+}
+
+#[test]
+fn an_end_read_before_the_dialog_is_up_cancels_the_start() {
+    for _ in 0..20 {
+        let h = H::new();
+        h.hello();
+        let start = h.send("computer.start", json!({ "chatId": "a", "title": "t" }));
+        let end = h.send("computer.end", json!({ "chatId": "a" }));
+        assert_eq!(h.result(start), json!({ "ok": false, "reason": STOPPED_FIRST }));
+        assert_eq!(h.result(end), json!({ "ok": true }));
+        thread::sleep(Duration::from_millis(20));
+        assert!(h.fake.dialogs.lock().unwrap().is_empty(), "a dialog for a chat the server had ended");
+    }
+}
+
+#[test]
+fn no_dialog_is_shown_while_an_act_is_still_pressing() {
+    let h = H::with(Fake::new(), Limits { settle: Duration::from_millis(10), ..limits() });
+    h.hello();
+    let t = h.start("a");
+    *h.fake.send_delay.lock().unwrap() = Duration::from_millis(300);
+    let act = h.send("computer.act", json!({ "chatId": "a", "session": t, "action": { "action": "type", "text": "x".repeat(100) }, "expect": expect(&app()) }));
+    wait_for("typing to start", || h.fake.in_send.load(Ordering::SeqCst) > 0);
+    h.shell.stop("button");
+    let start = h.send("computer.start", json!({ "chatId": "b", "title": "t" }));
+    assert_eq!(h.result(act)["ok"], json!(false));
+    assert_eq!(h.result(start)["ok"], json!(true));
+    assert_eq!(*h.fake.in_send_at_dialog.lock().unwrap(), [0, 0], "a dialog was shown while an act was pressing");
+}
+
+#[test]
+fn an_end_never_says_ok_before_the_start_it_ended_has_said_yes() {
+    let h = H::with(Fake::new(), Limits { settle: Duration::from_millis(100), ..limits() });
+    h.hello();
+    let events = locked(&h.shell.0.events);
+    let start = h.send("computer.start", json!({ "chatId": "a", "title": "t" }));
+    wait_for("the session", || h.shell.0.state().sessions.contains_key("a"));
+    let end = h.send("computer.end", json!({ "chatId": "a" }));
+    let (end_at, end) = h.answer_at(end);
+    assert_eq!(end["result"]["ok"], json!(false), "{end}");
+    drop(events);
+    let (start_at, _) = h.answer_at(start);
+    assert!(end_at < start_at);
+}
+
+#[test]
+fn every_button_event_and_notch_goes_with_a_move_to_the_checked_point() {
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    h.shot("a", &t);
+    for action in [
+        json!({ "action": "left_click", "coordinate": [10, 20] }),
+        json!({ "action": "right_click", "coordinate": [10, 20] }),
+        json!({ "action": "triple_click", "coordinate": [10, 20] }),
+        json!({ "action": "scroll", "coordinate": [10, 20], "scroll_direction": "left", "scroll_amount": 4 }),
+    ] {
+        assert_eq!(h.act("a", &t, action.clone()), json!({ "ok": true }), "{action}");
+    }
+    let batches = h.fake.batches.lock().unwrap().clone();
+    assert_eq!(batches.len(), 1 + 1 + 3 + 4);
+    for batch in batches {
+        for (i, event) in batch.iter().enumerate() {
+            if matches!(event, Input::Button { .. } | Input::Wheel { .. }) {
+                assert!(i > 0 && batch[i - 1] == Input::MoveTo { x: 10, y: 20 }, "{batch:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_start_whose_indicator_cant_be_shown_is_refused_and_leaves_nothing() {
+    let h = H::new();
+    h.hello();
+    h.fake.indicator_fails.store(true, Ordering::SeqCst);
+    let r = h.result(h.send("computer.start", json!({ "chatId": "a", "title": "t" })));
+    assert_eq!(r, json!({ "ok": false, "reason": NO_INDICATOR }));
+    assert!(no_session(&h.shot("a", &"x".repeat(64))));
+    assert_eq!(h.fake.hotkey.lock().unwrap().last(), Some(&false), "the stop hotkey is taken back");
+    assert!(!h.shell.0.state().sessions.contains_key("a"));
+}
+
+#[test]
+fn a_stop_hotkey_of_unknown_state_is_unregistered_before_the_next_start() {
+    let h = H::new();
+    h.hello();
+    h.fake.hotkey_fails.store(true, Ordering::SeqCst);
+    assert_eq!(h.result(h.send("computer.start", json!({ "chatId": "a", "title": "t" })))["reason"], json!(NO_HOTKEY));
+    h.fake.hotkey_fails.store(false, Ordering::SeqCst);
+    h.start("a");
+    // The refused start's clean-up unregistered it (state unknown); the next start registered it afresh.
+    assert_eq!(*h.fake.hotkey.lock().unwrap(), [false, true]);
+}
+
+#[test]
+fn a_lost_channel_says_computer_use_is_off() {
+    let h = H::new();
+    h.hello();
+    h.shell.lost();
+    wait_for("the off notice", || h.fake.channel_off.load(Ordering::SeqCst));
+}
+
+#[test]
+fn quitting_is_not_held_up_by_a_worker_holding_the_ui() {
+    let h = H::new();
+    h.hello();
+    h.start("a");
+    let ops = locked(&h.shell.0.ui_ops);
+    let asked = Instant::now();
+    h.shell.shutdown(Duration::from_millis(200));
+    assert!(asked.elapsed() < Duration::from_millis(600), "{:?}", asked.elapsed());
+    drop(ops);
+    wait_for("the quit to finish", || !h.events("computer.stopped").is_empty());
+    assert_eq!(h.events("computer.stopped")[0], json!({ "chatId": "a", "why": "quit" }));
 }

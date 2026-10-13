@@ -43,13 +43,13 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
+    KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, EnumThreadWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowTextW,
     GetWindowThreadProcessId, IsWindow, MessageBoxW, PostMessageW, SetCursorPos, SetForegroundWindow, SetWindowDisplayAffinity, WindowFromPoint, GA_ROOT,
-    GW_OWNER, IDOK, MB_DEFBUTTON2, MB_ICONWARNING, MB_OKCANCEL, MB_SETFOREGROUND, MB_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, WDA_EXCLUDEFROMCAPTURE, WM_CLOSE,
+    GW_OWNER, IDOK, MB_DEFBUTTON2, MB_ICONWARNING, MB_OKCANCEL, MB_SETFOREGROUND, MB_TOPMOST, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WDA_EXCLUDEFROMCAPTURE, WM_CLOSE,
 };
 
 use super::facts::{self, Facts, Identity, Location};
@@ -148,16 +148,23 @@ pub fn exclude_from_capture(window: isize) {
 
 // ---- input ---------------------------------------------------------------------
 
-fn as_input(event: &Input) -> INPUT {
+/// The virtual desktop: left, top, width, height.
+fn virtual_desktop() -> (i32, i32, i32, i32) {
+    unsafe { (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN)) }
+}
+
+/// One event as an INPUT; None for an absolute move to a point off the virtual desktop.
+fn as_input(event: &Input, desk: (i32, i32, i32, i32)) -> Option<INPUT> {
     let key = |vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(vk), wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     };
-    let mouse = |flags: MOUSE_EVENT_FLAGS, data: i32| INPUT {
+    let mouse_at = |flags: MOUSE_EVENT_FLAGS, data: i32, dx: i32, dy: i32| INPUT {
         r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
+        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx, dy, mouseData: data as u32, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     };
-    match *event {
+    let mouse = |flags: MOUSE_EVENT_FLAGS, data: i32| mouse_at(flags, data, 0, 0);
+    Some(match *event {
         Input::Key { vk, extended, up } => {
             let mut flags = KEYBD_EVENT_FLAGS(0);
             if extended {
@@ -175,15 +182,21 @@ fn as_input(event: &Input) -> INPUT {
         Input::Button { right: true, up: false } => mouse(MOUSEEVENTF_RIGHTDOWN, 0),
         Input::Button { right: true, up: true } => mouse(MOUSEEVENTF_RIGHTUP, 0),
         Input::Wheel { delta, horizontal } => mouse(if horizontal { MOUSEEVENTF_HWHEEL } else { MOUSEEVENTF_WHEEL }, delta),
-    }
+        Input::MoveTo { x, y } => {
+            let (dx, dy) = image::absolute(x, y, desk)?;
+            mouse_at(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0, dx, dy)
+        }
+    })
 }
 
-/// Inserts the events in one call; how many Windows took (they go in order, so the first that many).
+/// Inserts the events in one call; how many Windows took (they go in order,
+/// so the first that many). A batch with a move it can't express is not sent at all.
 pub fn send(events: &[Input]) -> usize {
-    if events.is_empty() {
+    let desk = virtual_desktop();
+    let Some(inputs) = events.iter().map(|e| as_input(e, desk)).collect::<Option<Vec<INPUT>>>() else { return 0 };
+    if inputs.is_empty() {
         return 0;
     }
-    let inputs: Vec<INPUT> = events.iter().map(as_input).collect();
     (unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) }) as usize
 }
 
@@ -482,7 +495,12 @@ fn original_name(path: &str) -> Option<Option<String>> {
         let mut len = 0u32;
         let mut keys = Vec::new();
         let translation = wide("\\VarFileInfo\\Translation");
+        // A value is read only where it lies wholly inside the buffer; anything else is inconsistent and refused.
+        let start = data.as_ptr() as usize;
         if VerQueryValueW(data.as_ptr() as *const c_void, PCWSTR(translation.as_ptr()), &mut ptr, &mut len).as_bool() && !ptr.is_null() && len >= 4 {
+            if !facts::inside(start, data.len(), ptr as usize, len as usize) || (ptr as usize) % 2 != 0 {
+                return None;
+            }
             let pairs = std::slice::from_raw_parts(ptr as *const u16, (len / 2) as usize);
             keys.extend(pairs.chunks_exact(2).map(|p| format!("{:04x}{:04x}", p[0], p[1])));
         }
@@ -492,6 +510,11 @@ fn original_name(path: &str) -> Option<Option<String>> {
             let mut ptr: *mut c_void = std::ptr::null_mut();
             let mut len = 0u32;
             if VerQueryValueW(data.as_ptr() as *const c_void, PCWSTR(sub.as_ptr()), &mut ptr, &mut len).as_bool() && !ptr.is_null() {
+                // A string value's length is in UTF-16 units.
+                let bytes = (len as usize).checked_mul(2)?;
+                if !facts::inside(start, data.len(), ptr as usize, bytes) || (ptr as usize) % 2 != 0 {
+                    return None;
+                }
                 let units = std::slice::from_raw_parts(ptr as *const u16, len as usize);
                 let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
                 return facts::strict_utf16(&units[..end]).map(Some);

@@ -177,6 +177,12 @@ pub fn pe_subsystem(bytes: &[u8]) -> Option<u16> {
     }
 }
 
+/// Whether `bytes` bytes at address `at` lie wholly inside the buffer at
+/// `start` of `len` bytes (a value `VerQueryValueW` points into it).
+pub fn inside(start: usize, len: usize, at: usize, bytes: usize) -> bool {
+    at >= start && at.checked_sub(start).and_then(|offset| offset.checked_add(bytes)).is_some_and(|end| end <= len)
+}
+
 /// The console subsystem.
 pub const SUBSYSTEM_CONSOLE: u16 = 3;
 
@@ -369,6 +375,17 @@ mod tests {
         assert_eq!(pe_subsystem(b"MZ"), None);
         assert_eq!(pe_subsystem(b"not an image at all"), None);
         assert_eq!(pe_subsystem(&pe(3, 0x20B)[..0x90]), None);
+    }
+
+    #[test]
+    fn a_version_value_must_lie_inside_its_buffer() {
+        assert!(inside(1000, 100, 1000, 100));
+        assert!(inside(1000, 100, 1050, 50));
+        assert!(!inside(1000, 100, 1050, 51));
+        assert!(!inside(1000, 100, 999, 2));
+        assert!(!inside(1000, 100, usize::MAX - 1, 4));
+        assert!(!inside(1000, 100, 1001, usize::MAX));
+        assert!(inside(1000, 100, 1100, 0));
     }
 
     #[test]

@@ -55,6 +55,24 @@ impl Shot {
     }
 }
 
+/// A screen point as `SendInput`'s absolute coordinates over the virtual
+/// desktop (`MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`): 0..=65535 each
+/// way, where Windows puts pixel `floor(n * size / 65536)`. The smallest `n`
+/// that lands on the pixel is used, so it maps back to exactly that pixel.
+/// `desk` is the virtual desktop: left, top, width, height. None for a point off it.
+pub fn absolute(x: i32, y: i32, desk: (i32, i32, i32, i32)) -> Option<(i32, i32)> {
+    let (left, top, width, height) = desk;
+    let along = |p: i32, origin: i32, size: i32| -> Option<i32> {
+        let offset = p as i64 - origin as i64;
+        if size <= 0 || offset < 0 || offset >= size as i64 {
+            return None;
+        }
+        // ceil(offset * 65536 / size)
+        Some(((offset * 65536 + size as i64 - 1) / size as i64) as i32)
+    };
+    Some((along(x, left, width)?, along(y, top, height)?))
+}
+
 /// GDI's top-down 32-bit BGRA rows as an RGB PNG.
 pub fn encode_png(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE || bgra.len() != width as usize * height as usize * 4 {
@@ -115,6 +133,32 @@ mod tests {
         for (x, y) in [(-1, 0), (0, -1), (1366, 0), (0, 768)] {
             assert!(!shot.contains(x, y), "{x},{y}");
         }
+    }
+
+    #[test]
+    fn absolute_coordinates_land_on_exactly_the_pixel() {
+        // A primary 2560 wide, a second monitor of 1920 to its left, one taller than the other.
+        for desk in [(0, 0, 1920, 1080), (-1920, 0, 4480, 1440), (0, -300, 1366, 1068), (0, 0, 1, 1), (-5000, -3000, 9999, 7777)] {
+            let (left, top, width, height) = desk;
+            for (x, y) in [(left, top), (left + width - 1, top + height - 1), (0, 0), (left + width / 3, top + height / 2)] {
+                if x < left || y < top || x >= left + width || y >= top + height {
+                    continue;
+                }
+                let (nx, ny) = absolute(x, y, desk).unwrap();
+                assert!((0..=65535).contains(&nx) && (0..=65535).contains(&ny), "{desk:?} {x},{y}: {nx},{ny}");
+                assert_eq!(left as i64 + nx as i64 * width as i64 / 65536, x as i64, "{desk:?} x {x}");
+                assert_eq!(top as i64 + ny as i64 * height as i64 / 65536, y as i64, "{desk:?} y {y}");
+            }
+        }
+        let desk = (-1920, 0, 4480, 1440);
+        for x in -1920..2560 {
+            let (nx, _) = absolute(x, 0, desk).unwrap();
+            assert_eq!(-1920 + nx as i64 * 4480 / 65536, x as i64);
+        }
+        for off in [(-1921, 0), (2560, 0), (0, -1), (0, 1440)] {
+            assert_eq!(absolute(off.0, off.1, desk), None, "{off:?}");
+        }
+        assert_eq!(absolute(0, 0, (0, 0, 0, 0)), None);
     }
 
     #[test]

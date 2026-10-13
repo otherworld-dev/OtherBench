@@ -9,22 +9,30 @@
 //!   and nothing is done.
 //! - One chat at a time: a start is refused while another chat holds a
 //!   session or has a dialog up. Each chat's session, dialog and answers are
-//!   kept apart.
-//! - An end is not token-checked. The reader thread marks the chat's session
-//!   dead and its dialog cancelled before it reads the next line (`take`), so
-//!   any later request for the chat is `no-session` whichever worker runs it.
-//!   The end then waits (at most `Limits::settle`) for an act in progress to
-//!   stop at its next check and release what it pressed, so nothing is
-//!   pressed after its answer, and answers well inside the server's 4 s.
-//! - Answers for one chat are written in the order their effects took place:
-//!   an end that ended a session waits for that session's start to have
-//!   written its yes.
+//!   kept apart. No dialog is shown while an act is still pressing.
+//! - The reader thread does each request's bookkeeping before it reads the
+//!   next line. A start is admitted there (its pending entry exists before
+//!   any dialog is shown), and an end marks the chat's session dead and its
+//!   start cancelled there (`take`), so any later request for the chat is
+//!   `no-session` whichever worker runs it, and a start it overtook never
+//!   shows its dialog.
+//! - Input is only sent while the session is held and after a last look
+//!   (act.rs `Press`), so nothing is pressed once an end has been read. The
+//!   end waits (at most `Limits::settle`) for the act to say it stopped and
+//!   for the start that made the session to have said yes, then answers:
+//!   `{ ok: true }` only when both happened and nothing is left down. The
+//!   shell's own UI (the stop hotkey, the indicator, the tray) is put away
+//!   after the answer, never before it.
 //! - Events go out only after the hello's answer: `computer.shortcuts`
 //!   whenever the list changes (before the start's yes that registered the
 //!   stop hotkey), `computer.stopped` only for the shell's own ends.
+//! - The shell's UI calls go to the main thread and are time-bounded; they
+//!   are made one at a time (`ui_ops`) and never under a lock that the main
+//!   thread or the reader thread takes.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -41,9 +49,11 @@ const UNANSWERED: &str = "Nobody answered the desktop app's question in time, so
 const NOT_ASKED: &str = "The desktop app couldn't ask whether Grunt may control the computer.";
 const STOPPED_FIRST: &str = "Control was stopped before it started, so nothing was started.";
 const NO_HOTKEY: &str = "Grunt couldn't register its stop hotkey (Ctrl+Alt+Backspace), so it didn't take control.";
+const NO_INDICATOR: &str = "Grunt couldn't show that it is controlling the computer, so it didn't take control.";
 const NO_TOKEN: &str = "Grunt couldn't make a session token, so it didn't take control.";
 const UNREADABLE: &str = "The desktop app couldn't read that request.";
 const STILL_RUNNING: &str = "An action for that chat had not stopped yet; it was told to stop.";
+const NOT_ANNOUNCED: &str = "The start of that session had not finished yet; it was ended.";
 const NO_CURSOR: &str = "The cursor is not on the screen Grunt last looked at.";
 const TOO_BIG: &str = "The screenshot is larger than Grunt can send.";
 
@@ -69,7 +79,7 @@ impl Default for Limits {
             dialog: Duration::from_secs(110),
             idle: Duration::from_secs(10 * 60),
             idle_tick: Duration::from_secs(5),
-            settle: Duration::from_millis(2500),
+            settle: Duration::from_millis(3000),
             act: Duration::from_secs(55),
             debounce: Duration::from_millis(300),
         }
@@ -122,6 +132,20 @@ impl Live {
         self.lock().stuck = true;
     }
 
+    /// Runs `work` (a last look and one send) while the session is held and
+    /// not ended: an end that comes meanwhile waits for it, and once an end
+    /// has been read nothing runs. `work` must be quick and must not touch
+    /// this session.
+    pub fn while_live<T>(&self, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        let s = self.lock();
+        if s.ended {
+            return Err(act::STOPPED.into());
+        }
+        let out = work();
+        drop(s);
+        out
+    }
+
     fn end(&self) {
         self.lock().ended = true;
         self.changed.notify_all();
@@ -141,7 +165,8 @@ impl Live {
     }
 }
 
-/// An act that has begun for a session: the end waits for it to drop.
+/// An act that has begun for a session: the end waits for it to drop, which
+/// is its word that it stopped and released what it pressed.
 struct Acting(Arc<Live>);
 
 impl Drop for Acting {
@@ -151,23 +176,25 @@ impl Drop for Acting {
     }
 }
 
-/// A start whose dialog is up. Its replies (the start, and any further start
-/// for the same chat) are answered once, by whoever settles it.
+/// A start admitted and not yet settled (its dialog may not be up yet). Its
+/// replies (the start, and any further start for the same chat) are
+/// answered once, by whoever settles it.
 struct Pending {
     chat: String,
+    title: String,
     replies: Mutex<Vec<Reply>>,
-    cancelled: std::sync::atomic::AtomicBool,
+    cancelled: AtomicBool,
     dialog: Dialog,
 }
 
 impl Pending {
     fn cancel(&self) {
-        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.cancelled.store(true, Ordering::SeqCst);
         self.dialog.dismiss();
     }
 
     fn cancelled(&self) -> bool {
-        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+        self.cancelled.load(Ordering::SeqCst)
     }
 
     fn take(&self) -> Vec<Reply> {
@@ -185,8 +212,9 @@ struct State {
     /// The channel closed or was lost: nothing more is acted on.
     off: bool,
     sessions: HashMap<String, Arc<Live>>,
+    /// Starts admitted and not yet settled, one per chat.
     dialogs: HashMap<String, Arc<Pending>>,
-    /// Dialogs still on the screen, cancelled ones included.
+    /// Starts whose dialog may still be on the screen, cancelled ones included.
     on_screen: usize,
 }
 
@@ -195,10 +223,14 @@ struct Events {
     last: Option<Vec<String>>,
 }
 
-/// The shell's own UI for a session: the stop hotkey and the indicator.
+/// What the shell believes about its own UI. Only ever locked briefly, never
+/// across a `Desktop` call.
 struct Ui {
     hotkey: bool,
     indicator: bool,
+    /// A hotkey call failed or timed out, so its state is unknown: the next
+    /// start or clean-up unregisters it again.
+    unsure: bool,
 }
 
 /// What a `computer.end` took off the chat, on the reader thread.
@@ -216,7 +248,11 @@ struct Inner {
     /// Held while the hello is answered and while any event is written, so no event comes before the hello's answer.
     events: Mutex<Events>,
     ui: Mutex<Ui>,
-    /// One act at a time, for the shell as a whole.
+    /// The shell's UI changes, one at a time. Held across `Desktop` UI calls
+    /// (each time-bounded), and only ever on a worker thread: never by the
+    /// reader, the main thread, or an end before it answers.
+    ui_ops: Mutex<()>,
+    /// One act at a time, for the shell as a whole; also held while a start's dialog is up.
     acting: Mutex<()>,
     debounce: Mutex<u64>,
 }
@@ -237,7 +273,8 @@ impl Shell {
             writer: Mutex::new(None),
             state: Mutex::new(State { off: false, sessions: HashMap::new(), dialogs: HashMap::new(), on_screen: 0 }),
             events: Mutex::new(Events { hello_done: false, last: None }),
-            ui: Mutex::new(Ui { hotkey: false, indicator: false }),
+            ui: Mutex::new(Ui { hotkey: false, indicator: false, unsure: false }),
+            ui_ops: Mutex::new(()),
             acting: Mutex::new(()),
             debounce: Mutex::new(0),
         }))
@@ -262,29 +299,35 @@ impl Shell {
     }
 
     /// The shell ends every session itself: `why` is "hotkey", "button",
-    /// "idle" or "quit". Each is ended as `computer.end` would, then the
-    /// server is told with `computer.stopped`.
+    /// "idle" or "quit". Each is ended as `computer.end` would (dead, its act
+    /// stopped and released), then the server is told with
+    /// `computer.stopped`, and then the UI is put away, as after an end's
+    /// answer. (On quit the main thread waits only briefly, so the server must
+    /// hear before the UI calls that need it.)
     pub fn stop(&self, why: &str) {
-        let (lives, pendings) = {
-            let mut st = locked(&self.0.state);
-            let lives: Vec<_> = st.sessions.drain().map(|(_, l)| l).collect();
-            let pendings: Vec<_> = st.dialogs.drain().map(|(_, p)| p).collect();
-            for l in &lives {
-                l.end();
-            }
-            for p in &pendings {
-                p.cancel();
-            }
-            (lives, pendings)
-        };
+        let (lives, pendings) = self.0.take_all();
         for p in pendings {
             p.refuse_all(STOPPED_FIRST);
         }
         for l in &lives {
-            self.0.stopped(l, why);
+            let _ = self.0.settle(l);
         }
-        self.0.settle_ui();
-        self.0.report_shortcuts();
+        for l in &lives {
+            self.0.event("computer.stopped", json!({ "chatId": l.chat, "why": why }));
+        }
+        self.0.clean_up();
+    }
+
+    /// `stop("quit")` on a thread of its own, waited for at most `wait`: a
+    /// worker holding the UI can't keep the caller (the main thread, quitting) waiting.
+    pub fn shutdown(&self, wait: Duration) {
+        let (tx, rx) = mpsc::channel();
+        let shell = self.clone();
+        thread::spawn(move || {
+            shell.stop("quit");
+            let _ = tx.send(());
+        });
+        let _ = rx.recv_timeout(wait);
     }
 }
 
@@ -369,11 +412,12 @@ impl Inner {
         let Request { method, params, .. } = request;
         match method.as_str() {
             "computer.end" => {
-                // Before the next line is read: the session is dead and the dialog cancelled.
+                // Before the next line is read: the session is dead and the start cancelled.
                 let taken = chat_of(&params).map(|chat| self.take(&chat));
                 self.spawn(move |me| me.end(taken, reply));
             }
-            "computer.hello" | "computer.start" | "computer.screenshot" | "computer.cursor" | "computer.target" | "computer.act" => {
+            "computer.start" => self.admit(&params, reply),
+            "computer.hello" | "computer.screenshot" | "computer.cursor" | "computer.target" | "computer.act" => {
                 self.spawn(move |me| me.dispatch(&method, &params, reply));
             }
             _ => reply.err("Unknown method.", None),
@@ -387,23 +431,20 @@ impl Inner {
     }
 
     fn dispatch(self: &Arc<Self>, method: &str, params: &Value, reply: Reply) {
+        if method == "computer.hello" {
+            return self.hello(reply);
+        }
+        let Some(live) = self.live(params) else {
+            return reply.err(NO_SESSION, Some(rpc::NO_SESSION_CODE));
+        };
+        let Some(desktop) = self.desktop.clone() else {
+            return reply.err(OFF_REASON, None);
+        };
         match method {
-            "computer.hello" => self.hello(reply),
-            "computer.start" => self.start(params, reply),
-            _ => {
-                let Some(live) = self.live(params) else {
-                    return reply.err(NO_SESSION, Some(rpc::NO_SESSION_CODE));
-                };
-                let Some(desktop) = self.desktop.clone() else {
-                    return reply.err(OFF_REASON, None);
-                };
-                match method {
-                    "computer.screenshot" => self.screenshot(&*desktop, &live, reply),
-                    "computer.cursor" => self.cursor(&*desktop, &live, reply),
-                    "computer.target" => self.target(&*desktop, &live, params, reply),
-                    _ => self.act(&*desktop, live, params, reply),
-                }
-            }
+            "computer.screenshot" => self.screenshot(&*desktop, &live, reply),
+            "computer.cursor" => self.cursor(&*desktop, &live, reply),
+            "computer.target" => self.target(&*desktop, &live, params, reply),
+            _ => self.act(&*desktop, live, params, reply),
         }
     }
 
@@ -416,28 +457,31 @@ impl Inner {
         (live.token.as_bytes() == token.as_bytes() && !live.ended()).then(|| live.clone())
     }
 
+    /// Every session ended and every start cancelled, at once.
+    fn take_all(&self) -> (Vec<Arc<Live>>, Vec<Arc<Pending>>) {
+        let mut st = self.state();
+        let lives: Vec<_> = st.sessions.drain().map(|(_, l)| l).collect();
+        let pendings: Vec<_> = st.dialogs.drain().map(|(_, p)| p).collect();
+        for l in &lives {
+            l.end();
+        }
+        for p in &pendings {
+            p.cancel();
+        }
+        (lives, pendings)
+    }
+
     // ---- hello ----------------------------------------------------------------
 
     fn hello(&self, reply: Reply) {
-        let (lives, pendings) = {
-            let mut st = self.state();
-            let lives: Vec<_> = st.sessions.drain().map(|(_, l)| l).collect();
-            let pendings: Vec<_> = st.dialogs.drain().map(|(_, p)| p).collect();
-            for l in &lives {
-                l.end();
-            }
-            for p in &pendings {
-                p.cancel();
-            }
-            (lives, pendings)
-        };
+        let (lives, pendings) = self.take_all();
         for p in pendings {
             p.refuse_all(STOPPED_FIRST);
         }
         for l in &lives {
             let _ = self.settle(l);
         }
-        self.settle_ui();
+        self.clean_up();
         // The answer goes out under the events lock: nothing is told before it.
         let mut events = locked(&self.events);
         let list = self.shortcut_list();
@@ -448,41 +492,52 @@ impl Inner {
 
     // ---- start ----------------------------------------------------------------
 
-    fn start(self: &Arc<Self>, params: &Value, reply: Reply) {
-        let Some(desktop) = self.desktop.clone() else {
+    /// The reader thread's part of a start: answered at once (off, unreadable,
+    /// the hot path, busy), joined to the chat's start already admitted, or
+    /// admitted as a new one whose dialog a worker shows.
+    fn admit(self: &Arc<Self>, params: &Value, reply: Reply) {
+        if self.desktop.is_none() {
             return reply.ok(json!({ "ok": false, "reason": OFF_REASON }));
-        };
+        }
         let (Some(chat), Some(title)) = (chat_of(params), params.get("title").and_then(Value::as_str)) else {
             return reply.err(UNREADABLE, None);
         };
-        let pending = {
-            let mut st = self.state();
-            if st.off {
-                return reply.ok(json!({ "ok": false, "reason": STOPPED_FIRST }));
-            }
-            // The hot path: the same token at once, no dialog, no event, no idle reset.
-            if let Some(live) = st.sessions.get(&chat) {
-                let token = live.token.clone();
-                drop(st);
-                return reply.ok(json!({ "ok": true, "session": token }));
-            }
-            if st.sessions.keys().any(|c| *c != chat) || st.dialogs.keys().any(|c| *c != chat) || (st.on_screen > 0 && !st.dialogs.contains_key(&chat)) {
-                drop(st);
-                return reply.ok(json!({ "ok": false, "reason": BUSY }));
-            }
-            if let Some(pending) = st.dialogs.get(&chat) {
-                // One dialog per chat: this start gets the same answer when it comes.
-                locked(&pending.replies).push(reply);
-                return;
-            }
-            let pending = Arc::new(Pending { chat: chat.clone(), replies: Mutex::new(vec![reply]), cancelled: false.into(), dialog: Dialog::new(self.limits.dialog) });
-            st.dialogs.insert(chat.clone(), pending.clone());
-            st.on_screen += 1;
-            pending
-        };
+        let mut st = self.state();
+        // The hot path: the same token at once, no dialog, no event, no idle reset.
+        if let Some(live) = st.sessions.get(&chat) {
+            let token = live.token.clone();
+            drop(st);
+            return reply.ok(json!({ "ok": true, "session": token }));
+        }
+        if st.sessions.keys().any(|c| *c != chat) || st.dialogs.keys().any(|c| *c != chat) || (st.on_screen > 0 && !st.dialogs.contains_key(&chat)) {
+            drop(st);
+            return reply.ok(json!({ "ok": false, "reason": BUSY }));
+        }
+        if let Some(pending) = st.dialogs.get(&chat) {
+            // One dialog per chat: this start gets the same answer when it comes.
+            locked(&pending.replies).push(reply);
+            return;
+        }
+        let pending = Arc::new(Pending {
+            chat: chat.clone(),
+            title: title.to_string(),
+            replies: Mutex::new(vec![reply]),
+            cancelled: AtomicBool::new(false),
+            dialog: Dialog::new(self.limits.dialog),
+        });
+        st.dialogs.insert(chat, pending.clone());
+        st.on_screen += 1;
+        drop(st);
+        self.spawn(move |me| me.ask(pending));
+    }
 
-        // The person, and nobody else, answers this.
-        let consent = desktop.consent(&dialog_text(title), &pending.dialog);
+    /// The worker's part of a start: the dialog, then the session.
+    fn ask(self: &Arc<Self>, pending: Arc<Pending>) {
+        let Some(desktop) = self.desktop.clone() else { return };
+        // No dialog while an act (of a session that has just ended) is still pressing.
+        let no_acts = locked(&self.acting);
+        // The person, and nobody else, answers this; a start already ended shows nothing.
+        let consent = if pending.cancelled() { Consent::No } else { desktop.consent(&dialog_text(&pending.title), &pending.dialog) };
         self.state().on_screen -= 1;
         let refused = match consent {
             Consent::Yes if !pending.cancelled() => None,
@@ -493,42 +548,34 @@ impl Inner {
             Consent::Failed => Some(NOT_ASKED),
         };
         if let Some(reason) = refused {
+            drop(no_acts);
             return self.refuse_pending(&pending, reason);
         }
-
-        // The shell's side first: the stop hotkey and the indicator.
-        {
-            let mut ui = locked(&self.ui);
-            if !ui.hotkey {
-                if desktop.stop_hotkey(true).is_err() {
-                    drop(ui);
-                    return self.refuse_pending(&pending, NO_HOTKEY);
-                }
-                ui.hotkey = true;
-            }
-            desktop.indicator(Some(&clean_title(title)));
-            ui.indicator = true;
+        // The shell's side first: the stop hotkey and the indicator, both confirmed.
+        if let Err(reason) = self.show_controls(&*desktop, &pending.title) {
+            drop(no_acts);
+            return self.refuse_pending(&pending, reason);
         }
         let Some(token) = mint_token() else {
+            drop(no_acts);
             return self.refuse_pending(&pending, NO_TOKEN);
         };
-        let live = Arc::new(Live::new(chat.clone(), token.clone()));
+        let live = Arc::new(Live::new(pending.chat.clone(), token.clone()));
         let replies = {
             let mut st = self.state();
-            let current = st.dialogs.get(&chat).is_some_and(|p| Arc::ptr_eq(p, &pending));
+            let current = st.dialogs.get(&pending.chat).is_some_and(|p| Arc::ptr_eq(p, &pending));
             if st.off || !current || pending.cancelled() {
                 None
             } else {
-                st.dialogs.remove(&chat);
-                st.sessions.insert(chat.clone(), live.clone());
+                st.dialogs.remove(&pending.chat);
+                st.sessions.insert(pending.chat.clone(), live.clone());
                 Some(pending.take())
             }
         };
+        drop(no_acts);
         let Some(replies) = replies else {
             // Ended while the shell's side was set up; whoever ended it answered the start.
-            self.settle_ui();
-            self.report_shortcuts();
-            return;
+            return self.clean_up();
         };
         // The new list (stop hotkey included) before the yes.
         self.report_shortcuts();
@@ -539,6 +586,35 @@ impl Inner {
         self.watch_idle(live);
     }
 
+    /// Registers the stop hotkey (after unregistering one whose state is
+    /// unknown) and shows the indicator; either failing refuses the start.
+    fn show_controls(&self, desktop: &dyn Desktop, title: &str) -> Result<(), &'static str> {
+        let _ops = locked(&self.ui_ops);
+        let (registered, unsure) = {
+            let ui = locked(&self.ui);
+            (ui.hotkey, ui.unsure)
+        };
+        if registered || unsure {
+            let gone = desktop.stop_hotkey(false).is_ok();
+            let mut ui = locked(&self.ui);
+            ui.hotkey = !gone && registered;
+            ui.unsure = !gone;
+        }
+        if desktop.stop_hotkey(true).is_err() {
+            // Maybe registered after all (a late answer): the next clean-up unregisters it.
+            locked(&self.ui).unsure = true;
+            return Err(NO_HOTKEY);
+        }
+        locked(&self.ui).hotkey = true;
+        if desktop.indicator(&clean_title(title)).is_err() {
+            desktop.hide_indicator();
+            locked(&self.ui).indicator = false;
+            return Err(NO_INDICATOR);
+        }
+        locked(&self.ui).indicator = true;
+        Ok(())
+    }
+
     fn refuse_pending(&self, pending: &Arc<Pending>, reason: &str) {
         {
             let mut st = self.state();
@@ -547,8 +623,7 @@ impl Inner {
             }
         }
         pending.refuse_all(reason);
-        self.settle_ui();
-        self.report_shortcuts();
+        self.clean_up();
     }
 
     // ---- end ------------------------------------------------------------------
@@ -567,24 +642,24 @@ impl Inner {
         Taken { live, pending }
     }
 
-    fn end(&self, taken: Option<Taken>, reply: Reply) {
+    /// Answers once the act has stopped and released, then puts the shell's UI away.
+    fn end(self: &Arc<Self>, taken: Option<Taken>, reply: Reply) {
         let Some(taken) = taken else {
             return reply.err(UNREADABLE, None);
         };
         if let Some(pending) = taken.pending {
             pending.refuse_all(STOPPED_FIRST);
         }
-        let outcome = taken.live.as_ref().map_or(Ok(()), |l| self.settle(l));
-        self.settle_ui();
-        self.report_shortcuts();
-        match outcome {
+        match taken.live.as_ref().map_or(Ok(()), |l| self.settle(l)) {
             Ok(()) => reply.ok(json!({ "ok": true })),
             Err(reason) => reply.ok(json!({ "ok": false, "reason": reason })),
         }
+        self.clean_up();
     }
 
     /// Waits for an ended session's start to have answered and its act (if
-    /// any) to have stopped and released what it pressed.
+    /// any) to have stopped and released what it pressed. Err when either
+    /// didn't happen in time, or a key may still be down.
     fn settle(&self, live: &Live) -> Result<(), String> {
         let deadline = Instant::now() + self.limits.settle;
         let mut s = live.lock();
@@ -598,58 +673,56 @@ impl Inner {
         if s.acting > 0 {
             return Err(STILL_RUNNING.into());
         }
+        if !s.announced {
+            return Err(NOT_ANNOUNCED.into());
+        }
         if s.stuck {
             return Err(act::STUCK.into());
         }
         Ok(())
     }
 
-    /// Takes the stop hotkey and the indicator away once no chat holds a session or has a dialog up.
-    fn settle_ui(&self) {
-        let mut ui = locked(&self.ui);
-        let idle = {
-            let st = self.state();
-            st.sessions.is_empty() && st.dialogs.is_empty()
-        };
-        if !idle {
-            return;
+    /// Once no chat holds a session or has a start admitted: unregisters the
+    /// stop hotkey (also when its state is unknown, which reconciles a late
+    /// answer) and takes the indicator away, then reports the shortcuts.
+    fn clean_up(&self) {
+        if let Some(desktop) = self.desktop.as_ref() {
+            let _ops = locked(&self.ui_ops);
+            let idle = {
+                let st = self.state();
+                st.sessions.is_empty() && st.dialogs.is_empty()
+            };
+            let (hotkey, indicator) = {
+                let ui = locked(&self.ui);
+                (ui.hotkey || ui.unsure, ui.indicator)
+            };
+            if idle && hotkey {
+                let gone = desktop.stop_hotkey(false).is_ok();
+                let mut ui = locked(&self.ui);
+                if gone {
+                    ui.hotkey = false;
+                }
+                ui.unsure = !gone;
+            }
+            if idle && indicator {
+                desktop.hide_indicator();
+                locked(&self.ui).indicator = false;
+            }
         }
-        let Some(desktop) = self.desktop.as_ref() else { return };
-        if ui.hotkey && desktop.stop_hotkey(false).is_ok() {
-            ui.hotkey = false;
-        }
-        if ui.indicator {
-            desktop.indicator(None);
-            ui.indicator = false;
-        }
-    }
-
-    /// The shell ended a session itself: everything an end does, then `computer.stopped`.
-    fn stopped(&self, live: &Arc<Live>, why: &str) {
-        let _ = self.settle(live);
-        self.settle_ui();
         self.report_shortcuts();
-        self.event("computer.stopped", json!({ "chatId": live.chat, "why": why }));
     }
 
-    /// `computer.close`, or the pipes are gone: end everything at once and act on nothing more.
+    /// `computer.close`, or the pipes are gone: end everything at once, act on
+    /// nothing more, and say computer use is off until Grunt restarts.
     fn close_all(self: &Arc<Self>) {
-        let (lives, pendings) = {
+        {
             let mut st = self.state();
             if st.off {
                 return;
             }
             st.off = true;
-            let lives: Vec<_> = st.sessions.drain().map(|(_, l)| l).collect();
-            let pendings: Vec<_> = st.dialogs.drain().map(|(_, p)| p).collect();
-            for l in &lives {
-                l.end();
-            }
-            for p in &pendings {
-                p.cancel();
-            }
-            (lives, pendings)
-        };
+        }
+        let (lives, pendings) = self.take_all();
         self.spawn(move |me| {
             for p in pendings {
                 p.refuse_all(STOPPED_FIRST);
@@ -657,7 +730,10 @@ impl Inner {
             for l in &lives {
                 let _ = me.settle(l);
             }
-            me.settle_ui();
+            me.clean_up();
+            if let Some(desktop) = me.desktop.as_ref() {
+                desktop.channel_off();
+            }
         });
     }
 
@@ -684,7 +760,9 @@ impl Inner {
                 current
             };
             if mine {
-                me.stopped(&live, "idle");
+                let _ = me.settle(&live);
+                me.event("computer.stopped", json!({ "chatId": live.chat, "why": "idle" }));
+                me.clean_up();
             }
             return;
         });

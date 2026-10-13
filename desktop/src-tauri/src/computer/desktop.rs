@@ -2,8 +2,15 @@
 //! shell's own pieces (the stop hotkey, the indicator bar, the tray). Built
 //! only when the shell was started with GRUNT_COMPUTER_USE=1 (computer.rs
 //! `shell`); no test builds one.
+//!
+//! Every call that needs the main thread (the event loop) is time-bounded,
+//! so no worker waits on it for long and the main thread never waits on a
+//! worker: hotkey and tray work goes through `on_main` (at most a second),
+//! and building or destroying the indicator window runs on a thread of its
+//! own that is waited for at most a few seconds.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
@@ -17,6 +24,10 @@ use super::{win, Capture, Consent, Desktop, Dialog, Input, Keyboard, Where, INDI
 const INDICATOR_WIDTH: f64 = 460.0;
 const INDICATOR_HEIGHT: f64 = 56.0;
 const NO_WINDOW: &str = "There is no window there.";
+/// How long the main thread gets for a hotkey or tray call.
+const MAIN_WAIT: Duration = Duration::from_secs(1);
+/// How long building or destroying the indicator window may take.
+const WINDOW_WAIT: Duration = Duration::from_secs(3);
 
 pub struct WinDesktop {
     app: AppHandle,
@@ -30,19 +41,51 @@ impl WinDesktop {
         Self { app, main: thread::current().id() }
     }
 
-    /// Runs `work` on the main thread and waits for it, at most a second (an
-    /// end must still answer inside the server's 4 s); directly when already
-    /// there, so the main thread never waits on itself.
+    /// Runs `work` on the main thread and waits for it at most `MAIN_WAIT`;
+    /// directly when already there, so the main thread never waits on itself.
+    /// Closures run on the main thread in the order they were queued, so a
+    /// late one (after a timeout) is followed by the next, never overtaken.
     fn on_main<T: Send + 'static>(&self, work: impl FnOnce(&AppHandle) -> T + Send + 'static) -> Option<T> {
         if thread::current().id() == self.main {
             return Some(work(&self.app));
         }
         let (tx, rx) = mpsc::channel();
         let app = self.app.clone();
-        self.app.run_on_main_thread(move || {
-            let _ = tx.send(work(&app));
-        }).ok()?;
-        rx.recv_timeout(Duration::from_secs(1)).ok()
+        self.app
+            .run_on_main_thread(move || {
+                let _ = tx.send(work(&app));
+            })
+            .ok()?;
+        rx.recv_timeout(MAIN_WAIT).ok()
+    }
+
+    /// Runs `work` on a thread of its own, waited for at most `WINDOW_WAIT`.
+    /// `abandoned` is set when it was not waited for to the end.
+    fn bounded<T: Send + 'static>(&self, work: impl FnOnce(&AppHandle, &AtomicBool) -> T + Send + 'static) -> Option<T> {
+        let (tx, rx) = mpsc::channel();
+        let app = self.app.clone();
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let flag = abandoned.clone();
+        thread::spawn(move || {
+            let _ = tx.send(work(&app, &flag));
+        });
+        let out = rx.recv_timeout(WINDOW_WAIT).ok();
+        if out.is_none() {
+            abandoned.store(true, Ordering::SeqCst);
+        }
+        out
+    }
+
+    fn tooltip(&self, text: Option<String>) {
+        let _ = self.on_main(move |app| crate::tray::set_override(app, text));
+    }
+
+    fn destroy_indicator(&self) {
+        let _ = self.bounded(|app, _| {
+            if let Some(window) = app.get_webview_window(INDICATOR) {
+                let _ = window.destroy();
+            }
+        });
     }
 }
 
@@ -76,15 +119,11 @@ impl Desktop for WinDesktop {
                 shortcuts.unregister(STOP_HOTKEY).map_err(|e| e.to_string())
             }
         })
-        .unwrap_or_else(|| Err("the main thread didn't answer".into()))
+        .unwrap_or_else(|| Err("the main thread didn't answer in time".into()))
     }
 
-    fn indicator(&self, title: Option<&str>) {
-        if let Some(window) = self.app.get_webview_window(INDICATOR) {
-            let _ = window.destroy();
-        }
-        crate::tray::set_control_tooltip(&self.app, title);
-        let Some(title) = title else { return };
+    fn indicator(&self, title: &str) -> Result<(), String> {
+        self.destroy_indicator();
         let x = self
             .app
             .primary_monitor()
@@ -96,22 +135,42 @@ impl Desktop for WinDesktop {
             })
             .unwrap_or(400.0);
         let url = format!("index.html?view=indicator&title={}", percent_encode(title));
-        let built = WebviewWindowBuilder::new(&self.app, INDICATOR, WebviewUrl::App(url.into()))
-            .title("Grunt is controlling this computer")
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .focused(false)
-            .resizable(false)
-            .inner_size(INDICATOR_WIDTH, INDICATOR_HEIGHT)
-            .position(x, 8.0)
-            .build();
-        if let Ok(window) = built {
-            if let Ok(hwnd) = window.hwnd() {
-                let raw = hwnd.0 as isize;
-                let _ = self.on_main(move |_| win::exclude_from_capture(raw));
+        let built = self.bounded(move |app, abandoned| {
+            let window = WebviewWindowBuilder::new(app, INDICATOR, WebviewUrl::App(url.into()))
+                .title("Grunt is controlling this computer")
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .focused(false)
+                .resizable(false)
+                .inner_size(INDICATOR_WIDTH, INDICATOR_HEIGHT)
+                .position(x, 8.0)
+                .build()
+                .map_err(|e| e.to_string())?;
+            if abandoned.load(Ordering::SeqCst) {
+                // Nobody waited for it: the session was refused, so it must not stay up.
+                let _ = window.destroy();
+                return Err("too late".to_string());
             }
-        }
+            window.hwnd().map(|h| h.0 as isize).map_err(|e| e.to_string())
+        });
+        let raw = match built {
+            Some(Ok(raw)) => raw,
+            _ => return Err("the indicator bar couldn't be shown".into()),
+        };
+        let _ = self.on_main(move |_| win::exclude_from_capture(raw));
+        self.tooltip(Some(crate::tray::control_tooltip(title)));
+        Ok(())
+    }
+
+    fn hide_indicator(&self) {
+        self.destroy_indicator();
+        self.tooltip(None);
+    }
+
+    fn channel_off(&self) {
+        self.tooltip(Some(crate::tray::COMPUTER_OFF_TOOLTIP.to_string()));
+        let _ = crate::notify::show(&self.app, "Grunt", "Computer use is off until Grunt restarts.", None);
     }
 
     fn indicator_action(&self, label: &str) {

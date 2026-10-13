@@ -134,6 +134,10 @@ pub enum Input {
     Button { right: bool, up: bool },
     /// One notch: 120 or -120.
     Wheel { delta: i32, horizontal: bool },
+    /// An absolute move to a screen point, sent in the same batch as every
+    /// button event and wheel notch, so they land where the check was made
+    /// whatever the cursor did meanwhile.
+    MoveTo { x: i32, y: i32 },
 }
 
 impl Input {
@@ -198,8 +202,13 @@ pub trait Desktop: Send + Sync {
     fn consent(&self, text: &str, dialog: &Dialog) -> Consent;
     /// Registers or unregisters the stop hotkey.
     fn stop_hotkey(&self, on: bool) -> Result<(), String>;
-    /// Shows the indicator bar (and the tray says so) for a chat's title, or takes it away.
-    fn indicator(&self, title: Option<&str>);
+    /// Shows the indicator bar (and the tray says so) for a chat's title.
+    /// An error means the person can't be shown that control is on.
+    fn indicator(&self, title: &str) -> Result<(), String>;
+    /// Takes the indicator bar away (and the tray's line).
+    fn hide_indicator(&self);
+    /// The channel to the server is gone for good: say computer use is off until Grunt restarts.
+    fn channel_off(&self);
     /// The indicator's line for the last action (never typed text).
     fn indicator_action(&self, label: &str);
     fn capture(&self, max: (u32, u32)) -> Result<Capture, String>;
@@ -238,11 +247,14 @@ pub fn stop_from_shell(app: &tauri::AppHandle, why: &'static str) {
     }
 }
 
-/// Grunt is quitting: end every session and tell the server, before the pipes close.
+/// Grunt is quitting: end every session and tell the server, before the
+/// pipes close. Runs off the main thread (whose event loop the hotkey and
+/// window calls need) and is waited for at most two seconds, so nothing a
+/// worker holds can keep Grunt from quitting.
 pub fn shutdown(app: &tauri::AppHandle) {
     use tauri::Manager;
     if let Some(shell) = app.try_state::<Arc<Shell>>() {
-        shell.stop("quit");
+        shell.shutdown(Duration::from_secs(2));
     }
 }
 

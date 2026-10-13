@@ -34,6 +34,7 @@ pub const OUTSIDE: &str = "That point is not inside the last screenshot; nothing
 pub const INPUT_REFUSED: &str =
     "Windows didn't take all of the input (the app may be running as administrator, or the computer is locked); nothing more was done.";
 pub const STUCK: &str = "Grunt couldn't release a key or button it pressed; check the keyboard and mouse.";
+pub const CURSOR_MOVED: &str = "The mouse pointer moved away from the point that was checked, so nothing more was done.";
 pub const NO_EXPECTATION: &str = "The action didn't say which window it was approved for, so nothing was done.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,20 +161,57 @@ pub fn typing(chars: &[char]) -> Vec<Input> {
 /// The keys and buttons this action has down. On every way out (an error,
 /// a stop, a panic) the downs still outstanding are released, last first;
 /// nothing else is ever released.
+///
+/// Every input goes out through `send` (or `move_to`), which takes one last
+/// look immediately before it, with nothing slow in between: control still
+/// held, time left, no modifier down, and for the mouse the cursor still at
+/// the checked point. The look and the send happen while the session is held
+/// (`Live::while_live`), so an end read meanwhile waits for this one send,
+/// and nothing is sent once it has been read.
 pub struct Press<'a> {
     desktop: &'a dyn Desktop,
     live: &'a Live,
+    deadline: Instant,
     down: Vec<Input>,
 }
 
 impl<'a> Press<'a> {
-    pub fn new(desktop: &'a dyn Desktop, live: &'a Live) -> Self {
-        Self { desktop, live, down: Vec::new() }
+    pub fn new(desktop: &'a dyn Desktop, live: &'a Live, deadline: Instant) -> Self {
+        Self { desktop, live, deadline, down: Vec::new() }
     }
 
-    /// Sends events in one go, noting exactly which were taken.
-    pub fn send(&mut self, inputs: &[Input]) -> Result<(), String> {
-        let taken = self.desktop.send(inputs).min(inputs.len());
+    fn last_look(&self, cursor_at: Option<(i32, i32)>) -> Result<(), String> {
+        if Instant::now() >= self.deadline {
+            return Err(TOO_LONG.into());
+        }
+        match self.desktop.keyboard() {
+            Keyboard::Clear => {}
+            Keyboard::Held => return Err(MODIFIER_HELD.into()),
+            Keyboard::Unknown => return Err(KEYBOARD_UNKNOWN.into()),
+        }
+        if let Some(point) = cursor_at {
+            if self.desktop.cursor().ok() != Some(point) {
+                return Err(CURSOR_MOVED.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves the cursor after the last look.
+    pub fn move_to(&mut self, x: i32, y: i32) -> Result<(), String> {
+        self.live.while_live(|| {
+            self.last_look(None)?;
+            self.desktop.move_to(x, y)
+        })
+    }
+
+    /// Sends events in one go after the last look, noting exactly which were
+    /// taken. `cursor_at`: a mouse step's checked point, where the cursor must still be.
+    pub fn send(&mut self, inputs: &[Input], cursor_at: Option<(i32, i32)>) -> Result<(), String> {
+        let taken = self.live.while_live(|| {
+            self.last_look(cursor_at)?;
+            Ok(self.desktop.send(inputs).min(inputs.len()))
+        })?;
         for event in &inputs[..taken] {
             if event.release().is_some() {
                 self.down.push(*event);
@@ -190,7 +228,8 @@ impl<'a> Press<'a> {
         }
     }
 
-    /// Releases what is still down, last first; false if any up wasn't taken.
+    /// Releases what is still down, last first; false if any up wasn't
+    /// taken. Never gated: what was pressed is released even after an end.
     pub fn release(&mut self) -> bool {
         let mut released = true;
         while let Some(down) = self.down.pop() {
@@ -224,7 +263,8 @@ impl Checks<'_> {
     /// Before every step: control still held, time left, no modifier down,
     /// and the live window (under the point, or the foreground) is exactly the
     /// approved one. `may_activate`: the first check of a `type` or `key` may
-    /// bring exactly `expect.windowId` forward, once, and check again.
+    /// bring exactly `expect.windowId` forward, once, and check again. The
+    /// window lookup can be slow, so `Press` looks again right before the send.
     fn check(&self, at: &Where, may_activate: bool) -> Result<(), String> {
         if self.live.ended() {
             return Err(STOPPED.into());
@@ -250,7 +290,7 @@ impl Checks<'_> {
             Ok(it) if self.expect.matches(&it) => {}
             _ => return Err(WINDOW_CHANGED.into()),
         }
-        if !self.desktop.activate(&self.expect.window_id) {
+        if self.live.ended() || !self.desktop.activate(&self.expect.window_id) {
             return Err(WINDOW_CHANGED.into());
         }
         match self.desktop.identity(&Where::Foreground) {
@@ -273,7 +313,7 @@ impl Checks<'_> {
 /// more was done after that point.
 pub fn run(desktop: &dyn Desktop, live: &Live, action: &Action, expect: &Expect, shot: Option<Shot>, deadline: Instant) -> Result<(), String> {
     let checks = Checks { desktop, live, expect, deadline };
-    let mut press = Press::new(desktop, live);
+    let mut press = Press::new(desktop, live, deadline);
     let outcome = steps(&checks, &mut press, action, shot);
     if !press.release() {
         live.set_stuck();
@@ -282,41 +322,46 @@ pub fn run(desktop: &dyn Desktop, live: &Live, action: &Action, expect: &Expect,
     outcome
 }
 
+/// Button events or wheel notches each with an absolute move to the checked
+/// point just before it, in the same batch: they land there, not wherever
+/// the cursor went meanwhile.
+pub fn at_point(x: i32, y: i32, events: &[Input]) -> Vec<Input> {
+    events.iter().flat_map(|e| [Input::MoveTo { x, y }, *e]).collect()
+}
+
 fn steps(checks: &Checks, press: &mut Press, action: &Action, shot: Option<Shot>) -> Result<(), String> {
-    let pointer = |at: &(u32, u32)| -> Result<(Shot, Where), String> {
+    let pointer = |at: &(u32, u32)| -> Result<(Shot, (i32, i32)), String> {
         let shot = shot.ok_or(NO_SCREENSHOT)?;
         if !shot.contains(at.0 as i64, at.1 as i64) {
             return Err(OUTSIDE.into());
         }
-        let (x, y) = shot.to_screen(at.0, at.1);
-        Ok((shot, Where::Point(x, y)))
+        Ok((shot, shot.to_screen(at.0, at.1)))
     };
-    let goto = |shot: &Shot, at: &Where| -> Result<(), String> {
+    let goto = |press: &mut Press, shot: &Shot, (x, y): (i32, i32)| -> Result<(), String> {
         checks.screen(shot)?;
-        checks.check(at, false)?;
-        let Where::Point(x, y) = *at else { return Err(OUTSIDE.into()) };
-        checks.desktop.move_to(x, y)
+        checks.check(&Where::Point(x, y), false)?;
+        press.move_to(x, y)
     };
     match action {
         Action::Move { at } => {
-            let (shot, at) = pointer(at)?;
-            goto(&shot, &at)
+            let (shot, point) = pointer(at)?;
+            goto(press, &shot, point)
         }
         Action::Click { at, button, count } => {
-            let (shot, at) = pointer(at)?;
-            goto(&shot, &at)?;
+            let (shot, (x, y)) = pointer(at)?;
+            goto(press, &shot, (x, y))?;
             let right = *button == Button::Right;
             for _ in 0..*count {
                 // Immediately before each button event: the first click can change what is under the point.
                 checks.screen(&shot)?;
-                checks.check(&at, false)?;
-                press.send(&[Input::Button { right, up: false }, Input::Button { right, up: true }])?;
+                checks.check(&Where::Point(x, y), false)?;
+                press.send(&at_point(x, y, &[Input::Button { right, up: false }, Input::Button { right, up: true }]), Some((x, y)))?;
             }
             Ok(())
         }
         Action::Scroll { at, direction, amount } => {
-            let (shot, at) = pointer(at)?;
-            goto(&shot, &at)?;
+            let (shot, (x, y)) = pointer(at)?;
+            goto(press, &shot, (x, y))?;
             let (delta, horizontal) = match direction {
                 Direction::Up => (120, false),
                 Direction::Down => (-120, false),
@@ -325,8 +370,8 @@ fn steps(checks: &Checks, press: &mut Press, action: &Action, shot: Option<Shot>
             };
             for _ in 0..*amount {
                 checks.screen(&shot)?;
-                checks.check(&at, false)?;
-                press.send(&[Input::Wheel { delta, horizontal }])?;
+                checks.check(&Where::Point(x, y), false)?;
+                press.send(&at_point(x, y, &[Input::Wheel { delta, horizontal }]), Some((x, y)))?;
             }
             Ok(())
         }
@@ -334,13 +379,13 @@ fn steps(checks: &Checks, press: &mut Press, action: &Action, shot: Option<Shot>
             let chars: Vec<char> = text.chars().collect();
             for (i, chunk) in chars.chunks(TYPE_CHUNK).enumerate() {
                 checks.check(&Where::Foreground, i == 0)?;
-                press.send(&typing(chunk))?;
+                press.send(&typing(chunk), None)?;
             }
             Ok(())
         }
         Action::Key { combo } => {
             checks.check(&Where::Foreground, true)?;
-            press.send(&keys::events(combo))
+            press.send(&keys::events(combo), None)
         }
     }
 }
