@@ -566,11 +566,12 @@ describe('computerTool.execute', () => {
   });
 
   it("answers an answer from the desktop app it can't read as an unknown outcome, and tells the model to look", async () => {
-    for (const answer of [undefined, null, 'ok', 1, true]) {
+    // Nothing, a bare word, and an object that is neither { ok: true } nor { ok: false }: the action may or may not have run.
+    for (const answer of [undefined, null, 'ok', 1, true, {}, [], { ok: 'yes' }, { ok: 1 }, { reason: 'the shell said so' }, [{ ok: true }]]) {
       const { tool, driver } = await ready();
       driver.act = async () => answer as never;
       const out = (await tool.execute({ action: 'left_click', coordinate: [1, 1], ...APP }, ctx())) as { error: boolean; code: string; message: string };
-      expect(out, String(answer)).toMatchObject({ error: true, code: 'computer_failed' });
+      expect(out, JSON.stringify(answer)).toMatchObject({ error: true, code: 'computer_failed' });
       expect(out.message, String(answer)).toContain("Grunt can't tell whether the action was carried out.");
       expect(out.message, String(answer)).toContain('Take a screenshot');
       expect(driver.screenshots).toEqual([]);

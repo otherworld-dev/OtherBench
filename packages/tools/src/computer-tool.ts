@@ -287,10 +287,12 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
     } catch (err) {
       return failFromScreen('computer_failed', `${errorText(err)} ${UNKNOWN_OUTCOME} ${LOOK_AGAIN}`);
     }
-    // An answer that is not an answer at all (nothing, a bare word): the action may or may not have run.
-    if (typeof done !== 'object' || done === null) return fail('computer_failed', `The desktop app's answer couldn't be read. ${UNKNOWN_OUTCOME} ${LOOK_AGAIN}`);
+    // An answer that is not an answer at all (nothing, a bare word, a list, an object that says neither
+    // `ok: true` nor `ok: false`): the action may or may not have run.
+    const ok = typeof done === 'object' && done !== null && !Array.isArray(done) ? (done as { ok?: unknown }).ok : undefined;
+    if (ok !== true && ok !== false) return fail('computer_failed', `The desktop app's answer couldn't be read. ${UNKNOWN_OUTCOME} ${LOOK_AGAIN}`);
     // The driver stops at the first check that fails, which can be part-way through typing: the model has to look.
-    if (done.ok !== true) return failFromScreen('computer_refused', `${driverText(done.reason) || 'The desktop app refused the action.'} ${LOOK_AGAIN}`);
+    if (!done.ok) return failFromScreen('computer_refused', `${driverText(done.reason) || 'The desktop app refused the action.'} ${LOOK_AGAIN}`);
     if (!FOLLOW_UP.has(action.action)) return [line('Done.')];
     // Let the app redraw, then show the model what happened. Not once the reply was stopped.
     await sleep(settleMs, ctx.signal);
