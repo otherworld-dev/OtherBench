@@ -2,7 +2,7 @@ import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { api } from '../state/api.js';
-import { actionSummary, COMPUTER_SCREEN_ABOUT, describeApp, typedTextForCard } from '@grunt/core/domain/computer-apps.js';
+import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@grunt/core/domain/computer-apps.js';
 import { isToolImageRef, type ToolImageRef } from '@grunt/core/domain/tool-images.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
@@ -104,24 +104,19 @@ function ToolImage({ item, scope, alt, noun }: { item: ToolImageRef; scope: Tool
 
 /**
  * How the thread shows a computer call: what it does (`actionSummary`, which
- * never holds typed text) and, when the arguments name a valid app, its name
- * from `describeApp`. Never the raw arguments: they can carry the window title
- * (an app's own words) and the text to type. Typed text stays behind a toggle.
+ * never holds typed text), and nothing else. No app: the stored call holds the
+ * model's own arguments, not the described target, so any app in them is only
+ * what the model claimed (the approval card names the real one). Never the raw
+ * arguments either: they can carry a window title and the text to type. Typed
+ * text stays behind a toggle.
  */
 function ComputerCallBlock({ args }: { args: unknown }): JSX.Element {
   const [showTyped, setShowTyped] = useState(false);
-  const app = describeApp(recordOf(args)?.['app']);
   const typed = typedTextForCard(args);
   return (
     <div data-testid="computer-call" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <span className="font-medium">
         {'\u{1F527}'} computer: <bdi>{oneLine(actionSummary(args))}</bdi>
-        {app !== null && (
-          <>
-            {' in '}
-            <bdi>{oneLine(app.name)}</bdi>
-          </>
-        )}
       </span>
       {typed !== null && (
         <>

@@ -143,6 +143,18 @@ describe('the computer-use approval card', () => {
       "This path has characters outside the plain Latin alphabet, so it may look like another program's. Grunt asks every time for it."
     );
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
+    // One "asks every time" line, not two.
+    expect(screen.queryByTestId('computer-high-risk')).toBeNull();
+    expect(card().textContent!.split('asks every time').length - 1).toBe(1);
+  });
+
+  it('keeps a non-ASCII path once-only even when the arguments call it ordinary and not a file view', () => {
+    render(<ApprovalPrompt request={request(described(RTL_PATH, { appName: 'App.exe', appRisk: 'normal', appShellView: false }))} onResolve={vi.fn()} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
+    expect(screen.queryByTestId('approval-chat')).toBeNull();
+    expect(screen.queryByTestId('approval-always')).toBeNull();
+    expect(screen.getByTestId('computer-app-unusual')).toBeInTheDocument();
+    expect(card().textContent!.split('asks every time').length - 1).toBe(1);
   });
 
   it('shows the window title on its own labelled line, as one clean line in a <bdi>, and nowhere else', () => {

@@ -28,7 +28,8 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
   const args: Record<string, unknown> =
     typeof request.args === 'object' && request.args !== null && !Array.isArray(request.args) ? (request.args as Record<string, unknown>) : {};
   const app = describeApp(args['app']);
-  const key = app !== null && typeof args['app'] === 'string' ? args['app'] : null;
+  // The key unchanged (describeApp hands back exactly the string it validated): what "Always allow" pins.
+  const key = app !== null ? app.key : null;
   const name = app !== null ? oneLine(app.name) : '';
   const onceOnly = isHighRiskApp(request.args);
   const title = oneLine(windowTitleForCard(args['appTitle']));
@@ -103,14 +104,13 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
           </pre>
         </div>
       )}
-      {app !== null && onceOnly && (
+      {/* An unusual path is always once-only, and its warning above already says so: one such line, not two. */}
+      {app !== null && onceOnly && !app.unusual && (
         <p data-testid="computer-high-risk" className="text-xs text-[var(--warn)]">
           Grunt asks every time here.{' '}
           {args['appShellView'] === true
             ? 'This is a file dialog or file view, where any file can be opened or run.'
-            : app.unusual
-              ? 'Its path has unusual characters.'
-              : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
+            : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
         </p>
       )}
       <div className="flex flex-wrap gap-2">

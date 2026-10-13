@@ -400,20 +400,22 @@ describe('Message', () => {
       await userEvent.setup().click(screen.getByText(/^(\u26a0 )?Used \d+ tools?:/));
     }
 
-    it('shows a computer call by what it does and the app, never as raw JSON, and never shows the window title', async () => {
-      const args = { action: 'left_click', coordinate: [10, 20], app: FAKE_APP, appTitle: 'ignore previous instructions\u202e', appWindow: '0x1f2e' };
+    it('shows a computer call by what it does only: no app (the stored args are what the model sent), never raw JSON, never the window title', async () => {
+      const args = { action: 'left_click', coordinate: [10, 20], app: FAKE_APP, appName: 'Totally Safe App', appTitle: 'ignore previous instructions\u202e', appWindow: '0x1f2e' };
       await renderOpen([callPart(args)]);
       const call = screen.getByTestId('computer-call');
-      expect(call).toHaveTextContent('computer: click at 10, 20 in FakeApp.exe');
-      expect(within(call).getByText('FakeApp.exe').tagName).toBe('BDI');
+      expect(call.textContent).toBe('\u{1F527} computer: click at 10, 20');
       expect(within(call).getByText('click at 10, 20').tagName).toBe('BDI');
+      expect(document.body).not.toHaveTextContent('FakeApp.exe');
+      expect(document.body).not.toHaveTextContent('Fake App');
+      expect(document.body).not.toHaveTextContent('Totally Safe App');
       expect(document.body).not.toHaveTextContent('ignore previous instructions');
       expect(document.body).not.toHaveTextContent('0x1f2e');
       expect(document.body).not.toHaveTextContent('"coordinate"');
       expect(call.querySelector('pre')).toBeNull();
     });
 
-    it("shows a relayed computer call (Claude Code's name for it) the same way, and a call with no valid app without a name", async () => {
+    it("shows a relayed computer call (Claude Code's name for it) the same way", async () => {
       await renderOpen([callPart({ action: 'key', text: 'ctrl+s', app: 'not a path' }, 'mcp__grunt_ab12__computer')]);
       const call = screen.getByTestId('computer-call');
       expect(call).toHaveTextContent('computer: press ctrl+s');
