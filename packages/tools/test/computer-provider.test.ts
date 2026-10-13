@@ -3,7 +3,7 @@ import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { COMPUTER_GRUNT_REASON, COMPUTER_OFF_REASON, COMPUTER_UNATTENDED_REASON, KEYS_WINDOWS_REASON } from '@grunt/core/domain/computer-apps.js';
 import { FAKE_COMPUTER_APP, FAKE_WINDOW_CHANGED_REASON, FakeComputerDriver, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
-import type { ApprovalChoice, ApprovalRequest, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolApprovalEvent, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { GruntToolProvider } from '../src/provider.js';
 import { ABOUT, AFTER, APP, DONE, EXPECT, EXPLORER, KEY, SHOT, UNATTENDED, ctx, policy, recordCalls, setup, unattendedCtx } from './computer-helpers.js';
@@ -21,10 +21,12 @@ function gated() {
   const { store, driver } = setup();
   const provider = new GruntToolProvider(store, new PermissionBroker(store), mcp as never, { computer: driver });
   const requests: ApprovalRequest[] = [];
+  const events: ToolApprovalEvent[] = [];
   provider.onApprovalEvent((e) => {
+    events.push(e);
     if (e.type === 'request') requests.push(e.request);
   });
-  return { store, driver, provider, requests };
+  return { store, driver, provider, requests, events };
 }
 
 async function gatedTool(provider: GruntToolProvider, p: ToolPolicy = policy()): Promise<ToolSpec> {
@@ -178,12 +180,12 @@ describe('the computer tool in GruntToolProvider', () => {
     expect(await answer(made, tool.execute({ action: 'left_click', coordinate: [5, 5] }, ctx()), { choice: 'once' })).toEqual(AFTER);
   });
 
-  it('denies the call when an always answer names another app than the card, or no app', async () => {
+  it('denies the call when an always answer names another app than the card, or no app, or the app and anything else', async () => {
     const made = await gatedReady();
     const { driver, store, tool } = made;
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      for (const constraint of [{ app: 'C:\\Program Files\\Other\\other.exe' }, null, { app: KEY.toLowerCase() }]) {
+      for (const constraint of [{ app: 'C:\\Program Files\\Other\\other.exe' }, null, { app: KEY.toLowerCase() }, { app: KEY, host: 'example.com' }]) {
         const out = await answer(made, tool.execute({ action: 'left_click', coordinate: [5, 5] }, ctx()), { choice: 'always', constraint });
         expect(out).toMatchObject({ error: true, code: 'permission_denied', message: expect.stringContaining('computer use') });
       }
@@ -194,20 +196,24 @@ describe('the computer tool in GruntToolProvider', () => {
     expect(store.grants.list()).toEqual([]);
   });
 
-  it('still runs a call of another source once when its answer cannot be stored', async () => {
+  it('still runs a call of another source once when its answer cannot be stored, audited and announced as once', async () => {
+    // Integration (cowork-parity step 5): computer use denies a call whose answer the broker refuses (ruling 8);
+    // every other source keeps step 3's rule, that the call runs as what the answer now is: once.
     const made = gated();
-    const { provider, store } = made;
+    const { provider, store, events } = made;
     const bash: ToolSpec = { name: 'Bash', description: '', parameters: {}, risk: 'execute', source: 'agent', execute: async () => undefined };
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const outcome = provider.requestApproval(bash, { command: 'npm test' }, policy({ shell: true }), ctx({ workspaceRoot: 'C:\\work' }));
       // An unconstrained "always" for a shell tool: the broker refuses to store it.
-      expect(await answer(made, outcome, { choice: 'always', constraint: null })).toEqual({ allowed: true, grantedBy: 'ask:always' });
+      expect(await answer(made, outcome, { choice: 'always', constraint: null })).toEqual({ allowed: true, grantedBy: 'ask:once' });
       expect(error).toHaveBeenCalledTimes(1);
     } finally {
       error.mockRestore();
     }
     expect(store.grants.list()).toEqual([]);
+    expect(store.audit.list('chat-1').at(-1)?.grantedBy).toBe('ask:once');
+    expect(events.filter((e) => e.type === 'resolved').map((e) => (e as { choice: string }).choice)).toEqual(['once']);
   });
 
   it('turns a refusal into an error result with no card, audited as a policy denial', async () => {
