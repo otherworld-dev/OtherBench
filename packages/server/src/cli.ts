@@ -1,3 +1,5 @@
+import { Console } from 'node:console';
+import { randomBytes } from 'node:crypto';
 import { createServer as createHttpsServer } from 'node:https';
 import { isIP } from 'node:net';
 import { parseArgs } from 'node:util';
@@ -5,7 +7,10 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve as nodeServe } from '@hono/node-server';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import { createApp } from './app.js';
+import { DesktopChannel } from './computer/desktop-channel.js';
+import { DesktopComputerDriver } from './computer/desktop-driver.js';
 import { createContainer, type Container } from './container.js';
 import { DatabaseLockedError } from './db-lock.js';
 import { announceLine, exitOnStdinClose } from './desktop.js';
@@ -68,6 +73,13 @@ export interface ServeOptions {
   token: string | null;
   /** Desktop handshake: print `{"port":N}` as the only stdout line, exit when stdin closes. */
   announce: boolean;
+  /**
+   * The desktop shell speaks the GRUNT-RPC channel on this process's stdio
+   * (computer use, computer/desktop-channel.ts). Only with `announce`, and
+   * refused without it (`DesktopRpcWithoutAnnounceError`): a server started
+   * by hand, and one that takes sign-ins, has no channel.
+   */
+  desktopRpc: boolean;
   corsOrigins: string[];
   /** The peer listener's port; unset uses the default (4748). */
   peerPort?: number;
@@ -97,6 +109,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
       db: { type: 'string' },
       token: { type: 'string' },
       announce: { type: 'boolean' },
+      'desktop-rpc': { type: 'boolean' },
       'cors-origin': { type: 'string', multiple: true },
       'peer-port': { type: 'string' },
       'peer-host': { type: 'string', multiple: true },
@@ -133,6 +146,7 @@ export function parseServeArgs(argv: string[], env: NodeJS.ProcessEnv = process.
     dbPath,
     token: typeof values['token'] === 'string' ? values['token'] : envToken ? envToken : null,
     announce: values['announce'] === true,
+    desktopRpc: values['desktop-rpc'] === true,
     corsOrigins: Array.isArray(corsOrigins) ? corsOrigins.filter((o): o is string => typeof o === 'string') : [],
     publicUrls: strings(values['public-url']),
     trustProxies: strings(values['trust-proxy']),
@@ -166,7 +180,7 @@ export class NonLoopbackWithoutTokenError extends Error {
 export type ServeMode = 'open' | 'token' | 'login';
 
 type SecurityOptions = Pick<ServeOptions, 'host' | 'token'> &
-  Partial<Pick<ServeOptions, 'announce' | 'publicUrls' | 'tls' | 'tlsCert' | 'tlsKey' | 'trustProxies'>>;
+  Partial<Pick<ServeOptions, 'announce' | 'desktopRpc' | 'publicUrls' | 'tls' | 'tlsCert' | 'tlsKey' | 'trustProxies'>>;
 
 /**
  * The non-negotiable startup gate (task 15, decision #4; spec
@@ -181,6 +195,8 @@ export function assertServeSecurity(options: SecurityOptions): ServeMode {
   const tls = options.tls ?? null;
   const tlsCert = options.tlsCert ?? null;
   const tlsKey = options.tlsKey ?? null;
+  // The desktop channel exists only for the shell's own launch (--announce), which is never a sign-in server.
+  if (options.desktopRpc === true && options.announce !== true) throw new DesktopRpcWithoutAnnounceError();
   if (publicUrls.length === 0) {
     if (tls !== null || tlsCert !== null || tlsKey !== null || trustProxies.length > 0) throw new TlsWithoutPublicUrlError();
     if (!isLoopbackHost(options.host) && !options.token) throw new NonLoopbackWithoutTokenError(options.host);
@@ -210,8 +226,47 @@ export class AnnounceWithoutTokenError extends Error {
   }
 }
 
+/**
+ * `--desktop-rpc` opens the computer-use channel on this process's stdio,
+ * which only the desktop shell that started it holds. Without `--announce`
+ * (the shell's launch) there is no such shell, so the flag is refused rather
+ * than ignored. A sign-in server can't have `--announce`, so it can't have
+ * the channel either.
+ */
+export class DesktopRpcWithoutAnnounceError extends Error {
+  constructor() {
+    super("Refusing to start: --desktop-rpc only works with --announce (the desktop app's own launch).");
+    this.name = 'DesktopRpcWithoutAnnounceError';
+  }
+}
+
+/**
+ * In `--desktop-rpc` mode stdout carries the channel to the shell, and
+ * nothing but the channel may write a line there. Every console method that
+ * would write to stdout writes to stderr instead (`warn`, `error` and
+ * `trace` already do). Something that writes to `process.stdout` itself is
+ * not caught here; the launch's word in every request (`rpc` in the
+ * announce line) is what keeps such a line from passing for one.
+ */
+export function consoleToStderr(target: Console = console, stream: NodeJS.WritableStream = process.stderr): void {
+  const toStderr = new Console({ stdout: stream, stderr: stream });
+  const methods = ['log', 'info', 'debug', 'dir', 'dirxml', 'table', 'count', 'countReset', 'group', 'groupCollapsed', 'groupEnd', 'time', 'timeLog', 'timeEnd'] as const;
+  for (const name of methods) {
+    const method = toStderr[name] as (...args: unknown[]) => void;
+    (target as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => method.apply(toStderr, args);
+  }
+}
+
 export interface ServeDeps {
-  createContainer: (opts: { dbPath: string; secretsPath: string; apiPort?: number; peerPort?: number; peerHosts?: string[]; serverPort?: () => number | null }) => Promise<Container>;
+  createContainer: (opts: {
+    dbPath: string;
+    secretsPath: string;
+    apiPort?: number;
+    peerPort?: number;
+    peerHosts?: string[];
+    serverPort?: () => number | null;
+    computer?: ComputerDriver;
+  }) => Promise<Container>;
   createApp: typeof createApp;
   serve: typeof nodeServe;
   /** Where the announce line goes. Defaults to `process.stdout`. */
@@ -220,6 +275,8 @@ export interface ServeDeps {
   stdin: NodeJS.ReadableStream;
   /** Called with 0 after an announce-mode shutdown. Defaults to `process.exit`. */
   exit: (code: number) => void;
+  /** In `--desktop-rpc` mode, sends what the console would write to stdout to stderr. Defaults to `consoleToStderr()`. */
+  consoleToStderr: () => void;
 }
 
 const defaultDeps: ServeDeps = {
@@ -229,6 +286,7 @@ const defaultDeps: ServeDeps = {
   stdout: process.stdout,
   stdin: process.stdin,
   exit: (code) => process.exit(code),
+  consoleToStderr: () => consoleToStderr(),
 };
 
 export interface ServerHandle {
@@ -263,6 +321,7 @@ export async function runServe(
     stdout,
     stdin,
     exit,
+    consoleToStderr: quietStdout,
   } = { ...defaultDeps, ...deps };
 
   const options = parseServeArgs(argv, env);
@@ -276,6 +335,16 @@ export async function runServe(
   // and no request can arrive before the port is bound. The sandbox's
   // self-test reads it too (0 asks the OS for a port: not known until bound).
   let boundPort = options.port;
+  // The shell's own channel (spec 2026-10-12-computer-use-design section 2),
+  // only when the shell asks for it: requests go out on stdout after the
+  // announce line and answers come back on stdin. A server started by hand
+  // has none, so it has no computer-use driver and offers no such tool.
+  // `rpc` is this launch's word: every request carries it, and it reaches the
+  // shell only in the announce line, so no other line on stdout passes for one.
+  const rpcWord = options.announce && options.desktopRpc ? randomBytes(16).toString('hex') : null;
+  if (rpcWord !== null) quietStdout();
+  const desktop = rpcWord !== null ? new DesktopComputerDriver(new DesktopChannel(stdin, stdout, { nonce: rpcWord })) : null;
+
   const container = await buildContainer({
     dbPath: options.dbPath,
     secretsPath,
@@ -283,6 +352,7 @@ export async function runServe(
     ...(options.peerPort !== undefined ? { peerPort: options.peerPort } : {}),
     peerHosts: options.peerHosts,
     serverPort: () => (boundPort > 0 ? boundPort : null),
+    ...(desktop ? { computer: desktop } : {}),
   });
 
   let signIn: SignIn | null = null;
@@ -347,7 +417,7 @@ export async function runServe(
   };
 
   if (options.announce) {
-    stdout.write(announceLine(boundPort));
+    stdout.write(announceLine(boundPort, rpcWord));
     exitOnStdinClose(stdin, () => {
       close();
       // Exiting at once would leave the sandbox's folders mounted in the VM (and undeletable on Windows) until WSL stops it.
@@ -360,6 +430,10 @@ export async function runServe(
         exit(0);
       });
     });
+    // Only now, after the announce line, may anything else go to stdout. Until
+    // the shell answers that computer use is on, the driver is not available
+    // and the tool is not offered; `hello` never throws.
+    if (desktop) void desktop.hello();
   }
 
   return {
@@ -381,7 +455,7 @@ export interface MainDeps extends Partial<ServeDeps> {
 
 const USAGE = [
   'Usage:',
-  '  grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...',
+  '  grunt serve [--port <n>] [--host <addr>] [--db <path>] [--token <secret>] [--announce [--desktop-rpc]] [--cors-origin <origin>]... [--peer-port <n>] [--peer-host <addr>]...',
   '              [--public-url https://<host>[:<port>]]... [--tls auto | --tls-cert <file> --tls-key <file>] [--trust-proxy <ip>]...',
   '  grunt password [--db <path>]',
 ].join('\n');
@@ -428,6 +502,7 @@ export async function main(argv: string[], deps: MainDeps = {}): Promise<void> {
     if (
       err instanceof NonLoopbackWithoutTokenError ||
       err instanceof AnnounceWithoutTokenError ||
+      err instanceof DesktopRpcWithoutAnnounceError ||
       err instanceof RemoteStartError ||
       err instanceof DatabaseLockedError
     ) {

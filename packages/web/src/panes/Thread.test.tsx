@@ -125,6 +125,16 @@ describe('Thread', () => {
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
   });
 
+  it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
+    useGruntStore.setState({ chats: [makeChat()] });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.queryByTestId('computer-banner')).toBeNull();
+    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'click at 1, 2' }));
+    expect(screen.getByTestId('computer-banner')).toHaveTextContent('Grunt is controlling this computer.');
+    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: false }));
+    expect(screen.queryByTestId('computer-banner')).toBeNull();
+  });
+
   it("tells the viewer the model used the browser only from this chat's own messages", () => {
     useViewerStore.setState({ viewers: {} });
     useViewerStore.getState().setOpen('chat-1', true);

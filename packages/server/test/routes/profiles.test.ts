@@ -7,8 +7,10 @@ import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
 import { DEFAULT_SANDBOX_HOSTS } from '@grunt/core/types/config.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { createApp } from '../../src/app.js';
 import { sandboxHostProblem } from '../../src/validation.js';
+import { ComputerSessions } from '../../src/computer/sessions.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -165,6 +167,73 @@ describe('POST /api/profiles', () => {
     const plain = await post({ fs: 'off' });
     expect(((await plain.json()) as { toolPolicy: Record<string, unknown> }).toolPolicy).not.toHaveProperty('subagents');
     expect((await post({ subagents: 'yes' })).status).toBe(400);
+  it('keeps toolPolicy.computer (off unless it is turned on), and refuses a non-boolean', async () => {
+    const post = (toolPolicy: unknown) =>
+      app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+    const patch = (id: string, toolPolicy: unknown) =>
+      app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolPolicy }) });
+    type Body = { id: string; toolPolicy: { computer?: boolean; fs: string } };
+
+    // Off by default: a profile that never mentions it has no `computer` at all, with or without a toolPolicy.
+    const plain = (await (await post(undefined)).json()) as Body;
+    expect('computer' in plain.toolPolicy).toBe(false);
+    const other = (await (await post({ fs: 'read', browser: true })).json()) as Body;
+    expect('computer' in other.toolPolicy).toBe(false);
+
+    const created = await post({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true });
+    expect(created.status).toBe(201);
+    const profile = (await created.json()) as Body;
+    expect(profile.toolPolicy.computer).toBe(true);
+    expect(container.store.profiles.get(profile.id)?.toolPolicy.computer).toBe(true);
+
+    // Only a boolean turns it on or off.
+    for (const bad of ['yes', 'true', 1, null, {}, []]) {
+      const res = await post({ computer: bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(((await res.json()) as { error: string }).error, JSON.stringify(bad)).toContain('"toolPolicy.computer" must be a boolean.');
+      expect((await patch(plain.id, { computer: bad })).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect('computer' in container.store.profiles.get(plain.id)!.toolPolicy).toBe(false);
+
+    // A partial PATCH that does not mention it keeps it; one that does changes it.
+    const kept = (await (await patch(profile.id, { fs: 'read' })).json()) as Body;
+    expect(kept.toolPolicy).toMatchObject({ fs: 'read', computer: true });
+    const off = (await (await patch(profile.id, { computer: false })).json()) as Body;
+    expect(off.toolPolicy.computer).toBe(false);
+    expect(container.store.profiles.get(profile.id)?.toolPolicy.computer).toBe(false);
+  });
+
+  it("turning computer use off on a profile ends the session of the chat using it and cancels that chat's replies, and no other chat's", async () => {
+    const driver = new FakeComputerDriver();
+    const cancelled: string[] = [];
+    const sessions = new ComputerSessions(driver, { emit: () => {}, cancelChat: (chatId) => cancelled.push(chatId), chatExists: (chatId) => container.store.chats.get(chatId) !== null });
+    container.computer = sessions;
+    const make = async (toolPolicy: unknown): Promise<string> => {
+      const res = await app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+      return ((await res.json()) as { id: string }).id;
+    };
+    const patch = (id: string, toolPolicy: unknown) =>
+      app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolPolicy }) });
+    const on = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true };
+    const used = await make(on);
+    const other = await make(on);
+    for (const [id, profileId] of [['chat-1', used], ['chat-2', other]] as const) {
+      container.store.chats.create({ id, title: id, profileId, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    }
+    expect(await sessions.ensureSession('chat-1', 'chat-1')).toMatchObject({ ok: true });
+
+    // A change that leaves it on, and turning it off on a profile no chat in control uses, change nothing.
+    expect((await patch(used, { fs: 'read' })).status).toBe(200);
+    expect((await patch(other, { computer: false })).status).toBe(200);
+    expect(sessions.activeChat()).toBe('chat-1');
+    expect(driver.ended).toEqual([]);
+    expect(cancelled).toEqual([]);
+
+    // Unticking it on the profile the chat in control uses is Stop for that chat.
+    expect((await patch(used, { computer: false })).status).toBe(200);
+    expect(sessions.activeChat()).toBeNull();
+    expect(driver.ended).toEqual(['chat-1']);
+    expect(cancelled).toEqual(['chat-1']);
   });
 
   it('rejects a missing name with 400', async () => {

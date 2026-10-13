@@ -544,6 +544,16 @@ export interface Grant {
    *   so a server renamed or replaced into the tool's name doesn't inherit
    *   it. Grants stored before it existed have none and never match.
    *
+   * - `app`: computer use's target app (`source: 'computer'`, spec
+   *   2026-10-12-computer-use-design): its key, the program's canonical
+   *   path exactly as the desktop shell resolved it (`appKey`,
+   *   domain/computer-apps.ts, checks it and never changes it). Matched with
+   *   `===`, never by name, case-folding or prefix, so `Downloads\EXCEL.EXE`
+   *   can't ride on Excel's grant. A stored value that isn't a valid key
+   *   matches nothing. A grant of one source never covers another: an `app`
+   *   is only ever matched for a computer call, a `host` only for a network
+   *   or browser call.
+   *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
@@ -552,6 +562,7 @@ export interface Grant {
     commandPrefix?: string;
     commandExact?: string;
     host?: string;
+    app?: string;
     live?: { artifactId: string; callId: string; hash: string; serverId: string };
   } | null;
   expiresAt: number | null;
@@ -650,7 +661,7 @@ export interface SyncRepo {
   /** Where an attachment's blob is on this machine, recorded without counting as a change. */
   setStoragePath(attachmentId: string, path: string): void;
   /** Attachments that came from another machine whose blob isn't here yet. */
-  missingBlobs(): { id: string; sha256: string }[];
+  missingBlobs(): { id: string; sha256: string; size: number }[];
   /** Whether a blob belongs to a file that has been sent in a message (only those leave this machine). */
   isSentBlob(sha256: string): boolean;
   /** Observes a stamp from another machine (its clock runs ahead, say). */

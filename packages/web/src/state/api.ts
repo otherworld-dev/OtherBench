@@ -459,6 +459,14 @@ export const api = {
       if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
       return res.blob();
     },
+    /** Ends the chat's computer-use session and stops its reply (the banner's Stop): `POST /api/chats/:id/computer/stop`. */
+    stopComputer: (id: string) => post<void>(`/chats/${encodeURIComponent(id)}/computer/stop`),
+  },
+
+  /** Computer use (spec 2026-10-12-computer-use-design section 7). */
+  computer: {
+    /** Whether this server can offer the computer tool (the desktop shell on Windows said it can). Authenticated. */
+    status: () => request<{ computerUse: boolean }>('/computer/status'),
   },
 
   projects: {
@@ -672,6 +680,13 @@ export const api = {
     delete: (id: string) => del(`/attachments/${id}`),
     /** Not fetched via `request` -- rendered through `AuthedImage`, which adds the token when there is one. */
     contentUrl: (id: string) => apiUrl(`/attachments/${id}/content`),
+    /**
+     * An image a tool returned (a screenshot), by the chat and the reply that hold
+     * it -- the server serves it only for that exact pair, and as a 404 otherwise.
+     * Use this, not `contentUrl`, for the images in a tool result.
+     */
+    toolImageUrl: (chatId: string, messageId: string, attachmentId: string) =>
+      apiUrl(`/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/tool-images/${encodeURIComponent(attachmentId)}`),
     /**
      * True only for the narrow raster-image allowlist that
      * `GET /attachments/:id/content` (packages/server/src/routes/

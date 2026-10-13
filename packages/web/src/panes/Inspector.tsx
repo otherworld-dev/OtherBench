@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
 import { latestTodos } from '@grunt/core/domain/thread-tools.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
+import { pathForCard } from '@grunt/core/domain/computer-apps.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
@@ -589,7 +590,8 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
     <div data-testid="grants-list" className="space-y-2">
       {shown.map((g) => (
         <div key={g.id} data-testid={`grant-${g.id}`} className="flex items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1 truncate">
+          {/* A computer grant's app is shown whole (it wraps), so two grants for different programs can be told apart. */}
+          <span className={`min-w-0 flex-1 ${g.constraint?.app ? 'break-all' : 'truncate'}`}>
             <span className="font-medium">{g.toolName}</span>
             <span className="ml-1.5 text-xs text-[var(--text-muted)]">
               {g.scope === 'always' ? 'always' : 'this chat'}
@@ -597,8 +599,13 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
               {g.constraint?.host ? ` · ${g.constraint.host}` : ''}
               {g.constraint?.commandExact ? ` · ${g.constraint.commandExact}` : ''}
               {g.constraint?.commandPrefix ? ` · ${g.constraint.commandPrefix} (any arguments)` : ''}
-              {g.constraint?.host ? ` · ${g.constraint.host}` : ''}
               {g.constraint?.live ? ` · live artifact call ${g.constraint.live.callId}` : ''}
+              {g.constraint?.app ? (
+                <>
+                  {' · '}
+                  <bdi>{pathForCard(g.constraint.app)}</bdi>
+                </>
+              ) : null}
             </span>
           </span>
           <button

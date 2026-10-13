@@ -220,6 +220,9 @@ export function chatsRoutes(container: Container): Hono {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getChatOrThrow(container, id);
+    // A chat in control of the computer stops controlling it, and its reply is cancelled
+    // (spec 2026-10-12-computer-use-design section 1). `stop` logs a driver it can't tell; the chat is deleted all the same.
+    await container.computer?.stop(id).catch((err: unknown) => console.error(`[grunt-server] couldn't stop computer use for chat ${id}:`, err));
     container.store.chats.delete(id);
     container.memory?.cancel(id);
     // Its sandbox agent, mounts and home folder in the VM go with it (spec 2026-10-12-sandbox-design). Best effort,

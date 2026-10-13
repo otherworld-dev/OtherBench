@@ -23,6 +23,7 @@ vi.mock('./state/api.js', () => ({
 // The app-wide event stream is tested on its own (state/store.test.ts, server events.test.ts).
 vi.mock('./state/useAppEvents.js', () => ({ useAppEvents: () => {} }));
 vi.mock('./views/QuickChat.js', () => ({ QuickChat: () => <div data-testid="quick-chat-view" /> }));
+vi.mock('./views/IndicatorView.js', () => ({ IndicatorView: () => <div data-testid="indicator-view" /> }));
 
 import { api } from './state/api.js';
 
@@ -201,6 +202,15 @@ describe('App view', () => {
     window.history.replaceState({}, '', '/');
     render(<App />);
     expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
+  });
+
+  it('renders only the computer-use indicator when the URL has view=indicator', () => {
+    window.history.replaceState({}, '', '/?view=indicator&title=Budget');
+    render(<App />);
+    expect(screen.getByTestId('indicator-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
+    window.history.replaceState({}, '', '/');
   });
 
   it('has no top bar', () => {

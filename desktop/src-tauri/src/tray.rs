@@ -1,5 +1,7 @@
 //! The tray icon: where Grunt lives while its window is closed.
 
+use std::sync::Mutex;
+
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -72,11 +74,52 @@ fn menu(app: &AppHandle, machines: &[String]) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
-/// Updates the tooltip and the machine lines; the web app calls this
-/// whenever either changes.
-pub fn set_status(app: &AppHandle, pending_approvals: u32, machines: &[String]) {
+/// The tooltip while a chat controls the computer (the title is already one clean line).
+pub fn control_tooltip(title: &str) -> String {
+    let text = format!("Grunt is controlling this computer ({title})");
+    // Windows shows at most 127 characters of a tray tooltip.
+    if text.chars().count() > 127 {
+        format!("{}…)", text.chars().take(125).collect::<String>())
+    } else {
+        text
+    }
+}
+
+/// What the tooltip says when computer use has nothing to say.
+pub const COMPUTER_OFF_TOOLTIP: &str = "Grunt: computer use is off until Grunt restarts";
+
+/// Computer use's own tooltip (a chat is controlling the computer, or the
+/// channel is gone), which the web app's status updates don't replace.
+static OVERRIDE: Mutex<Option<String>> = Mutex::new(None);
+/// The last approval count the web app reported, for when the override goes.
+static PENDING: Mutex<u32> = Mutex::new(0);
+
+/// The tooltip shown: computer use's own line while there is one, else the approval count.
+pub fn tooltip_for(override_text: Option<&str>, pending_approvals: u32) -> String {
+    override_text.map_or_else(|| tooltip_text(pending_approvals), str::to_string)
+}
+
+/// Sets (or clears) computer use's tooltip line and shows the result. Call it
+/// on the main thread: tray calls go to the event loop.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn set_override(app: &AppHandle, text: Option<String>) {
+    let shown = {
+        let mut current = OVERRIDE.lock().unwrap_or_else(|e| e.into_inner());
+        *current = text;
+        tooltip_for(current.as_deref(), *PENDING.lock().unwrap_or_else(|e| e.into_inner()))
+    };
     if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(tooltip_text(pending_approvals)));
+        let _ = tray.set_tooltip(Some(shown));
+    }
+}
+
+/// Updates the tooltip and the machine lines; the web app calls this
+/// whenever either changes. Computer use's own line stays while it is set.
+pub fn set_status(app: &AppHandle, pending_approvals: u32, machines: &[String]) {
+    *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = pending_approvals;
+    let shown = tooltip_for(OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()).as_deref(), pending_approvals);
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(shown));
         if let Ok(menu) = menu(app, machines) {
             let _ = tray.set_menu(Some(menu));
         }
@@ -125,6 +168,22 @@ mod tests {
     fn tooltip_counts_pending_approvals() {
         assert_eq!(tooltip_text(1), "Grunt: 1 tool call waiting for approval");
         assert_eq!(tooltip_text(3), "Grunt: 3 tool calls waiting for approval");
+    }
+
+    #[test]
+    fn computer_uses_own_line_wins_over_the_approval_count_while_set() {
+        assert_eq!(tooltip_for(Some("Grunt is controlling this computer (Budget)"), 3), "Grunt is controlling this computer (Budget)");
+        assert_eq!(tooltip_for(Some(COMPUTER_OFF_TOOLTIP), 0), COMPUTER_OFF_TOOLTIP);
+        assert_eq!(tooltip_for(None, 3), "Grunt: 3 tool calls waiting for approval");
+        assert!(COMPUTER_OFF_TOOLTIP.chars().count() <= 127);
+    }
+
+    #[test]
+    fn the_control_tooltip_names_the_chat_within_windows_limit() {
+        assert_eq!(control_tooltip("Budget"), "Grunt is controlling this computer (Budget)");
+        let long = control_tooltip(&"x".repeat(200));
+        assert_eq!(long.chars().count(), 127);
+        assert!(long.ends_with("…)"));
     }
 
     #[test]

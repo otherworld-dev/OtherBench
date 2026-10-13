@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
+import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
@@ -27,6 +27,8 @@ import { SubagentRunner } from './subagent.js';
 
 // `appendDelta` lives in parts.ts now (the web folds with it too); kept exported here for peer/forward.ts.
 export { appendDelta } from './parts.js';
+import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from './attachment-binding.js';
+import { bindToolImages, keepToolImages, MAX_TOOL_IMAGE_BYTES, toolImageBound, type SaveToolImage } from './tool-images.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -184,6 +186,14 @@ export interface TurnRunnerOptions {
    * it is. The server wires `realpathSync.native`, as the sandbox mounts by.
    */
   canonicalPath?: (path: string) => string;
+  /**
+   * Stores an image a tool returned (spec 2026-10-12-computer-use-design
+   * section 6) and returns its attachment id. The container wires it to the
+   * blob store plus an attachment row on the reply, so blob GC keeps it.
+   * Without it, images in tool results are dropped to a text note: base64 is
+   * never broadcast or stored either way.
+   */
+  saveToolImage?: SaveToolImage;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -283,6 +293,7 @@ export class TurnRunner {
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly pathExists: (path: string) => boolean;
   private readonly canonicalPath: (path: string) => string;
+  private readonly saveToolImage?: SaveToolImage;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
@@ -301,6 +312,7 @@ export class TurnRunner {
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
     this.canonicalPath = options.canonicalPath ?? ((p) => p);
+    this.saveToolImage = options.saveToolImage;
     this.toolProvider?.onApprovalEvent((event) => {
       switch (event.type) {
         case 'request':
@@ -477,6 +489,13 @@ export class TurnRunner {
       throw new Error(`retry: message "${messageId}" is ${message.status}, not error -- only an errored message can be retried`);
     }
 
+    // The images the failed run stored for this reply are tied to nothing once
+    // its parts are cleared: they go with them, so a retry starts the reply's
+    // image budget from zero without the old ones piling up behind it. (Blobs
+    // nothing references any more are collected by the server's sweep.)
+    for (const stranded of this.store.attachments.list(chatId)) {
+      if (stranded.messageId === messageId) this.store.attachments.delete(stranded.id);
+    }
     this.store.messages.updateParts(messageId, []);
     this.store.messages.updateStatus(messageId, 'streaming'); // omitting `error` clears it -- see MessageRepo.updateStatus's doc.
     this.emit({ messageId, type: 'status', status: 'streaming' });
@@ -561,6 +580,7 @@ export class TurnRunner {
     const startedAt = this.now();
 
     let parts: Part[] = [];
+    const imageBudget = { kept: 0 };
     let lastCheckpointAt = this.now();
     let status: MessageStatus = 'complete';
     let error: SerializedError | null = null;
@@ -635,11 +655,41 @@ export class TurnRunner {
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const history = this.withPlanNote(
+      const translated = this.withPlanNote(
         this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId),
         plan !== undefined,
         userMessageId
       );
+      // The attachments the history names are checked LAST, after every rewrite
+      // above (so nothing can change a reference once it has passed): an
+      // image or file of the user's must be in this chat, and an image a tool
+      // result refers to must be stored for this chat and the message that holds
+      // it. Anything else is a note, and the turn goes on.
+      const history = bindToolImages(
+        bindHistoryAttachments(translated, (id) => this.attachmentInChat(id, chatId)),
+        chatId,
+        (id) => this.store.attachments.get(id)
+      );
+      // The only way an engine gets a stored tool image's bytes back: for this
+      // chat, a message on this thread, and the row stored for exactly that
+      // pair. Anything else (an id from tool output, another chat's history)
+      // gets nothing, and no blob is read.
+      const threadIds = new Set(history.map((m) => m.id));
+      const loadStored = this.loadAttachment;
+      const toolImageRow = (ref: { chatId: string; messageId: string; attachmentId: string }): { size: number } | null => {
+        if (ref.chatId !== chatId || !threadIds.has(ref.messageId)) return null;
+        const row = this.store.attachments.get(ref.attachmentId);
+        return row && toolImageBound(row, chatId, ref.messageId) ? { size: row.size } : null;
+      };
+      const loadToolImage: ToolImageLoader | undefined = loadStored
+        ? async (ref) => {
+            if (toolImageRow(ref) === null) return null;
+            const bytes = await loadStored(ref.attachmentId);
+            return bytes.length > MAX_TOOL_IMAGE_BYTES ? null : bytes;
+          }
+        : undefined;
+      const toolImageSize: ToolImageSizer | undefined = loadStored ? (ref) => toolImageRow(ref)?.size ?? null : undefined;
+      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentInChat(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -713,7 +763,10 @@ export class TurnRunner {
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
         ...(subagents ? { subagents } : {}),
-        loadAttachment: this.loadAttachment,
+        ...(this.loadAttachment ? { loadAttachment: this.chatScopedLoader(this.loadAttachment, chatId) } : {}),
+        ...(loadToolImage ? { loadToolImage } : {}),
+        ...(toolImageSize ? { toolImageSize } : {}),
+        ...(attachmentSize ? { attachmentSize } : {}),
         purpose: 'turn',
         // Nobody can catch what auto mode's classifier allows in a scheduled
         // run, so it is never used there (the classifier isn't a security boundary).
@@ -757,38 +810,45 @@ export class TurnRunner {
           this.store.messages.updateEngineMeta(messageId, event.meta);
           continue;
         }
-        this.emit({ messageId, ...event });
+        // Images in a tool result go to the blob store before anyone sees
+        // the result (spec 2026-10-12-computer-use-design section 6): base64
+        // never reaches an SSE client or a message row.
+        const out: EngineEvent =
+          event.type === 'tool-result'
+            ? { ...event, result: await keepToolImages(event.result, this.saveToolImage, chatId, messageId, imageBudget, event.name) }
+            : event;
+        this.emit({ messageId, ...out });
 
-        switch (event.type) {
+        switch (out.type) {
           case 'notice':
-            parts = [...parts, { type: 'notice', text: event.text }];
+            parts = [...parts, { type: 'notice', text: out.text }];
             checkpoint(true);
             break;
           case 'text-delta':
-            parts = appendDelta(parts, 'text', event.text);
+            parts = appendDelta(parts, 'text', out.text);
             checkpoint(false);
             break;
           case 'reasoning-delta':
-            parts = appendDelta(parts, 'reasoning', event.text);
+            parts = appendDelta(parts, 'reasoning', out.text);
             checkpoint(false);
             break;
           case 'tool-call':
-            parts = [...parts, { type: 'tool-call', id: event.id, name: event.name, args: event.args }];
+            parts = [...parts, { type: 'tool-call', id: out.id, name: out.name, args: out.args }];
             checkpoint(true);
             break;
           case 'tool-result':
             parts = [
               ...parts,
-              { type: 'tool-result', id: event.id, name: event.name, result: event.result, isError: event.isError },
+              { type: 'tool-result', id: out.id, name: out.name, result: out.result, isError: out.isError },
             ];
             checkpoint(true);
             break;
           case 'finish':
-            usage = event.usage;
+            usage = out.usage;
             break;
           case 'error':
-            status = event.error.kind === 'cancelled' ? 'cancelled' : 'error';
-            error = event.error;
+            status = out.error.kind === 'cancelled' ? 'cancelled' : 'error';
+            error = out.error;
             break;
           default:
             break;
@@ -869,6 +929,23 @@ export class TurnRunner {
    * `Profile`, not in the tree -- so this is assembled fresh per variant
    * rather than read back from the store.
    */
+  /** Whether attachment `id` may be replayed in chat `chatId`: its row is in that chat, within the size cap, and was sent in a message of that chat. */
+  private attachmentInChat(id: string, chatId: string): boolean {
+    const row = this.store.attachments.get(id);
+    if (!row || row.chatId !== chatId || !(row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    return attachmentBound(row, row.messageId === null ? null : (this.store.messages.get(row.messageId)?.chatId ?? null));
+  }
+
+  /** `load` for one chat: it refuses an attachment `attachmentInChat` would not let through, and bytes over the cap, so no engine can read across chats by id. */
+  private chatScopedLoader(load: (id: string) => Promise<Buffer>, chatId: string): (id: string) => Promise<Buffer> {
+    return async (id) => {
+      if (!this.attachmentInChat(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
+      const bytes = await load(id);
+      if (bytes.length > MAX_HISTORY_ATTACHMENT_BYTES) throw new Error(`Attachment "${id}" is over the size limit.`);
+      return bytes;
+    };
+  }
+
   private buildRequestMessages(userMessageId: string, profile: ResolvedProfile): CanonMessage[] {
     const history = this.store.messages.pathToRoot(userMessageId);
     if (!profile.systemPrompt) return history;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyCoworkStats, planCoworkSession, UNTITLED_COWORK_SESSION, type CoworkSessionFiles } from '../src/domain/cowork-import.js';
+import { isAttachmentId } from '../src/domain/attachment-binding.js';
 import type { Part } from '../src/types/messages.js';
 
 // Transcripts shaped like Claude Code's JSONL as Cowork writes it (2026-10), with made-up content.
@@ -103,6 +104,28 @@ describe('planCoworkSession', () => {
     ]);
     expect(chat!.images).toEqual([{ attachmentId: 'u1:image:1', messageId: 'u1', mime: 'image/png', data: png, filename: 'image-1.png' }]);
     expect((reply!.parts[1] as Extract<Part, { type: 'tool-result' }>).result).toBe('[An image, not imported]\ncaptured');
+  });
+
+  it('mints only attachment ids the binding rule accepts, so an imported image is replayed and synced like any other', () => {
+    const png = Buffer.from('fake png').toString('base64');
+    const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } };
+    const uuid = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f';
+    const { chat } = plan(
+      session([
+        { uuid, parent: null, type: 'user', content: [image, image, { type: 'text', text: 'two receipts' }] },
+        // A line id no Claude Code transcript has: an id made from it would be refused wherever it is read, so the image is not imported.
+        { uuid: '../../x y', parent: uuid, type: 'user', content: [image, { type: 'text', text: 'and a third' }] },
+      ])
+    );
+    expect(chat!.images.map((i) => i.attachmentId)).toEqual([`${uuid}:image:1`, `${uuid}:image:2`]);
+    for (const i of chat!.images) expect(isAttachmentId(i.attachmentId), i.attachmentId).toBe(true);
+    expect(chat!.messages[0]!.parts).toEqual([
+      { type: 'image', attachmentId: `${uuid}:image:1`, mime: 'image/png' },
+      { type: 'image', attachmentId: `${uuid}:image:2`, mime: 'image/png' },
+      { type: 'text', text: 'two receipts' },
+      { type: 'text', text: '[An image, not imported]' },
+      { type: 'text', text: 'and a third' },
+    ]);
   });
 
   it('keeps only the branch the session ended on, and the results of calls on it', () => {

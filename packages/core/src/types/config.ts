@@ -59,8 +59,22 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * 2026-10-12-api-subagents-design).
  * `'browser'` is the model's own browser (spec
  * 2026-10-12-model-browser-design).
+ * `'computer'` is the desktop shell's computer use (spec
+ * 2026-10-12-computer-use-design).
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall' | 'sandbox' | 'network' | 'thread' | 'subagent' | 'browser';
+export type ToolSource =
+  | 'fs'
+  | 'shell'
+  | 'mcp'
+  | 'agent'
+  | 'artifact'
+  | 'recall'
+  | 'sandbox'
+  | 'network'
+  | 'thread'
+  | 'subagent'
+  | 'browser'
+  | 'computer';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -100,6 +114,8 @@ export interface ToolPolicy {
   browser?: boolean;
   /** Websites the browser may never use; each entry also blocks its subdomains. Absent = none. */
   browserBlockedHosts?: string[];
+  /** Computer use (spec 2026-10-12-computer-use-design): the `computer` tool, desktop app on Windows only. Absent = off. */
+  computer?: boolean;
 }
 
 /** What a sandboxed command may reach when the profile names no hosts of its own (spec 2026-10-12-sandbox-design). */

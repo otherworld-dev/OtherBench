@@ -11,9 +11,13 @@ import { cors } from 'hono/cors';
  * The handshake the desktop shell reads: with `--announce`, this is the
  * first and only thing written to stdout, once the port is bound. Every log
  * line goes to stderr in that mode so nothing can get ahead of it.
+ *
+ * With `--desktop-rpc` it also carries `rpc`, this launch's word: the
+ * computer-use channel writes it after the prefix of every request, and the
+ * shell acts on no request line without it (shell-wire-spec.md).
  */
-export function announceLine(port: number): string {
-  return `${JSON.stringify({ port })}\n`;
+export function announceLine(port: number, rpc: string | null = null): string {
+  return `${JSON.stringify(rpc === null ? { port } : { port, rpc })}\n`;
 }
 
 /**

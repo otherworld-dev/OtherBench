@@ -2,6 +2,23 @@ import { randomUUID } from 'node:crypto';
 import { sep } from 'node:path';
 import { AGENT_PATH_ARG_KEYS, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from './agent-tools.js';
 import { BROWSER_READ_COMMANDS, browserHostDenial, normaliseHost } from './browser-hosts.js';
+import { cardLine } from './card-text.js';
+import {
+  actionSummary,
+  appKey,
+  COMPUTER_BAD_ACTION_REASON,
+  COMPUTER_NO_APP_REASON,
+  COMPUTER_NO_WINDOW_REASON,
+  COMPUTER_OFF_REASON,
+  COMPUTER_UNATTENDED_REASON,
+  describeApp,
+  expectationOf,
+  isComputerAction,
+  isHighRiskApp,
+  isReadAction,
+  isUnattendedRun,
+  parseAction,
+} from './computer-apps.js';
 import { canonicalHost, isLocalOrPrivateHost } from './network-hosts.js';
 import { containPathIn } from './paths.js';
 import type { ApprovalChoice, ApprovalRequest, LiveCallRef, ToolContext, ToolSpec } from '../ports/tool-provider.js';
@@ -13,7 +30,8 @@ export type { ApprovalChoice, ApprovalRequest } from '../ports/tool-provider.js'
 
 export type Decision =
   | { kind: 'allow'; grantedBy: 'policy' | 'auto_read' | 'grant' | 'sandbox'; grantId?: string }
-  | { kind: 'deny'; reason: string; plan?: true; code?: 'not_approved' }
+  /** `plan`: refused while the reply's plan waits. `unattended`: refused because nobody is there (computer use). */
+  | { kind: 'deny'; reason: string; plan?: true; unattended?: true; code?: 'not_approved' }
   | { kind: 'ask'; request: ApprovalRequest };
 
 export interface PermissionBrokerOptions {
@@ -147,6 +165,20 @@ function isShellTool(tool: ToolSpec): boolean {
  * card under ask_on_mutate; its grants are always pinned to one `host`, by
  * the same rules as the sandbox's network grants (`alwaysConstraintFor`,
  * every-key matching, the canonical host) and never interchangeable with them.
+ *
+ * Computer use (`source: 'computer'`) is refused outright in an unattended
+ * run; its looking actions (`screenshot`, `cursor_position`, `wait`) skip the
+ * card in both modes, by exact action name; every other action is about one
+ * app, named by its key (`appKey`: the program path the shell resolved,
+ * compared with `===` and never repaired or folded here), and a call with no
+ * valid key is refused. Its grants are always pinned to one key. An app that
+ * isn't provably ordinary (`isHighRiskApp`: a shell, Explorer, a browser, or
+ * anything unknown) is asked about every time: no grant is stored for it and
+ * none is matched. The card's line names the app from the key alone. Its
+ * grants follow the same rules as the host-keyed ones: an "always" is
+ * exactly `{ app }`, the card's own (`alwaysConstraintFor`), every key must
+ * match, and an `app` grant only ever covers a computer call. In Plan mode
+ * every computer action is refused, the looks included (`allowedWhilePlanning`).
  */
 export class PermissionBroker {
   private readonly pending = new Map<string, PendingRequest>();
@@ -293,6 +325,39 @@ export class PermissionBroker {
       return ctx.subagent ? { kind: 'deny', reason: "A sub-agent can't start another sub-agent." } : { kind: 'allow', grantedBy: 'policy' };
     }
 
+    // Computer use (spec 2026-10-12-computer-use-design §1). Never in a run
+    // nobody is watching, whatever grants exist: checked before them.
+    // Looking (screenshot, cursor position, wait) needs no card in either
+    // mode -- the shell's own start dialog was the consent to see the screen
+    // -- and goes by the action's NAME, never the declared risk. Anything
+    // else needs a grant for the app the tool's describeCall resolved, or a
+    // card; with no app at all it is refused (fail closed).
+    if (tool.source === 'computer') {
+      // Fail closed: only a plain `false`, or nothing at all, says someone is
+      // there. Any other value (a string, a number, null) counts as unattended.
+      if (isUnattendedRun(ctx)) return { kind: 'deny', reason: COMPUTER_UNATTENDED_REASON, unattended: true };
+      const action = stringField(args, 'action');
+      // Exactly one of the known names, as a string: anything else (another
+      // case, an array, a missing action) is refused, never treated as a look.
+      if (!isComputerAction(action)) return { kind: 'deny', reason: `"${cardLine(action, 40)}" isn't a computer action Grunt can do.` };
+      // The whole action must be one Grunt would carry out, within every cap
+      // (`parseAction`): a readable coordinate, a key combination that stays
+      // in the app, typed text with no control characters, a wait that is a
+      // number. The tool's describeCall refuses these first, with a fuller
+      // reason; this is the backstop, so neither a look nor a grant ever
+      // covers one.
+      // `reserved: []`: nothing to hold back here; the tool checked a key against the shell's real list.
+      const valid = parseAction(args, { reserved: [] }).ok;
+      if (isReadAction(action)) return valid ? { kind: 'allow', grantedBy: 'policy' } : { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
+      // The app's key must be valid as it stands. One that isn't is no app.
+      if (appKey(rawField(args, 'app')) === null) return { kind: 'deny', reason: COMPUTER_NO_APP_REASON };
+      // A card and a grant are about one window of that app: without the
+      // window, pid and start time the shell checks before acting, the call
+      // could land anywhere, so it is refused.
+      if (expectationOf(args) === null) return { kind: 'deny', reason: COMPUTER_NO_WINDOW_REASON };
+      if (!valid) return { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
+    }
+
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the
     // user's OTHER chats, so text injected into this one could use it to
     // reach them. It falls through to the grants, and the card's "for this
@@ -314,8 +379,9 @@ export class PermissionBroker {
     }
 
     // A Claude Code write to its own config (see isProtectedAgentPath) always
-    // gets a card: no stored grant, however scoped, may cover it.
-    const grant = isProtectedAgentWrite(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
+    // gets a card: no stored grant, however scoped, may cover it. Nor may one
+    // cover computer use of a high-risk app.
+    const grant = isProtectedAgentWrite(tool, args) || isHighRiskComputerCall(tool, args) ? null : this.findMatchingGrant(tool, args, ctx);
     if (grant) {
       // A 'once' grant authorises exactly one call; consume it immediately
       // so a second identical call is asked about again rather than reusing
@@ -339,7 +405,9 @@ export class PermissionBroker {
             ? networkSummary(args)
             : tool.source === 'browser'
               ? browserSummary(args)
-              : summarize(tool, args),
+              : tool.source === 'computer'
+                ? computerSummary(args)
+                : summarize(tool, args),
       ...(ctx.subagent ? { subagent: ctx.subagent } : {}),
     };
     this.enforceBound(ctx.messageId);
@@ -468,6 +536,17 @@ export class PermissionBroker {
     // such a write either.
     if (isProtectedAgentWrite(pending.tool, pending.args)) return;
 
+    // Computer use of an app that isn't provably ordinary (a shell, Explorer,
+    // a browser, anything unknown) is only ever allowed once. Its card offers
+    // nothing else, so a 'chat' or 'always' answer for one is refused out
+    // loud and stores nothing; decide() never matches a grant for one either.
+    if (pending.tool.source === 'computer') {
+      const app = appForGrant(pending);
+      if (isHighRiskApp(pending.args)) {
+        throw new Error(`Refusing to store a grant for computer use of ${cardLine(describeApp(app)?.name, 80)}: Grunt asks every time for this app.`);
+      }
+    }
+
     if (choice.choice === 'chat') {
       // A 'chat' answer for the shell is NOT a blanket grant for the rest of
       // the chat. `{choice:'chat'}` carries no constraint of its own (the UI
@@ -481,7 +560,9 @@ export class PermissionBroker {
         ? { commandExact: exactCommandForGrant(pending) }
         : isHostKeyed(pending.tool.source)
           ? { host: hostForGrant(pending) }
-          : null;
+          : pending.tool.source === 'computer'
+            ? { app: appForGrant(pending) }
+            : null;
       this.store.grants.create({
         id: randomUUID(),
         chatId: pending.ctx.chatId,
@@ -510,7 +591,9 @@ export class PermissionBroker {
     // "always let the sandbox reach anything" is never one click. A browser
     // grant is the same: the one site the card named, never blanket and never
     // a different site than the one the person was shown. No constraint is
-    // stored as sent: see alwaysConstraintFor.
+    // stored as sent: see alwaysConstraintFor. Likewise for computer use: the
+    // grant is for the one app the card named (its key, as the tool's
+    // describeCall worked it out), never blanket and never another app.
     const constraint = alwaysConstraintFor(pending, choice.constraint);
 
     this.store.grants.create({
@@ -676,6 +759,15 @@ export function allowedWhilePlanning(tool: ToolSpec, args?: unknown): boolean {
     // query). A call with no command, or one Grunt doesn't know, is refused.
     case 'browser':
       return BROWSER_READ_COMMANDS.has(stringField(args, 'command') ?? '');
+    // Computer use (spec 2026-10-12-computer-use-design): every action is
+    // refused while planning, the looks (`screenshot`, `cursor_position`,
+    // `wait`) included. A look is not like the browser's `snapshot` of a page
+    // the model already opened: the first one starts the control session (the
+    // shell's native dialog and its indicator), and a screenshot sends
+    // whatever is on the screen, any app's window, to the model. Fail closed;
+    // the plan can say what it needs to look at.
+    case 'computer':
+      return false;
     case 'thread':
     case 'artifact':
     case 'recall':
@@ -717,6 +809,32 @@ function isProtectedAgentWrite(tool: ToolSpec, args: unknown): boolean {
     if (raw !== null && isProtectedAgentPath(raw)) return true;
   }
   return false;
+}
+
+/** A computer-use call on a high-risk app: it gets cards only, never grants. */
+function isHighRiskComputerCall(tool: ToolSpec, args: unknown): boolean {
+  return tool.source === 'computer' && isHighRiskApp(args);
+}
+
+/** The app a computer grant is pinned to: its key, valid as it stands. Throws rather than store a grant for anything else. */
+function appForGrant(pending: PendingRequest): string {
+  const app = appKey(rawField(pending.args, 'app'));
+  if (app === null) {
+    throw new Error('Refusing to create a grant for computer use: the approved call named no app Grunt could identify.');
+  }
+  return app;
+}
+
+/**
+ * A computer card's line: `Use EXCEL.EXE: click at 512, 300`. The name is the
+ * file name in the app's key (`describeApp`), the same key a grant would be
+ * pinned to and the shell checks before acting; a name the call carries
+ * (`appName`) or a window title is never used. The rest holds validated
+ * values only, and never typed text (`actionSummary`).
+ */
+function computerSummary(args: unknown): string {
+  const name = describeApp(rawField(args, 'app'))?.name;
+  return `Use ${name === undefined ? '?' : cardLine(name, 80)}: ${actionSummary(args)}`;
 }
 
 function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
@@ -763,6 +881,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
       return policy.subagents === true ? null : 'Sub-agents are turned off for this profile.';
     case 'browser':
       return policy.browser === true ? null : 'The browser is turned off for this profile.';
+    case 'computer':
+      return policy.computer === true ? null : COMPUTER_OFF_REASON;
     default: {
       const exhaustive: never = tool.source;
       return `Unknown tool source: ${String(exhaustive)}`;
@@ -770,8 +890,8 @@ function checkPolicy(tool: ToolSpec, policy: ToolPolicy): string | null {
   }
 }
 
-type ConstraintKey = 'pathPrefix' | 'commandPrefix' | 'commandExact' | 'host';
-const CONSTRAINT_KEYS: readonly ConstraintKey[] = ['pathPrefix', 'commandPrefix', 'commandExact', 'host'];
+type ConstraintKey = 'pathPrefix' | 'commandPrefix' | 'commandExact' | 'host' | 'app';
+const CONSTRAINT_KEYS: readonly ConstraintKey[] = ['pathPrefix', 'commandPrefix', 'commandExact', 'host', 'app'];
 
 /**
  * The keys a constraint actually sets. A key holding `undefined` is absent
@@ -794,33 +914,48 @@ function constraintKeys(constraint: object): ConstraintKey[] | null {
  * constraint sets must match (an earlier version stopped at the first key it
  * found, so `{commandExact: 'ls', pathPrefix: '.'}` matched any command with
  * an in-workspace `path`). A `host` key matches only a network or browser
- * call, and such a call needs one; a shell call needs a command key. A grant
- * with no constraint never covers a shell, network or browser call, and one
- * with no key Grunt knows covers nothing. A key whose stored value isn't a
- * string never matches (and never throws).
+ * call, and such a call needs one; an `app` key matches only a computer call,
+ * and such a call needs exactly `{ app }` and nothing else; a shell call
+ * needs a command key. A grant with no constraint never covers a shell,
+ * network, browser or computer call, and one with no key Grunt knows covers
+ * nothing. A key whose stored value isn't a string never matches (and never
+ * throws).
  *
  * The grant's source is part of the match: `findMatchingGrant` already skips
  * a grant of another source, and this refuses one again, so a host grant made
  * for the browser can never cover the sandbox's network, or the other way
- * round, whatever host they share.
+ * round, whatever host they share, and an app grant covers nothing but
+ * computer use.
  */
 function grantConstraintMatches(grant: Grant, tool: ToolSpec, args: unknown, ctx: ToolContext): boolean {
   const shell = isShellTool(tool);
   const hostKeyed = isHostKeyed(tool.source);
-  if (hostKeyed && grant.source !== tool.source) return false;
+  const computer = tool.source === 'computer';
+  if ((hostKeyed || computer) && grant.source !== tool.source) return false;
   const constraint = grant.constraint;
-  if (!constraint) return !shell && !hostKeyed;
+  if (!constraint) return !shell && !hostKeyed && !computer;
   // A live grant is for one live call (decideLive), never an ordinary one.
   // (constraintKeys would refuse the unknown key anyway; this says so.)
   if (constraint.live !== undefined) return false;
   const keys = constraintKeys(constraint);
   if (keys === null || keys.length === 0) return false;
   if (hostKeyed !== keys.includes('host')) return false;
+  // A computer grant is one app and nothing else (ruling C4): `{ app }`.
+  if (computer !== keys.includes('app')) return false;
+  if (computer && keys.length !== 1) return false;
   if (shell && !keys.includes('commandExact') && !keys.includes('commandPrefix')) return false;
   return keys.every((key) => constraintKeyMatches(key, constraint[key], tool, args, ctx));
 }
 
 function constraintKeyMatches(key: ConstraintKey, wanted: unknown, tool: ToolSpec, args: unknown, ctx: ToolContext): boolean {
+  if (key === 'app') {
+    // Exact on the app's key: both sides must be valid keys as they stand
+    // (`appKey` checks, it never repairs or folds) and the same string. No
+    // prefix, case, short-name or separator matching: the shell canonicalises.
+    const want = appKey(wanted);
+    const got = appKey(rawField(args, 'app'));
+    return want !== null && got !== null && want === got;
+  }
   if (key === 'host') {
     // Exact on the canonical host (so case, a trailing dot, an IDN or an IP
     // spelling can't differ): a grant never covers a subdomain. hostOfCall is
@@ -858,8 +993,11 @@ function constraintKeyMatches(key: ConstraintKey, wanted: unknown, tool: ToolSpe
  *     other;
  *   - a shell tool (`isShellTool`, which covers the sandboxed `run_command`):
  *     exactly one of `commandExact`/`commandPrefix`, non-empty, trimmed;
+ *   - computer use: exactly `{app}`, the card's own app key as it stands
+ *     (ruling C4 of the computer-use track) -- never another app, never a
+ *     second key, never blanket;
  *   - anything else: a `pathPrefix`, or nothing (an unconstrained grant, as
- *     before). No `host` and no command keys.
+ *     before). No `host`, `app` or command keys.
  */
 function alwaysConstraintFor(pending: PendingRequest, sent: Grant['constraint']): Grant['constraint'] {
   const tool = pending.tool;
@@ -902,6 +1040,23 @@ function alwaysConstraintFor(pending: PendingRequest, sent: Grant['constraint'])
       );
     }
     return key === 'commandExact' ? { commandExact: value(key) } : { commandPrefix: value(key) };
+  }
+
+  if (tool.source === 'computer') {
+    // The one app the card named, by its key exactly as the tool's
+    // describeCall worked it out: another spelling of the same path is
+    // another key, and one that isn't a valid key is none.
+    const own = appForGrant(pending);
+    if (sent?.app === undefined) {
+      throw new Error('Refusing to create an unconstrained "always" grant for computer use: it must name the app (constraint.app).');
+    }
+    if (keys.length !== 1 || keys[0] !== 'app') {
+      throw new Error(`Refusing to create an "always" grant for computer use that names anything but the card's own app (${own}).`);
+    }
+    if (appKey(sent.app) !== own) {
+      throw new Error(`Refusing an "always" grant for computer use that doesn't name the app the card asked about (${own}).`);
+    }
+    return { app: own };
   }
 
   if (keys.some((k) => k !== 'pathPrefix')) {
@@ -1131,6 +1286,11 @@ function browserSummary(args: unknown): string {
     default:
       return `Use ${host}: ${stringField(args, 'command') ?? '?'}`;
   }
+}
+
+/** `args[key]` whatever it is, for a validator that takes `unknown` (`appKey`). */
+function rawField(args: unknown, key: string): unknown {
+  return typeof args === 'object' && args !== null ? (args as Record<string, unknown>)[key] : undefined;
 }
 
 function stringField(args: unknown, key: string): string | null {

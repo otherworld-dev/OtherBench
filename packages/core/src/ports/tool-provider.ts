@@ -179,8 +179,24 @@ export type ToolApprovalEvent =
 export type ApprovalOutcome =
   /** `args`: the described arguments, when the spec has `describeCall` (the Claude Code gate keeps them as a ticket). */
   | { allowed: true; grantedBy: string; args?: unknown }
-  | { allowed: false; reason: string }
+  /**
+   * `about`: the line that says whose words `reason` may hold, when they may
+   * not be Grunt's (a computer call refused in the desktop app's words:
+   * `COMPUTER_SCREEN_ABOUT`). Whoever passes the reason on to a model puts
+   * this line first; it is not part of the reason a person is shown.
+   */
+  | { allowed: false; reason: string; about?: string }
   | { deferred: true };
+
+/**
+ * What a call is answered with when it comes to be run and no approval
+ * stands behind it: on Claude Code's path, a relayed call with no ticket
+ * (engine-claude-code `runRelayed`) and one the tool provider did not approve
+ * for that chat and reply (`GruntToolProvider.runRelayedCall`); in the
+ * browser tool, arguments that carry no approved site. One sentence for all
+ * three, so the model reads the same thing whichever of them refused.
+ */
+export const NO_APPROVAL_REASON = 'Grunt has no approval for this call.';
 
 /** Options for `ToolProvider.requestApproval`. */
 export interface ApprovalOptions {

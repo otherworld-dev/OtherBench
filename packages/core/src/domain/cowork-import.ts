@@ -1,4 +1,5 @@
 import type { CanonMessage, Part, ProducedBy } from '../types/messages.js';
+import { isAttachmentId } from './attachment-binding.js';
 import { CLAUDE_REPLY_NAME, type ImportedChat, type ImportProfile } from './claude-import.js';
 
 /**
@@ -209,8 +210,10 @@ export function planCoworkSession(files: CoworkSessionFiles, profile: ImportProf
         const source = isObj(b['source']) ? b['source'] : null;
         const mime = str(source?.['media_type'])?.toLowerCase() ?? '';
         const data = str(source?.['data']);
-        if (source?.['type'] === 'base64' && data && IMAGE_TYPES.has(mime)) {
-          const attachmentId = `${line.uuid}:image:${++n}`;
+        // The id is checked against the one rule every reader applies, so an image is never stored under an id that replay and sync would then refuse.
+        const attachmentId = `${line.uuid}:image:${n + 1}`;
+        if (source?.['type'] === 'base64' && data && IMAGE_TYPES.has(mime) && isAttachmentId(attachmentId)) {
+          n++;
           pasted.push({ attachmentId, mime, data, filename: `image-${n}.${mime === 'image/jpeg' ? 'jpg' : mime.slice('image/'.length)}` });
           prompt.push({ type: 'image', attachmentId, mime });
         } else {

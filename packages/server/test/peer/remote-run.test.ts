@@ -104,6 +104,8 @@ async function readStream(res: Response, onEvent: (e: StreamEvent, all: StreamEv
 }
 
 describe('running a chat on the machine it runs on', () => {
+  // Load-sensitive: about a second on its own, but two servers, a pairing and an approval round trip can go past
+  // the default 5 s while the whole suite runs, so it gets 20 s.
   it("the laptop sends a turn in the PC's chat; the PC runs it in its own folder, the laptop's approval answers it, and the PC's audit says so", async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     expect(laptop.container.store.chats.get(chatId)!.runsOn).toBe(pc.id);
@@ -140,7 +142,7 @@ describe('running a chat on the machine it runs on', () => {
     const audit = pc.container.store.audit.list(chatId);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ grantedBy: 'ask:once', decidedOnNode: laptop.id });
-  });
+  }, 20_000);
 
   it("the laptop answers a question asked by the PC's reply; the answer reaches the PC's model", async () => {
     const { pc, laptop, chatId, profileId } = await setup();

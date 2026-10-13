@@ -102,6 +102,8 @@ export interface GruntState {
   appPendingApprovals: Record<string, PendingApprovalSummary>;
   /** Replies being written anywhere in the app: chat id by message id (#824). */
   appRunningTurns: Record<string, string>;
+  /** Chats controlling this computer (computer use), by chat id, with their last action (`actionSummary`: never typed text). */
+  computerSessions: Record<string, { lastAction?: string }>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
   /**
@@ -277,6 +279,11 @@ function bump(counts: Record<string, number>, chatId: string): Record<string, nu
   return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
 }
 
+/** A computer session as the banner keeps it: a last action only when it is text. */
+function computerSessionOf(lastAction: unknown): { lastAction?: string } {
+  return typeof lastAction === 'string' ? { lastAction } : {};
+}
+
 export const useGruntStore = create<GruntState>()((set) => ({
   connections: [],
   models: [],
@@ -383,6 +390,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
   setHotkeyStatus: (status) => set({ hotkeyStatus: status }),
   appPendingApprovals: {},
   appRunningTurns: {},
+  computerSessions: {},
   syncRevision: 0,
   chatReloads: {},
   machines: null,
@@ -391,6 +399,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
       appRunningTurns: Object.fromEntries((hello.runningTurns ?? []).map((t) => [t.messageId, t.chatId])),
+      computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction)])),
     }),
   applyAppEvent: (event) =>
     set((state) => {
@@ -443,6 +452,16 @@ export const useGruntStore = create<GruntState>()((set) => ({
         case 'schedule-run-started':
         case 'schedule-run-finished':
           return { schedulesVersion: state.schedulesVersion + 1 };
+        case 'computer-session': {
+          const next = { ...state.computerSessions };
+          if (event.active) {
+            // An event with no last action (the session started, say) keeps the one already shown.
+            next[event.chatId] = typeof event.lastAction === 'string' ? computerSessionOf(event.lastAction) : (next[event.chatId] ?? {});
+          } else {
+            delete next[event.chatId];
+          }
+          return { computerSessions: next };
+        }
         default:
           return state;
       }

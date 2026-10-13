@@ -401,6 +401,78 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#computer trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+    const results = (events: EngineEvent[]) => events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');
+    const computerWith = (execute: ToolSpec['execute']): ToolSpec => ({ name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute });
+
+    it('looks first, then clicks and types through the real tool, passing its results on as they are, then answers slowly', async () => {
+      const calls: unknown[] = [];
+      const contexts: ToolContext[] = [];
+      const shot = [{ type: 'text', text: 'Screenshot, 1366×768.' }, { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }];
+      const computer = computerWith(async (args, ctx) => {
+        calls.push(args);
+        contexts.push(ctx);
+        return shot;
+      });
+      const sleep = fakeSleep();
+      const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#computer', { tools: [computer] })));
+
+      expect(calls).toEqual([{ action: 'screenshot' }, { action: 'left_click', coordinate: [10, 20] }, { action: 'type', text: 'hello from the mock' }]);
+      expect(contexts.map((c) => [c.chatId, c.messageId, c.profileId])).toEqual(Array(3).fill(['chat-1', 'msg-req-1', 'profile-1']));
+      const calledWith = events.filter((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call');
+      expect(calledWith.map((e) => [e.name, e.args])).toEqual(calls.map((args) => ['computer', args]));
+      // Each result is the tool's own value (an array with its image), not a JSON string, so the runner keeps the images.
+      expect(results(events).map((r) => [r.id, r.name, r.result, r.isError])).toEqual(calledWith.map((c) => [c.id, 'computer', shot, false]));
+      // A slow tail Stop can land in: 20 chunks a second apart.
+      expect(events.filter((e) => e.type === 'text-delta')).toHaveLength(20);
+      expect(sleep.mock.calls.map((call) => call[0])).toEqual(Array(20).fill(1000));
+      expect(text(events)).toBe('I clicked and typed in the fake app, and now I will keep talking slowly, one word at a time.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('stops at the first step that fails and says why, quickly', async () => {
+      const calls: unknown[] = [];
+      const denied = { error: true, code: 'approval_denied', message: 'The user denied this tool call.' };
+      const computer = computerWith(async (args) => {
+        calls.push(args);
+        return (args as { action: string }).action === 'screenshot' ? [{ type: 'text', text: 'Screenshot, 1366×768.' }] : denied;
+      });
+      const sleep = fakeSleep();
+      const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#computer', { tools: [computer] })));
+
+      expect(calls).toEqual([{ action: 'screenshot' }, { action: 'left_click', coordinate: [10, 20] }]);
+      expect(results(events).map((r) => [r.result, r.isError])).toEqual([
+        [[{ type: 'text', text: 'Screenshot, 1366×768.' }], false],
+        [denied, true],
+      ]);
+      expect(text(events)).toBe("The computer didn't work: The user denied this tool call.");
+      expect(sleep.mock.calls.every((call) => call[0] < 1000)).toBe(true);
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('says so when no computer tool was offered', async () => {
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#computer')));
+      expect(results(events)).toHaveLength(1);
+      expect(results(events)[0]).toMatchObject({ name: 'computer', isError: true });
+      expect(text(events)).toBe("The computer didn't work: No computer tool was offered.");
+    });
+
+    it('does nothing more once the reply is stopped during a step', async () => {
+      const controller = new AbortController();
+      const calls: unknown[] = [];
+      const computer = computerWith(async (args) => {
+        calls.push(args);
+        controller.abort();
+        return [{ type: 'text', text: 'Screenshot, 1366×768.' }];
+      });
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#computer', { tools: [computer], signal: controller.signal })));
+      expect(calls).toEqual([{ action: 'screenshot' }]);
+      expect(results(events)).toHaveLength(0);
+      expect(events.some((e) => e.type === 'text-delta' || e.type === 'finish')).toBe(false);
+    });
+  });
+
   describe('#slow trigger', () => {
     it('streams exactly 20 chunks at 400ms each', async () => {
       const sleep = fakeSleep();

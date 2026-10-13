@@ -98,6 +98,20 @@ describe('PermissionBroker: the browser (spec 2026-10-12-model-browser-design)',
     expect(broker.decide(BROWSER(), open(), policy(), ctx())).toMatchObject({ kind: 'ask' });
   });
 
+  it('never lets a browser grant with anything beside its site match by the other key', () => {
+    // Each of these names example.com AND carries a second key the call would satisfy on any site.
+    const beside = [{ commandExact: 'open' }, { commandPrefix: 'open' }, { pathPrefix: '/' }, { app: 'C:\\x\\app.exe' }];
+    for (const [i, extra] of beside.entries()) {
+      store.grants.create({ id: `g${i}`, chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com', ...extra }, expiresAt: null });
+    }
+    expect(broker.decide(BROWSER(), open('other.test'), policy(), ctx())).toMatchObject({ kind: 'ask' });
+    // Nor do they cover their own site: a grant that is not exactly one site is no grant.
+    expect(broker.decide(BROWSER(), open('example.com'), policy(), ctx())).toMatchObject({ kind: 'ask' });
+    store.grants.create({ id: 'plain', chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com' }, expiresAt: null });
+    expect(broker.decide(BROWSER(), open('example.com'), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    expect(broker.decide(BROWSER(), open('other.test'), policy(), ctx())).toMatchObject({ kind: 'ask' });
+  });
+
   it('stores an "always" grant under the canonical host, and matches it across spellings', () => {
     const ask = expectAsk(broker.decide(BROWSER(), open('bücher.example'), policy(), ctx()));
     broker.resolve(ask.request.id, { choice: 'always', constraint: { host: 'BÜCHER.example.' } });

@@ -143,6 +143,37 @@ describe('chatToMarkdown', () => {
   });
 });
 
+describe('computer calls in the Markdown export', () => {
+  const secret = 'hunter2 and my card number';
+  const ms = [
+    msg({ id: 'u1', createdAt: 1 }),
+    msg({
+      id: 'a1', createdAt: 2, parentId: 'u1', role: 'assistant', producedBy: by('A'),
+      parts: [
+        { type: 'tool-call', id: 't1', name: 'computer', args: { action: 'type', text: secret } },
+        { type: 'tool-result', id: 't1', name: 'computer', result: [{ type: 'text', text: 'Done.' }], isError: false },
+        { type: 'tool-call', id: 't2', name: 'mcp__grunt_0123456789abcdef__computer', args: { action: 'type', text: `${secret}\nsecond line` } },
+        { type: 'tool-call', id: 't3', name: 'computer', args: { action: 'left_click', coordinate: [10, 20] } },
+        { type: 'tool-call', id: 't4', name: 'computer', args: { action: 'type', text: `${secret}\u0000` } },
+      ],
+    }),
+  ];
+
+  it('says what a computer call does, never the text it types, as the thread does', () => {
+    const md = chatToMarkdown(chat({ headMessageId: 'a1' }), ms, [], AT);
+    expect(md).not.toContain('hunter2');
+    expect(md).toContain('**Tool call:** `computer`: type 26 characters');
+    expect(md).toContain('**Tool call:** `mcp__grunt_0123456789abcdef__computer`: type 38 characters (2 lines)');
+    expect(md).toContain('**Tool call:** `computer`: click at 10, 20');
+    // Text that would not be typed at all has no count, and is still not shown.
+    expect(md).toContain('**Tool call:** `computer`: type ?');
+  });
+
+  it('keeps the stored call whole in the JSON export, which is the data', () => {
+    expect(JSON.stringify(chatToJson(chat({ headMessageId: 'a1' }), ms, [], [], AT))).toContain('hunter2');
+  });
+});
+
 describe('chatToJson', () => {
   it('carries the chat, the shown path, every message, usage and attachment references without content', () => {
     const ms = [

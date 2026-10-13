@@ -87,7 +87,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'subagents', 'browser'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'subagents', 'browser', 'computer'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
@@ -117,6 +117,8 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(sandboxHosts !== undefined ? { sandboxHosts } : {}),
     ...(typeof v['subagents'] === 'boolean' ? { subagents: v['subagents'] } : base.subagents !== undefined ? { subagents: base.subagents } : {}),
     ...(typeof v['browser'] === 'boolean' ? { browser: v['browser'] } : base.browser !== undefined ? { browser: base.browser } : {}),
+    // Computer use (spec 2026-10-12-computer-use-design): off unless a profile turns it on, so it is only ever stored when it was set.
+    ...(typeof v['computer'] === 'boolean' ? { computer: v['computer'] } : base.computer !== undefined ? { computer: base.computer } : {}),
     ...(v['browserBlockedHosts'] !== undefined
       ? { browserBlockedHosts: parseBlockedHosts(v['browserBlockedHosts']) }
       : base.browserBlockedHosts !== undefined
@@ -178,6 +180,13 @@ export function profilesRoutes(container: Container): Hono {
     }
 
     const updated = container.store.profiles.update(id, patch);
+    // Computer use turned off on this profile: the chat on it that holds the computer (in control, or its
+    // start dialog up) is stopped as by the banner's Stop. Its session ends and its replies are cancelled,
+    // so a reply already running can't carry on with a tool the profile no longer allows.
+    if (updated.toolPolicy.computer !== true) {
+      const holder = container.computer?.holder() ?? null;
+      if (holder !== null && container.store.chats.get(holder)?.profileId === id) await container.computer?.stop(holder);
+    }
     // Spec section 5: an archived profile stops being any project's default.
     if (updated.archivedAt !== null) {
       clearProjectDefaultProfile(container.store, id);
@@ -197,6 +206,9 @@ export function profilesRoutes(container: Container): Hono {
     for (const chatId of chatIds) {
       await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
     }
+    // Its chats went with it, inside the database. One of them may be in control of the computer:
+    // its session ends and its reply is cancelled (spec 2026-10-12-computer-use-design section 1).
+    await container.computer?.endIfChatGone();
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
     // in turn cascades THEIR attachment rows away -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see

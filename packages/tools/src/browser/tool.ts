@@ -1,11 +1,13 @@
 import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@grunt/core/domain/browser-hosts.js';
-import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { asciiLower } from '@grunt/core/domain/card-text.js';
+import { NO_APPROVAL_REASON, type DescribedCall, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
 import { BrowserBusyError, PageMovedError, StaleRefError, type ActionGuard } from './session.js';
 import { MAX_NOTE_CHARS, MAX_TARGET_CHARS, cutSnapshot, pageText, refLines } from './snapshot.js';
 
 export const NO_PAGE = 'No page is open: use open first.';
-const NO_APPROVAL = 'Grunt has no approval for this call.';
+/** Arguments that carry no approved site or page: core's one sentence for a call nothing approved. */
+const NO_APPROVAL = NO_APPROVAL_REASON;
 
 /** The line every page result carries (spec §2, "Untrusted content"). */
 export function aboutPage(host: string): string {
@@ -112,6 +114,44 @@ export function parseBrowserCall(raw: unknown): BrowserCall | { refuse: string }
   return call;
 }
 
+/** Modifiers of a `press` key (Playwright's names) that make it a shortcut rather than typing. */
+const SHORTCUT_MODIFIERS: ReadonlySet<string> = new Set(['control', 'alt', 'meta', 'controlormeta']);
+/**
+ * Keys (Playwright's names, compared in ASCII lower case) that put no
+ * character on the page: the browser's form of core's list of keys that type
+ * nothing. Anything not here (a letter, a digit, `KeyA`, `Digit1`, `Space`,
+ * `Minus`, a numpad key, any single character) types one.
+ */
+const NON_TYPING_KEYS: ReadonlySet<string> = new Set([
+  'enter', 'tab', 'escape', 'backspace', 'delete', 'insert', 'home', 'end', 'pageup', 'pagedown',
+  'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'contextmenu', 'shift', 'control', 'alt', 'meta',
+  'capslock', 'numlock', 'scrolllock', 'pause', 'printscreen',
+  ...Array.from({ length: 24 }, (_, i) => `f${i + 1}`),
+]);
+
+/**
+ * Whether a `press` key must be kept out of the audit like typed text: the
+ * computer tool's rule (core's `isSensitiveKeyText`) in the browser's key
+ * names. Kept only when it says what was pressed and types nothing: a key
+ * that types nothing (`Enter`, `Shift+Tab`, `F5`), or a shortcut with
+ * Control, Alt or Meta (`Control+A`). A bare or shift-only key that types a
+ * character (`a`, `Shift+KeyA`, `7`) counts as typed, so a password pressed
+ * one key at a time is not readable a character per row; so does Control
+ * with Alt (AltGr types a character on many layouts) and anything that is
+ * not one key with known modifiers.
+ */
+export function isSensitiveBrowserKey(key: unknown): boolean {
+  if (typeof key !== 'string' || key === '') return true;
+  // `+` joins a combination; a key that is itself `+` comes last, after one (`Shift++`).
+  const parts = key === '+' ? ['+'] : key.endsWith('++') ? [...key.slice(0, -2).split('+'), '+'] : key.split('+');
+  const pressed = parts.pop() ?? '';
+  const modifiers = parts.map(asciiLower);
+  if (pressed === '' || modifiers.some((m) => m !== 'shift' && !SHORTCUT_MODIFIERS.has(m))) return true;
+  if (NON_TYPING_KEYS.has(asciiLower(pressed))) return false;
+  const altGr = modifiers.includes('alt') && modifiers.includes('control');
+  return altGr || !modifiers.some((m) => SHORTCUT_MODIFIERS.has(m));
+}
+
 /** `example.com/x` -> `https://example.com/x`; anything with a `scheme://` is left as it is. */
 function withScheme(url: string): string {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `https://${url}`;
@@ -141,6 +181,21 @@ function callArgs(call: BrowserCall): Record<string, unknown> {
 
 function failure(code: string, message: string): { error: true; code: string; message: string } {
   return { error: true, code, message };
+}
+
+/**
+ * An error whose message can carry words from a page or the browser engine
+ * (what an engine error said, where the page moved to): the line every page
+ * result carries goes first, naming the page's site (`site`, or an unknown
+ * page when there is none). Grunt's own fixed sentences (`failure`) need none.
+ */
+export function pageFailure(code: string, message: string, site: string | null): { about: string; error: true; code: string; message: string } {
+  return { about: aboutPage(site ?? 'an unknown page'), error: true, code, message };
+}
+
+/** The site of the page a chat's browser is on now, else the site the call was approved for. */
+function siteNow(chat: ChatBrowser, approved: string): string {
+  return siteOf(chat.session.url()) ?? approved;
 }
 
 /** An error's first line as page-safe text (an engine error can quote the page). */
@@ -257,13 +312,13 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
   try {
     chat = await manager.acquire(ctx.chatId, ctx.messageId, ctx.signal, policy.browserBlockedHosts ?? []);
   } catch (err) {
-    return err instanceof BrowserBusyError ? failure('browser_busy', err.message) : failure('browser_unavailable', firstLine(err));
+    return err instanceof BrowserBusyError ? failure('browser_busy', err.message) : pageFailure('browser_unavailable', firstLine(err), host);
   }
   if (call.command === 'close') {
     try {
       await manager.close(ctx.chatId);
     } catch (err) {
-      return failure('browser_error', firstLine(err));
+      return pageFailure('browser_error', firstLine(err), siteNow(chat, host));
     }
     return { closed: true };
   }
@@ -273,7 +328,7 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     const site = siteOf(chat.session.url());
     if (site !== guard.site || (guard.navId !== undefined && guard.navId !== chat.session.navigationId())) {
       setRefs(chat, new Map());
-      return failure('page_moved', new PageMovedError(site).message);
+      return pageFailure('page_moved', new PageMovedError(site).message, site);
     }
   }
   // A ref must come from the snapshot the call was described against, and still be in it.
@@ -289,16 +344,16 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
       const site = siteOf(chat.session.url());
       if (site !== guard.site) {
         setRefs(chat, new Map());
-        return failure('page_moved', new PageMovedError(site).message);
+        return pageFailure('page_moved', new PageMovedError(site).message, site);
       }
     }
     return result;
   } catch (err) {
     // Whatever went wrong, the page is not what the refs were read from: the next ref fails fast.
     setRefs(chat, new Map());
-    if (err instanceof PageMovedError) return failure('page_moved', err.message);
+    if (err instanceof PageMovedError) return pageFailure('page_moved', err.message, err.site);
     if (err instanceof StaleRefError) return failure('stale_ref', err.message);
-    return failure('browser_error', firstLine(err));
+    return pageFailure('browser_error', firstLine(err), siteNow(chat, host));
   }
 }
 

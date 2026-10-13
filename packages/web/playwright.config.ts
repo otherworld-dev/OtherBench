@@ -77,6 +77,8 @@ export default defineConfig({
         GRUNT_SANDBOX: 'fake',
         // The model's browser may reach the fixture site on 127.0.0.1 (tests only).
         GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS: String(SITE_PORT),
+        // Computer use is carried out by core's FakeComputerDriver, which touches nothing on this machine (computer.spec.ts).
+        GRUNT_COMPUTER_FAKE_DRIVER: '1',
       },
     },
     {

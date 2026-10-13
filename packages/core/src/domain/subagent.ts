@@ -265,6 +265,12 @@ export const SUBAGENT_POLICY_RULES: { readonly [K in keyof Required<ToolPolicy>]
   // Every site either profile blocks: the union, so the sub-agent can reach no
   // site its parent can't. Always named.
   browserBlockedHosts: ({ parent, chosen }) => allBlockedHosts(blockedHostsOf(parent) ?? [], blockedHostsOf(chosen) ?? []),
+  // Computer use (spec 2026-10-12-computer-use-design): never, whatever
+  // either profile has. A sub-agent's calls sit inside its card, nobody sees
+  // the screen it would act on, and its start would put the shell's native
+  // dialog (the one local consent) in front of the user for a job they never
+  // asked to watch. Its parent may use the computer itself.
+  computer: () => false,
 };
 
 /**

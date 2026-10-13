@@ -164,6 +164,9 @@ export function turnsRoutes(container: Container): Hono {
     const message = container.store.messages.get(messageId);
     if (!message) throw new HTTPException(404, { message: `Message "${messageId}" not found.` });
 
+    // Before the turn winds down: a computer-use start of this chat that has not reached the desktop app yet
+    // (it waits on an earlier end) is given up now, so no native dialog comes up for a reply that was stopped.
+    container.computer?.replyStopping(message.chatId);
     container.turnRunner.cancel(messageId);
     return c.body(null, 204);
   });

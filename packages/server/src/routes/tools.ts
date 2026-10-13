@@ -164,7 +164,7 @@ interface ApprovalBody {
 }
 
 /** The keys a grant's constraint may set, and only one of them at a time (the broker enforces the same). */
-const CONSTRAINT_KEYS = ['pathPrefix', 'commandPrefix', 'commandExact', 'host'] as const;
+const CONSTRAINT_KEYS = ['pathPrefix', 'commandPrefix', 'commandExact', 'host', 'app'] as const;
 
 function parseConstraint(value: unknown): Grant['constraint'] {
   if (value === undefined || value === null) return null;
@@ -180,6 +180,7 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   const commandPrefix = v['commandPrefix'];
   const commandExact = v['commandExact'];
   const host = v['host'];
+  const app = v['app'];
   if (pathPrefix !== undefined && typeof pathPrefix !== 'string') {
     throw new HTTPException(400, { message: '"constraint.pathPrefix" must be a string.' });
   }
@@ -195,14 +196,21 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   if (host !== undefined && (host.length === 0 || host.length > 253)) {
     throw new HTTPException(400, { message: '"constraint.host" must be 1-253 characters.' });
   }
-  const setKeys = [pathPrefix, commandPrefix, commandExact, host].filter((k) => k !== undefined).length;
+  // A computer grant's app (spec 2026-10-12-computer-use-design): the key the card carried, passed on
+  // exactly as it came. It is a Windows path, so nothing here trims it, changes its case or its separators,
+  // or normalises it in any way: the broker checks it (`appKey`) and compares it with the card's, byte for byte.
+  if (app !== undefined && typeof app !== 'string') {
+    throw new HTTPException(400, { message: '"constraint.app" must be a string.' });
+  }
+  const setKeys = [pathPrefix, commandPrefix, commandExact, host, app].filter((k) => k !== undefined).length;
   if (setKeys === 0) return null;
   if (setKeys > 1) throw new HTTPException(400, { message: '"constraint" must set only one key.' });
   return {
     pathPrefix: pathPrefix as string | undefined,
     commandPrefix: commandPrefix as string | undefined,
     commandExact: commandExact as string | undefined,
-    host: host as string | undefined,
+    ...(host !== undefined ? { host: host as string } : {}),
+    ...(app !== undefined ? { app: app as string } : {}),
   };
 }
 

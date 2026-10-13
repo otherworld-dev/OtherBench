@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { BrowserManager } from '@grunt/tools/browser/manager.js';
@@ -690,6 +691,80 @@ describe('Approval routes', () => {
     expect(browserGrants()).toEqual([expect.objectContaining({ toolName: 'browser', scope: 'always', chatId: null, constraint: { host: 'example.com' } })]);
     // And a network call for the same host gets nothing from it.
     expect(store.grants.list().filter((g) => g.source === 'network')).toEqual([]);
+  });
+
+  it('rejects a malformed choice with 400', async () => {
+    const res = await app().request('/api/approvals/whatever/resolve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ choice: 'maybe' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("keeps a computer grant's app through an 'always' answer exactly as it came, and refuses one that is not a string", () => {
+    const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    expect(parseApprovalChoice({ choice: 'always', constraint: { app } })).toEqual({ choice: 'always', constraint: { app } });
+    // The broker judges the key (`appKey`); nothing on the way may repair it. Spaces at the ends, another
+    // letter case, forward slashes, an accented letter composed and decomposed, a look-alike letter, an
+    // empty string and a hidden character all arrive as they were sent.
+    const asSent = [
+      ' C:\\Apps\\Tool.exe ',
+      'c:\\APPS\\tool.EXE',
+      'C:/Apps/Tool.exe',
+      'C:\\Users\\Jos\u00e9\\Tool.exe',
+      'C:\\Users\\Jose\u0301\\Tool.exe',
+      'C:\\Apps\\\u212a.exe',
+      'C:\\Apps\\Tool\u200b.exe',
+      'C:\\Apps\\Tool.exe\r\n',
+      '',
+    ];
+    for (const raw of asSent) {
+      const parsed = parseApprovalChoice({ choice: 'always', constraint: { app: raw } });
+      expect(parsed, JSON.stringify(raw)).toEqual({ choice: 'always', constraint: { app: raw } });
+      expect((parsed as { constraint: { app: string } }).constraint.app === raw, JSON.stringify(raw)).toBe(true);
+    }
+    for (const bad of [42, null, true, ['C:\\Apps\\Tool.exe'], { path: 'C:\\Apps\\Tool.exe' }]) {
+      expect(() => parseApprovalChoice({ choice: 'always', constraint: { app: bad } }), JSON.stringify(bad)).toThrow(/"constraint\.app" must be a string\./);
+    }
+    // The other keys are untouched by it, and an app is only there when one was sent.
+    expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } })).toEqual({ choice: 'always', constraint: { host: 'example.com' } });
+    expect('app' in ((parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } }) as { constraint: object }).constraint)).toBe(false);
+    expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toEqual({ choice: 'always', constraint: null });
+  });
+
+  it("an 'always' answer with the card's app stores a computer grant for exactly that app; one that is not a string is a 400 and stores nothing", async () => {
+    store.chats.create({ id: 'chat-c', title: 'C', profileId: 'profile-c', headMessageId: null, pinned: false, archivedAt: null } as never);
+    const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true };
+    const driver = new FakeComputerDriver();
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { computer: driver });
+    container.toolProvider = provider;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const tool = (await provider.listTools(policy)).find((t) => t.name === 'computer')!;
+    const ctx = { chatId: 'chat-c', messageId: 'msg-c', profileId: 'profile-c', workspaceRoot: null, signal: new AbortController().signal };
+    // A point is in the last screenshot's pixels, so the chat looks first (no card for a look).
+    await tool.execute({ action: 'screenshot' }, ctx);
+    const run = tool.execute({ action: 'left_click', coordinate: [10, 20] }, ctx);
+    await waitFor(() => requests.length === 1);
+    const resolve = (constraint: unknown) =>
+      app().request(`/api/approvals/${requests[0]!.id}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ choice: 'always', constraint }) });
+
+    expect((await resolve({ app: 42 })).status).toBe(400);
+    expect(store.grants.list()).toEqual([]);
+    expect(driver.actions).toEqual([]);
+
+    const key = (requests[0]!.args as { app: string }).app;
+    expect(key).toBe(FAKE_COMPUTER_APP.path);
+    expect((await resolve({ app: key })).status).toBe(200);
+    await run;
+    const grants = store.grants.list().filter((g) => g.source === 'computer');
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({ toolName: 'computer', scope: 'always' });
+    expect(grants[0]!.constraint).toEqual({ app: 'C:\\Program Files\\Fake App\\FakeApp.exe' });
+    expect(driver.actions.map((a) => a.action)).toEqual([{ action: 'left_click', coordinate: [10, 20] }]);
   });
 
   it('rejects a malformed choice with 400', async () => {

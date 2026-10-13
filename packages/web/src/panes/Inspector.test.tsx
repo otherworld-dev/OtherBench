@@ -566,6 +566,29 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByText(/example\.com/)).toBeInTheDocument();
   });
 
+  it('shows the program a computer-use grant is for, in full, so two apps can be told apart', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g5', chatId: null, profileId: null, toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE' }, expiresAt: null },
+      { id: 'g6', chatId: 'chat-1', profileId: null, toolName: 'computer', source: 'computer', scope: 'chat', constraint: { app: 'C:\\Program Files\\Notepad++\\notepad.exe' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const excel = await within(grantsSection()).findByTestId('grant-g5');
+    expect(excel).toHaveTextContent('always · C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE');
+    expect(within(excel).getByText('C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE').tagName).toBe('BDI');
+    expect(within(grantsSection()).getByTestId('grant-g6')).toHaveTextContent('this chat · C:\\Program Files\\Notepad++\\notepad.exe');
+  });
+
+  it("spells out hidden characters in a stored grant's app rather than letting them reorder or hide text", async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g7', chatId: null, profileId: null, toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: 'C:\\Apps\\exe.\u202eTXT\u200b.exe' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = await within(grantsSection()).findByTestId('grant-g7');
+    expect(row).toHaveTextContent('C:\\Apps\\exe.<U+202E>TXT<U+200B>.exe');
+    expect(row.textContent).not.toContain('\u202e');
+    expect(row.textContent).not.toContain('\u200b');
+  });
+
   it('shows the pinned command for a commandExact grant (the default shape for an "Always allow" shell grant)', async () => {
     mockedGrantsList.mockResolvedValue([
       { id: 'g3', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandExact: 'npm test' }, expiresAt: null },

@@ -109,6 +109,24 @@ export function isQuickView(): boolean {
   return internals?.metadata?.currentWindow?.label === 'quick';
 }
 
+/**
+ * True in the computer-use indicator bar (desktop/src-tauri/src/computer/desktop.rs).
+ * It loads the app with `?view=indicator`; its window label is checked too.
+ */
+export function isIndicatorView(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (new URLSearchParams(window.location.search).get('view') === 'indicator') return true;
+  const internals = (window as unknown as { __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } } }).__TAURI_INTERNALS__;
+  return internals?.metadata?.currentWindow?.label === 'computer-indicator';
+}
+
+/** The indicator bar's Stop: the shell ends computer-use control and tells the server. */
+export async function stopComputerControl(): Promise<void> {
+  if (!isDesktop()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('computer_stop');
+}
+
 /** Start-at-login, via the shell's autostart plugin. Only meaningful when `isDesktop()`. */
 export const autostart = {
   async isEnabled(): Promise<boolean> {

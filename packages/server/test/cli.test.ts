@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
@@ -12,6 +13,8 @@ import { DatabaseLockedError } from '../src/db-lock.js';
 import {
   AnnounceWithoutTokenError,
   assertServeSecurity,
+  consoleToStderr,
+  DesktopRpcWithoutAnnounceError,
   isLoopbackHost,
   main,
   NonLoopbackWithoutTokenError,
@@ -79,6 +82,8 @@ function fakeStdio() {
     stdout: { write: (s: string) => { writes.push(s); return true; } },
     stdin: new PassThrough(),
     exit: vi.fn(),
+    // Never the real one here: it would rewire this test process's own console.
+    consoleToStderr: vi.fn(),
   };
 }
 
@@ -292,6 +297,154 @@ describe('runServe desktop mode', () => {
     expect(io.writes).toEqual([]);
     expect(deps.fakeServerHandle.close).not.toHaveBeenCalled();
     expect(io.exit).not.toHaveBeenCalled();
+  });
+});
+
+describe('runServe with the desktop channel (--desktop-rpc)', () => {
+  /** The driver `runServe` handed to `createContainer`, if any. Nothing here is a shell: stdin and stdout are in-memory. */
+  const driverOf = (deps: ReturnType<typeof fakeDeps>): ComputerDriver | undefined =>
+    (deps.createContainer.mock.calls[0] as unknown as [{ computer?: ComputerDriver }])[0].computer;
+
+  it('parses --desktop-rpc, off by default', () => {
+    expect(parseServeArgs([]).desktopRpc).toBe(false);
+    expect(parseServeArgs(['--announce', '--desktop-rpc']).desktopRpc).toBe(true);
+  });
+
+  /** This launch's word, from the announce line. */
+  const rpcWordOf = (io: ReturnType<typeof fakeStdio>): string => (JSON.parse(io.writes[0]!) as { rpc: string }).rpc;
+
+  it("says hello to the shell after the announce line, which carries this launch's word, and hands the container a driver that is not available yet", async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    const word = rpcWordOf(io);
+    expect(word).toMatch(/^[0-9a-f]{32}$/);
+    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT},"rpc":"${word}"}\n`, `GRUNT-RPC ${word} {"id":1,"method":"computer.hello","params":{}}\n`]);
+    const computer = driverOf(deps)!;
+    expect(computer.available()).toBe(false);
+    expect(computer.reservedKeys()).toBeNull();
+    // The shell's own lines carry no word.
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
+    await vi.waitFor(() => expect(computer.available()).toBe(true));
+    expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']);
+  });
+
+  it('makes a new word for every launch', async () => {
+    const words = new Set<string>();
+    for (let i = 0; i < 5; i += 1) {
+      const io = fakeStdio();
+      await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { GRUNT_TOKEN: 'tok' });
+      words.add(rpcWordOf(io));
+    }
+    expect(words.size).toBe(5);
+  });
+
+  it('sends what the console would write to stdout to stderr, in --desktop-rpc mode only, before anything is written', async () => {
+    const io = fakeStdio();
+    io.consoleToStderr.mockImplementation(() => expect(io.writes).toEqual([]));
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { GRUNT_TOKEN: 'tok' });
+    expect(io.consoleToStderr).toHaveBeenCalledTimes(1);
+    for (const argv of [['--port', '0', '--announce'], ['--port', '0']]) {
+      const other = fakeStdio();
+      await runServe(argv, { ...fakeDeps(), ...other }, { GRUNT_TOKEN: 'tok' });
+      expect(other.consoleToStderr).not.toHaveBeenCalled();
+    }
+  });
+
+  it('consoleToStderr: every console method that writes to stdout writes to the stream it is given instead', () => {
+    const out: string[] = [];
+    const stream = new PassThrough();
+    stream.on('data', (chunk: Buffer) => out.push(chunk.toString('utf8')));
+    const untouched = vi.fn();
+    const target = { log: untouched, info: untouched, debug: untouched, dir: untouched, table: untouched, error: untouched, warn: untouched } as unknown as Console;
+    consoleToStderr(target, stream);
+    target.log('a log line');
+    target.info('an info line');
+    target.debug('a debug line');
+    target.dir({ x: 1 });
+    expect(untouched).not.toHaveBeenCalled();
+    expect(out.join('')).toBe('a log line\nan info line\na debug line\n{ x: 1 }\n');
+    // warn and error already go to stderr: left as they are.
+    expect(target.warn).toBe(untouched);
+    expect(target.error).toBe(untouched);
+  });
+
+  it('a shell that says computer use is off, as it ships, leaves the driver unavailable, and it is sent nothing more', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":false,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
+    await vi.waitFor(() => expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']));
+    expect(computer.available()).toBe(false);
+    expect((await computer.ensureSession('c', 'Budget')).ok).toBe(false);
+    expect(io.writes).toHaveLength(2);
+  });
+
+  it('a shell that never answers the hello leaves the driver unavailable, and it is sent nothing more', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    expect(computer.available()).toBe(false);
+    expect(await computer.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: "Computer use isn't available in the desktop app right now." });
+    expect(await computer.act('c', { action: 'type', text: 'x' }, { app: 'C:\\x.exe', shellView: false, windowId: 'w', pid: 1, startedAt: 's' })).toMatchObject({ ok: false });
+    expect(io.writes).toHaveLength(2);
+  });
+
+  it('without --desktop-rpc there is no channel and no driver, and nothing more is written', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    expect(driverOf(deps)).toBeUndefined();
+    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT}}\n`]);
+  });
+
+  it('refuses --desktop-rpc without --announce (a server started by hand, or a sign-in server), before anything is built', async () => {
+    for (const argv of [
+      ['--port', '0', '--desktop-rpc'],
+      ['--port', '0', '--desktop-rpc', '--host', '0.0.0.0', '--token', 'secret'],
+      ['--port', '0', '--desktop-rpc', '--public-url', 'https://grunt.example.com', '--tls', 'auto'],
+    ]) {
+      const deps = fakeDeps();
+      const io = fakeStdio();
+      await expect(runServe(argv, { ...deps, ...io }, { GRUNT_TOKEN: 'tok' }), argv.join(' ')).rejects.toThrow(DesktopRpcWithoutAnnounceError);
+      expect(deps.createContainer).not.toHaveBeenCalled();
+      expect(io.writes).toEqual([]);
+      expect(io.consoleToStderr).not.toHaveBeenCalled();
+    }
+    // And a sign-in server can't have --announce, so it can't have the channel with it either.
+    expect(() => assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true, publicUrls: ['https://grunt.example.com'], tls: 'auto' })).toThrow(RemoteWithAnnounceError);
+    expect(assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true })).toBe('token');
+  });
+
+  it('main() prints the refusal and exits 1', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exit = vi.fn();
+    await main(['serve', '--desktop-rpc'], { ...fakeDeps(), ...fakeStdio(), exit, env: {} });
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors).toHaveBeenCalledWith("Error: Refusing to start: --desktop-rpc only works with --announce (the desktop app's own launch).");
+    errors.mockRestore();
+  });
+
+  it('still closes and exits when stdin closes, and the driver is not available from then on', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":[],"sessions":0}}\n');
+    await vi.waitFor(() => expect(computer.available()).toBe(true));
+
+    io.stdin.end();
+    await tick();
+
+    expect(deps.fakeServerHandle.close).toHaveBeenCalledTimes(1);
+    expect(deps.containerClose).toHaveBeenCalledTimes(1);
+    expect(io.exit).toHaveBeenCalledWith(0);
+    expect(computer.available()).toBe(false);
+    expect(computer.reservedKeys()).toBeNull();
+    expect(io.writes).toHaveLength(2);
   });
 });
 

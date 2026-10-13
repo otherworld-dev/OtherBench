@@ -4,6 +4,7 @@ import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { ApiError, api, type CreateProfileBody, type ToolPolicyBody } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
 import { machineName } from '../../state/machines.js';
+import { useComputerUseAvailable } from '../../lib/computerUse.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
@@ -101,6 +102,11 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [subagents, setSubagents] = useState(profile?.toolPolicy.subagents ?? false);
   // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
   const [browser, setBrowser] = useState(profile?.toolPolicy.browser ?? false);
+  // Computer use (spec 2026-10-12-computer-use-design section 7): off unless the profile turns it on. Shown only where
+  // this server can offer it (GET /api/computer/status); the stored value is sent either way, so editing a profile
+  // on a machine with no driver never turns it off.
+  const [computer, setComputer] = useState(profile?.toolPolicy.computer ?? false);
+  const computerUse = useComputerUseAvailable();
   const [blockedSites, setBlockedSites] = useState((profile?.toolPolicy.browserBlockedHosts ?? []).join('\n'));
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
@@ -190,7 +196,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
       toolPolicy: isClaudeCode
-        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, ...blocked, ...sandboxFields }
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, computer, ...blocked, ...sandboxFields }
         : {
             fs,
             shell,
@@ -199,6 +205,7 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             artifacts,
             recall,
             browser,
+            computer,
             ...blocked,
             ...sandboxFields,
             ...(subagents || profile?.toolPolicy.subagents !== undefined ? { subagents } : {}),
@@ -463,6 +470,17 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             <input type="checkbox" aria-label="Browser" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
             Browser
           </label>
+          {computerUse && (
+            <label className="flex flex-col gap-0.5 self-end pb-1 text-xs text-[var(--text)]">
+              <span className="flex items-center gap-1.5">
+                <input type="checkbox" aria-label="Computer use" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
+                Computer use
+              </span>
+              <span className="text-[var(--text-muted)]">
+                Lets the model see your screen and use apps you approve, while you&apos;re at this computer. Desktop app on Windows only.
+              </span>
+            </label>
+          )}
           {isClaudeCode && (
             <>
               <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">

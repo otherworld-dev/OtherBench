@@ -3,13 +3,29 @@ import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { AGENT_ASK_TOOL, DECLINED_QUESTION, PLAN_TOOL, UNATTENDED_QUESTION, answersByQuestion, isInvalid, parseQuestions } from '@grunt/core/domain/thread-tools.js';
+import { desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ToolPolicy, ToolSource } from '@grunt/core/types/config.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 
-export type GateDecision = { allow: true; updatedInput?: Record<string, unknown> } | { allow: false; reason: string } | { defer: true };
+/**
+ * `about`: the line that says whose words a refusal's `reason` may hold, when
+ * they may not be Grunt's own (the tool provider sets it for a computer call
+ * refused in the desktop app's words). It is what Claude Code is told first
+ * (`denialText`): a refusal reaches the model as the result of its tool call.
+ */
+export type GateDecision = { allow: true; updatedInput?: Record<string, unknown> } | { allow: false; reason: string; about?: string } | { defer: true };
+
+/**
+ * A refusal as Claude Code is handed it, on both of its ways in (the
+ * PreToolUse hook's reason and `canUseTool`'s message): the line that says
+ * whose words follow, when the refusal has one, then the reason.
+ */
+export function denialText(decision: { reason: string; about?: string }): string {
+  return typeof decision.about === 'string' && decision.about.length > 0 ? `${decision.about}\n\n${decision.reason}` : decision.reason;
+}
 /**
  * `signal` is the SDK's own signal for this hook/permission call; the wait for
  * an answer ends when it or the turn's signal aborts. `mayDefer` is set only by
@@ -155,21 +171,26 @@ export function createGate(deps: {
   };
 
   const decide: Gate = async (toolName, input, callSignal, opts) => {
-    // No approval card for a turn that is already dead.
-    if (deps.ctx.signal.aborted) return { allow: false, reason: 'The turn was stopped.' };
-    if (callSignal?.aborted) return { allow: false, reason: 'Claude Code stopped waiting for this tool call.' };
+    // Grunt's own tools have no path arguments; each is checked as
+    // Grunt's (the profile's switch, no card), never as an MCP tool. A
+    // relayed tool is checked exactly as an API model's call to it would be.
+    const own = opts?.own;
+    const relay = typeof own === 'object' ? own.relay : undefined;
+    const ownTool = typeof own === 'string' ? own : undefined;
+    // No approval card for a turn that is already dead. A relayed tool's call
+    // goes on to the tool provider all the same, which refuses it as it does
+    // an API model's (nothing is asked, described or run) and puts the stop
+    // on record: the same audit row on either path.
+    if (relay === undefined) {
+      if (deps.ctx.signal.aborted) return { allow: false, reason: 'The turn was stopped.' };
+      if (callSignal?.aborted) return { allow: false, reason: 'Claude Code stopped waiting for this tool call.' };
+    }
     // A pending card is settled as a denial when either the turn stops or
     // Claude Code gives up on the call (e.g. the hook timed out), so no
     // card is left waiting for a call that no longer exists.
     const signal = callSignal ? AbortSignal.any([deps.ctx.signal, callSignal]) : deps.ctx.signal;
     try {
       const workspaceRoot = deps.ctx.workspaceRoot;
-      // Grunt's own tools have no path arguments; each is checked as
-      // Grunt's (the profile's switch, no card), never as an MCP tool. A
-      // relayed tool is checked exactly as an API model's call to it would be.
-      const own = opts?.own;
-      const relay = typeof own === 'object' ? own.relay : undefined;
-      const ownTool = typeof own === 'string' ? own : undefined;
       // With no folder (a clean chat) only Grunt's own tools, web tools and
       // Claude Code's internal ones (TodoWrite, AskUserQuestion) may go on.
       const category = classifyAgentTool(toolName).category;
@@ -201,14 +222,14 @@ export function createGate(deps: {
         return deferAsk ? { defer: true } : { allow: false, reason: 'Grunt could not check this tool call: unexpected deferral.' };
       }
       if (!('allowed' in outcome)) return { allow: false, reason: 'Grunt could not check this tool call: unrecognised approval outcome.' };
-      if (!outcome.allowed) return { allow: false, reason: outcome.reason };
-      // A relayed tool that describes its calls (the browser): keep what was approved, so only that runs.
+      if (!outcome.allowed) return { allow: false, reason: outcome.reason, ...(typeof outcome.about === 'string' ? { about: outcome.about } : {}) };
+      // A relayed tool that describes its calls (the browser, computer use): keep what was approved, so only that runs.
       if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
       // Allowed (internal, by policy): Claude Code's question now goes to the user as a card.
       if (!own && toolName === AGENT_ASK_TOOL) return await askQuestion(normalised.args, signal);
       return { allow: true };
     } catch (err) {
-      return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
+      return couldNotCheck(err, relay?.source === 'computer');
     }
   };
 
@@ -226,11 +247,32 @@ export function createGate(deps: {
   };
 }
 
+/**
+ * Claude Code's name for the computer tool relayed on a Grunt server
+ * (`mcp__grunt_<hex>__computer`): what `safely` has to go on when the gate
+ * itself threw before it could say which tool the call was for.
+ */
+const RELAYED_COMPUTER_TOOL_NAME = /^mcp__grunt_[0-9a-f]+__computer$/;
+
+/**
+ * A check that threw, as the denial Claude Code is handed. The error's words
+ * are not Grunt's own (they can quote anything a tool or the desktop app
+ * said): one clean line of at most 300 characters. For a computer call they
+ * go under the line that says they may be from the screen (core's builder,
+ * as the relay's error results do), which `denialText` puts first.
+ */
+function couldNotCheck(err: unknown, computer: boolean): Extract<GateDecision, { allow: false }> {
+  const said = desktopTextForResult(err instanceof Error ? err.message : String(err)) || 'no reason was given';
+  if (!computer) return { allow: false, reason: `Grunt could not check this tool call: ${said}` };
+  const { about, message } = screenContentError('computer_failed', `Grunt could not check this tool call: ${said}`);
+  return { allow: false, reason: message, about };
+}
+
 async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined, opts?: { mayDefer?: boolean; toolUseId?: string }): Promise<GateDecision> {
   try {
     return await gate(toolName, input, signal, opts);
   } catch (err) {
-    return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
+    return couldNotCheck(err, RELAYED_COMPUTER_TOOL_NAME.test(toolName));
   }
 }
 
@@ -254,7 +296,7 @@ export function preToolUseHook(gate: Gate): HookCallback {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: decision.allow ? 'allow' : 'deny',
-        permissionDecisionReason: decision.allow ? 'Approved in Grunt' : decision.reason,
+        permissionDecisionReason: decision.allow ? 'Approved in Grunt' : denialText(decision),
         // AskUserQuestion's answers ride on the input (the CLI's "hook satisfied user interaction via updatedInput").
         ...(decision.allow && decision.updatedInput ? { updatedInput: decision.updatedInput } : {}),
       },
@@ -268,7 +310,7 @@ export function canUseToolFor(gate: Gate): CanUseTool {
     const decision = await safely(gate, toolName, input, options?.signal, options?.toolUseID ? { toolUseId: options.toolUseID } : undefined);
     // Unreachable (the gate defers only for mayDefer), but fail closed.
     if ('defer' in decision) return { behavior: 'deny', message: 'Grunt could not check this tool call.' };
-    return decision.allow ? { behavior: 'allow', updatedInput: decision.updatedInput ?? input } : { behavior: 'deny', message: decision.reason };
+    return decision.allow ? { behavior: 'allow', updatedInput: decision.updatedInput ?? input } : { behavior: 'deny', message: denialText(decision) };
   };
 }
 

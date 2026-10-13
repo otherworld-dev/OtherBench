@@ -1,18 +1,21 @@
 //! The Grunt server as a child process of the shell.
 //!
-//! The server is started with `serve --port 0 --announce`, its per-launch
-//! token in `GRUNT_TOKEN` (never on the command line, which every process on
-//! the machine can read), and stdin piped. Its first stdout line is
-//! `{"port":N}`; everything else it logs goes to stderr, which is copied to
-//! `server.log` in the app's log directory. Dropping our end of stdin is the
-//! shutdown signal: the server closes and exits when its stdin ends, which
-//! also covers this process dying without running any cleanup at all.
+//! The server is started with `serve --port 0 --announce --desktop-rpc`, its
+//! per-launch token in `GRUNT_TOKEN` (never on the command line, which every
+//! process on the machine can read), and stdin piped. Its first stdout line is
+//! `{"port":N,"rpc":"<word>"}`; after it, stdout and stdin carry only the
+//! computer-use channel (rpc.rs). Everything it logs goes to stderr, which is
+//! copied to `server.log` in the app's log directory. Dropping our end of
+//! stdin is the shutdown signal: the server closes and exits when its stdin
+//! ends, which also covers this process dying without running any cleanup.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
+
+use crate::rpc;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc;
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,7 +48,8 @@ pub struct LaunchSpec {
 
 pub struct Server {
     child: Child,
-    stdin: Option<ChildStdin>,
+    /// Our end of the server's stdin: answers and events go through it, and closing it is the shutdown signal.
+    writer: rpc::Writer,
     pub port: u16,
     pub token: String,
 }
@@ -57,18 +61,12 @@ pub fn generate_token() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Parses the server's `{"port":N}` handshake line.
-pub fn parse_announce(line: &str) -> Result<u16, String> {
-    #[derive(serde::Deserialize)]
-    struct Announce {
-        port: u16,
-    }
-    let parsed: Announce = serde_json::from_str(line.trim())
-        .map_err(|e| format!("unexpected first line from the server ({e}): {line:?}"))?;
-    if parsed.port == 0 {
-        return Err("the server announced port 0".into());
-    }
-    Ok(parsed.port)
+/// The port in the server's `{"port":N,"rpc":"<word>"}` handshake line (the
+/// reader thread in `start` takes the word too). The error never quotes the
+/// line: it may hold this launch's word.
+#[cfg(test)]
+fn parse_announce(line: &str) -> Result<u16, String> {
+    rpc::parse_announce(line).map(|a| a.port)
 }
 
 fn tail(path: &Path, max_bytes: u64) -> String {
@@ -83,14 +81,17 @@ fn tail(path: &Path, max_bytes: u64) -> String {
     buf
 }
 
-pub fn start(spec: &LaunchSpec) -> Result<Server, String> {
+/// Starts the server. `handler` reads the computer-use channel (computer.rs)
+/// from the server's stdout, on a thread of its own, and is told when the
+/// channel is lost.
+pub fn start(spec: &LaunchSpec, handler: Arc<dyn rpc::Handler>) -> Result<Server, String> {
     let token = generate_token()?;
     fs::create_dir_all(&spec.log_dir).map_err(|e| format!("cannot create log directory: {e}"))?;
     let log_path = spec.log_dir.join("server.log");
     let mut log = File::create(&log_path).map_err(|e| format!("cannot create {}: {e}", log_path.display()))?;
 
     let mut cmd = Command::new(plain_path(&spec.node));
-    cmd.arg(plain_path(&spec.script)).args(["serve", "--port", "0", "--announce"]);
+    cmd.arg(plain_path(&spec.script)).args(["serve", "--port", "0", "--announce", "--desktop-rpc"]);
     for origin in &spec.cors_origins {
         cmd.args(["--cors-origin", origin]);
     }
@@ -128,33 +129,46 @@ pub fn start(spec: &LaunchSpec) -> Result<Server, String> {
         }
     });
 
-    // First stdout line is the handshake; anything after it is drained so a
-    // stray write can never block the server on a full pipe.
-    let (tx, rx) = mpsc::channel::<Result<String, String>>();
+    // Our end of the server's stdin. A write that fails means the server is
+    // gone: the channel is lost, as when its stdout ends.
+    let writer = rpc::Writer::new(child.stdin.take().map(|s| Box::new(s) as Box<dyn Write + Send>));
+    {
+        let handler = handler.clone();
+        writer.on_broken(move || handler.lost());
+    }
+
+    // The first stdout line is the handshake; it carries this launch's word,
+    // which stays in this thread. After it come GRUNT-RPC requests (rpc.rs);
+    // anything else is read and dropped, so a stray write can never block the
+    // server on a full pipe.
+    let (tx, rx) = mpsc::channel::<Result<u16, String>>();
+    let pump_writer = writer.clone();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
-        let mut first = String::new();
-        let sent = match reader.read_line(&mut first) {
-            Ok(0) => tx.send(Err("the server exited before announcing its port".into())),
-            Ok(_) => tx.send(Ok(first)),
-            Err(e) => tx.send(Err(format!("reading the server's stdout failed: {e}"))),
+        let word = match rpc::read_announce(&mut reader).and_then(|line| rpc::parse_announce(&line)) {
+            Ok(announce) => {
+                let _ = tx.send(Ok(announce.port));
+                announce.word
+            }
+            Err(e) => {
+                let _ = tx.send(Err(e));
+                None
+            }
         };
-        drop(sent);
-        let mut sink = Vec::new();
-        let _ = reader.read_to_end(&mut sink);
+        drop(tx);
+        rpc::pump(reader, word, &pump_writer, &*handler);
     });
 
-    let line = match rx.recv_timeout(ANNOUNCE_TIMEOUT) {
-        Ok(Ok(line)) => line,
-        Ok(Err(e)) => return Err(fail(child, &log_path, e)),
+    let port = match rx.recv_timeout(ANNOUNCE_TIMEOUT) {
+        Ok(Ok(port)) => port,
+        Ok(Err(e)) => {
+            let _ = writeln!(log, "[grunt-desktop] {e}");
+            return Err(fail(child, &log_path, e));
+        }
         Err(_) => return Err(fail(child, &log_path, "the server did not announce a port within 15s".into())),
     };
-    let port = parse_announce(&line).map_err(|e| {
-        let _ = writeln!(log, "[grunt-desktop] {e}");
-        e
-    })?;
 
-    Ok(Server { stdin: child.stdin.take(), child, port, token })
+    Ok(Server { writer, child, port, token })
 }
 
 fn fail(mut child: Child, log_path: &Path, reason: String) -> String {
@@ -171,7 +185,7 @@ fn fail(mut child: Child, log_path: &Path, reason: String) -> String {
 impl Server {
     /// Closes the server's stdin, waits briefly for it to exit, then kills it.
     pub fn stop(mut self) {
-        drop(self.stdin.take());
+        self.writer.close();
         let deadline = Instant::now() + SHUTDOWN_GRACE;
         while Instant::now() < deadline {
             match self.child.try_wait() {

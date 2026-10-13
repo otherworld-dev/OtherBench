@@ -4,13 +4,16 @@ import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { PLAN_TOOL, runPlanCommand } from '@grunt/core/domain/thread-tools.js';
 import { toolContextFor } from '@grunt/core/domain/tool-context.js';
+import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@grunt/core/domain/request-budget.js';
+import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Connection, ToolPolicy } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
 import { gruntArtifactTool, gruntMcpServer, gruntPlanTool, gruntRecallTool, gruntServerName, gruntToolName, type GruntServerTool } from './grunt-server.js';
@@ -118,8 +121,22 @@ const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig
 
 const textOf = (m: CanonMessage | undefined): string => (m?.parts ?? []).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 
-/** Filenames of the new message's non-image attachments, which Claude Code turns do not receive. */
-const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? []).flatMap((p) => (p.type === 'file' ? [p.filename] : []));
+/**
+ * The names of the new message's non-image attachments, which Claude Code
+ * turns do not receive, as they go into the transcript's notice and into the
+ * prompt: each cleaned by core's `listedName` (one line, no control or hidden
+ * character, at most 80 characters, no quote, no bracket that could close a
+ * note, no comma that could pass for two names). A name with nothing left in
+ * it is still listed, so the file is not dropped from the count.
+ */
+const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? []).flatMap((p) => (p.type === 'file' ? [listedName(p.filename) || 'unnamed file'] : []));
+
+/** The transcript's line about the new message's images that were not sent (how many, and each reason once), or null when all were. */
+function omittedImagesNotice(omitted: Omission[]): string | null {
+  if (omitted.length === 0) return null;
+  const reasons = [...new Set(omitted.map((why) => OMISSION_REASONS[why]))];
+  return `Not sent to Claude Code: ${omitted.length} ${omitted.length === 1 ? 'image' : 'images'} (${reasons.join('; ')}).`;
+}
 
 /**
  * Runs Grunt turns through the local Claude Code install via the Agent SDK
@@ -171,11 +188,16 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const backend = backendOf(conn);
     const plan = pickSession({ history: req.messages, backend, cwd, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
     try {
-      const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean);
+      // The new message's images are read once, before either attempt: a retry sends the same ones, and
+      // what was left out is said once, in the same notice as the files.
+      const images = await this.newImages(req);
+      const leftOut = omittedImagesNotice(images.omitted);
+      if (leftOut !== null) notice.text = notice.text === null ? leftOut : `${notice.text} ${leftOut}`;
+      const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean, images.blocks);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
         yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history." };
-        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean);
+        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean, images.blocks);
       }
     } finally {
       if (plan.mode === 'continue') this.claims.release(plan.sessionId);
@@ -197,7 +219,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     backend: string,
     notice: PendingNotice,
     cwd: string,
-    clean: boolean
+    clean: boolean,
+    images: ContentBlock[]
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const flushNotice = function* (): Generator<EngineEvent> {
       const text = notice.text;
@@ -206,7 +229,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield { type: 'notice', text };
     };
     const profile = req.profile;
-    const content = await this.userContent(req, plan.mode === 'fresh');
+    const content = this.userContent(req, plan.mode === 'fresh', images);
 
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
@@ -466,21 +489,57 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return process;
   }
 
-  /** The new user message as content blocks: seeded history for a fresh session, text, and images when the model takes them. */
-  private async userContent(req: EngineRequest, fresh: boolean): Promise<ContentBlock[]> {
+  /**
+   * The new message's images, when the model takes them, as what goes to
+   * Claude Code in their place: an image block, or the note for one left out
+   * (the notes the API engine writes), in the order of the parts. They are
+   * picked from the references and the sizes their rows state before any is
+   * read (the same selector the API engine uses): the newest few, each within
+   * the upload cap and all together within the request's room, each file once;
+   * the type sent is the one the bytes have. Nothing is left out silently:
+   * `omitted` says why for each, for the transcript's notice.
+   */
+  private async newImages(req: EngineRequest): Promise<{ blocks: ContentBlock[]; omitted: Omission[] }> {
+    const last = req.messages[req.messages.length - 1];
+    const blocks: ContentBlock[] = [];
+    const omitted: Omission[] = [];
+    const images = (last?.parts ?? []).filter((p): p is Extract<Part, { type: 'image' }> => p.type === 'image');
+    if (images.length === 0 || !req.loadAttachment || !(req.profile.model?.supportsVision ?? true)) return { blocks, omitted };
+    const leaveOut = (why: Omission): void => {
+      omitted.push(why);
+      blocks.push({ type: 'text', text: omissionNote(why) });
+    };
+    const distinct = [...new Map(images.map((p) => [p.attachmentId, p])).values()];
+    const limits = { maxCount: MAX_REQUEST_ATTACHMENTS, maxEach: MAX_HISTORY_ATTACHMENT_BYTES, maxTotal: MAX_REQUEST_ATTACHMENT_BYTES };
+    const newestFirst = [...distinct].reverse().map((p) => ({ key: p.attachmentId, size: req.attachmentSize ? req.attachmentSize(p.attachmentId) : undefined }));
+    const verdicts = selectWithinBudget(newestFirst, limits);
+    const loaded = { bytes: 0 };
+    for (const part of distinct) {
+      const verdict = verdicts.get(part.attachmentId) ?? 'unknown';
+      if (verdict !== 'load') {
+        leaveOut(verdict);
+        continue;
+      }
+      const bytes = await req.loadAttachment(part.attachmentId);
+      if (!withinAfterLoad(bytes.length, loaded, limits)) {
+        leaveOut(bytes.length > limits.maxEach ? 'too-large' : 'over-budget');
+        continue;
+      }
+      const mediaType = sniffToolImageMime(bytes);
+      if (mediaType === null) leaveOut('not-image');
+      else blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } });
+    }
+    return { blocks, omitted };
+  }
+
+  /** The new user message as content blocks: seeded history for a fresh session, text, then its images (see `newImages`). */
+  private userContent(req: EngineRequest, fresh: boolean, images: ContentBlock[]): ContentBlock[] {
     const last = req.messages[req.messages.length - 1];
     const history = fresh ? renderHistory(req.messages) : '';
-    const blocks: ContentBlock[] = [];
-    for (const part of last?.parts ?? []) {
-      if (part.type === 'image' && req.loadAttachment && (req.profile.model?.supportsVision ?? true)) {
-        const bytes = await req.loadAttachment(part.attachmentId);
-        blocks.push({ type: 'image', source: { type: 'base64', media_type: part.mime, data: bytes.toString('base64') } });
-      }
-    }
     const skipped = skippedFiles(last);
     const note = skipped.length > 0 ? `\n\n(Attached files not sent, because Claude Code turns in Grunt only receive images: ${skipped.join(', ')}.)` : '';
     const text = [history, textOf(last)].filter((s) => s.length > 0).join('\n\n') + note;
-    return [{ type: 'text', text }, ...blocks];
+    return [{ type: 'text', text }, ...images];
   }
 
   /**

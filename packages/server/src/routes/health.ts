@@ -14,6 +14,11 @@ import { Hono } from 'hono';
  * packages/core/src/domain/paths.ts), so "is this a native absolute path"
  * only has one correct answer, and it depends on what OS the server -- not
  * necessarily the machine the browser happens to run on -- is running on.
+ *
+ * Nothing about computer use is said here: whether this machine offers
+ * desktop control is not for a caller who has not signed in, and a liveness
+ * probe must not depend on the desktop shell answering. That is
+ * `GET /api/computer/status` (routes/computer.ts), behind the auth gate.
  */
 export function healthRoutes(): Hono {
   const app = new Hono();

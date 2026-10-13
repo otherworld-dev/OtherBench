@@ -4,6 +4,7 @@ import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.j
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
+import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
 import { WorkspacePrompt } from '../components/WorkspacePrompt.js';
 import { Message } from '../components/Message.js';
@@ -444,6 +445,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
             {announcement}
           </div>
+          <ComputerBanner chat={chat} />
           <UnreachableBanner chat={chat} />
           <WorkspacePrompt chat={chat} />
           <Composer

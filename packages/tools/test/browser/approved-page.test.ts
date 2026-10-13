@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
 import { BrowserManager } from '../../src/browser/manager.js';
-import { browserTool } from '../../src/browser/tool.js';
+import { aboutPage, browserTool } from '../../src/browser/tool.js';
 import { FakeFactory, fakeProxy } from './fakes.js';
 
 /** The page that was approved is the page that is acted on (security fix round 1). */
@@ -25,7 +25,7 @@ function setup() {
   return { tool, ctx, call, described, session: () => factory.sessions[0]! };
 }
 
-const MOVED_OTHER = { error: true, code: 'page_moved', message: 'The page moved to other.test since this was approved. Nothing was done: ask again.' };
+const MOVED_OTHER = { about: aboutPage('other.test'), error: true, code: 'page_moved', message: 'The page moved to other.test since this was approved. Nothing was done: ask again.' };
 const OPENED = ['open https://example.com/'];
 
 describe('acting only on the page that was approved', () => {
@@ -59,6 +59,7 @@ describe('acting only on the page that was approved', () => {
     const scroll = await s.described({ command: 'scroll', direction: 'down' });
     s.session().navigate('https://example.com/other-page');
     expect(await s.tool.execute(click, s.ctx())).toEqual({
+      about: aboutPage('example.com'),
       error: true,
       code: 'page_moved',
       message: 'The page moved to example.com since this was approved. Nothing was done: ask again.',

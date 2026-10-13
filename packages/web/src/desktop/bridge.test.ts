@@ -21,6 +21,7 @@ import {
   desktopBootstrap,
   hideQuick,
   isDesktop,
+  isIndicatorView,
   isMainWindowFocused,
   isQuickView,
   launchArgs,
@@ -33,6 +34,7 @@ import {
   setHotkey,
   setTrayStatus,
   showNotification,
+  stopComputerControl,
 } from './bridge.js';
 
 function enterDesktop() {
@@ -84,6 +86,27 @@ describe('desktop bridge', () => {
     expect(isQuickView()).toBe(false);
     (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'quick' } } };
     expect(isQuickView()).toBe(true);
+  });
+
+  it("isIndicatorView reads view=indicator from the URL, or the indicator window's label", () => {
+    window.history.replaceState({}, '', '/?view=indicator&title=Budget');
+    expect(isIndicatorView()).toBe(true);
+    expect(isQuickView()).toBe(false);
+    window.history.replaceState({}, '', '/');
+    expect(isIndicatorView()).toBe(false);
+    (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'main' } } };
+    expect(isIndicatorView()).toBe(false);
+    (window as unknown as Record<string, unknown>)['__TAURI_INTERNALS__'] = { metadata: { currentWindow: { label: 'computer-indicator' } } };
+    expect(isIndicatorView()).toBe(true);
+  });
+
+  it("the indicator's Stop goes to the shell in the desktop app and does nothing in a browser", async () => {
+    await stopComputerControl();
+    expect(invoke).not.toHaveBeenCalled();
+    enterDesktop();
+    invoke.mockResolvedValue(undefined);
+    await stopComputerControl();
+    expect(invoke.mock.calls).toEqual([['computer_stop']]);
   });
 
   it('pickFolder and launchArgs do nothing in a browser', async () => {

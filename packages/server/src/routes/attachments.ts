@@ -4,6 +4,8 @@ import { basename, extname, isAbsolute } from 'node:path';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
+import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
+import { sniffToolImageMime, toolImageBound } from '@grunt/core/domain/tool-images.js';
 import type { Attachment, PublicAttachment } from '@grunt/core/ports/store.js';
 import { gcBlobIfOrphaned, withPinnedSha } from '@grunt/store-sqlite/blob-gc.js';
 import { sha256Of } from '@grunt/store-sqlite/blob-store.js';
@@ -41,6 +43,28 @@ function getAttachmentOrThrow(container: Container, id: string): Attachment {
   if (!attachment) throw new HTTPException(404, { message: `Attachment "${id}" not found.` });
   return attachment;
 }
+
+/**
+ * `getAttachmentOrThrow` for the routes that show a file by its id alone (its
+ * details, its bytes). An unsent upload (a preview before sending) has no
+ * message and is shown as before. A SENT file is shown only if it is bound the
+ * way sync and the turn runner require (`attachmentBound`: its message exists in
+ * the file's own chat); a row that fails that is a 404, the same as no row. An
+ * edit-and-resend keeps the first message it was sent with, which is in the
+ * same chat, so it still passes.
+ */
+function getShownAttachmentOrThrow(container: Container, id: string): Attachment {
+  const attachment = getAttachmentOrThrow(container, id);
+  if (attachment.messageId !== null) {
+    const message = container.store.messages.get(attachment.messageId);
+    if (!attachmentBound(attachment, message?.chatId ?? null)) {
+      throw new HTTPException(404, { message: `Attachment "${id}" not found.` });
+    }
+  }
+  return attachment;
+}
+
+const TOOL_IMAGE_EXTENSIONS: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 
 /**
  * Strips `storagePath` -- a raw SERVER filesystem path -- before an
@@ -328,7 +352,7 @@ export function attachmentsRoutes(container: Container): Hono {
     return c.json(container.store.attachments.list(chatId).map(toPublicAttachment));
   });
 
-  app.get('/attachments/:id', (c) => c.json(toPublicAttachment(getAttachmentOrThrow(container, c.req.param('id')))));
+  app.get('/attachments/:id', (c) => c.json(toPublicAttachment(getShownAttachmentOrThrow(container, c.req.param('id')))));
 
   /**
    * Deletes an UNSENT attachment (task 32 decision #1): `messageId === null`
@@ -362,8 +386,39 @@ export function attachmentsRoutes(container: Container): Hono {
     return c.body(null, 204);
   });
 
+  /**
+   * An image a tool returned (a screenshot), by the chat and the reply that hold
+   * it. The bytes are served only if the file was stored for exactly this chat and
+   * this message (`toolImageBound`, the test the model's own replay uses), the
+   * message is in the chat, and the bytes really are a png, jpeg, gif or webp: the
+   * type is read from them, never from the stored row. Anything else, whatever
+   * the reason (no such chat, message or file, another chat's file, another
+   * reply's, a type that isn't an image), is the same 404, so the answer says
+   * nothing about what exists.
+   */
+  app.get('/chats/:chatId/messages/:messageId/tool-images/:attachmentId', async (c) => {
+    const { chatId, messageId, attachmentId } = c.req.param();
+    const notFound = (): HTTPException => new HTTPException(404, { message: 'Image not found.' });
+    const message = container.store.messages.get(messageId);
+    const row = container.store.attachments.get(attachmentId);
+    if (!message || message.chatId !== chatId || !row || !toolImageBound(row, chatId, messageId)) throw notFound();
+    const data = await container.blobStore.get(row.sha256).catch(() => null);
+    const type = data === null ? null : sniffToolImageMime(data);
+    if (data === null || type === null) throw notFound();
+    return new Response(new Uint8Array(data), {
+      status: 200,
+      headers: {
+        'Content-Type': type,
+        'Content-Disposition': contentDisposition('inline', `image.${TOOL_IMAGE_EXTENSIONS[type] ?? 'bin'}`),
+        'Content-Length': String(data.length),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+      },
+    });
+  });
+
   app.get('/attachments/:id/content', async (c) => {
-    const attachment = getAttachmentOrThrow(container, c.req.param('id'));
+    const attachment = getShownAttachmentOrThrow(container, c.req.param('id'));
 
     let data: Buffer;
     try {

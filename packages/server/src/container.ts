@@ -11,9 +11,11 @@ import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { Sandbox } from '@grunt/core/ports/sandbox.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
+import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '@grunt/engine-claude-code/engine.js';
@@ -28,6 +30,7 @@ import { ChromiumSessions } from '@grunt/tools/browser/chromium.js';
 import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
 import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
@@ -52,6 +55,7 @@ import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 import { startTurn } from './turn-start.js';
 import { workspaceResolver } from './workspace-view.js';
+import { toolImageSaver } from './tool-images.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -126,6 +130,14 @@ export interface Container {
    * tests can leave it out or pass a fake.
    */
   browser?: BrowserPort;
+  /**
+   * Computer use (spec 2026-10-12-computer-use-design section 7): the
+   * control sessions over the driver, which is the desktop shell's on
+   * Windows and the fake one under GRUNT_COMPUTER_FAKE_DRIVER=1 (tests only).
+   * Absent when there is no driver, and then no profile is offered the
+   * `computer` tool whatever it says.
+   */
+  computer?: ComputerSessions;
   close(): void;
   /**
    * After close(): settles (never rejects) once the shutdown work close() starts without waiting has finished:
@@ -169,6 +181,8 @@ export interface ContainerOptions {
   streamTimings?: StreamTimings;
   /** The port the API ends up on (cli.ts knows it after binding); the sandbox's self-test checks the VM can't reach it. */
   serverPort?: () => number | null;
+  /** The desktop shell's computer-use driver; cli.ts passes it only when the shell asked for the desktop channel. */
+  computer?: ComputerDriver;
 }
 
 /** A folder's real path (on-disk case, a mapped drive as its UNC path), as the sandbox mounts it; the path itself when that can't be read. */
@@ -358,7 +372,41 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });
   // Lazy: no Chromium starts until the first browser call.
   const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { sandbox, browser });
+  // Computer use: the shell's driver when the CLI passed one (the desktop
+  // channel exists: the shell started this server with --desktop-rpc). It is
+  // not available, and the tool is not offered, until the shell has said
+  // hello with computer use on. For tests only, GRUNT_COMPUTER_FAKE_DRIVER=1
+  // wires a fake that touches nothing. Read once. With neither (a server
+  // started by hand, one that takes sign-ins) there is no driver, and no
+  // profile is offered the tool.
+  const fakeComputer = options.computer === undefined && process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1';
+  if (fakeComputer) {
+    console.warn('[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.');
+  }
+  const computerDriver = options.computer ?? (fakeComputer ? new FakeComputerDriver() : undefined);
+  // One chat in control at a time; every start, action and end announced for
+  // the banner; Stop cancels the chat's reply. `turnRunner` exists by the
+  // time anything calls cancelChat. The tool provider is given the sessions,
+  // not the driver: every call goes through them, and the tool's own
+  // "session stopped" hook (it forgets that chat's last screenshot) listens
+  // to them, so it hears the ends the server makes itself too. The sessions
+  // also take the desktop driver's word that the shell started over
+  // (`onReset`), which the fake has no need to give.
+  const computer = computerDriver
+    ? new ComputerSessions(computerDriver, {
+        emit: (e) => events.emit(e),
+        cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
+        chatExists: (chatId) => store.chats.get(chatId) !== null,
+      })
+    : undefined;
+  if (computer) {
+    // A start nobody waits for any more, or a session never used, does not outlive the chat's last reply.
+    endSessionsLeftWithoutAReply(events, computer);
+    // Nor does a session outlive its chat: one deleted through the store, or by a paired machine's changes.
+    // (The profile and connection routes, whose deletes cascade past every event, call endIfChatGone themselves.)
+    endSessionsOfChatsThatAreGone(events, computer);
+  }
+  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { sandbox, browser, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
@@ -419,6 +467,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         throw new Error(`Attachment "${attachment.filename}" (${id}) is missing or unreadable.`);
       }
     },
+    // An image a tool returns (a screenshot) goes to the blob store, with a
+    // row on the reply, before the result is broadcast or stored.
+    saveToolImage: toolImageSaver(store, blobStore),
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   events.attach(turnRunner, store);
@@ -480,6 +531,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     sandbox,
     mcpManager,
     browser,
+    ...(computer ? { computer } : {}),
     claudeScratchRoot,
     blobStore,
     memory,
@@ -493,6 +545,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       memory.dispose();
       // Before the engine and store go: stops the schedule timer and its reply listeners.
       container.schedules?.dispose();
+      // Computer use ends with the server: the driver is told, and nothing starts afterwards.
+      computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
       void browser.closeAll().catch((err: unknown) => console.error('[grunt-server] error closing the model browser:', err));
       // Claude Code processes kept alive between replies.

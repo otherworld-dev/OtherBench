@@ -19,10 +19,29 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.3"
 tauri-plugin-opener = "2"
+# Computer use: screenshots as PNG, sent as base64 (src/computer). Both already in the tree.
+png = "0.18"
+base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 # Windows toasts with a click handler (notify.rs); already in the tree via the notification plugin.
 tauri-winrt-notification = "0.8"
+# Computer use (src/computer/win.rs). Already in the tree through Tauri; these features only switch modules on.
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_Security_Cryptography_Catalog",
+  "Win32_Security_Cryptography_Sip",
+  "Win32_Security_WinTrust",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_StationsAndDesktops",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 codegen-units = 1

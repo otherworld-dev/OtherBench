@@ -1,8 +1,10 @@
 // Release builds are GUI apps: no console window alongside the webview.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod computer;
 mod hotkey;
 mod notify;
+mod rpc;
 mod sidecar;
 mod site;
 mod tray;
@@ -72,13 +74,19 @@ fn set_tray_status(app: tauri::AppHandle, pending_approvals: u32, machines: Opti
 /// Makes `accelerator` the global hotkey for quick chat (Settings → Desktop).
 /// The error, if any, is shown in Settings rather than failing silently.
 #[tauri::command]
-fn set_hotkey(app: tauri::AppHandle, accelerator: String) -> Result<(), String> {
-    hotkey::set(&app, &accelerator)
+fn set_hotkey(app: tauri::AppHandle, shell: tauri::State<'_, Arc<computer::Shell>>, accelerator: String) -> Result<(), String> {
+    hotkey::set(&app, &accelerator, || shell.shortcuts_changed())
 }
 
 #[tauri::command]
 fn hide_quick(app: tauri::AppHandle) {
     hotkey::hide_quick(&app);
+}
+
+/// The indicator bar's Stop (computer.rs). The only command the indicator window may call.
+#[tauri::command]
+fn computer_stop(app: tauri::AppHandle) {
+    computer::stop_from_shell(&app, "button");
 }
 
 /// A desktop notification; clicking it opens `chat_id` (notify.rs).
@@ -175,7 +183,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site, computer_stop])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {
@@ -201,10 +209,15 @@ fn main() {
                 cors_origins: cors_origins(),
                 log_dir: app.path().app_log_dir()?,
             };
+            // The server's computer-use channel (rpc.rs) is answered here
+            // (computer.rs). Off, with no driver at all, unless the switch is set.
+            let shell = computer::shell(app.handle());
+            app.manage(shell.clone());
             let launch = launch.clone();
             let server = server.clone();
+            let handler: Arc<dyn rpc::Handler> = shell;
             std::thread::spawn(move || {
-                let outcome = sidecar::start(&spec).map(|s| {
+                let outcome = sidecar::start(&spec, handler).map(|s| {
                     let boot = Bootstrap { base_url: format!("http://127.0.0.1:{}", s.port), token: s.token.clone() };
                     *server.lock().expect("server lock") = Some(s);
                     boot
@@ -222,6 +235,8 @@ fn main() {
 
     app.run(move |handle, event| {
         if let RunEvent::Exit = event {
+            // Sessions end and the server is told (computer.stopped "quit") before its pipes close.
+            computer::shutdown(handle);
             let state = handle.state::<AppState>();
             let taken = state.server.lock().ok().and_then(|mut s| s.take());
             if let Some(s) = taken {
@@ -243,20 +258,38 @@ mod tests {
 
     /// Tauri lets any page it counts as local call an app command unless the
     /// app declares an ACL manifest. With one, a command needs its
-    /// `allow-<command>` permission, which only the main and quick windows
-    /// get, so a website window (site.rs) can call none, even one showing a
-    /// page Tauri counts as local (the dev server's).
+    /// `allow-<command>` permission. The main and quick windows get every
+    /// command but `computer_stop`; the indicator bar gets only that one; a
+    /// website window (site.rs) gets none, even one showing a page Tauri
+    /// counts as local (the dev server's).
     #[test]
-    fn every_app_command_needs_a_permission_only_the_app_windows_have() {
+    fn every_app_command_needs_a_permission_only_the_right_windows_have() {
         let build = include_str!("../build.rs");
-        let caps: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-        let granted = caps["permissions"].to_string();
+        let app: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let indicator: serde_json::Value = serde_json::from_str(include_str!("../capabilities/indicator.json")).unwrap();
+        let app_granted = app["permissions"].to_string();
+        let indicator_granted = indicator["permissions"].to_string();
         let commands = registered();
-        assert!(commands.len() >= 8, "{commands:?}");
+        assert!(commands.len() >= 9, "{commands:?}");
         for command in commands {
             assert!(build.contains(&format!("\"{command}\"")), "{command} is missing from the app manifest in build.rs");
-            let permission = format!("allow-{}", command.replace('_', "-"));
-            assert!(granted.contains(&format!("\"{permission}\"")), "{permission} is not granted to the app windows");
+            let permission = format!("\"allow-{}\"", command.replace('_', "-"));
+            if command == "computer_stop" {
+                assert!(indicator_granted.contains(&permission), "{permission} is not granted to the indicator");
+                assert!(!app_granted.contains(&permission), "{permission} must not be granted to the app windows");
+            } else {
+                assert!(app_granted.contains(&permission), "{permission} is not granted to the app windows");
+                assert!(!indicator_granted.contains(&permission), "{permission} must not be granted to the indicator");
+            }
         }
+    }
+
+    #[test]
+    fn the_indicator_window_can_only_stop() {
+        let indicator: serde_json::Value = serde_json::from_str(include_str!("../capabilities/indicator.json")).unwrap();
+        assert_eq!(indicator["windows"], serde_json::json!(["computer-indicator"]));
+        assert_eq!(indicator["permissions"], serde_json::json!(["core:default", "allow-computer-stop"]));
+        assert!(indicator.get("remote").is_none());
+        assert_eq!(crate::computer::INDICATOR, "computer-indicator");
     }
 }
