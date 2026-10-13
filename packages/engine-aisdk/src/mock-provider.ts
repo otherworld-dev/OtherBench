@@ -50,6 +50,21 @@ const DEFAULT_REPLY =
 const SLOW_REPLY =
   'This reply trickles out slowly one word at a time so watch streaming indicator animate smoothly across chat pane now';
 
+/**
+ * `#computer`'s steps, in order. The screenshot comes first: the tool refuses
+ * an action with a coordinate until the chat has taken one. The typed text is
+ * plain words an end-to-end test can look for anywhere on the page (it must
+ * only be in the approval card's typed-text box).
+ */
+const COMPUTER_STEPS: readonly Record<string, unknown>[] = [
+  { action: 'screenshot' },
+  { action: 'left_click', coordinate: [10, 20] },
+  { action: 'type', text: 'hello from the mock' },
+];
+
+// Exactly 20 words, so 20 chunks a second apart: about 20 s for Stop to land in.
+const COMPUTER_REPLY = 'I clicked and typed in the fake app, and now I will keep talking slowly, one word at a time.';
+
 const LOREM_WORDS = [
   'lorem', 'ipsum', 'dolor', 'sit', 'amet', 'consectetur', 'adipiscing', 'elit', 'sed', 'do',
   'eiusmod', 'tempor', 'incididunt', 'ut', 'labore', 'et', 'dolore', 'magna', 'aliqua', 'enim',
@@ -162,7 +177,11 @@ function firstHeading(snapshot: string): string | null {
  * "I made the artifact.". `#recall <query>` -> a `recall` search for the
  * rest of that line through the real tool when offered, then the titles of
  * the chats it found. `#browser <url>` -> a `browser` `open` of that address
- * through the real tool when offered, then the page's first heading. `#tool` -> a
+ * through the real tool when offered, then the page's first heading.
+ * `#computer` -> a screenshot, a click at (10, 20) and a short `type` through
+ * the real `computer` tool when offered, then a slow reply (20 chunks a
+ * second apart) that Stop can cancel; a step that fails ends it with a short
+ * reply saying why. `#tool` -> a
  * simulated `read_file` tool call/result round trip, then a short answer
  * that quotes the (fabricated) file contents. `#slow` -> 20 chunks at
  * 400ms each. `#long` -> ~2000 tokens of lorem ipsum, for scroll/perf
@@ -213,6 +232,11 @@ export class MockChatEngine implements ChatEngine {
     const browse = /#browser[ \t]+(\S+)/.exec(prompt);
     if (browse) {
       yield* this.streamBrowserTurn(req, browse[1]!, tokensIn);
+      return;
+    }
+
+    if (prompt.includes('#computer')) {
+      yield* this.streamComputerTurn(req, tokensIn);
       return;
     }
 
@@ -330,6 +354,36 @@ export class MockChatEngine implements ChatEngine {
       yield { type: 'text-delta', text: chunk };
     }
     yield finishEvent(tokensIn, estimateTokens(answer));
+  }
+
+  /**
+   * `#computer` (spec 2026-10-12-computer-use-design section 9): the steps in
+   * `COMPUTER_STEPS` through the real tool when offered, so the e2e drives
+   * the broker, the approval card and the fake driver. Each result goes out
+   * as the tool returned it (an array with its images), not as a JSON string,
+   * so `TurnRunner` keeps the images. The first step that fails (denied,
+   * refused, no tool) ends the turn with a short reply saying why; otherwise
+   * a slow reply follows that Stop can cancel.
+   */
+  private async *streamComputerTurn(req: EngineRequest, tokensIn: number): AsyncGenerator<EngineEvent> {
+    const tool = req.tools.find((t) => t.name === 'computer');
+    const ctx: ToolContext = { chatId: req.chatId, messageId: req.messageId, profileId: req.profile.id, workspaceRoot: req.workspaceRoot, signal: req.signal };
+    for (const step of COMPUTER_STEPS) {
+      if (req.signal.aborted) return;
+      const args = structuredClone(step);
+      const callId = `mock-computer-${randomUUID()}`;
+      yield { type: 'tool-call', id: callId, name: 'computer', args };
+      const result = tool ? await tool.execute(args, ctx) : { error: true, code: 'unavailable', message: 'No computer tool was offered.' };
+      if (req.signal.aborted) return;
+      const isError = isToolErrorResult(result);
+      yield { type: 'tool-result', id: callId, name: 'computer', result, isError };
+      if (isError) {
+        const answer = `The computer didn't work: ${String((result as { message?: unknown }).message ?? JSON.stringify(result))}`;
+        yield* this.streamReply(req, answer, 6, 30, tokensIn);
+        return;
+      }
+    }
+    yield* this.streamReply(req, COMPUTER_REPLY, 20, 1000, tokensIn);
   }
 
   /**
