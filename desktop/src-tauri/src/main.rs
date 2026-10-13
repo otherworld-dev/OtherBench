@@ -1,8 +1,10 @@
 // Release builds are GUI apps: no console window alongside the webview.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod computer;
 mod hotkey;
 mod notify;
+mod rpc;
 mod sidecar;
 mod site;
 mod tray;
@@ -72,8 +74,8 @@ fn set_tray_status(app: tauri::AppHandle, pending_approvals: u32, machines: Opti
 /// Makes `accelerator` the global hotkey for quick chat (Settings → Desktop).
 /// The error, if any, is shown in Settings rather than failing silently.
 #[tauri::command]
-fn set_hotkey(app: tauri::AppHandle, accelerator: String) -> Result<(), String> {
-    hotkey::set(&app, &accelerator)
+fn set_hotkey(app: tauri::AppHandle, shell: tauri::State<'_, Arc<computer::Shell>>, accelerator: String) -> Result<(), String> {
+    hotkey::set(&app, &accelerator, || shell.shortcuts_changed())
 }
 
 #[tauri::command]
@@ -157,6 +159,8 @@ fn node_binary(app: &tauri::AppHandle) -> PathBuf {
 fn main() {
     let launch = Arc::new(Launch::default());
     let server: Arc<Mutex<Option<sidecar::Server>>> = Arc::new(Mutex::new(None));
+    // The server's computer-use channel (rpc.rs) is answered here (computer.rs).
+    let shell = Arc::new(computer::Shell::new(|| hotkey::registered().into_iter().collect()));
 
     let app = tauri::Builder::default()
         // Must be the first plugin. A second launch exits immediately and
@@ -174,6 +178,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
+        .manage(shell.clone())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site])
         // Closing the main window hides it; the app keeps running in the
@@ -203,8 +208,9 @@ fn main() {
             };
             let launch = launch.clone();
             let server = server.clone();
+            let handler: Arc<dyn rpc::Handler> = shell.clone();
             std::thread::spawn(move || {
-                let outcome = sidecar::start(&spec).map(|s| {
+                let outcome = sidecar::start(&spec, handler).map(|s| {
                     let boot = Bootstrap { base_url: format!("http://127.0.0.1:{}", s.port), token: s.token.clone() };
                     *server.lock().expect("server lock") = Some(s);
                     boot
