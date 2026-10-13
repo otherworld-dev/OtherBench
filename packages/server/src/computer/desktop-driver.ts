@@ -1,5 +1,5 @@
 import { cardLine } from '@grunt/core/domain/card-text.js';
-import { COMPUTER_LIMITS } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_LIMITS, expectationOf } from '@grunt/core/domain/computer-apps.js';
 import { validateToolImage } from '@grunt/core/domain/tool-images.js';
 import type {
   ComputerAction,
@@ -32,6 +32,10 @@ export const ACT_TIMEOUT_MS = 60_000;
 export const MAX_TRACKED_CHATS = 64;
 /** How many of one chat's calls may wait behind the one the shell is working on. One more is refused. */
 export const MAX_QUEUED_PER_CHAT = 16;
+/** What a session token from the shell must look like: opaque, minted by the shell for one session, never reused. */
+export const SESSION_TOKEN = /^[A-Za-z0-9_-]{16,128}$/;
+/** The `code` of the shell's error for a request whose session token is not its live session for that chat. */
+export const NO_SESSION_CODE = 'no-session';
 /** A shortcut list longer than this, or with a longer entry, is not taken as a list. */
 export const MAX_SHORTCUTS = 64;
 export const MAX_SHORTCUT_LENGTH = 256;
@@ -53,6 +57,14 @@ export const DESKTOP_BUSY_REASON = "The desktop app is still busy with this chat
 export const DESKTOP_END_PENDING_REASON = "The desktop app hasn't confirmed that the last control session ended, so nothing was started.";
 /** What a mouse action without a point is refused with. Core's `parseAction` can't build one, so it is a mistake in Grunt itself. */
 export const DESKTOP_NO_POINT_REASON = 'Grunt tried to send a mouse action without a point. That is a mistake in Grunt, not in the request; nothing was done.';
+/** What an action without the whole approved expectation is refused with. The tool always hands one, so it is a mistake in Grunt itself. */
+export const DESKTOP_NO_EXPECTATION_REASON = 'Grunt tried to send an action without the app the person approved. That is a mistake in Grunt, not in the request; nothing was done.';
+/** What a call is told when the shell says the chat's session is not its live one. */
+export const DESKTOP_SESSION_GONE_REASON = "The desktop app no longer has this chat's control session, so nothing was done.";
+/** Said after a call when this side has ended the chat's session because it could no longer be trusted, and the shell confirmed. */
+export const DESKTOP_ENDED_AFTER = 'Grunt has ended the control session, so nothing more is done.';
+/** The same, when the shell did not confirm that end. */
+export const DESKTOP_END_UNCONFIRMED_AFTER = "Grunt asked the desktop app to end the control session and couldn't confirm that it did.";
 
 const TOO_MANY_REASON = 'Grunt is keeping track of too many control sessions; stop one first.';
 const START_TIMEOUT_REASON = "The desktop app didn't answer the request to control this computer in time, so nothing was started.";
@@ -67,10 +79,9 @@ const ACT_NOT_AN_ACTION_REASON = 'That is not an action Grunt can send.';
 const ACT_UNREADABLE_REASON = "The desktop app's answer couldn't be read.";
 const ACT_UNKNOWN = 'Whether the action was carried out is not known.';
 const ACT_SESSION_ENDED = 'The control session ended while the desktop app was working.';
-const ACT_ENDED_AFTER = 'Grunt has ended the control session, so nothing more is done.';
-const ACT_END_UNCONFIRMED_AFTER = "Grunt asked the desktop app to end the control session and couldn't confirm that it did.";
 const SCREENSHOT_UNREADABLE_REASON = "The desktop app's screenshot couldn't be read.";
 const CURSOR_UNREADABLE_REASON = "The cursor's position couldn't be read.";
+const TARGET_UNREADABLE_REASON = "The desktop app's answer about the window couldn't be read.";
 const UNREACHABLE_REASON = "The desktop app couldn't be reached.";
 
 const STOP_REASONS: readonly string[] = ['hotkey', 'button', 'idle', 'quit'];
@@ -93,6 +104,8 @@ export interface DesktopComputerDriverOptions {
 
 /** What this side knows of a chat's session. */
 interface Session {
+  /** The shell's token for it, sent with every request for the chat. */
+  readonly token: string;
   /** Whether it has taken a screenshot, and how big the last one was. */
   shot: { width: number; height: number } | null;
   /** One of the chat's calls is with the shell. */
@@ -129,6 +142,11 @@ function timedOut(err: unknown): boolean {
   return err instanceof DesktopChannelError && err.kind === 'timeout';
 }
 
+/** The shell says the session this side named is not its live one for the chat. */
+function noSession(err: unknown): boolean {
+  return err instanceof DesktopChannelError && err.kind === 'shell' && err.code === NO_SESSION_CODE;
+}
+
 /** The shell's shortcut list when it is one: an array of strings of a sane size, copied and frozen. Anything else is no list. */
 function shortcutList(value: unknown): readonly string[] | null {
   if (!Array.isArray(value) || value.length > MAX_SHORTCUTS) return null;
@@ -157,6 +175,12 @@ function pointRefusal(session: Session, x: unknown, y: unknown): string | null {
   return inside(x, session.shot.width) && inside(y, session.shot.height) ? null : DESKTOP_OUTSIDE_REASON;
 }
 
+/** Whether `expect` is the whole expectation core builds (`expectationOf`): every one of its five facts, well formed. */
+function isWholeExpectation(expect: unknown): boolean {
+  if (!isRecord(expect)) return false;
+  return expectationOf({ app: expect['app'], appShellView: expect['shellView'], appWindow: expect['windowId'], appPid: expect['pid'], appStarted: expect['startedAt'] }) !== null;
+}
+
 /** The size a PNG states for itself in its header (IHDR), or null when the bytes don't begin as a PNG does. */
 function pngSize(bytes: Buffer): { width: number; height: number } | null {
   // 8 bytes of signature, then the first chunk: 4 of length, 'IHDR', 4 of width, 4 of height.
@@ -166,31 +190,42 @@ function pngSize(bytes: Buffer): { width: number; height: number } | null {
 
 /**
  * `ComputerDriver` over the desktop shell's channel (spec
- * 2026-10-12-computer-use-design section 2): the server's end of the calls
- * the shell carries out. Facts in, facts out. It decides nothing about apps,
- * keys or risk, describes nothing and repairs nothing: an action and an
- * expectation go to the shell exactly as handed, and what the shell says a
- * target is comes back exactly as sent, missing and mistyped facts included,
- * so that core (`classifyTarget`) is what refuses or asks every time.
+ * 2026-10-12-computer-use-design section 2; the wire in full is
+ * `shell-wire-spec.md`): the server's end of the calls the shell carries
+ * out. Facts in, facts out. It decides nothing about apps, keys or risk,
+ * describes nothing and repairs nothing: an action and an expectation go to
+ * the shell exactly as handed, and what the shell says a target is comes
+ * back exactly as sent, missing and mistyped facts included, so that core
+ * (`classifyTarget`) is what refuses or asks every time.
  *
- * What it does own is the line itself, and there it fails closed:
+ * What it does own is the line itself, and there it fails closed. The shell
+ * is the source of truth; nothing this side believes about it outlives an
+ * error:
  *
- *   - It is available only after the shell said hello from Windows with
- *     computer use on, and only while the channel is open. The hello is said
- *     once. A shell that has not said so is sent nothing else (but an end,
- *     when this side has something on record to end).
+ *   - It is available only after the shell answered the hello from Windows
+ *     with computer use on, a shortcut list it can read and its word that it
+ *     holds no session (`sessions: 0`), and only while the channel is open.
+ *     The hello is said once per channel. A shell that has not said so is
+ *     sent nothing else (but an end, when this side has something on record
+ *     to end).
  *   - The shell's shortcuts are the last list it reported (the hello, then
  *     each `computer.shortcuts` event after it). No list, a list that can't
  *     be read, an event before the hello has answered, or a closed channel is
  *     `null`, never an empty list.
+ *   - A session is the shell's token for it. The shell mints one with the
+ *     yes to `computer.start` (the person answered its native dialog), and
+ *     this side sends it with every later request for the chat. Without a
+ *     token nothing but a start or an end is sent for a chat: no screenshot,
+ *     no target, no action before the person has said yes.
  *   - A start always settles, and one chat has one start with the shell at a
  *     time. A dialog nobody answers in `START_TIMEOUT_MS` is given up on: the
  *     shell is told to end that chat's start, and a yes that comes later is
- *     ended again. Whenever a start did not end in a plain yes while this
- *     side has, or may have, a session for the chat, the shell is told to
- *     end it. When the shell won't confirm that end, the start throws, so
- *     that `ComputerSessions` holds every other start back; and this side
- *     starts nothing itself until every end it asked for is confirmed.
+ *     ended again. Whenever a start did not end in a plain yes with a token
+ *     while this side has, or may have, a session for the chat, the shell is
+ *     told to end it. When the shell won't confirm that end, the start
+ *     throws, so that `ComputerSessions` holds every other start back; and
+ *     this side starts nothing itself until every end it asked for is
+ *     confirmed.
  *   - An end is asked of the shell every time (it is a no-op there for a
  *     chat with no session), goes out even when the channel is full of other
  *     calls, and is confirmed by `{ ok: true }` and nothing else. This side
@@ -200,17 +235,20 @@ function pngSize(bytes: Buffer): { width: number; height: number } | null {
  *   - One of a chat's calls is with the shell at a time; the rest wait their
  *     turn, at most `MAX_QUEUED_PER_CHAT` of them. So a burst of calls can
  *     neither fill the channel nor carry on after Stop.
- *   - It keeps, per chat, whether the session has a screenshot of its own
- *     and how big it was, and refuses a point without one or outside it:
- *     the tool's own memory of the size can be stale.
- *   - An action the shell did not answer in time may still be going on: the
- *     session is ended, so nothing more lands after it.
- *   - Every answer is checked for its shape before it is used, and every
- *     failure is told in this file's own words (or the shell's error as one
- *     bounded line), never the channel's internals.
- *   - A hello whose answer says the shell holds no session (`sessions: 0`)
- *     is this side's word to `onReset` listeners (`ComputerSessions`) that
- *     nothing is left there from before.
+ *   - It keeps, per session, whether it has a screenshot of its own and how
+ *     big it was, and refuses a point without one or outside it: the tool's
+ *     own memory of the size can be stale. An action goes only with the whole
+ *     approved expectation, which the shell checks again.
+ *   - Drift. A call for a session that timed out, an answer that can't be
+ *     read, or the shell's word that the token is not its live session, and
+ *     this side's view of that session can't be trusted: the session is
+ *     ended (here, and at the shell), `onLost` listeners (`ComputerSessions`)
+ *     are told, and the next call needs a new start, with a new dialog. When
+ *     the channel closes, for whatever reason, every session is lost at once
+ *     and nothing is sent again: a new channel (a new server) and a new hello
+ *     are the only way back.
+ *   - Every failure is told in this file's own words (or the shell's error as
+ *     one bounded line), never the channel's internals.
  */
 export class DesktopComputerDriver implements ComputerDriver {
   private ready = false;
@@ -229,6 +267,7 @@ export class DesktopComputerDriver implements ComputerDriver {
   private readonly doubtful = new Set<string>();
   private readonly stoppedListeners = new Set<(chatId: string, why: ComputerStopReason) => void>();
   private readonly resetListeners = new Set<() => void>();
+  private readonly lostListeners = new Set<(chatId: string) => void>();
   private readonly startTimeoutMs: number;
   private readonly startLateMs: number;
   private readonly endTimeoutMs: number;
@@ -251,14 +290,15 @@ export class DesktopComputerDriver implements ComputerDriver {
       // The whole list or none: a list that can't be read is not filtered down to the part that can.
       this.shortcuts = isRecord(params) ? shortcutList(params['shortcuts']) : null;
     });
+    channel.onClose(() => this.channelLost());
   }
 
   /**
-   * Asks the shell what it offers. Said once, after the announce line: a
-   * later call waits for that same hello and sends nothing. Never throws.
-   * When the answer states `sessions: 0`, the shell holds no session from
-   * before this server, and the reset listeners are told; an answer without
-   * it confirms nothing of the kind.
+   * Asks the shell what it offers. Said once per channel, after the announce
+   * line: a later call waits for that same hello and sends nothing. Never
+   * throws. When the answer states `sessions: 0`, the shell holds no session
+   * from before this server, and the reset listeners are told; an answer
+   * without it confirms nothing of the kind, and leaves computer use off.
    */
   hello(): Promise<void> {
     this.said ??= this.sayHello();
@@ -314,25 +354,16 @@ export class DesktopComputerDriver implements ComputerDriver {
       session.shot = null;
       let answer: unknown;
       try {
-        answer = await this.ask(session, 'computer.screenshot', { chatId }, this.callTimeoutMs);
+        answer = await this.ask(session, 'computer.screenshot', { chatId, session: session.token }, this.callTimeoutMs);
       } catch (err) {
-        throw new Error(failureText(err));
+        throw new Error(await this.failed(chatId, err));
       }
       // The session ended while the shell was taking it: it is nobody's to look at.
-      if (answer === ENDED) throw new Error(COMPUTER_NO_SESSION_REASON);
-      if (!isRecord(answer)) throw new Error(SCREENSHOT_UNREADABLE_REASON);
-      const { png, width, height } = answer;
-      if (typeof png !== 'string' || !isPixel(width, 1) || !isPixel(height, 1)) throw new Error(SCREENSHOT_UNREADABLE_REASON);
-      // Core's one test for an image from a tool: strict base64, at most 5 MB, the type read from the bytes.
-      const image = validateToolImage({ type: 'image', data: png, mimeType: 'image/png' });
-      if (!image.ok || image.mime !== 'image/png') throw new Error(SCREENSHOT_UNREADABLE_REASON);
-      // The size beside the image must be the image's own: a point is checked against the one and clicked in the other.
-      const own = pngSize(image.bytes);
-      if (own === null || own.width !== width || own.height !== height) throw new Error(SCREENSHOT_UNREADABLE_REASON);
-      // The session ended while the shell was taking it: it is nobody's to look at.
-      if (this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
-      session.shot = { width, height };
-      return { png: image.bytes, width, height };
+      if (answer === ENDED || this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
+      const read = this.readScreenshot(answer);
+      if (read === null) throw new Error(await this.drift(chatId, SCREENSHOT_UNREADABLE_REASON));
+      session.shot = { width: read.width, height: read.height };
+      return read;
     });
   }
 
@@ -341,15 +372,13 @@ export class DesktopComputerDriver implements ComputerDriver {
     return this.inTurn(session, async () => {
       let answer: unknown;
       try {
-        answer = await this.ask(session, 'computer.cursor', { chatId }, this.callTimeoutMs);
+        answer = await this.ask(session, 'computer.cursor', { chatId, session: session.token }, this.callTimeoutMs);
       } catch (err) {
-        throw new Error(failureText(err));
+        throw new Error(await this.failed(chatId, err));
       }
-      if (answer === ENDED) throw new Error(COMPUTER_NO_SESSION_REASON);
-      if (!isRecord(answer)) throw new Error(CURSOR_UNREADABLE_REASON);
-      const { x, y } = answer;
-      if (!isPixel(x, 0) || !isPixel(y, 0)) throw new Error(CURSOR_UNREADABLE_REASON);
-      if (this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
+      if (answer === ENDED || this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
+      const { x, y } = isRecord(answer) ? answer : { x: null, y: null };
+      if (!isPixel(x, 0) || !isPixel(y, 0)) throw new Error(await this.drift(chatId, CURSOR_UNREADABLE_REASON));
       return { x, y };
     });
   }
@@ -359,6 +388,8 @@ export class DesktopComputerDriver implements ComputerDriver {
    * it said it: not one fact is defaulted, coerced, added or dropped here.
    * The port's type is what the shell is supposed to send, not something
    * this method has checked; core's `classifyTarget` takes it as `unknown`.
+   * Only an answer that is not even an object is taken as one that can't be
+   * read (and the session ended).
    */
   async target(chatId: string, at: { x: number; y: number } | 'foreground'): Promise<ComputerTarget | ComputerRefusal> {
     const off = this.unusable();
@@ -370,22 +401,24 @@ export class DesktopComputerDriver implements ComputerDriver {
     try {
       let params: Record<string, unknown>;
       if (at === 'foreground') {
-        params = { chatId, foreground: true };
+        params = { chatId, session: session.token, foreground: true };
       } else {
         const point: { x?: unknown; y?: unknown } = isRecord(at) ? at : {};
         // Checked now, with the turn: a screenshot that was ahead in the queue has set the size.
         const why = pointRefusal(session, point.x, point.y);
         if (why !== null) return { refuse: why };
-        params = { chatId, x: point.x, y: point.y };
+        params = { chatId, session: session.token, x: point.x, y: point.y };
       }
       let answer: unknown;
       try {
         answer = await this.ask(session, 'computer.target', params, this.callTimeoutMs);
       } catch (err) {
-        throw new Error(failureText(err));
+        throw new Error(await this.failed(chatId, err));
       }
       if (answer === ENDED || this.sessions.get(chatId) !== session) return { refuse: COMPUTER_NO_SESSION_REASON };
-      return answer as ComputerTarget | ComputerRefusal;
+      if (!isRecord(answer)) return { refuse: await this.drift(chatId, TARGET_UNREADABLE_REASON) };
+      // Not a check: the facts go to core as the shell sent them, and core judges them.
+      return answer as unknown as ComputerTarget | ComputerRefusal;
     } finally {
       this.leave(session);
     }
@@ -404,6 +437,8 @@ export class DesktopComputerDriver implements ComputerDriver {
     const point = fields['coordinate'];
     // A mouse action is never sent without its point: the shell must not be left to pick one.
     if (mouse && !(Array.isArray(point) && point.length === 2)) return refusal(DESKTOP_NO_POINT_REASON);
+    // Nor any action without the whole approved app, window and run, which the shell checks again when it acts.
+    if (!isWholeExpectation(expect)) return refusal(DESKTOP_NO_EXPECTATION_REASON);
 
     const turn = await this.enter(session);
     if (turn !== 'go') return refusal(turn === 'full' ? DESKTOP_BUSY_REASON : COMPUTER_NO_SESSION_REASON);
@@ -417,22 +452,20 @@ export class DesktopComputerDriver implements ComputerDriver {
       let answer: unknown;
       try {
         // The action and the expectation as handed: this side adds nothing to them and takes nothing away.
-        answer = await this.ask(session, 'computer.act', { chatId, action, expect }, this.actTimeoutMs);
+        answer = await this.ask(session, 'computer.act', { chatId, session: session.token, action, expect }, this.actTimeoutMs);
       } catch (err) {
+        if (noSession(err)) return refusal(await this.drift(chatId, DESKTOP_SESSION_GONE_REASON));
         if (!outcomeUnknown(err)) return refusal(failureText(err));
+        // Gone: the channel closed, and every session with it.
         if (!timedOut(err)) return refusal(`${failureText(err)} ${ACT_UNKNOWN}`);
         // The shell may still be at it. The session is ended, so that nothing more lands after this action.
-        const ended = await this.end(chatId).then(
-          () => true,
-          () => false
-        );
-        return refusal(`${failureText(err)} ${ACT_UNKNOWN} ${ended ? ACT_ENDED_AFTER : ACT_END_UNCONFIRMED_AFTER}`);
+        return refusal(await this.drift(chatId, `${failureText(err)} ${ACT_UNKNOWN}`));
       }
       // The session ended while the shell was working: its answer, if it ever comes, is not this session's.
       if (answer === ENDED || this.sessions.get(chatId) !== session) return refusal(`${ACT_SESSION_ENDED} ${ACT_UNKNOWN}`);
       if (isRecord(answer) && answer['ok'] === true) return { ok: true };
       if (isRecord(answer) && answer['ok'] === false) return refusal(cardLine(answer['reason'], MAX_REASON) || ACT_REFUSED_REASON);
-      return refusal(`${ACT_UNREADABLE_REASON} ${ACT_UNKNOWN}`);
+      return refusal(await this.drift(chatId, `${ACT_UNREADABLE_REASON} ${ACT_UNKNOWN}`));
     } finally {
       this.leave(session);
     }
@@ -457,6 +490,21 @@ export class DesktopComputerDriver implements ComputerDriver {
     };
   }
 
+  /**
+   * This side ended a chat's session itself, because its view of it could
+   * no longer be trusted (a call that timed out, an answer it couldn't read,
+   * the shell's word that the token is not its live session, the channel
+   * closing). The end may or may not have been confirmed by the shell;
+   * whoever listens asks for it with `endSession` (it is the same end).
+   * Returns the unsubscribe.
+   */
+  onLost(cb: (chatId: string) => void): () => void {
+    this.lostListeners.add(cb);
+    return () => {
+      this.lostListeners.delete(cb);
+    };
+  }
+
   private async sayHello(): Promise<void> {
     let answer: unknown;
     try {
@@ -464,12 +512,14 @@ export class DesktopComputerDriver implements ComputerDriver {
     } catch {
       answer = null;
     }
-    if (!isRecord(answer)) return;
+    if (!isRecord(answer) || this.isClosed()) return;
     this.answered = true;
-    this.ready = answer['available'] === true && answer['platform'] === 'win32';
     this.shortcuts = shortcutList(answer['shortcuts']);
     // Only the shell's own statement that it holds nothing is taken as that.
-    if (answer['sessions'] !== 0) return;
+    const clean = answer['sessions'] === 0;
+    // Every fact must be there and say so: anything missing, mistyped or unknown leaves computer use off.
+    this.ready = clean && answer['available'] === true && answer['platform'] === 'win32' && this.shortcuts !== null;
+    if (!clean) return;
     for (const chatId of [...this.sessions.keys()]) this.drop(chatId);
     this.doubtful.clear();
     for (const cb of [...this.resetListeners]) {
@@ -479,6 +529,18 @@ export class DesktopComputerDriver implements ComputerDriver {
         console.error('[grunt-server] a computer-use reset listener failed:', err);
       }
     }
+  }
+
+  /** The channel closed: nothing more can be sent or read. Every session is lost, and the shell may still hold one (it must end them itself). */
+  private channelLost(): void {
+    this.ready = false;
+    this.shortcuts = null;
+    const lost = [...this.sessions.keys()];
+    for (const chatId of lost) {
+      this.doubtful.add(chatId);
+      this.drop(chatId);
+    }
+    for (const chatId of lost) this.tellLost(chatId);
   }
 
   /** Why nothing can be asked of the shell right now, or null. */
@@ -560,6 +622,59 @@ export class DesktopComputerDriver implements ComputerDriver {
     }
   }
 
+  /** A screenshot answer as the port has it, or null when it is anything else. */
+  private readScreenshot(answer: unknown): ComputerScreenshot | null {
+    if (!isRecord(answer)) return null;
+    const { png, width, height } = answer;
+    if (typeof png !== 'string' || !isPixel(width, 1) || !isPixel(height, 1)) return null;
+    // Core's one test for an image from a tool: strict base64, at most 5 MB, the type read from the bytes.
+    const image = validateToolImage({ type: 'image', data: png, mimeType: 'image/png' });
+    if (!image.ok || image.mime !== 'image/png') return null;
+    // The size beside the image must be the image's own: a point is checked against the one and clicked in the other.
+    const own = pngSize(image.bytes);
+    if (own === null || own.width !== width || own.height !== height) return null;
+    return { png: image.bytes, width, height };
+  }
+
+  /**
+   * What a look's failed call comes to. A plain error from the shell, or a
+   * request that never left, is told as it is and the session stays. A call
+   * that timed out, or the shell's word that the token is not its live
+   * session, ends the session (`drift`). After the channel closed every
+   * session is gone anyway.
+   */
+  private async failed(chatId: string, err: unknown): Promise<string> {
+    if (noSession(err)) return this.drift(chatId, DESKTOP_SESSION_GONE_REASON);
+    if (timedOut(err) || !(err instanceof DesktopChannelError)) return this.drift(chatId, failureText(err));
+    return failureText(err);
+  }
+
+  /**
+   * This side's view of the chat's session can't be trusted any more: the
+   * session is ended here and at the shell, the lost listeners are told, and
+   * the next call needs a new start. Answers `reason` with what came of the
+   * end.
+   */
+  private async drift(chatId: string, reason: string): Promise<string> {
+    const had = this.sessions.has(chatId);
+    const ending = this.end(chatId).then(
+      () => true,
+      () => false
+    );
+    if (had) this.tellLost(chatId);
+    return `${reason} ${(await ending) ? DESKTOP_ENDED_AFTER : DESKTOP_END_UNCONFIRMED_AFTER}`;
+  }
+
+  private tellLost(chatId: string): void {
+    for (const cb of [...this.lostListeners]) {
+      try {
+        cb(chatId);
+      } catch (err) {
+        console.error('[grunt-server] a computer-use lost-session listener failed:', err);
+      }
+    }
+  }
+
   private async start(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
     // Nothing is started while the shell may still hold something this side asked it to end.
     for (const waiting of [...this.doubtful]) {
@@ -584,12 +699,18 @@ export class DesktopComputerDriver implements ComputerDriver {
       return this.notStarted(chatId, failureText(err));
     }
     if (isRecord(answer) && answer['ok'] === true) {
-      if (!this.sessions.has(chatId)) {
+      const token = answer['session'];
+      // A yes without a token this side can use is not a session it can name: the shell may hold one, so it is ended.
+      if (typeof token !== 'string' || !SESSION_TOKEN.test(token)) return this.startUnknown(chatId, START_UNREADABLE_REASON);
+      const current = this.sessions.get(chatId);
+      if (current === undefined || current.token !== token) {
+        // A new token is a new session: whatever this side knew of an older one (its screenshot, its queue) goes.
+        this.drop(chatId);
         let end: () => void = () => {};
         const gone = new Promise<void>((resolve) => {
           end = resolve;
         });
-        this.sessions.set(chatId, { shot: null, busy: false, waiting: [], gone, end });
+        this.sessions.set(chatId, { token, shot: null, busy: false, waiting: [], gone, end });
       }
       return { ok: true };
     }
@@ -633,6 +754,7 @@ export class DesktopComputerDriver implements ComputerDriver {
 
   private end(chatId: string): Promise<void> {
     const known = this.tracked(chatId);
+    const token = this.sessions.get(chatId)?.token;
     // First, and before anything is awaited: nothing more is looked at, sent or done for the chat from here.
     this.drop(chatId);
     const closed = this.isClosed();
@@ -642,18 +764,19 @@ export class DesktopComputerDriver implements ComputerDriver {
     const ending = this.ends.get(chatId);
     if (ending !== undefined) return ending;
     if (closed) return Promise.reject(new Error(END_GONE_REASON));
-    const asked: Promise<void> = this.askToEnd(chatId).finally(() => {
+    const asked: Promise<void> = this.askToEnd(chatId, token).finally(() => {
       if (this.ends.get(chatId) === asked) this.ends.delete(chatId);
     });
     this.ends.set(chatId, asked);
     return asked;
   }
 
-  private async askToEnd(chatId: string): Promise<void> {
+  private async askToEnd(chatId: string, token: string | undefined): Promise<void> {
     let answer: unknown;
     try {
-      // `priority`: an end is sent however many other calls are waiting on the shell.
-      answer = await this.channel.call('computer.end', { chatId }, { timeoutMs: this.endTimeoutMs, priority: true });
+      // `priority`: an end is sent however many other calls are waiting on the shell. The token, when this side has one, is for the shell's log:
+      // an end ends whatever the chat has there, a start whose dialog is up included.
+      answer = await this.channel.call('computer.end', token === undefined ? { chatId } : { chatId, session: token }, { timeoutMs: this.endTimeoutMs, priority: true });
     } catch (err) {
       throw new Error(failureText(err));
     }

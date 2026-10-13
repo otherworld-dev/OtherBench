@@ -37,6 +37,13 @@ describe('announceLine', () => {
     expect(line.indexOf('\n')).toBe(line.length - 1);
     expect(JSON.parse(line)).toEqual({ port: 51234 });
   });
+
+  it("carries this launch's word for the desktop channel when there is one, and only then", () => {
+    const line = announceLine(51234, '0123456789abcdef0123456789abcdef');
+    expect(line.indexOf('\n')).toBe(line.length - 1);
+    expect(JSON.parse(line)).toEqual({ port: 51234, rpc: '0123456789abcdef0123456789abcdef' });
+    expect(announceLine(51234, null)).toBe('{"port":51234}\n');
+  });
 });
 
 describe('hostCheck', () => {

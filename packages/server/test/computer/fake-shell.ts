@@ -11,15 +11,31 @@ import { DesktopComputerDriver, type DesktopComputerDriverOptions } from '../../
  * channel's other end (`DesktopComputerDriver`, the container, the CLI) use
  * this and nothing else.
  *
- * Left alone it behaves as the real shell must (and as core's
- * `FakeComputerDriver` does): a hello drops every session; a start gives the
- * chat a session; everything else needs one. A test changes what it answers
+ * Left alone it behaves as the real shell must (shell-wire-spec.md, and as
+ * core's `FakeComputerDriver` does): a hello drops every session; a start's
+ * yes gives the chat a session and a fresh token; everything else needs the
+ * chat's live token, or is answered with the `no-session` error; a
+ * `computer.close` line ends every session. A test changes what it answers
  * through the fields below, or takes a request over altogether with
  * `override`.
  */
 
-/** What the stand-in says to a chat that has no session. */
+/** What the stand-in says to a chat that has no session, or names one that is not its live one. */
 export const SHELL_NO_SESSION = 'Grunt is not controlling this computer for that chat.';
+
+let minted = 0;
+/** A fresh session token, as the shell mints one: never reused. */
+export function mintToken(): string {
+  minted += 1;
+  return `session_${String(minted).padStart(8, '0')}_fake`;
+}
+
+/** The chats the stand-in holds a session for, each with its token. `add` mints one. */
+export class ShellSessions extends Map<string, string> {
+  add(chatId: string, token = mintToken()): this {
+    return this.set(chatId, token);
+  }
+}
 
 /** A Windows shell with computer use switched on, one shortcut registered, and no session held. */
 export const HELLO_ON = Object.freeze({ platform: 'win32', version: '0.1.0', available: true, shortcuts: Object.freeze(['Ctrl+Shift+Space']), sessions: 0 });
@@ -61,8 +77,12 @@ export class FakeShell {
   readonly lines: string[] = [];
   /** Every request, parsed, in the order it arrived. */
   readonly asked: ShellRequest[] = [];
-  /** The chats the shell holds a session for. */
-  readonly sessions = new Set<string>();
+  /** The chats the shell holds a session for, with the token it gave each. */
+  readonly sessions = new ShellSessions();
+  /** Notifications (lines with no id) this server wrote, such as `computer.close`. */
+  readonly notified: { method: string; params: unknown }[] = [];
+  /** This launch's word, when the channel writes one after the prefix. */
+  nonce: string | null = null;
   hello: unknown = HELLO_ON;
   /** What a start answers for a chat with no session (the native dialog's answer). */
   startAnswer: unknown = { ok: true };
@@ -74,12 +94,28 @@ export class FakeShell {
   /** Takes a request over when it returns something; `undefined` leaves it to the shell's own behaviour. */
   override: (method: string, params: Record<string, unknown>) => ShellAnswer | undefined = () => undefined;
 
-  /** What this server writes to: its stdout. */
+  private readonly pipeErrors: ((err: Error) => void)[] = [];
+
+  /** What this server writes to: its stdout. Its write errors come as an event, as a real pipe's do. */
   readonly toShell = {
+    on: (event: 'error', listener: (err: Error) => void): void => {
+      if (event === 'error') this.pipeErrors.push(listener);
+    },
     write: (line: string): boolean => {
       this.lines.push(line);
       if (!line.startsWith(RPC_PREFIX) || !line.endsWith('\n')) throw new Error(`not a GRUNT-RPC line: ${line}`);
-      const request = JSON.parse(line.slice(RPC_PREFIX.length)) as ShellRequest;
+      let body = line.slice(RPC_PREFIX.length);
+      if (this.nonce !== null) {
+        if (!body.startsWith(`${this.nonce} `)) throw new Error(`a GRUNT-RPC line without this launch's word: ${line}`);
+        body = body.slice(this.nonce.length + 1);
+      }
+      const request = JSON.parse(body) as ShellRequest;
+      if (request.id === undefined) {
+        // A notification. `computer.close`: the server is done with this channel, and the shell ends every session.
+        this.notified.push({ method: request.method, params: request.params });
+        if (request.method === 'computer.close') this.sessions.clear();
+        return true;
+      }
       this.asked.push(request);
       const params = (typeof request.params === 'object' && request.params !== null ? request.params : {}) as Record<string, unknown>;
       const answer = this.override(request.method, params) ?? this.behave(request.method, params);
@@ -107,6 +143,17 @@ export class FakeShell {
     this.fromShell.end();
   }
 
+  /** The shell stops reading: a write to it fails later, as EPIPE does. */
+  breakPipe(): void {
+    const err = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+    for (const listener of this.pipeErrors) listener(err);
+  }
+
+  /** The token of the chat's live session, or undefined. */
+  tokenOf(chatId: string): string | undefined {
+    return this.sessions.get(chatId);
+  }
+
   /** The parameters of every request for `method`, in order. */
   sent(method: string): unknown[] {
     return this.asked.filter((r) => r.method === method).map((r) => r.params);
@@ -125,33 +172,44 @@ export class FakeShell {
 
   private behave(method: string, params: Record<string, unknown>): ShellAnswer {
     const chatId = String(params['chatId']);
-    const has = this.sessions.has(chatId);
+    // A request names the chat's live session by its token; anything else is no session at all.
+    const has = this.sessions.has(chatId) && params['session'] === this.sessions.get(chatId);
+    const noSession = { error: { message: SHELL_NO_SESSION, code: 'no-session' } };
     switch (method) {
       case 'computer.hello':
         // A hello is a new server on the line: the shell keeps no session from before it.
         this.sessions.clear();
         return { result: this.hello };
       case 'computer.start': {
-        if (has) return { result: { ok: true } };
+        const live = this.sessions.get(chatId);
+        if (live !== undefined) return { result: { ok: true, session: live } };
         const answer = this.startAnswer;
-        if (typeof answer === 'object' && answer !== null && (answer as { ok?: unknown }).ok === true) this.sessions.add(chatId);
-        return { result: answer };
+        if (typeof answer !== 'object' || answer === null || (answer as { ok?: unknown }).ok !== true) return { result: answer };
+        // A yes mints the session's token, unless the test set one (or a wrong one) itself.
+        const token = 'session' in answer ? (answer as { session?: unknown }).session : mintToken();
+        this.sessions.set(chatId, String(token));
+        return { result: { ...answer, session: token } };
       }
       case 'computer.end':
         this.sessions.delete(chatId);
         return { result: this.endAnswer };
       case 'computer.screenshot':
-        return has ? { result: this.screenshot } : { error: { message: SHELL_NO_SESSION } };
+        return has ? { result: this.screenshot } : noSession;
       case 'computer.cursor':
-        return has ? { result: this.cursor } : { error: { message: SHELL_NO_SESSION } };
+        return has ? { result: this.cursor } : noSession;
       case 'computer.target':
-        return { result: has ? this.target : { refuse: SHELL_NO_SESSION } };
+        return has ? { result: this.target } : noSession;
       case 'computer.act':
-        return { result: has ? this.actAnswer : { ok: false, reason: SHELL_NO_SESSION } };
+        return has ? { result: this.actAnswer } : noSession;
       default:
         return { error: { message: `The shell has no method ${method}.` } };
     }
   }
+}
+
+/** The chat of every `computer.end` the shell was sent, in order. */
+export function endedChats(shell: FakeShell): string[] {
+  return shell.sent('computer.end').map((p) => (p as { chatId: string }).chatId);
 }
 
 export interface Connected {

@@ -67,6 +67,19 @@ export interface ComputerDriverResets {
   onReset(cb: () => void): () => void;
 }
 
+/**
+ * What a driver may offer beside the port: its word that it ended a chat's
+ * session itself, because its view of it could no longer be trusted (the
+ * desktop driver, after a call timed out, an answer it couldn't read, the
+ * shell's word that the session is not its live one, or the channel
+ * closing). The shell may still hold it: ending it is asked of the driver
+ * like any other end, and an end it can't confirm is unconfirmed.
+ */
+export interface ComputerDriverLosses {
+  /** Returns the unsubscribe. */
+  onLost(cb: (chatId: string) => void): () => void;
+}
+
 /** Cancels each reply the app-wide stream says is running in `chatId`. */
 export function cancelChatReplies(events: AppEventBus, turnRunner: Pick<TurnRunner, 'cancel'>, chatId: string): void {
   for (const turn of events.runningTurns()) if (turn.chatId === chatId) turnRunner.cancel(turn.messageId);
@@ -185,14 +198,16 @@ export class ComputerSessions implements ComputerDriver {
   private readonly stoppedListeners = new Set<StoppedListener>();
   private readonly offStopped: () => void;
   private readonly offReset: () => void;
+  private readonly offLost: () => void;
 
   constructor(
-    private readonly driver: ComputerDriver & Partial<ComputerDriverResets>,
+    private readonly driver: ComputerDriver & Partial<ComputerDriverResets> & Partial<ComputerDriverLosses>,
     private readonly deps: ComputerSessionsDeps,
     options: ComputerSessionsOptions = {}
   ) {
     this.endTimeoutMs = options.endTimeoutMs ?? COMPUTER_END_TIMEOUT_MS;
     this.offReset = typeof driver.onReset === 'function' ? driver.onReset(() => this.shellReset()) : () => {};
+    this.offLost = typeof driver.onLost === 'function' ? driver.onLost((chatId) => this.driverLost(chatId)) : () => {};
     this.offStopped = driver.onStopped((chatId, why) => {
       // The shell's own word that this chat's session is over.
       this.unconfirmed.delete(chatId);
@@ -333,6 +348,20 @@ export class ComputerSessions implements ComputerDriver {
     this.cancelReplies(chatId);
   }
 
+  /**
+   * The driver ended `chatId`'s session itself (`ComputerDriverLosses`). The
+   * record goes and the end is announced, as for any end; the driver is
+   * asked to confirm it like any other end, so one the shell does not
+   * confirm holds every start back. The chat's replies go on: the call that
+   * met the trouble is told so, and its next one needs a new start, with the
+   * native dialog again.
+   */
+  driverLost(chatId: string): void {
+    if (this.disposed) return;
+    if (this.release(chatId)) this.notifyStopped(chatId, 'button');
+    if (!this.heldByAnother(chatId)) void this.endOnDriver(chatId);
+  }
+
   async screenshot(chatId: string): Promise<ComputerScreenshot> {
     if (this.use(chatId) === null) throw new Error(COMPUTER_NO_SESSION_REASON);
     return this.driver.screenshot(chatId);
@@ -377,6 +406,7 @@ export class ComputerSessions implements ComputerDriver {
     this.disposed = true;
     this.offStopped();
     this.offReset();
+    this.offLost();
     const chatId = this.holder();
     if (chatId !== null) {
       if (this.release(chatId)) this.notifyStopped(chatId, 'quit');

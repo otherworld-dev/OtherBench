@@ -1320,6 +1320,81 @@ describe('while an earlier end is still being confirmed', () => {
   });
 });
 
+describe('a driver that ended a session itself (it could no longer trust it)', () => {
+  /** A fake that can say, as the desktop driver does after a timeout, an unreadable answer or a lost channel, that it ended a chat's session. */
+  class LosingDriver extends DialogDriver {
+    private readonly lostListeners = new Set<(chatId: string) => void>();
+
+    onLost(cb: (chatId: string) => void): () => void {
+      this.lostListeners.add(cb);
+      return () => {
+        this.lostListeners.delete(cb);
+      };
+    }
+
+    /** The driver ended `chatId`'s session on its side. */
+    lose(chatId: string): void {
+      for (const cb of [...this.lostListeners]) cb(chatId);
+    }
+
+    listening(): number {
+      return this.lostListeners.size;
+    }
+  }
+
+  function losing() {
+    const driver = new LosingDriver();
+    return { ...setup(driver), driver };
+  }
+
+  it('drops the record, announces the end, tells the stopped listeners and asks the driver to confirm the end; the reply goes on', async () => {
+    const { sessions, driver, events, stopped, cancelChat } = losing();
+    await sessions.ensureSession('c1', 'One');
+    await sessions.screenshot('c1');
+    const end = vi.spyOn(driver, 'endSession');
+    driver.lose('c1');
+    expect(sessions.activeChat()).toBeNull();
+    expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c1', active: false });
+    expect(stopped).toEqual([['c1', 'button']]);
+    expect(end.mock.calls).toEqual([['c1']]);
+    expect(cancelChat).not.toHaveBeenCalled();
+    // The chat's next call needs a new start, with the dialog again.
+    expect(await sessions.act('c1', CLICK, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    expect(await sessions.ensureSession('c1', 'One')).toEqual({ ok: true });
+    expect(driver.asked).toEqual(['c1', 'c1']);
+  });
+
+  it('an end the driver then cannot confirm holds every start back, as any other', async () => {
+    const { sessions, driver } = losing();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await sessions.ensureSession('c1', 'One');
+    const end = vi.spyOn(driver, 'endSession').mockRejectedValue(new Error('the desktop app went away'));
+    driver.lose('c1');
+    await tick();
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
+    end.mockRestore();
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: true });
+  });
+
+  it("a chat that is not the one in control: nothing of the chat in control changes, and the driver's end is not asked of it", async () => {
+    const { sessions, driver, events } = losing();
+    await sessions.ensureSession('c1', 'One');
+    const end = vi.spyOn(driver, 'endSession');
+    const before = events.length;
+    driver.lose('c2');
+    expect(sessions.activeChat()).toBe('c1');
+    expect(events).toHaveLength(before);
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('stops listening when the server shuts down', () => {
+    const { sessions, driver } = losing();
+    expect(driver.listening()).toBe(1);
+    sessions.dispose();
+    expect(driver.listening()).toBe(0);
+  });
+});
+
 describe('a driver whose shell started over', () => {
   /** A fake that can say, as the desktop driver does on a hello the shell answered, that the shell holds no session at all. */
   class ResettingDriver extends DialogDriver {

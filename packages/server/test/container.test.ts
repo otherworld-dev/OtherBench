@@ -704,11 +704,11 @@ describe('computer use wiring', () => {
       }
     });
 
-    it("the shell's word in its hello that it holds no session reaches the sessions, once, and only when it says so", async () => {
-      for (const [hello, times] of [
-        [HELLO_ON, 1],
-        [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [] }, 0],
-        [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [], sessions: 2 }, 0],
+    it("the shell's word in its hello that it holds no session reaches the sessions, once, and only when it says so (and only then is computer use on)", async () => {
+      for (const [hello, times, on] of [
+        [HELLO_ON, 1, true],
+        [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [] }, 0, false],
+        [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [], sessions: 2 }, 0, false],
       ] as const) {
         const { shell, driver } = connect();
         shell.hello = hello;
@@ -717,7 +717,7 @@ describe('computer use wiring', () => {
           const reset = vi.spyOn(container.computer!, 'shellReset');
           await driver.hello();
           await driver.hello();
-          expect(container.computer!.available()).toBe(true);
+          expect(container.computer!.available()).toBe(on);
           expect(reset).toHaveBeenCalledTimes(times);
         } finally {
           container.close();

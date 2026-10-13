@@ -3,14 +3,17 @@ import { MAX_TOOL_IMAGE_BYTES } from '@grunt/core/domain/tool-images.js';
 
 /**
  * The desktop shell's channel (spec 2026-10-12-computer-use-design section
- * 2). After the `{"port":N,"rpc":"<word>"}` announce line, this server writes
- * requests to its stdout and the shell answers on its stdin: one JSON object
- * per line, each starting `GRUNT-RPC `. Only the parent shell holds these
- * pipes; there is no network surface. A server started by hand has no channel.
+ * 2; the wire in full is `.superpowers/sdd/2026-10-12-computer-use/
+ * shell-wire-spec.md`). After the `{"port":N,"rpc":"<word>"}` announce line,
+ * this server writes requests to its stdout and the shell answers on its
+ * stdin: one JSON object per line, each starting `GRUNT-RPC `. Only the
+ * parent shell holds these pipes; there is no network surface. A server
+ * started by hand has no channel.
  *
  *   server to shell   GRUNT-RPC <word> {"id":<n>,"method":"<m>","params":{...}}
+ *                     GRUNT-RPC <word> {"method":"computer.close","params":{}}
  *   shell to server   GRUNT-RPC {"id":<n>,"result":<value>}
- *                     GRUNT-RPC {"id":<n>,"error":{"message":"..."}}
+ *                     GRUNT-RPC {"id":<n>,"error":{"message":"...","code":"..."}}
  *                     GRUNT-RPC {"event":"<name>","params":{...}}
  *
  * `<word>` is a random word made for this launch and told to the shell in
@@ -20,28 +23,35 @@ import { MAX_TOOL_IMAGE_BYTES } from '@grunt/core/domain/tool-images.js';
  * says. The shell's own lines carry no word: nothing else writes to stdin.
  *
  * The shell is trusted more than a model, and its lines are still read as
- * if they might be wrong: a line that is not a message is dropped, an answer
- * is matched to a call that is still waiting or dropped, and nothing the
- * shell sends decides how much this process holds. Every limit is here:
+ * if they might be wrong. A line that does not start with the prefix is not
+ * the channel's and is ignored. A line that does, and is not exactly a
+ * message (too long, not JSON, not an object, an answer to no request or to
+ * one already answered, an event in a flood) means the two ends are out of
+ * step: the channel CLOSES, which ends every session (the driver's part),
+ * and the shell is told so with a last `computer.close` line. Every limit:
  *
  *   - a line that does not start with the prefix is known by its first ten
  *     bytes, and none of it is held;
  *   - one line is at most `MAX_RPC_LINE_BYTES` (the largest screenshot the
- *     app keeps, as base64, and 64 KiB over). A longer line is dropped while
- *     it arrives, so no more than that is ever held for a line;
+ *     app keeps, as base64, and 64 KiB over). A longer one closes the channel
+ *     as it arrives, so no more than that is ever held;
  *   - at most `MAX_PENDING_CALLS` ordinary calls wait for an answer; the next
  *     is refused without being written. An end of session (`priority`) is
  *     never held back by that: it has `MAX_PRIORITY_CALLS` places of its own,
  *     so Stop reaches the shell however many other calls are waiting;
- *   - every call has a time limit, after which its place is free. A call may
- *     ask to be told of an answer that comes later (`late`): a note of it is
- *     kept for the time it names, at most `MAX_LATE_NOTES` of them;
- *   - every call still waiting is rejected when the shell's end closes, or
- *     when the stream this writes to reports an error.
+ *   - every call has a time limit, after which its place is free. A note of
+ *     it is kept for a while (`late`, or `LATE_GRACE_MS`), at most
+ *     `MAX_LATE_NOTES` of them, so that its answer, if it still comes, is
+ *     known for a late one and not taken for a protocol error;
+ *   - at most `MAX_EVENTS_PER_SECOND` events a second; one more closes the
+ *     channel;
+ *   - every call still waiting is rejected when the channel closes, for any
+ *     reason: the shell's end closed, the stream this writes to reported an
+ *     error, or a frame was out of step.
  *
  * What a caller sees of a failure is a `DesktopChannelError` in this file's
  * own words. The shell's own error message is the one thing passed on, cut
- * to one clean line.
+ * to one clean line, with its `code` when it is one of a few plain words.
  */
 
 export const RPC_PREFIX = 'GRUNT-RPC ';
@@ -56,7 +66,13 @@ export const MAX_PENDING_CALLS = 64;
 export const MAX_PRIORITY_CALLS = 64;
 
 /** How many calls that timed out are remembered for a late answer. One more, and the oldest note goes. */
-export const MAX_LATE_NOTES = 16;
+export const MAX_LATE_NOTES = 64;
+
+/** How long a call that timed out is remembered, unless it asked for longer (`late`). Ten minutes is the shell's own idle limit. */
+export const LATE_GRACE_MS = 600_000;
+
+/** How many events the shell may send in one second. One more is a flood, and the channel closes. */
+export const MAX_EVENTS_PER_SECOND = 100;
 
 /**
  * The longest line read from the shell, in bytes, without its line end. The
@@ -68,6 +84,10 @@ export const MAX_RPC_LINE_BYTES = Math.ceil(MAX_TOOL_IMAGE_BYTES / 3) * 4 + 65_5
 
 /** The longest error message taken from the shell, in characters. */
 const MAX_ERROR_TEXT = 300;
+/** The longest event name the shell may send. */
+const MAX_EVENT_NAME = 64;
+/** An error `code` from the shell is kept only when it is one plain word like this. */
+const ERROR_CODE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const GONE = 'The desktop app went away.';
 const NOT_WRITTEN = "The request couldn't be sent to the desktop app.";
@@ -83,7 +103,7 @@ const PREFIX_BYTES = Buffer.from(RPC_PREFIX, 'utf8');
  *   - `shell`: the shell answered with an error, in its own words. It did
  *     not do what was asked.
  *   - `timeout`: the request was sent and no answer came in time.
- *   - `gone`: the request was sent and the shell's end closed first.
+ *   - `gone`: the request was sent and the channel closed first.
  *
  * After `timeout` and `gone` nobody knows whether the shell acted.
  */
@@ -92,7 +112,9 @@ export type DesktopChannelFailure = 'not-sent' | 'shell' | 'timeout' | 'gone';
 export class DesktopChannelError extends Error {
   constructor(
     readonly kind: DesktopChannelFailure,
-    message: string
+    message: string,
+    /** For `shell`: the error's `code`, when the shell gave one that is a plain word (`no-session`). */
+    readonly code?: string
   ) {
     super(message);
     this.name = 'DesktopChannelError';
@@ -108,6 +130,10 @@ export interface DesktopChannelOptions {
   maxPriority?: number;
   /** See `MAX_RPC_LINE_BYTES`; tests lower it. */
   maxLineBytes?: number;
+  /** See `MAX_EVENTS_PER_SECOND`; tests lower it. */
+  maxEventsPerSecond?: number;
+  /** See `LATE_GRACE_MS`; tests shorten it. */
+  lateGraceMs?: number;
   /** This launch's word, written after the prefix of every request (letters and digits only). The CLI always gives one; without it requests carry the bare prefix. */
   nonce?: string;
 }
@@ -134,7 +160,7 @@ interface Pending {
 }
 
 interface LateNote {
-  answer: (result: unknown) => void;
+  answer: ((result: unknown) => void) | null;
   timer: NodeJS.Timeout;
 }
 
@@ -143,12 +169,18 @@ export interface ShellChannel {
   readonly closed: boolean;
   call(method: string, params: unknown, options?: number | CallOptions): Promise<unknown>;
   onEvent(name: string, cb: (params: unknown) => void): () => void;
+  /** Called once, when the channel closes for any reason (and at once for a channel that already has). Returns the unsubscribe. */
+  onClose(cb: () => void): () => void;
 }
 
 /** Where requests go. `on` is there for a real stream, whose write errors come as an event. */
 export interface ChannelOutput {
   write(chunk: string): unknown;
   on?(event: 'error', listener: (err: Error) => void): unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export class DesktopChannel implements ShellChannel {
@@ -159,19 +191,24 @@ export class DesktopChannel implements ShellChannel {
   private waitingPriority = 0;
   private readonly late = new Map<number, LateNote>();
   private readonly listeners = new Map<string, Set<(params: unknown) => void>>();
+  private readonly closeListeners = new Set<() => void>();
   private readonly timeoutMs: number;
   private readonly maxPending: number;
   private readonly maxPriority: number;
   private readonly maxLineBytes: number;
+  private readonly maxEvents: number;
+  private readonly lateGraceMs: number;
   private readonly requestPrefix: string;
   /** The pieces of the line being read, and how many bytes they hold. */
   private parts: Buffer[] = [];
   private held = 0;
   /** How many of the line's first bytes have been checked against the prefix. */
   private checked = 0;
-  /** The rest of the line being read is thrown away as it arrives: it is too long, or not a GRUNT-RPC line. */
+  /** The rest of the line being read is thrown away as it arrives: it is not a GRUNT-RPC line. */
   private skipping = false;
-  private dropped = 0;
+  /** Events counted in the second that began at `eventWindow`. */
+  private eventWindow = 0;
+  private events = 0;
 
   constructor(
     input: NodeJS.ReadableStream,
@@ -182,6 +219,8 @@ export class DesktopChannel implements ShellChannel {
     this.maxPending = options.maxPending ?? MAX_PENDING_CALLS;
     this.maxPriority = options.maxPriority ?? MAX_PRIORITY_CALLS;
     this.maxLineBytes = options.maxLineBytes ?? MAX_RPC_LINE_BYTES;
+    this.maxEvents = options.maxEventsPerSecond ?? MAX_EVENTS_PER_SECOND;
+    this.lateGraceMs = options.lateGraceMs ?? LATE_GRACE_MS;
     if (options.nonce !== undefined && !/^[A-Za-z0-9]{1,128}$/.test(options.nonce)) throw new Error('The channel nonce must be 1 to 128 letters and digits.');
     this.requestPrefix = options.nonce !== undefined ? `${RPC_PREFIX}${options.nonce} ` : RPC_PREFIX;
     // The same stream as exitOnStdinClose (desktop.ts) listens to; both see its end.
@@ -199,7 +238,7 @@ export class DesktopChannel implements ShellChannel {
     }
   }
 
-  /** True once the shell's end has closed: nothing more is sent, and nothing more will come. */
+  /** True once the channel has closed: nothing more is sent, and nothing more is read. */
   get closed(): boolean {
     return this.ended;
   }
@@ -217,11 +256,6 @@ export class DesktopChannel implements ShellChannel {
   /** How many bytes of an unfinished line are held. Never more than the line limit. */
   get bufferedBytes(): number {
     return this.held;
-  }
-
-  /** How many GRUNT-RPC lines were dropped for being longer than the limit. */
-  get droppedLines(): number {
-    return this.dropped;
   }
 
   /**
@@ -245,9 +279,9 @@ export class DesktopChannel implements ShellChannel {
     }
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
-        // The answer, if it ever comes, finds nothing waiting: it is dropped, or handed to whoever asked for it late.
+        // The answer, if it still comes, is known for a late one: handed to whoever asked for it, or dropped.
         this.settle(id);
-        if (late !== undefined) this.remember(id, late);
+        this.remember(id, late);
         reject(new DesktopChannelError('timeout', "The desktop app didn't answer in time."));
       }, timeoutMs);
       timer.unref?.();
@@ -277,6 +311,17 @@ export class DesktopChannel implements ShellChannel {
     };
   }
 
+  onClose(cb: () => void): () => void {
+    if (this.ended) {
+      queueMicrotask(() => this.tell(cb));
+      return () => {};
+    }
+    this.closeListeners.add(cb);
+    return () => {
+      this.closeListeners.delete(cb);
+    };
+  }
+
   /** Takes a call out of the waiting ones. The pending entry, or undefined when it was not waiting. */
   private settle(id: number): Pending | undefined {
     const pending = this.pending.get(id);
@@ -288,15 +333,15 @@ export class DesktopChannel implements ShellChannel {
     return pending;
   }
 
-  private remember(id: number, late: { forMs: number; answer: (result: unknown) => void }): void {
+  private remember(id: number, late: CallOptions['late']): void {
     if (this.ended) return;
     if (this.late.size >= MAX_LATE_NOTES) {
       const oldest = this.late.keys().next();
       if (!oldest.done) this.forget(oldest.value);
     }
-    const timer = setTimeout(() => this.late.delete(id), late.forMs);
+    const timer = setTimeout(() => this.late.delete(id), late?.forMs ?? this.lateGraceMs);
     timer.unref?.();
-    this.late.set(id, { answer: late.answer, timer });
+    this.late.set(id, { answer: late?.answer ?? null, timer });
   }
 
   private forget(id: number): LateNote | undefined {
@@ -309,25 +354,20 @@ export class DesktopChannel implements ShellChannel {
 
   /** Splits what arrives into lines, holding no more of one line than the limit and nothing of a line that is not for this channel. */
   private read(chunk: Buffer | string): void {
-    if (this.ended) return;
     const data = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
     let from = 0;
-    while (from < data.length) {
+    while (from < data.length && !this.ended) {
       const at = data.indexOf(NEWLINE, from);
       const piece = data.subarray(from, at === -1 ? data.length : at);
       if (!this.skipping && piece.length > 0) {
         if (!this.startsLikeOurs(piece)) {
-          // Not a GRUNT-RPC line: dropped as it arrives, without a word.
+          // Not a GRUNT-RPC line: ignored as it arrives, without a word.
           this.skipping = true;
           this.parts = [];
           this.held = 0;
         } else if (this.held + piece.length > this.maxLineBytes) {
-          this.skipping = true;
-          this.parts = [];
-          this.held = 0;
-          this.dropped += 1;
-          // Said once: a shell that keeps doing it must not fill the log.
-          if (this.dropped === 1) console.error(`[grunt-server] dropped a line from the desktop app that was longer than ${this.maxLineBytes} bytes.`);
+          this.fail(`a line from it was longer than ${this.maxLineBytes} bytes`);
+          return;
         } else {
           this.parts.push(piece);
           this.held += piece.length;
@@ -357,47 +397,96 @@ export class DesktopChannel implements ShellChannel {
   private receive(bytes: Buffer): void {
     const end = bytes.length > 0 && bytes[bytes.length - 1] === CARRIAGE_RETURN ? bytes.length - 1 : bytes.length;
     const line = bytes.toString('utf8', 0, end);
+    // Shorter than the prefix (`GRUNT-RPC` and nothing more): not one of the channel's lines.
     if (!line.startsWith(RPC_PREFIX)) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line.slice(RPC_PREFIX.length));
     } catch {
+      this.fail('a message from it was not JSON');
       return;
     }
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
-    const message = parsed as { id?: unknown; result?: unknown; error?: unknown; event?: unknown; params?: unknown };
-    if (typeof message.event === 'string') {
-      const name = message.event;
-      // A name nobody listens for is ignored. `listeners` is a Map: no name the shell sends can reach anything else.
-      for (const cb of [...(this.listeners.get(name) ?? [])]) {
-        try {
-          cb(message.params);
-        } catch (err) {
-          console.error(`[grunt-server] a desktop event listener for ${name} threw:`, err);
-        }
-      }
+    if (!isRecord(parsed)) {
+      this.fail('a message from it was not an object');
       return;
     }
-    if (typeof message.id !== 'number' || !Number.isSafeInteger(message.id)) return;
-    const failed = message.error !== undefined && message.error !== null;
-    const pending = this.settle(message.id);
+    if ('event' in parsed) {
+      this.receiveEvent(parsed);
+      return;
+    }
+    const { id } = parsed;
+    const hasResult = 'result' in parsed;
+    const hasError = 'error' in parsed;
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1 || hasResult === hasError || (hasError && !isRecord(parsed['error']))) {
+      this.fail('a message from it was not an answer it could read');
+      return;
+    }
+    const pending = this.settle(id);
     if (pending === undefined) {
-      // An id nobody is waiting on: never sent, already answered, or given up on. Only a note left for it makes it anybody's.
-      const note = this.forget(message.id);
-      if (note === undefined || failed) return;
+      // Not waiting: given up on (a note says so), or never asked, or answered already. Only the first is anybody's.
+      const note = this.forget(id);
+      if (note === undefined) {
+        this.fail('it answered a request that was not waiting for an answer');
+        return;
+      }
+      if (hasError || note.answer === null) return;
       try {
-        note.answer(message.result);
+        note.answer(parsed['result']);
       } catch (err) {
         console.error('[grunt-server] handling a late answer from the desktop app failed:', err);
       }
       return;
     }
-    if (failed) {
-      const said = typeof message.error === 'object' ? cardLine((message.error as { message?: unknown }).message, MAX_ERROR_TEXT) : '';
-      pending.reject(new DesktopChannelError('shell', said || 'The desktop app refused the request.'));
+    if (hasError) {
+      const error = parsed['error'] as Record<string, unknown>;
+      const said = cardLine(error['message'], MAX_ERROR_TEXT);
+      const code = typeof error['code'] === 'string' && ERROR_CODE.test(error['code']) ? error['code'] : undefined;
+      pending.reject(new DesktopChannelError('shell', said || 'The desktop app refused the request.', code));
     } else {
-      pending.resolve(message.result);
+      pending.resolve(parsed['result']);
     }
+  }
+
+  private receiveEvent(message: Record<string, unknown>): void {
+    const name = message['event'];
+    if (typeof name !== 'string' || name.length === 0 || name.length > MAX_EVENT_NAME || 'id' in message) {
+      this.fail('a message from it was not an event it could read');
+      return;
+    }
+    const now = Date.now();
+    if (now - this.eventWindow >= 1000) {
+      this.eventWindow = now;
+      this.events = 0;
+    }
+    this.events += 1;
+    if (this.events > this.maxEvents) {
+      this.fail(`it sent more than ${this.maxEvents} events in a second`);
+      return;
+    }
+    // A name nobody listens for is ignored. `listeners` is a Map: no name the shell sends can reach anything else.
+    for (const cb of [...(this.listeners.get(name) ?? [])]) {
+      try {
+        cb(message['params']);
+      } catch (err) {
+        console.error(`[grunt-server] a desktop event listener for ${name} threw:`, err);
+      }
+    }
+  }
+
+  /**
+   * The two ends are out of step: the channel closes. The shell is told with
+   * a last line (it ends every session it holds and reads nothing more), and
+   * everything waiting here is rejected. `why` is this file's own words.
+   */
+  private fail(why: string): void {
+    if (this.ended) return;
+    console.error(`[grunt-server] closed the channel to the desktop app: ${why}.`);
+    try {
+      this.output.write(`${this.requestPrefix}${JSON.stringify({ method: 'computer.close', params: {} })}\n`);
+    } catch {
+      // It is closing anyway; the shell also ends every session when this process's pipes close.
+    }
+    this.end();
   }
 
   private end(): void {
@@ -408,5 +497,16 @@ export class DesktopChannel implements ShellChannel {
     this.held = 0;
     for (const id of [...this.late.keys()]) this.forget(id);
     for (const id of [...this.pending.keys()]) this.settle(id)?.reject(new DesktopChannelError('gone', GONE));
+    const listeners = [...this.closeListeners];
+    this.closeListeners.clear();
+    for (const cb of listeners) this.tell(cb);
+  }
+
+  private tell(cb: () => void): void {
+    try {
+      cb();
+    } catch (err) {
+      console.error('[grunt-server] a desktop channel close listener threw:', err);
+    }
   }
 }
