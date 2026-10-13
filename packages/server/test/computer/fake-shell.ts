@@ -1,4 +1,5 @@
 import { PassThrough } from 'node:stream';
+import { crc32 } from 'node:zlib';
 import { FAKE_COMPUTER_APP, FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
 import { DesktopChannel, RPC_PREFIX, type DesktopChannelOptions } from '../../src/computer/desktop-channel.js';
 import { DesktopComputerDriver, type DesktopComputerDriverOptions } from '../../src/computer/desktop-driver.js';
@@ -20,10 +21,29 @@ import { DesktopComputerDriver, type DesktopComputerDriverOptions } from '../../
 /** What the stand-in says to a chat that has no session. */
 export const SHELL_NO_SESSION = 'Grunt is not controlling this computer for that chat.';
 
-/** A Windows shell with computer use switched on and one shortcut registered. */
-export const HELLO_ON = Object.freeze({ platform: 'win32', version: '0.1.0', available: true, shortcuts: Object.freeze(['Ctrl+Shift+Space']) });
+/** A Windows shell with computer use switched on, one shortcut registered, and no session held. */
+export const HELLO_ON = Object.freeze({ platform: 'win32', version: '0.1.0', available: true, shortcuts: Object.freeze(['Ctrl+Shift+Space']), sessions: 0 });
 /** The shell as it ships: computer use off. */
-export const HELLO_OFF = Object.freeze({ platform: 'win32', version: '0.1.0', available: false, shortcuts: Object.freeze(['Ctrl+Shift+Space']) });
+export const HELLO_OFF = Object.freeze({ platform: 'win32', version: '0.1.0', available: false, shortcuts: Object.freeze(['Ctrl+Shift+Space']), sessions: 0 });
+
+/**
+ * `FAKE_PNG` with another size written into its header (and the header's
+ * checksum to match): the bytes of a screenshot that says it is `width` by
+ * `height`. Nothing is drawn and nothing is captured.
+ */
+export function pngOf(width: number, height: number, bytes = FAKE_PNG.length): Buffer {
+  const png = Buffer.alloc(Math.max(bytes, FAKE_PNG.length));
+  FAKE_PNG.copy(png);
+  png.writeUInt32BE(width, 16);
+  png.writeUInt32BE(height, 20);
+  png.writeUInt32BE(crc32(png.subarray(12, 29)), 29);
+  return png;
+}
+
+/** A screenshot answer of that size. */
+export function shotOf(width: number, height: number): { png: string; width: number; height: number } {
+  return { png: pngOf(width, height).toString('base64'), width, height };
+}
 
 /** `'silent'`: the request is read and never answered (the test may answer it later with `answer`). */
 export type ShellAnswer = { result: unknown } | { error: unknown } | 'silent';
@@ -46,11 +66,11 @@ export class FakeShell {
   hello: unknown = HELLO_ON;
   /** What a start answers for a chat with no session (the native dialog's answer). */
   startAnswer: unknown = { ok: true };
-  screenshot: unknown = { png: FAKE_PNG.toString('base64'), width: 1366, height: 768 };
+  screenshot: unknown = shotOf(1366, 768);
   cursor: unknown = { x: 3, y: 4 };
   target: unknown = FAKE_COMPUTER_APP;
   actAnswer: unknown = { ok: true };
-  endAnswer: unknown = {};
+  endAnswer: unknown = { ok: true };
   /** Takes a request over when it returns something; `undefined` leaves it to the shell's own behaviour. */
   override: (method: string, params: Record<string, unknown>) => ShellAnswer | undefined = () => undefined;
 

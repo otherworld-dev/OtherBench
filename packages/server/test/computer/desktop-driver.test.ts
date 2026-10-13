@@ -6,17 +6,21 @@ import { FAKE_COMPUTER_APP, FAKE_PNG, fakeComputerTarget } from '@grunt/core/tes
 import { RPC_PREFIX, type ShellChannel } from '../../src/computer/desktop-channel.js';
 import {
   ACT_TIMEOUT_MS,
+  DESKTOP_BUSY_REASON,
+  DESKTOP_END_PENDING_REASON,
+  DESKTOP_NO_POINT_REASON,
   DESKTOP_NO_SCREENSHOT_REASON,
   DESKTOP_NOT_AVAILABLE_REASON,
   DESKTOP_OUTSIDE_REASON,
   DesktopComputerDriver,
   END_TIMEOUT_MS,
+  MAX_QUEUED_PER_CHAT,
   MAX_TRACKED_CHATS,
   START_LATE_WATCH_MS,
   START_TIMEOUT_MS,
 } from '../../src/computer/desktop-driver.js';
 import { COMPUTER_END_TIMEOUT_MS, COMPUTER_NO_SESSION_REASON } from '../../src/computer/sessions.js';
-import { connect, connected, FakeShell, HELLO_OFF, HELLO_ON, SHELL_NO_SESSION, type ShellAnswer } from './fake-shell.js';
+import { connect, connected, FakeShell, HELLO_OFF, HELLO_ON, pngOf, SHELL_NO_SESSION, shotOf, type ShellAnswer } from './fake-shell.js';
 
 /**
  * `DesktopComputerDriver` against a stand-in shell only (fake-shell.ts): an
@@ -73,6 +77,12 @@ async function inSession(options: Parameters<typeof connected>[0] = {}) {
   return made;
 }
 
+/** Takes requests for `method` over: they are read and not answered. */
+const silentOn =
+  (...methods: string[]) =>
+  (method: string): ShellAnswer | undefined =>
+    methods.includes(method) ? 'silent' : undefined;
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -88,7 +98,7 @@ describe('DesktopComputerDriver: hello and availability', () => {
 
   it('is available only when a Windows shell says computer use is on', async () => {
     const cases: [unknown, boolean][] = [
-      [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [] }, true],
+      [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [], sessions: 0 }, true],
       [{ platform: 'win32', version: '0.1.0', available: true }, true],
       [HELLO_OFF, false],
       [{ platform: 'win32', version: '0.1.0', shortcuts: [] }, false],
@@ -138,17 +148,30 @@ describe('DesktopComputerDriver: hello and availability', () => {
     await vi.waitFor(() => expect(driver.available()).toBe(false));
   });
 
-  it('stops being available when a later hello says otherwise', async () => {
-    const { driver, shell } = await connected();
+  it('says hello once: a second call sends nothing, waits for the same answer and changes nothing', async () => {
+    const shell = new FakeShell();
+    shell.override = silentOn('computer.hello');
+    const { driver } = connect({ shell });
+    const reset = vi.fn();
+    driver.onReset(reset);
+    const first = driver.hello();
+    const second = driver.hello();
+    await tick();
+    expect(shell.methods()).toEqual(['computer.hello']);
+    shell.answer(1, HELLO_ON);
+    await Promise.all([first, second]);
+    expect(driver.available()).toBe(true);
+    expect(reset).toHaveBeenCalledTimes(1);
+
+    // Later, with a session: another hello is not sent, so it can neither turn computer use off nor reset anything.
+    shell.override = () => undefined;
+    await driver.ensureSession('c', 'Budget');
     shell.hello = HELLO_OFF;
     await driver.hello();
-    expect(driver.available()).toBe(false);
-    shell.hello = HELLO_ON;
-    await driver.hello();
+    expect(shell.methods().filter((m) => m === 'computer.hello')).toHaveLength(1);
     expect(driver.available()).toBe(true);
-    shell.override = () => ({ error: { message: 'no' } });
-    await driver.hello();
-    expect(driver.available()).toBe(false);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: true });
   });
 
   it('available() and reservedKeys() never throw, whatever the channel does', () => {
@@ -186,10 +209,10 @@ describe('DesktopComputerDriver: hello and availability', () => {
   });
 });
 
-describe('DesktopComputerDriver: the shell\'s shortcuts', () => {
+describe("DesktopComputerDriver: the shell's shortcuts", () => {
   it('has no list until the hello answers, then the list the hello gave', async () => {
     const shell = new FakeShell();
-    shell.override = (method) => (method === 'computer.hello' ? 'silent' : undefined);
+    shell.override = silentOn('computer.hello');
     const { driver } = connect({ shell });
     expect(driver.reservedKeys()).toBeNull();
     const hello = driver.hello();
@@ -198,6 +221,36 @@ describe('DesktopComputerDriver: the shell\'s shortcuts', () => {
     shell.answer(1, { ...HELLO_ON, shortcuts: ['Ctrl+Shift+Space', 'Ctrl+Alt+Backspace'] });
     await hello;
     expect(driver.reservedKeys()).toEqual(['Ctrl+Shift+Space', 'Ctrl+Alt+Backspace']);
+  });
+
+  it('takes no list from an event before the hello has answered: not a list, and not an empty one', async () => {
+    const shell = new FakeShell();
+    shell.override = silentOn('computer.hello');
+    const { driver } = connect({ shell });
+    // Before the hello is even sent, and while it is on its way.
+    shell.event('computer.shortcuts', { shortcuts: [] });
+    shell.event('computer.shortcuts', { shortcuts: ['F9'] });
+    await tick();
+    expect(driver.reservedKeys()).toBeNull();
+    const hello = driver.hello();
+    shell.event('computer.shortcuts', { shortcuts: [] });
+    await tick();
+    expect(driver.reservedKeys()).toBeNull();
+    // The hello's own word is the first list there is; events count from then on.
+    shell.answer(1, { platform: 'win32', version: '0.1.0', available: false });
+    await hello;
+    expect(driver.reservedKeys()).toBeNull();
+    shell.event('computer.shortcuts', { shortcuts: ['F9'] });
+    await vi.waitFor(() => expect(driver.reservedKeys()).toEqual(['F9']));
+
+    // A hello that was never answered leaves every event unheard.
+    const mute = new FakeShell();
+    mute.override = () => 'silent';
+    const other = connect({ shell: mute, driver: { callTimeoutMs: 20 } });
+    await other.driver.hello();
+    mute.event('computer.shortcuts', { shortcuts: [] });
+    await tick();
+    expect(other.driver.reservedKeys()).toBeNull();
   });
 
   it('has no list when the hello gave none it can read: never an empty list in its place', async () => {
@@ -215,7 +268,7 @@ describe('DesktopComputerDriver: the shell\'s shortcuts', () => {
     expect((await connected({ shell })).driver.reservedKeys()).toEqual([]);
   });
 
-  it('follows every computer.shortcuts event, and an event it cannot read leaves no list at all', async () => {
+  it('follows every computer.shortcuts event after the hello, and an event it cannot read leaves no list at all', async () => {
     const { driver, shell } = await connected();
     expect(driver.reservedKeys()).toEqual(['Ctrl+Shift+Space']);
     shell.event('computer.shortcuts', { shortcuts: ['F9', 'Ctrl+Alt+Backspace'] });
@@ -280,6 +333,27 @@ describe('DesktopComputerDriver: starting a session', () => {
     ]);
   });
 
+  it('has one start with the shell per chat at a time: whoever asks meanwhile gets its answer', async () => {
+    const { driver, shell } = await connected();
+    shell.override = silentOn('computer.start');
+    const asked = Array.from({ length: 80 }, () => driver.ensureSession('c', 'Budget'));
+    const other = driver.ensureSession('d', 'Other');
+    await tick();
+    expect(shell.sent('computer.start')).toEqual([
+      { chatId: 'c', title: 'Budget' },
+      { chatId: 'd', title: 'Other' },
+    ]);
+    shell.sessions.add('c');
+    shell.answer(2, { ok: true });
+    shell.answer(3, { ok: false, reason: 'no' });
+    expect(await Promise.all(asked)).toEqual(Array.from({ length: 80 }, () => ({ ok: true })));
+    expect(await other).toEqual({ ok: false, reason: 'no' });
+    // Once it has settled, the next one asks the shell again.
+    shell.override = () => undefined;
+    await driver.ensureSession('c', 'Budget');
+    expect(shell.sent('computer.start')).toHaveLength(3);
+  });
+
   it("answers the shell's refusal as it is, bounded to one clean line, and keeps no session", async () => {
     const { driver, shell } = await connected();
     shell.startAnswer = { ok: false, reason: "The user didn't let Grunt control the computer." };
@@ -295,7 +369,7 @@ describe('DesktopComputerDriver: starting a session', () => {
       shell.startAnswer = { ok: false, reason };
       expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: 'The desktop app refused to start controlling this computer.' });
     }
-    // Nothing was ended: the shell said itself that there is no session.
+    // Nothing was ended: this side had no session for the chat, and the shell said itself that there is none.
     expect(shell.sent('computer.end')).toEqual([]);
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
   });
@@ -307,9 +381,43 @@ describe('DesktopComputerDriver: starting a session', () => {
     expect(shell.sent('computer.end')).toEqual([]);
   });
 
+  it('a start that does not end in a yes for a chat WITH a session on record ends that session at the shell', async () => {
+    // The caller is about to be told there is no session, so there must be none: with the shell, and here.
+    const outcomes: [string, ShellAnswer, string][] = [
+      ['the shell refuses', { result: { ok: false, reason: 'not now' } }, 'not now'],
+      ['the shell errors', { error: { message: 'internal failure' } }, 'internal failure'],
+    ];
+    for (const [label, answer, reason] of outcomes) {
+      const { driver, shell } = await inSession();
+      shell.override = (method) => (method === 'computer.start' ? answer : undefined);
+      expect(await driver.ensureSession('c', 'Budget'), label).toEqual({ ok: false, reason });
+      expect(shell.sent('computer.end'), label).toEqual([{ chatId: 'c' }]);
+      expect(shell.sessions.has('c'), label).toBe(false);
+      expect(await driver.act('c', TYPE, EXPECT), label).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    }
+  });
+
+  it('the same when the start could not even be sent (the channel is full): the end still goes out', async () => {
+    const { driver, shell } = await inSession({ channel: { maxPending: 2 } });
+    // Two other chats' dialogs are up and take every ordinary place.
+    shell.override = (method, params) => (method === 'computer.start' && params['chatId'] !== 'c' ? 'silent' : undefined);
+    const others = [driver.ensureSession('x', 'X'), driver.ensureSession('y', 'Y')];
+    await tick();
+    expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: 'The desktop app has too many requests waiting; nothing was sent.' });
+    expect(shell.sent('computer.start').filter((p) => (p as { chatId: string }).chatId === 'c')).toHaveLength(1);
+    expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }]);
+    expect(shell.sessions.has('c')).toBe(false);
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    // With no session on record, the same refusal has nothing to end.
+    expect(await driver.ensureSession('z', 'Z')).toEqual({ ok: false, reason: 'The desktop app has too many requests waiting; nothing was sent.' });
+    expect(shell.sent('computer.end')).toHaveLength(1);
+    shell.close();
+    await Promise.allSettled(others);
+  });
+
   it('gives up on a dialog nobody answers: it tells the shell to end that start, and answers a refusal', async () => {
     const { driver, shell } = await connected({ driver: { startTimeoutMs: 30 } });
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start');
     const answer = await driver.ensureSession('c', 'Budget');
     expect(answer).toEqual({ ok: false, reason: "The desktop app didn't answer the request to control this computer in time, so nothing was started." });
     expect(shell.methods()).toEqual(['computer.hello', 'computer.start', 'computer.end']);
@@ -318,9 +426,18 @@ describe('DesktopComputerDriver: starting a session', () => {
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
   });
 
+  it('a start it gave up on holds no place among the waiting calls: only a note, for a while', async () => {
+    const { driver, shell, channel } = await connected({ driver: { startTimeoutMs: 20, startLateMs: 300 } });
+    shell.override = silentOn('computer.start');
+    expect((await driver.ensureSession('c', 'Budget')).ok).toBe(false);
+    expect(channel.pendingCalls).toBe(0);
+    expect(channel.lateNotes).toBe(1);
+    await vi.waitFor(() => expect(channel.lateNotes).toBe(0));
+  });
+
   it('a yes that comes after it gave up is not a session: the shell is told to end it again', async () => {
     const { driver, shell } = await connected({ driver: { startTimeoutMs: 30 } });
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start');
     expect((await driver.ensureSession('c', 'Budget')).ok).toBe(false);
     expect(shell.sent('computer.end')).toHaveLength(1);
     // The person says OK to the old dialog; a shell that got this wrong now holds a session.
@@ -334,7 +451,7 @@ describe('DesktopComputerDriver: starting a session', () => {
 
   it('a no that comes after it gave up needs nothing more', async () => {
     const { driver, shell } = await connected({ driver: { startTimeoutMs: 30 } });
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start');
     expect((await driver.ensureSession('c', 'Budget')).ok).toBe(false);
     shell.answer(shell.idOf('computer.start'), { ok: false, reason: 'cancelled' });
     await wait(20);
@@ -343,7 +460,7 @@ describe('DesktopComputerDriver: starting a session', () => {
 
   it('a late yes for an old start leaves a session that a newer start made alone', async () => {
     const { driver, shell } = await connected({ driver: { startTimeoutMs: 30 } });
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start');
     expect((await driver.ensureSession('c', 'Budget')).ok).toBe(false);
     const old = shell.idOf('computer.start');
     shell.override = () => undefined;
@@ -355,17 +472,9 @@ describe('DesktopComputerDriver: starting a session', () => {
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: true });
   });
 
-  it('stops listening for a late answer after a while, so the call does not wait for ever', async () => {
-    const { driver, shell, channel } = await connected({ driver: { startTimeoutMs: 20, startLateMs: 300 } });
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
-    expect((await driver.ensureSession('c', 'Budget')).ok).toBe(false);
-    expect(channel.pendingCalls).toBe(1);
-    await vi.waitFor(() => expect(channel.pendingCalls).toBe(0));
-  });
-
   it('throws, in its own words, when it gave up and the shell did not confirm the end', async () => {
     const { driver, shell } = await connected({ driver: { startTimeoutMs: 30, endTimeoutMs: 30 } });
-    shell.override = (method) => (method === 'computer.start' || method === 'computer.end' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start', 'computer.end');
     const err = await rejection(driver.ensureSession('c', 'Budget'));
     expect(err.message).toBe(
       "The desktop app didn't answer the request to control this computer in time, so nothing was started. Grunt couldn't confirm that the desktop app cancelled it."
@@ -377,6 +486,28 @@ describe('DesktopComputerDriver: starting a session', () => {
     shell.override = () => undefined;
     await expect(driver.endSession('c')).resolves.toBeUndefined();
     expect(shell.sent('computer.end')).toHaveLength(3);
+  });
+
+  it('starts nothing, for any chat, while the shell has not confirmed an end it was asked for: it asks again first', async () => {
+    const { driver, shell } = await inSession({ driver: { endTimeoutMs: 30 } });
+    await driver.ensureSession('d', 'Other');
+    shell.override = silentOn('computer.end');
+    await expect(driver.endSession('c')).rejects.toThrow("didn't answer in time");
+    await expect(driver.endSession('d')).rejects.toThrow("didn't answer in time");
+    const starts = shell.sent('computer.start').length;
+    const ends = shell.sent('computer.end').length;
+    for (const chatId of ['c', 'e']) {
+      const err = await rejection(driver.ensureSession(chatId, 'Any'));
+      expect(err.message).toBe(DESKTOP_END_PENDING_REASON);
+    }
+    expect(shell.sent('computer.start')).toHaveLength(starts);
+    // Each refused start asked for ONE of the ends again and stopped at that failure: it did not wait for both.
+    expect(shell.sent('computer.end')).toHaveLength(ends + 2);
+    // Once the shell confirms them, the start goes through.
+    shell.override = () => undefined;
+    expect(await driver.ensureSession('e', 'Any')).toEqual({ ok: true });
+    expect(shell.sent('computer.end')).toHaveLength(ends + 4);
+    expect([...shell.sessions]).toEqual(['e']);
   });
 
   it('takes an answer it cannot read as not knowing: the start is ended, and refused', async () => {
@@ -394,7 +525,7 @@ describe('DesktopComputerDriver: starting a session', () => {
 
   it('throws when the shell goes away while its dialog is up: nobody can say what came of it', async () => {
     const { driver, shell } = await connected();
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start');
     const starting = driver.ensureSession('c', 'Budget');
     await tick();
     shell.close();
@@ -443,25 +574,48 @@ describe('DesktopComputerDriver: ending a session', () => {
     expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
   });
 
+  it('has one end with the shell per chat at a time: whoever asks meanwhile gets its answer', async () => {
+    const { driver, shell } = await inSession();
+    shell.override = silentOn('computer.end');
+    const ends = Array.from({ length: 200 }, () => driver.endSession('c'));
+    await tick();
+    expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }]);
+    shell.answer(shell.idOf('computer.end'), { ok: true });
+    await expect(Promise.all(ends)).resolves.toHaveLength(200);
+  });
+
   it('forgets the session at once, before the shell has answered', async () => {
     const { driver, shell } = await inSession();
-    shell.override = (method) => (method === 'computer.end' ? 'silent' : undefined);
+    shell.override = silentOn('computer.end');
     const ending = driver.endSession('c');
     expect(await driver.act('c', CLICK, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
     expect(await driver.target('c', 'foreground')).toEqual({ refuse: COMPUTER_NO_SESSION_REASON });
     expect(shell.sent('computer.act')).toEqual([]);
-    shell.answer(shell.idOf('computer.end'), {});
+    shell.answer(shell.idOf('computer.end'), { ok: true });
     await expect(ending).resolves.toBeUndefined();
   });
 
-  it('rejects when the shell did not confirm the end, and resolves once it does', async () => {
+  it('is confirmed by { ok: true } and by nothing else; anything else rejects, and it resolves once the shell does confirm', async () => {
+    const unreadable = "The desktop app's answer couldn't be read, so Grunt can't tell whether the control session ended.";
     const failures: [ShellAnswer, string][] = [
       [{ error: { message: 'A key could not be released.' } }, 'A key could not be released.'],
       [{ result: { ok: false, reason: 'A key could not be released.' } }, 'A key could not be released.'],
       [{ result: { ok: false } }, "The desktop app couldn't end the control session."],
-      [{ result: null }, "The desktop app's answer couldn't be read, so Grunt can't tell whether the control session ended."],
-      [{ result: 'done' }, "The desktop app's answer couldn't be read, so Grunt can't tell whether the control session ended."],
-      [{ result: [] }, "The desktop app's answer couldn't be read, so Grunt can't tell whether the control session ended."],
+      [{ result: {} }, unreadable],
+      [{ result: { ok: 'false' } }, unreadable],
+      [{ result: { ok: 'true' } }, unreadable],
+      [{ result: { ok: 0 } }, unreadable],
+      [{ result: { ok: 1 } }, unreadable],
+      [{ result: { ok: null } }, unreadable],
+      [{ result: { error: { message: 'could not end' } } }, unreadable],
+      [{ result: { refuse: 'no' } }, unreadable],
+      [{ result: { ended: false } }, unreadable],
+      [{ result: { ended: true } }, unreadable],
+      [{ result: null }, unreadable],
+      [{ result: 'done' }, unreadable],
+      [{ result: true }, unreadable],
+      [{ result: [] }, unreadable],
+      [{ result: [{ ok: true }] }, unreadable],
       ['silent', "The desktop app didn't answer in time."],
     ];
     for (const [answer, message] of failures) {
@@ -470,25 +624,25 @@ describe('DesktopComputerDriver: ending a session', () => {
       const err = await rejection(driver.endSession('c'));
       expect(err.message, JSON.stringify(answer)).toBe(message);
       expectClean(err.message);
-      // Still unconfirmed the second time; confirmed the third.
+      // Still unconfirmed the second time, and it holds a start back; confirmed the third.
       await expect(driver.endSession('c')).rejects.toThrow(message);
+      expect((await rejection(driver.ensureSession('d', 'Other'))).message, JSON.stringify(answer)).toBe(DESKTOP_END_PENDING_REASON);
       shell.override = () => undefined;
       await expect(driver.endSession('c')).resolves.toBeUndefined();
-      expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }, { chatId: 'c' }, { chatId: 'c' }]);
+      expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }, { chatId: 'c' }, { chatId: 'c' }, { chatId: 'c' }]);
+      expect(await driver.ensureSession('d', 'Other')).toEqual({ ok: true });
     }
   });
 
-  it('takes {} and { ok: true } as the end confirmed', async () => {
-    for (const endAnswer of [{}, { ok: true }]) {
-      const { driver, shell } = await inSession();
-      shell.endAnswer = endAnswer;
-      await expect(driver.endSession('c')).resolves.toBeUndefined();
-    }
+  it('takes { ok: true } with more beside it as confirmed', async () => {
+    const { driver, shell } = await inSession();
+    shell.endAnswer = { ok: true, released: ['ctrl'] };
+    await expect(driver.endSession('c')).resolves.toBeUndefined();
   });
 
-  it('an end while the start dialog is still up goes to the shell too, and a yes that still comes is the caller\'s to end', async () => {
+  it("an end while the start dialog is still up goes to the shell too, and a yes that still comes is the caller's to end", async () => {
     const { driver, shell } = await connected();
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    shell.override = silentOn('computer.start');
     const starting = driver.ensureSession('c', 'Budget');
     await tick();
     // Stop while the dialog is up: the shell is told (it cancels the dialog), and the start then says no.
@@ -524,7 +678,7 @@ describe('DesktopComputerDriver: ending a session', () => {
     shell.close();
     await vi.waitFor(() => expect(driver.available()).toBe(false));
     const err = await rejection(driver.endSession('c'));
-    expect(err.message).toBe("The desktop app went away before it confirmed that the control session ended.");
+    expect(err.message).toBe('The desktop app went away before it confirmed that the control session ended.');
     await expect(driver.endSession('c')).rejects.toThrow('went away before it confirmed');
     // Another chat, which had nothing, is not held up by it.
     await expect(driver.endSession('d')).resolves.toBeUndefined();
@@ -533,11 +687,151 @@ describe('DesktopComputerDriver: ending a session', () => {
 
   it('rejects when the shell goes away while the end is on its way', async () => {
     const { driver, shell } = await inSession();
-    shell.override = (method) => (method === 'computer.end' ? 'silent' : undefined);
+    shell.override = silentOn('computer.end');
     const ending = driver.endSession('c');
     await tick();
     shell.close();
     expect((await rejection(ending)).message).toBe('The desktop app went away.');
+  });
+
+  it('reaches the shell when every ordinary place on the channel is taken', async () => {
+    // The reviewer's probe, at the driver: the channel is full of other calls, and Stop still goes out.
+    const { driver, shell, channel } = await inSession({ channel: { maxPending: 4 } });
+    for (const chatId of ['d', 'e', 'f']) await driver.ensureSession(chatId, chatId);
+    shell.override = silentOn('computer.act');
+    const acts = ['c', 'd', 'e', 'f'].map((chatId) => driver.act(chatId, TYPE, EXPECT));
+    await tick();
+    expect(channel.pendingCalls).toBe(4);
+    expect(shell.sent('computer.act')).toHaveLength(4);
+
+    await expect(driver.endSession('c')).resolves.toBeUndefined();
+    expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }]);
+    expect(shell.sessions.has('c')).toBe(false);
+    // The action that was with the shell is not waited for any longer: whatever it answers now is not this session's.
+    expect(await acts[0]).toEqual({ ok: false, reason: 'The control session ended while the desktop app was working. Whether the action was carried out is not known.' });
+    shell.answer(shell.asked.find((r) => r.method === 'computer.act')!.id, { ok: true });
+    shell.close();
+    await Promise.allSettled(acts);
+  });
+});
+
+describe('DesktopComputerDriver: one call at a time for a chat', () => {
+  it("sends one of a chat's calls at a time, in the order they were made, whatever kind they are", async () => {
+    const { driver, shell } = await inSession();
+    shell.override = silentOn('computer.act', 'computer.screenshot', 'computer.target', 'computer.cursor');
+    const before = shell.asked.length;
+    const calls = [
+      driver.act('c', TYPE, EXPECT),
+      driver.screenshot('c'),
+      driver.target('c', 'foreground'),
+      driver.cursorPosition('c'),
+      driver.act('c', KEY, EXPECT),
+    ];
+    const answers: [string, unknown][] = [
+      ['computer.act', { ok: true }],
+      ['computer.screenshot', shotOf(1366, 768)],
+      ['computer.target', FAKE_COMPUTER_APP],
+      ['computer.cursor', { x: 1, y: 2 }],
+      ['computer.act', { ok: true }],
+    ];
+    for (const [i, [method, result]] of answers.entries()) {
+      await tick();
+      // Exactly one more request than answers given: the next is not sent until the one before is answered.
+      expect(shell.asked.slice(before).map((r) => r.method)).toEqual(answers.slice(0, i + 1).map(([m]) => m));
+      shell.answer(shell.asked.at(-1)!.id, result);
+      expect(method).toBe(shell.asked.at(-1)!.method);
+    }
+    const [typed, shot, target, cursor, key] = await Promise.all(calls);
+    expect(typed).toEqual({ ok: true });
+    expect((shot as { width: number }).width).toBe(1366);
+    expect(target).toEqual(FAKE_COMPUTER_APP);
+    expect(cursor).toEqual({ x: 1, y: 2 });
+    expect(key).toEqual({ ok: true });
+  });
+
+  it("does not make one chat wait for another's call", async () => {
+    const { driver, shell } = await inSession();
+    await driver.ensureSession('d', 'Other');
+    shell.override = (method, params) => (method === 'computer.act' && params['chatId'] === 'c' ? 'silent' : undefined);
+    const stuck = driver.act('c', TYPE, EXPECT);
+    expect(await driver.act('d', TYPE, EXPECT)).toEqual({ ok: true });
+    shell.answer(shell.asked.find((r) => r.method === 'computer.act')!.id, { ok: true });
+    expect(await stuck).toEqual({ ok: true });
+  });
+
+  it('lets a bounded few wait their turn and refuses the next without sending it', async () => {
+    const { driver, shell } = await inSession();
+    shell.override = silentOn('computer.act');
+    const sent = Array.from({ length: 1 + MAX_QUEUED_PER_CHAT }, () => driver.act('c', TYPE, EXPECT));
+    await tick();
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: DESKTOP_BUSY_REASON });
+    expect(await driver.target('c', 'foreground')).toEqual({ refuse: DESKTOP_BUSY_REASON });
+    expect((await rejection(driver.screenshot('c'))).message).toBe(DESKTOP_BUSY_REASON);
+    expect((await rejection(driver.cursorPosition('c'))).message).toBe(DESKTOP_BUSY_REASON);
+    expect(shell.sent('computer.act')).toHaveLength(1);
+    expect(MAX_QUEUED_PER_CHAT).toBe(16);
+    // As the shell answers, each waiting one goes in its turn.
+    shell.override = () => undefined;
+    shell.answer(shell.idOf('computer.act'), { ok: true });
+    expect(await Promise.all(sent)).toEqual(sent.map(() => ({ ok: true })));
+    expect(shell.sent('computer.act')).toHaveLength(1 + MAX_QUEUED_PER_CHAT);
+  });
+
+  it('when the session ends, every call that was waiting is dropped unsent, and the one with the shell is not believed', async () => {
+    const ends: [string, (made: Awaited<ReturnType<typeof inSession>>) => Promise<void>][] = [
+      ['endSession', async ({ driver }) => driver.endSession('c')],
+      [
+        'the shell says stopped',
+        async ({ shell }) => {
+          shell.sessions.delete('c');
+          shell.event('computer.stopped', { chatId: 'c', why: 'hotkey' });
+          await tick();
+        },
+      ],
+    ];
+    for (const [label, end] of ends) {
+      const made = await inSession();
+      const { driver, shell } = made;
+      shell.override = silentOn('computer.act', 'computer.screenshot', 'computer.target', 'computer.cursor');
+      const first = driver.act('c', TYPE, EXPECT);
+      const waiting = { act: driver.act('c', KEY, EXPECT), shot: rejection(driver.screenshot('c')), target: driver.target('c', 'foreground'), cursor: rejection(driver.cursorPosition('c')) };
+      await tick();
+      const actId = shell.idOf('computer.act');
+      shell.override = () => undefined;
+
+      await end(made);
+
+      expect(await waiting.act, label).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+      expect((await waiting.shot).message, label).toBe(COMPUTER_NO_SESSION_REASON);
+      expect(await waiting.target, label).toEqual({ refuse: COMPUTER_NO_SESSION_REASON });
+      expect((await waiting.cursor).message, label).toBe(COMPUTER_NO_SESSION_REASON);
+      // Only the first ever reached the shell.
+      expect(shell.sent('computer.act'), label).toHaveLength(1);
+      expect(shell.sent('computer.screenshot'), label).toHaveLength(1);
+      expect(shell.sent('computer.target'), label).toEqual([]);
+      expect(shell.sent('computer.cursor'), label).toEqual([]);
+      // Its caller is not kept waiting on a shell that was told to stop, and a yes that comes for it later is not passed on as done.
+      expect(await first, label).toEqual({
+        ok: false,
+        reason: 'The control session ended while the desktop app was working. Whether the action was carried out is not known.',
+      });
+      shell.answer(actId, { ok: true });
+      await tick();
+    }
+  });
+
+  it('checks a point when its turn comes: against the screenshot that was ahead of it in the queue', async () => {
+    const { driver, shell } = await inSession();
+    shell.screenshot = shotOf(800, 600);
+    const shot = driver.screenshot('c');
+    // Made while the new screenshot is still on its way: inside the old one, outside the new.
+    const click = driver.act('c', action({ action: 'left_click', coordinate: [1000, 700] }), EXPECT);
+    const target = driver.target('c', { x: 1000, y: 700 });
+    await shot;
+    expect(await click).toEqual({ ok: false, reason: DESKTOP_OUTSIDE_REASON });
+    expect(await target).toEqual({ refuse: DESKTOP_OUTSIDE_REASON });
+    expect(shell.sent('computer.act')).toEqual([]);
+    expect(shell.sent('computer.target')).toEqual([]);
   });
 });
 
@@ -548,7 +842,7 @@ describe('DesktopComputerDriver: screenshots', () => {
     const shot = await driver.screenshot('c');
     expect(shell.lines.at(-1)).toBe('GRUNT-RPC {"id":3,"method":"computer.screenshot","params":{"chatId":"c"}}\n');
     expect(Buffer.isBuffer(shot.png)).toBe(true);
-    expect(shot.png.equals(FAKE_PNG)).toBe(true);
+    expect(shot.png.equals(pngOf(1366, 768))).toBe(true);
     expect({ width: shot.width, height: shot.height }).toEqual({ width: 1366, height: 768 });
     expect(Object.keys(shot).sort()).toEqual(['height', 'png', 'width']);
   });
@@ -561,8 +855,9 @@ describe('DesktopComputerDriver: screenshots', () => {
   });
 
   it('refuses a screenshot that is not what the port defines, and then has none for that session', async () => {
-    const png = FAKE_PNG.toString('base64');
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]).toString('base64');
+    const png = pngOf(1366, 768).toString('base64');
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).toString('base64');
+    const noHeader = Buffer.concat([FAKE_PNG.subarray(0, 8), Buffer.alloc(24)]).toString('base64');
     const bad: unknown[] = [
       null,
       'png',
@@ -574,8 +869,11 @@ describe('DesktopComputerDriver: screenshots', () => {
       { png: `${png.slice(0, -4)}!!==`, width: 1366, height: 768 },
       { png: `${png}\n`, width: 1366, height: 768 },
       { png: png.slice(0, -1), width: 1366, height: 768 },
-      { png: Buffer.from('not an image at all').toString('base64'), width: 1366, height: 768 },
+      { png: Buffer.from('not an image at all, whatever it says').toString('base64'), width: 1366, height: 768 },
       { png: jpeg, width: 1366, height: 768 },
+      // A PNG signature with no header after it, or cut off before its size.
+      { png: noHeader, width: 1366, height: 768 },
+      { png: FAKE_PNG.subarray(0, 20).toString('base64'), width: 1366, height: 768 },
       { png, height: 768 },
       { png, width: '1366', height: 768 },
       { png, width: 1366.5, height: 768 },
@@ -586,6 +884,13 @@ describe('DesktopComputerDriver: screenshots', () => {
       { png, width: COMPUTER_LIMITS.coordinateMax + 1, height: 768 },
       { png, width: 1366, height: COMPUTER_LIMITS.coordinateMax + 1 },
       { png, width: Number.MAX_SAFE_INTEGER, height: 768 },
+      // A size beside the image that is not the image's own: a point would be checked against one and clicked in the other.
+      { png, width: 1365, height: 768 },
+      { png, width: 1366, height: 767 },
+      { png, width: 768, height: 1366 },
+      { png, width: 2732, height: 1536 },
+      { png: FAKE_PNG.toString('base64'), width: 1366, height: 768 },
+      { png: pngOf(40000, 768).toString('base64'), width: 1366, height: 768 },
     ];
     for (const screenshot of bad) {
       const { driver, shell } = await inSession();
@@ -601,25 +906,28 @@ describe('DesktopComputerDriver: screenshots', () => {
     expect(COMPUTER_LIMITS.coordinateMax).toBe(32767);
   });
 
-  it('takes the largest size a coordinate can have', async () => {
+  it("takes the image's own size when the size beside it says the same, up to the largest a coordinate can have", async () => {
     const { driver, shell } = await inSession();
-    shell.screenshot = { png: FAKE_PNG.toString('base64'), width: COMPUTER_LIMITS.coordinateMax, height: COMPUTER_LIMITS.coordinateMax };
-    const shot = await driver.screenshot('c');
-    expect([shot.width, shot.height]).toEqual([32767, 32767]);
+    for (const [width, height] of [
+      [1, 1],
+      [800, 600],
+      [COMPUTER_LIMITS.coordinateMax, COMPUTER_LIMITS.coordinateMax],
+    ] as const) {
+      shell.screenshot = shotOf(width, height);
+      const shot = await driver.screenshot('c');
+      expect([shot.width, shot.height]).toEqual([width, height]);
+    }
   });
 
   it('takes a screenshot of exactly 5 MB and refuses one byte more', async () => {
     const { driver, shell, channel } = await inSession();
-    const largest = Buffer.alloc(MAX_TOOL_IMAGE_BYTES);
-    FAKE_PNG.copy(largest, 0, 0, 8);
+    const largest = pngOf(1366, 768, MAX_TOOL_IMAGE_BYTES);
     shell.screenshot = { png: largest.toString('base64'), width: 1366, height: 768 };
     const shot = await driver.screenshot('c');
     expect(shot.png.length).toBe(MAX_TOOL_IMAGE_BYTES);
     expect(shot.png.equals(largest)).toBe(true);
 
-    const over = Buffer.alloc(MAX_TOOL_IMAGE_BYTES + 1);
-    FAKE_PNG.copy(over, 0, 0, 8);
-    shell.screenshot = { png: over.toString('base64'), width: 1366, height: 768 };
+    shell.screenshot = { png: pngOf(1366, 768, MAX_TOOL_IMAGE_BYTES + 1).toString('base64'), width: 1366, height: 768 };
     expect((await rejection(driver.screenshot('c'))).message).toBe("The desktop app's screenshot couldn't be read.");
     expect(channel.droppedLines).toBe(0);
   });
@@ -627,14 +935,12 @@ describe('DesktopComputerDriver: screenshots', () => {
   it('never holds a line longer than the channel allows: such a screenshot is dropped as it arrives and the call times out', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const { driver, shell, channel } = await inSession({ driver: { callTimeoutMs: 1000 } });
-    const huge = Buffer.alloc(MAX_TOOL_IMAGE_BYTES + 200_000);
-    FAKE_PNG.copy(huge, 0, 0, 8);
-    shell.screenshot = { png: huge.toString('base64'), width: 1366, height: 768 };
+    shell.screenshot = { png: pngOf(1366, 768, MAX_TOOL_IMAGE_BYTES + 200_000).toString('base64'), width: 1366, height: 768 };
     expect((await rejection(driver.screenshot('c'))).message).toBe("The desktop app didn't answer in time.");
     expect(channel.droppedLines).toBe(1);
     expect(channel.bufferedBytes).toBe(0);
     // The channel still reads what comes next.
-    shell.screenshot = { png: FAKE_PNG.toString('base64'), width: 1366, height: 768 };
+    shell.screenshot = shotOf(1366, 768);
     expect((await driver.screenshot('c')).width).toBe(1366);
   });
 
@@ -644,29 +950,53 @@ describe('DesktopComputerDriver: screenshots', () => {
     const said = await rejection(driver.screenshot('c'));
     expect(said.message.startsWith('capture failed at C:\\x y')).toBe(true);
     expectClean(said.message);
-    shell.override = (method) => (method === 'computer.screenshot' ? 'silent' : undefined);
+    shell.override = silentOn('computer.screenshot');
     expect((await rejection(driver.screenshot('c'))).message).toBe("The desktop app didn't answer in time.");
     expect(await driver.act('c', CLICK, EXPECT)).toEqual({ ok: false, reason: DESKTOP_NO_SCREENSHOT_REASON });
   });
 
   it('hands on no screenshot of a session that ended while it was being taken', async () => {
     const { driver, shell } = await inSession();
-    shell.override = (method) => (method === 'computer.screenshot' ? 'silent' : undefined);
-    const taking = driver.screenshot('c');
+    shell.override = silentOn('computer.screenshot');
+    const taking = rejection(driver.screenshot('c'));
     await tick();
     shell.event('computer.stopped', { chatId: 'c', why: 'hotkey' });
+    // Its caller is told at once, without the shell having answered; what the shell sends afterwards is nobody's.
+    expect((await taking).message).toBe(COMPUTER_NO_SESSION_REASON);
+    shell.answer(shell.idOf('computer.screenshot'), shotOf(1366, 768));
     await tick();
-    shell.answer(shell.idOf('computer.screenshot'), { png: FAKE_PNG.toString('base64'), width: 1366, height: 768 });
-    expect((await rejection(taking)).message).toBe(COMPUTER_NO_SESSION_REASON);
   });
 
-  it('reads the cursor with computer.cursor { chatId }, and refuses an answer that is not two numbers', async () => {
+  it('reads the cursor with computer.cursor { chatId }: two whole numbers a point can be, or an error', async () => {
     const { driver, shell } = await inSession();
     expect(await driver.cursorPosition('c')).toEqual({ x: 3, y: 4 });
     expect(shell.sent('computer.cursor')).toEqual([{ chatId: 'c' }]);
     shell.cursor = { x: 3, y: 4, window: 'hwnd-9' };
-    expect(await driver.cursorPosition('c')).toEqual({ x: 3, y: 4 });
-    for (const cursor of [null, [3, 4], { x: '3', y: 4 }, { x: 3 }, { x: 3, y: null }, 'here', { x: 1e400, y: 4 }]) {
+    expect(await driver.cursorPosition('c')).toStrictEqual({ x: 3, y: 4 });
+    for (const cursor of [
+      { x: 0, y: 0 },
+      { x: COMPUTER_LIMITS.coordinateMax, y: COMPUTER_LIMITS.coordinateMax },
+    ]) {
+      shell.cursor = cursor;
+      expect(await driver.cursorPosition('c')).toEqual(cursor);
+    }
+    const bad: unknown[] = [
+      null,
+      [3, 4],
+      'here',
+      { x: '3', y: 4 },
+      { x: 3 },
+      { x: 3, y: null },
+      { x: 1e400, y: 4 },
+      { x: 3.5, y: 4 },
+      { x: 3, y: 4.25 },
+      { x: -1, y: 4 },
+      { x: 3, y: -4 },
+      { x: COMPUTER_LIMITS.coordinateMax + 1, y: 4 },
+      { x: 3, y: 1e9 },
+      { x: true, y: 4 },
+    ];
+    for (const cursor of bad) {
       shell.cursor = cursor;
       expect((await rejection(driver.cursorPosition('c'))).message, JSON.stringify(cursor)).toBe("The cursor's position couldn't be read.");
     }
@@ -691,7 +1021,7 @@ describe('DesktopComputerDriver: points', () => {
 
   it('refuses a point outside its own last screenshot, whatever the caller thinks the size is', async () => {
     const { driver, shell } = await inSession();
-    shell.screenshot = { png: FAKE_PNG.toString('base64'), width: 800, height: 600 };
+    shell.screenshot = shotOf(800, 600);
     await driver.screenshot('c');
     const inside: [number, number][] = [
       [0, 0],
@@ -715,9 +1045,15 @@ describe('DesktopComputerDriver: points', () => {
       expect(await driver.act('c', action({ action: 'left_click', coordinate: [x, y] }), EXPECT)).toEqual({ ok: false, reason: DESKTOP_OUTSIDE_REASON });
       expect(await driver.target('c', { x, y })).toEqual({ refuse: DESKTOP_OUTSIDE_REASON });
     }
-    // And a point nobody should have been able to build.
-    const unbuilt: unknown[] = [[-1, 5], [5, -1], [1.5, 5], [5, Number.NaN], ['5', 5], [5], [5, 5, 5], null, '5,5', { x: 5, y: 5 }];
-    for (const coordinate of unbuilt) {
+    // And a pair nobody should have been able to build.
+    for (const coordinate of [
+      [-1, 5],
+      [5, -1],
+      [1.5, 5],
+      [5, Number.NaN],
+      ['5', 5],
+      [null, 5],
+    ]) {
       const a = { action: 'left_click', coordinate } as unknown as ComputerAction;
       expect(await driver.act('c', a, EXPECT), JSON.stringify(coordinate)).toEqual({ ok: false, reason: DESKTOP_OUTSIDE_REASON });
     }
@@ -725,6 +1061,22 @@ describe('DesktopComputerDriver: points', () => {
       expect(await driver.target('c', at as never), JSON.stringify(at)).toEqual({ refuse: DESKTOP_OUTSIDE_REASON });
     }
     expect(shell.methods()).toHaveLength(sent);
+  });
+
+  it('never sends a mouse action without its point, and says the mistake is its own', async () => {
+    const { driver, shell } = await inSession();
+    const sent = shell.methods().length;
+    const mouse = ['mouse_move', 'left_click', 'right_click', 'double_click', 'triple_click', 'scroll'];
+    for (const name of mouse) {
+      for (const coordinate of [undefined, null, [5], [5, 5, 5], '5,5', { x: 5, y: 5 }, 5]) {
+        const a = { action: name, ...(coordinate === undefined ? {} : { coordinate }), scroll_direction: 'down', scroll_amount: 1 } as unknown as ComputerAction;
+        expect(await driver.act('c', a, EXPECT), `${name} ${JSON.stringify(coordinate)}`).toEqual({ ok: false, reason: DESKTOP_NO_POINT_REASON });
+      }
+    }
+    expect(DESKTOP_NO_POINT_REASON).toContain('a mistake in Grunt');
+    expect(shell.methods()).toHaveLength(sent);
+    // The keyboard's actions have no point and need none.
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: true });
   });
 
   it('a new session starts with no screenshot, however the last one ended', async () => {
@@ -735,7 +1087,6 @@ describe('DesktopComputerDriver: points', () => {
         shell.event('computer.stopped', { chatId: 'c', why: 'idle' });
         await vi.waitFor(async () => expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON }));
       },
-      async ({ driver }) => driver.hello(),
     ];
     for (const end of ends) {
       const made = await inSession();
@@ -820,13 +1171,13 @@ describe('DesktopComputerDriver: targets', () => {
     shell.override = (method) => (method === 'computer.target' ? { error: { message: 'The window is gone.\nstack: at foo' } } : undefined);
     const said = await rejection(driver.target('c', 'foreground'));
     expect(said.message).toBe('The window is gone. stack: at foo');
-    shell.override = (method) => (method === 'computer.target' ? 'silent' : undefined);
+    shell.override = silentOn('computer.target');
     expect((await rejection(driver.target('c', { x: 1, y: 1 }))).message).toBe("The desktop app didn't answer in time.");
   });
 
   it("answers a refusal, not the shell's answer, for a session that ended while it asked", async () => {
     const { driver, shell } = await inSession();
-    shell.override = (method) => (method === 'computer.target' ? 'silent' : undefined);
+    shell.override = silentOn('computer.target');
     const asking = driver.target('c', 'foreground');
     await tick();
     shell.event('computer.stopped', { chatId: 'c', why: 'button' });
@@ -904,8 +1255,8 @@ describe('DesktopComputerDriver: acting', () => {
     });
   });
 
-  it('answers a refusal, never a throw, when the shell errors, does not answer or goes away', async () => {
-    const { driver, shell } = await inSession({ driver: { actTimeoutMs: 30 } });
+  it("answers the shell's error as a refusal in its words, one bounded clean line", async () => {
+    const { driver, shell } = await inSession();
     shell.override = (method) => (method === 'computer.act' ? { error: { message: `A modifier key is held; nothing was done.\n${'q'.repeat(999)}` } } : undefined);
     const said = await driver.act('c', CLICK, EXPECT);
     expect(said.ok).toBe(false);
@@ -913,11 +1264,51 @@ describe('DesktopComputerDriver: acting', () => {
       expect(said.reason.startsWith('A modifier key is held; nothing was done. q')).toBe(true);
       expectClean(said.reason);
     }
-    shell.override = (method) => (method === 'computer.act' ? 'silent' : undefined);
+    // The shell said it did nothing: the session goes on.
+    expect(shell.sent('computer.end')).toEqual([]);
+    shell.override = () => undefined;
+    expect(await driver.act('c', CLICK, EXPECT)).toEqual({ ok: true });
+  });
+
+  it('an action the shell does not answer in time may still be going on: the session is ended, and the outcome is said to be unknown', async () => {
+    const { driver, shell } = await inSession({ driver: { actTimeoutMs: 30 } });
+    shell.override = silentOn('computer.act');
+    const acting = driver.act('c', TYPE, EXPECT);
+    const waiting = driver.act('c', KEY, EXPECT);
+    expect(await acting).toStrictEqual({
+      ok: false,
+      reason: "The desktop app didn't answer in time. Whether the action was carried out is not known. Grunt has ended the control session, so nothing more is done.",
+    });
+    expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }]);
+    expect(shell.sessions.has('c')).toBe(false);
+    // What was waiting behind it is dropped unsent, and nothing more is sent for the chat until it starts again.
+    expect(await waiting).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    expect(shell.sent('computer.act')).toHaveLength(1);
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    shell.override = () => undefined;
+    expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: true });
+    expect(await driver.act('c', CLICK, EXPECT)).toEqual({ ok: false, reason: DESKTOP_NO_SCREENSHOT_REASON });
+  });
+
+  it('and when the shell does not confirm that end either, it says so, and nothing starts until it does', async () => {
+    const { driver, shell } = await inSession({ driver: { actTimeoutMs: 30, endTimeoutMs: 30 } });
+    shell.override = silentOn('computer.act', 'computer.end');
     expect(await driver.act('c', TYPE, EXPECT)).toStrictEqual({
       ok: false,
-      reason: "The desktop app didn't answer in time. Whether the action was carried out is not known.",
+      reason:
+        "The desktop app didn't answer in time. Whether the action was carried out is not known. Grunt asked the desktop app to end the control session and couldn't confirm that it did.",
     });
+    expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }]);
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    expect((await rejection(driver.ensureSession('c', 'Budget'))).message).toBe(DESKTOP_END_PENDING_REASON);
+    expect(shell.sent('computer.start')).toHaveLength(1);
+    shell.override = () => undefined;
+    expect(await driver.ensureSession('c', 'Budget')).toEqual({ ok: true });
+  });
+
+  it('answers a refusal, never a throw, when the shell goes away while it acts', async () => {
+    const { driver, shell } = await inSession();
+    shell.override = silentOn('computer.act');
     const acting = driver.act('c', TYPE, EXPECT);
     await tick();
     shell.close();
@@ -927,11 +1318,15 @@ describe('DesktopComputerDriver: acting', () => {
 
   it('answers a refusal when the channel is full, and says nothing was sent', async () => {
     const { driver, shell } = await inSession({ channel: { maxPending: 1 } });
-    shell.override = (method) => (method === 'computer.cursor' ? 'silent' : undefined);
-    const waiting = driver.cursorPosition('c');
+    await driver.ensureSession('d', 'Other');
+    shell.override = silentOn('computer.cursor');
+    const waiting = driver.cursorPosition('d');
     waiting.catch(() => {});
+    await tick();
     expect(await driver.act('c', TYPE, EXPECT)).toStrictEqual({ ok: false, reason: 'The desktop app has too many requests waiting; nothing was sent.' });
     expect(shell.sent('computer.act')).toEqual([]);
+    // Nothing was sent, so nothing is in doubt: the session goes on.
+    expect(shell.sent('computer.end')).toEqual([]);
     shell.close();
   });
 
@@ -944,11 +1339,12 @@ describe('DesktopComputerDriver: acting', () => {
     expect(SHELL_NO_SESSION).not.toBe(COMPUTER_NO_SESSION_REASON);
   });
 
-  it('never throws on an action that is not one', async () => {
+  it('never throws on, and never sends, an action that is not one of the port\'s', async () => {
     const { driver, shell } = await inSession();
     const sent = shell.methods().length;
-    for (const a of [null, undefined, 'left_click', 7]) {
-      expect(await driver.act('c', a as never, EXPECT)).toStrictEqual({ ok: false, reason: 'That is not an action Grunt can send.' });
+    const notActions: unknown[] = [null, undefined, 'left_click', 7, [], {}, { action: 'screenshot' }, { action: 'wait', duration: 1 }, { action: 'left_mouse_down', coordinate: [1, 1] }, { action: 'hold_key', text: 'ctrl' }, { action: 'LEFT_CLICK', coordinate: [1, 1] }, { action: 7 }];
+    for (const a of notActions) {
+      expect(await driver.act('c', a as never, EXPECT), JSON.stringify(a)).toStrictEqual({ ok: false, reason: 'That is not an action Grunt can send.' });
     }
     expect(shell.methods()).toHaveLength(sent);
   });
@@ -1032,65 +1428,43 @@ describe("DesktopComputerDriver: the shell's events", () => {
   });
 });
 
-describe('DesktopComputerDriver: a fresh hello', () => {
-  it('tells its listeners that the shell holds no session, and keeps none itself', async () => {
-    const { driver, shell } = connect();
+describe('DesktopComputerDriver: the hello as the shell\'s word that it holds no session', () => {
+  it('tells its listeners once, when the answer states sessions: 0', async () => {
+    const { driver } = connect();
     const reset = vi.fn();
     const off = driver.onReset(reset);
+    expect(reset).not.toHaveBeenCalled();
     await driver.hello();
     expect(reset).toHaveBeenCalledTimes(1);
-    await driver.ensureSession('c', 'Budget');
-    await driver.screenshot('c');
-    expect(shell.sessions.has('c')).toBe(true);
-
-    await driver.hello();
-    expect(reset).toHaveBeenCalledTimes(2);
-    // The shell dropped it when it read the hello; this side asks it for nothing on that chat's behalf.
-    expect(shell.sessions.has('c')).toBe(false);
-    expect(await driver.act('c', CLICK, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
-    expect(shell.sent('computer.act')).toEqual([]);
-    expect(shell.sent('computer.end')).toEqual([]);
     off();
-    await driver.hello();
-    expect(reset).toHaveBeenCalledTimes(2);
   });
 
-  it('an end the shell never confirmed is confirmed by it', async () => {
-    const { driver, shell } = await inSession({ driver: { endTimeoutMs: 30 } });
-    shell.override = (method) => (method === 'computer.end' ? 'silent' : undefined);
-    await expect(driver.endSession('c')).rejects.toThrow("didn't answer in time");
-    shell.override = () => undefined;
-    shell.hello = HELLO_OFF;
-    await driver.hello();
-    // Nothing is left to end, so a shell that is off is not even asked.
-    await expect(driver.endSession('c')).resolves.toBeUndefined();
-    expect(shell.sent('computer.end')).toHaveLength(1);
+  it('tells nobody when the answer does not state it, or states anything but 0', async () => {
+    const without = { platform: 'win32', version: '0.1.0', available: true, shortcuts: [] };
+    for (const hello of [without, { ...without, sessions: 1 }, { ...without, sessions: '0' }, { ...without, sessions: null }, { ...without, sessions: [] }, { ...without, sessions: false }]) {
+      const shell = new FakeShell();
+      shell.hello = hello;
+      const { driver } = connect({ shell });
+      const reset = vi.fn();
+      driver.onReset(reset);
+      await driver.hello();
+      // Computer use is still on: only the "nothing is left from before" part is not taken.
+      expect(driver.available(), JSON.stringify(hello)).toBe(true);
+      expect(reset, JSON.stringify(hello)).not.toHaveBeenCalled();
+    }
   });
 
-  it('a hello the shell did not answer, or answered unreadably, resets nothing', async () => {
-    const { driver, shell } = await inSession({ driver: { callTimeoutMs: 250 } });
-    const reset = vi.fn();
-    driver.onReset(reset);
+  it('tells nobody when the shell did not answer the hello, or answered unreadably', async () => {
     for (const answer of [{ error: { message: 'no' } }, { result: null }, { result: 'hello' }, 'silent'] as ShellAnswer[]) {
+      const shell = new FakeShell();
       shell.override = (method) => (method === 'computer.hello' ? answer : undefined);
+      const { driver } = connect({ shell, driver: { callTimeoutMs: 30 } });
+      const reset = vi.fn();
+      driver.onReset(reset);
       await driver.hello();
       expect(driver.available()).toBe(false);
+      expect(reset).not.toHaveBeenCalled();
     }
-    expect(reset).not.toHaveBeenCalled();
-  });
-
-  it('a start answered yes from before the hello is not a session after it', async () => {
-    const { driver, shell } = await connected();
-    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
-    const starting = driver.ensureSession('c', 'Budget');
-    await tick();
-    await driver.hello();
-    shell.override = () => undefined;
-    shell.sessions.add('c');
-    shell.answer(shell.idOf('computer.start'), { ok: true });
-    expect(await starting).toEqual({ ok: false, reason: 'The desktop app started over while Grunt was asking, so nothing was started.' });
-    expect(shell.sent('computer.end')).toEqual([{ chatId: 'c' }]);
-    expect(shell.sessions.has('c')).toBe(false);
   });
 
   it('a listener that throws stops nothing', async () => {

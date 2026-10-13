@@ -14,7 +14,7 @@ import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
 import { createApp } from '../src/app.js';
 import { DESKTOP_NOT_AVAILABLE_REASON, type DesktopComputerDriver } from '../src/computer/desktop-driver.js';
 import { COMPUTER_END_UNCONFIRMED_REASON, ComputerSessions } from '../src/computer/sessions.js';
-import { connect, HELLO_OFF } from './computer/fake-shell.js';
+import { connect, HELLO_OFF, HELLO_ON } from './computer/fake-shell.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
 import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase, withoutOwnPorts, type Container } from '../src/container.js';
 
@@ -674,7 +674,7 @@ describe('computer use wiring', () => {
       }
     });
 
-    it('an end the shell does not confirm holds every start back, until the shell says hello afresh', async () => {
+    it('an end the shell does not confirm holds every start back, until the shell does confirm it', async () => {
       const { shell, driver } = connect({ driver: { endTimeoutMs: 30 } });
       const container = await openOn(driver);
       const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -688,7 +688,12 @@ describe('computer use wiring', () => {
         expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
         expect(shell.sent('computer.start')).toEqual([{ chatId: 'c1', title: 'One' }]);
 
+        // Another hello is not the way out: it is said once, so it cannot be used to wave an unconfirmed end through.
         await driver.hello();
+        expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
+        expect(shell.methods().filter((m) => m === 'computer.hello')).toHaveLength(1);
+
+        shell.override = () => undefined;
         expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: true });
         expect(shell.sent('computer.start').at(-1)).toEqual({ chatId: 'c2', title: 'Two' });
       } finally {
@@ -699,27 +704,24 @@ describe('computer use wiring', () => {
       }
     });
 
-    it("a fresh hello from the shell drops the session the server had on record and cancels that chat's reply", async () => {
-      const { shell, driver } = connect();
-      const container = await openOn(driver);
-      try {
-        seed(container, 'c1', 'c2');
-        await driver.hello();
-        const cancel = vi.spyOn(container.turnRunner, 'cancel');
-        container.events!.emit({ type: 'turn-started', chatId: 'c1', messageIds: ['c1-reply'] });
-        await container.computer!.ensureSession('c1', 'One');
-        await container.computer!.screenshot('c1');
-        expect(container.events!.computerSessions()).toEqual([{ chatId: 'c1' }]);
-
-        await driver.hello();
-        expect(container.computer!.activeChat()).toBeNull();
-        expect(container.events!.computerSessions()).toEqual([]);
-        expect(cancel).toHaveBeenCalledWith('c1-reply');
-        // The shell dropped it itself when it read the hello: it is not asked to end anything.
-        expect(shell.sent('computer.end')).toEqual([]);
-        expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: true });
-      } finally {
-        container.close();
+    it("the shell's word in its hello that it holds no session reaches the sessions, once, and only when it says so", async () => {
+      for (const [hello, times] of [
+        [HELLO_ON, 1],
+        [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [] }, 0],
+        [{ platform: 'win32', version: '0.1.0', available: true, shortcuts: [], sessions: 2 }, 0],
+      ] as const) {
+        const { shell, driver } = connect();
+        shell.hello = hello;
+        const container = await openOn(driver);
+        try {
+          const reset = vi.spyOn(container.computer!, 'shellReset');
+          await driver.hello();
+          await driver.hello();
+          expect(container.computer!.available()).toBe(true);
+          expect(reset).toHaveBeenCalledTimes(times);
+        } finally {
+          container.close();
+        }
       }
     });
 
