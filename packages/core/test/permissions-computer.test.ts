@@ -486,4 +486,14 @@ describe('the app grant beside the host and live grants (cowork-parity integrati
     expect(() => broker.resolve(writeAsk.request.id, { choice: 'always', constraint: { app: EXCEL } })).toThrow(/only a pathPrefix/);
     expect(store.grants.list()).toEqual([]);
   });
+
+  it('never lets computer use feed a live artifact: not eligible, no live grant made, and a live context is refused', () => {
+    expect(broker.liveIneligibility(COMPUTER, wide())).toBe('Only MCP tools can feed a live artifact.');
+    expect(() =>
+      broker.grantLive({ chatId: 'chat-1', profileId: 'profile-1', artifactId: 'a', policy: wide(), calls: [{ tool: COMPUTER, callId: 'c', hash: 'h', serverId: 's' }] })
+    ).toThrow(/Only MCP tools/);
+    const live = { artifactId: 'a', callId: 'c', hash: 'h', serverId: 's' };
+    expect(broker.decide(COMPUTER, { action: 'screenshot', app: null }, wide(), ctx({ live }))).toMatchObject({ kind: 'deny' });
+    expect(store.grants.list()).toEqual([]);
+  });
 });
