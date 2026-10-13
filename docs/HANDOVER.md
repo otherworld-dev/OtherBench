@@ -321,7 +321,8 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 - **Once-only apps** get "Allow once" and "Deny" and nothing is stored or matched for them. They are: the programs listed in `HIGH_RISK_STEMS` and `HIGH_RISK_FAMILIES` (`packages/core/src/domain/computer-apps.ts`: shells and terminals, script hosts, interpreters, Explorer and the other shell surfaces, Settings and admin tools, on-screen keyboards, credential prompts, remote desktop and VM clients, file managers, password managers, browsers, editors and IDEs, and anything JetBrains signs); an ordinary app's Open or Save dialog, or any window hosting a shell file view, or a menu owned by one (`shellView`); and anything Grunt can't vouch for: no verified embedded signature (so Notepad and Calculator, which are catalog-signed), a console program, a program on a share or off a fixed disk, an 8.3 short name, any character outside plain ASCII anywhere in the path, or a fact the shell didn't report. These can start other programs or open any file, or Grunt can't tell what they are, so a lasting grant is never offered. A chat or always answer for one (only a forged answer can send it) denies the call, audited `deny:policy`, instead of running it once as other tools do.
 - **Refused outright, with no card:** Grunt's own windows, its child processes (the WebView2 dropdowns, context menus and devtools are windows of their own) and windows it owns, a second Grunt; anything running as administrator or with UI access; a path with a character from the hidden-character table (a zero-width non-joiner, say) or one that isn't a valid key; a point outside the last screenshot, and any click before the chat's first screenshot.
 - **Keys** go through an allowlist, one combination per `key` action. Refused: the Windows key, `ctrl+escape`, `ctrl+shift+escape`, the `alt+tab` family, `alt+escape`, `alt+space`, alt with a function key (so `alt+f4`), every `ctrl+alt` combination, Print Screen, Caps Lock, F13-F24, a modifier on its own, and Grunt's own shortcuts. Until the shell has reported its shortcut list no `key` action is sent at all, a bare key included, since the quick-chat hotkey can be a single key. `type` takes at most 4000 characters with line breaks and tabs only, and the shell sends it as Unicode characters, never as key chords. Every action, mouse ones included, is refused while a modifier is held.
-- **Never unattended.** A run with `ctx.unattended` set to anything but `undefined` or `false` is refused by the provider (audited `deny:unattended`), the tool and the broker, before any dialog. Nothing sets it on this branch yet (see Known gaps).
+- **Never unattended.** A run with `ctx.unattended` set to anything but `undefined` or `false` is refused by the provider (audited `deny:unattended`), the tool and the broker, before any dialog. On the integration branch the scheduled runs set it (one field, `ToolContext.unattended`, through `toolContextFor` on both engines), and a sub-agent never has computer use at all. See *Integration*.
+- **Never while a plan waits.** In a Plan-mode chat every computer action is refused until the plan is approved, the looks included (`allowedWhilePlanning`), and the provider refuses it before `describeCall`, so no start dialog comes up for it.
 - **One chat at a time**, held by both the server (`ComputerSessions`) and the shell.
 - **Stop** from the thread's banner ("Grunt is controlling this computer." with the last action and a Stop button), from the bar the shell shows at the top centre of the primary monitor (always on top, doesn't take focus, left out of screenshots), or with Ctrl+Alt+Backspace, which is registered only while a chat holds control. Each ends control and cancels the chat's replies.
 - **A session ends** on Stop, after 10 minutes with no action (the shell's timer; the server has none), on quit, and when the chat goes (deleted, or removed with its profile or connection, here or through sync). A session started and never used ends with its reply; one that was used carries over to the chat's next reply.
@@ -336,7 +337,7 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 - **Engine.** On an Anthropic connection, the models in `COMPUTER_TOOLSET_MODELS` (`engine-aisdk/src/engine.ts`: `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `claude-fable-5-1`, matched exactly or with a `-YYYYMMDD` date) get Anthropic's `computer_toolset_20260801` with every member outside phase 1 turned off. Every other model, and Claude Code, gets Grunt's JSON `computer` tool. Both run through the same gated `execute`.
 - **Server.** `server/src/computer/desktop-channel.ts` (`GRUNT-RPC` lines over the sidecar's stdio), `desktop-driver.ts` (`DesktopComputerDriver`), `sessions.ts` (`ComputerSessions`: one chat at a time, one dialog per chat, Stop, ending the session of a chat that has gone). Routes: `POST /api/chats/:id/computer/stop` and `GET /api/computer/status`. App events: `computer-session` (`chatId`, `active`, `lastAction`).
 - **The channel** exists only when the shell starts the server with `--announce --desktop-rpc`. The server refuses `--desktop-rpc` without `--announce`, and `--announce` with `--public-url`, so a sign-in server never has one; without the flag there is no channel and no driver at all. The announce line carries a 32-hex-digit word made for that launch, every line the server sends is `GRUNT-RPC <word> {...}`, and in this mode the console writes to stderr. An OK on the dialog gives a session token minted by the shell (at least 128 random bits), which every later request for the chat carries; a request whose token isn't live is answered `no-session` and nothing is done. Shell: `desktop/src-tauri/src/rpc.rs`, `computer.rs`, `computer/` (`session.rs`, `act.rs`, `keys.rs`, `facts.rs`, `image.rs` are platform-free; `win.rs` and `desktop.rs` are Windows only). The bar is `packages/web/src/views/IndicatorView.tsx`, loaded with the chat title in its URL; its Stop calls the shell's `computer_stop`, never the server.
-- **Web.** `components/ComputerApprovalPrompt.tsx` (the card), `components/ComputerBanner.tsx`, `components/Message.tsx` (the call line and screenshot thumbnails), and the Inspector, which shows a grant's app path and labels `deny:unattended` "denied: nobody at the computer".
+- **Web.** `components/ComputerApprovalPrompt.tsx` (the card), `components/ComputerBanner.tsx`, `components/Message.tsx` (the call line and screenshot thumbnails), and the Inspector, which shows a grant's app path and labels `deny:unattended` with scheduled tasks' shared "refused: nobody to approve (scheduled run)".
 - **Tests.** Everything uses `FakeComputerDriver`. `GRUNT_COMPUTER_FAKE_DRIVER=1` wires it into the server for the e2e run only (`web/e2e/computer.spec.ts`); the server logs a warning when it is set and does not refuse a non-loopback bind, so never set it outside tests. The server's channel is tested against a fake shell (`server/test/computer/fake-shell.ts`).
 
 **The offline probe passed.** `engine-aisdk/test/computer-toolset.test.ts` runs a real `createAnthropic` against a fake `fetch` (with `http://127.0.0.1:9/v1` as the base URL as a second guard) and checks the toolset goes out as `computer_toolset_20260801`, a member call comes back to the gated tool and the history is written back as the API expects. Nothing reached the network and no fixture change was needed, so the toolset is in; whether the API takes it from each listed model is a live check.
@@ -371,13 +372,12 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 | (nothing) | A tool result with no image goes to every provider as one string | Several text parts were several function responses for one call on older Gemini models |
 | (nothing, every tool) | Every tool's output, MCP tools included and on both engines, goes through `screenToolResult` (`core/src/domain/tool-images.ts`). An MCP `audio` item or `resource.blob` reaches the model as a note of its size; an MCP image is checked by its bytes, stored as a blob and held to the same 50 images or 20 MB per reply; an inline image stored by an older build is replayed as a note; and a result with no image goes to the model as one string | Screenshots needed one path for tool images, and every tool shares it, so bulk base64 from any tool reaches neither the model nor the store as text. An MCP tool's audio or blob is a note to the model, never its data |
 | (nothing) | An action carrying a field it doesn't use is refused by core's `parseAction` (`text` on a click or scroll, `coordinate` on `type`, `key` or a look, the scroll fields off a scroll, `duration` off a wait, any field it doesn't know); a field sent as `null` counts as left out | Anthropic's computer tools put keys to hold in `text` on a click; run without it a shift-click was a plain click and the model was told "Done." |
-| (nothing) | `ToolContext.unattended`, the `approval_unavailable` code and `deny:unattended` were added here | The scheduled-tasks plan that was meant to add them isn't on this branch. The model browser's `describeCall` and Claude Code tickets were reused as they were |
+| (nothing) | `ToolContext.unattended`, the `approval_unavailable` code and `deny:unattended` were added here | The scheduled-tasks plan that was meant to add them wasn't on this branch; on the integration branch they are scheduled tasks' one field, code and audit name. The model browser's `describeCall` and Claude Code tickets were reused as they were |
 | (nothing, every chat) | At most 20 user attachments per request (newest first), 25 MB each, 50 MB with the tool images; an image whose bytes aren't PNG, JPEG, GIF or WebP becomes a note | A bound had to exist before bytes load. SVG, HEIC, BMP and AVIF uploads no longer reach a vision model; the number is `MAX_REQUEST_ATTACHMENTS` |
 
 **Known gaps**
 
 - **Claude Code turns' screenshots are not stored or shown.** Relayed results are screened and reach Claude Code, but Grunt's transcript keeps only their text (`engine-claude-code/src/events.ts`, `resultText`), so there are no thumbnails and nothing to replay. Spec phase 2.
-- **`unattended` is never set on this branch.** When scheduled tasks are merged, it has to be added to `EngineRequest`, `TurnRunner`'s request, the API engine's run context and the Claude Code engine's gate context (`engine-claude-code/src/engine.ts`, around line 232). Until then a scheduled run with tools would rely on the profile's checkbox and the native dialog, and a session still live from earlier in the same chat would not ask again.
 - **Relayed MCP tools have no ticket.** Claude Code runs them with its own input after the hook; binding them needs a live check that Claude Code never changes an MCP tool's input between hook and call.
 - **A chat that runs on a paired machine:** the banner, Stop, the session and the thumbnails are local to the machine running the turn, so Stop on the laptop does not reach a chat running on the PC. A chat moved to run elsewhere while it holds control here keeps its session until Stop, idle or quit.
 - **Cards can be answered from a paired machine.** The native dialog is the only consent that needs someone at this computer, and once a session is live, cards answered elsewhere can keep it going until it ends.
@@ -1538,9 +1538,10 @@ this on startup.
 ## Integration (feat/cowork-parity-all)
 
 The sandbox, Office files, remote access with MCP sign-in, thread cards,
-scheduled tasks, live artifacts, API sub-agents and the model's browser were
-built on separate branches from 8dcbd36 and merged here (the browser from
-`feat/remote-access-build` at 42a56d0; it has no migration). Each took the
+scheduled tasks, live artifacts, API sub-agents, the model's browser and
+computer use were built on separate branches from 8dcbd36 and merged here (the
+browser from `feat/remote-access-build` at 42a56d0, computer use from the same
+branch at 4068624; neither has a migration). Each took the
 next free migration number on its own branch, so they were renumbered once
 merged. The final order is:
 
@@ -1609,6 +1610,57 @@ stopped:
   - From `feat/thread-cards-build`: 23 if migrated before b55da3e, or 24 from
     b55da3e on (that commit added `024-artifact-version-live`). Those numbers
     mean the same here, and it runs the rest.
+
+### Computer use beside the rest
+
+How computer use (Deck #927) meets the other features here. Its own rulings
+(once-only browsers, IDEs and non-ASCII paths; off after any channel fault
+until restart; the toolset model list; the 20-attachment cap) are as it built
+them.
+
+- **Scheduled runs never use the computer.** There is one
+  `ToolContext.unattended`, set from `TurnInput.unattended` and carried by
+  `toolContextFor` on both engines (the computer branch's own context in the
+  AI SDK engine and the mock `#computer` had neither the plan gate nor the
+  flag; both use `toolContextFor` now). Every action is refused, a screenshot
+  included and whatever grants exist, before `describeCall`, so no start
+  dialog comes up; it is audited `deny:unattended` with the computer's own
+  reason. The schedule editor says so for a profile with computer use on.
+- **Sub-agents never get it.** `SUBAGENT_POLICY_RULES.computer` is always
+  off and `SubagentRunner` never offers a `computer` tool whatever the
+  provider lists; the property test covers computer calls and grants.
+- **Plan mode refuses every computer action**, the looks included, until the
+  plan is approved: a look starts the session (the native dialog) and sends
+  the whole screen to the model, unlike the browser's snapshot of a page the
+  model opened. Fail closed; say if you want the looks allowed once a session
+  is already live.
+- **Grants.** `{ app }` sits beside `{ host }` and `live` on
+  `Grant.constraint`. A grant of one source never covers another; a host or
+  app grant must be exactly its one key; a computer "always" must be exactly
+  the card's own `{ app }` (anything more is refused). The web card, the
+  server's `parseConstraint` and the broker agree on that. When the broker
+  refuses an answer, a computer call is denied (ruling 8) and any other call
+  still runs once, audited and announced as `once`.
+- **Remote access.** Stop, `GET /api/computer/status` and the session events
+  (on `GET /api/events`) are behind sign-in mode, the Host check and the
+  cross-site check, and not on the peer listener; `/peer/events` never
+  carries a computer session. A signed-in remote client can turn computer use
+  on and answer cards; the native dialog on this machine stays the only local
+  consent.
+- **Images.** A sub-agent's tool images are now kept like the parent's
+  (stored against the parent reply, under its one budget), so no base64 goes
+  into its broadcast or stored copy. A file sent as its text (an Office file,
+  or any file for Claude Code) counts toward the request's attachment cap
+  like an image or a PDF; one past the newest 20 is the engines' over-budget
+  note. Live artifacts read only an MCP result's text and structuredContent,
+  so computer use's change to MCP images, audio and blobs doesn't reach them,
+  and computer use can never be a live call.
+- **The sandbox and the browser** share nothing with it at run time. Computer
+  use acts on this machine's desktop whatever the shell runs on, so a
+  sandboxed profile with computer use on can still reach a host terminal
+  through the GUI; terminals are once-only, so each action there asks.
+  The browser and computer use have separate grants (`host` and `app`) and
+  separate stops (the viewer's close and the banner's Stop).
 
 ### Follow-ups from the integration
 
