@@ -311,5 +311,25 @@ describe('ApprovalPrompt', () => {
       const other = spec.source === 'network' ? tool('browser', 'browser') : tool('sandbox_network', 'network');
       expect(broker.decide(other, { command: 'open', url: 'https://pypi.org/', host: 'pypi.org' }, policy, ctx).kind).toBe('ask');
     });
+
+    it('a computer card\'s "Always" is an answer the broker takes, stored as exactly its own app, and no host grant comes of it', async () => {
+      // Integration (cowork-parity step 5): the computer card sends `{ app }` (ComputerApprovalPrompt), the server's
+      // parseConstraint passes one key on as it came, and the broker's alwaysConstraintFor takes exactly the card's own app.
+      const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+      const computer: ToolSpec = { name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute: async () => null };
+      const args = { action: 'left_click', coordinate: [10, 20], app, appName: 'FakeApp.exe', appTitle: 'Fake', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' };
+      const store = new InMemoryStore();
+      const broker = new PermissionBroker(store);
+      const decision = broker.decide(computer, args, { ...policy, computer: true }, ctx);
+      if (decision.kind !== 'ask') throw new Error(`expected a card, got ${decision.kind}`);
+      const onResolve = vi.fn().mockResolvedValue(undefined);
+      render(<ApprovalPrompt request={decision.request} onResolve={onResolve} />);
+      await userEvent.setup().click(screen.getByTestId('approval-always'));
+      const [id, choice] = onResolve.mock.calls[0] as [string, ApprovalChoice];
+      expect(choice).toStrictEqual({ choice: 'always', constraint: { app } });
+      broker.resolve(id, choice);
+      expect(store.grants.list()).toEqual([expect.objectContaining({ toolName: 'computer', source: 'computer', scope: 'always', constraint: { app } })]);
+      expect(broker.decide(tool('browser', 'browser'), { command: 'open', url: 'https://pypi.org/', host: 'pypi.org' }, policy, ctx).kind).toBe('ask');
+    });
   });
 });

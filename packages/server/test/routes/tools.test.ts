@@ -730,6 +730,10 @@ describe('Approval routes', () => {
     // The other keys are untouched by it, and an app is only there when one was sent.
     expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } })).toEqual({ choice: 'always', constraint: { host: 'example.com' } });
     expect('app' in ((parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } }) as { constraint: object }).constraint)).toBe(false);
+    // One key at a time, as for a host (integration): an app beside anything else is refused here, before the broker.
+    for (const extra of [{ host: 'example.com' }, { commandExact: 'x' }, { pathPrefix: '/' }]) {
+      expect(() => parseApprovalChoice({ choice: 'always', constraint: { app, ...extra } }), JSON.stringify(extra)).toThrow(/must set only one key/);
+    }
     expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toEqual({ choice: 'always', constraint: null });
   });
 
