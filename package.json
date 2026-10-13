@@ -7,6 +7,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -b",
+    "typecheck:tests": "tsc -b && node scripts/typecheck-tests.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "npm run dev -w @grunt/server",

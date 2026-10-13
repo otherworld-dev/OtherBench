@@ -7,6 +7,7 @@ import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
 import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
 import { FakeSandbox } from '@grunt/core/testing/fakes.js';
 import type { GruntToolProvider } from '@grunt/tools/provider.js';
+import type { ToolPolicy } from '@grunt/core/types/config.js';
 import { encodeHlc } from '@grunt/core/domain/hlc.js';
 import type { SaveToolImage } from '@grunt/core/domain/tool-images.js';
 import { FAKE_PNG, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
@@ -468,7 +469,7 @@ describe('createContainer and the sandbox', () => {
       expect(sandbox).toBeInstanceOf(FakeSandbox);
       expect(sandbox.setupCalls).toBe(0);
       // The provider got it: the sandboxed run_command is relayed for a profile whose shell runs there.
-      const policy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' } as const;
+      const policy: ToolPolicy = { fs: 'off', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' };
       expect((container.toolProvider as GruntToolProvider).relayTools(policy).map((t) => t.name)).toEqual(['run_command']);
       container.close();
       await vi.waitFor(() => expect(sandbox.closed).toBe(true));

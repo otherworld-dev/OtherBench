@@ -29,7 +29,7 @@ beforeEach(async () => {
     store, secrets: new FakeSecretStore(), engine, registry: {} as never, toolProvider, mcpManager: manager,
     turnRunner, streamRegistry: new StreamRegistry(turnRunner, store), blobStore: {} as never, close: () => {},
   };
-  store.mcpServers.create({ id: 'srv-live', name: 'Live', transport: 'stdio', command: process.execPath, args: [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+  store.mcpServers.create({ id: 'srv-live', name: 'Live', transport: 'stdio', command: process.execPath, args: [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null });
   store.profiles.create({ id: 'p1', name: 'Live profile', description: null, colour: null, connectionId: 'conn', modelId: 'm', systemPrompt: null, params: {}, toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['srv-live'], approvalMode: 'always_ask' }, isDefault: true, archivedAt: null });
   store.chats.create({ id: 'c1', title: 'C', profileId: 'p1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
   const msg = (id: string, parentId: string | null, role: 'user' | 'assistant') =>

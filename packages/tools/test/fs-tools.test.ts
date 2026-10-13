@@ -471,7 +471,7 @@ describe('EEXIST from O_EXCL is disambiguated, not collapsed into io_error', () 
     const [a, b] = (await Promise.all([
       writeFileTool.execute({ path: 'concurrent.txt', content: 'A' }, ctx()),
       writeFileTool.execute({ path: 'concurrent.txt', content: 'B' }, ctx()),
-    ])) as Record<string, unknown>[];
+    ])) as [Record<string, unknown>, Record<string, unknown>];
 
     const succeeded = [a, b].filter((r) => r.error === undefined);
     const failed = [a, b].filter((r) => r.error === true);

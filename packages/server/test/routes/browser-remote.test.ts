@@ -163,7 +163,7 @@ describe("the model's browser routes and the cross-site check", () => {
         // From this origin, but a form or a page load, not Grunt's own fetch.
         { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' },
         { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'document' },
-      ]) {
+      ] as Record<string, string>[]) {
         const res = await call(app, 'DELETE', '/api/chats/c1/browser', { ...auth, ...headers });
         expect(res.status, `${name} ${JSON.stringify(headers)}`).toBe(403);
       }

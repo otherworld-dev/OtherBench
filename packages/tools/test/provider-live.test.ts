@@ -35,7 +35,7 @@ const run = (call: LiveCall, args: Record<string, unknown>, over: Partial<LiveRu
 
 beforeEach(async () => {
   store = new InMemoryStore();
-  store.mcpServers.create({ id: SERVER, name: 'Live', transport: 'stdio', command: process.execPath, args: [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+  store.mcpServers.create({ id: SERVER, name: 'Live', transport: 'stdio', command: process.execPath, args: [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null });
   const broker = new PermissionBroker(store);
   manager = new McpServerManager(store, new FakeSecretStore(), { initialBackoffMs: 50, maxBackoffMs: 100 });
   provider = new GruntToolProvider(store, broker, manager, { liveTimeoutMs: 300 });
@@ -116,7 +116,7 @@ describe('GruntToolProvider live calls', () => {
 
   const ambiguous = '"mcp__Live__lookup" names more than one tool; rename one of the MCP servers so each has its own name.';
   const addServer = async (id: string, name: string, over: { command?: string; args?: string[] } = {}) => {
-    store.mcpServers.create({ id, name, transport: 'stdio', command: over.command ?? process.execPath, args: over.args ?? [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id, name, transport: 'stdio', command: over.command ?? process.execPath, args: over.args ?? [LIVE_FIXTURE], envRefs: {}, url: null, headerRefs: {}, enabled: true, status: 'unknown', toolsCache: null, oauth: null });
     await manager.sync();
   };
   const addSecondLive = (over: { command?: string; args?: string[] } = {}) => addServer('srv-live-2', 'Live', over);

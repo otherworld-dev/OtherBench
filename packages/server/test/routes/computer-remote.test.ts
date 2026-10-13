@@ -121,7 +121,7 @@ describe('computer use routes in sign-in mode', () => {
     for (const [method, path] of ROUTES) {
       const res = await call(app, method, path);
       expect(res.status, `${method} ${path}`).toBe(401);
-      for (const headers of [{ Cookie: '__Host-grunt_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, { Authorization: 'Bearer guess' }]) {
+      for (const headers of [{ Cookie: '__Host-grunt_session=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }, { Authorization: 'Bearer guess' }] as Record<string, string>[]) {
         expect((await call(app, method, path, headers)).status, `${method} ${path} ${JSON.stringify(headers)}`).toBe(401);
       }
     }
@@ -175,7 +175,7 @@ describe('computer use routes and the cross-site check', () => {
         { 'Sec-Fetch-Site': 'same-site' },
         { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' },
         { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Dest': 'document' },
-      ]) {
+      ] as Record<string, string>[]) {
         expect((await call(app, ...STOP, { ...auth, ...headers })).status, `${name} ${JSON.stringify(headers)}`).toBe(403);
       }
     }

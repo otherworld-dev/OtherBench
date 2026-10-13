@@ -10,4 +10,9 @@ jobs:
       - run: npm ci
       - run: npx playwright install --only-shell chromium
       - run: npm run typecheck
+      # Tests are outside `tsc -b` (it builds src only); this checks them too.
+      # TODO: 101 type errors in 24 test files predate this step; remove
+      # continue-on-error once they are fixed (see docs/HANDOVER.md, Integration).
+      - run: npm run typecheck:tests
+        continue-on-error: true
       - run: npm test

@@ -214,7 +214,7 @@ describe('cross-site writes to the API (Deck #897)', () => {
       { 'Sec-Fetch-Site': 'cross-site' },
       { 'Sec-Fetch-Site': 'same-site' },
       { Origin: 'http://127.0.0.1:4748' },
-    ]) {
+    ] as Record<string, string>[]) {
       const res = await post(app, headers);
       expect(res.status, JSON.stringify(headers)).toBe(403);
       expect(await res.json(), JSON.stringify(headers)).toMatchObject({ error: expect.stringMatching(/another site/) });
@@ -230,7 +230,7 @@ describe('cross-site writes to the API (Deck #897)', () => {
       { Origin: 'http://localhost:5173', 'Sec-Fetch-Site': 'same-origin' },
       { Origin: APP_ORIGIN, 'Sec-Fetch-Site': 'cross-site' },
       {},
-    ]) {
+    ] as Record<string, string>[]) {
       expect((await post(app, headers)).status, JSON.stringify(headers)).toBe(201);
     }
   });
