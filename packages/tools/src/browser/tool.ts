@@ -1,4 +1,5 @@
 import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@grunt/core/domain/browser-hosts.js';
+import { asciiLower } from '@grunt/core/domain/card-text.js';
 import { NO_APPROVAL_REASON, type DescribedCall, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
 import { BrowserBusyError, PageMovedError, StaleRefError, type ActionGuard } from './session.js';
@@ -111,6 +112,44 @@ export function parseBrowserCall(raw: unknown): BrowserCall | { refuse: string }
       break;
   }
   return call;
+}
+
+/** Modifiers of a `press` key (Playwright's names) that make it a shortcut rather than typing. */
+const SHORTCUT_MODIFIERS: ReadonlySet<string> = new Set(['control', 'alt', 'meta', 'controlormeta']);
+/**
+ * Keys (Playwright's names, compared in ASCII lower case) that put no
+ * character on the page: the browser's form of core's list of keys that type
+ * nothing. Anything not here (a letter, a digit, `KeyA`, `Digit1`, `Space`,
+ * `Minus`, a numpad key, any single character) types one.
+ */
+const NON_TYPING_KEYS: ReadonlySet<string> = new Set([
+  'enter', 'tab', 'escape', 'backspace', 'delete', 'insert', 'home', 'end', 'pageup', 'pagedown',
+  'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'contextmenu', 'shift', 'control', 'alt', 'meta',
+  'capslock', 'numlock', 'scrolllock', 'pause', 'printscreen',
+  ...Array.from({ length: 24 }, (_, i) => `f${i + 1}`),
+]);
+
+/**
+ * Whether a `press` key must be kept out of the audit like typed text: the
+ * computer tool's rule (core's `isSensitiveKeyText`) in the browser's key
+ * names. Kept only when it says what was pressed and types nothing: a key
+ * that types nothing (`Enter`, `Shift+Tab`, `F5`), or a shortcut with
+ * Control, Alt or Meta (`Control+A`). A bare or shift-only key that types a
+ * character (`a`, `Shift+KeyA`, `7`) counts as typed, so a password pressed
+ * one key at a time is not readable a character per row; so does Control
+ * with Alt (AltGr types a character on many layouts) and anything that is
+ * not one key with known modifiers.
+ */
+export function isSensitiveBrowserKey(key: unknown): boolean {
+  if (typeof key !== 'string' || key === '') return true;
+  // `+` joins a combination; a key that is itself `+` comes last, after one (`Shift++`).
+  const parts = key === '+' ? ['+'] : key.endsWith('++') ? [...key.slice(0, -2).split('+'), '+'] : key.split('+');
+  const pressed = parts.pop() ?? '';
+  const modifiers = parts.map(asciiLower);
+  if (pressed === '' || modifiers.some((m) => m !== 'shift' && !SHORTCUT_MODIFIERS.has(m))) return true;
+  if (NON_TYPING_KEYS.has(asciiLower(pressed))) return false;
+  const altGr = modifiers.includes('alt') && modifiers.includes('control');
+  return altGr || !modifiers.some((m) => SHORTCUT_MODIFIERS.has(m));
 }
 
 /** `example.com/x` -> `https://example.com/x`; anything with a `scheme://` is left as it is. */

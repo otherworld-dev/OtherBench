@@ -29,7 +29,7 @@ import {
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolPolicy, ToolSource } from '@grunt/core/types/config.js';
 import type { BrowserManager } from './browser/manager.js';
-import { browserTool, pageFailure } from './browser/tool.js';
+import { browserTool, isSensitiveBrowserKey, pageFailure } from './browser/tool.js';
 import { computerTool } from './computer-tool.js';
 import { fsTools } from './fs-tools.js';
 import type { McpToolDescriptor } from './mcp/client.js';
@@ -240,7 +240,10 @@ function visible(value: unknown, depth = 0): unknown {
 
 /**
  * `args` without the text a call would type. The browser's `text` is always
- * typed text. The computer tool's `text` is typed text or one key
+ * typed text; its `press` `key` follows the computer tool's rule below in the
+ * browser's own key names (`isSensitiveBrowserKey`): kept when it types
+ * nothing or is a shortcut, `[redacted: 1 key]` when it types a character.
+ * The computer tool's `text` is typed text or one key
  * combination. A combination is kept only when it says what was pressed and
  * holds nothing typed (core's `isSensitiveKeyText`): one with ctrl or alt
  * (`ctrl+s`), or a key that types nothing (`return`, `shift+tab`, `f5`). A
@@ -251,9 +254,15 @@ function visible(value: unknown, depth = 0): unknown {
  * is kept.
  */
 function withoutTypedText(args: unknown, source: 'browser' | 'computer'): unknown {
-  if (typeof args !== 'object' || args === null || !('text' in args)) return args;
+  if (typeof args !== 'object' || args === null) return args;
   const a = args as Record<string, unknown>;
-  if (source === 'browser') return { ...a, text: '[redacted]' };
+  if (source === 'browser') {
+    const out: Record<string, unknown> = { ...a };
+    if ('text' in a) out['text'] = '[redacted]';
+    if ('key' in a && isSensitiveBrowserKey(a['key'])) out['key'] = '[redacted: 1 key]';
+    return out;
+  }
+  if (!('text' in a)) return args;
   const text = a['text'];
   if (a['action'] === 'key' && isKeyCombination(text)) return isSensitiveKeyText(text) ? { ...a, text: '[redacted: 1 key]' } : args;
   if (typeof text !== 'string') return { ...a, text: '[redacted]' };

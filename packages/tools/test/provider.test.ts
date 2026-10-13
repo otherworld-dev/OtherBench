@@ -529,6 +529,19 @@ describe('recordAgentDenial', () => {
     expect(rows.find((r) => r.messageId === 'msg-c')!.argsRedacted).toEqual({ text: 'kept' });
   });
 
+  it("keeps a browser key that types a character out of the audit, as the computer tool's rule does, and keeps one that types nothing", async () => {
+    const { provider, store } = makeProvider();
+    provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__browser', { command: 'press', key: 'p' }, 'Presses p');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-b' }), 'browser', { command: 'press', key: 'Shift+KeyA' }, 'Presses A');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-c' }), 'browser', { command: 'press', key: 'Enter' }, 'Submits');
+    provider.recordAgentDenial(ctx({ messageId: 'msg-d' }), 'browser', { command: 'press', key: 'Control+A' }, 'Selects all');
+    const rows = store.audit.list('chat-1');
+    expect(rows.find((r) => r.messageId === 'msg-a')!.argsRedacted).toEqual({ command: 'press', key: '[redacted: 1 key]' });
+    expect(rows.find((r) => r.messageId === 'msg-b')!.argsRedacted).toEqual({ command: 'press', key: '[redacted: 1 key]' });
+    expect(rows.find((r) => r.messageId === 'msg-c')!.argsRedacted).toEqual({ command: 'press', key: 'Enter' });
+    expect(rows.find((r) => r.messageId === 'msg-d')!.argsRedacted).toEqual({ command: 'press', key: 'Control+A' });
+  });
+
   it('keeps the text typed in a relayed computer call out of the audit too, and keeps a key combination', () => {
     const { provider, store } = makeProvider();
     provider.recordAgentDenial(ctx({ messageId: 'msg-a' }), 'mcp__grunt_0123456789abcdef__computer', { action: 'type', text: 'my password' }, 'Types a password');
@@ -809,6 +822,16 @@ describe('the browser tool (spec 2026-10-12-model-browser-design)', () => {
     const typed = rows.find((r) => (r.argsRedacted as { command?: string }).command === 'type')!;
     expect((typed.argsRedacted as { text?: string }).text).toBe('[redacted]');
     expect(JSON.stringify(rows)).not.toContain('my secret words');
+  });
+
+  it('keeps a password pressed one key at a time out of the audit, and the keys that type nothing in it', async () => {
+    const { provider, store } = browserProvider();
+    answerAll(provider);
+    const tool = (await browserOf(provider, on()))!;
+    await tool.execute({ command: 'open', url: 'https://example.com/' }, ctx());
+    for (const key of ['h', 'u', 'n', 't', 'e', 'r', '2', 'Enter']) await tool.execute({ command: 'press', key }, ctx());
+    const pressed = store.audit.list('chat-1').filter((r) => (r.argsRedacted as { command?: string }).command === 'press').map((r) => (r.argsRedacted as { key?: string }).key);
+    expect(pressed).toEqual([...Array.from({ length: 7 }, () => '[redacted: 1 key]'), 'Enter']);
   });
 
   it('an answer "for this chat" covers that site and no other', async () => {
