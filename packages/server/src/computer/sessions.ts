@@ -1,4 +1,4 @@
-import { actionSummary } from '@grunt/core/domain/computer-apps.js';
+import { actionSummary, chatTitleForDialog, desktopTextForResult } from '@grunt/core/domain/computer-apps.js';
 import type { TurnRunner } from '@grunt/core/domain/turn.js';
 import type {
   ComputerAction,
@@ -15,6 +15,11 @@ import type { AppEventBus } from '../stream/events.js';
 
 type SessionEvent = Extract<AppEvent, { type: 'computer-session' }>;
 type StoppedListener = (chatId: string, why: ComputerStopReason) => void;
+
+/** What an error from the driver said, for a log line: core's one clean bounded line of it, never the error itself. */
+function driverSaid(err: unknown): string {
+  return desktopTextForResult(err instanceof Error ? err.message : String(err)) || 'no reason was given';
+}
 
 /** What a second chat is told while another one is in control, or is being asked about. */
 export const COMPUTER_OTHER_CHAT_REASON = 'Another chat is controlling this computer. Stop it first.';
@@ -199,7 +204,7 @@ export class ComputerSessions implements ComputerDriver {
     try {
       return this.driver.available() === true;
     } catch (err) {
-      console.error("[grunt-server] the desktop app couldn't say whether computer use is available:", err);
+      console.error(`[grunt-server] the desktop app couldn't say whether computer use is available: ${driverSaid(err)}`);
       return false;
     }
   }
@@ -229,7 +234,9 @@ export class ComputerSessions implements ComputerDriver {
     });
     const start: Start = { chatId, abandoned: false, answer };
     this.starting = start;
-    this.begin(start, chatTitle).then(settle, fail);
+    // The title goes into the shell's native dialog. Whoever asks, the driver gets core's one clean line of it
+    // (the computer tool passes it that way already; this is the last thing of Grunt's between a title and the shell).
+    this.begin(start, chatTitleForDialog(chatTitle)).then(settle, fail);
     return answer;
   }
 
@@ -483,7 +490,7 @@ export class ComputerSessions implements ComputerDriver {
       this.tellDriverToEnd(chatId).then(
         () => true,
         (err: unknown) => {
-          console.error(`[grunt-server] couldn't confirm that the desktop app ended computer use for chat ${chatId}:`, err);
+          console.error(`[grunt-server] couldn't confirm that the desktop app ended computer use for chat ${chatId}: ${driverSaid(err)}`);
           return false;
         }
       )
