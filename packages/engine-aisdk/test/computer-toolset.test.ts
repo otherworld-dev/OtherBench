@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ConnectionKind, ResolvedProfile } from '@grunt/core/types/config.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { COMPUTER_ACTIONS } from '@grunt/core/domain/computer-apps.js';
 import { IMAGE_NOT_KEPT_LIMIT, MAX_TOOL_IMAGE_BYTES, TOOL_IMAGE_REF_REMOVED } from '@grunt/core/domain/tool-images.js';
 import { AiSdkChatEngine, COMPUTER_TOOLSET_CONFIGS, COMPUTER_TOOLSET_MODELS, usesComputerToolset } from '../src/engine.js';
@@ -71,12 +72,57 @@ const ANSWER = sse([
   { type: 'message_stop' },
 ]);
 
+type Block = Record<string, unknown>;
+
+/** Every request body any test here sent: each is checked by `expectWellFormed` when its test ends. */
+const everyBody: Record<string, unknown>[] = [];
+
+/**
+ * What the Messages API insists on, over a whole outgoing body: every
+ * `tool_result` answers a `tool_use` of the assistant message just before it,
+ * every `tool_use` is answered in the message just after it, results come
+ * before any other block of their message, and a `tool_use` that names the
+ * toolset is one of its members that is turned on (a phase-1 action).
+ */
+function expectWellFormed(body: Record<string, unknown>): void {
+  const messages = body['messages'] as { role: string; content: Block[] | string }[];
+  const blocks = (i: number): Block[] => {
+    const content = messages[i]?.content;
+    return Array.isArray(content) ? content : [];
+  };
+  for (let i = 0; i < messages.length; i++) {
+    const uses = blocks(i).filter((b) => b['type'] === 'tool_use');
+    const results = blocks(i).filter((b) => b['type'] === 'tool_result');
+    if (messages[i]!.role === 'assistant') {
+      expect(results, `message ${i}: a tool_result in an assistant message`).toEqual([]);
+      const answered = blocks(i + 1).filter((b) => b['type'] === 'tool_result').map((b) => b['tool_use_id']);
+      expect(answered.slice().sort(), `message ${i}: every tool_use is answered in the next message`).toEqual(uses.map((b) => b['id']).sort());
+      for (const use of uses) {
+        if (use['toolset_name'] !== undefined) expect(COMPUTER_ACTIONS as readonly unknown[], `message ${i}: tool_use ${String(use['name'])} names the toolset`).toContain(use['name']);
+      }
+    } else {
+      expect(uses, `message ${i}: a tool_use in a user message`).toEqual([]);
+      const asked = messages[i - 1]?.role === 'assistant' ? blocks(i - 1).filter((b) => b['type'] === 'tool_use').map((b) => b['id']) : [];
+      for (const result of results) expect(asked, `message ${i}: tool_result ${String(result['tool_use_id'])} has its tool_use just before it`).toContain(result['tool_use_id']);
+      const firstOther = blocks(i).findIndex((b) => b['type'] !== 'tool_result');
+      if (firstOther !== -1) expect(blocks(i).slice(firstOther).filter((b) => b['type'] === 'tool_result'), `message ${i}: results come first`).toEqual([]);
+    }
+    if (i > 0) expect(messages[i]!.role, `message ${i}: roles alternate`).not.toBe(messages[i - 1]!.role);
+  }
+  expect(messages[messages.length - 1]!.role, 'the request ends with a user message').toBe('user');
+}
+
+afterEach(() => {
+  for (const body of everyBody.splice(0)) expectWellFormed(body);
+});
+
 function fakeAnthropic(...replies: string[]) {
   const bodies: Record<string, unknown>[] = [];
   const urls: string[] = [];
   const fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
     urls.push(String(url));
     bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    everyBody.push(bodies[bodies.length - 1]!);
     const body = replies[bodies.length - 1] ?? replies[replies.length - 1]!;
     return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   });
@@ -100,8 +146,16 @@ const COMPUTER_PARAMETERS = {
 
 const SHOT = [{ type: 'text', text: SHOT_TEXT }, { type: 'image', data: PNG, mimeType: 'image/png' }];
 
+/** What the provider's gate answers for a name that is not an action (the shape of its refusals; the real one is pinned in packages/server/test/computer-toolset.test.ts). */
+const refusedByGate = (action: unknown): { error: true; code: string; message: string } => ({ error: true, code: 'permission_denied', message: `"${String(action)}" isn't a computer action Grunt can do.` });
+
+function answerLikeTheGate(args: { action: string }): unknown {
+  if (!(COMPUTER_ACTIONS as readonly string[]).includes(args.action)) return refusedByGate(args.action);
+  return args.action === 'screenshot' ? SHOT : [{ type: 'text', text: 'Done.' }];
+}
+
 /** Stands in for the gated `computer` spec the tool provider hands the engine: `execute` is where the broker decides. */
-function computerSpec(seen: unknown[], answer: (args: { action: string }, ctx: ToolContext) => unknown = (args) => (args.action === 'screenshot' ? SHOT : [{ type: 'text', text: 'Done.' }])): ToolSpec {
+function computerSpec(seen: unknown[], answer: (args: { action: string }, ctx: ToolContext) => unknown = answerLikeTheGate): ToolSpec {
   return {
     name: 'computer',
     description: 'Use the computer.',
@@ -119,7 +173,7 @@ function plainSpec(name: string, result: unknown): ToolSpec {
   return { name, description: 'x', parameters: { type: 'object', properties: {} }, risk: 'read', source: 'mcp', execute: async () => result };
 }
 
-function request(modelId: string, tools: ToolSpec[], over: { kind?: ConnectionKind; vision?: boolean; signal?: AbortSignal } = {}): EngineRequest {
+function request(modelId: string, tools: ToolSpec[], over: { kind?: ConnectionKind; vision?: boolean; signal?: AbortSignal; messages?: CanonMessage[] } = {}): EngineRequest {
   const profile: ResolvedProfile = {
     id: 'profile-1', name: 'Claude', description: null, colour: null, connectionId: 'conn-1', modelId, systemPrompt: null, params: {},
     toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true }, isDefault: false, archivedAt: null,
@@ -132,7 +186,7 @@ function request(modelId: string, tools: ToolSpec[], over: { kind?: ConnectionKi
   };
   return {
     profile,
-    messages: [{ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'click it' }], status: 'complete', error: null, producedBy: null, createdAt: 0 }],
+    messages: over.messages ?? [{ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'click it' }], status: 'complete', error: null, producedBy: null, createdAt: 0 }],
     tools,
     signal: over.signal ?? new AbortController().signal,
     chatId: 'chat-1',
@@ -146,8 +200,6 @@ async function drain(iterable: AsyncIterable<EngineEvent>): Promise<EngineEvent[
   for await (const event of iterable) events.push(event);
   return events;
 }
-
-type Block = Record<string, unknown>;
 
 /** The `tool_result` blocks of the last message of an outgoing request. */
 function resultsIn(body: Record<string, unknown>): Block[] {
@@ -260,11 +312,14 @@ describe("Anthropic's computer toolset", () => {
   });
 
   it('matches the toolset models exactly or as a dated snapshot, on Anthropic connections only', () => {
-    expect([...COMPUTER_TOOLSET_MODELS]).toEqual(['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-fable-5-1', 'claude-haiku-5-5']);
+    // The ids the SDK itself names as taking the toolset (index.d.ts, the doc comment on `computerToolset_20260801`).
+    expect([...COMPUTER_TOOLSET_MODELS]).toEqual(['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-fable-5', 'claude-fable-5-1']);
     for (const id of [...COMPUTER_TOOLSET_MODELS, 'claude-opus-5-5-20261001', 'claude-fable-5-20260801']) {
       expect(usesComputerToolset('anthropic', id), id).toBe(true);
     }
     for (const id of ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5']) expect(usesComputerToolset('anthropic', id), id).toBe(false);
+    // On the plan's list but never checked against the API: they keep the plain tool, which any model can call.
+    for (const id of ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-sonnet-5-5-20261001']) expect(usesComputerToolset('anthropic', id), id).toBe(false);
     // Not a bare prefix or a substring: a model Grunt does not know keeps the plain tool.
     for (const id of ['claude-opus-5-9', 'claude-opus-50', 'claude-opus-5-5x', 'claude-opus-5-5-', 'claude-opus-5-5-2026', 'claude-opus-5-5-202610011', 'claude-opus-5-5-latest', 'xclaude-opus-5-5', 'my-claude-opus-5-5', 'CLAUDE-OPUS-5-5', ' claude-opus-5-5', 'claude-opus-5-5\n', '']) {
       expect(usesComputerToolset('anthropic', id), JSON.stringify(id)).toBe(false);
@@ -282,8 +337,26 @@ describe("Anthropic's computer toolset", () => {
   });
 });
 
+/** A call the toolset cannot carry, as the model is shown it instead: a line in the assistant's message, and what it returned in the next one. */
+const callNote = (action?: string): string =>
+  action === undefined ? "[A call to the computer tool that can't be shown as one: it named no action.]" : `[A call to the computer tool that can't be shown as one: "${action}" is not one of its actions.]`;
+const resultNote = (text: string): string => `[What that call returned: ${text}]`;
+
+/** The text blocks of one message of an outgoing request. */
+function textsIn(body: Record<string, unknown>, index: number): string[] {
+  const messages = body['messages'] as { role: string; content: Block[] }[];
+  const message = messages[index < 0 ? messages.length + index : index]!;
+  return message.content.filter((b) => b['type'] === 'text').map((b) => String(b['text']));
+}
+
+/** Every `tool_use` of an outgoing request, as [name, toolset_name, id]. */
+function usesIn(body: Record<string, unknown>): unknown[][] {
+  const messages = body['messages'] as { role: string; content: Block[] | string }[];
+  return messages.flatMap((m) => (Array.isArray(m.content) ? m.content : []).filter((b) => b['type'] === 'tool_use').map((b) => [b['name'], b['toolset_name'], b['id']]));
+}
+
 describe('the toolset: what reaches the computer tool', () => {
-  it('answers a member that is not a phase-1 action with an error and never runs the tool for it', async () => {
+  it('hands a member that is not a phase-1 action to the tool as its name alone, so the gate refuses it and records it', async () => {
     const off = ['left_click_drag', 'hold_key', 'zoom', 'middle_click', 'left_mouse_down', 'left_mouse_up'];
     const calls: Call[] = off.map((name, i) => ({ id: `toolu_${i}`, name, input: { coordinate: [1, 2], start_coordinate: [3, 4], text: 'shift', duration: 1, region: [0, 0, 5, 5] } }));
     const { provider, bodies } = fakeAnthropic(turnOf('msg_1', calls), ANSWER);
@@ -291,23 +364,18 @@ describe('the toolset: what reaches the computer tool', () => {
 
     const events = await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec(seen)])));
 
-    expect(seen).toEqual([]);
+    // The name and nothing else: no point, no text, nothing the tool could act on.
+    expect(seen).toEqual(off.map((name) => ({ action: name })));
     const emitted = resultEvents(events);
-    expect(emitted).toHaveLength(off.length);
-    for (const [i, name] of off.entries()) {
-      expect(emitted[i]!.result, name).toEqual({
-        error: true,
-        code: 'computer_bad_action',
-        message: `"${name}" isn't a computer action Grunt can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.`,
-      });
-    }
-    // The model is told the same thing, against the member it called.
-    const results = resultsIn(bodies[1]!);
-    expect(results.map((b) => b['toolset_name'])).toEqual(off.map(() => 'computer'));
-    expect(results.map((b) => JSON.parse(String(b['content'])) as unknown)).toEqual(emitted.map((e) => e.result));
+    expect(emitted.map((e) => e.result)).toEqual(off.map((name) => refusedByGate(name)));
+    // The next request shows each as text: a member that is turned off is not written back as a call.
+    expect(usesIn(bodies[1]!)).toEqual([]);
+    expect(resultsIn(bodies[1]!)).toEqual([]);
+    expect(textsIn(bodies[1]!, -2)).toEqual(off.map((name) => callNote(name)));
+    expect(textsIn(bodies[1]!, -1)).toEqual(off.map((name) => resultNote(JSON.stringify(refusedByGate(name)))));
   });
 
-  it('never runs the tool for a member the toolset does not have', async () => {
+  it('never runs the tool for a member the toolset does not have, and shows the call as text afterwards', async () => {
     const { provider, bodies } = fakeAnthropic(turnOf('msg_1', [{ id: 'toolu_1', name: 'teleport', input: { coordinate: [1, 2] } }]), ANSWER);
     const seen: unknown[] = [];
 
@@ -315,22 +383,29 @@ describe('the toolset: what reaches the computer tool', () => {
 
     expect(seen).toEqual([]);
     expect(resultEvents(events).map((e) => [e.id, e.isError])).toEqual([['toolu_1', true]]);
-    expect(resultsIn(bodies[1]!).map((b) => b['is_error'])).toEqual([true]);
+    expect(usesIn(bodies[1]!)).toEqual([]);
+    expect(resultsIn(bodies[1]!)).toEqual([]);
+    expect(textsIn(bodies[1]!, -2)).toEqual([callNote('teleport')]);
+    expect(textsIn(bodies[1]!, -1)).toHaveLength(1);
+    expect(textsIn(bodies[1]!, -1)[0]).toContain('[What that call returned: Invalid input for tool computer');
   });
 
-  it("passes on the action and the fields the computer tool's parameters declare, and nothing else", async () => {
+  it("refuses a member call that carries a field the computer tool's parameters don't declare, naming the field, and runs nothing for it", async () => {
     const forged = { app: 'C:\\Windows\\notepad.exe', appName: 'notepad.exe', appRisk: 'normal', appShellView: false, appWindow: '1', appPid: 1, appStarted: 'x', appTitle: 't' };
-    const { provider } = fakeAnthropic(
+    const { provider, bodies } = fakeAnthropic(
       turnOf('msg_1', [
-        { id: 'toolu_1', name: 'left_click', input: { coordinate: [10, 20], region: [0, 0, 5, 5], repeat: 3, start_coordinate: [1, 1], ...forged, extra: 'x' } },
-        { id: 'toolu_2', name: 'scroll', input: { coordinate: [5, 6], scroll_direction: 'down', scroll_amount: 2, repeat: 9 } },
-        { id: 'toolu_3', name: 'type', input: { text: 'hello', duration: 2 } },
+        { id: 'toolu_1', name: 'left_click', input: { coordinate: [10, 20], repeat: 3 } },
+        { id: 'toolu_2', name: 'left_click', input: { coordinate: [10, 20], region: [0, 0, 5, 5], start_coordinate: [1, 1] } },
+        // What the SDK's own schema does not know never arrives at all.
+        { id: 'toolu_3', name: 'left_click', input: { coordinate: [10, 20], ...forged, extra: 'x' } },
+        { id: 'toolu_4', name: 'scroll', input: { coordinate: [5, 6], scroll_direction: 'down', scroll_amount: 2 } },
+        { id: 'toolu_5', name: 'type', input: { text: 'hello', duration: 2 } },
       ]),
       ANSWER
     );
     const seen: unknown[] = [];
 
-    await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec(seen)])));
+    const events = await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec(seen)])));
 
     expect(seen).toEqual([
       { action: 'left_click', coordinate: [10, 20] },
@@ -338,14 +413,56 @@ describe('the toolset: what reaches the computer tool', () => {
       { action: 'type', text: 'hello', duration: 2 },
     ]);
     for (const args of seen) expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
+    const byId = new Map(resultEvents(events).map((e) => [e.id, e.result]));
+    expect(byId.get('toolu_1')).toEqual({
+      error: true,
+      code: 'computer_bad_action',
+      message: 'The computer tool doesn\'t take "repeat" with left_click, so nothing was done. Send the action again without it.',
+    });
+    expect(byId.get('toolu_2')).toEqual({
+      error: true,
+      code: 'computer_bad_action',
+      message: 'The computer tool doesn\'t take "region", "start_coordinate" with left_click, so nothing was done. Send the action again without them.',
+    });
+    // The model is told the same, against the call it made (a real member, so it stays a call).
+    const results = resultsIn(bodies[1]!);
+    expect(results.map((b) => b['tool_use_id'])).toEqual(['toolu_1', 'toolu_2', 'toolu_3', 'toolu_4', 'toolu_5']);
+    expect(contentOf(results[0]!)).toEqual(byId.get('toolu_1'));
+    expect(contentOf(results[1]!)).toEqual(byId.get('toolu_2'));
   });
 
-  it('passes only the action when the spec declares no other field', async () => {
-    const { provider } = fakeAnthropic(turnOf('msg_1', [{ id: 'toolu_1', name: 'left_click', input: { coordinate: [10, 20], text: 'x' } }]), ANSWER);
+  it('refuses every field but the action when the spec declares no other', async () => {
+    const { provider } = fakeAnthropic(turnOf('msg_1', [{ id: 'toolu_1', name: 'left_click', input: { coordinate: [10, 20], text: 'x' } }, { id: 'toolu_2', name: 'screenshot' }]), ANSWER);
     const seen: unknown[] = [];
     const bare: ToolSpec = { ...computerSpec(seen), parameters: { type: 'object' } };
-    await drain(engineFor(provider).stream(request('claude-opus-5-5', [bare])));
-    expect(seen).toEqual([{ action: 'left_click' }]);
+    const events = await drain(engineFor(provider).stream(request('claude-opus-5-5', [bare])));
+    expect(seen).toEqual([{ action: 'screenshot' }]);
+    expect((resultEvents(events).find((e) => e.id === 'toolu_1')!.result as { message: string }).message).toBe(
+      'The computer tool doesn\'t take "coordinate", "text" with left_click, so nothing was done. Send the action again without them.'
+    );
+  });
+
+  it('ends the turn as stopped when the reply is stopped while a member call is running', async () => {
+    const { provider, fetch } = fakeAnthropic(turnOf('msg_1', [{ id: 'toolu_1', name: 'left_click', input: { coordinate: [10, 20] } }]), ANSWER);
+    const controller = new AbortController();
+    const during: boolean[] = [];
+    const spec = computerSpec([], async (_args, ctx) => {
+      during.push(ctx.signal.aborted);
+      const stopped = new Promise<void>((resolve) => ctx.signal.addEventListener('abort', () => resolve(), { once: true }));
+      controller.abort();
+      await stopped;
+      during.push(ctx.signal.aborted);
+      return { error: true, code: 'cancelled', message: 'The reply was stopped, so nothing was done.' };
+    });
+
+    const events = await drain(engineFor(provider).stream(request('claude-opus-5-5', [spec], { signal: controller.signal })));
+
+    // The call saw the stop through its own context, while it was running.
+    expect(during).toEqual([false, true]);
+    expect(events.at(-1)).toMatchObject({ type: 'error', error: { kind: 'cancelled' } });
+    expect(events.filter((e) => e.type === 'finish')).toEqual([]);
+    // No second request went out for a reply that was stopped.
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("runs every member call through the spec's own execute, with the turn's context, and hands back what it answers", async () => {
@@ -370,6 +487,108 @@ describe('the toolset: what reaches the computer tool', () => {
     // What the gate answered (a denial here) is the result, for the transcript and for the model.
     expect(resultEvents(events)[1]!.result).toEqual(denied);
     expect(JSON.parse(String(resultsIn(bodies[1]!)[1]!['content']))).toEqual(denied);
+  });
+});
+
+describe('the toolset: a computer call that is not one of its members goes out as text, with its result', () => {
+  const user = (id: string, text: string): CanonMessage => ({ id, chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 0 });
+  const call = (id: string, args: unknown): Part => ({ type: 'tool-call', id, name: 'computer', args });
+  const result = (id: string, value: unknown, isError = false): Part => ({ type: 'tool-result', id, name: 'computer', result: value, isError });
+  const noAction = { error: true, code: 'permission_denied', message: 'no action' };
+
+  /** A chat whose earlier reply (made with the JSON tool, on another model) holds calls the toolset has no member for, and one it has. */
+  const history: CanonMessage[] = [
+    user('u1', 'do things'),
+    {
+      id: 'a1', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null, createdAt: 1,
+      parts: [
+        call('c1', {}),
+        result('c1', noAction),
+        call('c2', { action: 5 }),
+        result('c2', 'bad input', true),
+        call('c3', { action: 'click', coordinate: [1, 2] }),
+        result('c3', refusedByGate('click')),
+        call('c4', { action: 'left_click_drag', start_coordinate: [1, 2], coordinate: [3, 4] }),
+        result('c4', refusedByGate('left_click_drag')),
+        call('c5', { action: 'screenshot' }),
+        result('c5', [{ type: 'text', text: 'Looked.' }]),
+        { type: 'text', text: 'I tried.' },
+      ],
+    },
+    user('u2', 'and now?'),
+  ];
+
+  it('replays stored calls with no action, an action that is not text, a name that is no member and a member that is off as text', async () => {
+    const { provider, bodies } = fakeAnthropic(ANSWER);
+    // And one whose stored arguments are not an object at all.
+    const reply = history[1]!;
+    const messages = [history[0]!, { ...reply, parts: [...reply.parts.slice(0, -1), call('c6', 'not even an object'), result('c6', noAction), reply.parts.at(-1)!] }, history[2]!];
+
+    const events = await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec([])], { messages })));
+
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expectWellFormed(bodies[0]!);
+    // The one real member is still a call of the toolset, with its result.
+    expect(usesIn(bodies[0]!)).toEqual([['screenshot', 'computer', 'c5']]);
+    expect(resultsIn(bodies[0]!).map((b) => [b['tool_use_id'], b['toolset_name']])).toEqual([['c5', 'computer']]);
+    // Each of the others is a line where the call was, and what it returned after the results that stayed.
+    expect(textsIn(bodies[0]!, 1)).toEqual([callNote(), callNote(), callNote('click'), callNote('left_click_drag'), callNote(), 'I tried.']);
+    expect(textsIn(bodies[0]!, 2)).toEqual([
+      resultNote(JSON.stringify(noAction)),
+      resultNote('"bad input"'),
+      resultNote(JSON.stringify(refusedByGate('click'))),
+      resultNote(JSON.stringify(refusedByGate('left_click_drag'))),
+      resultNote(JSON.stringify(noAction)),
+      'and now?',
+    ]);
+  });
+
+  it('keeps the request well formed when every call of a reply goes out as text', async () => {
+    const only: CanonMessage[] = [user('u1', 'do things'), { ...history[1]!, parts: [call('c1', {}), result('c1', noAction)] }, user('u2', 'and now?')];
+    const { provider, bodies } = fakeAnthropic(ANSWER);
+    await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec([])], { messages: only })));
+    expect((bodies[0]!['messages'] as { role: string }[]).map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(usesIn(bodies[0]!)).toEqual([]);
+    expect(textsIn(bodies[0]!, 1)).toEqual([callNote()]);
+    expect(textsIn(bodies[0]!, 2)).toEqual([resultNote(JSON.stringify(noAction)), 'and now?']);
+  });
+
+  it('leaves the same history alone for a model that gets the JSON tool, and when the request has no computer tool', async () => {
+    for (const [modelId, tools] of [['claude-sonnet-4-5', [computerSpec([])]], ['claude-opus-5-5', []]] as [string, ToolSpec[]][]) {
+      const { provider, bodies } = fakeAnthropic(ANSWER);
+      await drain(engineFor(provider).stream(request(modelId, tools, { messages: history })));
+      expect(usesIn(bodies[0]!), modelId).toEqual(['c1', 'c2', 'c3', 'c4', 'c5'].map((id) => ['computer', undefined, id]));
+      expect(resultsIn(bodies[0]!).map((b) => b['tool_use_id']), modelId).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+      expect(textsIn(bodies[0]!, 1), modelId).toEqual(['I tried.']);
+    }
+  });
+
+  it('does not leave a result without its call in the next step when a member call arrives with an action that is not text', async () => {
+    const { provider, bodies } = fakeAnthropic(
+      turnOf('msg_1', [
+        { id: 'toolu_1', name: 'screenshot', input: { action: null } },
+        { id: 'toolu_2', name: 'left_click', input: { action: 5, coordinate: [1, 2] } },
+        { id: 'toolu_3', name: 'screenshot' },
+      ]),
+      turnOf('msg_2', [{ id: 'toolu_4', name: 'left_click', input: { coordinate: [10, 20] } }]),
+      ANSWER
+    );
+    const seen: unknown[] = [];
+
+    const events = await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec(seen)])));
+
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(seen).toEqual([{ action: 'screenshot' }, { action: 'left_click', coordinate: [10, 20] }]);
+    expect(resultEvents(events).map((e) => [e.id, e.isError])).toEqual(expect.arrayContaining([['toolu_1', true], ['toolu_2', true], ['toolu_3', false], ['toolu_4', false]]));
+    // The second step's request, and the third's (which carries the first step again): the two odd calls are text both times.
+    for (const body of [bodies[1]!, bodies[2]!]) {
+      expectWellFormed(body);
+      expect(usesIn(body).slice(0, 1)).toEqual([['screenshot', 'computer', 'toolu_3']]);
+      expect(textsIn(body, 1)).toEqual([callNote(), callNote()]);
+      expect(textsIn(body, 2)).toHaveLength(2);
+      for (const text of textsIn(body, 2)) expect(text).toContain('[What that call returned: Invalid input for tool computer');
+    }
+    expect(usesIn(bodies[2]!)).toEqual([['screenshot', 'computer', 'toolu_3'], ['left_click', 'computer', 'toolu_4']]);
   });
 });
 

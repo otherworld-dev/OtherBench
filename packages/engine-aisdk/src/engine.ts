@@ -1,7 +1,7 @@
 import type { AnthropicProvider } from '@ai-sdk/anthropic';
 import { APICallError } from '@ai-sdk/provider';
 import { jsonSchema, stepCountIs, streamText, tool } from 'ai';
-import type { JSONSchema7, LanguageModel, LanguageModelUsage, TextStreamPart, ToolSet } from 'ai';
+import type { JSONSchema7, LanguageModel, LanguageModelUsage, ModelMessage, TextStreamPart, ToolSet } from 'ai';
 import type {
   ChatEngine,
   ConnectionTestResult,
@@ -14,7 +14,9 @@ import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
-import { COMPUTER_BAD_ACTION_REASON, COMPUTER_TOOL, isComputerAction, parseAction } from '@grunt/core/domain/computer-apps.js';
+import { cardLine } from '@grunt/core/domain/card-text.js';
+import { COMPUTER_TOOL, isComputerAction } from '@grunt/core/domain/computer-apps.js';
+import { toolsetSafeMessages } from './computer-toolset.js';
 import { toModelMessages } from './convert.js';
 import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
 import { liveToolOutput, toolImagesSupported } from './tool-images.js';
@@ -66,28 +68,39 @@ const MAX_TOOL_STEPS = 20;
 
 /**
  * Models that take Anthropic's computer toolset (spec
- * 2026-10-12-computer-use-design section 5), on Anthropic connections. Opus
- * 5.5 and Sonnet 5.5 take only the toolset on the Claude API. Every other
- * model gets Grunt's JSON-schema `computer` tool, with the same action names
- * and arguments. Anthropic's tool versions change often: this list is the one
- * place to update.
+ * 2026-10-12-computer-use-design section 5), on Anthropic connections. Every
+ * other model gets Grunt's JSON-schema `computer` tool, with the same action
+ * names and arguments, which any model can call. Anthropic's tool versions
+ * change often: this list is the one place to update.
+ *
+ * These are the ids the SDK's own doc comment names as supported
+ * (`@ai-sdk/anthropic` 3.0.127, `dist/index.d.ts`, on
+ * `computerToolset_20260801`): Opus 5.5 (which takes only the toolset), Opus
+ * 5, Sonnet 5, Fable 5, Fable 5.1 and Opus 4.8. The plan also listed
+ * `claude-sonnet-5-5` and `claude-haiku-5-5`; nobody has checked them against
+ * the API, so they are left out and get the JSON tool.
+ *
+ * To add an id: send one live request with it from a profile that has computer
+ * use on, and add it only if the request is accepted. A wrong id here has no
+ * fallback: the toolset is in every request of such a profile whether or not
+ * the model uses it, so every request fails with a 400 that names
+ * `computer_toolset_20260801`. A missing id costs nothing but the JSON tool.
  */
 export const COMPUTER_TOOLSET_MODELS = [
   'claude-opus-5-5',
   'claude-opus-5',
   'claude-opus-4-8',
-  'claude-sonnet-5-5',
   'claude-sonnet-5',
   'claude-fable-5',
   'claude-fable-5-1',
-  'claude-haiku-5-5',
 ] as const;
 
 /**
  * Phase 1 leaves out zoom, drags, raw mouse down/up, middle click and held
  * keys: every member of the toolset that is not one of core's
- * `COMPUTER_ACTIONS` is turned off here. A member the model calls anyway is
- * refused in `memberArgs`; this list is not what keeps it from running.
+ * `COMPUTER_ACTIONS` is turned off here. This list is not what keeps such a
+ * member from running: one the model calls anyway reaches the tool as its
+ * name alone (`memberArgs`), and the tool provider's gate refuses it.
  */
 export const COMPUTER_TOOLSET_CONFIGS = Object.freeze({
   zoom: Object.freeze({ enabled: false }),
@@ -202,10 +215,16 @@ export class AiSdkChatEngine implements ChatEngine {
       const toolset = usesComputerToolset(req.profile.connection.kind, req.profile.modelId) ? computerToolsetOf(handle) : null;
       const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk, imageBudget, toolset);
       const model = resolveLanguageModel(handle, req.profile.modelId);
+      // With the toolset among the tools, a `computer` call that is not one of its members can't be written back
+      // as a call: it and its result go out as text. The same pass runs on the history the request starts with
+      // and on every later step's messages, which hold the calls this reply itself made (computer-toolset.ts).
+      const toolsetOn = toolset !== null && req.tools.some(isComputerSpec);
+      const safe = (list: ModelMessage[]): ModelMessage[] => (toolsetOn ? toolsetSafeMessages(list, COMPUTER_TOOL) : list);
 
       const result = streamText({
         model,
-        messages,
+        messages: safe(messages),
+        ...(toolsetOn ? { prepareStep: ({ messages: stepMessages }: { messages: ModelMessage[] }) => ({ messages: safe(stepMessages) }) } : {}),
         tools: Object.keys(tools).length > 0 ? tools : undefined,
         stopWhen: stepCountIs(MAX_TOOL_STEPS),
         abortSignal: req.signal,
@@ -515,24 +534,33 @@ function declaredFields(spec: ToolSpec): string[] {
  * A member call of the computer toolset as the arguments of Grunt's `computer`
  * tool, or why it has none. The SDK hands a member call over as
  * `{ action: <member>, ...its input }`, which is the JSON tool's own shape.
- * Only a member that is one of core's phase-1 actions is mapped; a drag, a
- * held key, a zoom, or a name nobody knows is refused here and never reaches
- * the tool. Of the member's input, only the fields the tool's parameters
- * declare (`fields`) go on: nothing else the provider's schema allows
- * (`region`, `repeat`, `start_coordinate`) and nothing else at all.
+ *
+ *   - A member that is not one of core's phase-1 actions (a drag, a held key,
+ *     a zoom, a name nobody knows) goes to the tool as `{ action }` ALONE:
+ *     nothing it could act on. The tool provider's gate then refuses it the
+ *     way it refuses an unknown action of the JSON tool (before any control
+ *     session is started, with no card) and records it in the audit.
+ *   - A phase-1 action that carries a field the tool's parameters do not
+ *     declare (`fields`): the provider's schema allows `region`, `repeat` and
+ *     `start_coordinate`, which Grunt does nothing with. It is refused here,
+ *     naming the field, rather than run without it: a click sent with
+ *     `repeat: 3` that ran once would leave the model and the transcript
+ *     believing it ran three times.
+ *   - Otherwise the action and the declared fields it carries, in a fresh
+ *     object, and nothing else.
  */
 function memberArgs(input: unknown, fields: readonly string[]): { args: Record<string, unknown> } | { refuse: string } {
   const member = typeof input === 'object' && input !== null && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
   const action = member !== null && Object.hasOwn(member, 'action') ? member['action'] : undefined;
-  if (member === null || !isComputerAction(action)) {
-    // Core's own wording for a name that is not an action.
-    const refused = parseAction({ action });
-    return { refuse: refused.ok ? COMPUTER_BAD_ACTION_REASON : refused.reason };
+  if (member === null || !isComputerAction(action)) return { args: { action } };
+  const sent = Object.keys(member).filter((field) => field !== 'action' && member[field] !== undefined);
+  const unknown = sent.filter((field) => !fields.includes(field));
+  if (unknown.length > 0) {
+    const names = unknown.map((field) => `"${cardLine(field, 40)}"`).join(', ');
+    return { refuse: `The computer tool doesn't take ${names} with ${action}, so nothing was done. Send the action again without ${unknown.length === 1 ? 'it' : 'them'}.` };
   }
   const args: Record<string, unknown> = { action };
-  for (const field of fields) {
-    if (field !== 'action' && Object.hasOwn(member, field) && member[field] !== undefined) args[field] = member[field];
-  }
+  for (const field of sent) args[field] = member[field];
   return { args };
 }
 
