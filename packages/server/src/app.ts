@@ -7,6 +7,7 @@ import { authGate, authRoutes } from './remote/auth.js';
 import type { RemoteAccess } from './remote/index.js';
 import { attachmentsRoutes } from './routes/attachments.js';
 import { browserRoutes } from './routes/browser.js';
+import { computerRoutes } from './routes/computer.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { eventsRoutes } from './routes/events.js';
 import { fsRoutes } from './routes/fs.js';
@@ -95,7 +96,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // Every mode (Deck #897): browser mode has no token to stop another site's form.
   app.use('/api/*', refuseCrossSiteWrites([...(options.corsOrigins ?? []), ...(remote?.publicOrigins ?? [])]));
 
-  app.route('/api', healthRoutes());
+  app.route('/api', healthRoutes(() => container.computer?.available() === true));
   // Sign-in, sign-out and what mode this is (every mode); before the gated routes.
   app.route('/api/auth', authRoutes({ token, remote }));
 
@@ -140,6 +141,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // under /chats/:id/browser; nothing else owns them. Behind the auth gate and
   // the cross-site write check like the rest; never on the peer listener.
   authed.route('/', browserRoutes(container));
+  // Computer use (spec 2026-10-12-computer-use-design section 7): POST /chats/:id/computer/stop, the
+  // thread banner's Stop. Behind the auth gate and the cross-site write check; never on the peer listener.
+  authed.route('/', computerRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));

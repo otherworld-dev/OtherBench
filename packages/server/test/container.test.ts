@@ -8,6 +8,8 @@ import type { SaveToolImage } from '@grunt/core/domain/tool-images.js';
 import { FAKE_PNG, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
+import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
+import { ComputerSessions } from '../src/computer/sessions.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
 import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase, withoutOwnPorts, type Container } from '../src/container.js';
 
@@ -492,6 +494,93 @@ describe('computer use wiring', () => {
       expect(container.computer?.available()).toBe(true);
     } finally {
       container.close();
+    }
+  });
+
+  /** A profile, and for each chat id a chat with one reply `<chat>-reply`. */
+  function seed(container: Container, ...chatIds: string[]): void {
+    container.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+    container.store.profiles.create({
+      id: 'prof', name: 'P', description: null, colour: null, connectionId: 'conn', modelId: 'mock-standard', systemPrompt: null, params: {},
+      toolPolicy: on, isDefault: false, archivedAt: null,
+    });
+    for (const id of chatIds) {
+      container.store.chats.create({ id, title: `Chat ${id}`, profileId: 'prof', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+      container.store.messages.create({ id: `${id}-reply`, chatId: id, parentId: null, role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null });
+    }
+  }
+  const ctxFor = (chatId: string) => ({ chatId, messageId: `${chatId}-reply`, profileId: 'prof', workspaceRoot: null, signal: new AbortController().signal });
+
+  it('puts the control sessions between the tool and the driver: one chat at a time, announced on the app-wide stream', async () => {
+    const driver = new FakeComputerDriver();
+    const container = await open(driver);
+    try {
+      seed(container, 'c1', 'c2');
+      expect(container.computer).toBeInstanceOf(ComputerSessions);
+      const tool = (await container.toolProvider.listTools(on)).find((t) => t.name === 'computer')!;
+      // The tool's own call starts the session through the sessions, which announce it.
+      expect(await tool.execute({ action: 'screenshot' }, ctxFor('c1'))).toMatchObject([{ type: 'text' }, { type: 'image', mimeType: 'image/png' }]);
+      expect(container.computer!.activeChat()).toBe('c1');
+      expect(container.events!.computerSessions()).toEqual([{ chatId: 'c1' }]);
+      // A second chat's tool call is refused by them: the driver is never asked, so no second dialog.
+      const second = (await tool.execute({ action: 'screenshot' }, ctxFor('c2'))) as { error: boolean; message: string };
+      expect(second).toMatchObject({ error: true });
+      expect(second.message).toContain('Another chat is controlling this computer. Stop it first.');
+      expect(driver.started).toEqual([{ chatId: 'c1', chatTitle: 'Chat c1' }]);
+    } finally {
+      container.close();
+    }
+  });
+
+  it("Stop cancels the chat's reply through the runner, and the tool forgets that chat's last screenshot", async () => {
+    const driver = new FakeComputerDriver();
+    const container = await open(driver);
+    try {
+      seed(container, 'c1');
+      const tool = (await container.toolProvider.listTools(on)).find((t) => t.name === 'computer')!;
+      await tool.execute({ action: 'screenshot' }, ctxFor('c1'));
+      const cancel = vi.spyOn(container.turnRunner, 'cancel');
+      container.events!.emit({ type: 'turn-started', chatId: 'c1', messageIds: ['c1-reply'] });
+
+      await container.computer!.stop('c1');
+
+      expect(cancel).toHaveBeenCalledWith('c1-reply');
+      expect(driver.ended).toEqual(['c1']);
+      expect(container.events!.computerSessions()).toEqual([]);
+      // The tool heard the server's own stop: a point in the old screenshot is refused before anything is started.
+      const click = (await tool.execute({ action: 'left_click', coordinate: [10, 20] }, ctxFor('c1'))) as { error: boolean; message: string };
+      expect(click.message).toContain(COMPUTER_NO_SCREENSHOT_REASON);
+      expect(driver.started).toHaveLength(1);
+      expect(driver.targets).toEqual([]);
+    } finally {
+      container.close();
+    }
+  });
+
+  it('ends a session left without a reply, and ends the one in control when the server closes', async () => {
+    const driver = new FakeComputerDriver();
+    const container = await open(driver);
+    let closed = false;
+    try {
+      const stopped: string[] = [];
+      container.computer!.onStopped((chatId, why) => stopped.push(`${chatId}:${why}`));
+      // Started and never used, and the chat's reply is over: nobody is watching it.
+      await container.computer!.ensureSession('c1', 'One');
+      container.events!.emit({ type: 'turn-finished', chatId: 'c1', messageId: 'm1', status: 'cancelled' });
+      expect(driver.ended).toEqual(['c1']);
+      expect(container.computer!.activeChat()).toBeNull();
+      // One in use is the chat's until the server closes.
+      await container.computer!.ensureSession('c1', 'One');
+      await container.computer!.screenshot('c1');
+      container.events!.emit({ type: 'turn-finished', chatId: 'c1', messageId: 'm2', status: 'complete' });
+      expect(container.computer!.activeChat()).toBe('c1');
+      closed = true;
+      container.close();
+      expect(driver.ended).toEqual(['c1', 'c1']);
+      expect(driver.hasSession('c1')).toBe(false);
+      expect(stopped).toEqual(['c1:button', 'c1:quit']);
+    } finally {
+      if (!closed) container.close();
     }
   });
 

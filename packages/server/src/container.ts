@@ -28,6 +28,7 @@ import { ChromiumSessions } from '@grunt/tools/browser/chromium.js';
 import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
 import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
@@ -112,12 +113,13 @@ export interface Container {
    */
   browser?: BrowserPort;
   /**
-   * The computer-use driver (spec 2026-10-12-computer-use-design section 7):
-   * the desktop shell's on Windows, the fake one under
-   * GRUNT_COMPUTER_FAKE_DRIVER=1 (tests only), otherwise absent, and then no
-   * profile is offered the `computer` tool whatever it says.
+   * Computer use (spec 2026-10-12-computer-use-design section 7): the
+   * control sessions over the driver, which is the desktop shell's on
+   * Windows and the fake one under GRUNT_COMPUTER_FAKE_DRIVER=1 (tests only).
+   * Absent when there is no driver, and then no profile is offered the
+   * `computer` tool whatever it says.
    */
-  computer?: ComputerDriver;
+  computer?: ComputerSessions;
   close(): void;
 }
 
@@ -336,7 +338,21 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Computer use: the shell's driver when the CLI passed one. For tests only,
   // GRUNT_COMPUTER_FAKE_DRIVER=1 wires a fake that touches nothing. Read once.
   // With neither there is no driver, and no profile is offered the tool.
-  const computer = options.computer ?? (process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1' ? new FakeComputerDriver() : undefined);
+  const computerDriver = options.computer ?? (process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1' ? new FakeComputerDriver() : undefined);
+  // One chat in control at a time; every start, action and end announced for
+  // the banner; Stop cancels the chat's reply. `turnRunner` exists by the
+  // time anything calls cancelChat. The tool provider is given the sessions,
+  // not the driver: every call goes through them, and the tool's own
+  // "session stopped" hook (it forgets that chat's last screenshot) listens
+  // to them, so it hears the ends the server makes itself too.
+  const computer = computerDriver
+    ? new ComputerSessions(computerDriver, {
+        emit: (e) => events.emit(e),
+        cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
+      })
+    : undefined;
+  // A start nobody waits for any more, or a session never used, does not outlive the chat's last reply.
+  if (computer) endSessionsLeftWithoutAReply(events, computer);
   const toolProvider = new GruntToolProvider(store, broker, mcpManager, { browser, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
@@ -467,6 +483,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
       claudeImport.dispose();
       memory.dispose();
+      // Computer use ends with the server: the driver is told, and nothing starts afterwards.
+      computer?.dispose();
       // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
       void browser.closeAll().catch((err: unknown) => console.error('[grunt-server] error closing the model browser:', err));
       // Claude Code processes kept alive between replies.
