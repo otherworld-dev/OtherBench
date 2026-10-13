@@ -5,6 +5,7 @@ import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage
 import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
 import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
+import { cardLine } from '@grunt/core/domain/card-text.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@grunt/core/domain/request-budget.js';
 import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
@@ -116,8 +117,23 @@ const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig
 
 const textOf = (m: CanonMessage | undefined): string => (m?.parts ?? []).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 
-/** Filenames of the new message's non-image attachments, which Claude Code turns do not receive. */
-const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? []).flatMap((p) => (p.type === 'file' ? [p.filename] : []));
+/** The longest file name the notice and the prompt carry (the cap core's attachment notes use). */
+const SKIPPED_NAME_MAX = 80;
+
+/**
+ * A file name as it goes into the transcript's notice and into the prompt,
+ * cleaned the way core's attachment notes clean one (request-budget.ts): one
+ * line, no control or hidden character, at most 80 characters (`cardLine`),
+ * and without the quote and square brackets Grunt's own notes are written
+ * with, so a name can't pass for one. A name with nothing left in it is still
+ * listed, so the file is not dropped from the count.
+ */
+function skippedName(filename: unknown): string {
+  return cardLine(filename, SKIPPED_NAME_MAX).replace(/"/g, "'").replace(/\[/g, '(').replace(/\]/g, ')') || 'unnamed file';
+}
+
+/** The names (cleaned, see `skippedName`) of the new message's non-image attachments, which Claude Code turns do not receive. */
+const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? []).flatMap((p) => (p.type === 'file' ? [skippedName(p.filename)] : []));
 
 /** The transcript's line about the new message's images that were not sent (how many, and each reason once), or null when all were. */
 function omittedImagesNotice(omitted: Omission[]): string | null {
