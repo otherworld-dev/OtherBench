@@ -483,6 +483,13 @@ describe('toolPolicy: the sandboxed shell', () => {
     expect((await res.json()).toolPolicy.sandboxHosts).toEqual([...DEFAULT_SANDBOX_HOSTS]);
   });
 
+  it("still accepts GitHub in a profile's own list, though it is no longer a default", async () => {
+    const hosts = ['github.com', 'codeload.github.com', 'objects.githubusercontent.com', 'raw.githubusercontent.com'];
+    const res = await create({ shell: true, shellRuns: 'sandbox', sandboxHosts: hosts });
+    expect(res.status).toBe(201);
+    expect((await res.json()).toolPolicy.sandboxHosts).toEqual(hosts);
+  });
+
   it.each([
     [{ shellRuns: 'vm' }, '"toolPolicy.shellRuns" must be one of: host, sandbox.'],
     [{ sandboxHosts: 'pypi.org' }, '"toolPolicy.sandboxHosts" must be an array of strings, or null for the defaults.'],

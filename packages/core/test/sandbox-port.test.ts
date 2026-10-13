@@ -17,16 +17,16 @@ describe('sandbox policy fields', () => {
       'registry.npmjs.org',
       'pypi.org',
       'files.pythonhosted.org',
-      'github.com',
-      'codeload.github.com',
-      'objects.githubusercontent.com',
-      'raw.githubusercontent.com',
     ]);
+    for (const host of DEFAULT_SANDBOX_HOSTS) expect(host).not.toMatch(/github/);
     const hosts = sandboxHostsOf(policy());
     expect(hosts).toEqual([...DEFAULT_SANDBOX_HOSTS]);
     hosts.push('evil.example');
     expect(DEFAULT_SANDBOX_HOSTS).not.toContain('evil.example');
     expect(sandboxHostsOf(policy({ sandboxHosts: ['example.org'] }))).toEqual(['example.org']);
+    // A profile that names GitHub itself keeps it: only the default changed.
+    expect(sandboxHostsOf(policy({ sandboxHosts: ['github.com', 'pypi.org'] }))).toEqual(['github.com', 'pypi.org']);
+    expect(sandboxHostsOf(policy({ sandboxHosts: [] }))).toEqual([]);
   });
 });
 

@@ -727,7 +727,7 @@ describe('ProfilesPanel: where the shell runs', () => {
     const user = userEvent.setup();
     await newProfileWithShell(user);
     await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
-    expect(screen.getByLabelText('The sandbox can reach')).toHaveValue('registry.npmjs.org\npypi.org\nfiles.pythonhosted.org\ngithub.com\ncodeload.github.com\nobjects.githubusercontent.com\nraw.githubusercontent.com');
+    expect(screen.getByLabelText('The sandbox can reach')).toHaveValue('registry.npmjs.org\npypi.org\nfiles.pythonhosted.org');
     await user.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ shell: true, shellRuns: 'sandbox' }) })));
     expect(mockedCreate.mock.calls[0]![0].toolPolicy).not.toHaveProperty('sandboxHosts');

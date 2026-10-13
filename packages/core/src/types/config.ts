@@ -118,15 +118,15 @@ export interface ToolPolicy {
   computer?: boolean;
 }
 
-/** What a sandboxed command may reach when the profile names no hosts of its own (spec 2026-10-12-sandbox-design). */
+/**
+ * What a sandboxed command may reach when the profile names no hosts of its own (spec 2026-10-12-sandbox-design):
+ * package registries only. GitHub is left off on purpose, since a command could push data out to an account it controls;
+ * a profile that wants it names it in its own list, and any other host raises a card.
+ */
 export const DEFAULT_SANDBOX_HOSTS: readonly string[] = [
   'registry.npmjs.org',
   'pypi.org',
   'files.pythonhosted.org',
-  'github.com',
-  'codeload.github.com',
-  'objects.githubusercontent.com',
-  'raw.githubusercontent.com',
 ];
 
 /** Whether this policy's `run_command` is the sandboxed one: shell on and set to run in the sandbox. */

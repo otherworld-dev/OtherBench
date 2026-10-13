@@ -198,9 +198,9 @@ describe('the ranges the agent hands the runtime (DENIED_RESOLVED_ADDRESSES)', (
     }
   });
 
-  it('leaves the public internet alone: addresses like the ones the default hosts resolve to, in IPv4, IPv6 and behind NAT64', () => {
+  it('leaves the public internet alone: addresses like the ones the default hosts (and GitHub, which a profile may add) resolve to, in IPv4, IPv6 and behind NAT64', () => {
     const blockList = runtimeBlockList();
-    // registry.npmjs.org (Cloudflare), pypi.org and files.pythonhosted.org (Fastly), github.com and codeload.github.com, *.githubusercontent.com.
+    // registry.npmjs.org (Cloudflare), pypi.org and files.pythonhosted.org (Fastly), plus GitHub's (github.com, codeload.github.com, *.githubusercontent.com), which a profile may still name itself.
     const v4 = ['104.16.0.35', '151.101.0.223', '151.101.64.223', '140.82.112.3', '140.82.121.9', '185.199.108.133'];
     const v6 = ['2606:4700::6810:23', '2a04:4e42::223', '2a04:4e42:400::223', '2606:50c0:8000::154', '2606:50c0:8003::154'];
     const nat64 = v4.map((text) => `64:ff9b::${text}`);
