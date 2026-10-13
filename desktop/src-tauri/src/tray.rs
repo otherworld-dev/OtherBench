@@ -72,6 +72,30 @@ fn menu(app: &AppHandle, machines: &[String]) -> tauri::Result<Menu<Wry>> {
     Ok(menu)
 }
 
+/// The tooltip while a chat controls the computer (the title is already one clean line).
+pub fn control_tooltip(title: &str) -> String {
+    let text = format!("Grunt is controlling this computer ({title})");
+    // Windows shows at most 127 characters of a tray tooltip.
+    if text.chars().count() > 127 {
+        format!("{}…)", text.chars().take(125).collect::<String>())
+    } else {
+        text
+    }
+}
+
+/// While a chat controls the computer, the tooltip says so; `None` puts the
+/// plain one back (the web app's next `set_tray_status` refreshes the count).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn set_control_tooltip(app: &AppHandle, controlling: Option<&str>) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let text = match controlling {
+            Some(title) => control_tooltip(title),
+            None => tooltip_text(0),
+        };
+        let _ = tray.set_tooltip(Some(text));
+    }
+}
+
 /// Updates the tooltip and the machine lines; the web app calls this
 /// whenever either changes.
 pub fn set_status(app: &AppHandle, pending_approvals: u32, machines: &[String]) {
@@ -125,6 +149,14 @@ mod tests {
     fn tooltip_counts_pending_approvals() {
         assert_eq!(tooltip_text(1), "Grunt: 1 tool call waiting for approval");
         assert_eq!(tooltip_text(3), "Grunt: 3 tool calls waiting for approval");
+    }
+
+    #[test]
+    fn the_control_tooltip_names_the_chat_within_windows_limit() {
+        assert_eq!(control_tooltip("Budget"), "Grunt is controlling this computer (Budget)");
+        let long = control_tooltip(&"x".repeat(200));
+        assert_eq!(long.chars().count(), 127);
+        assert!(long.ends_with("…)"));
     }
 
     #[test]

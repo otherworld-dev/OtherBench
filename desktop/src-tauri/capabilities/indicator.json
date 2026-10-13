@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "indicator",
+  "description": "The computer-use indicator bar (computer-indicator). It shows who is in control and can only stop it: no other app command. default.json is unchanged.",
+  "windows": ["computer-indicator"],
+  "permissions": ["core:default", "allow-computer-stop"]
+}

@@ -42,7 +42,6 @@ const MAX_ANNOUNCE: usize = 4096;
 
 /// The server closes the channel at 100 events in a second; the shell keeps
 /// itself to half of that, waiting rather than dropping one.
-#[allow(dead_code)] // Events go out once a driver is built in (Task 14).
 const EVENTS_PER_SECOND: u32 = 50;
 
 /// What an answer says when the work behind it failed before it could answer.
@@ -202,14 +201,12 @@ pub fn error_line(id: u64, message: &str, code: Option<&str>) -> String {
     format!("{PREFIX}{}\n", json!({ "id": id, "error": error }))
 }
 
-#[allow(dead_code)] // Events go out once a driver is built in (Task 14).
 pub fn event_line(event: &str, params: &Value) -> String {
     format!("{PREFIX}{}\n", json!({ "event": event, "params": params }))
 }
 
 type Broken = Box<dyn Fn() + Send + Sync>;
 
-#[allow(dead_code)] // Events go out once a driver is built in (Task 14).
 struct Rate {
     window: Instant,
     count: u32,
@@ -219,7 +216,6 @@ struct WriterInner {
     /// The server's stdin. One lock for every thread that writes (answers and
     /// events come from different threads): each line is one `write_all`.
     sink: Mutex<Option<Box<dyn Write + Send>>>,
-    #[allow(dead_code)] // Events go out once a driver is built in (Task 14).
     rate: Mutex<Rate>,
     broken: Mutex<Option<Broken>>,
 }
@@ -241,11 +237,6 @@ impl Writer {
     /// Called once if a write fails (the server is gone): the channel is lost.
     pub fn on_broken(&self, hook: impl Fn() + Send + Sync + 'static) {
         *locked(&self.0.broken) = Some(Box::new(hook));
-    }
-
-    #[allow(dead_code)] // Events go out once a driver is built in (Task 14).
-    pub fn is_open(&self) -> bool {
-        locked(&self.0.sink).is_some()
     }
 
     /// Writes one whole line, then flushes; false once closed or broken.
@@ -279,7 +270,6 @@ impl Writer {
         self.send(&error_line(id, message, code))
     }
 
-    #[allow(dead_code)] // Events go out once a driver is built in (Task 14).
     /// Sends an event, never more than `EVENTS_PER_SECOND` in a second: past
     /// that it waits for the next second rather than drop one.
     pub fn event(&self, name: &str, params: &Value) -> bool {
@@ -603,7 +593,7 @@ pub(crate) mod tests {
         let t = told.clone();
         w.on_broken(move || *t.lock().unwrap() += 1);
         assert!(!w.answer(1, &json!(1)));
-        assert!(!w.is_open());
+        assert!(!w.error(3, "x", None));
         assert!(!w.answer(2, &json!(1)));
         assert_eq!(*told.lock().unwrap(), 1);
         let (w, sink) = writer();

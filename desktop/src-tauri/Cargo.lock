@@ -1404,7 +1404,9 @@ dependencies = [
 name = "grunt-desktop"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "getrandom 0.3.4",
+ "png 0.18.1",
  "serde",
  "serde_json",
  "tauri",
@@ -1416,6 +1418,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-winrt-notification",
+ "windows",
 ]
 
 [[package]]

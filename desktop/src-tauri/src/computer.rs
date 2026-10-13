@@ -3,15 +3,42 @@
 //! reads and writes the lines).
 //!
 //! It ships switched OFF: `computer.hello` reports `available: false` unless
-//! a driver is built in AND the shell was started with GRUNT_COMPUTER_USE=1,
-//! which only Adam sets, for his live check. In this build there is no driver
-//! at all, so every start is refused and nothing else can have a session.
+//! the Windows driver is built in (it is, on Windows) AND the shell was
+//! started with GRUNT_COMPUTER_USE=1, which only Adam sets, for his live
+//! check. With the switch off the shell has no driver at all (`Shell::new`
+//! gets `None`), so no input, capture or window call can be reached.
+//!
+//! The shell reports facts and presses what it is told; core decides
+//! everything else. It does refuse its own shortcuts, check the expectation
+//! it is handed before every step, and never trust a remembered keyboard.
+//!
+//!   session.rs  the sessions, their tokens and the answers (platform-free, tested with a fake)
+//!   act.rs      reading an action and carrying it out with its checks
+//!   keys.rs     the key table (exactly core's key names)
+//!   facts.rs    what is reported about a window, and the pure parts of finding it out
+//!   image.rs    screenshot scaling, coordinates and PNG
+//!   win.rs      the Win32 calls (Windows only; never run by a test)
+//!   desktop.rs  the real driver: win.rs plus the dialog, hotkey, indicator and tray
+
+mod act;
+mod facts;
+mod image;
+mod keys;
+mod session;
+
+#[cfg(windows)]
+mod desktop;
+#[cfg(windows)]
+mod win;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use crate::rpc::{self, Reply, Request, Writer};
+pub use facts::{Facts, Identity};
+pub use session::{Limits, Shell};
 
 /// Set to "1" to switch computer use on in this shell. Off when unset.
 pub const SWITCH_ENV: &str = "GRUNT_COMPUTER_USE";
@@ -20,16 +47,18 @@ pub const OFF_REASON: &str = "Computer use is off in this Grunt desktop app.";
 pub const NO_SESSION: &str = "Grunt is not controlling this computer for that chat.";
 /// Registered only while a chat is in control.
 pub const STOP_HOTKEY: &str = "Ctrl+Alt+Backspace";
+/// The indicator bar's window label (capabilities/indicator.json) and the event it listens for.
+pub const INDICATOR: &str = "computer-indicator";
 
-/// Whether a driver is compiled in. There is none in this build.
-const DRIVER_BUILT: bool = false;
+/// The Windows driver is compiled in on Windows. It still only runs with GRUNT_COMPUTER_USE=1.
+const DRIVER_BUILT: bool = cfg!(windows);
 
 pub fn switched_on(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
 pub fn enabled() -> bool {
-    DRIVER_BUILT && cfg!(windows) && switched_on(std::env::var(SWITCH_ENV).ok().as_deref())
+    DRIVER_BUILT && switched_on(std::env::var(SWITCH_ENV).ok().as_deref())
 }
 
 /// Node's name for a platform (`process.platform`), which the server checks.
@@ -62,73 +91,173 @@ pub fn hello_result(available: bool, shortcuts: Vec<String>) -> Value {
     })
 }
 
-/// The shell's side of the channel. With no driver it holds no session, so
-/// it answers every request at once, on the reader thread.
-pub struct Shell {
-    /// The global shortcuts the shell has registered now (hotkey.rs).
-    shortcuts: Box<dyn Fn() -> Vec<String> + Send + Sync>,
-    closed: AtomicBool,
+// ---- what the driver is asked to do -----------------------------------------
+
+/// Which window to look at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Where {
+    /// The top-level window under a screen point.
+    Point(i32, i32),
+    /// The foreground window.
+    Foreground,
+    /// A window by its id (re-activation only).
+    Window(String),
 }
 
-impl Shell {
-    pub fn new(shortcuts: impl Fn() -> Vec<String> + Send + Sync + 'static) -> Self {
-        Self { shortcuts: Box::new(shortcuts), closed: AtomicBool::new(false) }
-    }
-
-    /// The quick-chat hotkey changed. Nothing is told: computer use is off.
-    pub fn shortcuts_changed(&self) {}
+/// The real modifier state, read before anything is pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keyboard {
+    Clear,
+    /// A modifier (either Ctrl, Alt, Shift or Windows key) is down, physically or logically.
+    Held,
+    /// The state can't be read (the input desktop isn't the user's: locked, a UAC prompt).
+    Unknown,
 }
 
-impl rpc::Handler for Shell {
-    fn attach(&self, _writer: Writer) {}
+/// The person's answer to the native start dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Consent {
+    Yes,
+    /// Cancel, closed, dismissed by the shell, or timed out.
+    No,
+    /// The dialog could not be shown.
+    Failed,
+}
 
-    fn request(&self, request: Request, reply: Reply) {
-        if self.closed.load(Ordering::SeqCst) {
-            return;
-        }
-        match request.method.as_str() {
-            "computer.hello" => reply.ok(hello_result(enabled(), (self.shortcuts)())),
-            "computer.start" => reply.ok(json!({ "ok": false, "reason": OFF_REASON })),
-            // Nothing is ever held, so an end has nothing to end.
-            "computer.end" => reply.ok(json!({ "ok": true })),
-            "computer.screenshot" | "computer.cursor" | "computer.target" | "computer.act" => reply.err(NO_SESSION, Some(rpc::NO_SESSION_CODE)),
-            _ => reply.err("Unknown method.", None),
+/// One input event. A down and its up are separate events, so a guard can
+/// tell exactly which keys and buttons it left down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Input {
+    Key { vk: u16, extended: bool, up: bool },
+    /// A UTF-16 unit typed as a character (`KEYEVENTF_UNICODE`).
+    Unicode { unit: u16, up: bool },
+    Button { right: bool, up: bool },
+    /// One notch: 120 or -120.
+    Wheel { delta: i32, horizontal: bool },
+}
+
+impl Input {
+    /// The up that releases this event, if it is a down.
+    pub fn release(&self) -> Option<Input> {
+        match *self {
+            Input::Key { vk, extended, up: false } => Some(Input::Key { vk, extended, up: true }),
+            Input::Unicode { unit, up: false } => Some(Input::Unicode { unit, up: true }),
+            Input::Button { right, up: false } => Some(Input::Button { right, up: true }),
+            _ => None,
         }
     }
 
-    fn notification(&self, method: &str, _params: &Value) -> bool {
-        if method == "computer.close" {
-            self.closed.store(true, Ordering::SeqCst);
-            return true;
-        }
-        false
+    pub fn is_up(&self) -> bool {
+        matches!(self, Input::Key { up: true, .. } | Input::Unicode { up: true, .. } | Input::Button { up: true, .. })
+    }
+}
+
+/// A capture of the primary monitor, already scaled: top-down BGRA rows.
+pub struct Capture {
+    pub bgra: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub screen_w: u32,
+    pub screen_h: u32,
+}
+
+/// The start dialog's handle: another thread dismisses it (an end, a hello,
+/// the channel closing), and it dismisses itself at its deadline. Dismissing
+/// is always Cancel, never OK.
+#[derive(Clone)]
+pub struct Dialog(Arc<(AtomicBool, Instant)>);
+
+impl Dialog {
+    pub fn new(limit: Duration) -> Self {
+        Self(Arc::new((AtomicBool::new(false), Instant::now() + limit)))
     }
 
-    fn lost(&self) {
-        self.closed.store(true, Ordering::SeqCst);
+    pub fn dismiss(&self) {
+        self.0 .0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn dismissed(&self) -> bool {
+        self.0 .0.load(Ordering::SeqCst)
+    }
+
+    pub fn expired(&self) -> bool {
+        Instant::now() >= self.0 .1
+    }
+
+    /// The dialog must close now (as Cancel).
+    pub fn should_close(&self) -> bool {
+        self.dismissed() || self.expired()
+    }
+}
+
+/// What the session needs of the machine. The real one is desktop.rs (only
+/// built when the switch is on); tests use a fake that touches nothing.
+pub trait Desktop: Send + Sync {
+    /// Shows the native start dialog and waits for the person, closing it
+    /// (as Cancel) once `dialog.should_close()`.
+    fn consent(&self, text: &str, dialog: &Dialog) -> Consent;
+    /// Registers or unregisters the stop hotkey.
+    fn stop_hotkey(&self, on: bool) -> Result<(), String>;
+    /// Shows the indicator bar (and the tray says so) for a chat's title, or takes it away.
+    fn indicator(&self, title: Option<&str>);
+    /// The indicator's line for the last action (never typed text).
+    fn indicator_action(&self, label: &str);
+    fn capture(&self, max: (u32, u32)) -> Result<Capture, String>;
+    fn screen_size(&self) -> Result<(u32, u32), String>;
+    fn cursor(&self) -> Result<(i32, i32), String>;
+    fn facts(&self, at: &Where) -> Result<Facts, String>;
+    /// The facts an action is checked against, quickly (no signature check).
+    fn identity(&self, at: &Where) -> Result<Identity, String>;
+    /// Brings exactly this window forward; false if it couldn't.
+    fn activate(&self, window_id: &str) -> bool;
+    fn keyboard(&self) -> Keyboard;
+    fn move_to(&self, x: i32, y: i32) -> Result<(), String>;
+    /// Sends events in order, all in one go; how many were taken.
+    fn send(&self, inputs: &[Input]) -> usize;
+}
+
+/// The shell for this app: with the switch on (Windows only), the real
+/// driver; otherwise none, and computer use reports off.
+pub fn shell(app: &tauri::AppHandle) -> Arc<Shell> {
+    let shortcuts = || crate::hotkey::registered().into_iter().collect();
+    #[cfg(windows)]
+    if enabled() {
+        return Arc::new(Shell::new(shortcuts, Some(Arc::new(desktop::WinDesktop::new(app.clone())) as Arc<dyn Desktop>), Limits::default()));
+    }
+    let _ = app;
+    Arc::new(Shell::new(shortcuts, None, Limits::default()))
+}
+
+/// Stop from the shell itself: the hotkey, the indicator's Stop. Off the
+/// calling thread, which may be the main one the hotkey needs.
+pub fn stop_from_shell(app: &tauri::AppHandle, why: &'static str) {
+    use tauri::Manager;
+    if let Some(shell) = app.try_state::<Arc<Shell>>() {
+        let shell = shell.inner().clone();
+        std::thread::spawn(move || shell.stop(why));
+    }
+}
+
+/// Grunt is quitting: end every session and tell the server, before the pipes close.
+pub fn shutdown(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(shell) = app.try_state::<Arc<Shell>>() {
+        shell.stop("quit");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::tests::writer;
-    use crate::rpc::Handler;
-
-    fn ask(shell: &Shell, id: u64, method: &str, params: Value) -> (Writer, crate::rpc::tests::Sink) {
-        let (w, sink) = writer();
-        shell.request(Request { id, method: method.into(), params }, Reply::new(id, w.clone()));
-        (w, sink)
-    }
 
     #[test]
     fn ships_switched_off() {
-        assert!(!DRIVER_BUILT);
-        assert!(!enabled());
+        assert!(!enabled(), "GRUNT_COMPUTER_USE must not be set where tests run");
         assert!(switched_on(Some("1")));
         for v in [None, Some(""), Some("0"), Some("true"), Some("yes"), Some(" 1")] {
             assert!(!switched_on(v), "{v:?}");
         }
+        assert_eq!(hello_result(false, vec![])["available"], json!(false));
     }
 
     #[test]
@@ -139,13 +268,9 @@ mod tests {
     }
 
     #[test]
-    fn hello_answers_every_field_with_computer_use_off() {
-        let shell = Shell::new(|| vec!["Ctrl+Shift+Space".to_string()]);
-        let (_, sink) = ask(&shell, 1, "computer.hello", json!({}));
-        let m = &sink.messages()[0];
-        assert_eq!(m["id"], json!(1));
-        let r = &m["result"];
-        assert_eq!(r["available"], json!(false));
+    fn hello_answers_every_field() {
+        let r = hello_result(true, vec!["Ctrl+Shift+Space".into()]);
+        assert_eq!(r["available"], json!(true));
         assert_eq!(r["sessions"], json!(0));
         assert!(r["sessions"].is_u64());
         assert_eq!(r["shortcuts"], json!(["Ctrl+Shift+Space"]));
@@ -154,36 +279,29 @@ mod tests {
     }
 
     #[test]
-    fn every_other_method_answers_as_a_shell_with_no_session() {
-        let shell = Shell::new(Vec::new);
-        let (_, s) = ask(&shell, 2, "computer.start", json!({ "chatId": "c", "title": "t" }));
-        assert_eq!(s.messages()[0]["result"], json!({ "ok": false, "reason": OFF_REASON }));
-        let (_, s) = ask(&shell, 3, "computer.end", json!({ "chatId": "c" }));
-        assert_eq!(s.messages()[0]["result"], json!({ "ok": true }));
-        for (id, m) in [(4, "computer.screenshot"), (5, "computer.cursor"), (6, "computer.target"), (7, "computer.act")] {
-            let (_, s) = ask(&shell, id, m, json!({ "chatId": "c", "session": "x".repeat(32) }));
-            assert_eq!(s.messages()[0], json!({ "id": id, "error": { "message": NO_SESSION, "code": "no-session" } }), "{m}");
-        }
-        let (_, s) = ask(&shell, 8, "computer.dance", json!({}));
-        assert_eq!(s.messages()[0], json!({ "id": 8, "error": { "message": "Unknown method." } }));
-    }
-
-    #[test]
-    fn after_close_nothing_more_is_acted_on() {
-        let shell = Shell::new(Vec::new);
-        assert!(shell.notification("computer.close", &json!({})));
-        assert!(!Shell::new(Vec::new).notification("computer.other", &json!({})));
-        let (w, s) = writer();
-        // The reply goes unanswered on purpose: the server reads nothing after close (it is dropped, which writes a plain error).
-        shell.request(Request { id: 9, method: "computer.hello".into(), params: json!({}) }, Reply::new(9, w));
-        assert!(s.messages()[0].get("result").is_none());
-    }
-
-    #[test]
     fn knows_the_stop_hotkey_however_it_is_spelled() {
         assert!(is_stop_hotkey("Ctrl+Alt+Backspace"));
         assert!(is_stop_hotkey("alt+control+BACKSPACE"));
         assert!(!is_stop_hotkey("Ctrl+Shift+Backspace"));
         assert!(!is_stop_hotkey("not a shortcut"));
+    }
+
+    #[test]
+    fn a_down_knows_its_up() {
+        let down = Input::Key { vk: 0x41, extended: false, up: false };
+        assert_eq!(down.release(), Some(Input::Key { vk: 0x41, extended: false, up: true }));
+        assert!(down.release().unwrap().is_up());
+        assert_eq!(Input::Wheel { delta: 120, horizontal: false }.release(), None);
+        assert_eq!(Input::Unicode { unit: 0x61, up: false }.release(), Some(Input::Unicode { unit: 0x61, up: true }));
+    }
+
+    #[test]
+    fn a_dialog_closes_when_dismissed_or_at_its_deadline() {
+        let d = Dialog::new(Duration::from_secs(60));
+        assert!(!d.should_close());
+        d.clone().dismiss();
+        assert!(d.should_close() && d.dismissed() && !d.expired());
+        let d = Dialog::new(Duration::ZERO);
+        assert!(d.should_close() && d.expired() && !d.dismissed());
     }
 }
