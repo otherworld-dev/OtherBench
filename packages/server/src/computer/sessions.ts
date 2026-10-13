@@ -29,8 +29,11 @@ export const COMPUTER_NO_SESSION_REASON = 'Grunt is not controlling this compute
 export const COMPUTER_START_STOPPED_REASON = 'Control was stopped before it started, so Grunt is not controlling this computer.';
 /** What a start answers once the server is shutting down. */
 export const COMPUTER_SHUTTING_DOWN_REASON = 'Grunt is shutting down, so it is not controlling this computer.';
-/** What a start answers while the desktop app has not confirmed that an earlier session ended. */
-export const COMPUTER_END_UNCONFIRMED_REASON = "Grunt couldn't confirm that the last control session was stopped, so nothing was started.";
+/** What a start answers while the desktop app has not confirmed that an earlier session ended. It says what to do: the same start is refused again until the desktop app answers. */
+export const COMPUTER_END_UNCONFIRMED_REASON =
+  "Grunt couldn't confirm that the last control session was stopped, so nothing was started. Try again in a moment; if this keeps happening, restart Grunt.";
+/** What another chat is told while a start is still waiting for an earlier end to be confirmed: no chat is in control then, so "stop it first" would be wrong. */
+export const COMPUTER_CONFIRMING_REASON = 'Grunt is still confirming that the last control session was stopped. Try again in a moment.';
 
 /** How long the driver is given to answer an end of session before the end counts as unconfirmed. */
 export const COMPUTER_END_TIMEOUT_MS = 5000;
@@ -100,6 +103,8 @@ interface Start {
   readonly chatId: string;
   /** Stopped, or left without a reply, while it waited. An OK that comes now is ended, not kept. */
   abandoned: boolean;
+  /** It is waiting for earlier ends to be confirmed: the driver has not been asked yet, and no dialog is up. */
+  confirming: boolean;
   /** What every caller for this chat gets: one dialog, one answer. */
   readonly answer: Promise<ComputerAnswer>;
 }
@@ -222,7 +227,11 @@ export class ComputerSessions implements ComputerDriver {
     if (this.disposed) return Promise.resolve({ ok: false, reason: COMPUTER_SHUTTING_DOWN_REASON });
     this.dropGoneHolder();
     const holder = this.holder();
-    if (holder !== null && holder !== chatId) return Promise.resolve({ ok: false, reason: COMPUTER_OTHER_CHAT_REASON });
+    if (holder !== null && holder !== chatId) {
+      // While the other chat's start only waits for an earlier end, nobody is in control and there is nothing to stop.
+      const confirming = this.active === null && this.starting !== null && this.starting.confirming;
+      return Promise.resolve({ ok: false, reason: confirming ? COMPUTER_CONFIRMING_REASON : COMPUTER_OTHER_CHAT_REASON });
+    }
     // One dialog per chat: whoever asks while it is up gets its answer.
     if (this.starting !== null) return this.starting.answer;
 
@@ -232,7 +241,7 @@ export class ComputerSessions implements ComputerDriver {
       settle = resolve;
       fail = reject;
     });
-    const start: Start = { chatId, abandoned: false, answer };
+    const start: Start = { chatId, abandoned: false, confirming: false, answer };
     this.starting = start;
     // The title goes into the shell's native dialog. Whoever asks, the driver gets core's one clean line of it
     // (the computer tool passes it that way already; this is the last thing of Grunt's between a title and the shell).
@@ -277,6 +286,21 @@ export class ComputerSessions implements ComputerDriver {
     if (this.active === chatId ? !unused : !asking) return;
     if (this.release(chatId)) this.notifyStopped(chatId, 'button');
     void this.endOnDriver(chatId);
+  }
+
+  /**
+   * A reply of `chatId` was asked to stop with its own Stop (the cancel
+   * route). The turn may take a while to wind down, and `replyEnded` only
+   * comes when it has. A start of that chat that has not reached the desktop
+   * app yet, because it is waiting for an earlier end to be confirmed, is
+   * given up here and now: no native dialog comes up for a reply that was
+   * stopped. A dialog that is already up, and a session, are left to
+   * `replyEnded`. (With two replies running in one chat, the other's call
+   * gets the same refusal and may ask again.)
+   */
+  replyStopping(chatId: string): void {
+    const start = this.starting;
+    if (start !== null && start.chatId === chatId && start.confirming) start.abandoned = true;
   }
 
   /**
@@ -366,12 +390,19 @@ export class ComputerSessions implements ComputerDriver {
     const { chatId } = start;
     // Nothing is started while the driver may still hold a session this server has ended.
     if (this.ending.size > 0 || this.unconfirmed.size > 0) {
+      start.confirming = true;
       const confirmed = await this.endsConfirmed();
-      if (!confirmed || start.abandoned || this.disposed) {
+      start.confirming = false;
+      if (!confirmed) {
         if (this.starting === start) this.starting = null;
-        // Stopped while it waited: the driver was never asked, so there is no dialog and nothing to end.
-        return { ok: false, reason: confirmed ? COMPUTER_START_STOPPED_REASON : COMPUTER_END_UNCONFIRMED_REASON };
+        return { ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON };
       }
+    }
+    // Looked at immediately before the driver is asked, whatever came before: a start that was stopped, or whose
+    // reply was stopped or is over, brings up no dialog. The driver was never asked, so there is nothing to end.
+    if (start.abandoned || this.disposed) {
+      if (this.starting === start) this.starting = null;
+      return { ok: false, reason: COMPUTER_START_STOPPED_REASON };
     }
     let answer: ComputerAnswer;
     try {
@@ -508,10 +539,18 @@ export class ComputerSessions implements ComputerDriver {
     return end;
   }
 
-  /** Waits for every end in flight, tries every unconfirmed one again, and says whether none is left. */
+  /**
+   * Waits for every end in flight, then tries the unconfirmed ones again, one
+   * at a time, and says whether none is left. It stops at the first that
+   * still fails: the answer is "no" either way, and a desktop app that is
+   * not answering would otherwise make the caller wait out its limit once
+   * for every chat on the list.
+   */
   private async endsConfirmed(): Promise<boolean> {
     while (this.ending.size > 0) await Promise.all([...this.ending]);
-    for (const chatId of [...this.unconfirmed]) await this.endOnDriver(chatId);
+    for (const chatId of [...this.unconfirmed]) {
+      if (!(await this.endOnDriver(chatId))) return false;
+    }
     return this.unconfirmed.size === 0;
   }
 

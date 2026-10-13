@@ -12,6 +12,7 @@ import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import {
   cancelChatReplies,
+  COMPUTER_CONFIRMING_REASON,
   COMPUTER_END_UNCONFIRMED_REASON,
   COMPUTER_NO_SESSION_REASON,
   COMPUTER_OTHER_CHAT_REASON,
@@ -1192,6 +1193,130 @@ describe('cancelChatReplies', () => {
     const cancel = vi.fn();
     cancelChatReplies(bus, { cancel }, 'c1');
     expect(cancel.mock.calls).toEqual([['m1'], ['m2']]);
+  });
+});
+
+describe('while an earlier end is still being confirmed', () => {
+  /** The driver's `endSession` waits until the test lets it go, then fails or succeeds as told. */
+  function heldEnd(driver: DialogDriver) {
+    const real = driver.endSession.bind(driver);
+    const waiting: ((ok: boolean) => void)[] = [];
+    const spy = vi.spyOn(driver, 'endSession').mockImplementation(async (chatId: string) => {
+      const ok = await new Promise<boolean>((resolve) => waiting.push(resolve));
+      if (!ok) throw new Error('the desktop app did not answer');
+      return real(chatId);
+    });
+    return { spy, release: (ok: boolean) => waiting.splice(0).forEach((resolve) => resolve(ok)), held: () => waiting.length };
+  }
+
+  it('tries the ends it could not confirm one at a time and stops at the first that still fails', async () => {
+    const { sessions, driver } = setup();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await sessions.ensureSession('c1', 'One');
+    const end = vi.spyOn(driver, 'endSession').mockRejectedValue(new Error('the desktop app did not answer'));
+    // Five chats whose end the desktop app would not confirm.
+    for (const chatId of ['c1', 'c2', 'c3', 'c4', 'c5']) await sessions.stop(chatId);
+    expect(end).toHaveBeenCalledTimes(5);
+
+    expect(await sessions.ensureSession('c9', 'Nine')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
+    // One more try, not five: the answer is the same, and the caller does not wait five times over for it.
+    expect(end).toHaveBeenCalledTimes(6);
+    expect(driver.asked).toEqual(['c1']);
+
+    // When the desktop app answers again, they are all confirmed before anything starts.
+    end.mockRestore();
+    const ended = vi.spyOn(driver, 'endSession');
+    expect(await sessions.ensureSession('c9', 'Nine')).toEqual({ ok: true });
+    expect(ended.mock.calls.map((call) => call[0])).toEqual(['c1', 'c2', 'c3', 'c4', 'c5']);
+  });
+
+  it('says what to do when it stays that way', () => {
+    expect(COMPUTER_END_UNCONFIRMED_REASON).toBe(
+      "Grunt couldn't confirm that the last control session was stopped, so nothing was started. Try again in a moment; if this keeps happening, restart Grunt."
+    );
+  });
+
+  it('tells another chat that Grunt is still confirming, not that a chat is in control: nobody is', async () => {
+    const { sessions, driver } = setup();
+    await sessions.ensureSession('c1', 'One');
+    await sessions.screenshot('c1');
+    const end = heldEnd(driver);
+    const stopping = sessions.stop('c1');
+    // c1 asks again and waits for that end; nobody controls the computer meanwhile.
+    const restart = sessions.ensureSession('c1', 'One');
+    await tick();
+    expect(sessions.activeChat()).toBeNull();
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_CONFIRMING_REASON });
+    expect(COMPUTER_CONFIRMING_REASON).toBe('Grunt is still confirming that the last control session was stopped. Try again in a moment.');
+    expect(COMPUTER_CONFIRMING_REASON).not.toBe(COMPUTER_OTHER_CHAT_REASON);
+
+    // Once the end is confirmed and c1's dialog is up, c1 does hold the computer, and the other chat is told so.
+    driver.dialogUp = true;
+    end.release(true);
+    await stopping;
+    await vi.waitFor(() => expect(driver.asked).toEqual(['c1', 'c1']));
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_OTHER_CHAT_REASON });
+    driver.answer();
+    expect(await restart).toEqual({ ok: true });
+  });
+
+  it("a reply stopped with its own Stop while its start waits: no native dialog comes up afterwards", async () => {
+    const { sessions, driver, events } = setup();
+    await sessions.ensureSession('c1', 'One');
+    await sessions.screenshot('c1');
+    const end = heldEnd(driver);
+    const stopping = sessions.stop('c1');
+    const restart = sessions.ensureSession('c1', 'One');
+    await tick();
+
+    // The reply's own Stop: the turn is cancelled, and may take a while to wind down. The start must not outlive it.
+    sessions.replyStopping('c1');
+    end.release(true);
+    await stopping;
+    expect(await restart).toEqual({ ok: false, reason: COMPUTER_START_STOPPED_REASON });
+    // The driver was asked once, for the first session, and never for the one that was waiting.
+    expect(driver.asked).toEqual(['c1']);
+    expect(driver.started).toHaveLength(1);
+    expect(sessions.holder()).toBeNull();
+    expect(events.filter((e) => e.type === 'computer-session').map((e) => (e as { active: boolean }).active)).toEqual([true, false]);
+    // The chat can start again afterwards.
+    end.spy.mockRestore();
+    expect(await sessions.ensureSession('c1', 'One')).toEqual({ ok: true });
+  });
+
+  it('the same when the reply has finished by then (replyEnded)', async () => {
+    const { sessions, driver } = setup();
+    await sessions.ensureSession('c1', 'One');
+    await sessions.screenshot('c1');
+    const end = heldEnd(driver);
+    const stopping = sessions.stop('c1');
+    const restart = sessions.ensureSession('c1', 'One');
+    await tick();
+    sessions.replyEnded('c1');
+    await tick();
+    end.release(true);
+    await stopping;
+    expect(await restart).toEqual({ ok: false, reason: COMPUTER_START_STOPPED_REASON });
+    expect(driver.asked).toEqual(['c1']);
+  });
+
+  it("a reply's Stop does nothing to a dialog that is already up, a session in control, or another chat", async () => {
+    const { sessions, driver } = setup();
+    // Another chat, and a chat with nothing going on.
+    sessions.replyStopping('c2');
+    // A dialog that is up: answering it still starts the session (the tool then sees its reply was stopped and does nothing).
+    driver.dialogUp = true;
+    const starting = sessions.ensureSession('c1', 'One');
+    await tick();
+    sessions.replyStopping('c1');
+    sessions.replyStopping('c2');
+    driver.answer();
+    expect(await starting).toEqual({ ok: true });
+    // A session in control stays the chat's.
+    await sessions.screenshot('c1');
+    sessions.replyStopping('c1');
+    expect(sessions.activeChat()).toBe('c1');
+    expect(driver.ended).toEqual([]);
   });
 });
 

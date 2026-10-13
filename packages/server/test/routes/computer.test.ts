@@ -12,7 +12,7 @@ import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@grunt/core/testing/fake-
 import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
 import { createApp } from '../../src/app.js';
-import { cancelChatReplies, ComputerSessions } from '../../src/computer/sessions.js';
+import { cancelChatReplies, COMPUTER_START_STOPPED_REASON, ComputerSessions } from '../../src/computer/sessions.js';
 import type { Container } from '../../src/container.js';
 import { AppEventBus } from '../../src/stream/events.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
@@ -181,6 +181,31 @@ describe('computer use and the rest of the API', () => {
     expect(sessions.activeChat()).toBeNull();
     expect(cancel).toHaveBeenCalledWith(replyId);
     expect(container.store.chats.get('chat-1')).toBeNull();
+  });
+
+  it("a reply's own Stop (POST /api/messages/:id/cancel) while its start waits on an earlier end: no native dialog comes up afterwards", async () => {
+    await sessions.ensureSession('chat-1', 'Budget');
+    await sessions.screenshot('chat-1');
+    // The desktop app is slow to confirm the end of the last session.
+    const real = driver.endSession.bind(driver);
+    let release: () => void = () => {};
+    vi.spyOn(driver, 'endSession').mockImplementation(async (chatId: string) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return real(chatId);
+    });
+    const stopping = sessions.stop('chat-1');
+    const replyId = await startReply('chat-1');
+    // The new reply asks for control again, and waits for that end.
+    const restart = sessions.ensureSession('chat-1', 'Budget');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect((await post(`/api/messages/${replyId}/cancel`)).status).toBe(204);
+    release();
+    await stopping;
+    expect(await restart).toEqual({ ok: false, reason: COMPUTER_START_STOPPED_REASON });
+    // One dialog, for the first session; none for the reply that was stopped.
+    expect(driver.started.map((s) => s.chatId)).toEqual(['chat-1']);
+    expect(sessions.holder()).toBeNull();
   });
 
   it('a chat is still deleted when the driver cannot be told', async () => {
