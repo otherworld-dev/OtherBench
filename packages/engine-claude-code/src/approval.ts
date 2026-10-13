@@ -2,6 +2,7 @@ import { isAbsolute, relative, sep } from 'node:path';
 import type { CanUseTool, HookCallback } from '@anthropic-ai/claude-agent-sdk';
 import { AGENT_PATH_ARG_KEYS, classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
 import { containPath, containPathIn, type ContainedIn } from '@grunt/core/domain/paths.js';
 import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
@@ -206,16 +207,37 @@ export function createGate(deps: {
       if (relay?.describeCall && outcome.args !== undefined) deps.onApproved?.(relay, input, outcome.args);
       return { allow: true };
     } catch (err) {
-      return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
+      return couldNotCheck(err, relay?.source === 'computer');
     }
   };
+}
+
+/**
+ * Claude Code's name for the computer tool relayed on a Grunt server
+ * (`mcp__grunt_<hex>__computer`): what `safely` has to go on when the gate
+ * itself threw before it could say which tool the call was for.
+ */
+const RELAYED_COMPUTER_TOOL_NAME = /^mcp__grunt_[0-9a-f]+__computer$/;
+
+/**
+ * A check that threw, as the denial Claude Code is handed. The error's words
+ * are not Grunt's own (they can quote anything a tool or the desktop app
+ * said): one clean line of at most 300 characters. For a computer call they
+ * go under the line that says they may be from the screen (core's builder,
+ * as the relay's error results do), which `denialText` puts first.
+ */
+function couldNotCheck(err: unknown, computer: boolean): Extract<GateDecision, { allow: false }> {
+  const said = desktopTextForResult(err instanceof Error ? err.message : String(err)) || 'no reason was given';
+  if (!computer) return { allow: false, reason: `Grunt could not check this tool call: ${said}` };
+  const { about, message } = screenContentError('computer_failed', `Grunt could not check this tool call: ${said}`);
+  return { allow: false, reason: message, about };
 }
 
 async function safely(gate: Gate, toolName: string, input: Record<string, unknown>, signal: AbortSignal | undefined, opts?: { mayDefer?: boolean }): Promise<GateDecision> {
   try {
     return await gate(toolName, input, signal, opts);
   } catch (err) {
-    return { allow: false, reason: `Grunt could not check this tool call: ${err instanceof Error ? err.message : String(err)}` };
+    return couldNotCheck(err, RELAYED_COMPUTER_TOOL_NAME.test(toolName));
   }
 }
 
