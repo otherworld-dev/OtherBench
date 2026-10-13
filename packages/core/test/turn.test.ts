@@ -9,6 +9,7 @@ import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
 import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
 import { LIVE_ARTIFACTS_GUIDANCE } from '../src/domain/live-artifacts.js';
+import { MAX_REQUEST_ATTACHMENTS, omissionNote } from '../src/domain/request-budget.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1100,6 +1101,29 @@ describe('TurnRunner sends attached files to the model as text', () => {
     expect(notices[0]!.text).toContain(`Grunt couldn't read "old.xlsx" as text, so no-vision-model didn't get it.`);
     const reply = store.messages.get(result.assistantMessageIds[0]!)!;
     expect(reply.parts.filter((p) => p.type === 'notice')).toHaveLength(1);
+  });
+
+  it("holds a file sent as its text to the request's attachment count cap: one past the newest 20 is a note, never its text (integration)", async () => {
+    // Computer use's ruling 17 (at most MAX_REQUEST_ATTACHMENTS, the newest kept) beside office files: the stricter
+    // rule wins, so a Word file's text counts as one of the request's attachments like the bytes of a PDF or an image.
+    const ids = Array.from({ length: MAX_REQUEST_ATTACHMENTS + 2 }, (_, i) => `doc-${String(i).padStart(2, '0')}`);
+    const store = chatWith(...ids.map((id) => makeAttachment({ id, chatId: 'chat-1', filename: `${id}.docx`, mime: DOCX, extractedText: `text of ${id}` })));
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    // The oldest two first, on their own message; the newest twenty on the next.
+    const first = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'old' }, file(ids[0]!, DOCX, `${ids[0]}.docx`), file(ids[1]!, DOCX, `${ids[1]}.docx`)], profiles: [makeResolvedProfile()] });
+    await flush();
+    await runner.run({ chatId: 'chat-1', parentId: first.assistantMessageIds[0]!, userParts: [{ type: 'text', text: 'new' }, ...ids.slice(2).map((id) => file(id, DOCX, `${id}.docx`))], profiles: [makeResolvedProfile()] });
+    await flush();
+
+    const sent = JSON.stringify(engine.requests[1]!.messages);
+    for (const id of ids.slice(2)) expect(sent).toContain(`text of ${id}`);
+    for (const id of ids.slice(0, 2)) {
+      expect(sent).not.toContain(`text of ${id}`);
+      expect(sent).toContain(JSON.stringify(omissionNote('over-budget', `${id}.docx`)).slice(1, -1));
+    }
+    // The first request had only its own two, well within the cap.
+    expect(JSON.stringify(engine.requests[0]!.messages)).toContain('text of doc-00');
   });
 
   it('names every unread file once, as "them"', async () => {

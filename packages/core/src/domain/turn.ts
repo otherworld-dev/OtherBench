@@ -29,6 +29,7 @@ import { SubagentRunner } from './subagent.js';
 export { appendDelta } from './parts.js';
 import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from './attachment-binding.js';
 import { bindToolImages, keepToolImages, MAX_TOOL_IMAGE_BYTES, toolImageBound, type SaveToolImage } from './tool-images.js';
+import { MAX_REQUEST_ATTACHMENTS, omissionNote } from './request-budget.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -1198,6 +1199,19 @@ export class TurnRunner {
   ): { messages: CanonMessage[]; unread: { attachmentId: string; filename: string }[] } {
     const unread: { attachmentId: string; filename: string }[] = [];
     const seen = new Set<string>();
+    // The request's attachment count cap (computer use's ruling 17: at most
+    // MAX_REQUEST_ATTACHMENTS, the newest kept) counts the user's images and
+    // files as the engines will, newest first, each attachment once. A file
+    // sent as its text is held to it too: one that isn't among the newest is
+    // left out with the same note the engines give, not sent as text instead.
+    const counted = new Set<string>();
+    for (let m = messages.length - 1; m >= 0 && counted.size < MAX_REQUEST_ATTACHMENTS; m--) {
+      const parts = messages[m]!.role === 'system' ? [] : messages[m]!.parts;
+      for (let i = parts.length - 1; i >= 0 && counted.size < MAX_REQUEST_ATTACHMENTS; i--) {
+        const part = parts[i]!;
+        if (part.type === 'file' || part.type === 'image') counted.add(part.attachmentId);
+      }
+    }
     const next = messages.map((message) => {
       if (!message.parts.some((p) => p.type === 'file')) return message;
       const parts = message.parts.map((part): Part => {
@@ -1205,6 +1219,7 @@ export class TurnRunner {
         if (pdfNative && part.mime === 'application/pdf') return part;
         const attachment = this.store.attachments.get(part.attachmentId);
         const filename = attachment?.filename ?? part.filename;
+        if (!counted.has(part.attachmentId)) return { type: 'text', text: omissionNote('over-budget', filename) };
         if (attachment?.extractedText) return { type: 'text', text: fencedFileText(filename, attachment.extractedText) };
         if (!seen.has(part.attachmentId)) {
           seen.add(part.attachmentId);
