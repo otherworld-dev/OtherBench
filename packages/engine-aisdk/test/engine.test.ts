@@ -423,6 +423,8 @@ describe('AiSdkChatEngine.stream', () => {
       ['call-1', false],
       ['call-2', false],
     ]);
+  });
+
   it('sends an image a tool returns to a vision model on a provider that takes it as image content, and a note to any other', async () => {
     const png = FAKE_PNG.toString('base64');
     const shot = [

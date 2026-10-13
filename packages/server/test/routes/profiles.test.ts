@@ -167,6 +167,8 @@ describe('POST /api/profiles', () => {
     const plain = await post({ fs: 'off' });
     expect(((await plain.json()) as { toolPolicy: Record<string, unknown> }).toolPolicy).not.toHaveProperty('subagents');
     expect((await post({ subagents: 'yes' })).status).toBe(400);
+  });
+
   it('keeps toolPolicy.computer (off unless it is turned on), and refuses a non-boolean', async () => {
     const post = (toolPolicy: unknown) =>
       app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
