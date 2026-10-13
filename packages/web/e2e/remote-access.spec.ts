@@ -9,11 +9,14 @@ import { expect, request as playwrightRequest, test, type APIRequestContext, typ
  * Remote access (spec 2026-10-12-remote-access §10): a server in sign-in mode
  * with its own certificate, used from a browser that ignores the certificate
  * warning (the CA isn't installed). Started here, not by the config's
- * webServer, which keeps serving every other spec in open mode.
+ * webServer, which keeps serving every other spec in open mode. It trusts
+ * 127.0.0.1 as a proxy so (g) can sign in from many addresses with
+ * `X-Forwarded-For`; the browser sends none, so it is still 127.0.0.1.
  */
 
 const webDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 4781;
+/** Its own port; GRUNT_E2E_REMOTE_PORT moves it when 4781 is taken. */
+const PORT = Number(process.env.GRUNT_E2E_REMOTE_PORT ?? 4781);
 const BASE = `https://127.0.0.1:${PORT}`;
 const PASSWORD = 'e2e remote password';
 const TOKEN = 'e2e-remote-token';
@@ -39,7 +42,7 @@ function run(args: string[], stdin?: string): Promise<number> {
 test.beforeAll(async () => {
   test.setTimeout(60_000);
   expect(await run(['password', '--db', db], `${PASSWORD}\n`)).toBe(0);
-  server = spawn(process.execPath, ['../server/dist/cli.js', 'serve', '--port', String(PORT), '--db', db, '--public-url', BASE, '--tls', 'auto'], {
+  server = spawn(process.execPath, ['../server/dist/cli.js', 'serve', '--port', String(PORT), '--db', db, '--public-url', BASE, '--tls', 'auto', '--trust-proxy', '127.0.0.1'], {
     cwd: webDir,
     stdio: 'ignore',
     env: { ...process.env, GRUNT_TOKEN: TOKEN },
@@ -168,4 +171,34 @@ test('(f) six wrong passwords lock this address out', async ({ page }) => {
   }
   await signIn(page, 'wrong password number 6');
   await expect(page.getByRole('alert')).toHaveText(/^Too many tries\. Try again in 15 minutes\.$/);
+});
+
+test('(g) twenty wrong passwords from anywhere slow every sign-in down, but never close it', async () => {
+  test.setTimeout(90_000);
+  // No bearer token: these are sign-ins, each from its own forwarded address (127.0.0.1 is locked by (f)).
+  const anon = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  let next = 0;
+  const attempt = async (password: string): Promise<{ status: number; ms: number }> => {
+    next += 1;
+    const started = Date.now();
+    const res = await anon.post('/api/auth/login', { data: { password }, headers: { 'X-Forwarded-For': `203.0.113.${next}` } });
+    return { status: res.status(), ms: Date.now() - started };
+  };
+  try {
+    const before = await attempt(PASSWORD);
+    expect(before.status).toBe(200);
+
+    // At most 6 wrong passwords so far ((a) and (f)), so this makes 20 to 26: a 625 ms wait for everyone.
+    for (let i = 0; i < 20; i++) expect((await attempt(`wrong password from afar ${i}`)).status).toBe(401);
+
+    const slowed = await attempt(PASSWORD);
+    expect(slowed.status).toBe(200);
+    expect(slowed.ms).toBeGreaterThanOrEqual(600);
+    expect(slowed.ms).toBeGreaterThan(before.ms + 300);
+    const wrong = await attempt('one more wrong password');
+    expect(wrong.status).toBe(401);
+    expect(wrong.ms).toBeGreaterThanOrEqual(600);
+  } finally {
+    await anon.dispose();
+  }
 });
