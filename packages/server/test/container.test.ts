@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
+import type { SaveToolImage } from '@grunt/core/domain/tool-images.js';
+import { FAKE_PNG, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
-import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase, withoutOwnPorts } from '../src/container.js';
+import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase, withoutOwnPorts, type Container } from '../src/container.js';
 
 let dir: string;
 
@@ -420,6 +422,96 @@ describe('project memory on startup (final review)', () => {
       await container.memory!.idle();
       expect(container.memory!.lastError('proj')).toBeNull();
       expect(container.store.projectMemory.get('proj')).toBeNull();
+    } finally {
+      container.close();
+    }
+  });
+});
+
+describe('computer use wiring', () => {
+  const on = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true };
+  const off = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+  const names = async (container: Container, policy: typeof on | typeof off): Promise<string[]> => (await container.toolProvider.listTools(policy)).map((t) => t.name);
+  const open = (computer?: FakeComputerDriver): Promise<Container> =>
+    createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), ...(computer ? { computer } : {}) });
+
+  beforeEach(() => {
+    delete process.env['GRUNT_COMPUTER_FAKE_DRIVER'];
+  });
+  afterEach(() => {
+    delete process.env['GRUNT_COMPUTER_FAKE_DRIVER'];
+  });
+
+  it('offers no computer tool without a driver, even to a profile that turns it on', async () => {
+    const container = await open();
+    try {
+      expect(container.computer).toBeUndefined();
+      expect(await names(container, on)).not.toContain('computer');
+      // Nor to Claude Code, whose tools are listed apart.
+      const relayed = (container.toolProvider as unknown as { relayGruntTools: (policy: typeof on) => { name: string }[] }).relayGruntTools(on);
+      expect(relayed.map((t) => t.name)).not.toContain('computer');
+    } finally {
+      container.close();
+    }
+  });
+
+  it('offers it with a driver, only to a profile that turns it on, and only while the driver can carry it out', async () => {
+    const driver = new FakeComputerDriver();
+    const container = await open(driver);
+    try {
+      expect(container.computer?.available()).toBe(true);
+      expect(await names(container, on)).toContain('computer');
+      expect(await names(container, off)).not.toContain('computer');
+      expect(await names(container, { ...off, computer: false })).not.toContain('computer');
+      driver.isAvailable = false;
+      expect(container.computer?.available()).toBe(false);
+      expect(await names(container, on)).not.toContain('computer');
+      // Listing the tool starts nothing.
+      expect(driver.started).toEqual([]);
+    } finally {
+      container.close();
+    }
+  });
+
+  it('wires the fake driver for tests when GRUNT_COMPUTER_FAKE_DRIVER=1, and for no other value', async () => {
+    for (const value of ['0', 'true', 'yes', '']) {
+      process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = value;
+      const container = await open();
+      try {
+        expect(container.computer, JSON.stringify(value)).toBeUndefined();
+        expect(await names(container, on), JSON.stringify(value)).not.toContain('computer');
+      } finally {
+        container.close();
+      }
+    }
+    process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '1';
+    const container = await open();
+    try {
+      expect(await names(container, on)).toContain('computer');
+      expect(await names(container, off)).not.toContain('computer');
+      expect(container.computer?.available()).toBe(true);
+    } finally {
+      container.close();
+    }
+  });
+
+  it("gives the turn runner a saver that keeps a tool's image in this database and its blob store", async () => {
+    const container = await open();
+    try {
+      container.store.connections.create({ id: 'conn', name: 'Mock', kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+      container.store.profiles.create({
+        id: 'prof', name: 'P', description: null, colour: null, connectionId: 'conn', modelId: 'mock-standard', systemPrompt: null, params: {},
+        toolPolicy: off, isDefault: false, archivedAt: null,
+      });
+      container.store.chats.create({ id: 'chat', title: 'Chat', profileId: 'prof', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+      container.store.messages.create({ id: 'reply', chatId: 'chat', parentId: null, role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null });
+      // The runner keeps its options to itself; this reads the one the container gave it.
+      const save = (container.turnRunner as unknown as { saveToolImage?: SaveToolImage }).saveToolImage;
+      expect(save).toBeTypeOf('function');
+      const id = await save!('chat', 'reply', FAKE_PNG, 'image/png');
+      const row = container.store.attachments.get(id)!;
+      expect(row).toMatchObject({ chatId: 'chat', messageId: 'reply', mime: 'image/png', size: FAKE_PNG.length, filename: 'tool-image.png' });
+      expect(await container.blobStore.get(row.sha256)).toEqual(FAKE_PNG);
     } finally {
       container.close();
     }

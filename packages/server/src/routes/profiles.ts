@@ -87,7 +87,7 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'browser'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'browser', 'computer'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
@@ -108,6 +108,8 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
     ...(typeof v['browser'] === 'boolean' ? { browser: v['browser'] } : base.browser !== undefined ? { browser: base.browser } : {}),
+    // Computer use (spec 2026-10-12-computer-use-design): off unless a profile turns it on, so it is only ever stored when it was set.
+    ...(typeof v['computer'] === 'boolean' ? { computer: v['computer'] } : base.computer !== undefined ? { computer: base.computer } : {}),
     ...(v['browserBlockedHosts'] !== undefined
       ? { browserBlockedHosts: parseBlockedHosts(v['browserBlockedHosts']) }
       : base.browserBlockedHosts !== undefined

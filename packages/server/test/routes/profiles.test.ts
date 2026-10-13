@@ -153,6 +153,42 @@ describe('POST /api/profiles', () => {
     expect((await post({ recall: 'yes' })).status).toBe(400);
   });
 
+  it('keeps toolPolicy.computer (off unless it is turned on), and refuses a non-boolean', async () => {
+    const post = (toolPolicy: unknown) =>
+      app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+    const patch = (id: string, toolPolicy: unknown) =>
+      app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolPolicy }) });
+    type Body = { id: string; toolPolicy: { computer?: boolean; fs: string } };
+
+    // Off by default: a profile that never mentions it has no `computer` at all, with or without a toolPolicy.
+    const plain = (await (await post(undefined)).json()) as Body;
+    expect('computer' in plain.toolPolicy).toBe(false);
+    const other = (await (await post({ fs: 'read', browser: true })).json()) as Body;
+    expect('computer' in other.toolPolicy).toBe(false);
+
+    const created = await post({ fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true });
+    expect(created.status).toBe(201);
+    const profile = (await created.json()) as Body;
+    expect(profile.toolPolicy.computer).toBe(true);
+    expect(container.store.profiles.get(profile.id)?.toolPolicy.computer).toBe(true);
+
+    // Only a boolean turns it on or off.
+    for (const bad of ['yes', 'true', 1, null, {}, []]) {
+      const res = await post({ computer: bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(((await res.json()) as { error: string }).error, JSON.stringify(bad)).toContain('"toolPolicy.computer" must be a boolean.');
+      expect((await patch(plain.id, { computer: bad })).status, JSON.stringify(bad)).toBe(400);
+    }
+    expect('computer' in container.store.profiles.get(plain.id)!.toolPolicy).toBe(false);
+
+    // A partial PATCH that does not mention it keeps it; one that does changes it.
+    const kept = (await (await patch(profile.id, { fs: 'read' })).json()) as Body;
+    expect(kept.toolPolicy).toMatchObject({ fs: 'read', computer: true });
+    const off = (await (await patch(profile.id, { computer: false })).json()) as Body;
+    expect(off.toolPolicy.computer).toBe(false);
+    expect(container.store.profiles.get(profile.id)?.toolPolicy.computer).toBe(false);
+  });
+
   it('rejects a missing name with 400', async () => {
     const res = await app().request('/api/profiles', {
       method: 'POST',

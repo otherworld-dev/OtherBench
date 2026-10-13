@@ -10,9 +10,11 @@ import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
+import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '@grunt/engine-claude-code/engine.js';
@@ -46,6 +48,7 @@ import { subscribeAutoTitle } from './routes/chats.js';
 import { AppEventBus, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
+import { toolImageSaver } from './tool-images.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -108,6 +111,13 @@ export interface Container {
    * tests can leave it out or pass a fake.
    */
   browser?: BrowserPort;
+  /**
+   * The computer-use driver (spec 2026-10-12-computer-use-design section 7):
+   * the desktop shell's on Windows, the fake one under
+   * GRUNT_COMPUTER_FAKE_DRIVER=1 (tests only), otherwise absent, and then no
+   * profile is offered the `computer` tool whatever it says.
+   */
+  computer?: ComputerDriver;
   close(): void;
 }
 
@@ -144,6 +154,8 @@ export interface ContainerOptions {
   peerHosts?: string[];
   /** Keepalive and idle limits for streams (defaults in stream/sse.ts); tests shorten them. */
   streamTimings?: StreamTimings;
+  /** The desktop shell's computer-use driver; cli.ts passes it only when the shell asked for the desktop channel. */
+  computer?: ComputerDriver;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -321,7 +333,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const mcpManager = new McpServerManager(store, secrets);
   // Lazy: no Chromium starts until the first browser call.
   const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { browser });
+  // Computer use: the shell's driver when the CLI passed one. For tests only,
+  // GRUNT_COMPUTER_FAKE_DRIVER=1 wires a fake that touches nothing. Read once.
+  // With neither there is no driver, and no profile is offered the tool.
+  const computer = options.computer ?? (process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1' ? new FakeComputerDriver() : undefined);
+  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { browser, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
@@ -378,6 +394,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         throw new Error(`Attachment "${attachment.filename}" (${id}) is missing or unreadable.`);
       }
     },
+    // An image a tool returns (a screenshot) goes to the blob store, with a
+    // row on the reply, before the result is broadcast or stored.
+    saveToolImage: toolImageSaver(store, blobStore),
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   events.attach(turnRunner, store);
@@ -436,6 +455,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     toolProvider,
     mcpManager,
     browser,
+    ...(computer ? { computer } : {}),
     claudeScratchRoot,
     blobStore,
     memory,

@@ -173,6 +173,7 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   const commandPrefix = v['commandPrefix'];
   const commandExact = v['commandExact'];
   const host = v['host'];
+  const app = v['app'];
   if (pathPrefix !== undefined && typeof pathPrefix !== 'string') {
     throw new HTTPException(400, { message: '"constraint.pathPrefix" must be a string.' });
   }
@@ -186,12 +187,19 @@ function parseConstraint(value: unknown): Grant['constraint'] {
   if (host !== undefined && typeof host !== 'string') {
     throw new HTTPException(400, { message: '"constraint.host" must be a string.' });
   }
-  if (pathPrefix === undefined && commandPrefix === undefined && commandExact === undefined && host === undefined) return null;
+  // A computer grant's app (spec 2026-10-12-computer-use-design): the key the card carried, passed on
+  // exactly as it came. It is a Windows path, so nothing here trims it, changes its case or its separators,
+  // or normalises it in any way: the broker checks it (`appKey`) and compares it with the card's, byte for byte.
+  if (app !== undefined && typeof app !== 'string') {
+    throw new HTTPException(400, { message: '"constraint.app" must be a string.' });
+  }
+  if (pathPrefix === undefined && commandPrefix === undefined && commandExact === undefined && host === undefined && app === undefined) return null;
   return {
     pathPrefix: pathPrefix as string | undefined,
     commandPrefix: commandPrefix as string | undefined,
     commandExact: commandExact as string | undefined,
     ...(host !== undefined ? { host } : {}),
+    ...(app !== undefined ? { app } : {}),
   };
 }
 
