@@ -109,6 +109,18 @@ const ACCELERATOR_ALIASES: ReadonlyMap<string, string> = new Map<string, string>
 ]);
 
 /**
+ * The keys that put a character on the page when pressed on their own or with
+ * shift: letters, digits, punctuation and the space bar. Every other key in
+ * the table (enter, tab, escape, the editing and arrow keys, the function
+ * keys) types nothing.
+ */
+const TYPING_KEYS: ReadonlySet<string> = new Set([
+  'space', 'minus', 'equal', 'comma', 'period', 'slash', 'semicolon', 'apostrophe', 'bracketleft', 'bracketright', 'backslash', 'grave',
+  ...'abcdefghijklmnopqrstuvwxyz',
+  ...'0123456789',
+]);
+
+/**
  * The caps on a `key` action, enforced here before anything is looked up or
  * sent: the text's length (checked before it is split), the names in one
  * combination (three modifiers and one key), and one combination per action.
@@ -232,4 +244,30 @@ export function parseKeys(text: unknown, reserved: unknown): ParsedKeys {
     if (held === canonical) return refuse(`Grunt never sends ${canonical}: it's one of Grunt's own shortcuts.`);
   }
   return { ok: true, combos: [[...KEY_MODIFIERS.filter((m) => combo.modifiers.has(m)), ...combo.keys]], text: canonical };
+}
+
+/**
+ * Whether `text` is one key combination a `key` action could send, Grunt's own
+ * shortcuts aside (`[]`: nothing held back; this only asks what the text is).
+ */
+export function isKeyCombination(text: unknown): boolean {
+  return parseKeys(text, []).ok;
+}
+
+/**
+ * Whether the text of a `key` action must be kept out of the audit like typed
+ * text. It may be kept only when it says what was pressed and holds nothing
+ * typed: a combination with ctrl or alt (`ctrl+s`), or a key that types
+ * nothing (`Return`, `shift+Tab`, `F5`). A bare or shift-only key that types
+ * a character (`a`, `shift+a`, `7`, `space`) counts as typed: a password
+ * entered one `key` action at a time would otherwise land in the audit a
+ * character per row. So does anything that is not one combination at all.
+ */
+export function isSensitiveKeyText(text: unknown): boolean {
+  const parsed = parseKeys(text, []);
+  if (!parsed.ok) return true;
+  const combo = parsed.combos[0] ?? [];
+  if (combo.includes('ctrl') || combo.includes('alt')) return false;
+  const pressed = combo[combo.length - 1];
+  return pressed === undefined || TYPING_KEYS.has(pressed);
 }

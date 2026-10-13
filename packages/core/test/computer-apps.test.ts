@@ -18,6 +18,7 @@ import {
   isHighRiskApp,
   isHighRiskProgramName,
   isReadAction,
+  isUnattendedRun,
   parseAction,
   pathForCard,
   READ_ACTIONS,
@@ -1038,5 +1039,14 @@ describe('round 2: nothing can hold a key or a button down', () => {
       if (!result.ok) throw new Error(`Expected ${action} to parse`);
       expect(Object.keys(result.action).sort(), action).toEqual(fields);
     }
+  });
+});
+
+describe('a run nobody is watching', () => {
+  it('is anything but a plain false, or nothing at all: the one test the broker and the tool both use', () => {
+    for (const value of [true, 'true', 'false', 1, 0, null, {}, [], '']) expect(isUnattendedRun({ unattended: value }), JSON.stringify(value)).toBe(true);
+    expect(isUnattendedRun({})).toBe(false);
+    expect(isUnattendedRun({ unattended: undefined })).toBe(false);
+    expect(isUnattendedRun({ unattended: false })).toBe(false);
   });
 });

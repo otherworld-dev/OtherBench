@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, parseKeys, SHORTCUTS_UNKNOWN_REASON } from '../src/domain/computer-keys.js';
+import { isKeyCombination, isSensitiveKeyText, KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, parseKeys, SHORTCUTS_UNKNOWN_REASON } from '../src/domain/computer-keys.js';
 
 function canonical(text: unknown, reserved: unknown = []): string | null {
   const parsed = parseKeys(text, reserved);
@@ -240,5 +240,53 @@ describe('a key combination stands on its own', () => {
     }
     expect(parseKeys('ctrl+down', [])).toEqual({ ok: true, combos: [['ctrl', 'down']], text: 'ctrl+down' });
     expect(parseKeys('up', [])).toEqual({ ok: true, combos: [['up']], text: 'up' });
+  });
+});
+
+describe('what the audit may keep of a key action', () => {
+  const kept = [
+    'ctrl+s', 'Ctrl+A', 'alt+a', 'ctrl+shift+z', 'ctrl+1', 'alt+period', 'ctrl+space',
+    'Return', 'Enter', 'Tab', 'shift+Tab', 'Escape', 'BackSpace', 'Delete', 'Insert', 'Home', 'End', 'Page_Up', 'Page_Down',
+    'Up', 'shift+Down', 'Left', 'Right', 'Menu', 'F1', 'shift+F10', 'F12',
+  ];
+  const typed = [
+    'a', 'Z', 'shift+a', '5', 'shift+5', 'space', 'shift+space',
+    'minus', 'equal', 'plus', 'comma', 'period', 'slash', 'semicolon', 'apostrophe', 'bracketleft', 'bracketright', 'backslash', 'grave', 'shift+slash',
+  ];
+
+  it('keeps a combination with ctrl or alt and a key that types nothing', () => {
+    for (const text of kept) {
+      expect(isKeyCombination(text), text).toBe(true);
+      expect(isSensitiveKeyText(text), text).toBe(false);
+    }
+  });
+
+  it('counts a bare or shift-only key that types a character as typed text: a secret can be entered one key action at a time', () => {
+    for (const text of typed) {
+      expect(isKeyCombination(text), text).toBe(true);
+      expect(isSensitiveKeyText(text), text).toBe(true);
+    }
+  });
+
+  it('counts anything that is not one combination as typed text', () => {
+    for (const text of ['hunter2 is my password', 'a b', 'ctrl+s ctrl+v', 'ctrl+alt+a', 'super+r', 'alt+F4', 'shift', 'F13', '', ' ', 'x'.repeat(65), null, undefined, 5, {}, ['a']]) {
+      expect(isKeyCombination(text), JSON.stringify(text)).toBe(false);
+      expect(isSensitiveKeyText(text), JSON.stringify(text)).toBe(true);
+    }
+  });
+
+  it('classes every key name there is: on its own it either types a character or it does not', () => {
+    const typing = KEY_NAMES.filter((name) => isSensitiveKeyText(name));
+    const letters = Array.from('abcdefghijklmnopqrstuvwxyz');
+    const digits = Array.from('0123456789');
+    expect([...typing].sort()).toEqual([...letters, ...digits, 'space', 'minus', 'equal', 'comma', 'period', 'slash', 'semicolon', 'apostrophe', 'bracketleft', 'bracketright', 'backslash', 'grave'].sort());
+    expect(KEY_NAMES.filter((name) => !isSensitiveKeyText(name)).sort()).toEqual(
+      ['return', 'tab', 'escape', 'backspace', 'delete', 'insert', 'home', 'end', 'page_up', 'page_down', 'up', 'down', 'left', 'right', 'menu', ...Array.from({ length: 12 }, (_, i) => `f${i + 1}`)].sort()
+    );
+    // With ctrl in front none of them is typed text; shift alone changes nothing.
+    for (const name of KEY_NAMES) {
+      if (name !== 'escape') expect(isSensitiveKeyText(`ctrl+${name}`), name).toBe(false);
+      expect(isSensitiveKeyText(`shift+${name}`), name).toBe(isSensitiveKeyText(name));
+    }
   });
 });

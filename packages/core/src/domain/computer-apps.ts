@@ -21,7 +21,7 @@ import { asciiLower, cardLine, hasHiddenCharacter, isWellFormedText, revealAllHi
 import { KEY_LIMITS, parseKeys } from './computer-keys.js';
 import type { ComputerAction, ComputerExpectation } from '../ports/computer.js';
 
-export { KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, SHORTCUTS_UNKNOWN_REASON, type ParsedKeys } from './computer-keys.js';
+export { isKeyCombination, isSensitiveKeyText, KEY_LIMITS, KEY_MODIFIERS, KEY_NAMES, KEYS_WINDOWS_REASON, parseKeys, SHORTCUTS_UNKNOWN_REASON, type ParsedKeys } from './computer-keys.js';
 export { cardLine } from './card-text.js';
 
 export const COMPUTER_TOOL = 'computer';
@@ -51,6 +51,16 @@ export const COMPUTER_GRUNT_REASON = "That's Grunt's own window. Grunt never con
 export const COMPUTER_UNCHECKED_REASON = "Grunt couldn't check what kind of window that is, so it didn't use it.";
 export const COMPUTER_NO_WINDOW_REASON = "Grunt couldn't pin down which window that is, so it didn't use it.";
 export const COMPUTER_BAD_ACTION_REASON = "Grunt can't carry out that action as it was sent, so it didn't run it.";
+
+/**
+ * Whether nobody is there to watch a call. Only a plain `false`, or nothing
+ * at all, says someone is: any other value (`true`, a string, a number,
+ * `null`, an object) counts as unattended. The one test, used by the broker
+ * (domain/permissions.ts) and by the computer tool and its provider.
+ */
+export function isUnattendedRun(ctx: { unattended?: unknown }): boolean {
+  return ctx.unattended !== undefined && ctx.unattended !== false;
+}
 
 /** Exactly one of the phase-1 action names: a string, in this spelling and case. */
 export function isComputerAction(value: unknown): value is ComputerActionName {
