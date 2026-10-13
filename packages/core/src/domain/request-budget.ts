@@ -85,10 +85,22 @@ const NOTE_NAME_MAX = 80;
  * A file name as it may appear inside a note: one line, no control or hidden
  * character, at most 80 characters (`cardLine`), and without the quote and
  * square brackets the note itself is written with, so a name can't end the
- * note early or pass for one. Empty when there is nothing left to show.
+ * note early or pass for one. Empty when there is nothing left to show. The
+ * one way a file name gets into a note, for every engine.
  */
-function noteName(filename: unknown): string {
+export function noteName(filename: unknown): string {
   return cardLine(filename, NOTE_NAME_MAX).replace(/"/g, "'").replace(/\[/g, '(').replace(/\]/g, ')');
+}
+
+/**
+ * A file name as one entry of a comma-separated list inside a round-bracketed
+ * note (the Claude Code engine's "(Attached files not sent ...: a.pdf, b.csv.)"):
+ * `noteName`, and also without round brackets, so a name can't close that note,
+ * and without commas, so one name can't pass for two. Brackets of either kind
+ * become braces and a comma a semicolon. Empty when there is nothing left.
+ */
+export function listedName(filename: unknown): string {
+  return noteName(filename).replace(/\(/g, '{').replace(/\)/g, '}').replace(/,/g, ';');
 }
 
 /**
