@@ -543,10 +543,15 @@ describe("the spec handed to Claude Code's relay", () => {
     for (const other of [{ chatId: 'chat-2' }, { messageId: 'msg-2' }, { profileId: 'profile-2' }]) {
       expect(await spec.execute(await approve(), ctx(other)), JSON.stringify(other)).toEqual(NO_APPROVAL);
     }
-    // Another tool's relayed spec is handed the computer tool's approval.
-    const otherTool: ToolSpec = { ...spec, name: 'browser', source: 'browser' };
-    const wrapped = (provider as unknown as { relayed(tool: ToolSpec): ToolSpec }).relayed(otherTool);
-    expect(await wrapped.execute(await approve(), ctx())).toEqual(NO_APPROVAL);
+    // Another tool's relayed spec is handed the computer tool's approval: another name, another source, or both.
+    // Each has its own execute, so a refusal can only come from the approval check, never from the computer tool.
+    for (const other of [{ name: 'browser', source: 'browser' }, { name: 'browser', source: 'computer' }, { name: 'computer', source: 'browser' }] as const) {
+      const execute = vi.fn(async () => 'ran');
+      const otherTool: ToolSpec = { ...spec, ...other, execute };
+      const wrapped = (provider as unknown as { relayed(tool: ToolSpec): ToolSpec }).relayed(otherTool);
+      expect(await wrapped.execute(await approve(), ctx()), JSON.stringify(other)).toEqual(NO_APPROVAL);
+      expect(execute, JSON.stringify(other)).not.toHaveBeenCalled();
+    }
     expect(driver.actions).toEqual([]);
     expect(driver.started.map((s) => s.chatId)).toEqual(['chat-1']);
   });
