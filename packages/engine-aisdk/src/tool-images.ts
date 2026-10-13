@@ -57,13 +57,17 @@ function isTextItem(value: unknown): value is { type: 'text'; text: string } {
  *     1.5, `gemini-pro`) and anything that is not a Gemini model, the SDK
  *     writes the image as a part of its own in the user's turn, next to the
  *     function response, so those get the note. The rule here is narrower
- *     than the SDK's (a `gemini-<number>` id with a number of 3 or more), so a
- *     model the two disagree about gets the note.
+ *     than the SDK's: the id has exactly ONE `gemini-` segment (at its start
+ *     or after a `/`), and it is `gemini-<number>` with a number of 3 or
+ *     more. The SDK treats an id as older when ANY of its segments names an
+ *     older Gemini (`gemini-3-pro/gemini-1.5`), so an id with two segments
+ *     gets the note, as does any model the two rules disagree about.
  *   - `@ai-sdk/openai-compatible` and Ollama: tool messages are text only.
  */
 export function toolImagesSupported(kind: ConnectionKind, modelId: string): boolean {
   if (kind === 'anthropic' || kind === 'openai') return true;
   if (kind !== 'google' || typeof modelId !== 'string') return false;
+  if ((modelId.match(/(?:^|\/)gemini-/gi) ?? []).length !== 1) return false;
   const generation = /(?:^|\/)gemini-(\d+)(?:[.-]|$)/i.exec(modelId)?.[1];
   return generation !== undefined && generation.length <= 3 && Number(generation) >= 3;
 }

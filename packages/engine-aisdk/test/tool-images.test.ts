@@ -103,6 +103,13 @@ describe('toolImagesSupported', () => {
       ['google', 'gemma-3-27b-it', false],
       ['google', 'my-gemini-3', false],
       ['google', 'gemini-30000000000000000000', false],
+      // The SDK treats an id as older if ANY of its segments names an older Gemini: so does this.
+      ['google', 'gemini-3-pro/gemini-1.5', false],
+      ['google', 'gemini-1.5/gemini-3-pro', false],
+      ['google', 'models/gemini-3-pro/gemini-2.0-flash', false],
+      ['google', 'gemini-3-pro/gemini-pro', false],
+      ['google', 'gemini-3-pro/gemini-robotics-er-1.5', false],
+      ['google', 'gemini-3-pro/gemini-4-ultra', false],
       ['google', '', false],
       ['openai_compatible', 'gemini-3-pro', false],
       ['ollama', 'llava', false],
