@@ -282,15 +282,18 @@ describe('AiSdkChatEngine.stream', () => {
     });
     const image = { type: 'image-data', data: png, mediaType: 'image/png' };
     const omitted = { type: 'text', text: "[image omitted: this model can't take images]" };
-    const table: [boolean, Connection['kind'], unknown][] = [
-      [true, 'anthropic', image],
-      [true, 'openai', image],
-      [true, 'google', image],
-      [false, 'anthropic', omitted],
-      [true, 'openai_compatible', omitted],
-      [true, 'ollama', omitted],
+    // An image only where the provider puts it inside the tool result itself (tool-images.ts, `toolImagesSupported`).
+    const table: [boolean, Connection['kind'], string, unknown][] = [
+      [true, 'anthropic', 'claude-test-model', image],
+      [true, 'openai', 'gpt-test-model', image],
+      [true, 'google', 'gemini-3-pro', image],
+      [true, 'google', 'gemini-2.5-pro', omitted],
+      [false, 'anthropic', 'claude-test-model', omitted],
+      [false, 'google', 'gemini-3-pro', omitted],
+      [true, 'openai_compatible', 'gemini-3-pro', omitted],
+      [true, 'ollama', 'llava', omitted],
     ];
-    for (const [vision, kind, expected] of table) {
+    for (const [vision, kind, modelId, expected] of table) {
       const mock = new MockLanguageModelV3({
         doStream: stepsForModel(
           [
@@ -305,9 +308,9 @@ describe('AiSdkChatEngine.stream', () => {
         ),
       });
       const engine = new AiSdkChatEngine(resolverFor(mock));
-      await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ connection: makeConnection({ kind }), model: model(vision) }) })));
+      await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ modelId, connection: makeConnection({ kind }), model: model(vision) }) })));
       const toolMessage = mock.doStreamCalls[1]!.prompt.find((m) => m.role === 'tool');
-      expect(toolMessage?.content[0], `${kind} vision=${vision}`).toMatchObject({ type: 'tool-result', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2×1.' }, expected] } });
+      expect(toolMessage?.content[0], `${kind} ${modelId} vision=${vision}`).toMatchObject({ type: 'tool-result', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2×1.' }, expected] } });
     }
   });
 

@@ -1,5 +1,4 @@
-import type { ModelMessage, ToolResultPart } from 'ai';
-import { cardLine } from '@grunt/core/domain/card-text.js';
+import type { ModelMessage } from 'ai';
 import { isComputerAction } from '@grunt/core/domain/computer-apps.js';
 
 /**
@@ -22,73 +21,59 @@ import { isComputerAction } from '@grunt/core/domain/computer-apps.js';
  *
  * What it does: a call of the toolset whose `action` is not one of core's
  * phase-1 actions (which are exactly the toolset's members that are turned on,
- * see `COMPUTER_TOOLSET_CONFIGS`) becomes a line of text where it stood in the
- * assistant's message, and its result becomes a line of text in a user message
- * right after the results that stay. Text rather than nothing, so the model
- * still sees that it tried and what came back; a user message for the result
- * because results may only answer calls, a request may not end on the
- * assistant's turn, and text after the results of the same turn is what the
- * API takes. The SDK joins that user message with the tool results before it
- * and any user message after it, so roles still alternate.
+ * see `COMPUTER_TOOLSET_CONFIGS`) stays a call, and its result stays the result
+ * of that call, under a name the toolset does not claim
+ * (`TOOLSET_PLAIN_CALL`): the SDK then writes the pair as an ordinary
+ * `tool_use` and `tool_result`. Nothing moves and nothing becomes text.
+ *
+ * That is deliberate. What a tool returned (a screenshot, the words with it,
+ * an error from the desktop app) is content from the screen, which whoever
+ * wrote the page or the document on it can choose. It may only ever reach the
+ * model as a tool result. Text of the user's turn, or of the assistant's own,
+ * would read as an instruction from the person or as something the model said.
  */
 export function toolsetSafeMessages(messages: ModelMessage[], toolName: string): ModelMessage[] {
-  /** Calls shown as text whose result has not come by yet. */
+  /** Calls written under the plain name whose result has not come by yet. */
   const plain = new Set<string>();
   let changed = false;
-  const out: ModelMessage[] = [];
-  for (const message of messages) {
+  const out = messages.map((message): ModelMessage => {
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       let touched = false;
       const content = message.content.map((part) => {
-        if (part.type !== 'tool-call' || !isToolsetCall(part, toolName)) return part;
-        const action = actionOf(part.input);
-        if (isComputerAction(action)) return part;
+        if (part.type !== 'tool-call' || !isToolsetCall(part, toolName) || isComputerAction(actionOf(part.input))) return part;
         touched = true;
         plain.add(part.toolCallId);
-        return { type: 'text' as const, text: toolsetCallNote(action) };
+        // Only the id, the name and the arguments: nothing the provider said about the call (its toolset) comes along.
+        return { type: 'tool-call' as const, toolCallId: part.toolCallId, toolName: TOOLSET_PLAIN_CALL, input: isRecord(part.input) ? part.input : {} };
       });
-      if (touched) changed = true;
-      out.push(touched ? { ...message, content } : message);
-      continue;
+      if (!touched) return message;
+      changed = true;
+      return { ...message, content };
     }
     if (message.role === 'tool') {
-      const kept: typeof message.content = [];
-      const notes: { type: 'text'; text: string }[] = [];
-      for (const part of message.content) {
-        if (part.type === 'tool-result' && plain.has(part.toolCallId)) {
-          plain.delete(part.toolCallId);
-          notes.push({ type: 'text', text: toolsetResultNote(part.output) });
-        } else kept.push(part);
-      }
-      if (notes.length === 0) {
-        out.push(message);
-        continue;
-      }
+      let touched = false;
+      const content = message.content.map((part) => {
+        if (part.type !== 'tool-result' || !plain.has(part.toolCallId)) return part;
+        touched = true;
+        plain.delete(part.toolCallId);
+        return { type: 'tool-result' as const, toolCallId: part.toolCallId, toolName: TOOLSET_PLAIN_CALL, output: part.output };
+      });
+      if (!touched) return message;
       changed = true;
-      if (kept.length > 0) out.push({ ...message, content: kept });
-      out.push({ role: 'user', content: notes });
-      continue;
+      return { ...message, content };
     }
-    out.push(message);
-  }
+    return message;
+  });
   return changed ? out : messages;
 }
 
-/** The longest result text a note carries. */
-const RESULT_NOTE_MAX = 4000;
-
-/** The line that stands where a call was. Only the action's name is repeated, as one clean line. */
-export function toolsetCallNote(action: unknown): string {
-  const why = typeof action === 'string' ? `"${cardLine(action, 40)}" is not one of its actions` : 'it named no action';
-  return `[A call to the computer tool that can't be shown as one: ${why}.]`;
-}
-
-/** The line that stands for what such a call returned. */
-export function toolsetResultNote(output: ToolResultPart['output']): string {
-  const text = outputText(output);
-  const points = Array.from(text);
-  return `[What that call returned: ${points.length > RESULT_NOTE_MAX ? `${points.slice(0, RESULT_NOTE_MAX).join('')}\u2026` : text}]`;
-}
+/**
+ * The name a `computer` call is written under when the toolset has no member
+ * for it. It is in no request's tools, so the model cannot call it; a call and
+ * its result under it are history, as those of any tool a profile no longer
+ * has.
+ */
+export const TOOLSET_PLAIN_CALL = 'invalid_computer_call';
 
 /** Whether the SDK would write this call back as a member of the toolset: by the tool's name, or by what the provider said about it. */
 function isToolsetCall(part: { toolName: string; providerOptions?: unknown }, toolName: string): boolean {
@@ -97,24 +82,10 @@ function isToolsetCall(part: { toolName: string; providerOptions?: unknown }, to
   return typeof anthropic?.toolsetName === 'string';
 }
 
-function actionOf(input: unknown): unknown {
-  return typeof input === 'object' && input !== null && !Array.isArray(input) && Object.hasOwn(input, 'action') ? (input as Record<string, unknown>)['action'] : undefined;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** A tool result as text: what the model would have read in the result itself, without any image. */
-function outputText(output: ToolResultPart['output']): string {
-  switch (output.type) {
-    case 'text':
-    case 'error-text':
-      return output.value;
-    case 'json':
-    case 'error-json':
-      return JSON.stringify(output.value) ?? '';
-    case 'execution-denied':
-      return output.reason ?? 'Tool call execution denied.';
-    case 'content':
-      return output.value.map((item) => (item.type === 'text' ? item.text : '[not shown]')).join('\n');
-    default:
-      return '';
-  }
+function actionOf(input: unknown): unknown {
+  return isRecord(input) && Object.hasOwn(input, 'action') ? input['action'] : undefined;
 }

@@ -76,17 +76,30 @@ describe('liveToolOutput', () => {
 });
 
 describe('toolImagesSupported', () => {
-  it('is true only for the provider families that turn image-data in a tool result into an image', () => {
-    const table: [ConnectionKind, boolean][] = [
-      ['anthropic', true],
-      ['openai', true],
-      ['google', true],
-      ['openai_compatible', false],
-      ['ollama', false],
-      ['claude_code', false],
-      ['mock', false],
+  it('is true only where the provider puts an image INSIDE the tool result, never as a block of the user turn', () => {
+    const table: [ConnectionKind, string, boolean][] = [
+      ['anthropic', 'claude-sonnet-4-5', true],
+      ['openai', 'gpt-5', true],
+      ['google', 'gemini-3-pro-preview', true],
+      ['google', 'gemini-3.1-flash', true],
+      ['google', 'models/gemini-3-pro', true],
+      ['google', 'gemini-4-ultra', true],
+      // Before Gemini 3 the SDK writes a tool's image as a part of its own in the user turn: a note instead.
+      ['google', 'gemini-2.5-pro', false],
+      ['google', 'gemini-2.0-flash', false],
+      ['google', 'gemini-1.5-pro', false],
+      ['google', 'gemini-pro', false],
+      ['google', 'gemini-flash-latest', false],
+      ['google', 'gemma-3-27b-it', false],
+      ['google', 'my-gemini-3', false],
+      ['google', 'gemini-30000000000000000000', false],
+      ['google', '', false],
+      ['openai_compatible', 'gemini-3-pro', false],
+      ['ollama', 'llava', false],
+      ['claude_code', 'claude-opus-5-5', false],
+      ['mock', 'gemini-3-pro', false],
     ];
-    for (const [kind, expected] of table) expect(toolImagesSupported(kind), kind).toBe(expected);
+    for (const [kind, modelId, expected] of table) expect(toolImagesSupported(kind, modelId), `${kind} ${modelId}`).toBe(expected);
   });
 });
 

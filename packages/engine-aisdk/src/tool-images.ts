@@ -42,13 +42,30 @@ function isTextItem(value: unknown): value is { type: 'text'; text: string } {
 }
 
 /**
- * Whether a provider takes images inside tool results: only the families whose
- * AI SDK provider turns `image-data` in a tool result into an image
- * (Anthropic, OpenAI, Google). Anything else, `@ai-sdk/openai-compatible`
- * and Ollama included, gets a text note.
+ * Whether an image a tool returned is sent to this model as an image: only
+ * when the AI SDK's provider puts it INSIDE the tool result. A tool's image is
+ * content from outside (a screenshot shows whatever a page or a document put
+ * on the screen), so it may never go out as a block of the user's turn, where
+ * it would read as something the person showed the model. Anything else gets
+ * a text note inside the tool result, and the image stays for the transcript.
+ *
+ *   - Anthropic: an `image` block inside the `tool_result`.
+ *   - OpenAI (the Responses API, which is what the registry's provider
+ *     uses): an `input_image` inside the `function_call_output`.
+ *   - Google: inside the `functionResponse` (its `parts`) only for the models
+ *     the SDK treats as Gemini 3 or later. For every earlier one (2.5, 2.0,
+ *     1.5, `gemini-pro`) and anything that is not a Gemini model, the SDK
+ *     writes the image as a part of its own in the user's turn, next to the
+ *     function response, so those get the note. The rule here is narrower
+ *     than the SDK's (a `gemini-<number>` id with a number of 3 or more), so a
+ *     model the two disagree about gets the note.
+ *   - `@ai-sdk/openai-compatible` and Ollama: tool messages are text only.
  */
-export function toolImagesSupported(kind: ConnectionKind): boolean {
-  return kind === 'anthropic' || kind === 'openai' || kind === 'google';
+export function toolImagesSupported(kind: ConnectionKind, modelId: string): boolean {
+  if (kind === 'anthropic' || kind === 'openai') return true;
+  if (kind !== 'google' || typeof modelId !== 'string') return false;
+  const generation = /(?:^|\/)gemini-(\d+)(?:[.-]|$)/i.exec(modelId)?.[1];
+  return generation !== undefined && generation.length <= 3 && Number(generation) >= 3;
 }
 
 const validated = new WeakMap<object, ValidatedToolImage>();

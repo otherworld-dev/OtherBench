@@ -337,10 +337,8 @@ describe("Anthropic's computer toolset", () => {
   });
 });
 
-/** A call the toolset cannot carry, as the model is shown it instead: a line in the assistant's message, and what it returned in the next one. */
-const callNote = (action?: string): string =>
-  action === undefined ? "[A call to the computer tool that can't be shown as one: it named no action.]" : `[A call to the computer tool that can't be shown as one: "${action}" is not one of its actions.]`;
-const resultNote = (text: string): string => `[What that call returned: ${text}]`;
+/** The name a `computer` call the toolset has no member for is written under: still a call, with its result still its result. */
+const PLAIN = 'invalid_computer_call';
 
 /** The text blocks of one message of an outgoing request. */
 function textsIn(body: Record<string, unknown>, index: number): string[] {
@@ -368,14 +366,17 @@ describe('the toolset: what reaches the computer tool', () => {
     expect(seen).toEqual(off.map((name) => ({ action: name })));
     const emitted = resultEvents(events);
     expect(emitted.map((e) => e.result)).toEqual(off.map((name) => refusedByGate(name)));
-    // The next request shows each as text: a member that is turned off is not written back as a call.
-    expect(usesIn(bodies[1]!)).toEqual([]);
-    expect(resultsIn(bodies[1]!)).toEqual([]);
-    expect(textsIn(bodies[1]!, -2)).toEqual(off.map((name) => callNote(name)));
-    expect(textsIn(bodies[1]!, -1)).toEqual(off.map((name) => resultNote(JSON.stringify(refusedByGate(name)))));
+    // The next request: a member that is turned off is not written back as a member. It is still a call, and
+    // what the gate answered is still its result; none of it became text of the assistant's or the user's turn.
+    expect(usesIn(bodies[1]!)).toEqual(off.map((_, i) => [PLAIN, undefined, `toolu_${i}`]));
+    const results = resultsIn(bodies[1]!);
+    expect(results.map((b) => [b['tool_use_id'], b['toolset_name']])).toEqual(off.map((_, i) => [`toolu_${i}`, undefined]));
+    expect(results.map((b) => contentOf(b))).toEqual(off.map((name) => refusedByGate(name)));
+    expect(textsIn(bodies[1]!, -2)).toEqual([]);
+    expect(textsIn(bodies[1]!, -1)).toEqual([]);
   });
 
-  it('never runs the tool for a member the toolset does not have, and shows the call as text afterwards', async () => {
+  it('never runs the tool for a member the toolset does not have, and writes the call back under a name of its own', async () => {
     const { provider, bodies } = fakeAnthropic(turnOf('msg_1', [{ id: 'toolu_1', name: 'teleport', input: { coordinate: [1, 2] } }]), ANSWER);
     const seen: unknown[] = [];
 
@@ -383,11 +384,12 @@ describe('the toolset: what reaches the computer tool', () => {
 
     expect(seen).toEqual([]);
     expect(resultEvents(events).map((e) => [e.id, e.isError])).toEqual([['toolu_1', true]]);
-    expect(usesIn(bodies[1]!)).toEqual([]);
-    expect(resultsIn(bodies[1]!)).toEqual([]);
-    expect(textsIn(bodies[1]!, -2)).toEqual([callNote('teleport')]);
-    expect(textsIn(bodies[1]!, -1)).toHaveLength(1);
-    expect(textsIn(bodies[1]!, -1)[0]).toContain('[What that call returned: Invalid input for tool computer');
+    expect(usesIn(bodies[1]!)).toEqual([[PLAIN, undefined, 'toolu_1']]);
+    const results = resultsIn(bodies[1]!);
+    expect(results.map((b) => [b['tool_use_id'], b['toolset_name'], b['is_error']])).toEqual([['toolu_1', undefined, true]]);
+    expect(String(results[0]!['content'])).toContain('Invalid input for tool computer');
+    expect(textsIn(bodies[1]!, -2)).toEqual([]);
+    expect(textsIn(bodies[1]!, -1)).toEqual([]);
   });
 
   it("refuses a member call that carries a field the computer tool's parameters don't declare, naming the field, and runs nothing for it", async () => {
@@ -490,7 +492,7 @@ describe('the toolset: what reaches the computer tool', () => {
   });
 });
 
-describe('the toolset: a computer call that is not one of its members goes out as text, with its result', () => {
+describe('the toolset: a computer call that is not one of its members stays a call, with its result, under another name', () => {
   const user = (id: string, text: string): CanonMessage => ({ id, chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 0 });
   const call = (id: string, args: unknown): Part => ({ type: 'tool-call', id, name: 'computer', args });
   const result = (id: string, value: unknown, isError = false): Part => ({ type: 'tool-result', id, name: 'computer', result: value, isError });
@@ -518,7 +520,7 @@ describe('the toolset: a computer call that is not one of its members goes out a
     user('u2', 'and now?'),
   ];
 
-  it('replays stored calls with no action, an action that is not text, a name that is no member and a member that is off as text', async () => {
+  it('replays stored calls with no action, an action that is not text, a name that is no member and a member that is off as plain calls', async () => {
     const { provider, bodies } = fakeAnthropic(ANSWER);
     // And one whose stored arguments are not an object at all.
     const reply = history[1]!;
@@ -528,29 +530,38 @@ describe('the toolset: a computer call that is not one of its members goes out a
 
     expect(events.filter((e) => e.type === 'error')).toEqual([]);
     expectWellFormed(bodies[0]!);
-    // The one real member is still a call of the toolset, with its result.
-    expect(usesIn(bodies[0]!)).toEqual([['screenshot', 'computer', 'c5']]);
-    expect(resultsIn(bodies[0]!).map((b) => [b['tool_use_id'], b['toolset_name']])).toEqual([['c5', 'computer']]);
-    // Each of the others is a line where the call was, and what it returned after the results that stayed.
-    expect(textsIn(bodies[0]!, 1)).toEqual([callNote(), callNote(), callNote('click'), callNote('left_click_drag'), callNote(), 'I tried.']);
-    expect(textsIn(bodies[0]!, 2)).toEqual([
-      resultNote(JSON.stringify(noAction)),
-      resultNote('"bad input"'),
-      resultNote(JSON.stringify(refusedByGate('click'))),
-      resultNote(JSON.stringify(refusedByGate('left_click_drag'))),
-      resultNote(JSON.stringify(noAction)),
-      'and now?',
+    // The one real member is still a call of the toolset; each of the others is a call under the plain name, in place.
+    expect(usesIn(bodies[0]!)).toEqual([
+      [PLAIN, undefined, 'c1'],
+      [PLAIN, undefined, 'c2'],
+      [PLAIN, undefined, 'c3'],
+      [PLAIN, undefined, 'c4'],
+      ['screenshot', 'computer', 'c5'],
+      [PLAIN, undefined, 'c6'],
     ]);
+    // Their arguments stay the call's own arguments (an object, whatever was stored), never text.
+    const assistant = (bodies[0]!['messages'] as { content: Block[] }[])[1]!.content;
+    expect(assistant.filter((b) => b['type'] === 'tool_use').map((b) => b['input'])).toEqual([{}, { action: 5 }, { action: 'click', coordinate: [1, 2] }, { action: 'left_click_drag', start_coordinate: [1, 2], coordinate: [3, 4] }, {}, {}]);
+    // Every result is still the result of its call, and only the member's names the toolset.
+    const results = resultsIn(bodies[0]!);
+    expect(results.map((b) => [b['tool_use_id'], b['toolset_name']])).toEqual([['c1', undefined], ['c2', undefined], ['c3', undefined], ['c4', undefined], ['c5', 'computer'], ['c6', undefined]]);
+    expect(contentOf(results[0]!)).toEqual(noAction);
+    expect(results[1]).toMatchObject({ content: '"bad input"', is_error: true });
+    expect(contentOf(results[2]!)).toEqual(refusedByGate('click'));
+    // Nothing a tool returned, and nothing about a call, became text of either turn.
+    expect(textsIn(bodies[0]!, 1)).toEqual(['I tried.']);
+    expect(textsIn(bodies[0]!, 2)).toEqual(['and now?']);
   });
 
-  it('keeps the request well formed when every call of a reply goes out as text', async () => {
+  it('keeps the request well formed when every call of a reply is one the toolset has no member for', async () => {
     const only: CanonMessage[] = [user('u1', 'do things'), { ...history[1]!, parts: [call('c1', {}), result('c1', noAction)] }, user('u2', 'and now?')];
     const { provider, bodies } = fakeAnthropic(ANSWER);
     await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec([])], { messages: only })));
     expect((bodies[0]!['messages'] as { role: string }[]).map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
-    expect(usesIn(bodies[0]!)).toEqual([]);
-    expect(textsIn(bodies[0]!, 1)).toEqual([callNote()]);
-    expect(textsIn(bodies[0]!, 2)).toEqual([resultNote(JSON.stringify(noAction)), 'and now?']);
+    expect(usesIn(bodies[0]!)).toEqual([[PLAIN, undefined, 'c1']]);
+    expect(resultsIn(bodies[0]!).map((b) => b['tool_use_id'])).toEqual(['c1']);
+    expect(textsIn(bodies[0]!, 1)).toEqual([]);
+    expect(textsIn(bodies[0]!, 2)).toEqual(['and now?']);
   });
 
   it('leaves the same history alone for a model that gets the JSON tool, and when the request has no computer tool', async () => {
@@ -580,15 +591,18 @@ describe('the toolset: a computer call that is not one of its members goes out a
     expect(events.filter((e) => e.type === 'error')).toEqual([]);
     expect(seen).toEqual([{ action: 'screenshot' }, { action: 'left_click', coordinate: [10, 20] }]);
     expect(resultEvents(events).map((e) => [e.id, e.isError])).toEqual(expect.arrayContaining([['toolu_1', true], ['toolu_2', true], ['toolu_3', false], ['toolu_4', false]]));
-    // The second step's request, and the third's (which carries the first step again): the two odd calls are text both times.
+    // The second step's request, and the third's (which carries the first step again): the two odd calls are plain
+    // calls both times, each with its result, and the model reads why they failed in the result itself.
     for (const body of [bodies[1]!, bodies[2]!]) {
       expectWellFormed(body);
-      expect(usesIn(body).slice(0, 1)).toEqual([['screenshot', 'computer', 'toolu_3']]);
-      expect(textsIn(body, 1)).toEqual([callNote(), callNote()]);
-      expect(textsIn(body, 2)).toHaveLength(2);
-      for (const text of textsIn(body, 2)) expect(text).toContain('[What that call returned: Invalid input for tool computer');
+      expect(usesIn(body).slice(0, 3)).toEqual([[PLAIN, undefined, 'toolu_1'], [PLAIN, undefined, 'toolu_2'], ['screenshot', 'computer', 'toolu_3']]);
+      const first = (body['messages'] as { content: Block[] }[])[2]!.content.filter((b) => b['type'] === 'tool_result');
+      expect(first.map((b) => [b['tool_use_id'], b['toolset_name'], b['is_error']])).toEqual([['toolu_1', undefined, true], ['toolu_2', undefined, true], ['toolu_3', 'computer', undefined]]);
+      expect(String(first[0]!['content'])).toContain('Invalid input for tool computer');
+      expect(textsIn(body, 1)).toEqual([]);
+      expect(textsIn(body, 2)).toEqual([]);
     }
-    expect(usesIn(bodies[2]!)).toEqual([['screenshot', 'computer', 'toolu_3'], ['left_click', 'computer', 'toolu_4']]);
+    expect(usesIn(bodies[2]!).slice(3)).toEqual([['left_click', 'computer', 'toolu_4']]);
   });
 });
 

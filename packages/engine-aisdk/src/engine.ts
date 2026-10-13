@@ -199,7 +199,7 @@ export class AiSdkChatEngine implements ChatEngine {
         vision: req.profile.model?.supportsVision ?? false,
         tools: req.profile.model?.supportsTools ?? true,
       };
-      const imagesOk = caps.vision && toolImagesSupported(req.profile.connection.kind);
+      const imagesOk = caps.vision && toolImagesSupported(req.profile.connection.kind, req.profile.modelId);
       // Stored tool images come back only through a loader that checks them
       // against this chat; `loadAttachment` is never used for them.
       const messages = await toModelMessages(
@@ -216,8 +216,9 @@ export class AiSdkChatEngine implements ChatEngine {
       const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk, imageBudget, toolset);
       const model = resolveLanguageModel(handle, req.profile.modelId);
       // With the toolset among the tools, a `computer` call that is not one of its members can't be written back
-      // as a call: it and its result go out as text. The same pass runs on the history the request starts with
-      // and on every later step's messages, which hold the calls this reply itself made (computer-toolset.ts).
+      // as a member call: it and its result go out as an ordinary call and result under another name, never as
+      // text. The same pass runs on the history the request starts with and on every later step's messages,
+      // which hold the calls this reply itself made (computer-toolset.ts).
       const toolsetOn = toolset !== null && req.tools.some(isComputerSpec);
       const safe = (list: ModelMessage[]): ModelMessage[] => (toolsetOn ? toolsetSafeMessages(list, COMPUTER_TOOL) : list);
 
