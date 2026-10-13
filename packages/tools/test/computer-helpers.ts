@@ -1,3 +1,4 @@
+import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
 import { FAKE_COMPUTER_APP, FAKE_PNG, FakeComputerDriver, fakeComputerTarget } from '@grunt/core/testing/fake-computer.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ToolContext } from '@grunt/core/ports/tool-provider.js';
@@ -28,12 +29,22 @@ export const APP = {
 /** What the driver must still find true when it acts on the fake app. */
 export const EXPECT = { app: KEY, shellView: false, windowId: 'hwnd-1', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' };
 
-export const SHOT = [
+/** The line every result with something from the screen in it begins with. */
+export const ABOUT = { type: 'text', text: COMPUTER_SCREEN_ABOUT };
+
+/** A screenshot's own line and its image. */
+const SHOT_ITEMS = [
   { type: 'text', text: 'Screenshot, 1366\u00d7768.' },
   { type: 'image', data: FAKE_PNG.toString('base64'), mimeType: 'image/png' },
 ];
 
+/** What a screenshot is answered with. */
+export const SHOT = [ABOUT, ...SHOT_ITEMS];
+
 export const DONE = { type: 'text', text: 'Done.' };
+
+/** What an action that is followed by a screenshot is answered with. */
+export const AFTER = [ABOUT, DONE, ...SHOT_ITEMS];
 
 /** A program on the high-risk list: only ever "Allow once". */
 export const EXPLORER = fakeComputerTarget({ path: 'C:\\Windows\\explorer.exe', originalName: 'EXPLORER.EXE', title: 'Documents' });

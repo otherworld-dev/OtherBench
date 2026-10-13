@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { artifactTool } from './artifact-tool.js';
 import { recallTool } from './recall-tool.js';
-import { COMPUTER_OFF_REASON, COMPUTER_UNATTENDED_REASON, parseKeys } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_OFF_REASON, COMPUTER_SCREEN_ABOUT, COMPUTER_UNATTENDED_REASON, isKeyCombination, isSensitiveKeyText, isUnattendedRun } from '@grunt/core/domain/computer-apps.js';
 import { isDeferrableInAutoMode, PermissionBroker, type Decision } from '@grunt/core/domain/permissions.js';
 import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import type {
@@ -19,7 +19,7 @@ import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolPolicy } from '@grunt/core/types/config.js';
 import type { BrowserManager } from './browser/manager.js';
 import { browserTool } from './browser/tool.js';
-import { computerTool, isUnattendedRun } from './computer-tool.js';
+import { computerTool } from './computer-tool.js';
 import { fsTools } from './fs-tools.js';
 import type { McpToolDescriptor } from './mcp/client.js';
 import type { McpServerManager } from './mcp/manager.js';
@@ -40,6 +40,8 @@ const BUILTIN_FS_TOOLS: ToolSpec[] = fsTools;
 const BUILTIN_SHELL_TOOLS: ToolSpec[] = [runCommandTool];
 
 interface ToolError {
+  /** The line that says the message holds content from outside (today: `COMPUTER_SCREEN_ABOUT`), first when there. */
+  about?: string;
   error: true;
   code: string;
   message: string;
@@ -67,10 +69,17 @@ type Denied = Extract<Authorization, { ok: false }>;
  */
 type SettleCause = 'user' | 'turn-ended' | 'dropped' | 'answer-refused';
 
-/** A call that was refused before the broker decided. `unattended`: because nobody is there to watch it. */
+/**
+ * A call that was refused before the broker decided. `unattended`: because
+ * nobody is there to watch it. `about`: the tool itself refused it while
+ * describing it, and its reason may hold words that are not Grunt's (the
+ * computer tool passes on what the desktop app said), so the model is told
+ * what it is reading, first.
+ */
 interface Refused {
   refuse: string;
   unattended?: true;
+  about?: string;
 }
 
 const CANCELLED_REASON = 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.';
@@ -88,8 +97,8 @@ function deniedAuth(reason: string, unattended: boolean): Denied {
     : { ok: false, code: 'permission_denied', reason, grantedBy: 'deny:policy' };
 }
 
-function toolError(code: string, message: string): ToolError {
-  return { error: true, code, message };
+function toolError(code: string, message: string, about?: string): ToolError {
+  return about === undefined ? { error: true, code, message } : { about, error: true, code, message };
 }
 
 // ---------------------------------------------------------------------------
@@ -131,18 +140,21 @@ function auditArgs(tool: ToolSpec, args: unknown): unknown {
 /**
  * `args` without the text a call would type. The browser's `text` is always
  * typed text. The computer tool's `text` is typed text or one key
- * combination: only its length is kept, unless the call is a `key` action
- * whose text really is one combination (`ctrl+s`), which says what was
- * pressed and holds nothing typed. Anything else under `text` (a `key`
- * action carrying a sentence, a click carrying text) is treated as typed.
+ * combination. A combination is kept only when it says what was pressed and
+ * holds nothing typed (core's `isSensitiveKeyText`): one with ctrl or alt
+ * (`ctrl+s`), or a key that types nothing (`return`, `shift+tab`, `f5`). A
+ * bare or shift-only key that types a character (`a`, `shift+a`, `7`) is
+ * `[redacted: 1 key]`: a password entered one `key` action at a time must not
+ * be readable a character per row. Anything else under `text` (a `key` action
+ * carrying a sentence, a click carrying text) is typed text: only its length
+ * is kept.
  */
 function withoutTypedText(args: unknown, source: 'browser' | 'computer'): unknown {
   if (typeof args !== 'object' || args === null || !('text' in args)) return args;
   const a = args as Record<string, unknown>;
   if (source === 'browser') return { ...a, text: '[redacted]' };
   const text = a['text'];
-  // `[]`: nothing to hold back here, only "is this one key combination".
-  if (a['action'] === 'key' && parseKeys(text, []).ok) return args;
+  if (a['action'] === 'key' && isKeyCombination(text)) return isSensitiveKeyText(text) ? { ...a, text: '[redacted: 1 key]' } : args;
   if (typeof text !== 'string') return { ...a, text: '[redacted]' };
   let characters = 0;
   for (const _ of text) characters += 1;
@@ -396,18 +408,19 @@ export class GruntToolProvider implements ToolProvider {
     }
     // What the call is about, before the broker decides (describeCall).
     const call = await this.described(tool, args, policy, ctx);
+    // The turn ended while the call was being described: nobody is there to answer, and nothing may be approved.
+    // Checked before a refusal is read: a describeCall that stopped because the turn did was stopped, not refused by a rule.
+    if (ctx.signal.aborted) {
+      const gone = cancelledAuth();
+      if (!gone.ok) {
+        this.audit(ctx, tool.name, auditArgs(tool, 'refuse' in call ? args : call.args), toolError(gone.code, gone.reason), this.now() - startedAt, gone.grantedBy);
+        return { allowed: false, reason: gone.reason };
+      }
+    }
     if ('refuse' in call) {
       const denied = deniedAuth(call.refuse, call.unattended === true);
       this.audit(ctx, tool.name, auditArgs(tool, args), toolError(denied.code, denied.reason), this.now() - startedAt, denied.grantedBy);
       return { allowed: false, reason: call.refuse };
-    }
-    // The turn ended while the call was being described: nobody is there to answer, and nothing may be approved.
-    if (ctx.signal.aborted) {
-      const gone = cancelledAuth();
-      if (!gone.ok) {
-        this.audit(ctx, tool.name, auditArgs(tool, call.args), toolError(gone.code, gone.reason), this.now() - startedAt, gone.grantedBy);
-        return { allowed: false, reason: gone.reason };
-      }
     }
     const decision = this.broker.decide(call.tool, call.args, policy, ctx);
     if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(call.tool, call.args)) {
@@ -452,11 +465,13 @@ export class GruntToolProvider implements ToolProvider {
       if (policy.computer !== true) return { refuse: COMPUTER_OFF_REASON };
       if (isUnattendedRun(ctx)) return { refuse: COMPUTER_UNATTENDED_REASON, unattended: true };
     }
+    // What the computer tool refuses with can be the desktop app's own words: say so with the refusal.
+    const about = tool.source === 'computer' ? { about: COMPUTER_SCREEN_ABOUT } : {};
     try {
       const d = await tool.describeCall(args, ctx);
-      return 'refuse' in d ? { refuse: d.refuse } : { tool: { ...tool, risk: d.risk }, args: d.args };
+      return 'refuse' in d ? { refuse: d.refuse, ...about } : { tool: { ...tool, risk: d.risk }, args: d.args };
     } catch (err) {
-      return { refuse: `Grunt couldn't check this call: ${err instanceof Error ? err.message : String(err)}` };
+      return { refuse: `Grunt couldn't check this call: ${err instanceof Error ? err.message : String(err)}`, ...about };
     }
   }
 
@@ -504,15 +519,21 @@ export class GruntToolProvider implements ToolProvider {
         } else {
           // What the call is about, before the broker decides (describeCall).
           const call = await this.described(tool, args, policy, ctx);
-          if ('refuse' in call) {
+          if (ctx.signal.aborted) {
+            // The turn ended while the call was being described: it must not run, even when a grant would allow
+            // it. Checked before a refusal is read: a describeCall that stopped because the turn did (the start
+            // dialog was still up) was stopped, not refused by a rule, and is audited as that.
+            if (!('refuse' in call)) callArgs = call.args;
+            auth = cancelledAuth();
+          } else if ('refuse' in call) {
             const denied = deniedAuth(call.refuse, call.unattended === true);
-            const result = toolError(denied.code, denied.reason);
+            const result = toolError(denied.code, denied.reason, call.about);
             this.audit(ctx, tool.name, auditArgs(tool, args), result, this.now() - startedAt, denied.grantedBy);
             return result;
+          } else {
+            callArgs = call.args;
+            auth = await this.authorize(call.tool, callArgs, policy, ctx);
           }
-          callArgs = call.args;
-          // The turn may have ended while the call was being described: it must not run, even when a grant would allow it.
-          auth = ctx.signal.aborted ? cancelledAuth() : await this.authorize(call.tool, callArgs, policy, ctx);
         }
         if (!auth.ok) {
           const result = toolError(auth.code, auth.reason);
