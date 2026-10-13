@@ -406,6 +406,17 @@ describe('MockChatEngine', () => {
     const results = (events: EngineEvent[]) => events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');
     const computerWith = (execute: ToolSpec['execute']): ToolSpec => ({ name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute });
 
+    it("hands the tool the reply's plan gate, the unattended flag, its call id and a sub-agent's tag, like every other call (integration)", async () => {
+      const execute = vi.fn(async () => ({ error: true, code: 'plan_mode', message: 'No.' }));
+      const plan = createPlanGate();
+      const subagent = { callId: 'c1', label: 'First helper', parentProfileId: 'p-parent' };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#computer', { tools: [computerWith(execute)], plan, unattended: true, subagent })));
+      expect(execute).toHaveBeenCalledWith(
+        { action: 'screenshot' },
+        expect.objectContaining({ plan, unattended: true, subagent, profileId: 'p-parent', toolCallId: expect.stringMatching(/^mock-computer-/) })
+      );
+    });
+
     it('looks first, then clicks and types through the real tool, passing its results on as they are, then answers slowly', async () => {
       const calls: unknown[] = [];
       const contexts: ToolContext[] = [];

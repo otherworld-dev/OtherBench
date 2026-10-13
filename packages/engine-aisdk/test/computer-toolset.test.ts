@@ -191,6 +191,21 @@ function asSent(result: unknown): unknown {
 const engineFor = (provider: unknown): AiSdkChatEngine => new AiSdkChatEngine({ resolve: (): ProviderHandle => ({ kind: 'aisdk', provider: provider as never }) });
 
 describe("Anthropic's computer toolset", () => {
+  it("gives a member call the same context a JSON tool call gets: the reply's plan gate, the unattended flag, its call id and the profile (integration)", async () => {
+    // toolContextFor is the one place a ToolContext is built; the computer-use branch built its own here, which had
+    // no plan gate and no unattended flag, so neither the broker nor the provider's pre-dialog checks could see them.
+    const { provider } = fakeAnthropic(MEMBER_CALLS, ANSWER);
+    const contexts: ToolContext[] = [];
+    const plan = { approved: false, approve: () => {} } as unknown as NonNullable<EngineRequest['plan']>;
+    const base = request('claude-opus-5-5', [computerSpec([], (args, ctx) => (contexts.push(ctx), answerLikeTheGate(args)))]);
+    await drain(engineFor(provider).stream({ ...base, plan, unattended: true }));
+    expect(contexts).toHaveLength(2);
+    for (const [i, ctx] of contexts.entries()) {
+      expect(ctx).toMatchObject({ chatId: 'chat-1', messageId: base.messageId, profileId: 'profile-1', unattended: true, toolCallId: `toolu_${i + 1}` });
+      expect(ctx.plan).toBe(plan);
+    }
+  });
+
   it('runs member calls through the computer spec and echoes toolset_name in the results', async () => {
     const { provider, bodies, urls } = fakeAnthropic(MEMBER_CALLS, ANSWER);
     const seen: unknown[] = [];
