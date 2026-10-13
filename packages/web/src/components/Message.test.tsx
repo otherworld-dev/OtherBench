@@ -498,6 +498,26 @@ describe('Message', () => {
       expect(document.body).not.toHaveTextContent('"code"');
     });
 
+    it("shows a Claude Code computer result (kept as one string) with the screen-content line as its label and each line as plain text", async () => {
+      const name = 'mcp__grunt_ab12__computer';
+      const result = `${COMPUTER_SCREEN_ABOUT}\nDone.\nScreenshot, 1366×768. **bold**‮`;
+      await renderOpen([callPart({ action: 'left_click', coordinate: [1, 2] }, name), resultPart(result, false, name)]);
+      const about = screen.getByTestId('computer-screen-about');
+      expect(about).toHaveTextContent(COMPUTER_SCREEN_ABOUT);
+      expect(screen.getByText('Done.').tagName).toBe('BDI');
+      expect(screen.getByText('Screenshot, 1366×768. **bold**').tagName).toBe('BDI');
+      // The label is not repeated as body text, and nothing is glued to it.
+      expect(screen.getAllByText(COMPUTER_SCREEN_ABOUT, { exact: false })).toHaveLength(1);
+      expect(document.body.textContent).not.toContain('‮');
+      expect(document.querySelector('strong')).toBeNull();
+    });
+
+    it('shows a string result without the screen-content line as plain text, with no label', async () => {
+      await renderOpen([callPart({ action: 'wait' }), resultPart('Waited 1 s.')]);
+      expect(screen.queryByTestId('computer-screen-about')).toBeNull();
+      expect(screen.getByText('Waited 1 s.').tagName).toBe('BDI');
+    });
+
     it('leaves other tools as they were: the call as JSON, a text result as it is', async () => {
       await renderOpen([
         { type: 'tool-call', id: 'g1', name: 'Glob', args: { pattern: '**/*.ts' } },

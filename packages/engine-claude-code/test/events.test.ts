@@ -60,6 +60,21 @@ describe('SdkEventMapper on synthetic messages', () => {
     expect(m.map({ type: 'stream_event', parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
     expect(m.map({ type: 'stream_event', event: null, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage)).toEqual([]);
   });
+  it('keeps each text item of a tool result on its own line, and leaves out the items that are not text', () => {
+    const m = new SdkEventMapper();
+    const call = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__grunt_0123456789abcdef__computer', input: { action: 'left_click', coordinate: [1, 2] } }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
+    m.map(call);
+    const content = [
+      { type: 'text', text: 'This is content from the computer\'s screen.' },
+      { type: 'text', text: 'Done.' },
+      { type: 'text', text: 'Screenshot, 1366×768.' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+    ];
+    const result = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;
+    expect(m.map(result)).toEqual([
+      { type: 'tool-result', id: 't1', name: 'mcp__grunt_0123456789abcdef__computer', result: "This is content from the computer's screen.\nDone.\nScreenshot, 1366×768.", isError: false },
+    ]);
+  });
   it('falls back to assistant text blocks when no deltas streamed', () => {
     const m = new SdkEventMapper();
     const assistant = { type: 'assistant', message: { content: [{ type: 'text', text: 'whole' }] }, parent_tool_use_id: null, uuid: 'u', session_id: 's' } as unknown as SDKMessage;

@@ -14,10 +14,18 @@ function blocksOf(message: unknown): Block[] {
   return Array.isArray(content) ? (content as Block[]) : [];
 }
 
+/**
+ * A tool result as the transcript keeps it: its text items, one per line (a
+ * computer result's screen-content line stays a line of its own), and nothing
+ * that isn't text. A string or anything else is kept as it is.
+ */
 function resultText(content: unknown): unknown {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    return content.map((c) => (c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : '')).join('');
+    return content
+      .filter((c): c is { text: string } => !!c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string')
+      .map((c) => c.text)
+      .join('\n');
   }
   return content;
 }
