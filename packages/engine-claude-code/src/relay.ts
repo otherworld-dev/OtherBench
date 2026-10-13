@@ -64,11 +64,17 @@ export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext
 /** The running reply's relay executor, or undefined when no Grunt reply is running. */
 type CurrentRelay = () => ((spec: ToolSpec, args: unknown) => Promise<unknown>) | undefined;
 
-function errorResult(text: string): CallToolResult {
-  return { content: [{ type: 'text', text }], isError: true };
+/**
+ * An error as MCP content. `about` is the line a tool put first in its error
+ * to say whose words the message holds (the computer tool: content from the
+ * screen, not from the user); it stays first, as an item of its own.
+ */
+function errorResult(text: string, about?: unknown): CallToolResult {
+  const said: { type: 'text'; text: string }[] = typeof about === 'string' && about.length > 0 ? [{ type: 'text', text: about }] : [];
+  return { content: [...said, { type: 'text', text }], isError: true };
 }
 
-function isToolError(value: unknown): value is { error: true; message: string } {
+function isToolError(value: unknown): value is { error: true; message: string; about?: unknown } {
   return typeof value === 'object' && value !== null && (value as { error?: unknown }).error === true && typeof (value as { message?: unknown }).message === 'string';
 }
 
@@ -104,7 +110,7 @@ export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRe
       if (!run) return errorResult('No Grunt reply is waiting on this tool call.');
       try {
         const out = await run(spec, args);
-        if (isToolError(out)) return errorResult(out.message);
+        if (isToolError(out)) return errorResult(out.message, out.about);
         if (Array.isArray(out)) {
           // MCP content goes to Claude Code only after the same screening an API
           // model's tool result gets: images by their bytes and within the reply's
