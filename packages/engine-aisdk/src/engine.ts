@@ -1,3 +1,4 @@
+import type { AnthropicProvider } from '@ai-sdk/anthropic';
 import { APICallError } from '@ai-sdk/provider';
 import { jsonSchema, stepCountIs, streamText, tool } from 'ai';
 import type { JSONSchema7, LanguageModel, LanguageModelUsage, TextStreamPart, ToolSet } from 'ai';
@@ -10,9 +11,10 @@ import type {
 } from '@grunt/core/ports/chat-engine.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
-import type { Connection } from '@grunt/core/types/config.js';
+import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
+import { COMPUTER_BAD_ACTION_REASON, COMPUTER_TOOL, isComputerAction, parseAction } from '@grunt/core/domain/computer-apps.js';
 import { toModelMessages } from './convert.js';
 import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
 import { liveToolOutput, toolImagesSupported } from './tool-images.js';
@@ -61,6 +63,63 @@ export interface AiSdkChatEngineOptions {
  * misbehaving loop to a finite number of model calls within one request.
  */
 const MAX_TOOL_STEPS = 20;
+
+/**
+ * Models that take Anthropic's computer toolset (spec
+ * 2026-10-12-computer-use-design section 5), on Anthropic connections. Opus
+ * 5.5 and Sonnet 5.5 take only the toolset on the Claude API. Every other
+ * model gets Grunt's JSON-schema `computer` tool, with the same action names
+ * and arguments. Anthropic's tool versions change often: this list is the one
+ * place to update.
+ */
+export const COMPUTER_TOOLSET_MODELS = [
+  'claude-opus-5-5',
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-sonnet-5-5',
+  'claude-sonnet-5',
+  'claude-fable-5',
+  'claude-fable-5-1',
+  'claude-haiku-5-5',
+] as const;
+
+/**
+ * Phase 1 leaves out zoom, drags, raw mouse down/up, middle click and held
+ * keys: every member of the toolset that is not one of core's
+ * `COMPUTER_ACTIONS` is turned off here. A member the model calls anyway is
+ * refused in `memberArgs`; this list is not what keeps it from running.
+ */
+export const COMPUTER_TOOLSET_CONFIGS = Object.freeze({
+  zoom: Object.freeze({ enabled: false }),
+  left_click_drag: Object.freeze({ enabled: false }),
+  left_mouse_down: Object.freeze({ enabled: false }),
+  left_mouse_up: Object.freeze({ enabled: false }),
+  middle_click: Object.freeze({ enabled: false }),
+  hold_key: Object.freeze({ enabled: false }),
+});
+
+/** A dated snapshot of a model: its id, a hyphen and eight digits (`claude-opus-5-5-20261001`). */
+const SNAPSHOT_DATE = /^\d{8}$/;
+
+/**
+ * Whether a model is given the toolset instead of the JSON tool: an Anthropic
+ * connection, and a model id that is one of `COMPUTER_TOOLSET_MODELS` exactly
+ * or a dated snapshot of one. Not a bare prefix: a model Grunt does not know
+ * (`claude-opus-5-9`, a later `claude-opus-50`) keeps the JSON tool, which any
+ * model can use, where a toolset it may not take would fail the request.
+ */
+export function usesComputerToolset(kind: ConnectionKind, modelId: string): boolean {
+  if (kind !== 'anthropic' || typeof modelId !== 'string') return false;
+  return COMPUTER_TOOLSET_MODELS.some((id) => modelId === id || (modelId.startsWith(`${id}-`) && SNAPSHOT_DATE.test(modelId.slice(id.length + 1))));
+}
+
+type ComputerToolsetFactory = AnthropicProvider['tools']['computerToolset_20260801'];
+
+/** The Anthropic provider's toolset factory, or null (another provider, or a test double without one). */
+function computerToolsetOf(handle: Extract<ProviderHandle, { kind: 'aisdk' }>): ComputerToolsetFactory | null {
+  const tools = (handle.provider as Partial<AnthropicProvider>).tools;
+  return typeof tools?.computerToolset_20260801 === 'function' ? tools.computerToolset_20260801 : null;
+}
 
 /**
  * Bounds `seedOllamaCapabilities`'s own `/api/tags` fetch (see that
@@ -139,7 +198,9 @@ export class AiSdkChatEngine implements ChatEngine {
       );
       // One budget for the whole reply: images a tool returns are screened against it as they come, across every step.
       const imageBudget: ToolImageBudget = { images: 0, bytes: 0 };
-      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk, imageBudget);
+      // Anthropic's own computer toolset, for the models that take it. It only stands in for Grunt's `computer` tool when the request has one.
+      const toolset = usesComputerToolset(req.profile.connection.kind, req.profile.modelId) ? computerToolsetOf(handle) : null;
+      const tools = buildToolSet(req.tools, req.signal, chatId, messageId, req.profile.id, req.workspaceRoot, req.folders, imagesOk, imageBudget, toolset);
       const model = resolveLanguageModel(handle, req.profile.modelId);
 
       const result = streamText({
@@ -439,6 +500,42 @@ function resolveLanguageModel(handle: Extract<ProviderHandle, { kind: 'aisdk' }>
   return (handle.provider as unknown as (id: string) => LanguageModel)(modelId);
 }
 
+/** Grunt's own `computer` tool (packages/tools/src/computer-tool.ts), by source and by name: the one tool the toolset can stand in for. */
+function isComputerSpec(spec: ToolSpec): boolean {
+  return spec.source === 'computer' && spec.name === COMPUTER_TOOL;
+}
+
+/** The fields a spec's parameters declare (the top-level `properties` of its JSON Schema). */
+function declaredFields(spec: ToolSpec): string[] {
+  const properties = spec.parameters['properties'];
+  return typeof properties === 'object' && properties !== null && !Array.isArray(properties) ? Object.keys(properties) : [];
+}
+
+/**
+ * A member call of the computer toolset as the arguments of Grunt's `computer`
+ * tool, or why it has none. The SDK hands a member call over as
+ * `{ action: <member>, ...its input }`, which is the JSON tool's own shape.
+ * Only a member that is one of core's phase-1 actions is mapped; a drag, a
+ * held key, a zoom, or a name nobody knows is refused here and never reaches
+ * the tool. Of the member's input, only the fields the tool's parameters
+ * declare (`fields`) go on: nothing else the provider's schema allows
+ * (`region`, `repeat`, `start_coordinate`) and nothing else at all.
+ */
+function memberArgs(input: unknown, fields: readonly string[]): { args: Record<string, unknown> } | { refuse: string } {
+  const member = typeof input === 'object' && input !== null && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
+  const action = member !== null && Object.hasOwn(member, 'action') ? member['action'] : undefined;
+  if (member === null || !isComputerAction(action)) {
+    // Core's own wording for a name that is not an action.
+    const refused = parseAction({ action });
+    return { refuse: refused.ok ? COMPUTER_BAD_ACTION_REASON : refused.reason };
+  }
+  const args: Record<string, unknown> = { action };
+  for (const field of fields) {
+    if (field !== 'action' && Object.hasOwn(member, field) && member[field] !== undefined) args[field] = member[field];
+  }
+  return { args };
+}
+
 function buildToolSet(
   specs: ToolSpec[],
   signal: AbortSignal,
@@ -448,34 +545,61 @@ function buildToolSet(
   workspaceRoot: string | null,
   folders: ResolvedFolder[] | undefined,
   imagesOk: boolean,
-  imageBudget: ToolImageBudget
+  imageBudget: ToolImageBudget,
+  /** Anthropic's computer toolset when this request's model takes it: it then stands in for Grunt's `computer` tool, when the request has one. */
+  toolset: ComputerToolsetFactory | null
 ): ToolSet {
   const toolSet: ToolSet = {};
   for (const spec of specs) {
+    /**
+     * Runs the tool for one call, however the model was given it (a JSON tool
+     * or a member of the toolset). `spec.execute` is the tool provider's gate,
+     * so the permission broker decides every call.
+     */
+    const run = async (input: unknown, abortSignal: AbortSignal | undefined): Promise<unknown> => {
+      const ctx: ToolContext = {
+        chatId,
+        messageId,
+        // The profile decides what tools may do (ToolPolicy) AND scopes
+        // the grants recorded for them, so every tool execution has to
+        // carry it -- see ToolContext.profileId.
+        profileId,
+        workspaceRoot,
+        ...(folders && folders.length > 0 ? { folders } : {}),
+        signal: abortSignal ?? signal,
+      };
+      // What the model is shown and what is stored are one thing: the output is
+      // screened here, once, so an image that is not let through is the same note
+      // in both, and bulk base64 never goes on to either.
+      const screened = screenToolResult(await spec.execute(input, ctx), imageBudget, LIVE_IMAGE_LIMITS);
+      if (screened.forged) console.warn(`[AiSdkChatEngine] a "${spec.name}" result carried a reference to a stored image; removed.`);
+      return screened.result;
+    };
+    // Images a tool returns go to the model as images, or as a note when it can't take them.
+    const toModelOutput = ({ output }: { output: unknown }): ReturnType<typeof liveToolOutput> => liveToolOutput(output, imagesOk);
+
+    if (toolset !== null && isComputerSpec(spec)) {
+      // One way to act: the toolset is sent INSTEAD of the JSON tool, under the
+      // same name, so the transcript and the broker see one `computer` tool
+      // whichever way the model was given it.
+      const fields = declaredFields(spec);
+      toolSet[spec.name] = toolset({
+        configs: COMPUTER_TOOLSET_CONFIGS,
+        toModelOutput,
+        execute: async (input: unknown, opts) => {
+          const member = memberArgs(input, fields);
+          // The shape of every other refusal the model gets from a Grunt tool (packages/tools/src/provider.ts).
+          if ('refuse' in member) return { error: true, code: 'computer_bad_action', message: member.refuse };
+          return run(member.args, opts.abortSignal);
+        },
+      });
+      continue;
+    }
     toolSet[spec.name] = tool({
       description: spec.description,
       inputSchema: jsonSchema(spec.parameters as JSONSchema7),
-      // Images a tool returns go to the model as images, or as a note when it can't take them.
-      toModelOutput: ({ output }) => liveToolOutput(output, imagesOk),
-      execute: async (input: unknown, opts) => {
-        const ctx: ToolContext = {
-          chatId,
-          messageId,
-          // The profile decides what tools may do (ToolPolicy) AND scopes
-          // the grants recorded for them, so every tool execution has to
-          // carry it -- see ToolContext.profileId.
-          profileId,
-          workspaceRoot,
-          ...(folders && folders.length > 0 ? { folders } : {}),
-          signal: opts.abortSignal ?? signal,
-        };
-        // What the model is shown and what is stored are one thing: the output is
-        // screened here, once, so an image that is not let through is the same note
-        // in both, and bulk base64 never goes on to either.
-        const screened = screenToolResult(await spec.execute(input, ctx), imageBudget, LIVE_IMAGE_LIMITS);
-        if (screened.forged) console.warn(`[AiSdkChatEngine] a "${spec.name}" result carried a reference to a stored image; removed.`);
-        return screened.result;
-      },
+      toModelOutput,
+      execute: async (input: unknown, opts) => run(input, opts.abortSignal),
     });
   }
   return toolSet;
