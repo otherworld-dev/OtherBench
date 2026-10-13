@@ -72,6 +72,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     workspaceRoot: null,
     pinned: false,
     projectPinned: false,
+    unread: false,
     autoMode: false,
     projectId: null,
     memoryCursor: null,

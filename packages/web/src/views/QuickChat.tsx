@@ -3,6 +3,7 @@ import type { Chat } from '@grunt/core/ports/store.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import { Message } from '../components/Message.js';
 import { hideQuick, onDesktopEvent, openChatInMain } from '../desktop/bridge.js';
+import { useWindowFocused } from '../lib/useWindowFocused.js';
 import { ApiError, api } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
@@ -69,6 +70,17 @@ export function QuickChat(): JSX.Element {
   );
   const streaming = thread.some((m) => m.status === 'streaming');
   const profile = profiles.find((p) => p.isDefault && p.archivedAt === null) ?? profiles.find((p) => p.archivedAt === null) ?? null;
+
+  // A reply read here isn't news in the main window's sidebar: mark the chat read once the latest reply has
+  // finished with this window in front. The server marked it unread before the reply's end reached this window.
+  const focused = useWindowFocused();
+  const lastReplyId = streaming ? null : (thread.findLast((m) => m.role === 'assistant')?.id ?? null);
+  const readReplyId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!chat || !focused || lastReplyId === null || readReplyId.current === lastReplyId) return;
+    readReplyId.current = lastReplyId;
+    api.chats.patch(chat.id, { unread: false }).catch((err: unknown) => console.error(`[grunt-web] failed to mark chat ${chat.id} read:`, err));
+  }, [chat, focused, lastReplyId]);
 
   async function send(): Promise<void> {
     const body = text.trim();

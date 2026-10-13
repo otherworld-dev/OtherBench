@@ -34,10 +34,11 @@ interface ChatBody {
   memoryExcluded?: unknown;
   sortOrder?: unknown;
   runsOn?: unknown;
+  unread?: unknown;
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -184,6 +185,7 @@ export function chatsRoutes(container: Container): Hono {
       patch.effort = body.effort;
     }
     if (body.memoryExcluded !== undefined) patch.memoryExcluded = optionalBoolean(body.memoryExcluded, 'memoryExcluded', false);
+    if (body.unread !== undefined) patch.unread = optionalBoolean(body.unread, 'unread', false);
     if (body.sortOrder !== undefined) {
       if (typeof body.sortOrder !== 'number' || !Number.isFinite(body.sortOrder)) {
         throw new HTTPException(400, { message: '"sortOrder" must be a finite number.' });
@@ -204,7 +206,7 @@ export function chatsRoutes(container: Container): Hono {
     }
 
     // Toggling Auto, turning project memory off or on, moving a chat to another project, pinning it within its
-    // project or reordering it is not chat activity: such a PATCH leaves updatedAt alone. Every other PATCH, including an empty one, still bumps it.
+    // project, reordering it or marking it read is not chat activity: such a PATCH leaves updatedAt alone. Every other PATCH, including an empty one, still bumps it.
     const keys = Object.keys(patch);
     const nonActivity = keys.length > 0 && keys.every((k) => NON_ACTIVITY_KEYS.has(k));
     if (!nonActivity) patch.updatedAt = Date.now();

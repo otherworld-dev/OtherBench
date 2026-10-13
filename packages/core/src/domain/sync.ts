@@ -99,6 +99,7 @@ export const CHAT_FIELDS: Record<string, string[]> = {
   runsOn: ['runs_on'],
   pinned: ['pinned'],
   projectPinned: ['project_pinned'],
+  unread: ['unread'],
   archivedAt: ['archived_at'],
   autoMode: ['auto_mode'],
   effort: ['effort'],

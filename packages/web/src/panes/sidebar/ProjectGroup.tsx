@@ -1,6 +1,8 @@
 import type { DragEvent, JSX, ReactNode } from 'react';
 import { PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
+import { STATUS_LABELS, StatusDot } from '../../components/StatusDot.js';
+import type { ChatStatus } from '../../state/chatStatus.js';
 import { groupDomId } from '../../state/sidebarGroups.js';
 import { CHAT_DRAG_MIME, isContextMenuKey, type MenuSource } from './ChatRow.js';
 
@@ -27,6 +29,8 @@ export interface ProjectGroupProps {
   onOpenMenu?: (position: { x: number; y: number }, source: MenuSource) => void;
   onRename?: (name: string) => void;
   onRenameCancel?: () => void;
+  /** The most urgent status among the group's chats, shown on the heading whether it's open or collapsed. */
+  status?: ChatStatus | null;
 }
 
 function carriesChat(e: DragEvent): boolean {
@@ -36,7 +40,7 @@ function carriesChat(e: DragEvent): boolean {
 /** A collapsible sidebar group (a project, or No project) whose heading is also a drop target for chat rows. */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
-  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel } = props;
+  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -95,10 +99,14 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
           >
             <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
             <span className="truncate">{name}</span>{' '}
-            <span className="ml-auto pl-1 font-normal tabular-nums" data-testid={`group-count-${groupKey}`}>
-              {count}
+            <span className="ml-auto flex items-center gap-1.5 pl-1">
+              {status && <StatusDot status={status} testId={`group-status-${groupKey}`} hidden />}
+              <span className="font-normal tabular-nums" data-testid={`group-count-${groupKey}`}>
+                {count}
+              </span>
             </span>
             <span className="sr-only">{count === 1 ? ' chat' : ' chats'}</span>
+            {status && <span className="sr-only">, {STATUS_LABELS[status]}</span>}
           </button>
           </h3>
         )}

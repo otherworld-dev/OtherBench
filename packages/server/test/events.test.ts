@@ -12,7 +12,7 @@ import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
-import { AppEventBus, withChatEvents } from '../src/stream/events.js';
+import { AppEventBus, markUnreadOnFinish, withChatEvents } from '../src/stream/events.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { sseStream } from '../src/stream/sse.js';
 
@@ -50,6 +50,7 @@ function build(engine: ChatEngine): void {
   const toolProvider = new GruntToolProvider(store, broker, mcpManager);
   const turnRunner = new TurnRunner(store, engine, { toolProvider });
   events.attach(turnRunner, store);
+  markUnreadOnFinish(events, store);
   container = {
     store, events, secrets, engine, registry: {} as never, toolProvider, mcpManager, turnRunner,
     // A real blob store: deleting a chat sweeps blobs.
@@ -177,6 +178,43 @@ describe('app-wide events', () => {
     expect(live).toContain('"type":"approval-resolved"');
     await reader.cancel();
     container.turnRunner.cancel(messageId);
+  });
+
+  it('a reply that finishes marks its chat unread and announces it', async () => {
+    build(new FakeChatEngine([{ type: 'text-delta', text: 'hi' }, FINISH]));
+    container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    seen.length = 0;
+    await post('/api/chats/chat-1/turns', { parts: [{ type: 'text', text: 'hello' }], profileIds: ['profile-1'] });
+    await flush();
+
+    expect(container.store.chats.get('chat-1')).toMatchObject({ unread: true });
+    const types = seen.map((e) => e.type);
+    expect(types.lastIndexOf('chat-updated')).toBeGreaterThan(types.indexOf('turn-started'));
+    expect(seen.filter((e) => e.type === 'chat-updated').at(-1)).toMatchObject({ chat: { id: 'chat-1', unread: true } });
+  });
+
+  it('a reply that fails marks its chat unread; one the user stopped does not', () => {
+    build(new FakeChatEngine([FINISH]));
+    container.store.chats.create({ id: 'failed', title: 'A', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    container.store.chats.create({ id: 'stopped', title: 'B', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+    events.emit({ type: 'turn-finished', chatId: 'failed', messageId: 'm1', status: 'error' });
+    events.emit({ type: 'turn-finished', chatId: 'stopped', messageId: 'm2', status: 'cancelled' });
+
+    expect(container.store.chats.get('failed')!.unread).toBe(true);
+    expect(container.store.chats.get('stopped')!.unread).toBe(false);
+  });
+
+  it('a chat already unread, or gone, is left alone when another reply finishes', () => {
+    build(new FakeChatEngine([FINISH]));
+    container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    events.emit({ type: 'turn-finished', chatId: 'chat-1', messageId: 'm1', status: 'complete' });
+    seen.length = 0;
+
+    events.emit({ type: 'turn-finished', chatId: 'chat-1', messageId: 'm2', status: 'complete' });
+    events.emit({ type: 'turn-finished', chatId: 'deleted', messageId: 'm3', status: 'complete' });
+
+    expect(seen.map((e) => e.type)).toEqual(['turn-finished', 'turn-finished']);
   });
 
   it('deleting a project announces each chat it moved to No project', async () => {

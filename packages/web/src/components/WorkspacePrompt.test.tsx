@@ -32,6 +32,7 @@ function chat(over: Partial<Chat>): Chat {
     workspaceRoot: null,
     pinned: false,
     projectPinned: false,
+    unread: false,
     archivedAt: null,
     autoMode: false,
     projectId: null,

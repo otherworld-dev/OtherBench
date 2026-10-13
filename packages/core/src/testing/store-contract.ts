@@ -553,6 +553,18 @@ export function runStoreContract(
       });
     });
 
+    describe('chats: unread', () => {
+      it('unread defaults to false and round-trips through update and list', () => {
+        const { profileId } = seedProfile(store, 'profile-a');
+        expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).unread).toBe(false);
+        store.chats.update('chat-a', { unread: true });
+        expect(store.chats.get('chat-a')!.unread).toBe(true);
+        expect(store.chats.list().find((c) => c.id === 'chat-a')!.unread).toBe(true);
+        store.chats.update('chat-a', { unread: false });
+        expect(store.chats.get('chat-a')!.unread).toBe(false);
+      });
+    });
+
     describe('chats: memory fields', () => {
       function addProject(id: string): void {
         store.projects.create({ id, name: id, workspaceRoot: null, defaultProfileId: null });

@@ -2,6 +2,8 @@ import type { DragEvent, JSX } from 'react';
 import type { Chat } from '@grunt/core/ports/store.js';
 import { PinIcon } from '../../components/icons.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
+import { StatusDot } from '../../components/StatusDot.js';
+import type { ChatStatus } from '../../state/chatStatus.js';
 
 /** `dataTransfer` type a dragged chat row carries; its value is the chat id. */
 export const CHAT_DRAG_MIME = 'application/x-grunt-chat';
@@ -58,6 +60,8 @@ export interface ChatRowProps {
   projectPinMarker?: boolean;
   /** A drag of this row has started (ChatList shows the empty Pinned drop zone). */
   onDragStart?: () => void;
+  /** The dot at the end of the row; a reply ready also makes the title bold. */
+  status?: ChatStatus | null;
 }
 
 /**
@@ -69,7 +73,7 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, projectPinMarker = false, onDragStart } = props;
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, onDragStart, status = null } = props;
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -167,9 +171,10 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
             <PinIcon className="h-3 w-3" />
           </span>
         )}
-        <span className="min-w-0 truncate">{chat.title}</span>
+        <span className={`min-w-0 truncate ${status === 'ready' ? 'font-medium' : ''}`}>{chat.title}</span>
       </button>
-      {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip it. */}
+      {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
+      {status && <StatusDot status={status} testId={`chat-status-${chat.id}`} className="mx-1.5" />}
       {chat.memoryExcluded && (
         <span
           data-testid="memory-excluded-marker"

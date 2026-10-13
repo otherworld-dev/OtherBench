@@ -6,7 +6,7 @@ import { CHAT_DRAG_MIME, ChatRow, type ChatRowProps } from './ChatRow.js';
 
 afterEach(cleanup);
 
-const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1 };
+const chat: Chat = { id: 'chat-1', title: 'Notes', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1 };
 
 function renderRow(props: Partial<ChatRowProps> = {}) {
   const handlers = { onSelect: vi.fn(), onDragEnd: vi.fn(), onOpenMenu: vi.fn(), onRename: vi.fn(), onRenameCancel: vi.fn() };
@@ -34,6 +34,31 @@ describe('ChatRow', () => {
 
     renderRow();
     expect(screen.queryByTestId('memory-excluded-marker')).toBeNull();
+  });
+
+  it('marks a reply ready in bold with a dot, announced beside the button; no status, no dot', () => {
+    renderRow({ status: 'ready' });
+    const dot = screen.getByRole('img', { name: 'reply ready' });
+    expect(dot).toHaveAttribute('data-status', 'ready');
+    expect(dot.closest('button')).toBeNull();
+    expect(screen.getByText('Notes')).toHaveClass('font-medium');
+    // The row's name stays the title.
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    cleanup();
+
+    renderRow();
+    expect(screen.queryByTestId('chat-status-chat-1')).toBeNull();
+    expect(screen.getByText('Notes')).not.toHaveClass('font-medium');
+  });
+
+  it('marks a chat replying, or waiting for an approval, with the same dots as its tab', () => {
+    renderRow({ status: 'working' });
+    expect(screen.getByRole('img', { name: 'replying' })).toHaveAttribute('data-status', 'working');
+    expect(screen.getByText('Notes')).not.toHaveClass('font-medium');
+    cleanup();
+
+    renderRow({ status: 'waiting' });
+    expect(screen.getByRole('img', { name: 'waiting for approval' })).toHaveAttribute('data-status', 'waiting');
   });
 
   it('selects on click and marks the active row', async () => {

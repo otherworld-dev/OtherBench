@@ -7,8 +7,10 @@ import { FolderPlusIcon, PinIcon } from '../components/icons.js';
 import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
 import { saveFile } from '../lib/saveFile.js';
+import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { setChatPinned } from '../state/chatActions.js';
+import { chatStatus, groupStatus, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
@@ -90,6 +92,8 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
   const openTab = useGruntStore((s) => s.openTab);
   const paneTabs = useGruntStore((s) => s.paneState.tabs);
   const collapsedGroups = useCollapsedGroups();
+  const { waiting, working } = useChatActivity();
+  const reading = useReadingChatIds(useMediaQuery(NARROW_BREAKPOINT));
 
   const [query, setQuery] = useState('');
   const [searchChatIds, setSearchChatIds] = useState<ReadonlySet<string> | null>(null);
@@ -474,11 +478,18 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
     }
   }
 
+  /** A reply ready in a chat the user is reading isn't news: useMarkRead is clearing it. */
+  function statusOf(chat: Chat): ChatStatus | null {
+    const status = chatStatus(chat, waiting, working);
+    return status === 'ready' && reading.has(chat.id) ? null : status;
+  }
+
   function renderRow(chat: Chat, section: Section | null): JSX.Element {
     return (
       <ChatRow
         key={chat.id}
         chat={chat}
+        status={statusOf(chat)}
         active={chat.id === activeChatId}
         onSelect={() => setActiveChatId(chat.id)}
         onDragStart={() => setDraggingChatId(chat.id)}
@@ -588,6 +599,7 @@ export function ChatList({ footer }: { footer?: ReactNode } = {}): JSX.Element {
               count={group.total}
               empty={group.total === 0}
               collapsed={!searching && collapsedGroups.has(group.key)}
+              status={groupStatus([...group.pinnedChats, ...group.chats].map(statusOf))}
               dropActive={dropTarget === group.key}
               onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
               onDragTarget={(on) => setDropTarget((current) => (on ? group.key : current === group.key ? null : current))}

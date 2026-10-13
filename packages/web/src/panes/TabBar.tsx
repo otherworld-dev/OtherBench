@@ -1,5 +1,7 @@
 import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent } from 'react';
 import { Menu } from '../components/Menu.js';
+import { StatusDot } from '../components/StatusDot.js';
+import { useChatActivity } from '../state/chatStatus.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
@@ -44,8 +46,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const chats = useGruntStore((s) => s.chats);
   const paneState = useGruntStore((s) => s.paneState);
   const activeChatId = useGruntStore((s) => s.activeChatId);
-  const pending = useGruntStore((s) => s.appPendingApprovals);
-  const running = useGruntStore((s) => s.appRunningTurns);
+  const { waiting, working } = useChatActivity();
   const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
   const openTab = useGruntStore((s) => s.openTab);
   const closeTab = useGruntStore((s) => s.closeTab);
@@ -68,8 +69,6 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
       }),
     [paneState.tabs, chats]
   );
-  const waiting = useMemo(() => new Set(Object.values(pending).map((p) => p.chatId)), [pending]);
-  const working = useMemo(() => new Set(Object.values(running)), [running]);
   const multi = !narrow && paneState.panes.length > 1;
   const paneOf = (chatId: string): number => (paneState.focusedPane >= 0 && chatId === activeChatId ? paneState.focusedPane : paneState.panes.indexOf(chatId));
 
@@ -159,15 +158,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
                 title={t.title}
                 className={`flex min-w-0 items-center gap-1.5 py-1 pl-2.5 pr-1 text-xs ${active ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'}`}
               >
-                {status && (
-                  <span
-                    data-testid={`tab-status-${t.id}`}
-                    data-status={status}
-                    role="img"
-                    aria-label={status === 'waiting' ? 'waiting for approval' : 'replying'}
-                    className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${status === 'waiting' ? 'bg-[var(--warn)]' : 'animate-pulse bg-[var(--accent)]'}`}
-                  />
-                )}
+                {status && <StatusDot status={status} testId={`tab-status-${t.id}`} />}
                 <span className="truncate">{t.title}</span>
                 {multi && pane !== -1 && (
                   <span data-testid={`tab-pane-${t.id}`} className="shrink-0 rounded bg-[var(--bg-sunken)] px-1 text-[0.65rem] tabular-nums" aria-label={`in pane ${pane + 1}`}>

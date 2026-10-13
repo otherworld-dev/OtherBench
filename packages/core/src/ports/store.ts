@@ -69,6 +69,12 @@ export interface Chat {
    * when the chat changes project, unless the same update sets it.
    */
   projectPinned: boolean;
+  /**
+   * A reply finished (or failed) here that the user hasn't had on screen
+   * since: the sidebar marks the chat. Set by the server when a turn ends
+   * complete or in error, cleared by the client once the chat is shown.
+   */
+  unread: boolean;
   archivedAt: number | null;
   /**
    * Claude Code auto mode for this chat's turns (spec
@@ -127,7 +133,7 @@ export interface Chat {
  */
 export type NewChat = Omit<
   Chat,
-  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'projectPinned' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
+  'createdAt' | 'updatedAt' | 'autoMode' | 'projectId' | 'projectPinned' | 'unread' | 'memoryCursor' | 'memoryExcluded' | 'sortOrder' | 'workspace' | 'runsOn' | 'workspaceRoot' | 'workspaceStatus'
 > & {
   workspace?: Workspace | null;
   workspaceRoot?: string | null;
@@ -140,6 +146,7 @@ export type NewChat = Omit<
   memoryCursor?: string | null;
   memoryExcluded?: boolean;
   projectPinned?: boolean;
+  unread?: boolean;
 };
 
 export interface ChatRepo {

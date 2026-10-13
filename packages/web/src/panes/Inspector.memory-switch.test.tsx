@@ -39,6 +39,7 @@ const chatIn = (id: string, projectId: string): Chat => ({
   workspaceRoot: null,
   pinned: false,
   projectPinned: false,
+  unread: false,
   autoMode: false,
   projectId,
   memoryCursor: null,

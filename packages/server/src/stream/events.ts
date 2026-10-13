@@ -76,6 +76,21 @@ export class AppEventBus {
   }
 }
 
+/**
+ * Marks a chat `unread` when a reply there finishes or fails, so the sidebar
+ * shows it's ready; a reply the user stopped isn't marked. Covers replies run
+ * on a paired machine too, whose `turn-finished` the forwarding emits here.
+ * `store` should be the evented one, so the change reaches every window. It
+ * leaves `updatedAt` alone. Returns the unsubscribe.
+ */
+export function markUnreadOnFinish(events: AppEventBus, store: Store): () => void {
+  return events.subscribe((e) => {
+    if (e.type !== 'turn-finished' || (e.status !== 'complete' && e.status !== 'error')) return;
+    const chat = store.chats.get(e.chatId);
+    if (chat && !chat.unread) store.chats.update(e.chatId, { unread: true });
+  });
+}
+
 /** A chat repo that announces every change on `events`. */
 class EventedChatRepo implements ChatRepo {
   constructor(

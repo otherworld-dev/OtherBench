@@ -73,6 +73,7 @@ const chat: Chat = {
   workspaceRoot: null,
   pinned: false,
   projectPinned: false,
+  unread: false,
   autoMode: false,
   projectId: null,
   memoryCursor: null,
@@ -284,6 +285,43 @@ describe('ChatList groups', () => {
     expect(mockedProjectCreate).not.toHaveBeenCalled();
   });
 
+});
+
+describe('ChatList status dots', () => {
+  it('marks chats with a reply ready, replying or waiting for an approval, and each group heading by its most urgent chat', () => {
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [
+        makeChat({ id: 'ready', unread: true }),
+        makeChat({ id: 'busy' }),
+        makeChat({ id: 'asking', unread: true }),
+        makeChat({ id: 'quiet' }),
+        makeChat({ id: 'hidden', projectId: 'p-a', unread: true }),
+      ],
+      appRunningTurns: { m1: 'busy', m2: 'asking' },
+      appPendingApprovals: { r1: { chatId: 'asking', messageId: 'm2', requestId: 'r1', toolName: 'write_file' } },
+    });
+    setGroupCollapsed('p-a', true);
+    render(<ChatList />);
+
+    expect(screen.getByTestId('chat-status-ready')).toHaveAttribute('data-status', 'ready');
+    expect(screen.getByTestId('chat-status-busy')).toHaveAttribute('data-status', 'working');
+    expect(screen.getByTestId('chat-status-asking')).toHaveAttribute('data-status', 'waiting');
+    expect(screen.queryByTestId('chat-status-quiet')).toBeNull();
+    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('data-status', 'ready');
+    expect(screen.getByTestId(`group-status-${NO_PROJECT_KEY}`)).toHaveAttribute('data-status', 'waiting');
+  });
+
+  it('shows no ready dot on a chat that is on screen in a focused window: it is being read', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    useGruntStore.setState({ chats: [makeChat({ id: 'open', unread: true }), makeChat({ id: 'other', unread: true })] });
+    useGruntStore.getState().setActiveChatId('open');
+    render(<ChatList />);
+
+    expect(screen.queryByTestId('chat-status-open')).toBeNull();
+    expect(screen.getByTestId('chat-status-other')).toHaveAttribute('data-status', 'ready');
+    vi.restoreAllMocks();
+  });
 });
 
 describe('ChatList pin button', () => {

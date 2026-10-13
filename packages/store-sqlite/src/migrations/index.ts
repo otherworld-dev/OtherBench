@@ -19,6 +19,7 @@ import { MIGRATION_017_ARTIFACT_VERSION_KIND } from './017-artifact-version-kind
 import { MIGRATION_018_PROJECT_DETAILS } from './018-project-details.js';
 import { MIGRATION_019_GLOBAL_MEMORY } from './019-global-memory.js';
 import { MIGRATION_020_CHAT_PROJECT_PINNED } from './020-chat-project-pinned.js';
+import { MIGRATION_021_CHAT_UNREAD } from './021-chat-unread.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -44,6 +45,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 18, name: '018-project-details', sql: MIGRATION_018_PROJECT_DETAILS },
   MIGRATION_019_GLOBAL_MEMORY,
   { version: 20, name: '020-chat-project-pinned', sql: MIGRATION_020_CHAT_PROJECT_PINNED },
+  { version: 21, name: '021-chat-unread', sql: MIGRATION_021_CHAT_UNREAD },
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

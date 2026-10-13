@@ -565,6 +565,7 @@ class InMemoryChatRepo implements ChatRepo {
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
       projectPinned: c.projectPinned ?? false,
+      unread: c.unread ?? false,
       globalMemoryCursor: c.globalMemoryCursor ?? null,
       sortOrder: c.sortOrder ?? c.createdAt ?? now,
       createdAt: c.createdAt ?? now,

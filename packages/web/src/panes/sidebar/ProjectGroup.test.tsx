@@ -38,6 +38,21 @@ describe('ProjectGroup', () => {
     expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'true');
   });
 
+  it("shows its chats' status on the heading, open or collapsed, and says it in the heading button", () => {
+    renderGroup({ collapsed: true, status: 'ready' });
+    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('data-status', 'ready');
+    expect(screen.getByRole('button', { name: /^Alpha.*reply ready/ })).toHaveAttribute('aria-expanded', 'false');
+    cleanup();
+
+    renderGroup({ collapsed: false, status: 'working' });
+    expect(screen.getByTestId('group-status-p-a')).toHaveAttribute('data-status', 'working');
+    expect(screen.getByRole('button', { name: /^Alpha.*replying/ })).toHaveAttribute('aria-expanded', 'true');
+    cleanup();
+
+    renderGroup({ collapsed: false, status: null });
+    expect(screen.queryByTestId('group-status-p-a')).toBeNull();
+  });
+
   it('hides its list when collapsed', () => {
     renderGroup({ collapsed: true });
     expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'false');

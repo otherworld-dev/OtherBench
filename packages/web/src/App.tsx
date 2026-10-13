@@ -14,6 +14,7 @@ import { useDesktopShell } from './desktop/useDesktopShell.js';
 import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
+import { useMarkRead } from './state/useMarkRead.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
 import { QuickChat } from './views/QuickChat.js';
 import { ProjectView } from './views/ProjectView.js';
@@ -103,6 +104,7 @@ function MainApp(): JSX.Element {
   useDesktopShell();
   useTextSizeShortcuts();
   usePaneShortcuts(isNarrow);
+  useMarkRead(isNarrow);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
   const activeProfile = activeChat ? (profiles.find((p) => p.id === activeChat.profileId) ?? null) : null;

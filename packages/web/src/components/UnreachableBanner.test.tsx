@@ -15,7 +15,7 @@ import { UnreachableBanner } from './UnreachableBanner.js';
 
 function chat(over: Partial<Chat> = {}): Chat {
   return {
-    id: 'c', title: 'T', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-pc', workspaceRoot: null, pinned: false, projectPinned: false, archivedAt: null,
+    id: 'c', title: 'T', profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-pc', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null,
     autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
   };
 }

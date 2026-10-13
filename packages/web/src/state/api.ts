@@ -187,6 +187,8 @@ export type ChatPatchBody = Partial<{
   memoryExcluded: boolean;
   /** Its place in its sidebar section, higher first (#823). Not chat activity: leaves updatedAt alone. */
   sortOrder: number;
+  /** False marks a finished reply as seen, clearing the sidebar's dot. Not chat activity either. */
+  unread: boolean;
 }>;
 
 export interface CreateProjectBody {

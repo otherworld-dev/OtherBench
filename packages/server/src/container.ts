@@ -40,7 +40,7 @@ import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
 import { subscribeAutoTitle } from './routes/chats.js';
-import { AppEventBus, withChatEvents } from './stream/events.js';
+import { AppEventBus, markUnreadOnFinish, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
 
@@ -335,6 +335,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   events.attach(turnRunner, store);
+  markUnreadOnFinish(events, store);
   const memoryQueue = new MemoryQueue();
   const memoryDeps = { store, engine, resolveProfile: (id: string) => resolveProfile({ store, secrets }, id), queue: memoryQueue };
   const memory = new MemoryServices(new ProjectMemoryService(memoryDeps), new GlobalMemoryService(memoryDeps));
