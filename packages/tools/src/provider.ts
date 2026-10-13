@@ -29,7 +29,7 @@ import {
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolPolicy, ToolSource } from '@grunt/core/types/config.js';
 import type { BrowserManager } from './browser/manager.js';
-import { browserTool } from './browser/tool.js';
+import { browserTool, pageFailure } from './browser/tool.js';
 import { computerTool } from './computer-tool.js';
 import { fsTools } from './fs-tools.js';
 import type { McpToolDescriptor } from './mcp/client.js';
@@ -688,7 +688,9 @@ export class GruntToolProvider implements ToolProvider {
       result = await tool.execute(call.args, ctx);
     } catch (err) {
       if (!isScreenTool(tool.source)) throw err;
-      result = tool.source === 'computer' ? screenContentError('computer_failed', messageOf(err)) : toolError('browser_error', messageOf(err));
+      // An engine error can quote the page: the browser's error carries the page's line, naming the site the call was approved for.
+      const host = (call.args as { host?: unknown } | null)?.host;
+      result = tool.source === 'computer' ? screenContentError('computer_failed', messageOf(err)) : pageFailure('browser_error', messageOf(err), typeof host === 'string' ? host : null);
     }
     this.auditCall(ctx, tool, call.args, result, this.now() - startedAt, call.grantedBy, undefined, call.decidedOnNode);
     return result;

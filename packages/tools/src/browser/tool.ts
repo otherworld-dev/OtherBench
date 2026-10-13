@@ -144,6 +144,21 @@ function failure(code: string, message: string): { error: true; code: string; me
   return { error: true, code, message };
 }
 
+/**
+ * An error whose message can carry words from a page or the browser engine
+ * (what an engine error said, where the page moved to): the line every page
+ * result carries goes first, naming the page's site (`site`, or an unknown
+ * page when there is none). Grunt's own fixed sentences (`failure`) need none.
+ */
+export function pageFailure(code: string, message: string, site: string | null): { about: string; error: true; code: string; message: string } {
+  return { about: aboutPage(site ?? 'an unknown page'), error: true, code, message };
+}
+
+/** The site of the page a chat's browser is on now, else the site the call was approved for. */
+function siteNow(chat: ChatBrowser, approved: string): string {
+  return siteOf(chat.session.url()) ?? approved;
+}
+
 /** An error's first line as page-safe text (an engine error can quote the page). */
 function firstLine(err: unknown): string {
   return pageText((err instanceof Error ? err.message : String(err)).split('\n')[0] ?? '', MAX_NOTE_CHARS);
@@ -258,13 +273,13 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
   try {
     chat = await manager.acquire(ctx.chatId, ctx.messageId, ctx.signal, policy.browserBlockedHosts ?? []);
   } catch (err) {
-    return err instanceof BrowserBusyError ? failure('browser_busy', err.message) : failure('browser_unavailable', firstLine(err));
+    return err instanceof BrowserBusyError ? failure('browser_busy', err.message) : pageFailure('browser_unavailable', firstLine(err), host);
   }
   if (call.command === 'close') {
     try {
       await manager.close(ctx.chatId);
     } catch (err) {
-      return failure('browser_error', firstLine(err));
+      return pageFailure('browser_error', firstLine(err), siteNow(chat, host));
     }
     return { closed: true };
   }
@@ -274,7 +289,7 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
     const site = siteOf(chat.session.url());
     if (site !== guard.site || (guard.navId !== undefined && guard.navId !== chat.session.navigationId())) {
       setRefs(chat, new Map());
-      return failure('page_moved', new PageMovedError(site).message);
+      return pageFailure('page_moved', new PageMovedError(site).message, site);
     }
   }
   // A ref must come from the snapshot the call was described against, and still be in it.
@@ -290,16 +305,16 @@ async function execute(manager: BrowserManager, policy: { browserBlockedHosts?: 
       const site = siteOf(chat.session.url());
       if (site !== guard.site) {
         setRefs(chat, new Map());
-        return failure('page_moved', new PageMovedError(site).message);
+        return pageFailure('page_moved', new PageMovedError(site).message, site);
       }
     }
     return result;
   } catch (err) {
     // Whatever went wrong, the page is not what the refs were read from: the next ref fails fast.
     setRefs(chat, new Map());
-    if (err instanceof PageMovedError) return failure('page_moved', err.message);
+    if (err instanceof PageMovedError) return pageFailure('page_moved', err.message, err.site);
     if (err instanceof StaleRefError) return failure('stale_ref', err.message);
-    return failure('browser_error', firstLine(err));
+    return pageFailure('browser_error', firstLine(err), siteNow(chat, host));
   }
 }
 
