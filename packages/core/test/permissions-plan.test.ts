@@ -206,6 +206,39 @@ describe('plan mode in the broker', () => {
     expect(b.pendingCount).toBe(0);
   });
 
+  it('refuses every computer action while the plan waits, the looks included, with no card and whatever grants there are', () => {
+    // Integration (cowork-parity step 5). Fail closed: a look starts the control session (the shell's native dialog)
+    // and sends whatever is on the screen to the model, so it is not treated like the browser's snapshot of an open page.
+    const store = new InMemoryStore();
+    const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    store.grants.create({ id: 'g1', chatId: null, profileId: 'p1', toolName: 'computer', source: 'computer', scope: 'always', constraint: { app }, expiresAt: null });
+    const b = new PermissionBroker(store);
+    const on = policy({ computer: true });
+    const computer = tool('computer', 'computer', 'mutate');
+    const described = { app, appName: 'FakeApp.exe', appTitle: 'Fake', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' };
+    const calls = [
+      { action: 'screenshot', app: null },
+      { action: 'cursor_position', app: null },
+      { action: 'wait', duration: 1, app: null },
+      { action: 'left_click', coordinate: [10, 20], ...described },
+      { action: 'type', text: 'hello', ...described },
+    ];
+    for (const args of calls) {
+      for (const risk of ['read', 'mutate'] as const) {
+        expect(allowedWhilePlanning({ ...computer, risk }, args)).toBe(false);
+        expect(b.decide({ ...computer, risk }, args, on, planning()), JSON.stringify(args)).toEqual({ kind: 'deny', reason: PLAN_REFUSAL, plan: true });
+      }
+    }
+    expect(b.pendingCount).toBe(0);
+    // Approved: the look needs no card and the click goes on to its grant.
+    const gate = createPlanGate();
+    gate.approve();
+    expect(b.decide({ ...computer, risk: 'read' }, calls[0], on, ctx({ plan: gate }))).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    expect(b.decide(computer, calls[3], on, ctx({ plan: gate }))).toMatchObject({ kind: 'allow', grantedBy: 'grant', grantId: 'g1' });
+    // The policy ceiling still comes first.
+    expect(b.decide(computer, calls[0], policy({ computer: false }), planning())).toEqual({ kind: 'deny', reason: 'Computer use is turned off for this profile.' });
+  });
+
   it('fails closed for a source it has never heard of', () => {
     expect(allowedWhilePlanning(tool('teleport', 'teleport' as ToolSource, 'read'))).toBe(false);
   });

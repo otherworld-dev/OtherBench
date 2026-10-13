@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PermissionBroker, type Decision } from '../src/domain/permissions.js';
+import type { Grant } from '../src/ports/store.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
@@ -431,5 +432,58 @@ describe('PermissionBroker and computer use', () => {
     store.grants.create({ id: 'mcp', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'mcp', scope: 'always', constraint: { app: EXCEL }, expiresAt: null });
     store.grants.create({ id: 'browser', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'browser', scope: 'always', constraint: { host: 'example.com', app: EXCEL }, expiresAt: null });
     expect(broker.decide(COMPUTER, click(), policy(), ctx()).kind).toBe('ask');
+  });
+});
+
+describe('the app grant beside the host and live grants (cowork-parity integration)', () => {
+  let store: InMemoryStore;
+  let broker: PermissionBroker;
+  const BROWSER: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => null };
+  const NETWORK: ToolSpec = { name: 'sandbox_network', description: '', parameters: {}, risk: 'mutate', source: 'network', execute: async () => null };
+  const WRITE: ToolSpec = { name: 'write_file', description: '', parameters: {}, risk: 'mutate', source: 'fs', execute: async () => null };
+  const wide = (): ToolPolicy => ({ fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate', browser: true, computer: true });
+  const open = { command: 'open', url: 'https://example.com/', host: 'example.com' };
+  const row = (id: string, toolName: string, source: Grant['source'], constraint: Grant['constraint']): void => {
+    store.grants.create({ id, chatId: null, profileId: 'profile-1', toolName, source, scope: 'always', constraint, expiresAt: null });
+  };
+
+  beforeEach(() => {
+    store = new InMemoryStore();
+    broker = new PermissionBroker(store);
+  });
+
+  it('never lets an app grant cover a browser, network or file call, nor a host grant a computer call, whatever the rows say', () => {
+    row('b-app', 'browser', 'browser', { app: EXCEL });
+    row('n-app', 'sandbox_network', 'network', { app: EXCEL });
+    row('c-host', 'computer', 'computer', { host: 'example.com' });
+    row('c-both', 'computer', 'computer', { app: EXCEL, host: 'example.com' });
+    row('b-both', 'browser', 'browser', { host: 'example.com', app: EXCEL });
+    row('c-live', 'computer', 'computer', { app: EXCEL, live: { artifactId: 'a', callId: 'c', hash: 'h', serverId: 's' } });
+    expect(broker.decide(BROWSER, open, wide(), ctx({ workspaceRoot: '/ws' })).kind).toBe('ask');
+    expect(broker.decide(NETWORK, { host: 'example.com' }, wide(), ctx({ workspaceRoot: '/ws' })).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(), wide(), ctx()).kind).toBe('ask');
+    // The plain ones each cover their own source only.
+    row('c-ok', 'computer', 'computer', { app: EXCEL });
+    row('b-ok', 'browser', 'browser', { host: 'example.com' });
+    expect(broker.decide(COMPUTER, click(), wide(), ctx())).toMatchObject({ kind: 'allow', grantId: 'c-ok' });
+    expect(broker.decide(BROWSER, open, wide(), ctx({ workspaceRoot: '/ws' }))).toMatchObject({ kind: 'allow', grantId: 'b-ok' });
+    expect(broker.decide(NETWORK, { host: 'example.com' }, wide(), ctx({ workspaceRoot: '/ws' })).kind).toBe('ask');
+  });
+
+  it("stores a chat answer for computer use as exactly { app }, and refuses an 'always' of another kind on either side", () => {
+    const chat = expectAsk(broker.decide(COMPUTER, click(), wide(), ctx()));
+    broker.resolve(chat.request.id, { choice: 'chat' });
+    expect(store.grants.list().map((g) => g.constraint)).toEqual([{ app: EXCEL }]);
+    store.grants.delete(store.grants.list()[0]!.id);
+    // A host on a computer card, an app on a browser, network or file card: refused, nothing stored.
+    const computerAsk = expectAsk(broker.decide(COMPUTER, click(), wide(), ctx()));
+    expect(() => broker.resolve(computerAsk.request.id, { choice: 'always', constraint: { host: 'example.com' } })).toThrow();
+    const browserAsk = expectAsk(broker.decide(BROWSER, open, wide(), ctx({ workspaceRoot: '/ws' })));
+    expect(() => broker.resolve(browserAsk.request.id, { choice: 'always', constraint: { app: EXCEL } })).toThrow();
+    const networkAsk = expectAsk(broker.decide(NETWORK, { host: 'example.com' }, wide(), ctx({ workspaceRoot: '/ws' })));
+    expect(() => broker.resolve(networkAsk.request.id, { choice: 'always', constraint: { host: 'example.com', app: EXCEL } })).toThrow();
+    const writeAsk = expectAsk(broker.decide(WRITE, { path: 'a.txt' }, wide(), ctx({ workspaceRoot: '/ws' })));
+    expect(() => broker.resolve(writeAsk.request.id, { choice: 'always', constraint: { app: EXCEL } })).toThrow(/only a pathPrefix/);
+    expect(store.grants.list()).toEqual([]);
   });
 });
