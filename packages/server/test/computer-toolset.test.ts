@@ -9,6 +9,8 @@ import type { ResolvedProfile, ToolPolicy } from '@grunt/core/types/config.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+// The one pairing check, shared with the engine's own tests (this package's tests already import other packages' test helpers).
+import { expectWellFormed } from '../../engine-aisdk/test/tool-channel.js';
 
 /**
  * Anthropic's computer toolset end to end on this side of the wire: the real
@@ -148,32 +150,6 @@ const resultEvents = (events: EngineEvent[]): Extract<EngineEvent, { type: 'tool
 
 /** Every request body a test here sent: each is checked when its test ends. */
 const everyBody: Record<string, unknown>[] = [];
-
-/**
- * What the Messages API insists on, over a whole outgoing body (the same check
- * as in packages/engine-aisdk/test/computer-toolset.test.ts): a `tool_result`
- * answers a `tool_use` of the assistant message just before it, every
- * `tool_use` is answered in the message just after it, and a `tool_use` that
- * names the toolset is one of its members that is turned on.
- */
-function expectWellFormed(body: Record<string, unknown>): void {
-  const messages = body['messages'] as { role: string; content: Block[] | string }[];
-  const blocks = (i: number, type: string): Block[] => {
-    const content = messages[i]?.content;
-    return Array.isArray(content) ? content.filter((b) => b['type'] === type) : [];
-  };
-  for (let i = 0; i < messages.length; i++) {
-    if (messages[i]!.role === 'assistant') {
-      const uses = blocks(i, 'tool_use');
-      expect(blocks(i + 1, 'tool_result').map((b) => b['tool_use_id']).sort(), `message ${i}: every tool_use is answered in the next message`).toEqual(uses.map((b) => b['id']).sort());
-      for (const use of uses) if (use['toolset_name'] !== undefined) expect(COMPUTER_ACTIONS as readonly unknown[], `message ${i}`).toContain(use['name']);
-    } else {
-      const asked = messages[i - 1]?.role === 'assistant' ? blocks(i - 1, 'tool_use').map((b) => b['id']) : [];
-      for (const result of blocks(i, 'tool_result')) expect(asked, `message ${i}: a tool_result has its tool_use just before it`).toContain(result['tool_use_id']);
-    }
-    if (i > 0) expect(messages[i]!.role, `message ${i}: roles alternate`).not.toBe(messages[i - 1]!.role);
-  }
-}
 
 afterEach(() => {
   vi.unstubAllGlobals();

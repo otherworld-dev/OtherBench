@@ -10,6 +10,7 @@ import { IMAGE_NOT_KEPT_LIMIT, MAX_TOOL_IMAGE_BYTES, TOOL_IMAGE_REF_REMOVED } fr
 import { AiSdkChatEngine, COMPUTER_TOOLSET_CONFIGS, COMPUTER_TOOLSET_MODELS, usesComputerToolset } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 import { IMAGE_OMITTED_NOTE } from '../src/tool-images.js';
+import { expectWellFormed } from './tool-channel.js';
 
 /**
  * The offline probe (spec 2026-10-12-computer-use-design section 5, "Task 1"):
@@ -76,41 +77,6 @@ type Block = Record<string, unknown>;
 
 /** Every request body any test here sent: each is checked by `expectWellFormed` when its test ends. */
 const everyBody: Record<string, unknown>[] = [];
-
-/**
- * What the Messages API insists on, over a whole outgoing body: every
- * `tool_result` answers a `tool_use` of the assistant message just before it,
- * every `tool_use` is answered in the message just after it, results come
- * before any other block of their message, and a `tool_use` that names the
- * toolset is one of its members that is turned on (a phase-1 action).
- */
-function expectWellFormed(body: Record<string, unknown>): void {
-  const messages = body['messages'] as { role: string; content: Block[] | string }[];
-  const blocks = (i: number): Block[] => {
-    const content = messages[i]?.content;
-    return Array.isArray(content) ? content : [];
-  };
-  for (let i = 0; i < messages.length; i++) {
-    const uses = blocks(i).filter((b) => b['type'] === 'tool_use');
-    const results = blocks(i).filter((b) => b['type'] === 'tool_result');
-    if (messages[i]!.role === 'assistant') {
-      expect(results, `message ${i}: a tool_result in an assistant message`).toEqual([]);
-      const answered = blocks(i + 1).filter((b) => b['type'] === 'tool_result').map((b) => b['tool_use_id']);
-      expect(answered.slice().sort(), `message ${i}: every tool_use is answered in the next message`).toEqual(uses.map((b) => b['id']).sort());
-      for (const use of uses) {
-        if (use['toolset_name'] !== undefined) expect(COMPUTER_ACTIONS as readonly unknown[], `message ${i}: tool_use ${String(use['name'])} names the toolset`).toContain(use['name']);
-      }
-    } else {
-      expect(uses, `message ${i}: a tool_use in a user message`).toEqual([]);
-      const asked = messages[i - 1]?.role === 'assistant' ? blocks(i - 1).filter((b) => b['type'] === 'tool_use').map((b) => b['id']) : [];
-      for (const result of results) expect(asked, `message ${i}: tool_result ${String(result['tool_use_id'])} has its tool_use just before it`).toContain(result['tool_use_id']);
-      const firstOther = blocks(i).findIndex((b) => b['type'] !== 'tool_result');
-      if (firstOther !== -1) expect(blocks(i).slice(firstOther).filter((b) => b['type'] === 'tool_result'), `message ${i}: results come first`).toEqual([]);
-    }
-    if (i > 0) expect(messages[i]!.role, `message ${i}: roles alternate`).not.toBe(messages[i - 1]!.role);
-  }
-  expect(messages[messages.length - 1]!.role, 'the request ends with a user message').toBe('user');
-}
 
 afterEach(() => {
   for (const body of everyBody.splice(0)) expectWellFormed(body);
