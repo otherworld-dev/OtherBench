@@ -15,7 +15,7 @@ import type { Connection, ConnectionKind } from '@grunt/core/types/config.js';
 import { classifyProviderError } from '@grunt/core/types/errors.js';
 import type { Usage } from '@grunt/core/types/usage.js';
 import { cardLine } from '@grunt/core/domain/card-text.js';
-import { COMPUTER_TOOL, isComputerAction } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_TOOL, desktopTextForResult, isComputerAction, screenContentError } from '@grunt/core/domain/computer-apps.js';
 import { toolsetSafeMessages } from './computer-toolset.js';
 import { toModelMessages } from './convert.js';
 import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
@@ -597,12 +597,20 @@ function buildToolSet(
         ...(folders && folders.length > 0 ? { folders } : {}),
         signal: abortSignal ?? signal,
       };
-      // What the model is shown and what is stored are one thing: the output is
-      // screened here, once, so an image that is not let through is the same note
-      // in both, and bulk base64 never goes on to either.
-      const screened = screenToolResult(await spec.execute(input, ctx), imageBudget, LIVE_IMAGE_LIMITS);
-      if (screened.forged) console.warn(`[AiSdkChatEngine] a "${spec.name}" result carried a reference to a stored image; removed.`);
-      return screened.result;
+      try {
+        // What the model is shown and what is stored are one thing: the output is
+        // screened here, once, so an image that is not let through is the same note
+        // in both, and bulk base64 never goes on to either.
+        const screened = screenToolResult(await spec.execute(input, ctx), imageBudget, LIVE_IMAGE_LIMITS);
+        if (screened.forged) console.warn(`[AiSdkChatEngine] a "${spec.name}" result carried a reference to a stored image; removed.`);
+        return screened.result;
+      } catch (err) {
+        // Every other tool's throw goes on to the SDK as it always has (its own error result), and so does a stop.
+        if (!isComputerSpec(spec) || ctx.signal.aborted) throw err;
+        // A computer call's words may be the desktop app's: answered as the Claude Code relay answers the
+        // same throw (relay.ts), one clean bounded line under the line that says it is screen content.
+        return screenContentError('computer_failed', desktopTextForResult(errorMessage(err)));
+      }
     };
     // Images a tool returns go to the model as images, or as a note when it can't take them.
     const toModelOutput = ({ output }: { output: unknown }): ReturnType<typeof liveToolOutput> => liveToolOutput(output, imagesOk);
