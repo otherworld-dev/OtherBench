@@ -220,8 +220,9 @@ open the file again.
 shell commands, browse folders anywhere on the box, attach a file by path.
 Use a long password you use nowhere else, and prefer a LAN or a tailnet to
 the open internet. Five wrong passwords from one address lock it out for 15
-minutes; a hundred in an hour close sign-in for everyone for the rest of the
-hour.
+minutes. Wrong passwords from anywhere slow every sign-in down instead of
+closing it: from 20 in an hour each attempt waits a moment first, up to 10
+seconds from 100 on.
 
 ## Claude Code
 

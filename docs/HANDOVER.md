@@ -269,6 +269,35 @@ of work landed after that plan closed out:
   (or `--tls-cert/--tls-key`, or `--trust-proxy`) runs Grunt for other
   devices' browsers behind a password set with `grunt password`; see the
   README's *Use it from another device*.
+  - **Sign-in limits** (`packages/server/src/remote/limiter.ts`, used by
+    `checkPassword` in `remote/auth.ts` for `/api/auth/login` and
+    `/api/auth/password`). Per address, as built: 5 wrong passwords in 15
+    minutes lock it for 15 minutes (429 with `Retry-After`, even for the
+    right password). Globally there is no lockout any more (Adam,
+    2026-10-14), only a slow-down: wrong passwords from anywhere in the last
+    hour, counted per minute, make every attempt wait before its password
+    is read, right or wrong, so the timing says nothing. Under 20 there is
+    no wait; at 20 it is 625 ms, doubling with each further 20 (1.25 s at
+    40, 2.5 s at 60, 5 s at 80) to 10 s from 100 on, the count that used to
+    close sign-in. The global count never refuses by itself. The wait is a
+    timer awaited after the body is read and before the password file is
+    read or a check slot taken, so nothing (no lock, no database) is held
+    across it. At most 50 attempts wait at once (`MAX_DELAYED`); more get
+    429 `Sign-in is busy. Try again in a few seconds.` with `Retry-After` of
+    the current wait, rounded up to whole seconds. An attempt whose client
+    disconnects stops waiting and frees its place at once (the request's
+    abort signal, which `@hono/node-server` fires on close), and the wait is
+    10 s at most, so the slow-down can hold at most 50 sockets for 10 s.
+    The address's lock is checked again after the wait, so attempts sent
+    together from one address can't all slip past a lock the first of them
+    sets. A log line says SIGN-IN IS SLOWED DOWN FOR EVERYONE each time the
+    wait grows. After the wait the two password-check slots are as before:
+    when both are busy the attempt gets 429 with `Retry-After: 1`, so under
+    a heavy attack a right password can wait out the delay and still be
+    told to try again. Tests: `server/test/remote/limiter.test.ts` and
+    `auth.test.ts` (fake timers), `web/e2e/remote-access.spec.ts` (g), which
+    starts its server with `--trust-proxy 127.0.0.1` to sign in from many
+    addresses and takes its port from `GRUNT_E2E_REMOTE_PORT` (default 4781).
 
 ### The model's browser (Deck #926)
 
@@ -659,8 +688,12 @@ the database) and a session cookie (`__Host-`, `HttpOnly; Secure;
 SameSite=Strict`, counted only when `Sec-Fetch-Site` says same-origin);
 HTTPS only (no plain-HTTP sign-in, no HSTS, no redirect); a Host check
 against the public URLs; the cross-site write check; 5 wrong passwords lock
-an address out for 15 minutes and 100 in an hour close sign-in for everyone,
-which trades guessing for denial of service; `/view/` links work only from
+an address out for 15 minutes, and wrong passwords from anywhere slow every
+sign-in down (from 20 in the last hour; see "Sign-in limits" under Remote
+access) without ever closing it, which keeps Adam able to sign in under a
+spread-out guessing attack at the cost of letting guesses through at up to
+about 5 a second (50 waiting at once, 10 s each) rather than 100 an hour;
+`/view/` links work only from
 the address that made them (weak behind shared NAT, nothing behind a proxy
 that sends no `X-Forwarded-For`); and `frame-ancestors 'none'` on the UI in
 every mode. With `--tls auto` the first visit is trust-on-first-use: only
@@ -1741,6 +1774,7 @@ surprise.
 | Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
 | The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
 | Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
+| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout: a global slow-down from 20 wrong passwords in the last hour (625 ms, doubling per 20, up to 10 s), never a refusal by count; at most 50 attempts wait at once, more get 429 with `Retry-After`. The per-address lockout is unchanged | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. See "Sign-in limits" under Remote access |
 
 ## Deviations from the original spec
 
