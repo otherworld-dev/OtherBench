@@ -224,4 +224,14 @@ describe('unattendedWarnings', () => {
     expect(unattendedWarnings(policy(), 'anthropic', true)).toEqual([]);
     expect(unattendedWarnings(policy({ approvalMode: 'always_ask', browser: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
   });
+
+  it('says computer use is refused for a profile with it on, on either engine and in a clean chat, Always grants or not', () => {
+    const line = 'Computer use needs someone at the machine, so every computer action is refused, a screenshot included.';
+    expect(unattendedWarnings(policy({ computer: true }), 'anthropic', true)).toEqual([line]);
+    expect(unattendedWarnings(policy({ computer: true }), 'claude_code', true)).toEqual([line]);
+    expect(unattendedWarnings(policy({ computer: true }), 'claude_code', false)).toEqual([line]);
+    expect(unattendedWarnings(policy({ computer: false }), 'anthropic', true)).toEqual([]);
+    expect(unattendedWarnings(policy(), 'anthropic', true)).toEqual([]);
+    expect(unattendedWarnings(policy({ approvalMode: 'always_ask', computer: true }), 'anthropic', true)).toEqual(['This profile asks before every tool call, so every tool call will be refused.']);
+  });
 });

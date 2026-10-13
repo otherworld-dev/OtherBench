@@ -318,5 +318,8 @@ export function unattendedWarnings(policy: ToolPolicy, connectionKind: Connectio
   if (policy.browser === true) lines.push("The browser asks before each new website, so using a site is refused unless a grant already covers it (an Always grant, or one for the schedule's own chat).");
   // Sub-agents are for API profiles. One run as another profile is held to both policies, the stricter approval mode included.
   if (!claudeCode && policy.subagents === true) lines.push('A sub-agent run as a profile that asks before every tool call will have every tool call refused.');
+  // Computer use (spec 2026-10-12-computer-use-design) never runs unattended, whatever grants there are, for both
+  // engines: every action is refused, a screenshot included, before the desktop app is asked anything.
+  if (policy.computer === true) lines.push('Computer use needs someone at the machine, so every computer action is refused, a screenshot included.');
   return lines;
 }
