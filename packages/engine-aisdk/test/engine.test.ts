@@ -310,7 +310,9 @@ describe('AiSdkChatEngine.stream', () => {
       const engine = new AiSdkChatEngine(resolverFor(mock));
       await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ modelId, connection: makeConnection({ kind }), model: model(vision) }) })));
       const toolMessage = mock.doStreamCalls[1]!.prompt.find((m) => m.role === 'tool');
-      expect(toolMessage?.content[0], `${kind} ${modelId} vision=${vision}`).toMatchObject({ type: 'tool-result', output: { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2×1.' }, expected] } });
+      // Content only when the image is sent; otherwise the words and the note are one text.
+      const output = expected === image ? { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2\u00d71.' }, image] } : { type: 'text', value: `Screenshot, 2\u00d71.\n${omitted.text}` };
+      expect(toolMessage?.content[0], `${kind} ${modelId} vision=${vision}`).toMatchObject({ type: 'tool-result', output });
     }
   });
 
@@ -342,8 +344,9 @@ describe('AiSdkChatEngine.stream', () => {
       });
       const events = await drain(new AiSdkChatEngine(resolverFor(mock)).stream(makeRequest({ tools: specs, profile: makeResolvedProfile({ model: vision }) })));
 
-      const seen = mock.doStreamCalls[1]!.prompt.filter((m) => m.role === 'tool').flatMap((m) => m.content as { output: { value: { type: string; text?: string }[] } }[]);
-      const modelItems = seen.flatMap((r) => r.output.value);
+      const seen = mock.doStreamCalls[1]!.prompt.filter((m) => m.role === 'tool').flatMap((m) => m.content as { output: { type: string; value: unknown } }[]);
+      // A result left with no image goes as one text: its one item here.
+      const modelItems = seen.flatMap((r) => (r.output.type === 'text' ? [{ type: 'text', text: r.output.value as string }] : (r.output.value as { type: string; text?: string }[])));
       const emitted = events.flatMap((e) => (e.type === 'tool-result' ? (e.result as { type: string; text?: string }[]) : []));
       expect(modelItems.filter((v) => v.type === 'image-data'), label).toHaveLength(allowed);
       // What is emitted (and so stored) is the same thing, item by item: an image only where the model got one.
@@ -378,7 +381,7 @@ describe('AiSdkChatEngine.stream', () => {
     expect(loadToolImage).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-assistant', attachmentId: 'att-1' });
 
     // No scoped loader: a note, and the raw loader is not used as a fallback.
-    expect(await run({ loadAttachment })).toMatchObject({ output: { type: 'content', value: [{ type: 'text', text: '[image not available]' }] } });
+    expect(await run({ loadAttachment })).toMatchObject({ output: { type: 'text', value: '[image not available]' } });
     expect(loadAttachment).not.toHaveBeenCalled();
   });
 

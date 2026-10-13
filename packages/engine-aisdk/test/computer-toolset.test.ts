@@ -673,6 +673,7 @@ describe('the toolset: screenshots are screened like any tool image', () => {
   it("gives a model that can't take images the note instead of the screenshot", async () => {
     const { provider, bodies } = fakeAnthropic(turnOf('msg_1', [{ id: 'toolu_1', name: 'screenshot' }]), ANSWER);
     await drain(engineFor(provider).stream(request('claude-opus-5-5', [computerSpec([])], { vision: false })));
-    expect(resultsIn(bodies[1]!)[0]!['content']).toEqual([{ type: 'text', text: SHOT_TEXT }, { type: 'text', text: IMAGE_OMITTED_NOTE }]);
+    // Nothing but text is left: one string, the words then the note.
+    expect(resultsIn(bodies[1]!)[0]!['content']).toBe(`${SHOT_TEXT}\n${IMAGE_OMITTED_NOTE}`);
   });
 });

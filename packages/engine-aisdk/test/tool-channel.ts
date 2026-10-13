@@ -1,4 +1,5 @@
 import { expect } from 'vitest';
+import { COMPUTER_ACTIONS } from '@grunt/core/domain/computer-apps.js';
 
 /**
  * Where tool output may be in a request, per wire format. What a tool
@@ -51,25 +52,37 @@ export function zonesOpenAiResponses(body: Json): Zones {
 
 /**
  * Google generateContent: `functionResponse` parts are inside; `systemInstruction`
- * and every other part are outside. For models before Gemini 3 the SDK writes
- * one function response per text item of a result, so the parts that answer
- * one call (the same `id`) are read together as its one result.
+ * and every other part are outside. One call is answered by ONE function
+ * response: a second part for the same call (the same `id`), which the SDK
+ * writes for each text item of a `content` output on models before Gemini 3,
+ * fails here.
  */
 export function zonesGoogle(body: Json): Zones {
   const zones: Zones = { inside: [], outside: [] };
   if (body['systemInstruction'] !== undefined) zones.outside.push({ where: 'systemInstruction', text: JSON.stringify(body['systemInstruction']) });
   list(body['contents']).forEach((content, i) => {
-    const byCall = new Map<string, string[]>();
+    const answered = new Set<string>();
     list(content['parts']).forEach((part, j) => {
       const response = part['functionResponse'] as Json | undefined;
       if (response !== undefined && Object.keys(part).length === 1) {
         const id = typeof response['id'] === 'string' ? response['id'] : `part-${j}`;
-        byCall.set(id, [...(byCall.get(id) ?? []), JSON.stringify(part)]);
+        expect(answered.has(id), `contents[${i}]: call ${id} is answered by one functionResponse`).toBe(false);
+        answered.add(id);
+        zones.inside.push(JSON.stringify(part));
       } else zones.outside.push({ where: `contents[${i}].parts[${j}] (${String(content['role'])} ${Object.keys(part).join('+')})`, text: JSON.stringify(part) });
     });
-    for (const parts of byCall.values()) zones.inside.push(parts.join('\n'));
   });
   return zones;
+}
+
+/** Every `functionResponse` of a Google request, in order: the call it answers and what it says. */
+export function googleResponses(body: Json): { id: unknown; content: unknown }[] {
+  return list(body['contents']).flatMap((content) =>
+    list(content['parts']).flatMap((part) => {
+      const response = part['functionResponse'] as Json | undefined;
+      return response === undefined ? [] : [{ id: response['id'], content: (response['response'] as Json | undefined)?.['content'] }];
+    })
+  );
 }
 
 /** Chat completions (openai-compatible, Ollama): `role: tool` messages are inside; every other message is outside. */
@@ -127,4 +140,43 @@ export function expectOnlyInToolResults(zones: Zones, markers: string[], opts: {
       }
     }
   }
+}
+
+type Block = Record<string, unknown>;
+
+/**
+ * What the Messages API insists on, over a whole outgoing Anthropic body:
+ * every `tool_result` answers a `tool_use` of the assistant message just
+ * before it, every `tool_use` is answered in the message just after it,
+ * results come before any other block of their message, roles alternate, the
+ * request ends on a user message, and a `tool_use` that names the toolset is
+ * one of its members that is turned on (a phase-1 action). The one copy:
+ * the engine's tests and the server's use it.
+ */
+export function expectWellFormed(body: Record<string, unknown>): void {
+  const messages = body['messages'] as { role: string; content: Block[] | string }[];
+  const blocks = (i: number): Block[] => {
+    const content = messages[i]?.content;
+    return Array.isArray(content) ? content : [];
+  };
+  for (let i = 0; i < messages.length; i++) {
+    const uses = blocks(i).filter((b) => b['type'] === 'tool_use');
+    const results = blocks(i).filter((b) => b['type'] === 'tool_result');
+    if (messages[i]!.role === 'assistant') {
+      expect(results, `message ${i}: a tool_result in an assistant message`).toEqual([]);
+      const answered = blocks(i + 1).filter((b) => b['type'] === 'tool_result').map((b) => b['tool_use_id']);
+      expect(answered.slice().sort(), `message ${i}: every tool_use is answered in the next message`).toEqual(uses.map((b) => b['id']).sort());
+      for (const use of uses) {
+        if (use['toolset_name'] !== undefined) expect(COMPUTER_ACTIONS as readonly unknown[], `message ${i}: tool_use ${String(use['name'])} names the toolset`).toContain(use['name']);
+      }
+    } else {
+      expect(uses, `message ${i}: a tool_use in a user message`).toEqual([]);
+      const asked = messages[i - 1]?.role === 'assistant' ? blocks(i - 1).filter((b) => b['type'] === 'tool_use').map((b) => b['id']) : [];
+      for (const result of results) expect(asked, `message ${i}: tool_result ${String(result['tool_use_id'])} has its tool_use just before it`).toContain(result['tool_use_id']);
+      const firstOther = blocks(i).findIndex((b) => b['type'] !== 'tool_result');
+      if (firstOther !== -1) expect(blocks(i).slice(firstOther).filter((b) => b['type'] === 'tool_result'), `message ${i}: results come first`).toEqual([]);
+    }
+    if (i > 0) expect(messages[i]!.role, `message ${i}: roles alternate`).not.toBe(messages[i - 1]!.role);
+  }
+  expect(messages[messages.length - 1]!.role, 'the request ends with a user message').toBe('user');
 }

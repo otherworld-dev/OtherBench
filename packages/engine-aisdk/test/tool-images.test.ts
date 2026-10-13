@@ -35,8 +35,16 @@ describe('liveToolOutput', () => {
     });
   });
 
-  it('replaces it with a note for a model that does not', () => {
-    expect(liveToolOutput(shot, false)).toEqual({ type: 'content', value: [text('Screenshot, 2×1.'), text(IMAGE_OMITTED_NOTE)] });
+  it('replaces it with a note for a model that does not, and sends what is left as one text, in order', () => {
+    expect(liveToolOutput(shot, false)).toEqual({ type: 'text', value: `Screenshot, 2\u00d71.\n${IMAGE_OMITTED_NOTE}` });
+  });
+
+  it('sends content only when an image is actually in it', () => {
+    const items = [text('first'), { type: 'image', data: PNG_B64, mimeType: 'image/png' }, text('last')];
+    expect(liveToolOutput(items, true)).toMatchObject({ type: 'content' });
+    expect(liveToolOutput(items, false)).toEqual({ type: 'text', value: `first\n${IMAGE_OMITTED_NOTE}\nlast` });
+    // An image that fails the check is a note: nothing is left to need content.
+    expect(liveToolOutput([text('first'), { type: 'image', data: 'AAAA', mimeType: 'image/png' }], true)).toEqual({ type: 'text', value: `first\n${IMAGE_NOT_KEPT}` });
   });
 
   it('leaves text-only and plain results as the SDK would', () => {
@@ -62,14 +70,16 @@ describe('liveToolOutput', () => {
       ['image/png', `${PNG_B64}\n`, text(IMAGE_NOT_KEPT)],
     ];
     for (const [label, data, expected] of table) {
-      expect(liveToolOutput([{ type: 'image', data, mimeType: label }], true), `${label} ${data.slice(0, 12)}`).toEqual({ type: 'content', value: [expected] });
+      // A note left in place of the image is all there is: one text, not content.
+      const note = (expected as { type: string; text?: string }).type === 'text' ? (expected as { text: string }).text : null;
+      expect(liveToolOutput([{ type: 'image', data, mimeType: label }], true), `${label} ${data.slice(0, 12)}`).toEqual(note !== null ? { type: 'text', value: note } : { type: 'content', value: [expected] });
     }
   });
 
   it('never decodes an image over the cap', () => {
     const huge = 'A'.repeat(Math.ceil(REPLAYED_IMAGE_MAX_BYTES / 3) * 4 + 4);
     const from = vi.spyOn(Buffer, 'from');
-    expect(liveToolOutput([{ type: 'image', data: huge, mimeType: 'image/png' }], true)).toEqual({ type: 'content', value: [text(IMAGE_NOT_KEPT_LIMIT)] });
+    expect(liveToolOutput([{ type: 'image', data: huge, mimeType: 'image/png' }], true)).toEqual({ type: 'text', value: IMAGE_NOT_KEPT_LIMIT });
     expect(from).not.toHaveBeenCalled();
     from.mockRestore();
   });
@@ -125,7 +135,8 @@ function toolOutputs(messages: Awaited<ReturnType<typeof toModelMessages>>): unk
   return messages.filter((m) => m.role === 'tool').flatMap((m) => (m.content as { output: unknown }[]).map((c) => c.output));
 }
 
-const withNote = (note: string) => ({ type: 'content', value: [text('Screenshot, 2×1.'), text(note)] });
+/** A replayed screenshot that is not sent: its words and the note, as one text. */
+const withNote = (note: string) => ({ type: 'text', value: `Screenshot, 2\u00d71.\n${note}` });
 const withImage = (data: Buffer, mediaType = 'image/png') => ({ type: 'content', value: [text('Screenshot, 2×1.'), { type: 'image-data', data: data.toString('base64'), mediaType }] });
 const CAPS = { vision: true, tools: true, toolImages: true };
 const never = async (): Promise<Buffer> => {

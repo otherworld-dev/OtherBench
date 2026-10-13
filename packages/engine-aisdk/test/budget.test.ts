@@ -73,8 +73,12 @@ function shots(ids: string[], chatId = 'c'): CanonMessage[] {
   }));
 }
 
+/** Each tool result's items. A result left with no image goes as one `text` output (tool-images.ts): read here as that one item. */
 const outputs = (messages: Awaited<ReturnType<typeof toModelMessages>>): { type: string; value: { type: string; text?: string }[] }[] =>
-  messages.filter((m) => m.role === 'tool').flatMap((m) => (m.content as { output: never }[]).map((c) => c.output));
+  messages
+    .filter((m) => m.role === 'tool')
+    .flatMap((m) => (m.content as { output: { type: string; value: unknown } }[]).map((c) => c.output))
+    .map((o) => (o.type === 'text' ? { type: 'text', value: [{ type: 'text', text: o.value as string }] } : (o as { type: string; value: { type: string; text?: string }[] })));
 
 describe('tool images: the caps are decided from the references before any bytes are read', () => {
   it('reads at most three images for fifty references across many messages, and none for the rest', async () => {

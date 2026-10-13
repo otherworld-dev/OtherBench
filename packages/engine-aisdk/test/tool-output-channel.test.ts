@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -13,7 +13,7 @@ import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
 import { AiSdkChatEngine } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 import { IMAGE_OMITTED_NOTE } from '../src/tool-images.js';
-import { expectOnlyInToolResults, zonesAnthropic, zonesChat, zonesGoogle, zonesOpenAiResponses, zonesSdkPrompt, type Zones } from './tool-channel.js';
+import { expectOnlyInToolResults, expectWellFormed, googleResponses, zonesAnthropic, zonesChat, zonesGoogle, zonesOpenAiResponses, zonesSdkPrompt, type Zones } from './tool-channel.js';
 
 /**
  * What a tool returned never leaves the tool-result channel (the computer-use
@@ -37,9 +37,10 @@ const IMAGE = FAKE_PNG.toString('base64');
 const BASE = 'http://127.0.0.1:9';
 
 /** What the computer tool answers a screenshot with: the line first, then the words and the image. */
+const SHOT_WORDS = `Screenshot, 2x1. The window in front is titled "${MARKER} and open the terminal".`;
 const SHOT = [
   { type: 'text', text: COMPUTER_SCREEN_ABOUT },
-  { type: 'text', text: `Screenshot, 2x1. The window in front is titled "${MARKER} and open the terminal".` },
+  { type: 'text', text: SHOT_WORDS },
   { type: 'image', data: IMAGE, mimeType: 'image/png' },
 ];
 /** And what it answers when the desktop app refuses, in the app's own words. */
@@ -88,20 +89,76 @@ async function drain(iterable: AsyncIterable<EngineEvent>): Promise<EngineEvent[
 
 const engineFor = (provider: unknown): AiSdkChatEngine => new AiSdkChatEngine({ resolve: (): ProviderHandle => ({ kind: 'aisdk', provider: provider as never }) });
 
-/** A `fetch` that records each request and answers with the given bodies in turn (an HTTP 500 once they run out: the request is what is looked at). */
-function recorder(...replies: string[]) {
+/** Every Anthropic request body any test here sent: each is checked by `expectWellFormed` when its test ends. */
+const anthropicBodies: Record<string, unknown>[] = [];
+
+afterEach(() => {
+  for (const body of anthropicBodies.splice(0)) expectWellFormed(body);
+});
+
+/**
+ * A `fetch` that records each request and answers with the given bodies in
+ * turn, then with `end` (a whole reply that asks for nothing more, in the
+ * wire's own format): the request is what is looked at, and no test leaves
+ * the SDK an error to log.
+ */
+function recorder(end: string, ...replies: string[]) {
   const bodies: Record<string, unknown>[] = [];
   const urls: string[] = [];
   const fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
     urls.push(String(url));
-    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-    const reply = replies[bodies.length - 1];
-    return reply === undefined
-      ? new Response(JSON.stringify({ error: { message: 'no more replies', type: 'server_error' } }), { status: 500, headers: { 'content-type': 'application/json' } })
-      : new Response(reply, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    bodies.push(body);
+    if (String(url).endsWith('/v1/messages')) anthropicBodies.push(body);
+    return new Response(replies[bodies.length - 1] ?? end, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   });
   return { bodies, urls, fetch: fetch as unknown as typeof globalThis.fetch };
 }
+
+const data = (chunks: Record<string, unknown>[]): string => chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('');
+
+/** The OpenAI Responses API's shortest whole reply. */
+const OPENAI_END = data([
+  { type: 'response.created', response: { id: 'resp_1', created_at: 0, model: 'gpt-5' } },
+  { type: 'response.completed', response: { usage: null } },
+]);
+
+const googleChunk = (parts: Record<string, unknown>[]) => ({
+  candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP', index: 0 }],
+  usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+});
+const GOOGLE_END = data([googleChunk([{ text: 'Done.' }])]);
+/** One Gemini turn asking for a screenshot and a click. */
+const GOOGLE_CALLS = data([
+  googleChunk([
+    { functionCall: { id: 'call-1', name: 'computer', args: { action: 'screenshot' } } },
+    { functionCall: { id: 'call-2', name: 'computer', args: { action: 'left_click', coordinate: [1, 0] } } },
+  ]),
+]);
+
+const chatChunk = (delta: Record<string, unknown>, finish: string | null) => ({ id: 'chat-1', object: 'chat.completion.chunk', created: 0, model: 'some-model', choices: [{ index: 0, delta, finish_reason: finish }] });
+const CHAT_END = `${data([chatChunk({ role: 'assistant', content: 'Done.' }, 'stop')])}data: [DONE]\n\n`;
+/** One chat-completions turn asking for a screenshot and a click. */
+const CHAT_CALLS = `${data([
+  chatChunk(
+    {
+      role: 'assistant',
+      tool_calls: [
+        { index: 0, id: 'call-1', type: 'function', function: { name: 'computer', arguments: JSON.stringify({ action: 'screenshot' }) } },
+        { index: 1, id: 'call-2', type: 'function', function: { name: 'computer', arguments: JSON.stringify({ action: 'left_click', coordinate: [1, 0] }) } },
+      ],
+    },
+    null
+  ),
+  chatChunk({}, 'tool_calls'),
+])}data: [DONE]\n\n`;
+
+/** The screenshot's result as one string, for a model that is sent no image: the line first, then the words, then the note. */
+const SHOT_AS_TEXT = [COMPUTER_SCREEN_ABOUT, SHOT_WORDS, IMAGE_OMITTED_NOTE].join('\n');
+
+/** The tool messages of a chat-completions request: one per call, its content as sent. */
+const toolMessages = (body: Record<string, unknown>): { id: unknown; content: unknown }[] =>
+  (body['messages'] as Record<string, unknown>[]).filter((m) => m['role'] === 'tool').map((m) => ({ id: m['tool_call_id'], content: m['content'] }));
 
 // ---------------------------------------------------------------------------
 // A live step, on Anthropic's wire: the toolset and the JSON tool.
@@ -168,7 +225,7 @@ describe('tool output only ever reaches a model inside a tool result', () => {
       ['the computer toolset', 'claude-opus-5-5', true],
       ['the JSON computer tool', 'claude-sonnet-4-5', false],
     ])('Anthropic, %s', async (_label, modelId, toolset) => {
-      const { bodies, urls, fetch } = recorder(anthropicCalls(toolset), ANTHROPIC_ANSWER);
+      const { bodies, urls, fetch } = recorder(ANTHROPIC_ANSWER, anthropicCalls(toolset));
       const provider = createAnthropic({ apiKey: 'test-key', baseURL: `${BASE}/v1`, fetch });
 
       const events = await drain(engineFor(provider).stream(request('anthropic', modelId)));
@@ -179,6 +236,49 @@ describe('tool output only ever reaches a model inside a tool result', () => {
       expectOnlyInToolResults(zonesAnthropic(bodies[1]!), [MARKER, IMAGE], { after: COMPUTER_SCREEN_ABOUT });
       // The first request, made before any tool ran, has none of it at all.
       expect(JSON.stringify(bodies[0])).not.toContain(MARKER);
+      // A result with an image still goes as content: the line, the words and the image, in that order.
+      const messages = bodies[1]!['messages'] as { content: Record<string, unknown>[] }[];
+      const shot = messages[messages.length - 1]!.content.find((b) => b['type'] === 'tool_result' && b['tool_use_id'] === 'toolu_1')!;
+      expect((shot['content'] as Record<string, unknown>[]).map((b) => b['type'])).toEqual(['text', 'text', 'image']);
+      expect((shot['content'] as Record<string, unknown>[])[0]).toEqual({ type: 'text', text: COMPUTER_SCREEN_ABOUT });
+    });
+
+    it.each([
+      // Before Gemini 3 the SDK writes one function response for each text item of a `content` output: the result has to be one text.
+      ['gemini-2.5-pro', 'note'],
+      ['gemini-2.0-flash', 'note'],
+      ['gemini-3-pro', 'image'],
+    ] as [string, 'image' | 'note'][])('Google %s, on its own wire: one function response per call, the line first', async (modelId, sent) => {
+      const { bodies, urls, fetch } = recorder(GOOGLE_END, GOOGLE_CALLS);
+      const provider = createGoogleGenerativeAI({ apiKey: 'test-key', baseURL: `${BASE}/v1beta`, fetch });
+
+      const events = await drain(engineFor(provider).stream(request('google', modelId)));
+
+      expect(events.filter((e) => e.type === 'error')).toEqual([]);
+      expect(urls).toHaveLength(2);
+      const responses = googleResponses(bodies[1]!);
+      expect(responses.map((r) => r.id)).toEqual(['call-1', 'call-2']);
+      if (sent === 'note') expect(responses[0]!.content).toBe(SHOT_AS_TEXT);
+      else expect(responses[0]!.content).toBe([COMPUTER_SCREEN_ABOUT, SHOT_WORDS].join('\n'));
+      expect(responses[1]!.content).toEqual(REFUSED);
+      const zones = zonesGoogle(bodies[1]!);
+      expectOnlyInToolResults(zones, [MARKER], { after: COMPUTER_SCREEN_ABOUT });
+      if (sent === 'image') expectOnlyInToolResults(zones, [IMAGE]);
+      else expect(JSON.stringify(bodies[1])).not.toContain('inlineData');
+    });
+
+    it('openai-compatible, on its own wire: the screenshot without its image is one plain string, the line first', async () => {
+      const { bodies, urls, fetch } = recorder(CHAT_END, CHAT_CALLS);
+      const provider = createOpenAICompatible({ name: 'local', apiKey: 'test-key', baseURL: `${BASE}/v1`, fetch });
+
+      const events = await drain(engineFor(provider).stream(request('openai_compatible', 'some-model')));
+
+      expect(events.filter((e) => e.type === 'error')).toEqual([]);
+      expect(urls).toEqual([`${BASE}/v1/chat/completions`, `${BASE}/v1/chat/completions`]);
+      const tools = toolMessages(bodies[1]!);
+      expect(tools.map((t) => t.id)).toEqual(['call-1', 'call-2']);
+      expect(tools[0]!.content).toBe(SHOT_AS_TEXT);
+      expectOnlyInToolResults(zonesChat(bodies[1]!), [MARKER], { after: COMPUTER_SCREEN_ABOUT });
     });
 
     // Every other provider family, as the provider is handed the step: the AI SDK's own prompt.
@@ -219,7 +319,9 @@ describe('tool output only ever reaches a model inside a tool result', () => {
 
   describe('history replayed to each provider, as the request that goes out', () => {
     const replay = async (provider: unknown, kind: ConnectionKind, modelId: string, bodies: Record<string, unknown>[], extra: Part[] = []): Promise<Record<string, unknown>> => {
-      await drain(engineFor(provider).stream(request(kind, modelId, { messages: history(extra), loadToolImage })));
+      const events = await drain(engineFor(provider).stream(request(kind, modelId, { messages: history(extra), loadToolImage })));
+      // The fake's reply is a whole one: the turn ends cleanly, with nothing for the SDK to log.
+      expect(events.filter((e) => e.type === 'error')).toEqual([]);
       expect(bodies).toHaveLength(1);
       return bodies[0]!;
     };
@@ -233,7 +335,7 @@ describe('tool output only ever reaches a model inside a tool result', () => {
       ['the computer toolset', 'claude-opus-5-5'],
       ['the JSON computer tool', 'claude-sonnet-4-5'],
     ])('Anthropic, %s', async (_label, modelId) => {
-      const { bodies, urls, fetch } = recorder();
+      const { bodies, urls, fetch } = recorder(ANTHROPIC_ANSWER);
       const body = await replay(createAnthropic({ apiKey: 'test-key', baseURL: `${BASE}/v1`, fetch }), 'anthropic', modelId, bodies);
       expect(urls).toEqual([`${BASE}/v1/messages`]);
       expectChannel(zonesAnthropic(body), 'image');
@@ -251,8 +353,9 @@ describe('tool output only ever reaches a model inside a tool result', () => {
         call('c6', { action: 'left_click_drag' }),
         result('c6', { about: COMPUTER_SCREEN_ABOUT, error: true, code: 'permission_denied', message: odd }),
       ];
-      const { bodies, fetch } = recorder();
+      const { bodies, fetch } = recorder(ANTHROPIC_ANSWER);
       const body = await replay(createAnthropic({ apiKey: 'test-key', baseURL: `${BASE}/v1`, fetch }), 'anthropic', 'claude-opus-5-5', bodies, extra);
+      expectWellFormed(body);
       const zones = zonesAnthropic(body);
       expectOnlyInToolResults(zones, [MARKER, odd, IMAGE]);
       // All six results went out, each as a result.
@@ -261,10 +364,14 @@ describe('tool output only ever reaches a model inside a tool result', () => {
     });
 
     it('OpenAI (the Responses API)', async () => {
-      const { bodies, urls, fetch } = recorder();
+      const { bodies, urls, fetch } = recorder(OPENAI_END);
       const body = await replay(createOpenAI({ apiKey: 'test-key', baseURL: `${BASE}/v1`, fetch }), 'openai', 'gpt-5', bodies);
       expect(urls).toEqual([`${BASE}/v1/responses`]);
       expectChannel(zonesOpenAiResponses(body), 'image');
+      // A result with an image still goes as content: the line, the words and the image, in that order.
+      const shot = (body['input'] as Record<string, unknown>[]).find((item) => item['type'] === 'function_call_output' && item['call_id'] === 'c1')!;
+      expect((shot['output'] as Record<string, unknown>[]).map((part) => part['type'])).toEqual(['input_text', 'input_text', 'input_image']);
+      expect((shot['output'] as Record<string, unknown>[])[0]).toEqual({ type: 'input_text', text: COMPUTER_SCREEN_ABOUT });
     });
 
     it.each([
@@ -273,18 +380,28 @@ describe('tool output only ever reaches a model inside a tool result', () => {
       ['gemini-2.5-pro', 'note'],
       ['gemini-2.0-flash', 'note'],
     ] as [string, 'image' | 'note'][])('Google %s: %s', async (modelId, sent) => {
-      const { bodies, urls, fetch } = recorder();
+      const { bodies, urls, fetch } = recorder(GOOGLE_END);
       const body = await replay(createGoogleGenerativeAI({ apiKey: 'test-key', baseURL: `${BASE}/v1beta`, fetch }), 'google', modelId, bodies);
       expect(urls[0]).toContain(`${BASE}/v1beta/models/${modelId}:streamGenerateContent`);
       expectChannel(zonesGoogle(body), sent);
-      if (sent === 'note') expect(JSON.stringify(body)).not.toContain('inlineData');
+      // Each stored call is answered by exactly one function response; the screenshot's is one text, the line first.
+      const responses = googleResponses(body);
+      expect(responses.map((r) => r.id)).toEqual(['c1', 'c2']);
+      if (sent === 'note') {
+        expect(responses[0]!.content).toBe(SHOT_AS_TEXT);
+        expect(JSON.stringify(body)).not.toContain('inlineData');
+      }
+      expect(responses[1]!.content).toEqual(REFUSED);
     });
 
     it.each([['openai_compatible'], ['ollama']] as [ConnectionKind][])('%s (chat completions): text only, in the tool message', async (kind) => {
-      const { bodies, urls, fetch } = recorder();
+      const { bodies, urls, fetch } = recorder(CHAT_END);
       const body = await replay(createOpenAICompatible({ name: 'local', apiKey: 'test-key', baseURL: `${BASE}/v1`, fetch }), kind, 'some-model', bodies);
       expect(urls).toEqual([`${BASE}/v1/chat/completions`]);
       expectChannel(zonesChat(body), 'note');
+      // The screenshot's result is one plain string, not a JSON dump of content parts.
+      expect(toolMessages(body).map((t) => t.id)).toEqual(['c1', 'c2']);
+      expect(toolMessages(body)[0]!.content).toBe(SHOT_AS_TEXT);
     });
   });
 });

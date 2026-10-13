@@ -81,6 +81,22 @@ function checkLive(item: InlineToolImage): ValidatedToolImage {
 }
 
 /**
+ * A result's items as the output a provider is handed. `content` only when an
+ * image is actually sent: it is the one shape that carries one. A result left
+ * with text alone (no image, or a note in place of each) is ONE `text`
+ * output, its items joined by a line break in their order, so the line that
+ * says whose words they are stays first. Sent as `content`, such a result
+ * would be several function responses for one call on Google's models before
+ * Gemini 3 (the SDK writes one per text item) and a JSON dump of the parts on
+ * chat-completions providers; as `text` it is one response and one string
+ * everywhere.
+ */
+function contentOrText(value: ContentItem[]): Output {
+  if (value.some((item) => item.type !== 'text')) return { type: 'content', value };
+  return { type: 'text', value: value.map((item) => (item.type === 'text' ? item.text : '')).join('\n') };
+}
+
+/**
  * A tool's live output as the model gets it. An inline image goes through the
  * same validator that decides what is stored (`validateToolImage`): the type
  * comes from its bytes and the base64 sent is the canonical form of them, and
@@ -91,9 +107,8 @@ function checkLive(item: InlineToolImage): ValidatedToolImage {
  */
 export function liveToolOutput(output: unknown, imagesOk: boolean): Output {
   if (Array.isArray(output) && output.some(isInlineToolImage)) {
-    return {
-      type: 'content',
-      value: output.map((item): ContentItem => {
+    return contentOrText(
+      output.map((item): ContentItem => {
         if (isInlineToolImage(item)) {
           if (!imagesOk) return { type: 'text', text: IMAGE_OMITTED_NOTE };
           const checked = checkLive(item);
@@ -101,8 +116,8 @@ export function liveToolOutput(output: unknown, imagesOk: boolean): Output {
         }
         if (isTextItem(item)) return { type: 'text', text: item.text };
         return { type: 'text', text: JSON.stringify(item) };
-      }),
-    };
+      })
+    );
   }
   return typeof output === 'string' ? { type: 'text', value: output } : { type: 'json', value: (output ?? null) as JSONValue };
 }
@@ -257,7 +272,7 @@ export function replayToolOutput(result: unknown, isError: boolean, messageId: s
       } else if (isTextItem(item)) value.push({ type: 'text', text: item.text });
       else value.push({ type: 'text', text: JSON.stringify(item) });
     }
-    return { type: 'content', value };
+    return contentOrText(value);
   }
   // An error result goes as JSON, so a reference in it would put an attachment id in front of the model: it is a note instead.
   const plain = isError && Array.isArray(result) ? result.map((item) => (isToolImageRef(item) || isInlineToolImage(item) ? { type: 'text', text: IMAGE_NOT_SHOWN_NOTE } : item)) : result;
