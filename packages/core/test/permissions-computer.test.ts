@@ -292,9 +292,17 @@ describe('PermissionBroker and computer use', () => {
     expect(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL), policy(), ctx()).kind).toBe('ask');
   });
 
-  it("stores only the card's app on an always answer, whatever else the answer carries", () => {
+  it("stores an always answer only as exactly the card's app: one that carries anything else is refused and stores nothing", () => {
+    // Integration (cowork-parity step 5): an "always" is held to the same rule as the host-keyed ones
+    // (alwaysConstraintFor): exactly one key, the card's own. The provider denies a computer call whose
+    // answer the broker refuses (ruling 8), so a card that sent more runs nothing.
     const ask = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
-    broker.resolve(ask.request.id, { choice: 'always', constraint: { app: EXCEL, commandExact: 'x', pathPrefix: '/', host: 'example.com' } });
+    expect(() => broker.resolve(ask.request.id, { choice: 'always', constraint: { app: EXCEL, commandExact: 'x', pathPrefix: '/', host: 'example.com' } })).toThrow(
+      /names anything but the card's own app/
+    );
+    expect(store.grants.list()).toEqual([]);
+    const again = expectAsk(broker.decide(COMPUTER, click(), policy(), ctx()));
+    broker.resolve(again.request.id, { choice: 'always', constraint: { app: EXCEL } });
     const grants = store.grants.list();
     expect(grants).toHaveLength(1);
     expect(grants[0]).toMatchObject({ scope: 'always', chatId: null, profileId: 'profile-1', toolName: 'computer', source: 'computer' });

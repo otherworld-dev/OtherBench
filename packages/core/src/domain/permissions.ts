@@ -940,9 +940,12 @@ function grantConstraintMatches(grant: Grant, tool: ToolSpec, args: unknown, ctx
   const keys = constraintKeys(constraint);
   if (keys === null || keys.length === 0) return false;
   if (hostKeyed !== keys.includes('host')) return false;
-  // A computer grant is one app and nothing else (ruling C4): `{ app }`.
   if (computer !== keys.includes('app')) return false;
-  if (computer && keys.length !== 1) return false;
+  // A host-keyed grant is one host and nothing else, `{ host }`, and a
+  // computer grant one app and nothing else, `{ app }` (ruling C4): a second
+  // key a call could satisfy on its own (`{ host, commandExact: 'open' }`)
+  // makes it no grant at all, whatever the first key says.
+  if ((hostKeyed || computer) && keys.length !== 1) return false;
   if (shell && !keys.includes('commandExact') && !keys.includes('commandPrefix')) return false;
   return keys.every((key) => constraintKeyMatches(key, constraint[key], tool, args, ctx));
 }
