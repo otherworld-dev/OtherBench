@@ -12,7 +12,9 @@ import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
 import { createApp } from '../src/app.js';
-import { ComputerSessions } from '../src/computer/sessions.js';
+import { DESKTOP_NOT_AVAILABLE_REASON, type DesktopComputerDriver } from '../src/computer/desktop-driver.js';
+import { COMPUTER_END_UNCONFIRMED_REASON, ComputerSessions } from '../src/computer/sessions.js';
+import { connect, HELLO_OFF } from './computer/fake-shell.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
 import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase, withoutOwnPorts, type Container } from '../src/container.js';
 
@@ -612,6 +614,134 @@ describe('computer use wiring', () => {
     } finally {
       if (!closed) container.close();
     }
+  });
+
+  describe('with the desktop driver (the server was started by the shell)', () => {
+    // The shell here is the in-memory stand-in (computer/fake-shell.ts): no shell or desktop app is started.
+    const openOn = (driver: DesktopComputerDriver): Promise<Container> => createContainer({ dbPath: ':memory:', secretsPath: join(dir, 'secrets.json'), computer: driver });
+    const relayed = (container: Container): string[] =>
+      (container.toolProvider as unknown as { relayGruntTools: (policy: typeof on) => { name: string }[] }).relayGruntTools(on).map((t) => t.name);
+
+    it('offers no computer tool at all while the shell says computer use is off, which is how it ships', async () => {
+      const { shell, driver } = connect();
+      shell.hello = HELLO_OFF;
+      const container = await openOn(driver);
+      try {
+        seed(container, 'c1');
+        expect(container.computer).toBeInstanceOf(ComputerSessions);
+        // Before the shell has answered at all, and after it has said no.
+        for (const hello of [async () => {}, () => driver.hello()]) {
+          await hello();
+          expect(container.computer!.available()).toBe(false);
+          expect(await names(container, on)).not.toContain('computer');
+          expect(relayed(container)).not.toContain('computer');
+          // Whoever asks anyway is refused here, and the shell is asked nothing.
+          expect(await container.computer!.ensureSession('c1', 'One')).toEqual({ ok: false, reason: DESKTOP_NOT_AVAILABLE_REASON });
+        }
+        expect(shell.methods()).toEqual(['computer.hello']);
+      } finally {
+        container.close();
+      }
+    });
+
+    it('offers it once the shell says computer use is on, carries a call out over the channel, and stops offering it when the shell goes away', async () => {
+      const { shell, driver } = connect();
+      const container = await openOn(driver);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        seed(container, 'c1');
+        expect(await names(container, on)).not.toContain('computer');
+        await driver.hello();
+        expect(await names(container, on)).toContain('computer');
+        expect(relayed(container)).toContain('computer');
+        expect(await names(container, off)).not.toContain('computer');
+
+        const tool = (await container.toolProvider.listTools(on)).find((t) => t.name === 'computer')!;
+        expect(await tool.execute({ action: 'screenshot' }, ctxFor('c1'))).toMatchObject([{ type: 'text', text: COMPUTER_SCREEN_ABOUT }, { type: 'text' }, { type: 'image', mimeType: 'image/png' }]);
+        expect(shell.methods()).toEqual(['computer.hello', 'computer.start', 'computer.screenshot']);
+        expect(shell.sent('computer.start')).toEqual([{ chatId: 'c1', title: 'Chat c1' }]);
+        expect(container.computer!.activeChat()).toBe('c1');
+
+        shell.close();
+        await vi.waitFor(() => expect(container.computer!.available()).toBe(false));
+        expect(await names(container, on)).not.toContain('computer');
+        expect(relayed(container)).not.toContain('computer');
+      } finally {
+        // The session was still on record when the shell went: the close says it could not confirm its end.
+        container.close();
+        await vi.waitFor(() => expect(logged).toHaveBeenCalled());
+        logged.mockRestore();
+      }
+    });
+
+    it('an end the shell does not confirm holds every start back, until the shell says hello afresh', async () => {
+      const { shell, driver } = connect({ driver: { endTimeoutMs: 30 } });
+      const container = await openOn(driver);
+      const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        seed(container, 'c1', 'c2');
+        await driver.hello();
+        await container.computer!.ensureSession('c1', 'One');
+        await container.computer!.screenshot('c1');
+        shell.override = (method) => (method === 'computer.end' ? 'silent' : undefined);
+        await container.computer!.stop('c1');
+        expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
+        expect(shell.sent('computer.start')).toEqual([{ chatId: 'c1', title: 'One' }]);
+
+        await driver.hello();
+        expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: true });
+        expect(shell.sent('computer.start').at(-1)).toEqual({ chatId: 'c2', title: 'Two' });
+      } finally {
+        // The shell answers ends again, so the close's own end is confirmed and says nothing.
+        shell.override = () => undefined;
+        container.close();
+        logged.mockRestore();
+      }
+    });
+
+    it("a fresh hello from the shell drops the session the server had on record and cancels that chat's reply", async () => {
+      const { shell, driver } = connect();
+      const container = await openOn(driver);
+      try {
+        seed(container, 'c1', 'c2');
+        await driver.hello();
+        const cancel = vi.spyOn(container.turnRunner, 'cancel');
+        container.events!.emit({ type: 'turn-started', chatId: 'c1', messageIds: ['c1-reply'] });
+        await container.computer!.ensureSession('c1', 'One');
+        await container.computer!.screenshot('c1');
+        expect(container.events!.computerSessions()).toEqual([{ chatId: 'c1' }]);
+
+        await driver.hello();
+        expect(container.computer!.activeChat()).toBeNull();
+        expect(container.events!.computerSessions()).toEqual([]);
+        expect(cancel).toHaveBeenCalledWith('c1-reply');
+        // The shell dropped it itself when it read the hello: it is not asked to end anything.
+        expect(shell.sent('computer.end')).toEqual([]);
+        expect(await container.computer!.ensureSession('c2', 'Two')).toEqual({ ok: true });
+      } finally {
+        container.close();
+      }
+    });
+
+    it("the shell's own stop ends the server's session and cancels the reply", async () => {
+      const { shell, driver } = connect();
+      const container = await openOn(driver);
+      try {
+        seed(container, 'c1');
+        await driver.hello();
+        const cancel = vi.spyOn(container.turnRunner, 'cancel');
+        container.events!.emit({ type: 'turn-started', chatId: 'c1', messageIds: ['c1-reply'] });
+        await container.computer!.ensureSession('c1', 'One');
+        await container.computer!.screenshot('c1');
+        shell.sessions.delete('c1');
+        shell.event('computer.stopped', { chatId: 'c1', why: 'hotkey' });
+        await vi.waitFor(() => expect(container.computer!.activeChat()).toBeNull());
+        expect(cancel).toHaveBeenCalledWith('c1-reply');
+        expect(container.events!.computerSessions()).toEqual([]);
+      } finally {
+        container.close();
+      }
+    });
   });
 
   /**

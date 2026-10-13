@@ -335,9 +335,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const mcpManager = new McpServerManager(store, secrets);
   // Lazy: no Chromium starts until the first browser call.
   const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
-  // Computer use: the shell's driver when the CLI passed one. For tests only,
-  // GRUNT_COMPUTER_FAKE_DRIVER=1 wires a fake that touches nothing. Read once.
-  // With neither there is no driver, and no profile is offered the tool.
+  // Computer use: the shell's driver when the CLI passed one (the desktop
+  // channel exists: the shell started this server with --desktop-rpc). It is
+  // not available, and the tool is not offered, until the shell has said
+  // hello with computer use on. For tests only, GRUNT_COMPUTER_FAKE_DRIVER=1
+  // wires a fake that touches nothing. Read once. With neither (a server
+  // started by hand, one that takes sign-ins) there is no driver, and no
+  // profile is offered the tool.
   const fakeComputer = options.computer === undefined && process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1';
   if (fakeComputer) {
     console.warn('[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.');
@@ -348,7 +352,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // time anything calls cancelChat. The tool provider is given the sessions,
   // not the driver: every call goes through them, and the tool's own
   // "session stopped" hook (it forgets that chat's last screenshot) listens
-  // to them, so it hears the ends the server makes itself too.
+  // to them, so it hears the ends the server makes itself too. The sessions
+  // also take the desktop driver's word that the shell started over
+  // (`onReset`), which the fake has no need to give.
   const computer = computerDriver
     ? new ComputerSessions(computerDriver, {
         emit: (e) => events.emit(e),

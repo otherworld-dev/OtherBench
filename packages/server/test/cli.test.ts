@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
@@ -254,6 +255,75 @@ describe('runServe desktop mode', () => {
     expect(io.writes).toEqual([]);
     expect(deps.fakeServerHandle.close).not.toHaveBeenCalled();
     expect(io.exit).not.toHaveBeenCalled();
+  });
+});
+
+describe('runServe with the desktop channel (--desktop-rpc)', () => {
+  /** The driver `runServe` handed to `createContainer`, if any. Nothing here is a shell: stdin and stdout are in-memory. */
+  const driverOf = (deps: ReturnType<typeof fakeDeps>): ComputerDriver | undefined =>
+    (deps.createContainer.mock.calls[0] as unknown as [{ computer?: ComputerDriver }])[0].computer;
+
+  it('parses --desktop-rpc, off by default', () => {
+    expect(parseServeArgs([]).desktopRpc).toBe(false);
+    expect(parseServeArgs(['--announce', '--desktop-rpc']).desktopRpc).toBe(true);
+  });
+
+  it('says hello to the shell after the announce line and hands the container a driver that is not available yet', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT}}\n`, 'GRUNT-RPC {"id":1,"method":"computer.hello","params":{}}\n']);
+    const computer = driverOf(deps)!;
+    expect(computer.available()).toBe(false);
+    expect(computer.reservedKeys()).toBeNull();
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":["Ctrl+Shift+Space"]}}\n');
+    await vi.waitFor(() => expect(computer.available()).toBe(true));
+    expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']);
+  });
+
+  it('a shell that says computer use is off, as it ships, leaves the driver unavailable, and it is sent nothing more', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":false,"shortcuts":["Ctrl+Shift+Space"]}}\n');
+    await vi.waitFor(() => expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']));
+    expect(computer.available()).toBe(false);
+    expect((await computer.ensureSession('c', 'Budget')).ok).toBe(false);
+    expect(io.writes).toHaveLength(2);
+  });
+
+  it('without --desktop-rpc, or without --announce, gives the container no driver and writes nothing more', async () => {
+    for (const argv of [
+      ['--port', '0', '--announce'],
+      ['--port', '0', '--desktop-rpc'],
+    ]) {
+      const deps = fakeDeps();
+      const io = fakeStdio();
+      await runServe(argv, { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+      expect(driverOf(deps)).toBeUndefined();
+      expect(io.writes.filter((w) => w.startsWith('GRUNT-RPC'))).toEqual([]);
+    }
+  });
+
+  it('still closes and exits when stdin closes, and the driver is not available from then on', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":[]}}\n');
+    await vi.waitFor(() => expect(computer.available()).toBe(true));
+
+    io.stdin.end();
+    await tick();
+
+    expect(deps.fakeServerHandle.close).toHaveBeenCalledTimes(1);
+    expect(deps.containerClose).toHaveBeenCalledTimes(1);
+    expect(io.exit).toHaveBeenCalledWith(0);
+    expect(computer.available()).toBe(false);
+    expect(computer.reservedKeys()).toBeNull();
+    expect(io.writes).toHaveLength(2);
   });
 });
 
