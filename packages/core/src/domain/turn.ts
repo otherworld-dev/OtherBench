@@ -1204,6 +1204,9 @@ export class TurnRunner {
     // files as the engines will, newest first, each attachment once. A file
     // sent as its text is held to it too: one that isn't among the newest is
     // left out with the same note the engines give, not sent as text instead.
+    // The other way round as well: once a file is text the engines no longer
+    // count it, so an image or a PDF past the window is left out here too,
+    // or older images would ride on the slots the newer files' text took.
     const counted = new Set<string>();
     for (let m = messages.length - 1; m >= 0 && counted.size < MAX_REQUEST_ATTACHMENTS; m--) {
       const parts = messages[m]!.role === 'system' ? [] : messages[m]!.parts;
@@ -1213,13 +1216,14 @@ export class TurnRunner {
       }
     }
     const next = messages.map((message) => {
-      if (!message.parts.some((p) => p.type === 'file')) return message;
+      if (message.role === 'system' || !message.parts.some((p) => p.type === 'file' || p.type === 'image')) return message;
       const parts = message.parts.map((part): Part => {
+        if (part.type === 'image') return counted.has(part.attachmentId) ? part : { type: 'text', text: omissionNote('over-budget') };
         if (part.type !== 'file') return part;
-        if (pdfNative && part.mime === 'application/pdf') return part;
         const attachment = this.store.attachments.get(part.attachmentId);
         const filename = attachment?.filename ?? part.filename;
         if (!counted.has(part.attachmentId)) return { type: 'text', text: omissionNote('over-budget', filename) };
+        if (pdfNative && part.mime === 'application/pdf') return part;
         if (attachment?.extractedText) return { type: 'text', text: fencedFileText(filename, attachment.extractedText) };
         if (!seen.has(part.attachmentId)) {
           seen.add(part.attachmentId);

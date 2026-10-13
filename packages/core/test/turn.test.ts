@@ -1126,6 +1126,40 @@ describe('TurnRunner sends attached files to the model as text', () => {
     expect(JSON.stringify(engine.requests[0]!.messages)).toContain('text of doc-00');
   });
 
+  it('leaves out older images (and PDFs) past the newest 20 too, when newer files sent as text took the slots (integration)', async () => {
+    // The other direction of the cap: once the files are text the engines count only the images left, so five older
+    // images beside twenty newer Word files would otherwise send twenty-five attachments.
+    const docs = Array.from({ length: MAX_REQUEST_ATTACHMENTS }, (_, i) => `doc-${String(i).padStart(2, '0')}`);
+    const images = ['img-a', 'img-b', 'img-c', 'img-d', 'img-e'];
+    const store = chatWith(
+      ...docs.map((id) => makeAttachment({ id, chatId: 'chat-1', filename: `${id}.docx`, mime: DOCX, extractedText: `text of ${id}` })),
+      ...images.map((id) => makeAttachment({ id, chatId: 'chat-1', filename: `${id}.png`, mime: 'image/png', extractedText: null })),
+      makeAttachment({ id: 'old-pdf', chatId: 'chat-1', filename: 'old.pdf', mime: 'application/pdf', extractedText: 'old pdf text' }),
+    );
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    const vision = makeResolvedProfile({ model: makeModel({ supportsVision: true }) });
+    const first = await runner.run({
+      chatId: 'chat-1', parentId: null,
+      userParts: [{ type: 'text', text: 'old' }, ...images.map((id): Part => ({ type: 'image', attachmentId: id, mime: 'image/png' })), file('old-pdf', 'application/pdf', 'old.pdf')],
+      profiles: [vision],
+    });
+    await flush();
+    // The first request is within the cap: the images go as images.
+    expect(engine.requests[0]!.messages.at(-1)!.parts.filter((p) => p.type === 'image')).toHaveLength(5);
+    await runner.run({ chatId: 'chat-1', parentId: first.assistantMessageIds[0]!, userParts: [{ type: 'text', text: 'new' }, ...docs.map((id) => file(id, DOCX, `${id}.docx`))], profiles: [vision] });
+    await flush();
+
+    const messages = engine.requests[1]!.messages;
+    const parts = messages.flatMap((m) => m.parts);
+    expect(parts.filter((p) => p.type === 'image' || p.type === 'file')).toEqual([]);
+    for (const id of docs) expect(JSON.stringify(messages)).toContain(`text of ${id}`);
+    const old = messages.find((m) => m.parts.some((p) => p.type === 'text' && p.text === 'old'))!;
+    expect(old.parts.filter((p) => p.type === 'text' && p.text === omissionNote('over-budget'))).toHaveLength(5);
+    expect(old.parts).toContainEqual({ type: 'text', text: omissionNote('over-budget', 'old.pdf') });
+    expect(JSON.stringify(messages)).not.toContain('old pdf text');
+  });
+
   it('names every unread file once, as "them"', async () => {
     const store = chatWith(
       makeAttachment({ id: 'a', chatId: 'chat-1', filename: 'a.pptx', mime: 'application/octet-stream', extractedText: null }),
