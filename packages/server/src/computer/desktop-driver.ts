@@ -119,6 +119,8 @@ interface Session {
 
 /** What `ask` gives when the session ended before the shell answered. */
 const ENDED = Symbol('the session ended');
+/** What `ask` gives when the session had ended before the request could be written: nothing was sent. */
+const UNSENT = Symbol('the session had ended, nothing was sent');
 
 type Turn = 'go' | 'full' | 'ended';
 
@@ -354,12 +356,12 @@ export class DesktopComputerDriver implements ComputerDriver {
       session.shot = null;
       let answer: unknown;
       try {
-        answer = await this.ask(session, 'computer.screenshot', { chatId, session: session.token }, this.callTimeoutMs);
+        answer = await this.ask(chatId, session, 'computer.screenshot', { chatId, session: session.token }, this.callTimeoutMs);
       } catch (err) {
         throw new Error(await this.failed(chatId, err));
       }
       // The session ended while the shell was taking it: it is nobody's to look at.
-      if (answer === ENDED || this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
+      if (answer === ENDED || answer === UNSENT || this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
       const read = this.readScreenshot(answer);
       if (read === null) throw new Error(await this.drift(chatId, SCREENSHOT_UNREADABLE_REASON));
       session.shot = { width: read.width, height: read.height };
@@ -372,11 +374,11 @@ export class DesktopComputerDriver implements ComputerDriver {
     return this.inTurn(session, async () => {
       let answer: unknown;
       try {
-        answer = await this.ask(session, 'computer.cursor', { chatId, session: session.token }, this.callTimeoutMs);
+        answer = await this.ask(chatId, session, 'computer.cursor', { chatId, session: session.token }, this.callTimeoutMs);
       } catch (err) {
         throw new Error(await this.failed(chatId, err));
       }
-      if (answer === ENDED || this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
+      if (answer === ENDED || answer === UNSENT || this.sessions.get(chatId) !== session) throw new Error(COMPUTER_NO_SESSION_REASON);
       const { x, y } = isRecord(answer) ? answer : { x: null, y: null };
       if (!isPixel(x, 0) || !isPixel(y, 0)) throw new Error(await this.drift(chatId, CURSOR_UNREADABLE_REASON));
       return { x, y };
@@ -411,11 +413,11 @@ export class DesktopComputerDriver implements ComputerDriver {
       }
       let answer: unknown;
       try {
-        answer = await this.ask(session, 'computer.target', params, this.callTimeoutMs);
+        answer = await this.ask(chatId, session, 'computer.target', params, this.callTimeoutMs);
       } catch (err) {
         throw new Error(await this.failed(chatId, err));
       }
-      if (answer === ENDED || this.sessions.get(chatId) !== session) return { refuse: COMPUTER_NO_SESSION_REASON };
+      if (answer === ENDED || answer === UNSENT || this.sessions.get(chatId) !== session) return { refuse: COMPUTER_NO_SESSION_REASON };
       if (!isRecord(answer)) return { refuse: await this.drift(chatId, TARGET_UNREADABLE_REASON) };
       // Not a check: the facts go to core as the shell sent them, and core judges them.
       return answer as unknown as ComputerTarget | ComputerRefusal;
@@ -452,7 +454,7 @@ export class DesktopComputerDriver implements ComputerDriver {
       let answer: unknown;
       try {
         // The action and the expectation as handed: this side adds nothing to them and takes nothing away.
-        answer = await this.ask(session, 'computer.act', { chatId, session: session.token, action, expect }, this.actTimeoutMs);
+        answer = await this.ask(chatId, session, 'computer.act', { chatId, session: session.token, action, expect }, this.actTimeoutMs);
       } catch (err) {
         if (noSession(err)) return refusal(await this.drift(chatId, DESKTOP_SESSION_GONE_REASON));
         if (!outcomeUnknown(err)) return refusal(failureText(err));
@@ -461,6 +463,8 @@ export class DesktopComputerDriver implements ComputerDriver {
         // The shell may still be at it. The session is ended, so that nothing more lands after this action.
         return refusal(await this.drift(chatId, `${failureText(err)} ${ACT_UNKNOWN}`));
       }
+      // The session ended before the request was written: nothing was done.
+      if (answer === UNSENT) return refusal(COMPUTER_NO_SESSION_REASON);
       // The session ended while the shell was working: its answer, if it ever comes, is not this session's.
       if (answer === ENDED || this.sessions.get(chatId) !== session) return refusal(`${ACT_SESSION_ENDED} ${ACT_UNKNOWN}`);
       if (isRecord(answer) && answer['ok'] === true) return { ok: true };
@@ -584,8 +588,16 @@ export class DesktopComputerDriver implements ComputerDriver {
    * Sends one of the chat's calls and waits for the shell's answer, or for
    * the session to be forgotten here, whichever comes first (`ENDED`): after
    * Stop nobody waits on the shell for what it was doing.
+   *
+   * The one place a request for a session is written. Every caller checked
+   * the session and then awaited (its turn, at least), and an end can come in
+   * that gap: so the session is checked again here, synchronously, right
+   * before the write. One that is no longer the chat's live session gets
+   * `UNSENT` and nothing is written, so no request with its token follows
+   * the `computer.end` that ended it.
    */
-  private ask(session: Session, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  private ask(chatId: string, session: Session, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+    if (this.sessions.get(chatId) !== session) return Promise.resolve(UNSENT);
     const asked = this.channel.call(method, params, timeoutMs);
     // If the session ends first, an answer or a failure that comes later is nobody's.
     asked.catch(() => {});

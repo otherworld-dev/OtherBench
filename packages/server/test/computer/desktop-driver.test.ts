@@ -21,7 +21,7 @@ import {
   START_LATE_WATCH_MS,
   START_TIMEOUT_MS,
 } from '../../src/computer/desktop-driver.js';
-import { COMPUTER_END_TIMEOUT_MS, COMPUTER_NO_SESSION_REASON } from '../../src/computer/sessions.js';
+import { COMPUTER_END_TIMEOUT_MS, COMPUTER_NO_SESSION_REASON, ComputerSessions } from '../../src/computer/sessions.js';
 import { connect, connected, endedChats, FakeShell, HELLO_OFF, HELLO_ON, pngOf, SHELL_NO_SESSION, shotOf, type ShellAnswer } from './fake-shell.js';
 
 /**
@@ -751,6 +751,66 @@ describe('DesktopComputerDriver: ending a session', () => {
     shell.answer(shell.asked.find((r) => r.method === 'computer.act')!.id, { ok: true });
     shell.close();
     await Promise.allSettled(acts);
+  });
+});
+
+describe('DesktopComputerDriver: nothing is written for a session once it has ended, however close the end comes', () => {
+  /** The calls a chat can make, each started and left unawaited, so that an end can come in the same tick. */
+  const calls: [string, string, (d: DesktopComputerDriver) => Promise<unknown>][] = [
+    ['an act', 'computer.act', (d) => d.act('c', TYPE, EXPECT)],
+    ['a target', 'computer.target', (d) => d.target('c', 'foreground')],
+    ['a screenshot', 'computer.screenshot', (d) => d.screenshot('c').then(() => 'shot', (e: Error) => e.message)],
+    ['a cursor read', 'computer.cursor', (d) => d.cursorPosition('c').then(() => 'cursor', (e: Error) => e.message)],
+  ];
+
+  for (const [label, method, call] of calls) {
+    it(`${label}, then Stop in the same tick: the end goes out, and the call after it never does`, async () => {
+      const { driver, shell } = await inSession();
+      const token = shell.tokenOf('c');
+      const before = shell.lines.length;
+      const calling = call(driver);
+      const ending = driver.endSession('c');
+      const answer = await calling;
+      await ending;
+      const written = shell.asked.slice(shell.asked.length - (shell.lines.length - before));
+      expect(written.map((r) => r.method)).toEqual(['computer.end']);
+      expect(written[0]!.params).toEqual({ chatId: 'c', session: token });
+      expect(shell.sent(method).filter((p) => (p as { session?: string }).session === token).length).toBe(method === 'computer.screenshot' ? 1 : 0);
+      expect(JSON.stringify(answer)).toContain(COMPUTER_NO_SESSION_REASON);
+    });
+  }
+
+  it("the same when the reply's end ends a session nobody used, in the same tick", async () => {
+    const made = await connected();
+    const sessions = new ComputerSessions(made.driver, { emit: () => {}, cancelChat: () => {} }, { endTimeoutMs: 200 });
+    expect(await sessions.ensureSession('c', 'Budget')).toEqual({ ok: true });
+    const before = made.shell.lines.length;
+    // Asked of the driver directly, so the server's own record still says the session was never used.
+    const acting = made.driver.act('c', TYPE, EXPECT);
+    sessions.replyEnded('c');
+    expect(await acting).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    await vi.waitFor(() => expect(made.shell.lines.length).toBeGreaterThan(before));
+    expect(made.shell.lines.slice(before).map((l) => JSON.parse(l.slice(RPC_PREFIX.length)).method)).toEqual(['computer.end']);
+  });
+
+  it('the same when the channel is lost in the gap: the call is told there is no session, not that it may have been done', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { driver, shell } = await inSession();
+    const before = shell.lines.length;
+    const acting = driver.act('c', TYPE, EXPECT);
+    shell.breakPipe();
+    expect(await acting).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    expect(shell.lines.length).toBe(before);
+  });
+
+  it('the same when another call of the chat drifts and ends the session while this one waits its turn', async () => {
+    const { driver, shell } = await inSession();
+    shell.target = 'not an object';
+    const looking = driver.target('c', 'foreground');
+    const acting = driver.act('c', TYPE, EXPECT);
+    expect((await looking) as unknown).toEqual({ refuse: `The desktop app's answer about the window couldn't be read. ${DESKTOP_ENDED_AFTER}` });
+    expect(await acting).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    expect(shell.sent('computer.act')).toEqual([]);
   });
 });
 
