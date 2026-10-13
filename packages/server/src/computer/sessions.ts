@@ -352,14 +352,16 @@ export class ComputerSessions implements ComputerDriver {
    * The driver ended `chatId`'s session itself (`ComputerDriverLosses`). The
    * record goes and the end is announced, as for any end; the driver is
    * asked to confirm it like any other end, so one the shell does not
-   * confirm holds every start back. The chat's replies go on: the call that
-   * met the trouble is told so, and its next one needs a new start, with the
-   * native dialog again.
+   * confirm holds every start back. And, as for a stop from the shell, the
+   * chat's running replies are cancelled: a reply does not go on without the
+   * session it was using (a new one would need the native dialog again).
+   * Only that chat's.
    */
   driverLost(chatId: string): void {
     if (this.disposed) return;
     if (this.release(chatId)) this.notifyStopped(chatId, 'button');
     if (!this.heldByAnother(chatId)) void this.endOnDriver(chatId);
+    this.cancelReplies(chatId);
   }
 
   async screenshot(chatId: string): Promise<ComputerScreenshot> {

@@ -220,14 +220,14 @@ describe('an action the shell does not answer in time', () => {
     expect(await sessions.act('c', CLICK, EXPECT)).toEqual({ ok: false, reason: DESKTOP_NO_SCREENSHOT_REASON });
   });
 
-  it('is ended in the server as well: the record goes, the end is announced, and an OK that comes late changes nothing', async () => {
+  it("is ended in the server as well: the record goes, the end is announced, the chat's replies are cancelled, and an OK that comes late changes nothing", async () => {
     const { sessions, shell, events, cancelChat } = await inControl({ driver: { actTimeoutMs: 30 } });
     shell.override = silentOn('computer.act');
     expect((await sessions.act('c', TYPE, EXPECT)).ok).toBe(false);
     expect(sessions.activeChat()).toBeNull();
     expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c', active: false });
-    // The reply goes on: it is told what happened, and its next call asks the person again.
-    expect(cancelChat).not.toHaveBeenCalled();
+    // As for a stop from the shell: the reply does not go on without the session it was using.
+    expect(cancelChat.mock.calls).toEqual([['c']]);
     shell.override = () => undefined;
     shell.answer(shell.idOf('computer.act'), { ok: true });
     await tick();
@@ -301,11 +301,12 @@ describe('the shell is the source of truth: what the server believed is dropped 
     ['an action', (s: ComputerSessions) => s.act('c', TYPE, EXPECT).then((a) => (a.ok ? 'done' : a.reason))],
   ] as const) {
     it(`a token the shell says is not its live session, on ${label}: the session is ended, and the next call needs a new start with a new token`, async () => {
-      const { sessions, shell, events } = await inControl();
+      const { sessions, shell, events, cancelChat } = await inControl();
       const old = shell.tokenOf('c');
       forget(shell);
       expect(await call(sessions)).toBe(`${DESKTOP_SESSION_GONE_REASON} ${DESKTOP_ENDED_AFTER}`);
       expect(sessions.activeChat()).toBeNull();
+      expect(cancelChat.mock.calls).toEqual([['c']]);
       expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c', active: false });
       expect(endedChats(shell)[0]).toBe('c');
       expect(await sessions.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
@@ -322,9 +323,11 @@ describe('the shell is the source of truth: what the server believed is dropped 
 
   /** Everything the server believed of every session is gone, and nothing more is sent. */
   async function expectAllLost(made: Awaited<ReturnType<typeof inControl>>, writesAfter: number): Promise<void> {
-    const { sessions, events, driver, shell } = made;
+    const { sessions, events, driver, shell, cancelChat } = made;
     await vi.waitFor(() => expect(sessions.activeChat()).toBeNull());
     expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c', active: false });
+    // The replies of the chat that held the session are cancelled, and no other chat's.
+    expect(cancelChat.mock.calls).toEqual([['c']]);
     expect(sessions.available()).toBe(false);
     expect(driver.reservedKeys()).toBeNull();
     expect(await sessions.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });

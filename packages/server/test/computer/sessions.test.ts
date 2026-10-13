@@ -1347,7 +1347,7 @@ describe('a driver that ended a session itself (it could no longer trust it)', (
     return { ...setup(driver), driver };
   }
 
-  it('drops the record, announces the end, tells the stopped listeners and asks the driver to confirm the end; the reply goes on', async () => {
+  it("drops the record, announces the end, tells the stopped listeners and asks the driver to confirm the end, and cancels the chat's replies", async () => {
     const { sessions, driver, events, stopped, cancelChat } = losing();
     await sessions.ensureSession('c1', 'One');
     await sessions.screenshot('c1');
@@ -1357,7 +1357,8 @@ describe('a driver that ended a session itself (it could no longer trust it)', (
     expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c1', active: false });
     expect(stopped).toEqual([['c1', 'button']]);
     expect(end.mock.calls).toEqual([['c1']]);
-    expect(cancelChat).not.toHaveBeenCalled();
+    // As for a stop from the shell: the reply that was using the session does not go on without it.
+    expect(cancelChat.mock.calls).toEqual([['c1']]);
     // The chat's next call needs a new start, with the dialog again.
     expect(await sessions.act('c1', CLICK, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
     expect(await sessions.ensureSession('c1', 'One')).toEqual({ ok: true });
@@ -1376,8 +1377,8 @@ describe('a driver that ended a session itself (it could no longer trust it)', (
     expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: true });
   });
 
-  it("a chat that is not the one in control: nothing of the chat in control changes, and the driver's end is not asked of it", async () => {
-    const { sessions, driver, events } = losing();
+  it("a chat that is not the one in control: nothing of the chat in control changes, the driver's end is not asked of it, and only the lost chat's replies are cancelled", async () => {
+    const { sessions, driver, events, cancelChat } = losing();
     await sessions.ensureSession('c1', 'One');
     const end = vi.spyOn(driver, 'endSession');
     const before = events.length;
@@ -1385,6 +1386,7 @@ describe('a driver that ended a session itself (it could no longer trust it)', (
     expect(sessions.activeChat()).toBe('c1');
     expect(events).toHaveLength(before);
     expect(end).not.toHaveBeenCalled();
+    expect(cancelChat.mock.calls).toEqual([['c2']]);
   });
 
   it('stops listening when the server shuts down', () => {
