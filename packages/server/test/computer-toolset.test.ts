@@ -122,10 +122,14 @@ async function setup(...replies: string[]) {
       contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
     },
   };
+  // Every profile is also offered Grunt's thread tools (spec 2026-10-12-thread-cards-design); they go out as ordinary
+  // JSON tools beside computer use, and the checks below look at what is sent besides them.
+  const listed = await provider.listTools(policy);
+  const threadNames = listed.filter((t) => t.source === 'thread').map((t) => t.name);
   const request: EngineRequest = {
     profile,
     messages: [{ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', parts: [{ type: 'text', text: 'click it' }], status: 'complete', error: null, producedBy: null, createdAt: 0 }],
-    tools: await provider.listTools(policy),
+    tools: listed,
     signal: new AbortController().signal,
     chatId: 'chat-1',
     messageId: 'msg-1',
@@ -137,7 +141,9 @@ async function setup(...replies: string[]) {
     for await (const event of engine.stream(request)) events.push(event);
     return events;
   };
-  return { store, driver, provider, requests, bodies, urls, run };
+  /** The tools a request body sends, besides Grunt's thread tools. */
+  const toolsSent = (body: Record<string, unknown>): Block[] => (body['tools'] as Block[]).filter((t) => !threadNames.includes(String(t['name'])));
+  return { store, driver, provider, requests, bodies, urls, run, threadNames, toolsSent };
 }
 
 /** The `tool_result` blocks of the last message of an outgoing request. */
@@ -162,7 +168,8 @@ describe("Anthropic's computer toolset through the tool provider and the broker"
     const made = await setup(ANSWER);
     await made.run();
     expect(made.urls).toEqual(['http://127.0.0.1:9/v1/messages']);
-    const tools = made.bodies[0]!['tools'] as Block[];
+    const tools = made.toolsSent(made.bodies[0]!);
+    expect(made.threadNames.length).toBeGreaterThan(0);
     expect(tools.map((t) => t['type'])).toEqual(['computer_toolset_20260801']);
     expect(tools.filter((t) => t['name'] === 'computer')).toEqual([]);
     expect(made.driver.started).toEqual([]);
@@ -330,7 +337,7 @@ describe("Anthropic's computer toolset through the tool provider and the broker"
       const events = await made.run();
 
       // Which way the model was given the tool.
-      const tools = made.bodies[0]!['tools'] as Block[];
+      const tools = made.toolsSent(made.bodies[0]!);
       expect(tools).toHaveLength(1);
       expect(tools[0]!['type'] === 'computer_toolset_20260801').toBe(model === TOOLSET_MODEL);
       expect(tools[0]!['name'] === 'computer').toBe(model === JSON_TOOL_MODEL);
