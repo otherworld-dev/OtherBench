@@ -48,6 +48,17 @@ export interface ComputerSessionsOptions {
   endTimeoutMs?: number;
 }
 
+/**
+ * What a driver may offer beside the port: its word that the desktop app
+ * holds no session at all any more. The desktop driver gives it whenever the
+ * shell answers a hello (desktop-driver.ts): a shell that answers one has
+ * dropped every session it had. The fake driver has no such thing to say.
+ */
+export interface ComputerDriverResets {
+  /** Returns the unsubscribe. */
+  onReset(cb: () => void): () => void;
+}
+
 /** Cancels each reply the app-wide stream says is running in `chatId`. */
 export function cancelChatReplies(events: AppEventBus, turnRunner: Pick<TurnRunner, 'cancel'>, chatId: string): void {
   for (const turn of events.runningTurns()) if (turn.chatId === chatId) turnRunner.cancel(turn.messageId);
@@ -125,7 +136,9 @@ interface Start {
  * before the driver is asked to start anything, for any chat, every end
  * still in flight is waited for and every unconfirmed one is tried again;
  * unless they all succeed the start is refused. Until then no chat is in
- * control here, so nothing is looked at or done for any chat either.
+ * control here, so nothing is looked at or done for any chat either. The
+ * one other thing that confirms such an end is the driver's word that the
+ * shell holds no session at all any more (`shellReset`).
  *
  * A start that outlives what asked for it is ended rather than kept: when
  * Stop comes, the shell says stopped, the server shuts down or the chat's
@@ -161,13 +174,15 @@ export class ComputerSessions implements ComputerDriver {
   private readonly endTimeoutMs: number;
   private readonly stoppedListeners = new Set<StoppedListener>();
   private readonly offStopped: () => void;
+  private readonly offReset: () => void;
 
   constructor(
-    private readonly driver: ComputerDriver,
+    private readonly driver: ComputerDriver & Partial<ComputerDriverResets>,
     private readonly deps: ComputerSessionsDeps,
     options: ComputerSessionsOptions = {}
   ) {
     this.endTimeoutMs = options.endTimeoutMs ?? COMPUTER_END_TIMEOUT_MS;
+    this.offReset = typeof driver.onReset === 'function' ? driver.onReset(() => this.shellReset()) : () => {};
     this.offStopped = driver.onStopped((chatId, why) => {
       // The shell's own word that this chat's session is over.
       this.unconfirmed.delete(chatId);
@@ -268,6 +283,25 @@ export class ComputerSessions implements ComputerDriver {
     if (holder !== null && this.chatIsGone(holder)) await this.stop(holder);
   }
 
+  /**
+   * The driver's word that the desktop app holds no session at all any more
+   * (`ComputerDriverResets`). So every end this server could not confirm is
+   * confirmed, and a session, or a start, it still has on record is over:
+   * the record is cleared, the end announced, the stopped listeners told and
+   * the chat's replies cancelled, as when the shell itself says stopped. The
+   * driver is not asked to end anything: there is nothing there to end. An
+   * OK that still comes for a start that was waiting is ended like any other
+   * late one.
+   */
+  shellReset(): void {
+    if (this.disposed) return;
+    this.unconfirmed.clear();
+    const chatId = this.holder();
+    if (chatId === null) return;
+    if (this.release(chatId)) this.notifyStopped(chatId, 'quit');
+    this.cancelReplies(chatId);
+  }
+
   async screenshot(chatId: string): Promise<ComputerScreenshot> {
     if (this.use(chatId) === null) throw new Error(COMPUTER_NO_SESSION_REASON);
     return this.driver.screenshot(chatId);
@@ -311,6 +345,7 @@ export class ComputerSessions implements ComputerDriver {
     if (this.disposed) return;
     this.disposed = true;
     this.offStopped();
+    this.offReset();
     const chatId = this.holder();
     if (chatId !== null) {
       if (this.release(chatId)) this.notifyStopped(chatId, 'quit');

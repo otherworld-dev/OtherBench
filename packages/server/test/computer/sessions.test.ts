@@ -1194,3 +1194,111 @@ describe('cancelChatReplies', () => {
     expect(cancel.mock.calls).toEqual([['m1'], ['m2']]);
   });
 });
+
+describe('a driver whose shell started over', () => {
+  /** A fake that can say, as the desktop driver does on a hello the shell answered, that the shell holds no session at all. */
+  class ResettingDriver extends DialogDriver {
+    private readonly resetListeners = new Set<() => void>();
+
+    onReset(cb: () => void): () => void {
+      this.resetListeners.add(cb);
+      return () => {
+        this.resetListeners.delete(cb);
+      };
+    }
+
+    /** The shell answered a fresh hello. */
+    reset(): void {
+      for (const cb of [...this.resetListeners]) cb();
+    }
+
+    listening(): number {
+      return this.resetListeners.size;
+    }
+  }
+
+  function resetting() {
+    const driver = new ResettingDriver();
+    return { ...setup(driver), driver };
+  }
+
+  it('confirms every end it could not confirm: the next start goes ahead without the driver being asked to end anything', async () => {
+    const { sessions, driver } = resetting();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await sessions.ensureSession('c1', 'One');
+    await sessions.screenshot('c1');
+    const end = vi.spyOn(driver, 'endSession').mockRejectedValue(new Error('the desktop app did not answer'));
+    await sessions.stop('c1');
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: false, reason: COMPUTER_END_UNCONFIRMED_REASON });
+    const asked = end.mock.calls.length;
+
+    driver.reset();
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: true });
+    expect(end).toHaveBeenCalledTimes(asked);
+    expect(sessions.activeChat()).toBe('c2');
+  });
+
+  it('drops the session it had on record, as when the shell says stopped: announced, listeners told, replies cancelled', async () => {
+    const { sessions, driver, events, cancelChat, stopped } = resetting();
+    await sessions.ensureSession('c1', 'One');
+    await sessions.screenshot('c1');
+    const end = vi.spyOn(driver, 'endSession');
+    const spies = [vi.spyOn(driver, 'act'), vi.spyOn(driver, 'target'), vi.spyOn(driver, 'screenshot'), vi.spyOn(driver, 'cursorPosition')];
+
+    driver.reset();
+    expect(sessions.activeChat()).toBeNull();
+    expect(sessions.holder()).toBeNull();
+    expect(events.at(-1)).toEqual({ type: 'computer-session', chatId: 'c1', active: false });
+    expect(stopped).toEqual([['c1', 'quit']]);
+    expect(cancelChat.mock.calls).toEqual([['c1']]);
+    // The shell holds nothing: there is nothing to ask it to end.
+    expect(end).not.toHaveBeenCalled();
+
+    expect(await sessions.act('c1', CLICK, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+    expect(await sessions.target('c1', 'foreground')).toEqual({ refuse: COMPUTER_NO_SESSION_REASON });
+    await expect(sessions.screenshot('c1')).rejects.toThrow(COMPUTER_NO_SESSION_REASON);
+    await expect(sessions.cursorPosition('c1')).rejects.toThrow(COMPUTER_NO_SESSION_REASON);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    // Another chat can start, with its own dialog.
+    expect(await sessions.ensureSession('c2', 'Two')).toEqual({ ok: true });
+    expect(driver.started.map((s) => s.chatId)).toEqual(['c1', 'c2']);
+  });
+
+  it("a start whose dialog was up is nobody's any more: a yes that comes afterwards is ended", async () => {
+    const { sessions, driver, cancelChat, events, stopped } = resetting();
+    driver.dialogUp = true;
+    const starting = sessions.ensureSession('c1', 'One');
+    await tick();
+    driver.reset();
+    expect(cancelChat.mock.calls).toEqual([['c1']]);
+    expect(stopped).toEqual([['c1', 'quit']]);
+    driver.answer();
+    expect(await starting).toEqual({ ok: false, reason: COMPUTER_START_STOPPED_REASON });
+    expect(driver.ended).toEqual(['c1']);
+    expect(sessions.activeChat()).toBeNull();
+    expect(events.filter((e) => e.type === 'computer-session')).toEqual([]);
+  });
+
+  it('with nothing on record: announces nothing and cancels nothing', () => {
+    const { driver, events, cancelChat, stopped } = resetting();
+    driver.reset();
+    expect(events).toEqual([]);
+    expect(stopped).toEqual([]);
+    expect(cancelChat).not.toHaveBeenCalled();
+  });
+
+  it('stops listening when the server shuts down, and a reset after that does nothing', async () => {
+    const { sessions, driver, cancelChat } = resetting();
+    expect(driver.listening()).toBe(1);
+    sessions.dispose();
+    expect(driver.listening()).toBe(0);
+    sessions.shellReset();
+    expect(cancelChat).not.toHaveBeenCalled();
+  });
+
+  it('a driver that cannot say so (the fake) is taken as it is', async () => {
+    const { sessions } = setup();
+    expect(await sessions.ensureSession('c1', 'One')).toEqual({ ok: true });
+    expect(sessions.activeChat()).toBe('c1');
+  });
+});
