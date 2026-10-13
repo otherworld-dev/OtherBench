@@ -1,7 +1,15 @@
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TOOL_IMAGE_BYTES } from '@grunt/core/domain/tool-images.js';
-import { DesktopChannel, DesktopChannelError, MAX_PENDING_CALLS, MAX_RPC_LINE_BYTES, RPC_PREFIX } from '../../src/computer/desktop-channel.js';
+import {
+  DesktopChannel,
+  DesktopChannelError,
+  MAX_LATE_NOTES,
+  MAX_PENDING_CALLS,
+  MAX_PRIORITY_CALLS,
+  MAX_RPC_LINE_BYTES,
+  RPC_PREFIX,
+} from '../../src/computer/desktop-channel.js';
 import { exitOnStdinClose } from '../../src/desktop.js';
 
 /**
@@ -302,7 +310,7 @@ describe('DesktopChannel', () => {
     reply(fromShell, { id: 1, result: 'short' });
     expect(await call).toBe('short');
     // One line in the log for the first one dropped, and it holds nothing the shell sent.
-    fromShell.write(`${'B'.repeat(500)}\n`);
+    fromShell.write(`${RPC_PREFIX}${'B'.repeat(500)}\n`);
     await tick();
     expect(channel.droppedLines).toBe(2);
     expect(logged.mock.calls).toEqual([['[grunt-server] dropped a line from the desktop app that was longer than 64 bytes.']]);
@@ -314,7 +322,7 @@ describe('DesktopChannel', () => {
     const channel = new DesktopChannel(fromShell, toShell, { maxLineBytes: 64, timeoutMs: 5000 });
     const call = channel.call('computer.act', {});
     // One long line whose last piece, arriving on its own, is a whole answer to the call that is waiting.
-    fromShell.write('A'.repeat(64));
+    fromShell.write(`${RPC_PREFIX}${'A'.repeat(64 - RPC_PREFIX.length)}`);
     fromShell.write('B');
     await tick();
     fromShell.write(`${RPC_PREFIX}{"id":1,"result":"smuggled"}\n`);
@@ -343,6 +351,149 @@ describe('DesktopChannel', () => {
     const largestPng = Math.ceil(MAX_TOOL_IMAGE_BYTES / 3) * 4;
     expect(MAX_RPC_LINE_BYTES).toBe(largestPng + 65536);
     expect(MAX_RPC_LINE_BYTES).toBeLessThan(8 * 1024 * 1024);
+  });
+
+  it('knows a line that is not a GRUNT-RPC line by its first bytes and holds none of it, however long it is', async () => {
+    const { fromShell, toShell } = pipes();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const channel = new DesktopChannel(fromShell, toShell);
+    const call = channel.call('computer.hello', {});
+    let most = 0;
+    for (const start of ['some library logged this, at length: ', 'GRUNT-RPX {"id":1,"result":"near miss"}', 'GRUNT-RP', '{"id":1,"result":"no prefix"}']) {
+      fromShell.write(start);
+      for (let i = 0; i < 50; i += 1) {
+        fromShell.write('Z'.repeat(100_000));
+        await tick();
+        most = Math.max(most, channel.bufferedBytes);
+      }
+      fromShell.write(`${RPC_PREFIX}{"id":1,"result":"still part of that line"}\n`);
+      await tick();
+    }
+    // Never more than the prefix's own length is held of such a line, and it is not counted or logged as too long.
+    expect(most).toBeLessThanOrEqual(RPC_PREFIX.length);
+    expect(channel.droppedLines).toBe(0);
+    expect(logged).not.toHaveBeenCalled();
+    expect(channel.pendingCalls).toBe(1);
+    reply(fromShell, { id: 1, result: 'the real answer' });
+    expect(await call).toBe('the real answer');
+  });
+
+  it('lets an end of session through when every ordinary place is taken, up to a limit of its own', async () => {
+    const { fromShell, sent, toShell } = pipes();
+    const channel = new DesktopChannel(fromShell, toShell, { maxPending: 2, maxPriority: 2 });
+    const waiting = [channel.call('computer.act', {}), channel.call('computer.act', {})];
+    expect((await failure(channel.call('computer.act', {}))).kind).toBe('not-sent');
+    const end = channel.call('computer.end', { chatId: 'c' }, { priority: true });
+    expect(sent.at(-1)).toBe('GRUNT-RPC {"id":3,"method":"computer.end","params":{"chatId":"c"}}\n');
+    reply(fromShell, { id: 3, result: { ok: true } });
+    expect(await end).toEqual({ ok: true });
+    // Ends do not use up the ordinary places, and the ordinary ones do not use up theirs.
+    const ends = [channel.call('computer.end', {}, { priority: true }), channel.call('computer.end', {}, { priority: true })];
+    const refused = await failure(channel.call('computer.end', {}, { priority: true }));
+    expect(refused.kind).toBe('not-sent');
+    expect(sent).toHaveLength(5);
+    expect(channel.pendingCalls).toBe(4);
+    expect(MAX_PRIORITY_CALLS).toBe(64);
+    fromShell.end();
+    await Promise.allSettled([...waiting, ...ends]);
+  });
+
+  it('a call that asked to be told of a late answer frees its place at its limit and is told once, within the time it gave', async () => {
+    const { fromShell, toShell } = pipes();
+    const channel = new DesktopChannel(fromShell, toShell);
+    const late = vi.fn();
+    const call = channel.call('computer.start', {}, { timeoutMs: 20, late: { forMs: 5000, answer: late } });
+    expect((await failure(call)).kind).toBe('timeout');
+    // Its place among the waiting is free at once; only a note is kept.
+    expect(channel.pendingCalls).toBe(0);
+    expect(channel.lateNotes).toBe(1);
+    reply(fromShell, { id: 1, result: { ok: true } });
+    await vi.waitFor(() => expect(late).toHaveBeenCalledWith({ ok: true }));
+    expect(channel.lateNotes).toBe(0);
+    reply(fromShell, { id: 1, result: { ok: true } });
+    await tick();
+    expect(late).toHaveBeenCalledTimes(1);
+
+    // A late error is the shell saying no: nobody needs telling. A note is gone after its time.
+    const refusedLate = vi.fn();
+    await failure(channel.call('computer.start', {}, { timeoutMs: 20, late: { forMs: 5000, answer: refusedLate } }));
+    reply(fromShell, { id: 2, error: { message: 'cancelled' } });
+    await tick();
+    expect(refusedLate).not.toHaveBeenCalled();
+    expect(channel.lateNotes).toBe(0);
+    const expired = vi.fn();
+    await failure(channel.call('computer.start', {}, { timeoutMs: 20, late: { forMs: 30, answer: expired } }));
+    await vi.waitFor(() => expect(channel.lateNotes).toBe(0));
+    reply(fromShell, { id: 3, result: { ok: true } });
+    await tick();
+    expect(expired).not.toHaveBeenCalled();
+  });
+
+  it('keeps a small fixed number of such notes (the oldest goes), and none once the shell has gone', async () => {
+    const { fromShell, toShell } = pipes();
+    const channel = new DesktopChannel(fromShell, toShell);
+    const heard: number[] = [];
+    for (let i = 1; i <= MAX_LATE_NOTES + 2; i += 1) {
+      await failure(channel.call('computer.start', {}, { timeoutMs: 1, late: { forMs: 5000, answer: () => heard.push(i) } }));
+    }
+    expect(channel.lateNotes).toBe(MAX_LATE_NOTES);
+    reply(fromShell, { id: 1, result: {} });
+    reply(fromShell, { id: 2, result: {} });
+    reply(fromShell, { id: 3, result: {} });
+    await vi.waitFor(() => expect(heard).toEqual([3]));
+    expect(MAX_LATE_NOTES).toBe(16);
+    fromShell.end();
+    await vi.waitFor(() => expect(channel.closed).toBe(true));
+    expect(channel.lateNotes).toBe(0);
+  });
+
+  it('a listener for a late answer that throws does not stop the reader', async () => {
+    const { fromShell, toShell } = pipes();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const channel = new DesktopChannel(fromShell, toShell);
+    await failure(
+      channel.call('computer.start', {}, {
+        timeoutMs: 10,
+        late: {
+          forMs: 5000,
+          answer: () => {
+            throw new Error('listener bug');
+          },
+        },
+      })
+    );
+    reply(fromShell, { id: 1, result: {} });
+    const next = channel.call('computer.hello', {});
+    reply(fromShell, { id: 2, result: 'still reading' });
+    expect(await next).toBe('still reading');
+    expect(logged.mock.calls[0]![0]).toBe('[grunt-server] handling a late answer from the desktop app failed:');
+  });
+
+  it("writes this launch's word after the prefix of every request when it has one", async () => {
+    const { fromShell, sent, toShell } = pipes();
+    const channel = new DesktopChannel(fromShell, toShell, { nonce: '0123456789abcdef0123456789abcdef' });
+    const call = channel.call('computer.hello', {});
+    expect(sent).toEqual(['GRUNT-RPC 0123456789abcdef0123456789abcdef {"id":1,"method":"computer.hello","params":{}}\n']);
+    // The shell's own lines carry no such word: only the shell writes to this end.
+    reply(fromShell, { id: 1, result: 'ok' });
+    expect(await call).toBe('ok');
+    expect(() => new DesktopChannel(fromShell, toShell, { nonce: 'has a space' })).toThrow('nonce');
+    expect(() => new DesktopChannel(fromShell, toShell, { nonce: '' })).toThrow('nonce');
+  });
+
+  it('closes when the stream it writes to reports an error, instead of leaving it unhandled', async () => {
+    const { fromShell } = pipes();
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = new PassThrough();
+    const channel = new DesktopChannel(fromShell, out);
+    const pending = channel.call('computer.act', {});
+    // An EPIPE that comes later, as an event: with no listener this would take the process down.
+    out.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    expect((await failure(pending)).kind).toBe('gone');
+    expect(channel.closed).toBe(true);
+    expect((await failure(channel.call('computer.end', {}, { priority: true }))).kind).toBe('not-sent');
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(logged.mock.calls[0]![0]).toBe('[grunt-server] the pipe to the desktop app failed:');
   });
 
   it('leaves exitOnStdinClose working on the same stream', async () => {
