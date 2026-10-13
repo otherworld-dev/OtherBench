@@ -64,6 +64,21 @@ describe('shapeLiveResult', () => {
     expect(shapeLiveResult('not a list', undefined)).toEqual({ ok: true, text: '' });
   });
 
+  it("gives a live page the text and structuredContent of a result that also holds an image, audio and a resource blob, and none of their base64 (integration)", () => {
+    // Computer use changed what a model gets for an MCP tool's images, audio and blobs (stored, or a note); a live
+    // call never goes through that path (it reads `content` and `structured` itself), so its page is unchanged.
+    const b64 = Buffer.from('binary-bytes-binary-bytes').toString('base64');
+    const content = [
+      { type: 'text', text: '{"rows":3}' },
+      { type: 'image', data: b64, mimeType: 'image/png' },
+      { type: 'audio', data: b64, mimeType: 'audio/wav' },
+      { type: 'resource', resource: { uri: 'file:///x.bin', blob: b64, mimeType: 'application/octet-stream' } },
+    ];
+    const shaped = shapeLiveResult(content, { rows: 3 });
+    expect(shaped).toEqual({ ok: true, text: '{"rows":3}', json: { rows: 3 }, structured: { rows: 3 } });
+    expect(JSON.stringify(shaped)).not.toContain(b64);
+  });
+
   it('refuses over 1 MB of text and structured JSON together', () => {
     const half = 'x'.repeat(600 * 1024);
     expect(shapeLiveResult([{ type: 'text', text: half }], { blob: half })).toMatchObject({ ok: false, code: 'too_large' });
