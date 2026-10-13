@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import type { ChatStatus } from '../state/chatStatus.js';
 
 /** What each dot means, for screen readers. */
-export const STATUS_LABELS: Record<ChatStatus, string> = { waiting: 'waiting for approval', working: 'replying', ready: 'reply ready' };
+export const STATUS_LABELS: Record<ChatStatus, string> = { waiting: 'waiting for you', working: 'replying', ready: 'reply ready' };
 
 const STATUS_STYLES: Record<ChatStatus, string> = {
   waiting: 'bg-[var(--warn)]',
@@ -11,7 +11,7 @@ const STATUS_STYLES: Record<ChatStatus, string> = {
 };
 
 /**
- * A chat's status as a small dot: amber while a tool call waits for approval,
+ * A chat's status as a small dot: amber while an approval, question or plan waits for the user,
  * pulsing while a reply is written, solid once a reply is ready. `hidden`
  * leaves it out of the accessibility tree, for a caller that says it in text.
  */

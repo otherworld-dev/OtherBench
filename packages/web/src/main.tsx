@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './App.js';
-import { desktopBootstrap } from './desktop/bridge.js';
+import { Root } from './Root.js';
+import { desktopBootstrap, isIndicatorView } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
 import { initSidebarWidth } from './state/sidebarWidth.js';
 import { initTextSize } from './state/textSize.js';
@@ -18,13 +18,17 @@ const root = createRoot(rootEl);
 
 // In the desktop app the API lives on the sidecar's port, not this page's
 // origin, so the transport must be configured before the first request.
-// In a browser this resolves to null straight away.
+// In a browser this resolves to null straight away. The computer-use
+// indicator bar needs no server and may not ask for one (it has no
+// `allow-bootstrap`): it only shows what the shell tells it, and is never
+// put behind the sign-in gate.
 try {
-  const desktop = await desktopBootstrap();
+  const indicator = isIndicatorView();
+  const desktop = indicator ? null : await desktopBootstrap();
   if (desktop) configureTransport(desktop);
   root.render(
     <StrictMode>
-      <App />
+      <Root desktop={indicator || desktop !== null} />
     </StrictMode>
   );
 } catch (err) {

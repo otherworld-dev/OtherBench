@@ -8,11 +8,16 @@ import type {
   McpServer,
   Grant,
   AuditEntry,
+  NewSchedule,
+  NewScheduleRun,
+  Schedule,
+  ScheduleRun,
 } from '../ports/store.js';
 import type { Connection, ModelInfo, Profile, ToolPolicy } from '../types/config.js';
 import type { CanonMessage, Part } from '../types/messages.js';
 import type { PricingSnapshot } from '../types/usage.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
+import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -152,6 +157,7 @@ function makeMcpServer(over: Partial<McpServer> & { id: string }): McpServer {
     enabled: true,
     status: 'unknown',
     toolsCache: null,
+    oauth: null,
     ...over,
   };
 }
@@ -302,6 +308,16 @@ export function runStoreContract(
 
       store.chats.create(makeChatInput({ id: 'chat-b', profileId, autoMode: true }));
       expect(store.chats.get('chat-b')!.autoMode).toBe(true);
+    });
+
+    it('chats: planMode defaults to false and round-trips through create and update', () => {
+      const { profileId } = seedProfile(store, 'profile-a');
+      expect(store.chats.create(makeChatInput({ id: 'chat-a', profileId })).planMode).toBe(false);
+      store.chats.update('chat-a', { planMode: true });
+      expect(store.chats.get('chat-a')!.planMode).toBe(true);
+      expect(store.chats.list().find((c) => c.id === 'chat-a')!.planMode).toBe(true);
+      store.chats.create(makeChatInput({ id: 'chat-b', profileId, planMode: true }));
+      expect(store.chats.get('chat-b')!.planMode).toBe(true);
     });
 
     it('transaction: returns what fn returns and keeps its writes; a nested one just runs', () => {
@@ -749,6 +765,15 @@ export function runStoreContract(
         store.settings.update({ memoryProfileId: null });
         expect(store.settings.get()).toEqual({ memoryProfileId: null });
       });
+      it('keeps machine-local values beside the settings, out of get(), and refuses a settings key', () => {
+        expect(store.settings.getValue('sandbox')).toBeNull();
+        store.settings.setValue('sandbox', { state: 'ready', packages: ['ffmpeg'] });
+        expect(store.settings.getValue('sandbox')).toEqual({ state: 'ready', packages: ['ffmpeg'] });
+        expect(store.settings.get()).toEqual({ memoryProfileId: null });
+        store.settings.setValue('sandbox', null);
+        expect(store.settings.getValue('sandbox')).toBeNull();
+        expect(() => store.settings.setValue('memoryProfileId', 'x')).toThrow(/settings key/);
+      });
     });
 
     it('attachments: create/get round-trip', () => {
@@ -825,6 +850,14 @@ export function runStoreContract(
     it('mcpServers: create/get round-trip', () => {
       store.mcpServers.create(makeMcpServer({ id: 'mcp-a', name: 'My MCP Server' }));
       expect(store.mcpServers.get('mcp-a')).toMatchObject({ id: 'mcp-a', name: 'My MCP Server' });
+    });
+
+    it('mcpServers: the oauth summary round-trips, and an update can clear it', () => {
+      const oauth = { clientId: 'client-1', clientSecretRef: 'mcp:mcp-o:oauth:client-secret', account: 'alice@example.com', signedInAt: 1_760_000_000_000 };
+      store.mcpServers.create(makeMcpServer({ id: 'mcp-o', transport: 'http', command: null, url: 'https://mcp.example.com/mcp', oauth }));
+      expect(store.mcpServers.get('mcp-o')!.oauth).toEqual(oauth);
+      store.mcpServers.update('mcp-o', { oauth: null });
+      expect(store.mcpServers.get('mcp-o')!.oauth).toBeNull();
     });
 
     it('audit: create/get round-trip, defaulting createdAt', () => {
@@ -1184,6 +1217,141 @@ export function runStoreContract(
         store.grants.create(makeGrant({ id: 'grant-b', chatId: chatB.id }));
 
         expect(store.grants.list(chatA.id).map((g) => g.id)).toEqual(['grant-a']);
+      });
+    });
+
+    describe('schedules', () => {
+      const rule = { cadence: 'daily' as const, time: '09:00' };
+
+      function seedTargets(): { chatId: string; profileId: string } {
+        const { chat, profileId } = seedChat(store, 'chat-a');
+        store.projects.create({ id: 'proj-a', name: 'Alpha', workspace: null, defaultProfileId: null });
+        return { chatId: chat.id, profileId };
+      }
+
+      function schedule(over: { id: string } & Partial<Schedule>, ids: { chatId: string; profileId: string }): NewSchedule {
+        return {
+          name: 'Weekly report',
+          prompt: 'hello',
+          profileId: ids.profileId,
+          target: { kind: 'chat', chatId: ids.chatId },
+          rule,
+          timezone: 'Europe/London',
+          enabled: true,
+          nextRunAt: 1000,
+          ...over,
+        };
+      }
+
+      function run(over: { id: string; scheduleId: string } & Partial<ScheduleRun>): NewScheduleRun {
+        return { trigger: 'scheduled', dueAt: 1000, startedAt: 1000, status: 'running', ...over };
+      }
+
+      it('create/get/list/update/delete round-trip, defaulting the timestamps to now', () => {
+        const ids = seedTargets();
+        const created = store.schedules.create(schedule({ id: 's1' }, ids));
+        expectRecentTimestamp(created.createdAt);
+        expectRecentTimestamp(created.updatedAt);
+        expect(store.schedules.get('s1')).toEqual(created);
+        expect(created).not.toHaveProperty('invalid');
+        store.schedules.create(schedule({ id: 's2', target: { kind: 'project', projectId: 'proj-a' }, createdAt: 5, updatedAt: 5 }, ids));
+        expect(store.schedules.list().map((s) => s.id)).toEqual(['s2', 's1']);
+        expect(store.schedules.get('s2')!.target).toEqual({ kind: 'project', projectId: 'proj-a' });
+
+        const weekly = { cadence: 'weekly' as const, time: '07:30', weekdays: [1, 3] };
+        const updated = store.schedules.update('s1', { name: 'Daily', rule: weekly, enabled: false, nextRunAt: null, updatedAt: 9 });
+        expect(updated).toMatchObject({ name: 'Daily', rule: weekly, enabled: false, nextRunAt: null, updatedAt: 9, prompt: 'hello' });
+        expect(store.schedules.get('s1')).toEqual(updated);
+        expect(() => store.schedules.update('nope', { name: 'x' })).toThrow(Error);
+        expect(() => store.schedules.create(schedule({ id: 's1' }, ids))).toThrow(Error);
+
+        store.schedules.addRun(run({ id: 'r1', scheduleId: 's1' }));
+        store.schedules.delete('s1');
+        expect(store.schedules.get('s1')).toBeNull();
+        expect(store.schedules.runs('s1')).toEqual([]);
+        expect(() => store.schedules.delete('s1')).not.toThrow();
+      });
+
+      it('due lists enabled schedules whose time has come, oldest due first', () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 'late', nextRunAt: 500 }, ids));
+        store.schedules.create(schedule({ id: 'now', nextRunAt: 1000 }, ids));
+        store.schedules.create(schedule({ id: 'later', nextRunAt: 2000 }, ids));
+        store.schedules.create(schedule({ id: 'paused', enabled: false, nextRunAt: null }, ids));
+        store.schedules.create(schedule({ id: 'off', enabled: false, nextRunAt: 100 }, ids));
+        expect(store.schedules.due(1000).map((s) => s.id)).toEqual(['late', 'now']);
+        expect(store.schedules.due(499)).toEqual([]);
+      });
+
+      it(`keeps the newest ${SCHEDULE_RUNS_KEPT} runs per schedule, newest first`, () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1' }, ids));
+        store.schedules.create(schedule({ id: 's2' }, ids));
+        for (let i = 0; i <= SCHEDULE_RUNS_KEPT; i++) store.schedules.addRun(run({ id: `r${i}`, scheduleId: 's1', startedAt: i, status: 'complete' }));
+        store.schedules.addRun(run({ id: 'other', scheduleId: 's2' }));
+        const runs = store.schedules.runs('s1');
+        expect(runs).toHaveLength(SCHEDULE_RUNS_KEPT);
+        expect(runs[0]!.id).toBe(`r${SCHEDULE_RUNS_KEPT}`);
+        expect(runs.some((r) => r.id === 'r0')).toBe(false);
+        expect(store.schedules.runs('s2').map((r) => r.id)).toEqual(['other']);
+        expect(() => store.schedules.addRun(run({ id: 'orphan', scheduleId: 'nope' }))).toThrow(Error);
+      });
+
+      it('addRun fills the defaults; updateRun merges a patch and returns null for a run that is gone', () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1' }, ids));
+        expect(store.schedules.addRun(run({ id: 'r1', scheduleId: 's1' }))).toEqual({
+          id: 'r1', scheduleId: 's1', trigger: 'scheduled', dueAt: 1000, startedAt: 1000, finishedAt: null, status: 'running',
+          detail: null, chatId: null, createdChat: false, userMessageId: null, messageId: null, refusedCalls: 0,
+        });
+        const updated = store.schedules.updateRun('r1', { status: 'complete', finishedAt: 2000, chatId: ids.chatId, refusedCalls: 2 });
+        expect(updated).toMatchObject({ status: 'complete', finishedAt: 2000, chatId: ids.chatId, refusedCalls: 2, trigger: 'scheduled' });
+        expect(store.schedules.runs('s1')[0]).toEqual(updated);
+        expect(store.schedules.updateRun('missing', { status: 'error' })).toBeNull();
+      });
+
+      it('lastRun, lastCompleted and runningRuns', () => {
+        const ids = seedTargets();
+        store.schedules.create(schedule({ id: 's1' }, ids));
+        expect(store.schedules.lastRun('s1')).toBeNull();
+        expect(store.schedules.lastCompleted('s1')).toBeNull();
+        store.schedules.addRun(run({ id: 'r1', scheduleId: 's1', startedAt: 1, status: 'complete' }));
+        store.schedules.addRun(run({ id: 'r2', scheduleId: 's1', startedAt: 2, status: 'error' }));
+        store.schedules.addRun(run({ id: 'r3', scheduleId: 's1', startedAt: 3, status: 'running' }));
+        expect(store.schedules.lastRun('s1')!.id).toBe('r3');
+        expect(store.schedules.lastCompleted('s1')!.id).toBe('r1');
+        expect(store.schedules.runningRuns().map((r) => r.id)).toEqual(['r3']);
+      });
+
+      it("deleting the target chat, the project or the profile deletes the schedule; deleting a run's chat keeps the run without it", () => {
+        const ids = seedTargets();
+        const { profileId: otherProfile } = seedProfile(store, 'sched-profile');
+        const { chat: runChat } = seedChat(store, 'chat-b');
+        store.schedules.create(schedule({ id: 'on-chat' }, ids));
+        store.schedules.create(schedule({ id: 'on-project', target: { kind: 'project', projectId: 'proj-a' } }, ids));
+        store.schedules.create(schedule({ id: 'on-profile', profileId: otherProfile }, ids));
+        store.schedules.addRun(run({ id: 'made', scheduleId: 'on-project', chatId: runChat.id, createdChat: true }));
+
+        store.chats.delete(runChat.id);
+        expect(store.schedules.runs('on-project')[0]).toMatchObject({ id: 'made', chatId: null });
+
+        store.profiles.delete(otherProfile);
+        expect(store.schedules.get('on-profile')).toBeNull();
+        store.projects.delete('proj-a');
+        expect(store.schedules.get('on-project')).toBeNull();
+        store.chats.delete(ids.chatId);
+        expect(store.schedules.get('on-chat')).toBeNull();
+      });
+
+      it('madeChat is true only for a chat a run created', () => {
+        const ids = seedTargets();
+        const { chat: made } = seedChat(store, 'chat-made');
+        store.schedules.create(schedule({ id: 's1', target: { kind: 'project', projectId: 'proj-a' } }, ids));
+        store.schedules.addRun(run({ id: 'r1', scheduleId: 's1', chatId: made.id, createdChat: true }));
+        store.schedules.addRun(run({ id: 'r2', scheduleId: 's1', chatId: ids.chatId, createdChat: false }));
+        expect(store.schedules.madeChat(made.id)).toBe(true);
+        expect(store.schedules.madeChat(ids.chatId)).toBe(false);
+        expect(store.schedules.madeChat('nope')).toBe(false);
       });
     });
 

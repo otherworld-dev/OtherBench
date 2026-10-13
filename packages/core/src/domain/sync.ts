@@ -102,6 +102,7 @@ export const CHAT_FIELDS: Record<string, string[]> = {
   unread: ['unread'],
   archivedAt: ['archived_at'],
   autoMode: ['auto_mode'],
+  planMode: ['plan_mode'],
   effort: ['effort'],
   folders: ['folders'],
   projectId: ['project_id'],

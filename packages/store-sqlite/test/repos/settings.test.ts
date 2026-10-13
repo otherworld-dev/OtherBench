@@ -22,4 +22,12 @@ describe('SqliteSettingsRepo', () => {
     expect(repo.get()).toEqual({ memoryProfileId: null });
     expect(warn).toHaveBeenCalledTimes(1);
   });
+
+  it('a damaged machine-local value reads as null and is logged, not thrown', () => {
+    const db = freshDb();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    db.prepare(`INSERT INTO app_setting (key, value) VALUES ('sandbox', '{not json')`).run();
+    expect(new SqliteSettingsRepo(db).getValue('sandbox')).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
 });

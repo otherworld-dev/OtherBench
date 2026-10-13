@@ -48,4 +48,17 @@ describe('AuthedImage', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(screen.queryByTestId('img')).toBeNull();
   });
+
+  it('with a token, tells the caller once when the image could not be fetched', async () => {
+    configureTransport({ baseUrl: '', token: 'tok' });
+    const fetchSpy = vi.fn(async () => new Response('no', { status: 404 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onFailed = vi.fn();
+
+    render(<AuthedImage src="/api/attachments/a1/content" alt="" data-testid="img" onFailed={onFailed} />);
+
+    await waitFor(() => expect(onFailed).toHaveBeenCalledTimes(1));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
 });

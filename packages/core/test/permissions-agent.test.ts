@@ -85,9 +85,9 @@ describe('PermissionBroker with source "agent"', () => {
     expect(b.decide({ ...spec('Bash'), risk: 'read' }, { command: 'ls' }, policy(), ctx()).kind).toBe('ask');
     expect(b.decide({ ...spec('Edit'), risk: 'read' }, { path: 'a' }, policy(), ctx()).kind).toBe('ask');
   });
-  it('allows EnterPlanMode/ToolSearch/Skill as internal', () => {
+  it('allows ToolSearch/Skill as internal', () => {
     const b = new PermissionBroker(new InMemoryStore());
-    for (const n of ['EnterPlanMode', 'ToolSearch', 'Skill']) {
+    for (const n of ['ToolSearch', 'Skill']) {
       expect(b.decide(spec(n), {}, policy({ approvalMode: 'always_ask' }), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'policy' });
     }
   });

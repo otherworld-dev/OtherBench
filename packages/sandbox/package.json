@@ -1,0 +1,21 @@
+{
+  "name": "@grunt/sandbox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*.js": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@grunt/core": "*"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

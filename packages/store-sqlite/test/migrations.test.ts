@@ -3,7 +3,9 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openDatabase } from '../src/db.js';
-import { runMigrations, MIGRATIONS, type Migration } from '../src/migrations/index.js';
+import { runMigrations, MIGRATIONS, SCHEMA_VERSION, type Migration } from '../src/migrations/index.js';
+import { MCP_OAUTH_ALREADY_THERE } from '../src/migrations/025-mcp-oauth.js';
+import { USAGE_SUBAGENT_ALREADY_THERE } from '../src/migrations/026-usage-subagent.js';
 import type { DatabaseSync } from 'node:sqlite';
 
 function freshDb(): DatabaseSync {
@@ -21,6 +23,148 @@ function tableNames(db: DatabaseSync): string[] {
 }
 
 describe('runMigrations', () => {
+  it('numbers migrations uniquely in ascending order with no gaps, ending with the Cowork-parity ones after chat-unread', () => {
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(new Set(versions).size).toBe(versions.length);
+    expect([...versions].sort((a, b) => a - b)).toEqual(versions);
+    for (const m of MIGRATIONS) expect(m.name.startsWith(String(m.version).padStart(3, '0') + '-')).toBe(true);
+    expect(versions).toEqual(versions.map((_, i) => i + 1));
+    expect(MIGRATIONS.slice(-6).map((m) => m.name)).toEqual(['021-chat-unread', '022-chat-plan-mode', '023-schedules', '024-artifact-version-live', '025-mcp-oauth', '026-usage-subagent']);
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
+      expect(userVersion(db)).toBe(20);
+      runMigrations(db);
+      expect(userVersion(db)).toBe(SCHEMA_VERSION);
+      expect(SCHEMA_VERSION).toBe(26);
+    } finally {
+      db.close();
+    }
+  });
+
+  describe('databases migrated under an older numbering (docs/HANDOVER.md, "Integration")', () => {
+    const columns = (db: DatabaseSync, table: string): string[] =>
+      (db.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as { name: string }[]).map((r) => r.name);
+    /** A database as a branch left it: migrated to `version` here, plus mcp_server.oauth, at `userVersionThen`. */
+    function oldDb(version: number, userVersionThen: number): DatabaseSync {
+      const db = freshDb();
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= version));
+      db.exec('ALTER TABLE mcp_server ADD COLUMN oauth TEXT');
+      db.exec(`PRAGMA user_version = ${userVersionThen}`);
+      return db;
+    }
+
+    it('refuses a remote-access database at 22 with the pointer, not a bare duplicate-column error, after committing 023 and 024', () => {
+      const db = oldDb(20, 22);
+      try {
+        expect(() => runMigrations(db)).toThrow(MCP_OAUTH_ALREADY_THERE);
+        expect(MCP_OAUTH_ALREADY_THERE).toMatch(/"Integration \(feat\/cowork-parity-all\)" in docs\/HANDOVER\.md/);
+        // Each migration commits on its own: it is left at 24, plan_mode still missing.
+        expect(userVersion(db)).toBe(24);
+        expect(columns(db, 'chat')).not.toContain('plan_mode');
+        // The hand fix for that state keeps the sign-in data.
+        db.exec('ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 25;');
+        runMigrations(db);
+        // 026 (the sub-agent usage column) still follows the hand fix.
+        expect(userVersion(db)).toBe(26);
+        expect(columns(db, 'usage')).toContain('subagent_call_id');
+        expect(columns(db, 'artifact_version')).toContain('live');
+        expect(tableNames(db)).toContain('schedule');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('a remote-access database never opened here is fixed by dropping oauth and going back to 20', () => {
+      const db = oldDb(20, 22);
+      try {
+        db.exec('ALTER TABLE mcp_server DROP COLUMN oauth; PRAGMA user_version = 20;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(26);
+        expect(columns(db, 'chat')).toContain('plan_mode');
+        expect(columns(db, 'mcp_server')).toContain('oauth');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('refuses a pre-live integration database at 24, and its hand fix adds the live column', () => {
+      const db = oldDb(23, 24);
+      try {
+        expect(() => runMigrations(db)).toThrow(MCP_OAUTH_ALREADY_THERE);
+        expect(userVersion(db)).toBe(24);
+        db.exec('ALTER TABLE artifact_version ADD COLUMN live TEXT; PRAGMA user_version = 25;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(26);
+        expect(columns(db, 'artifact_version')).toContain('live');
+        expect(columns(db, 'chat')).toContain('plan_mode');
+      } finally {
+        db.close();
+      }
+    });
+
+    /** A database as feat/office-files-build left it once sub-agents landed: dev's 20, plus usage.subagent_call_id, at 22. */
+    function subagentsDb(): DatabaseSync {
+      const db = freshDb();
+      runMigrations(db, MIGRATIONS.filter((m) => m.version <= 20));
+      db.exec('ALTER TABLE usage ADD COLUMN subagent_call_id TEXT');
+      db.exec('PRAGMA user_version = 22');
+      return db;
+    }
+
+    it('refuses a sub-agents database at 22 with the pointer, not a bare duplicate-column error, after committing 023 to 025', () => {
+      const db = subagentsDb();
+      try {
+        expect(() => runMigrations(db)).toThrow(USAGE_SUBAGENT_ALREADY_THERE);
+        expect(USAGE_SUBAGENT_ALREADY_THERE).toMatch(/"Integration \(feat\/cowork-parity-all\)" in docs\/HANDOVER\.md/);
+        // Each migration commits on its own: it is left at 25, plan_mode still missing.
+        expect(userVersion(db)).toBe(25);
+        expect(columns(db, 'chat')).not.toContain('plan_mode');
+        // Opening it again changes nothing and refuses the same way.
+        expect(() => runMigrations(db)).toThrow(USAGE_SUBAGENT_ALREADY_THERE);
+        expect(userVersion(db)).toBe(25);
+        // The hand fix for that state keeps the sub-agent usage rows' marks.
+        db.exec('ALTER TABLE chat ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 26;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(SCHEMA_VERSION);
+        expect(columns(db, 'chat')).toContain('plan_mode');
+        expect(columns(db, 'usage')).toContain('subagent_call_id');
+        expect(columns(db, 'artifact_version')).toContain('live');
+        expect(columns(db, 'mcp_server')).toContain('oauth');
+        expect(tableNames(db)).toContain('schedule');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('a sub-agents database never opened here is fixed by dropping the column and going back to 20', () => {
+      const db = subagentsDb();
+      try {
+        db.exec('ALTER TABLE usage DROP COLUMN subagent_call_id; PRAGMA user_version = 20;');
+        runMigrations(db);
+        expect(userVersion(db)).toBe(26);
+        expect(columns(db, 'chat')).toContain('plan_mode');
+        expect(columns(db, 'usage')).toContain('subagent_call_id');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it('mcp-oauth adds mcp_server.oauth, empty for every existing server', () => {
+    const mcpOauth = MIGRATIONS.find((m) => m.name.endsWith('mcp-oauth'));
+    expect(mcpOauth).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < mcpOauth!.version));
+      db.exec(`INSERT INTO mcp_server (id, name, transport) VALUES ('s1', 'Old', 'http')`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT oauth FROM mcp_server WHERE id = 's1'`).get()).toEqual({ oauth: null });
+    } finally {
+      db.close();
+    }
+  });
+
   it('016 adds the artifact tables, tracked for sync', () => {
     const db = openDatabase(':memory:');
     runMigrations(db);
@@ -41,6 +185,20 @@ describe('runMigrations', () => {
     runMigrations(db);
     expect(db.prepare("SELECT kind, language FROM artifact_version WHERE id = 'v1'").get()).toEqual({ kind: 'code', language: 'py' });
     expect(logged()).toBe(before);
+  });
+
+  it('usage-subagent adds a nullable usage.subagent_call_id', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('usage-subagent'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db);
+      const columns = db.prepare('PRAGMA table_info(usage)').all() as { name: string; notnull: number }[];
+      expect(columns.find((c) => c.name === 'subagent_call_id')).toMatchObject({ notnull: 0 });
+      expect(userVersion(db)).toBe(Math.max(...MIGRATIONS.map((m) => m.version)));
+    } finally {
+      db.close();
+    }
   });
 
   it('brings a fresh database to the latest migration version', () => {
@@ -145,6 +303,22 @@ describe('runMigrations', () => {
       db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
       runMigrations(db);
       expect(db.prepare(`SELECT effort FROM chat WHERE id = 'legacy'`).get()).toEqual({ effort: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('chat-plan-mode adds chat.plan_mode, with every existing chat off', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('chat-plan-mode'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Mock', 'c1', 'mock')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('legacy', 'Old chat', 'p1', 1, 1)`);
+      runMigrations(db);
+      expect(db.prepare(`SELECT plan_mode FROM chat WHERE id = 'legacy'`).get()).toEqual({ plan_mode: 0 });
     } finally {
       db.close();
     }
@@ -643,6 +817,45 @@ describe('runMigrations', () => {
         db.close();
       }
     });
+  });
+
+  it('schedules adds the local schedule tables: no sync triggers, one target, and cascades from chat, project and profile', () => {
+    const migration = MIGRATIONS.find((m) => m.name.endsWith('-schedules'));
+    expect(migration).toBeDefined();
+    const db = freshDb();
+    try {
+      runMigrations(db, MIGRATIONS.filter((m) => m.version < migration!.version));
+      db.exec(`INSERT INTO connection (id, name, kind) VALUES ('c1', 'Mock', 'mock')`);
+      db.exec(`INSERT INTO profile (id, name, connection_id, model_id) VALUES ('p1', 'Default', 'c1', 'm')`);
+      db.exec(`INSERT INTO chat (id, title, profile_id, created_at, updated_at) VALUES ('chat1', 'Chat', 'p1', 1, 1)`);
+      db.exec(`INSERT INTO project (id, name, sort_order, created_at, updated_at) VALUES ('proj1', 'Alpha', 0, 1, 1)`);
+
+      runMigrations(db);
+
+      expect(tableNames(db)).toEqual(expect.arrayContaining(['schedule', 'schedule_run']));
+      const triggers = db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'sync_schedule%'").all();
+      expect(triggers).toEqual([]);
+      const insert = (id: string, chat: string | null, project: string | null): void =>
+        db.exec(
+          `INSERT INTO schedule (id, name, prompt, profile_id, chat_id, project_id, rule, timezone, enabled, next_run_at, created_at, updated_at)
+           VALUES ('${id}', 'S', 'p', 'p1', ${chat ? `'${chat}'` : 'NULL'}, ${project ? `'${project}'` : 'NULL'}, '{"cadence":"daily","time":"09:00"}', 'UTC', 1, 5, 1, 1)`
+        );
+      expect(() => insert('both', 'chat1', 'proj1')).toThrow();
+      expect(() => insert('neither', null, null)).toThrow();
+      insert('on-chat', 'chat1', null);
+      insert('on-project', null, 'proj1');
+      db.exec(`INSERT INTO schedule_run (id, schedule_id, trigger, started_at, status, chat_id) VALUES ('r1', 'on-project', 'scheduled', 1, 'running', 'chat1')`);
+      expect(() => db.exec(`INSERT INTO schedule_run (id, schedule_id, trigger, started_at, status) VALUES ('r2', 'on-chat', 'hourly', 1, 'running')`)).toThrow();
+
+      db.exec(`DELETE FROM chat WHERE id = 'chat1'`);
+      expect(db.prepare(`SELECT id FROM schedule ORDER BY id`).all()).toEqual([{ id: 'on-project' }]);
+      expect(db.prepare(`SELECT chat_id FROM schedule_run WHERE id = 'r1'`).get()).toEqual({ chat_id: null });
+      db.exec(`DELETE FROM project WHERE id = 'proj1'`);
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM schedule`).get()).toEqual({ n: 0 });
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM schedule_run`).get()).toEqual({ n: 0 });
+    } finally {
+      db.close();
+    }
   });
 });
 

@@ -159,6 +159,21 @@ describe('dead approval prompts', () => {
   });
 });
 
+describe('asks', () => {
+  const ask = { kind: 'question' as const, toolName: 'ask_user', questions: [], id: 'a1', chatId: 'c1', messageId: 'm1' };
+  it('adds a pending ask on ask-request and removes it on ask-resolved', () => {
+    let acc = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'ask-request', ask });
+    expect(acc.extras.pendingAsks).toEqual([ask]);
+    acc = applyEventToMessage(acc.message, acc.extras, { messageId: 'm1', type: 'ask-resolved', askId: 'a1' });
+    expect(acc.extras.pendingAsks).toEqual([]);
+  });
+  it('drops pending asks when the message stops streaming, and keeps them across a hello replay', () => {
+    const asked = applyEventToMessage(baseMessage(), emptyExtras, { messageId: 'm1', type: 'ask-request', ask });
+    expect(applyEventToMessage(asked.message, asked.extras, { messageId: 'm1', type: 'status', status: 'cancelled' }).extras.pendingAsks ?? []).toEqual([]);
+    expect(applyHelloBuffer(baseMessage(), [{ messageId: 'm1', type: 'ask-request', ask }], 'streaming').extras.pendingAsks).toEqual([ask]);
+  });
+});
+
 describe('error mid-step (server keeps streaming)', () => {
   const req = { id: 'req-1', chatId: 'c1', messageId: 'm1', toolName: 'write_file', risk: 'mutate' as const, source: 'fs' as const, args: {}, summary: 'a' };
 
@@ -169,5 +184,37 @@ describe('error mid-step (server keeps streaming)', () => {
     ], 'streaming');
     expect(message.status).toBe('streaming');
     expect(extras.pendingApprovals).toEqual([req]);
+  });
+});
+
+describe('subagent events', () => {
+  const start: TurnEvent = { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'start', label: 'Helper', prompt: 'Look.', profileId: 'p', profileName: 'P', modelId: 'm' } };
+  const delta: TurnEvent = { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'text-delta', text: 'Found it.' } };
+  const end: TurnEvent = { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'end', status: 'complete' } };
+
+  it('folds a sub-agent into a card part on the message', () => {
+    const { message } = replayEvents(baseMessage(), emptyExtras, [start, { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'running' } }, delta, end]);
+    expect(message.parts).toEqual([
+      { type: 'subagent', callId: 'c1', label: 'Helper', prompt: 'Look.', profileId: 'p', profileName: 'P', modelId: 'm', status: 'complete', parts: [{ type: 'text', text: 'Found it.' }] },
+    ]);
+  });
+
+  it('ignores a malformed sub-agent event instead of folding it', () => {
+    const live = replayEvents(baseMessage(), emptyExtras, [start]).message;
+    const bad = [
+      { messageId: 'm1', type: 'subagent', callId: 7, event: { type: 'running' } },
+      { messageId: 'm1', type: 'subagent', callId: 'c1', event: { type: 'start', label: 1 } },
+      { messageId: 'm1', type: 'subagent', callId: 'c1', event: 'end' },
+      { messageId: 'm1', type: 'subagent', callId: 'c1' },
+    ] as unknown as TurnEvent[];
+    const { message } = replayEvents(live, emptyExtras, bad);
+    expect(message.parts).toBe(live.parts);
+  });
+
+  it('replays a hello buffer of sub-agent events without duplicating the card', () => {
+    const live = replayEvents(baseMessage(), emptyExtras, [start, delta]).message;
+    const { message } = applyHelloBuffer(live, [start, delta, end], 'complete');
+    expect(message.parts).toHaveLength(1);
+    expect(message.parts[0]).toMatchObject({ status: 'complete', parts: [{ type: 'text', text: 'Found it.' }] });
   });
 });

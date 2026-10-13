@@ -11,9 +11,13 @@ import { cors } from 'hono/cors';
  * The handshake the desktop shell reads: with `--announce`, this is the
  * first and only thing written to stdout, once the port is bound. Every log
  * line goes to stderr in that mode so nothing can get ahead of it.
+ *
+ * With `--desktop-rpc` it also carries `rpc`, this launch's word: the
+ * computer-use channel writes it after the prefix of every request, and the
+ * shell acts on no request line without it (shell-wire-spec.md).
  */
-export function announceLine(port: number): string {
-  return `${JSON.stringify({ port })}\n`;
+export function announceLine(port: number, rpc: string | null = null): string {
+  return `${JSON.stringify(rpc === null ? { port } : { port, rpc })}\n`;
 }
 
 /**
@@ -21,14 +25,16 @@ export function announceLine(port: number): string {
  * origin can resolve its own hostname to 127.0.0.1 and then talk to this
  * port as "same origin" -- but the browser still sends that hostname in
  * `Host`. Only the loopback names this server can actually be reached by
- * are accepted. `port` is read per request because with `--port 0` it isn't
- * known until after the app is built.
+ * are accepted, plus, in sign-in mode, each `--public-url`'s host
+ * (`extraHosts`, as `new URL(u).host` gives it). `port` is read per request
+ * because with `--port 0` it isn't known until after the app is built.
  */
-export function hostCheck(port: () => number): MiddlewareHandler {
+export function hostCheck(port: () => number, extraHosts: readonly string[] = []): MiddlewareHandler {
+  const extra = extraHosts.map((h) => h.toLowerCase());
   return async (c, next) => {
     const host = c.req.header('host')?.toLowerCase();
     const p = port();
-    const allowed = [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`];
+    const allowed = [`127.0.0.1:${p}`, `localhost:${p}`, `[::1]:${p}`, ...extra];
     if (!host || !allowed.includes(host)) {
       return c.json({ error: `Host "${host ?? ''}" is not allowed; this server only answers on ${allowed[0]}.` }, 421);
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentDisallowedTools, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from '../src/domain/agent-tools.js';
+import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools, agentPolicyDenial, classifyAgentTool, isProtectedAgentPath } from '../src/domain/agent-tools.js';
 import type { ToolPolicy } from '../src/types/config.js';
 
 const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
@@ -11,7 +11,8 @@ describe('classifyAgentTool', () => {
     ['Bash', 'shell', 'execute'], ['BashOutput', 'shell', 'execute'], ['KillShell', 'shell', 'execute'],
     ['WebFetch', 'web', 'mutate'], ['WebSearch', 'web', 'mutate'],
     ['mcp__nextcloud__deck_add_card', 'mcp', 'mutate'],
-    ['TodoWrite', 'internal', 'read'], ['Task', 'internal', 'read'], ['Agent', 'internal', 'read'], ['ExitPlanMode', 'internal', 'read'],
+    ['TodoWrite', 'internal', 'read'], ['Task', 'internal', 'read'], ['Agent', 'internal', 'read'], ['AskUserQuestion', 'internal', 'read'],
+    ['ExitPlanMode', 'other', 'mutate'], ['EnterPlanMode', 'other', 'mutate'],
     ['SomethingNew', 'other', 'mutate'],
   ])('%s -> %s/%s', (name, category, risk) => {
     expect(classifyAgentTool(name)).toEqual({ category, risk });
@@ -35,9 +36,10 @@ describe('agentPolicyDenial', () => {
 });
 
 describe('agentDisallowedTools', () => {
-  it('always removes AskUserQuestion', () => {
-    expect(agentDisallowedTools(policy())).toEqual(['AskUserQuestion']);
+  it("always removes Claude Code's own plan mode tools, and no longer AskUserQuestion", () => {
+    expect(agentDisallowedTools(policy())).toEqual(['EnterPlanMode', 'ExitPlanMode']);
   });
+  it('lists the internal tools a clean chat gets', () => expect(CLEAN_CHAT_AGENT_TOOLS).toEqual(['TodoWrite', 'AskUserQuestion']));
   it('removes tools the policy forbids', () => {
     const list = agentDisallowedTools(policy({ fs: 'off', shell: false, agentWeb: false }));
     for (const t of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Glob', 'Grep', 'LS', 'NotebookRead', 'Bash', 'BashOutput', 'KillShell', 'WebFetch', 'WebSearch']) {
@@ -67,7 +69,7 @@ describe('isProtectedAgentPath', () => {
 describe('R7 additions', () => {
   it.each([
     ['PowerShell', 'shell', 'execute'], ['Monitor', 'shell', 'execute'],
-    ['EnterPlanMode', 'internal', 'read'], ['ToolSearch', 'internal', 'read'], ['Skill', 'internal', 'read'],
+    ['ToolSearch', 'internal', 'read'], ['Skill', 'internal', 'read'],
     ['ListMcpResourcesTool', 'mcp', 'mutate'], ['ReadMcpResourceTool', 'mcp', 'mutate'], ['ReadMcpResourceDirTool', 'mcp', 'mutate'],
   ])('%s -> %s/%s', (name, category, risk) => {
     expect(classifyAgentTool(name)).toEqual({ category, risk });

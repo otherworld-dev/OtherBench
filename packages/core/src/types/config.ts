@@ -49,8 +49,32 @@ export type FsMode = 'off' | 'read' | 'readwrite';
  * not be able to satisfy, or to mint, a grant meant for the real shell.
  * `'agent'` is a tool run by an external agent (Claude Code) whose execution
  * Grunt only gates, never performs.
+ * `'sandbox'` is the sandboxed `run_command` (spec 2026-10-12-sandbox-design)
+ * and `'network'` the `sandbox_network` approval a sandboxed command raises
+ * for a host that isn't on its allowlist: new sources rather than flags, so
+ * nothing but Grunt's own sandbox tool can claim to be sandboxed.
+ * `'thread'` is Grunt's own checklist, question and plan tools (spec
+ * 2026-10-12-thread-cards-design), allowed by policy and audited.
+ * `'subagent'` is the API engine's sub-agent tool (spec
+ * 2026-10-12-api-subagents-design).
+ * `'browser'` is the model's own browser (spec
+ * 2026-10-12-model-browser-design).
+ * `'computer'` is the desktop shell's computer use (spec
+ * 2026-10-12-computer-use-design).
  */
-export type ToolSource = 'fs' | 'shell' | 'mcp' | 'agent' | 'artifact' | 'recall';
+export type ToolSource =
+  | 'fs'
+  | 'shell'
+  | 'mcp'
+  | 'agent'
+  | 'artifact'
+  | 'recall'
+  | 'sandbox'
+  | 'network'
+  | 'thread'
+  | 'subagent'
+  | 'browser'
+  | 'computer';
 
 /** How much Claude Code thinks before and while it answers (the Agent SDK's `effort`), lowest first. */
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -59,6 +83,9 @@ export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 export function isClaudeEffort(value: unknown): value is ClaudeEffort {
   return typeof value === 'string' && (CLAUDE_EFFORTS as readonly string[]).includes(value);
 }
+
+/** Where a profile's shell commands run (spec 2026-10-12-sandbox-design): on this machine, or in Grunt's sandbox. */
+export type ShellRuns = 'host' | 'sandbox';
 
 export interface ToolPolicy {
   fs: FsMode;
@@ -73,6 +100,43 @@ export interface ToolPolicy {
   artifacts?: boolean;
   /** Search past chats (spec 2026-10-09-recall-design): the `recall` tool, for both engines. Absent = on. */
   recall?: boolean;
+  /** Where `run_command` runs when `shell` is on (spec 2026-10-12-sandbox-design). Absent = 'host'. */
+  shellRuns?: ShellRuns;
+  /**
+   * Hosts a sandboxed command may reach without asking, as the sandbox
+   * runtime takes them (`pypi.org`, `*.example.com`, optional `:port`).
+   * Absent = DEFAULT_SANDBOX_HOSTS. Any other host raises a card.
+   */
+  sandboxHosts?: string[];
+  /** Sub-agents (spec 2026-10-12-api-subagents-design): the `subagent` tool, API profiles only. Absent = off. */
+  subagents?: boolean;
+  /** The model's own browser (spec 2026-10-12-model-browser-design), for both engines. Absent = off. */
+  browser?: boolean;
+  /** Websites the browser may never use; each entry also blocks its subdomains. Absent = none. */
+  browserBlockedHosts?: string[];
+  /** Computer use (spec 2026-10-12-computer-use-design): the `computer` tool, desktop app on Windows only. Absent = off. */
+  computer?: boolean;
+}
+
+/**
+ * What a sandboxed command may reach when the profile names no hosts of its own (spec 2026-10-12-sandbox-design):
+ * package registries only. GitHub is left off on purpose, since a command could push data out to an account it controls;
+ * a profile that wants it names it in its own list, and any other host raises a card.
+ */
+export const DEFAULT_SANDBOX_HOSTS: readonly string[] = [
+  'registry.npmjs.org',
+  'pypi.org',
+  'files.pythonhosted.org',
+];
+
+/** Whether this policy's `run_command` is the sandboxed one: shell on and set to run in the sandbox. */
+export function runsShellInSandbox(policy: ToolPolicy): boolean {
+  return policy.shell && policy.shellRuns === 'sandbox';
+}
+
+/** The hosts a sandboxed command may reach without asking, as a fresh array. */
+export function sandboxHostsOf(policy: ToolPolicy): string[] {
+  return [...(policy.sandboxHosts ?? DEFAULT_SANDBOX_HOSTS)];
 }
 
 export interface ModelParams {

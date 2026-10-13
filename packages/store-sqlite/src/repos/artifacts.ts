@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, ArtifactVersionInfo, NewArtifactVersion } from '@grunt/core/ports/store.js';
+import type { Artifact, ArtifactKind, ArtifactRepo, ArtifactVersion, ArtifactVersionInfo, LiveSpec, NewArtifactVersion } from '@grunt/core/ports/store.js';
+import { parseLiveSpec } from '@grunt/core/domain/live-artifacts.js';
 import type { SyncClock } from './clock.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 
@@ -17,10 +18,17 @@ const ARTIFACT: CrudMapping<Artifact> = {
   }),
 };
 
+/** A stored declaration, or null for none (or for text that no longer parses: the page is then shown plain). */
+function storedLive(value: unknown): LiveSpec | null {
+  if (typeof value !== 'string') return null;
+  const parsed = parseLiveSpec(value);
+  return parsed.ok ? parsed.spec : null;
+}
+
 const VERSION: CrudMapping<ArtifactVersion> = {
   table: 'artifact_version',
-  columns: ['id', 'artifact_id', 'number', 'title', 'content', 'kind', 'language', 'made_by', 'message_id', 'parent_version_id', 'created_at'],
-  toRow: (v) => [v.id, v.artifactId, v.number, v.title, v.content, v.kind, v.language, v.madeBy, v.messageId, v.parentVersionId, v.createdAt],
+  columns: ['id', 'artifact_id', 'number', 'title', 'content', 'kind', 'language', 'made_by', 'message_id', 'parent_version_id', 'created_at', 'live'],
+  toRow: (v) => [v.id, v.artifactId, v.number, v.title, v.content, v.kind, v.language, v.madeBy, v.messageId, v.parentVersionId, v.createdAt, v.live === null ? null : JSON.stringify(v.live)],
   fromRow: (row) => ({
     id: row.id as string,
     artifactId: row.artifact_id as string,
@@ -33,10 +41,11 @@ const VERSION: CrudMapping<ArtifactVersion> = {
     messageId: (row.message_id as string | null) ?? null,
     parentVersionId: (row.parent_version_id as string | null) ?? null,
     createdAt: row.created_at as number,
+    live: storedLive(row.live),
   }),
 };
 
-/** Artifacts and their versions (migrations 016, 017); both synced, so every write is stamped. */
+/** Artifacts and their versions (migrations 016, 017, 024); both synced, so every write is stamped. */
 export class SqliteArtifactRepo implements ArtifactRepo {
   private readonly artifacts: SqliteCrudRepo<Artifact>;
   private readonly versionRows: SqliteCrudRepo<ArtifactVersion>;
@@ -67,7 +76,7 @@ export class SqliteArtifactRepo implements ArtifactRepo {
     const artifact = this.get(v.artifactId);
     if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
     const { n } = this.db.prepare('SELECT COALESCE(MAX(number), 0) AS n FROM artifact_version WHERE artifact_id = ?').get(v.artifactId) as { n: number };
-    return this.versionRows.create({ ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number: n + 1 });
+    return this.versionRows.create({ ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, live: v.live ?? null, number: n + 1 });
   }
 
   getVersion(id: string): ArtifactVersion | null {
@@ -76,7 +85,7 @@ export class SqliteArtifactRepo implements ArtifactRepo {
 
   versionInfos(artifactId: string): ArtifactVersionInfo[] {
     const rows = this.db
-      .prepare("SELECT id, artifact_id, number, title, '' AS content, kind, language, made_by, message_id, parent_version_id, created_at FROM artifact_version WHERE artifact_id = ? ORDER BY number, created_at, id")
+      .prepare("SELECT id, artifact_id, number, title, '' AS content, kind, language, made_by, message_id, parent_version_id, created_at, live FROM artifact_version WHERE artifact_id = ? ORDER BY number, created_at, id")
       .all(artifactId) as Record<string, unknown>[];
     return rows.map((row) => {
       const { content: _content, ...info } = VERSION.fromRow(row);

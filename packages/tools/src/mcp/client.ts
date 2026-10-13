@@ -1,12 +1,24 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, type StdioServerParameters } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { FetchLike, Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js';
+import { looksSecret, redactMessage } from './redact.js';
+import { sameOrigin } from './url.js';
 import { resolveExecutable } from './spawn.js';
 
 export type McpTransportConfig =
   | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string> }
-  | { transport: 'http'; url: string; headers: Record<string, string> };
+  | {
+      transport: 'http';
+      url: string;
+      headers: Record<string, string>;
+      /** Sign-in (spec 2026-10-12-mcp-oauth-design §4): attached by `McpServerManager` to http servers without a fixed Authorization header. */
+      authProvider?: OAuthClientProvider;
+      /** Secret strings the provider holds right now (tokens), so an error that echoes one is redacted before `lastError` shows it. */
+      secrets?: () => string[];
+    };
 
 export interface McpToolDescriptor {
   name: string;
@@ -17,11 +29,22 @@ export interface McpToolDescriptor {
   destructiveHint?: boolean;
 }
 
-export type McpStatus = 'connecting' | 'ok' | 'error';
+/** `needs_auth`: the server answered 401 and only a browser sign-in can fix it. No reconnect is scheduled; `refresh()` starts over. */
+export type McpStatus = 'connecting' | 'ok' | 'error' | 'needs_auth';
+
+export const NEEDS_SIGN_IN_CALL_MESSAGE = 'This MCP server needs you to sign in again (Settings > MCP servers).';
 
 export interface McpCallResult {
   content: unknown;
   isError: boolean;
+  /** The result's `structuredContent`, when the server sent one (live artifacts pass it to the page). */
+  structured?: unknown;
+}
+
+/** Per-call options: the caller's abort signal and a timeout, passed to the SDK's own request options. */
+export interface McpCallOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface McpClientOptions {
@@ -40,8 +63,24 @@ const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 30_000;
 const DEFAULT_INITIAL_BACKOFF_MS = 1_000;
 const DEFAULT_MAX_BACKOFF_MS = 60_000;
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+/**
+ * A fetch that adds an http server's configured headers only to requests for
+ * the MCP server's own origin. They are not passed as the transport's
+ * `requestInit`, because the SDK's `auth()` merges those into discovery,
+ * registration and token requests, which go to whatever authorization server
+ * the server's metadata names: a configured `X-Api-Key` must not follow them
+ * there. A configured header replaces the SDK's own of the same name, as
+ * `requestInit` did.
+ */
+export function fetchWithServerHeaders(serverUrl: string, headers: Record<string, string>, base: FetchLike = (url, init) => fetch(url, init)): FetchLike {
+  if (Object.keys(headers).length === 0) return base;
+  return (url, init) => {
+    // Compared by `url.ts` (parsed, normalised; userinfo refused): origin is origin, whatever the path.
+    if (!sameOrigin(url, serverUrl)) return base(url, init);
+    const merged = new Headers(init?.headers);
+    for (const [name, value] of Object.entries(headers)) merged.set(name, value);
+    return base(url, { ...init, headers: merged });
+  };
 }
 
 interface RawListedTool {
@@ -118,7 +157,20 @@ export class McpClient {
     this.clearTimeoutFn = options.clearTimeout ?? clearTimeout;
   }
 
-  /** Subscribes to status transitions ('connecting' | 'ok' | 'error'). Returns an unsubscribe function. */
+  /**
+   * An error's text as `lastError` (and so the Inspector) or a failed tool call
+   * may show it. A response body or header an SDK error embeds can carry a token
+   * or a fixed credential, so the provider's tokens and every configured header
+   * and env value that looks like a secret (`looksSecret`) are redacted.
+   */
+  private errorMessage(err: unknown): string {
+    const message = err instanceof Error ? err.message : String(err);
+    const configured = Object.values(this.config.transport === 'http' ? this.config.headers : this.config.env).filter(looksSecret);
+    const held = this.config.transport === 'http' ? (this.config.secrets?.() ?? []) : [];
+    return redactMessage(message, [...configured, ...held]);
+  }
+
+  /** Subscribes to status transitions ('connecting' | 'ok' | 'error' | 'needs_auth'). Returns an unsubscribe function. */
   onStatusChange(cb: (status: McpStatus, error: string | null) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
@@ -150,8 +202,12 @@ export class McpClient {
       this.scheduleHealthCheck(seq);
     } catch (err) {
       if (seq !== this.connectSeq || this.closed) return;
+      if (this.signInRequired(err)) {
+        this.enterNeedsAuth();
+        return;
+      }
       this.client = null;
-      this.setStatus('error', errorMessage(err));
+      this.setStatus('error', this.errorMessage(err));
       this.scheduleReconnect(seq);
     }
   }
@@ -172,13 +228,28 @@ export class McpClient {
     await this.connect();
   }
 
-  async callTool(name: string, args: unknown): Promise<McpCallResult> {
+  async callTool(name: string, args: unknown, opts: McpCallOptions = {}): Promise<McpCallResult> {
+    if (this.status === 'needs_auth') throw new Error(NEEDS_SIGN_IN_CALL_MESSAGE);
     if (!this.client || this.status !== 'ok') {
       throw new Error(`MCP server "${this.id}" is not connected (status: ${this.status}).`);
     }
-    const result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined });
+    const request = {
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    };
+    let result: Awaited<ReturnType<Client['callTool']>>;
+    try {
+      result = await this.client.callTool({ name, arguments: args as Record<string, unknown> | undefined }, undefined, request);
+    } catch (err) {
+      // The same redaction as `lastError`: the message reaches the model, the chat and a live page.
+      if (this.signInRequired(err)) throw new Error(NEEDS_SIGN_IN_CALL_MESSAGE);
+      // The SDK's numeric error code (a live call's timeout, -32001) carries no secret, so it stays.
+      const code = (err as { code?: unknown } | null)?.code;
+      throw Object.assign(new Error(this.errorMessage(err)), typeof code === 'number' ? { code } : {});
+    }
     const content = 'content' in result ? result.content : result['toolResult'];
-    return { content, isError: 'isError' in result && result.isError === true };
+    const structured = 'structuredContent' in result ? result.structuredContent : undefined;
+    return { content, isError: 'isError' in result && result.isError === true, ...(structured !== undefined ? { structured } : {}) };
   }
 
   private buildTransport(): Transport {
@@ -197,16 +268,24 @@ export class McpClient {
       return new StdioClientTransport(params);
     }
     const headers = this.config.headers;
+    // No timeout of our own here: the background transport keeps the SDK's defaults.
     return new StreamableHTTPClientTransport(new URL(this.config.url), {
-      requestInit: Object.keys(headers).length > 0 ? { headers } : undefined,
+      fetch: Object.keys(headers).length > 0 ? fetchWithServerHeaders(this.config.url, headers) : undefined,
+      authProvider: this.config.authProvider,
     });
   }
 
   private handleUnexpectedClose(seq: number, err?: Error): void {
     if (seq !== this.connectSeq || this.closed) return; // stale event from an already-superseded/closed connection
+    // A failed connect fires onerror (with the sign-in error), then onclose (with none). Stay in needs_auth until refresh()/connect().
+    if (this.status === 'needs_auth') return;
+    if (err && this.signInRequired(err)) {
+      this.enterNeedsAuth();
+      return;
+    }
     this.client = null;
     this.clearTimer('health');
-    this.setStatus('error', err ? errorMessage(err) : 'The MCP server connection closed unexpectedly.');
+    this.setStatus('error', err ? this.errorMessage(err) : 'The MCP server connection closed unexpectedly.');
     this.scheduleReconnect(seq);
   }
 
@@ -225,8 +304,12 @@ export class McpClient {
       this.scheduleHealthCheck(seq);
     } catch (err) {
       if (seq !== this.connectSeq || this.closed) return;
+      if (this.signInRequired(err)) {
+        this.enterNeedsAuth();
+        return;
+      }
       this.client = null;
-      this.setStatus('error', errorMessage(err));
+      this.setStatus('error', this.errorMessage(err));
       this.scheduleReconnect(seq);
     }
   }
@@ -240,6 +323,21 @@ export class McpClient {
       void this.connect();
     }, delay);
     this.reconnectTimer.unref?.();
+  }
+
+  /** Only a server we attached a sign-in provider to can need a sign-in; a 401 with a fixed Authorization header stays an ordinary error. */
+  private signInRequired(err: unknown): boolean {
+    return this.config.transport === 'http' && this.config.authProvider !== undefined && isSignInRequired(err);
+  }
+
+  private enterNeedsAuth(): void {
+    const stale = this.client;
+    this.client = null;
+    this.clearTimer('health');
+    this.clearTimer('reconnect');
+    this.backoffMs = this.initialBackoffMs;
+    if (stale) void stale.close().catch(() => {});
+    if (this.status !== 'needs_auth') this.setStatus('needs_auth', SIGN_IN_REQUIRED_MESSAGE);
   }
 
   private clearTimer(which: 'health' | 'reconnect'): void {

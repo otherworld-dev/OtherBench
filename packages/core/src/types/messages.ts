@@ -1,8 +1,30 @@
+import type { Usage } from './usage.js';
+
+/** Where a sub-agent is (spec 2026-10-12-api-subagents-design): waiting for a slot, working, or finished one way or another. */
+export type SubagentStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+
+/**
+ * The mark on a reference to a file that has not been checked yet. Sync can
+ * bring a message before the file rows it names; until the row arrives, the
+ * store keeps the reference with `pending: true` (only ever `true`; a checked
+ * reference has no such field). The mark is set and cleared by the store on
+ * sync apply (store-sqlite `SqliteSyncRepo`) and by nothing else.
+ *
+ * A reader must treat a pending item as NOT shown: it names an attachment id
+ * nothing has verified, so it is not replayed to a model, not served, not
+ * offered to a peer as an image, and a UI shows a placeholder, not the file.
+ * It is carried by a user's `image` and `file` parts and by a tool result's
+ * image reference (`ToolImageRef` in domain/tool-images.ts).
+ */
+export interface PendingMark {
+  pending?: true;
+}
+
 export type Part =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'image'; attachmentId: string; mime: string }
-  | { type: 'file'; attachmentId: string; mime: string; filename: string }
+  | ({ type: 'image'; attachmentId: string; mime: string } & PendingMark)
+  | ({ type: 'file'; attachmentId: string; mime: string; filename: string } & PendingMark)
   | { type: 'tool-call'; id: string; name: string; args: unknown }
   | { type: 'tool-result'; id: string; name: string; result: unknown; isError: boolean }
   /**
@@ -16,7 +38,31 @@ export type Part =
    * not something the model said, so forwarding it as conversation history
    * would misattribute it as assistant output.
    */
-  | { type: 'notice'; text: string };
+  | { type: 'notice'; text: string }
+  /**
+   * A sub-agent this reply started with the `subagent` tool (API profiles
+   * only), with its own transcript in `parts`: text, reasoning, tool-call,
+   * tool-result and notice parts, never another `subagent` part. Tool results
+   * in it are a cut copy (the sub-agent's model saw them whole). Added when
+   * the call starts and updated as it runs (domain/parts.ts folds it). The
+   * parent model never sees it: `toModelMessages` drops it, and the parent
+   * only sees its own `subagent` tool call and result.
+   */
+  | {
+      type: 'subagent';
+      callId: string;
+      label: string;
+      prompt: string;
+      profileId: string;
+      profileName: string;
+      modelId: string;
+      status: SubagentStatus;
+      parts: Part[];
+      /** Why it failed, for a person; set with status `error`. */
+      error?: string;
+      /** What its model reported when it finished. Absent when it never finished. */
+      usage?: Usage;
+    };
 
 export type Role = 'system' | 'user' | 'assistant';
 export type MessageStatus = 'streaming' | 'complete' | 'error' | 'cancelled';

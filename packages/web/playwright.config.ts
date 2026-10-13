@@ -5,6 +5,9 @@ import { defineConfig } from '@playwright/test';
 
 const PORT = Number(process.env.GRUNT_E2E_PORT ?? 4756);
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
+/** The fixture site browser.spec.ts opens (e2e/fixtures/site-server.mjs). */
+export const SITE_PORT = Number(process.env.GRUNT_E2E_SITE_PORT ?? 4797);
+export const SITE_URL = `http://127.0.0.1:${SITE_PORT}`;
 /** The one Cowork session the e2e server finds (claude-import.spec.ts imports it). */
 export const COWORK_SESSION = { id: 'local_e2e_cowork', title: 'Cowork e2e session' };
 
@@ -32,6 +35,8 @@ writeFileSync(
 // A Claude Desktop config the server reads instead of the real one
 // (GRUNT_CLAUDE_DESKTOP_CONFIG), for mcp-import.spec.ts. The commands don't
 // exist anywhere, so importing a server never starts anything.
+// GRUNT_SANDBOX=fake gives the server a FakeSandbox (sandbox.spec.ts): setting
+// it up and running in it touch no VM.
 export const DESKTOP_SERVERS = { secret: 'e2e-desktop-secret-value', command: 'grunt-e2e-no-such-command' };
 const desktopConfig = join(dbDir, 'claude_desktop_config.json');
 writeFileSync(
@@ -59,11 +64,28 @@ export default defineConfig({
   // Requires `npm run build` (root or `-w @grunt/server -w @grunt/web`) to
   // have already produced packages/{server,web}/dist -- this only starts
   // the already-built server, it doesn't build it.
-  webServer: {
-    command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}"`,
-    url: `${BASE_URL}/api/health`,
-    reuseExistingServer: false,
-    timeout: 15_000,
-    env: { ...(process.env as Record<string, string>), GRUNT_COWORK_ROOT: coworkDir, GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig },
-  },
+  webServer: [
+    {
+      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}"`,
+      url: `${BASE_URL}/api/health`,
+      reuseExistingServer: false,
+      timeout: 15_000,
+      env: {
+        ...(process.env as Record<string, string>),
+        GRUNT_COWORK_ROOT: coworkDir,
+        GRUNT_CLAUDE_DESKTOP_CONFIG: desktopConfig,
+        GRUNT_SANDBOX: 'fake',
+        // The model's browser may reach the fixture site on 127.0.0.1 (tests only).
+        GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS: String(SITE_PORT),
+        // Computer use is carried out by core's FakeComputerDriver, which touches nothing on this machine (computer.spec.ts).
+        GRUNT_COMPUTER_FAKE_DRIVER: '1',
+      },
+    },
+    {
+      command: `node e2e/fixtures/site-server.mjs ${SITE_PORT}`,
+      url: `${SITE_URL}/`,
+      reuseExistingServer: false,
+      timeout: 10_000,
+    },
+  ],
 });

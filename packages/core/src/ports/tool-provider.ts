@@ -1,8 +1,39 @@
-import type { Grant } from './store.js';
+import type { Grant, LiveCall } from './store.js';
 import type { ToolPolicy, ToolSource } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
+import type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
+export type { AskAnswerResult, AskInput, AskOutcome, AskReply, PlanGate, UserAsk } from '../types/thread.js';
+
+/** Which sub-agent a tool call or approval card belongs to (spec 2026-10-12-api-subagents-design). */
+export interface SubagentTag {
+  /** The parent's `subagent` tool call id. */
+  callId: string;
+  /** The label the parent model gave it. */
+  label: string;
+  /**
+   * The parent reply's profile id. The sub-agent's tool calls are matched
+   * against, and any grant given on them is stored under, this profile, not
+   * the one it runs as: a sub-agent can never do more than its parent.
+   */
+  parentProfileId: string;
+  /** The profile it runs as, set only when that isn't the parent's own (for its approval cards). */
+  profileName?: string;
+}
+
+/** Runs sub-agents for one reply. The `subagent` tool's `execute` hands its call here. */
+export interface SubagentHost {
+  run(input: unknown, ctx: ToolContext): Promise<unknown>;
+}
 
 export type RiskClass = 'read' | 'mutate' | 'execute';
+
+/**
+ * Which declared call of which artifact version a live call is, by its
+ * declaration's hash, and the id of the MCP server its tool comes from now
+ * (spec 2026-10-12-live-artifacts). The server id is always the provider's
+ * own lookup, never anything the page sent.
+ */
+export type LiveCallRef = NonNullable<NonNullable<Grant['constraint']>['live']>;
 
 export interface ToolContext {
   chatId: string;
@@ -15,7 +46,8 @@ export interface ToolContext {
    * so approving a command while using a locked-down profile also approved
    * it for a permissive one. `PermissionBroker` stamps every grant it
    * creates with this id and refuses to match a grant belonging to a
-   * different profile.
+   * different profile. For a sub-agent's call it is the PARENT reply's
+   * profile (`SubagentTag.parentProfileId`), never the one it runs as.
    */
   profileId: string;
   workspaceRoot: string | null;
@@ -25,8 +57,45 @@ export interface ToolContext {
    * path always means the workspace. Absent means none.
    */
   folders?: ResolvedFolder[];
+  /**
+   * This reply's plan approval (spec 2026-10-12-thread-cards-design §4), set
+   * only while the chat's Plan mode is on. Until it is approved,
+   * `PermissionBroker.decide` refuses anything that could change something.
+   */
+  plan?: PlanGate;
+  /**
+   * Nobody can answer a card for this call: a scheduled run (spec
+   * 2026-10-12-scheduled-tasks-design). Questions and plans are answered for
+   * the model and never raise a card; any other call that would ask is refused
+   * with `approval_unavailable` instead of waiting (the sandbox's network
+   * cards included, spec 2026-10-12-sandbox-design "Unattended runs"). Set
+   * only by the schedule service, through `TurnInput.unattended`; it can only
+   * take permissions away.
+   */
+  unattended?: boolean;
+  /**
+   * Set only by `GruntToolProvider.runLiveCall`, never by an engine or
+   * `toolContextFor`: this call is one a live artifact's page asked for (spec
+   * 2026-10-12-live-artifacts). `PermissionBroker.decide` then takes its live
+   * branch, which allows only a live grant for exactly this call.
+   */
+  live?: LiveCallRef;
   signal: AbortSignal;
+  /** The model's id for this tool call, when the engine knows it. */
+  toolCallId?: string;
+  /** The reply's sub-agent runner; set only for a turn that offers the `subagent` tool. */
+  subagents?: SubagentHost;
+  /** Set on every call a sub-agent makes: whose call it is. */
+  subagent?: SubagentTag;
 }
+
+/**
+ * What `ToolSpec.describeCall` makes of a call before the broker decides
+ * (spec 2026-10-12-model-browser-design §1): the arguments the broker, the
+ * card, the audit and `execute` all see, and this call's risk; or a refusal,
+ * which ends the call with no card.
+ */
+export type DescribedCall = { args: Record<string, unknown>; risk: RiskClass } | { refuse: string };
 
 export interface ToolSpec {
   name: string;
@@ -44,6 +113,15 @@ export interface ToolSpec {
    * Undefined for built-in fs/shell tools, which have no server.
    */
   serverId?: string;
+  /**
+   * Works out what a call will act on before the broker decides. The provider
+   * calls it first (provider.ts `gate()` and `requestApproval()`); the broker
+   * then decides on `{ ...spec, risk }` with the described arguments, and
+   * `execute` receives those, never the raw ones. Specs without it are
+   * decided on their raw arguments, as before. The browser uses it to name
+   * the website a call touches; a `host` the model sent is thrown away.
+   */
+  describeCall?(args: unknown, ctx: ToolContext): Promise<DescribedCall>;
   execute(args: unknown, ctx: ToolContext): Promise<unknown>;
 }
 
@@ -69,6 +147,8 @@ export interface ApprovalRequest {
   source: ToolSpec['source'];
   args: unknown;
   summary: string;
+  /** Set when a sub-agent's tool call raised this card. */
+  subagent?: SubagentTag;
 }
 
 /** The human's answer to a previously-issued `ApprovalRequest`, as `PermissionBroker.resolve()` consumes it. */
@@ -89,13 +169,34 @@ export type ApprovalChoice =
  */
 export type ToolApprovalEvent =
   | { type: 'request'; request: ApprovalRequest }
-  | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] };
+  | { type: 'resolved'; requestId: string; messageId: string; choice: ApprovalChoice['choice'] }
+  /** A question or plan card for the user (spec 2026-10-12-thread-cards-design), tied to `ask.messageId`. */
+  | { type: 'ask'; ask: UserAsk }
+  /** That ask ended, however: answered, the turn stopped, or the backstop dropped it. */
+  | { type: 'ask-resolved'; askId: string; messageId: string };
 
 /** What `ToolProvider.requestApproval` decided for an externally executed tool call. */
 export type ApprovalOutcome =
-  | { allowed: true; grantedBy: string }
-  | { allowed: false; reason: string }
+  /** `args`: the described arguments, when the spec has `describeCall` (the Claude Code gate keeps them as a ticket). */
+  | { allowed: true; grantedBy: string; args?: unknown }
+  /**
+   * `about`: the line that says whose words `reason` may hold, when they may
+   * not be Grunt's (a computer call refused in the desktop app's words:
+   * `COMPUTER_SCREEN_ABOUT`). Whoever passes the reason on to a model puts
+   * this line first; it is not part of the reason a person is shown.
+   */
+  | { allowed: false; reason: string; about?: string }
   | { deferred: true };
+
+/**
+ * What a call is answered with when it comes to be run and no approval
+ * stands behind it: on Claude Code's path, a relayed call with no ticket
+ * (engine-claude-code `runRelayed`) and one the tool provider did not approve
+ * for that chat and reply (`GruntToolProvider.runRelayedCall`); in the
+ * browser tool, arguments that carry no approved site. One sentence for all
+ * three, so the model reads the same thing whichever of them refused.
+ */
+export const NO_APPROVAL_REASON = 'Grunt has no approval for this call.';
 
 /** Options for `ToolProvider.requestApproval`. */
 export interface ApprovalOptions {
@@ -105,6 +206,53 @@ export interface ApprovalOptions {
    * card, when `isDeferrableInAutoMode` allows it. Deny/allow are unaffected.
    */
   deferAsk?: boolean;
+}
+
+/** One declared call of a live page, as the viewer's panel shows it (spec 2026-10-12-live-artifacts). */
+export interface LiveCallStatus {
+  callId: string;
+  /** The namespaced MCP name, `mcp__<server>__<tool>`. */
+  tool: string;
+  serverName: string;
+  toolName: string;
+  /** The server's description of the tool, at most 300 characters, shown as plain text. */
+  description: string;
+  state: 'allowed' | 'needs_ok' | 'unavailable';
+  /** Why it is unavailable. */
+  reason?: string;
+}
+
+export type LiveCallFailure = 'not_approved' | 'refused' | 'not_available' | 'rate_limited' | 'timeout' | 'tool_error' | 'failed' | 'too_large';
+
+/** What a live call came back as: data for the page, or why not. */
+export type LiveCallOutcome =
+  | { ok: true; text: string; json?: unknown; structured?: unknown; cached: boolean; at: number }
+  | { ok: false; code: LiveCallFailure; message: string };
+
+/** A live page's calls, for its status or to allow them: each declared call with its declaration hash. */
+export interface LiveStatusRequest {
+  chatId: string;
+  profileId: string;
+  policy: ToolPolicy;
+  artifactId: string;
+  calls: { call: LiveCall; hash: string }[];
+}
+
+/** One live call to run. `args` are already built from the stored declaration (never from the page). */
+export interface LiveRunRequest {
+  chatId: string;
+  /** The version's reply: audit rows point at it. */
+  messageId: string;
+  profileId: string;
+  policy: ToolPolicy;
+  artifactId: string;
+  callId: string;
+  hash: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  /** Skip the cache and replace its entry (Refresh). */
+  fresh: boolean;
+  signal: AbortSignal;
 }
 
 export interface ToolProvider {
@@ -136,4 +284,21 @@ export interface ToolProvider {
    * classifier's reason as the summary. Changes no decision. Never throws.
    */
   recordAgentDenial(ctx: ToolContext, toolName: string, args: unknown, reason: string): void;
+  /**
+   * Puts a question or a plan to the user and waits (spec
+   * 2026-10-12-thread-cards-design): raises an `ask` event, then settles on
+   * `answerAsk`, on the turn's signal, or at once with `{ unattended: true }`
+   * when `ctx.unattended` is set (no event at all then).
+   */
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome>;
+  /** Answers a pending ask: `'unknown'` for an unknown or settled id, `{ invalid }` for a reply that doesn't fit it. Never throws. */
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult;
+  /** Live artifacts (spec 2026-10-12-live-artifacts): each declared call's state for the viewer's panel. */
+  liveStatus(req: LiveStatusRequest): LiveCallStatus[];
+  /** Grants the calls that need an OK (PermissionBroker.grantLive), then returns the status again. */
+  allowLive(req: LiveStatusRequest): LiveCallStatus[];
+  /** Stop live data: removes the chat's live grants for the artifact. Returns how many. */
+  revokeLive(chatId: string, artifactId: string): number;
+  /** Runs one live call through the broker's live branch, the cache and the limits. Never throws. */
+  runLiveCall(req: LiveRunRequest): Promise<LiveCallOutcome>;
 }

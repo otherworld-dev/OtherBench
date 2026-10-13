@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { attachmentBound } from '@grunt/core/domain/attachment-binding.js';
 import type { Attachment, AttachmentRepo } from '@grunt/core/ports/store.js';
 import { SqliteCrudRepo, type CrudMapping } from './crud.js';
 import { clockOf, type SyncClock } from './clock.js';
@@ -31,7 +32,22 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
     this.crud = new SqliteCrudRepo(db, mapping, clock);
   }
 
+  /**
+   * A file is tied to one chat for good, and once it is sent to a message of
+   * that chat: the same rule sync applies to a row from another machine
+   * (`attachmentBound` in core, and `BOUND_ATTACHMENT_SQL` in sync.ts). A message of another chat, or one that
+   * does not exist, is refused whoever asks (a route, an import, a turn).
+   */
+  private requireBoundTo(chatId: string, messageId: string | null): void {
+    if (messageId === null) return;
+    const message = this.db.prepare('SELECT chat_id FROM message WHERE id = ?').get(messageId) as { chat_id: string } | undefined;
+    if (!attachmentBound({ chatId, messageId }, message?.chat_id ?? null)) {
+      throw new Error(`Attachment cannot be bound to message "${messageId}": it is not a message of chat "${chatId}".`);
+    }
+  }
+
   create(a: Attachment): Attachment {
+    this.requireBoundTo(a.chatId, a.messageId);
     return this.crud.create(a);
   }
 
@@ -44,6 +60,21 @@ export class SqliteAttachmentRepo implements AttachmentRepo {
   }
 
   update(id: string, patch: Partial<Omit<Attachment, 'id'>>): Attachment {
+    const current = this.crud.get(id);
+    if (current) {
+      // Chat, content and type never change; the message it was sent with is set once.
+      if (patch.chatId !== undefined && patch.chatId !== current.chatId) throw new Error(`Attachment "${id}" cannot move to another chat.`);
+      if (patch.sha256 !== undefined && patch.sha256 !== current.sha256) throw new Error(`Attachment "${id}" cannot change its content.`);
+      if (patch.mime !== undefined && patch.mime !== current.mime) throw new Error(`Attachment "${id}" cannot change its type.`);
+      if (patch.size !== undefined && patch.size !== current.size) throw new Error(`Attachment "${id}" cannot change its size.`);
+      if (patch.extractedText !== undefined && current.extractedText !== null && patch.extractedText !== current.extractedText) {
+        throw new Error(`Attachment "${id}" already has its extracted text.`);
+      }
+      if (patch.messageId !== undefined && patch.messageId !== current.messageId) {
+        if (current.messageId !== null) throw new Error(`Attachment "${id}" was already sent with message "${current.messageId}".`);
+        this.requireBoundTo(current.chatId, patch.messageId);
+      }
+    }
     return this.crud.update(id, patch);
   }
 

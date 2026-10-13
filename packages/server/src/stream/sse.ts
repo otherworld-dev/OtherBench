@@ -27,6 +27,12 @@ export interface SseSink {
   comment(text: string): void;
   /** Ends the stream from this side (the cleanup still runs, once). */
   close(): void;
+  /**
+   * Whether the reader has caught up: false while a record is still queued
+   * unread (a client on a bad connection). Senders of bulky, replaceable data
+   * (live-view frames) check it and hold back; `send` itself never refuses.
+   */
+  ready(): boolean;
 }
 
 /**
@@ -67,6 +73,9 @@ export function sseStream(setup: (sink: SseSink) => () => void): Response {
         },
         comment(text) {
           controller.enqueue(encoder.encode(`: ${text.replace(/\n/g, ' ')}\n\n`));
+        },
+        ready() {
+          return (controller.desiredSize ?? 0) > 0;
         },
         close() {
           runCleanup();

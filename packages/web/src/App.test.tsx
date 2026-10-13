@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSidebarWidthForTests } from './state/sidebarWidth.js';
+import { useAuthStore } from './state/auth.js';
 import { useGruntStore } from './state/store.js';
 import { App } from './App.js';
 
@@ -22,6 +23,7 @@ vi.mock('./state/api.js', () => ({
 // The app-wide event stream is tested on its own (state/store.test.ts, server events.test.ts).
 vi.mock('./state/useAppEvents.js', () => ({ useAppEvents: () => {} }));
 vi.mock('./views/QuickChat.js', () => ({ QuickChat: () => <div data-testid="quick-chat-view" /> }));
+vi.mock('./views/IndicatorView.js', () => ({ IndicatorView: () => <div data-testid="indicator-view" /> }));
 
 import { api } from './state/api.js';
 
@@ -39,6 +41,7 @@ function reset(): void {
   window.localStorage.clear();
   resetSidebarWidthForTests();
   useGruntStore.setState(useGruntStore.getInitialState(), true);
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
   mockedConnections.mockReset();
   mockedModels.mockReset();
   mockedProfiles.mockReset();
@@ -88,6 +91,21 @@ describe('App bootstrap', () => {
     render(<App />);
 
     await waitFor(() => expect(useGruntStore.getState().projects.map((p) => p.id)).toEqual(['p-a']));
+  });
+
+  it('has a Sign out button in sign-in mode only', async () => {
+    mockedConnections.mockResolvedValue([]);
+    mockedModels.mockResolvedValue([]);
+    mockedProfiles.mockResolvedValue([]);
+    mockedChats.mockResolvedValue([]);
+    const first = render(<App />);
+    await screen.findByRole('button', { name: 'Settings' });
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    first.unmount();
+
+    useAuthStore.setState({ mode: 'login', status: 'ready' });
+    render(<App />);
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   });
 
   it('shows a clear unreachable-server banner when every bootstrap fetch fails', async () => {
@@ -184,6 +202,15 @@ describe('App view', () => {
     window.history.replaceState({}, '', '/');
     render(<App />);
     expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
+  });
+
+  it('renders only the computer-use indicator when the URL has view=indicator', () => {
+    window.history.replaceState({}, '', '/?view=indicator&title=Budget');
+    render(<App />);
+    expect(screen.getByTestId('indicator-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('quick-chat-view')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Expand inspector' })).toBeNull();
+    window.history.replaceState({}, '', '/');
   });
 
   it('has no top bar', () => {

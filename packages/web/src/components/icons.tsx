@@ -62,3 +62,23 @@ export function ChartIcon({ className }: IconProps): JSX.Element {
     </Svg>
   );
 }
+
+/** A door with an arrow leaving it: Sign out. */
+export function SignOutIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <path d="M6.5 2.5h-3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3" />
+      <path d="M10.5 5l3 3-3 3M13.5 8h-7" />
+    </Svg>
+  );
+}
+
+/** A clock face: scheduled tasks. */
+export function ClockIcon({ className }: IconProps): JSX.Element {
+  return (
+    <Svg className={className}>
+      <circle cx="8" cy="8" r="5.75" />
+      <path d="M8 4.75V8l2.25 1.5" />
+    </Svg>
+  );
+}

@@ -488,6 +488,58 @@ describe('app-wide events (Task 34)', () => {
     s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
     expect(selectPendingApprovalCount(s())).toBe(0);
   });
+
+  it('bumps the schedules version on each schedule event, and opens and closes the Scheduled overlay', () => {
+    const s = () => useGruntStore.getState();
+    expect(s().schedulesVersion).toBe(0);
+    s().applyAppEvent({ type: 'schedules-changed' });
+    s().applyAppEvent({ type: 'schedule-run-started', scheduleId: 's', scheduleName: 'S', runId: 'r', chatId: 'c', messageId: 'm' });
+    s().applyAppEvent({ type: 'schedule-run-finished', scheduleId: 's', scheduleName: 'S', runId: 'r', chatId: 'c', messageId: 'm', status: 'complete', detail: null });
+    expect(s().schedulesVersion).toBe(3);
+
+    expect(s().schedulesPage).toBeNull();
+    s().openSchedules({ kind: 'chat', chatId: 'c' });
+    expect(s().schedulesPage).toEqual({ prefill: { kind: 'chat', chatId: 'c' } });
+    s().openSchedules();
+    expect(s().schedulesPage).toEqual({});
+    s().closeSchedules();
+    expect(s().schedulesPage).toBeNull();
+  });
+});
+
+describe('chats controlling the computer (computer use)', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+
+  it('keeps the chats controlling the computer from the hello and from computer-session events', () => {
+    const s = () => useGruntStore.getState();
+    expect(s().computerSessions).toEqual({});
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'c1', lastAction: 'click at 3, 4' }] });
+    expect(s().computerSessions).toEqual({ c1: { lastAction: 'click at 3, 4' } });
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c2', active: true });
+    expect(s().computerSessions['c2']).toEqual({});
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c2', active: true, lastAction: 'click at 1, 2' });
+    expect(s().computerSessions['c2']).toEqual({ lastAction: 'click at 1, 2' });
+    // An event with no lastAction keeps the last one.
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c2', active: true });
+    expect(s().computerSessions['c2']).toEqual({ lastAction: 'click at 1, 2' });
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: false });
+    expect(Object.keys(s().computerSessions)).toEqual(['c2']);
+  });
+
+  it('a hello replaces the set, and one with no computerSessions (an older server) clears it', () => {
+    const s = () => useGruntStore.getState();
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: true, lastAction: 'press ctrl+s' });
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'c3' }] });
+    expect(s().computerSessions).toEqual({ c3: {} });
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
+    expect(s().computerSessions).toEqual({});
+  });
+
+  it('keeps no lastAction that is not a string', () => {
+    const s = () => useGruntStore.getState();
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: true, lastAction: { text: 'x' } as unknown as string });
+    expect(s().computerSessions['c1']).toEqual({});
+  });
 });
 
 describe('running replies from app-wide events (#824)', () => {
@@ -599,5 +651,22 @@ describe('the project page slot', () => {
     expect(useGruntStore.getState().projectPage).toEqual({ mode: 'edit', projectId: 'p1' });
     useGruntStore.getState().closeProjectPage();
     expect(useGruntStore.getState().projectPage).toBeNull();
+  });
+});
+
+describe('asks and the app-wide pending list', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+  it('dropAsk removes a dead card from whichever message holds it', () => {
+    const ask = { kind: 'plan' as const, toolName: 'propose_plan', plan: '1. x', id: 'a1', chatId: 'c1', messageId: 'm1' };
+    useGruntStore.setState({ extras: { m1: { usage: null, pendingApprovals: [], pendingAsks: [ask] } } });
+    useGruntStore.getState().dropAsk('a1');
+    expect(useGruntStore.getState().extras['m1']!.pendingAsks).toEqual([]);
+  });
+  it('keeps the kind of a pending question, and the tray counts tool approvals only', () => {
+    const s = useGruntStore.getState();
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });
+    s.applyAppEvent({ type: 'approval-requested', chatId: 'c1', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
+    expect(useGruntStore.getState().appPendingApprovals['a1']).toMatchObject({ kind: 'question' });
+    expect(selectPendingApprovalCount(useGruntStore.getState())).toBe(1);
   });
 });

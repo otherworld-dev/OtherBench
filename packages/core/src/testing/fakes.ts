@@ -12,12 +12,16 @@ import type {
   ApprovalChoice,
   ApprovalOptions,
   ApprovalOutcome,
+  LiveCallOutcome,
+  LiveCallStatus,
+  LiveRunRequest,
+  LiveStatusRequest,
   ToolApprovalEvent,
   ToolContext,
   ToolProvider,
   ToolSpec,
 } from '../ports/tool-provider.js';
-import type { ToolPolicy } from '../types/config.js';
+import { runsShellInSandbox, type ToolPolicy } from '../types/config.js';
 import type {
   AppSettings,
   Artifact,
@@ -57,14 +61,26 @@ import type {
   UsageRepo,
   NewArtifactVersion,
   ArtifactVersionInfo,
+  NewSchedule,
+  NewScheduleRun,
+  Schedule,
+  SchedulePatch,
+  ScheduleRepo,
+  ScheduleRun,
+  ScheduleRunPatch,
 } from '../ports/store.js';
 import type { Peer } from '../types/peer.js';
 import type { Location, LocationPath, NodeInfo } from '../types/workspace.js';
+import { UserAsks } from '../domain/user-asks.js';
+import type { AskAnswerResult, AskInput, AskOutcome, AskReply } from '../types/thread.js';
 import { toStoredWorkspace } from '../domain/workspace.js';
-import { isDeferrableInAutoMode, PermissionBroker } from '../domain/permissions.js';
+import { isDeferrableInAutoMode, PermissionBroker, UNATTENDED_REASON } from '../domain/permissions.js';
 import { compareProjects } from '../domain/projects.js';
 import { MEMORY_VERSIONS_KEPT } from '../domain/memory.js';
+import { SCHEDULE_RUNS_KEPT } from '../domain/schedule.js';
 import { DEFAULT_APP_SETTINGS } from '../domain/settings.js';
+import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type SandboxVersions } from '../ports/sandbox.js';
+import { normaliseWindowsPath, toSandboxPath } from '../domain/sandbox-paths.js';
 import type { ModelInfo, Profile } from '../types/config.js';
 import type { CanonMessage, EngineMeta, MessageStatus, Part, SerializedError } from '../types/messages.js';
 
@@ -143,6 +159,98 @@ export class FakeSecretStore implements SecretStore {
 }
 
 // ---------------------------------------------------------------------------
+// FakeSandbox
+// ---------------------------------------------------------------------------
+
+export interface FakeSandboxOptions {
+  /** Start ready, as if set up. Default: not set up, like a fresh machine. */
+  ready?: boolean;
+  /** This machine's name, for the "isn't set up on <machine>" refusal. */
+  machine?: () => string;
+  /** Hosts every run asks about (through `req.askHost`) before it finishes. */
+  askHosts?: { host: string; port?: number }[];
+  /** Changes to the result a run returns. */
+  result?: (req: SandboxRunRequest) => Partial<SandboxRunResult>;
+}
+
+export const FAKE_SANDBOX_VERSIONS: SandboxVersions = { distro: 'Fake Linux 1.0', runtime: '0.0.79', node: 'v24.21.0' };
+
+function fakeSandboxCwd(root: string): string {
+  try {
+    return toSandboxPath(normaliseWindowsPath(root));
+  } catch {
+    return root;
+  }
+}
+
+/**
+ * A `Sandbox` test double, and the e2e server's (GRUNT_SANDBOX=fake): records
+ * every request, runs nothing, and answers like a sandbox that worked.
+ */
+export class FakeSandbox implements Sandbox {
+  readonly requests: SandboxRunRequest[] = [];
+  readonly released: string[] = [];
+  readonly asked: { host: string; port: number | undefined; allowed: boolean }[] = [];
+  setupCalls = 0;
+  closed = false;
+  private state: 'not_set_up' | 'ready';
+  private packages: string[] = [];
+  private readonly machine: () => string;
+
+  constructor(private readonly options: FakeSandboxOptions = {}) {
+    this.state = options.ready === true ? 'ready' : 'not_set_up';
+    this.machine = options.machine ?? (() => 'This machine');
+  }
+
+  async status(): Promise<SandboxStatus> {
+    const base = { packages: [...this.packages], machine: this.machine() };
+    return this.state === 'ready' ? { state: 'ready', versions: { ...FAKE_SANDBOX_VERSIONS }, ...base } : { state: 'not_set_up', ...base };
+  }
+
+  async setup(): Promise<void> {
+    this.setupCalls += 1;
+    this.state = 'ready';
+  }
+
+  async remove(): Promise<void> {
+    this.state = 'not_set_up';
+  }
+
+  async setPackages(packages: string[]): Promise<void> {
+    this.packages = [...packages];
+  }
+
+  async run(req: SandboxRunRequest): Promise<SandboxRunResult> {
+    this.requests.push(req);
+    if (this.state !== 'ready') throw new SandboxError('not_set_up', `The sandbox isn't set up on ${this.machine()}.`);
+    for (const { host, port } of this.options.askHosts ?? []) {
+      const allowed = await req.askHost(host, port);
+      this.asked.push({ host, port, allowed });
+    }
+    return {
+      command: req.command,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      truncated: false,
+      timeoutMsUsed: req.timeoutMs,
+      output: `fake sandbox ran: ${req.command}\n`,
+      sandbox: true,
+      cwd: fakeSandboxCwd(req.workspaceRoot),
+      ...this.options.result?.(req),
+    };
+  }
+
+  async release(chatId: string): Promise<void> {
+    this.released.push(chatId);
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // FakeToolProvider
 // ---------------------------------------------------------------------------
 
@@ -165,10 +273,12 @@ export interface FakeMcpServer {
 }
 
 export interface FakeToolProviderOptions {
-  /** Built-in (fs/shell) tools. Defaults to one read fs tool, one mutate fs tool and a shell tool. */
+  /** Built-in (fs/shell) tools. Defaults to one read fs tool, one mutate fs tool, the host shell tool and the sandboxed one. */
   tools?: ToolSpec[];
   /** MCP servers whose tools are offered when the policy enables their id. */
   mcpServers?: FakeMcpServer[];
+  /** The store its `PermissionBroker` reads grants from and writes them to. Defaults to a private `InMemoryStore`. */
+  store?: Store;
 }
 
 /**
@@ -191,6 +301,9 @@ const FAKE_CANCELLED = {
   reason: 'The turn was stopped before this tool call was approved, so it did not run. Nobody denied it.',
 };
 
+/** What GruntToolProvider returns when an unattended run's call would need a card. */
+const FAKE_UNATTENDED = { ok: false as const, code: 'approval_unavailable' as const, reason: UNATTENDED_REASON };
+
 export class FakeToolProvider implements ToolProvider {
   readonly refreshed: string[] = [];
   readonly denials: { toolName: string; reason: string }[] = [];
@@ -200,13 +313,16 @@ export class FakeToolProvider implements ToolProvider {
   private readonly broker: PermissionBroker;
   private readonly tools: ToolSpec[];
   private readonly mcpServers: FakeMcpServer[];
+  /** The real ask bookkeeping, so the fake behaves exactly as GruntToolProvider does. */
+  private readonly asks = new UserAsks((event) => this.notify(event));
 
   constructor(options: FakeToolProviderOptions = {}) {
-    this.broker = new PermissionBroker(new InMemoryStore());
+    this.broker = new PermissionBroker(options.store ?? new InMemoryStore());
     this.tools = options.tools ?? [
       stubTool('read_file', 'read', 'fs'),
       stubTool('write_file', 'mutate', 'fs'),
       stubTool('run_command', 'execute', 'shell'),
+      stubTool('run_command', 'execute', 'sandbox'),
     ];
     this.mcpServers = options.mcpServers ?? [];
   }
@@ -215,9 +331,12 @@ export class FakeToolProvider implements ToolProvider {
     const raw: ToolSpec[] = [];
     if (policy.fs === 'readwrite') raw.push(...this.tools.filter((t) => t.source === 'fs'));
     else if (policy.fs === 'read') raw.push(...this.tools.filter((t) => t.source === 'fs' && t.risk === 'read'));
-    if (policy.shell) raw.push(...this.tools.filter((t) => t.source === 'shell'));
+    // One run_command, never both: the sandboxed one when the shell runs there.
+    if (policy.shell) raw.push(...this.tools.filter((t) => t.source === (runsShellInSandbox(policy) ? 'sandbox' : 'shell')));
     if (policy.artifacts !== false) raw.push(...this.tools.filter((t) => t.source === 'artifact'));
     if (policy.recall !== false) raw.push(...this.tools.filter((t) => t.source === 'recall'));
+    raw.push(...this.tools.filter((t) => t.source === 'thread'));
+    if (policy.subagents === true) raw.push(...this.tools.filter((t) => t.source === 'subagent'));
     for (const id of policy.mcpServerIds) {
       const server = this.mcpServers.find((s) => s.id === id);
       if (!server) continue;
@@ -264,7 +383,7 @@ export class FakeToolProvider implements ToolProvider {
 
   async requestApproval(tool: ToolSpec, args: unknown, policy: ToolPolicy, ctx: ToolContext, opts: ApprovalOptions = {}): Promise<ApprovalOutcome> {
     const decision = this.broker.decide(tool, args, policy, ctx);
-    if (decision.kind === 'ask' && opts.deferAsk === true && isDeferrableInAutoMode(tool, args)) {
+    if (decision.kind === 'ask' && opts.deferAsk === true && ctx.unattended !== true && isDeferrableInAutoMode(tool, args)) {
       this.broker.discard(decision.request.id);
       return { deferred: true };
     }
@@ -274,6 +393,31 @@ export class FakeToolProvider implements ToolProvider {
 
   recordAgentDenial(_ctx: ToolContext, toolName: string, _args: unknown, reason: string): void {
     this.denials.push({ toolName, reason });
+  }
+
+  askUser(ctx: ToolContext, input: AskInput): Promise<AskOutcome> {
+    return this.asks.ask(ctx, input);
+  }
+
+  answerAsk(askId: string, reply: AskReply): AskAnswerResult {
+    return this.asks.answer(askId, reply);
+  }
+
+  /** The fake runs no live calls (spec 2026-10-12-live-artifacts): every call is unavailable. */
+  liveStatus(req: LiveStatusRequest): LiveCallStatus[] {
+    return req.calls.map(({ call }): LiveCallStatus => ({ callId: call.id, tool: call.tool, serverName: '', toolName: '', description: '', state: 'unavailable', reason: 'The fake tool provider runs no live calls.' }));
+  }
+
+  allowLive(req: LiveStatusRequest): LiveCallStatus[] {
+    return this.liveStatus(req);
+  }
+
+  revokeLive(): number {
+    return 0;
+  }
+
+  async runLiveCall(_req: LiveRunRequest): Promise<LiveCallOutcome> {
+    return { ok: false, code: 'not_available', message: 'The fake tool provider runs no live calls.' };
   }
 
   private gate(tool: ToolSpec, policy: ToolPolicy): ToolSpec {
@@ -292,7 +436,7 @@ export class FakeToolProvider implements ToolProvider {
   private async settle(
     decision: ReturnType<PermissionBroker['decide']>,
     ctx: ToolContext
-  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled'; reason: string }> {
+  ): Promise<{ ok: true; grantedBy: string } | { ok: false; code: 'permission_denied' | 'approval_denied' | 'cancelled' | 'approval_unavailable'; reason: string }> {
     if (decision.kind === 'deny') return { ok: false, code: 'permission_denied', reason: decision.reason };
     if (decision.kind === 'allow') return { ok: true, grantedBy: decision.grantId ? `${decision.grantedBy}:${decision.grantId}` : decision.grantedBy };
 
@@ -301,6 +445,11 @@ export class FakeToolProvider implements ToolProvider {
     if (ctx.signal.aborted) {
       this.broker.discard(request.id);
       return FAKE_CANCELLED;
+    }
+    // Nobody can answer this run's cards: drop the request, raise none.
+    if (ctx.unattended === true) {
+      this.broker.discard(request.id);
+      return FAKE_UNATTENDED;
     }
     // Waiter registered BEFORE notifying so a listener may answer synchronously.
     const pending = new Promise<{ choice: ApprovalChoice; cancelled: boolean }>((resolve) => {
@@ -437,7 +586,10 @@ class InMemoryModelRepo implements ModelRepo {
 
 class InMemoryProfileRepo implements ProfileRepo {
   private readonly repo = new InMemoryCrudRepo<Profile>();
-  constructor(private readonly projects: ProjectRepo) {}
+  constructor(
+    private readonly projects: ProjectRepo,
+    private readonly onDelete: (profileId: string) => void = () => {}
+  ) {}
   create(p: Profile): Profile {
     return this.repo.create({ ...p, useGlobalMemory: p.useGlobalMemory ?? true });
   }
@@ -456,6 +608,7 @@ class InMemoryProfileRepo implements ProfileRepo {
       if (project.defaultProfileId === id) this.projects.update(project.id, { defaultProfileId: null });
     }
     this.repo.delete(id);
+    this.onDelete(id);
   }
 }
 
@@ -546,7 +699,10 @@ class InMemoryPeerRepo implements PeerRepo {
 
 class InMemoryChatRepo implements ChatRepo {
   private readonly repo = new InMemoryCrudRepo<Chat>();
-  constructor(private readonly selfNodeId: string) {}
+  constructor(
+    private readonly selfNodeId: string,
+    private readonly onDelete: (chatId: string) => void = () => {}
+  ) {}
   /** A deleted location takes its chats' folders with it (the SQL schema's ON DELETE SET NULL). */
   clearLocation(locationId: string): void {
     for (const chat of this.repo.list()) {
@@ -561,6 +717,7 @@ class InMemoryChatRepo implements ChatRepo {
       workspace: fields.workspace ?? null,
       runsOn: c.runsOn ?? this.selfNodeId,
       autoMode: c.autoMode ?? false,
+      planMode: c.planMode ?? false,
       projectId: c.projectId ?? null,
       memoryCursor: c.memoryCursor ?? null,
       memoryExcluded: c.memoryExcluded ?? false,
@@ -588,6 +745,7 @@ class InMemoryChatRepo implements ChatRepo {
   }
   delete(id: string): void {
     this.repo.delete(id);
+    this.onDelete(id);
   }
 }
 
@@ -720,6 +878,8 @@ class InMemoryGlobalMemoryRepo implements GlobalMemoryRepo {
 
 class InMemorySettingsRepo implements SettingsRepo {
   private value: AppSettings = { ...DEFAULT_APP_SETTINGS };
+  /** JSON text, so a caller can't change a stored value through the object it passed in. */
+  private readonly values = new Map<string, string>();
   get(): AppSettings {
     return { ...this.value };
   }
@@ -728,6 +888,15 @@ class InMemorySettingsRepo implements SettingsRepo {
       if (value !== undefined) this.value = { ...this.value, [key]: value };
     }
     return this.get();
+  }
+  getValue(key: string): unknown {
+    const text = this.values.get(key);
+    return text === undefined ? null : (JSON.parse(text) as unknown);
+  }
+  setValue(key: string, value: unknown): void {
+    if (Object.hasOwn(DEFAULT_APP_SETTINGS, key)) throw new Error(`"${key}" is a settings key: change it with update().`);
+    if (value === null || value === undefined) this.values.delete(key);
+    else this.values.set(key, JSON.stringify(value));
   }
 }
 
@@ -1004,7 +1173,7 @@ class InMemoryArtifactRepo implements ArtifactRepo {
     const artifact = this.artifacts.get(v.artifactId);
     if (!artifact) throw new Error(`Artifact "${v.artifactId}" not found.`);
     const number = Math.max(0, ...this.versions(v.artifactId).map((x) => x.number)) + 1;
-    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, number };
+    const full: ArtifactVersion = { ...v, kind: v.kind ?? artifact.kind, language: v.language !== undefined ? v.language : artifact.language, live: v.live ?? null, number };
     this.versionsById.set(v.id, full);
     return { ...full };
   }
@@ -1018,6 +1187,122 @@ class InMemoryArtifactRepo implements ArtifactRepo {
   }
   versions(artifactId: string): ArtifactVersion[] {
     return [...this.versionsById.values()].filter((v) => v.artifactId === artifactId).sort((x, y) => x.number - y.number).map((v) => ({ ...v }));
+  }
+}
+
+/** Mirrors SqliteScheduleRepo, including the foreign keys' cascades (called by the chat, project and profile repos). */
+class InMemoryScheduleRepo implements ScheduleRepo {
+  private readonly rows = new Map<string, Schedule>();
+  /** Every run with the order it was added, for ties on `startedAt` (SQLite: rowid). */
+  private runRows: { run: ScheduleRun; seq: number }[] = [];
+  private seq = 0;
+
+  create(s: NewSchedule): Schedule {
+    if (this.rows.has(s.id)) throw new Error(`Duplicate id: ${s.id}`);
+    const now = Date.now();
+    const full: Schedule = { ...structuredClone(s), createdAt: s.createdAt ?? now, updatedAt: s.updatedAt ?? now };
+    this.rows.set(full.id, full);
+    return structuredClone(full);
+  }
+
+  get(id: string): Schedule | null {
+    const s = this.rows.get(id);
+    return s ? structuredClone(s) : null;
+  }
+
+  list(): Schedule[] {
+    return [...this.rows.values()]
+      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((s) => structuredClone(s));
+  }
+
+  update(id: string, patch: SchedulePatch): Schedule {
+    const current = this.rows.get(id);
+    if (!current) throw new Error(`schedule: not found: ${id}`);
+    const next: Schedule = { ...current, ...structuredClone(patch) };
+    this.rows.set(id, next);
+    return structuredClone(next);
+  }
+
+  delete(id: string): void {
+    this.rows.delete(id);
+    this.runRows = this.runRows.filter((r) => r.run.scheduleId !== id);
+  }
+
+  due(now: number): Schedule[] {
+    return this.list()
+      .filter((s) => s.enabled && s.nextRunAt !== null && s.nextRunAt <= now)
+      .sort((a, b) => (a.nextRunAt ?? 0) - (b.nextRunAt ?? 0) || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  addRun(r: NewScheduleRun): ScheduleRun {
+    // Mirrors schedule_run.schedule_id's foreign key and its primary key.
+    if (!this.rows.has(r.scheduleId)) throw new Error(`schedule_run: no schedule ${r.scheduleId}`);
+    if (this.runRows.some((x) => x.run.id === r.id)) throw new Error(`Duplicate id: ${r.id}`);
+    const full: ScheduleRun = {
+      finishedAt: null,
+      detail: null,
+      chatId: null,
+      createdChat: false,
+      userMessageId: null,
+      messageId: null,
+      refusedCalls: 0,
+      ...structuredClone(r),
+    };
+    this.runRows.push({ run: full, seq: this.seq++ });
+    const keep = new Set(this.newestFirst(r.scheduleId).slice(0, SCHEDULE_RUNS_KEPT).map((x) => x.id));
+    this.runRows = this.runRows.filter((x) => x.run.scheduleId !== r.scheduleId || keep.has(x.run.id));
+    return structuredClone(full);
+  }
+
+  updateRun(id: string, patch: ScheduleRunPatch): ScheduleRun | null {
+    const row = this.runRows.find((x) => x.run.id === id);
+    if (!row) return null;
+    row.run = { ...row.run, ...structuredClone(patch) };
+    return structuredClone(row.run);
+  }
+
+  runs(scheduleId: string): ScheduleRun[] {
+    return this.newestFirst(scheduleId).map((r) => structuredClone(r));
+  }
+
+  lastRun(scheduleId: string): ScheduleRun | null {
+    return this.runs(scheduleId)[0] ?? null;
+  }
+
+  lastCompleted(scheduleId: string): ScheduleRun | null {
+    return this.runs(scheduleId).find((r) => r.status === 'complete') ?? null;
+  }
+
+  runningRuns(): ScheduleRun[] {
+    return this.runRows.filter((x) => x.run.status === 'running').map((x) => structuredClone(x.run));
+  }
+
+  madeChat(chatId: string): boolean {
+    return this.runRows.some((x) => x.run.chatId === chatId && x.run.createdChat);
+  }
+
+  /** Mirrors schedule.chat_id's ON DELETE CASCADE and schedule_run.chat_id's ON DELETE SET NULL. */
+  chatDeleted(chatId: string): void {
+    for (const s of [...this.rows.values()]) if (s.target.kind === 'chat' && s.target.chatId === chatId) this.delete(s.id);
+    for (const x of this.runRows) if (x.run.chatId === chatId) x.run = { ...x.run, chatId: null };
+  }
+
+  /** Mirrors schedule.project_id's ON DELETE CASCADE. */
+  projectDeleted(projectId: string): void {
+    for (const s of [...this.rows.values()]) if (s.target.kind === 'project' && s.target.projectId === projectId) this.delete(s.id);
+  }
+
+  /** Mirrors schedule.profile_id's ON DELETE CASCADE. */
+  profileDeleted(profileId: string): void {
+    for (const s of [...this.rows.values()]) if (s.profileId === profileId) this.delete(s.id);
+  }
+
+  private newestFirst(scheduleId: string): ScheduleRun[] {
+    return this.runRows
+      .filter((x) => x.run.scheduleId === scheduleId)
+      .sort((a, b) => b.run.startedAt - a.run.startedAt || b.seq - a.seq)
+      .map((x) => x.run);
   }
 }
 
@@ -1041,24 +1326,34 @@ export class InMemoryStore implements Store {
   readonly grants: GrantRepo = new InMemoryGrantRepo();
   readonly artifacts: ArtifactRepo = new InMemoryArtifactRepo();
   readonly audit: AuditRepo;
+  readonly schedules: ScheduleRepo;
 
   /** `selfNodeId` is this store's machine; two stores with different ids stand in for two machines. */
   constructor(selfNodeId = 'node-self') {
     this.nodes = new InMemoryNodeRepo(selfNodeId);
-    const chats = new InMemoryChatRepo(selfNodeId);
+    const schedules = new InMemoryScheduleRepo();
+    this.schedules = schedules;
+    const chats = new InMemoryChatRepo(selfNodeId, (id) => schedules.chatDeleted(id));
     this.chats = chats;
     this.messages = new InMemoryMessageRepo(selfNodeId);
     this.audit = new InMemoryAuditRepo(selfNodeId);
     // The project and memory repos refer to each other lazily (existence check, cascade on delete).
     const memoryRepo = new InMemoryProjectMemoryRepo((id) => this.projects.get(id) !== null);
     this.projectMemory = memoryRepo;
-    const projects = new InMemoryProjectRepo(this.chats, (id) => memoryRepo.removeProject(id), selfNodeId);
+    const projects = new InMemoryProjectRepo(
+      this.chats,
+      (id) => {
+        memoryRepo.removeProject(id);
+        schedules.projectDeleted(id);
+      },
+      selfNodeId
+    );
     this.projects = projects;
     this.locations = new InMemoryLocationRepo((id) => {
       chats.clearLocation(id);
       projects.clearLocation(id);
     });
-    this.profiles = new InMemoryProfileRepo(this.projects);
+    this.profiles = new InMemoryProfileRepo(this.projects, (id) => schedules.profileDeleted(id));
   }
 
   /** Just runs `fn`: there is nothing to roll back to. */

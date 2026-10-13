@@ -5,7 +5,9 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { Connection, ResolvedProfile } from '@grunt/core/types/config.js';
+import { createPlanGate } from '@grunt/core/domain/thread-tools.js';
 import { FakeChatEngine } from '@grunt/core/testing/fakes.js';
+import { FAKE_PNG } from '@grunt/core/testing/fake-computer.js';
 import { AiSdkChatEngine, type ProviderResolver } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
 
@@ -159,6 +161,37 @@ describe('AiSdkChatEngine.stream', () => {
     expect(events).toContainEqual({ type: 'reasoning-delta', text: 'thinking...' });
   });
 
+  it("gives each tool call its call id, the reply's sub-agent host and the sub-agent tag", async () => {
+    const seen: ToolContext[] = [];
+    const spec: ToolSpec = {
+      name: 'probe',
+      description: '',
+      parameters: { type: 'object', properties: {} },
+      risk: 'read',
+      source: 'mcp',
+      execute: async (_args, ctx) => {
+        seen.push(ctx);
+        return 'ok';
+      },
+    };
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-42', toolName: 'probe', input: '{}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      ),
+    });
+    const host = { run: async () => 'x' };
+    await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec], subagents: host, subagent: { callId: 'parent-call', label: 'Helper', parentProfileId: 'profile-1' } })));
+    expect(seen[0]).toMatchObject({ toolCallId: 'call-42', subagents: host, subagent: { callId: 'parent-call', label: 'Helper', parentProfileId: 'profile-1' }, chatId: 'chat-1', profileId: 'profile-1' });
+  });
+
   it('round-trips a tool call: tool-call event, then tool-result event with the real return value, then the follow-up answer', async () => {
     const toolExecute = vi.fn(async (args: unknown, ctx: ToolContext) => {
       expect(ctx.chatId).toBe('chat-1');
@@ -222,6 +255,80 @@ describe('AiSdkChatEngine.stream', () => {
     expect(events.at(-1)?.type).toBe('finish');
   });
 
+  it('gives each tool call a context carrying the reply plan gate and the unattended flag', async () => {
+    const seen: ToolContext[] = [];
+    const toolExecute = vi.fn(async (_args: unknown, ctx: ToolContext) => {
+      seen.push(ctx);
+      return { tempC: 22 };
+    });
+    const toolSpec: ToolSpec = {
+      name: 'get_weather',
+      description: 'Gets the weather for a city.',
+      parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+      risk: 'read',
+      source: 'mcp',
+      execute: toolExecute,
+    };
+
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'get_weather', input: JSON.stringify({ city: 'Paris' }) },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'It is 22C in Paris.' },
+          { type: 'text-end', id: 't1' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      ),
+    });
+    const engine = new AiSdkChatEngine(resolverFor(model));
+    const plan = createPlanGate();
+
+    await drain(engine.stream(makeRequest({ tools: [toolSpec], plan, unattended: true })));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.plan).toBe(plan);
+    expect(seen[0]!.unattended).toBe(true);
+    expect(seen[0]!.profileId).toBe(makeRequest().profile.id);
+  });
+
+  it("marks each tool call of an unattended turn unattended, and leaves an ordinary turn's calls unmarked", async () => {
+    const seen: (boolean | undefined)[] = [];
+    const toolSpec: ToolSpec = {
+      name: 'get_weather',
+      description: 'Gets the weather for a city.',
+      parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+      risk: 'read',
+      source: 'mcp',
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        seen.push(ctx.unattended);
+        return { tempC: 22 };
+      },
+    };
+    const steps = () =>
+      stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'get_weather', input: JSON.stringify({ city: 'Paris' }) },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      );
+
+    await drain(new AiSdkChatEngine(resolverFor(new MockLanguageModelV3({ doStream: steps() }))).stream(makeRequest({ tools: [toolSpec], unattended: true })));
+    await drain(new AiSdkChatEngine(resolverFor(new MockLanguageModelV3({ doStream: steps() }))).stream(makeRequest({ tools: [toolSpec] })));
+
+    expect(seen).toEqual([true, undefined]);
+  });
+
   it('reports a failed tool execution as a tool-result event with isError true', async () => {
     const toolSpec: ToolSpec = {
       name: 'boom',
@@ -258,6 +365,188 @@ describe('AiSdkChatEngine.stream', () => {
     if (toolResult?.type === 'tool-result') {
       expect(String(toolResult.result)).toContain('kaboom');
     }
+  });
+
+  it('starts every tool call of one step at once, without waiting for the one before (sub-agents run in parallel)', async () => {
+    let started = 0;
+    let bothStarted!: () => void;
+    const allIn = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
+    const execute = vi.fn(async () => {
+      started += 1;
+      if (started === 2) bothStarted();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          allIn,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('the calls ran one after another')), 2_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      return 'ok';
+    });
+    const spec: ToolSpec = {
+      name: 'wait_for_sibling',
+      description: 'Waits until its sibling call has started too.',
+      parameters: { type: 'object', properties: {} },
+      risk: 'read',
+      source: 'mcp',
+      execute,
+    };
+    const model = new MockLanguageModelV3({
+      doStream: stepsForModel(
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'tool-call', toolCallId: 'call-1', toolName: 'wait_for_sibling', input: '{}' },
+          { type: 'tool-call', toolCallId: 'call-2', toolName: 'wait_for_sibling', input: '{}' },
+          { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_calls' }, usage: ZERO_USAGE },
+        ],
+        [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'Both done.' },
+          { type: 'text-end', id: 't1' },
+          { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+        ]
+      ),
+    });
+
+    const events = await drain(new AiSdkChatEngine(resolverFor(model)).stream(makeRequest({ tools: [spec] })));
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    const results = events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');
+    expect(results.map((r) => [r.id, r.isError])).toEqual([
+      ['call-1', false],
+      ['call-2', false],
+    ]);
+  });
+
+  it('sends an image a tool returns to a vision model on a provider that takes it as image content, and a note to any other', async () => {
+    const png = FAKE_PNG.toString('base64');
+    const shot = [
+      { type: 'text', text: 'Screenshot, 2×1.' },
+      { type: 'image', data: png, mimeType: 'image/png' },
+    ];
+    const toolSpec: ToolSpec = {
+      name: 'look',
+      description: 'Looks.',
+      parameters: { type: 'object', properties: {} },
+      risk: 'read',
+      source: 'mcp',
+      execute: async () => shot,
+    };
+    const model = (vision: boolean) => ({
+      id: 'model-1', connectionId: 'conn-1', modelId: 'claude-test-model', displayName: 'Test', source: 'manual' as const,
+      supportsVision: vision, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null,
+      priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD',
+    });
+    const image = { type: 'image-data', data: png, mediaType: 'image/png' };
+    const omitted = { type: 'text', text: "[image omitted: this model can't take images]" };
+    // An image only where the provider puts it inside the tool result itself (tool-images.ts, `toolImagesSupported`).
+    const table: [boolean, Connection['kind'], string, unknown][] = [
+      [true, 'anthropic', 'claude-test-model', image],
+      [true, 'openai', 'gpt-test-model', image],
+      [true, 'google', 'gemini-3-pro', image],
+      [true, 'google', 'gemini-2.5-pro', omitted],
+      [false, 'anthropic', 'claude-test-model', omitted],
+      [false, 'google', 'gemini-3-pro', omitted],
+      [true, 'openai_compatible', 'gemini-3-pro', omitted],
+      [true, 'ollama', 'llava', omitted],
+    ];
+    for (const [vision, kind, modelId, expected] of table) {
+      const mock = new MockLanguageModelV3({
+        doStream: stepsForModel(
+          [
+            { type: 'stream-start', warnings: [] },
+            { type: 'tool-call', toolCallId: 'call-1', toolName: 'look', input: '{}' },
+            { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage: ZERO_USAGE },
+          ],
+          [
+            { type: 'stream-start', warnings: [] },
+            { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE },
+          ]
+        ),
+      });
+      const engine = new AiSdkChatEngine(resolverFor(mock));
+      await drain(engine.stream(makeRequest({ tools: [toolSpec], profile: makeResolvedProfile({ modelId, connection: makeConnection({ kind }), model: model(vision) }) })));
+      const toolMessage = mock.doStreamCalls[1]!.prompt.find((m) => m.role === 'tool');
+      // Content only when the image is sent; otherwise the words and the note are one text.
+      const output = expected === image ? { type: 'content', value: [{ type: 'text', text: 'Screenshot, 2\u00d71.' }, image] } : { type: 'text', value: `Screenshot, 2\u00d71.\n${omitted.text}` };
+      expect(toolMessage?.content[0], `${kind} ${modelId} vision=${vision}`).toMatchObject({ type: 'tool-result', output });
+    }
+  });
+
+  it('lets a reply show the model no more tool images than it may store (count and bytes, across tool calls), and stores exactly what the model saw', async () => {
+    const png = (size: number) => Buffer.concat([FAKE_PNG, Buffer.alloc(size - FAKE_PNG.length)]).toString('base64');
+    const small = png(FAKE_PNG.length);
+    const big = png(4 * 1024 * 1024);
+    const vision = { id: 'model-1', connectionId: 'conn-1', modelId: 'claude-test-model', displayName: 'Test', source: 'manual' as const, supportsVision: true, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
+    // [tool results (one per call), images the model may get]
+    const table: [string, unknown[][], number][] = [
+      ['60 images in one result', [Array.from({ length: 60 }, () => ({ type: 'image', data: small, mimeType: 'image/png' }))], 50],
+      ['8 big images over 8 calls (20 MB together)', Array.from({ length: 8 }, () => [{ type: 'image', data: big, mimeType: 'image/png' }]), 5],
+    ];
+    for (const [label, perCall, allowed] of table) {
+      const specs: ToolSpec[] = perCall.map((result, i) => ({
+        name: `tool${i}`,
+        description: 'x',
+        parameters: { type: 'object', properties: {} },
+        risk: 'read',
+        source: 'mcp',
+        execute: async () => result,
+      }));
+      const calls = perCall.map((_, i) => ({ type: 'tool-call', toolCallId: `call-${i}`, toolName: `tool${i}`, input: '{}' }));
+      const mock = new MockLanguageModelV3({
+        doStream: stepsForModel(
+          [{ type: 'stream-start', warnings: [] }, ...calls, { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool_use' }, usage: ZERO_USAGE }],
+          [{ type: 'stream-start', warnings: [] }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE }]
+        ),
+      });
+      const events = await drain(new AiSdkChatEngine(resolverFor(mock)).stream(makeRequest({ tools: specs, profile: makeResolvedProfile({ model: vision }) })));
+
+      const seen = mock.doStreamCalls[1]!.prompt.filter((m) => m.role === 'tool').flatMap((m) => m.content as { output: { type: string; value: unknown } }[]);
+      // A result left with no image goes as one text: its one item here.
+      const modelItems = seen.flatMap((r) => (r.output.type === 'text' ? [{ type: 'text', text: r.output.value as string }] : (r.output.value as { type: string; text?: string }[])));
+      const emitted = events.flatMap((e) => (e.type === 'tool-result' ? (e.result as { type: string; text?: string }[]) : []));
+      expect(modelItems.filter((v) => v.type === 'image-data'), label).toHaveLength(allowed);
+      // What is emitted (and so stored) is the same thing, item by item: an image only where the model got one.
+      expect(emitted.map((v) => v.type === 'image'), label).toEqual(modelItems.map((v) => v.type === 'image-data'));
+      expect(emitted.filter((v) => v.type === 'text').every((v) => v.text === '[image not kept: too many or too large]'), label).toBe(true);
+    }
+  });
+
+  it('replays a stored tool image only through the chat-scoped loader, never through loadAttachment', async () => {
+    const history: CanonMessage[] = [
+      userMessage('look'),
+      {
+        id: 'msg-assistant', chatId: 'chat-1', parentId: null, role: 'assistant', status: 'complete', error: null, producedBy: null, createdAt: 2,
+        parts: [
+          { type: 'tool-call', id: 'call-1', name: 'look', args: {} },
+          { type: 'tool-result', id: 'call-1', name: 'look', result: [{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }], isError: false },
+        ],
+      },
+      userMessage('and now?'),
+    ];
+    const vision = { id: 'model-1', connectionId: 'conn-1', modelId: 'claude-test-model', displayName: 'Test', source: 'manual' as const, supportsVision: true, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' };
+    const run = async (extra: Partial<EngineRequest>): Promise<unknown> => {
+      const mock = new MockLanguageModelV3({ doStream: stepsForModel([{ type: 'stream-start', warnings: [] }, { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: ZERO_USAGE }]) });
+      await drain(new AiSdkChatEngine(resolverFor(mock)).stream(makeRequest({ messages: history, profile: makeResolvedProfile({ model: vision }), ...extra })));
+      return mock.doStreamCalls[0]!.prompt.find((m) => m.role === 'tool')?.content[0];
+    };
+
+    const loadToolImage = vi.fn(async () => FAKE_PNG);
+    const loadAttachment = vi.fn(async () => FAKE_PNG);
+    expect(await run({ loadToolImage, loadAttachment })).toMatchObject({ output: { type: 'content', value: [{ type: 'image-data', data: FAKE_PNG.toString('base64'), mediaType: 'image/png' }] } });
+    expect(loadToolImage).toHaveBeenCalledTimes(1);
+    expect(loadToolImage).toHaveBeenCalledWith({ chatId: 'chat-1', messageId: 'msg-assistant', attachmentId: 'att-1' });
+
+    // No scoped loader: a note, and the raw loader is not used as a fallback.
+    expect(await run({ loadAttachment })).toMatchObject({ output: { type: 'text', value: '[image not available]' } });
+    expect(loadAttachment).not.toHaveBeenCalled();
   });
 
   it('maps a 429 APICallError to a single error event with kind rate_limit, retryable true', async () => {

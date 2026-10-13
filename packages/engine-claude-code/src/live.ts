@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { HookCallback, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { Gate } from './approval.js';
+import type { ApprovalTickets } from './tickets.js';
 
 /** How long a Claude Code process with no reply in progress stays alive for the next message. */
 export const LIVE_IDLE_MS = 30 * 60_000;
@@ -45,14 +46,20 @@ export interface TurnBinding {
   artifact?: (args: unknown) => Promise<unknown>;
   /** Runs a `recall` call for this reply (spec 2026-10-09-recall-design); absent when the profile turns recall off. */
   recall?: (args: unknown) => Promise<unknown>;
+  /** Runs a propose_plan call for this reply (spec 2026-10-12-thread-cards-design); absent when the reply isn't planning. */
+  plan?: (args: unknown) => Promise<unknown>;
   /** Runs a relayed MCP tool's (already approved) call for this reply, with the reply's tool context. */
   relay?: (spec: ToolSpec, args: unknown) => Promise<unknown>;
+  /** This reply's approval tickets for relayed calls with `describeCall` (tickets.ts); cleared when the reply ends. */
+  tickets?: ApprovalTickets;
 }
 
 /** Which of Grunt's own tools a process's server carries; fixed when it starts. */
 export interface GruntServerSwitches {
   artifacts: boolean;
   recall: boolean;
+  /** propose_plan, for a reply in Plan mode. */
+  plan: boolean;
   /** `buildRelay(...).hash` of the relayed MCP tools; '' for none (relay.ts). */
   relay: string;
 }
@@ -72,6 +79,8 @@ export class LiveProcess {
   artifactTool: string | null = null;
   /** Claude Code's name for this process's recall tool, or null when its Grunt server has none. */
   recallTool: string | null = null;
+  /** Claude Code's name for this process's plan tool, or null when its server has none. */
+  planTool: string | null = null;
   /** Claude Code's name for each relayed MCP tool on this process's Grunt server -> the API model's name for it. */
   relayNames = new Map<string, string>();
   readonly stderr: string[] = [];
@@ -106,7 +115,7 @@ export class LiveProcess {
 /**
  * The options that fix a process's behaviour for its whole life. A reply can
  * reuse a live process only when these are identical; anything else -- a
- * different model, folder, tool policy, auto mode, system prompt (which
+ * different model, folder, tool policy, auto mode, Plan mode, system prompt (which
  * carries project memory), extra folders, thinking budget, effort, backend or credentials -- starts
  * a fresh process. `connection` stands in for the child environment, which
  * can't be compared whole: the Agent SDK itself changes the server's
@@ -116,7 +125,7 @@ export class LiveProcess {
 export function liveKey(options: Options, connection: { backend: string; token: string | null }, own: GruntServerSwitches): string {
   const { cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings } = options;
   return createHash('sha256')
-    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, relay: own.relay, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
+    .update(JSON.stringify({ connection, artifacts: own.artifacts, recall: own.recall, plan: own.plan, relay: own.relay, cwd, additionalDirectories, model, permissionMode, tools, disallowedTools, systemPrompt, strictMcpConfig, thinking, effort, settingSources, settings }))
     .digest('hex');
 }
 

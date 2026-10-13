@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
 import type { ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import { sweepOrphanedBlobs } from '@grunt/store-sqlite/blob-gc.js';
 import type { Container } from '../container.js';
-import { optionalBoolean, optionalNullableString, optionalStringArray, requireNonEmptyString } from '../validation.js';
+import { optionalBoolean, optionalNullableString, optionalStringArray, parseSandboxHosts, requireNonEmptyString } from '../validation.js';
 import { clearProjectDefaultProfile } from './projects.js';
 import { clearMemoryProfile } from './settings.js';
 
@@ -34,6 +35,38 @@ function parseParams(value: unknown): ModelParams {
   return value as ModelParams;
 }
 
+const MAX_BLOCKED_HOSTS = 200;
+
+/** A hostname: dot-separated labels of letters, digits and hyphens (any script: an IDN is stored as its punycode). */
+const LABEL = String.raw`[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?`;
+const HOSTNAME = new RegExp(`^${LABEL}(?:\\.${LABEL})*$`, 'u');
+/** An IP literal's characters: IPv4 dotted, or IPv6 (with or without brackets, at least one colon). */
+const IPV6_LITERAL = /^\[?[0-9a-f]*:[0-9a-f:.]*\]?$/i;
+
+/**
+ * The browser's blocked sites (spec 2026-10-12-model-browser-design §3): each
+ * entry must be a bare hostname or IP literal, stored in the canonical form the
+ * broker and the proxy compare. A leading "*." is dropped (subdomains are
+ * blocked anyway); any other `*`, a port, scheme, path, empty label or leading
+ * or trailing dot is refused, naming the entry as typed.
+ */
+function parseBlockedHosts(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
+    throw new HTTPException(400, { message: '"toolPolicy.browserBlockedHosts" must be a list of website names.' });
+  }
+  if (value.length > MAX_BLOCKED_HOSTS) {
+    throw new HTTPException(400, { message: `"toolPolicy.browserBlockedHosts" can hold at most ${MAX_BLOCKED_HOSTS} sites.` });
+  }
+  const out: string[] = [];
+  for (const raw of value as string[]) {
+    const entry = raw.trim().replace(/^\*\./, '');
+    const host = HOSTNAME.test(entry) || IPV6_LITERAL.test(entry) ? normaliseHost(entry) : null;
+    if (host === null) throw new HTTPException(400, { message: `"${raw}" isn't a website name. Use a name like example.com, one per line.` });
+    if (!out.includes(host)) out.push(host);
+  }
+  return out;
+}
+
 /**
  * Parses a `toolPolicy` body. Omitted fields fall back to `base`: the defaults
  * on POST, the profile's EXISTING policy on PATCH -- so a partial PATCH such as
@@ -54,11 +87,17 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
   if (approvalMode !== undefined && approvalMode !== 'always_ask' && approvalMode !== 'ask_on_mutate') {
     throw new HTTPException(400, { message: '"toolPolicy.approvalMode" must be one of: always_ask, ask_on_mutate.' });
   }
-  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall'] as const) {
+  for (const key of ['agentWeb', 'agentMcp', 'artifacts', 'recall', 'subagents', 'browser', 'computer'] as const) {
     if (v[key] !== undefined && typeof v[key] !== 'boolean') {
       throw new HTTPException(400, { message: `"toolPolicy.${key}" must be a boolean.` });
     }
   }
+  const shellRuns = v['shellRuns'];
+  if (shellRuns !== undefined && shellRuns !== 'host' && shellRuns !== 'sandbox') {
+    throw new HTTPException(400, { message: '"toolPolicy.shellRuns" must be one of: host, sandbox.' });
+  }
+  // null = back to the default allowlist (the key is dropped); omitted = keep the base's.
+  const sandboxHosts = v['sandboxHosts'] === undefined ? base.sandboxHosts : v['sandboxHosts'] === null ? undefined : parseSandboxHosts(v['sandboxHosts']);
   return {
     fs: (fs as ToolPolicy['fs']) ?? base.fs,
     shell: typeof v['shell'] === 'boolean' ? v['shell'] : base.shell,
@@ -74,6 +113,17 @@ function parseToolPolicy(value: unknown, base: ToolPolicy = DEFAULT_TOOL_POLICY)
     ...(typeof v['agentMcp'] === 'boolean' ? { agentMcp: v['agentMcp'] } : base.agentMcp !== undefined ? { agentMcp: base.agentMcp } : {}),
     ...(typeof v['artifacts'] === 'boolean' ? { artifacts: v['artifacts'] } : base.artifacts !== undefined ? { artifacts: base.artifacts } : {}),
     ...(typeof v['recall'] === 'boolean' ? { recall: v['recall'] } : base.recall !== undefined ? { recall: base.recall } : {}),
+    ...(shellRuns !== undefined ? { shellRuns: shellRuns as ToolPolicy['shellRuns'] } : base.shellRuns !== undefined ? { shellRuns: base.shellRuns } : {}),
+    ...(sandboxHosts !== undefined ? { sandboxHosts } : {}),
+    ...(typeof v['subagents'] === 'boolean' ? { subagents: v['subagents'] } : base.subagents !== undefined ? { subagents: base.subagents } : {}),
+    ...(typeof v['browser'] === 'boolean' ? { browser: v['browser'] } : base.browser !== undefined ? { browser: base.browser } : {}),
+    // Computer use (spec 2026-10-12-computer-use-design): off unless a profile turns it on, so it is only ever stored when it was set.
+    ...(typeof v['computer'] === 'boolean' ? { computer: v['computer'] } : base.computer !== undefined ? { computer: base.computer } : {}),
+    ...(v['browserBlockedHosts'] !== undefined
+      ? { browserBlockedHosts: parseBlockedHosts(v['browserBlockedHosts']) }
+      : base.browserBlockedHosts !== undefined
+        ? { browserBlockedHosts: base.browserBlockedHosts }
+        : {}),
   };
 }
 
@@ -130,6 +180,13 @@ export function profilesRoutes(container: Container): Hono {
     }
 
     const updated = container.store.profiles.update(id, patch);
+    // Computer use turned off on this profile: the chat on it that holds the computer (in control, or its
+    // start dialog up) is stopped as by the banner's Stop. Its session ends and its replies are cancelled,
+    // so a reply already running can't carry on with a tool the profile no longer allows.
+    if (updated.toolPolicy.computer !== true) {
+      const holder = container.computer?.holder() ?? null;
+      if (holder !== null && container.store.chats.get(holder)?.profileId === id) await container.computer?.stop(holder);
+    }
     // Spec section 5: an archived profile stops being any project's default.
     if (updated.archivedAt !== null) {
       clearProjectDefaultProfile(container.store, id);
@@ -141,8 +198,17 @@ export function profilesRoutes(container: Container): Hono {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getProfileOrThrow(container, id);
+    // Its chats go with it (ON DELETE CASCADE): so do their sandboxes.
+    const chatIds = container.store.chats.list().filter((chat) => chat.profileId === id).map((chat) => chat.id);
     container.store.profiles.delete(id);
     clearMemoryProfile(container.store, id);
+    // Best effort, and before the sweep below, which can fail the request on purpose.
+    for (const chatId of chatIds) {
+      await container.sandbox?.release(chatId).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${chatId}:`, err));
+    }
+    // Its chats went with it, inside the database. One of them may be in control of the computer:
+    // its session ends and its reply is cancelled (spec 2026-10-12-computer-use-design section 1).
+    await container.computer?.endIfChatGone();
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
     // in turn cascades THEIR attachment rows away -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see

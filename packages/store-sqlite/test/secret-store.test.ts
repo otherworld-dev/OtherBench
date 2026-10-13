@@ -73,9 +73,9 @@ describe('EncryptedFileSecretStore', () => {
     const envelope = JSON.parse(readFileSync(path, 'utf8')) as {
       entries: Record<string, { ciphertext: string }>;
     };
-    const entry = envelope.entries['ref'];
+    const entry = envelope.entries['ref']!;
     const ciphertext = Buffer.from(entry.ciphertext, 'base64');
-    ciphertext[0] = ciphertext[0] ^ 0x01;
+    ciphertext[0] = ciphertext[0]! ^ 0x01;
     entry.ciphertext = ciphertext.toString('base64');
     writeFileSync(path, JSON.stringify(envelope));
 

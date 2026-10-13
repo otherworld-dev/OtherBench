@@ -12,9 +12,12 @@ const BAR_BUTTON = 'rounded px-1.5 py-0.5 text-xs text-[var(--text-muted)] hover
 /**
  * A chat's viewer panel (spec 2026-10-07-viewer): back and forward, an
  * address box for a path or a website, Files, Open as tab and close, over
- * either the Files tree or the open item.
+ * either the Files tree or the open item. `browserUsed` (the model has used
+ * the browser in this chat) shows the Browser button (spec
+ * 2026-10-12-model-browser-design §6); the thread works it out from the chat's
+ * own messages.
  */
-export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
+export function ViewerPanel({ chat, browserUsed = false }: { chat: Chat; browserUsed?: boolean }): JSX.Element {
   const viewer = useViewerStore((s) => viewerFor(s.viewers, chat.id));
   const { openItem, setOpen, setMode, step } = useViewerStore.getState();
   const openTab = useGruntStore((s) => s.openTab);
@@ -42,6 +45,11 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
         <button type="button" aria-pressed={viewer.mode === 'files'} onClick={() => setMode(chat.id, viewer.mode === 'files' && current ? 'item' : 'files')} className={BAR_BUTTON}>
           Files
         </button>
+        {browserUsed && (
+          <button type="button" aria-pressed={current?.kind === 'browser' && viewer.mode === 'item'} onClick={() => openItem(chat.id, { kind: 'browser' })} className={BAR_BUTTON}>
+            Browser
+          </button>
+        )}
         <form
           className="min-w-0 flex-1"
           onSubmit={(e) => {
@@ -51,7 +59,7 @@ export function ViewerPanel({ chat }: { chat: Chat }): JSX.Element {
         >
           <input
             aria-label="Open a path or web address"
-            placeholder={current?.kind === 'file' ? current.path : (current?.title ?? 'Path, or https://…')}
+            placeholder={current?.kind === 'file' ? current.path : current?.kind === 'artifact' ? current.title : 'Path, or https://…'}
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             className="w-full rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-0.5 font-mono text-xs"

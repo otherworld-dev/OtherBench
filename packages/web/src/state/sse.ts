@@ -1,6 +1,6 @@
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { HelloBuffer, StreamConnectionStatus } from './store.js';
-import { authHeaders } from './transport.js';
+import { authHeaders, reportUnauthorized } from './transport.js';
 
 /** Backoff schedule (ms) between reconnect attempts; the last value repeats once exhausted. */
 const DEFAULT_BACKOFF_MS = [500, 1000, 2000, 5000, 10000, 15000];
@@ -81,6 +81,7 @@ export function createFetchSseConnect(fetchImpl: typeof fetch = (...args) => fet
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
+          if (res.status === 401) reportUnauthorized();
           fail();
           return;
         }

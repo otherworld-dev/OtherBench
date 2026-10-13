@@ -9,7 +9,8 @@ export const EVENTS_KEEPALIVE_MS = 25_000;
 
 /**
  * `GET /api/events` (v2 plan, Task 34): the app-wide event stream. Opens
- * with a `hello` carrying the pending approvals, then one unnamed event per
+ * with a `hello` carrying the pending approvals, the running replies and the
+ * chats controlling this computer, then one unnamed event per
  * `AppEvent`. Subscribing before the hello is read means nothing that
  * happens in between is lost (it may also be in the hello; the client's
  * handling is idempotent).
@@ -23,6 +24,7 @@ export function eventsRoutes(container: Container): Hono {
       const hello: AppEventsHello = {
         pendingApprovals: container.events?.pendingApprovals() ?? [],
         runningTurns: container.events?.runningTurns() ?? [],
+        computerSessions: container.events?.computerSessions() ?? [],
       };
       sink.send('hello', hello);
       const keepalive = setInterval(() => sink.comment('keepalive'), EVENTS_KEEPALIVE_MS);

@@ -28,6 +28,7 @@ interface ChatBody {
   projectPinned?: unknown;
   archivedAt?: unknown;
   autoMode?: unknown;
+  planMode?: unknown;
   effort?: unknown;
   folders?: unknown;
   projectId?: unknown;
@@ -38,7 +39,7 @@ interface ChatBody {
 }
 
 /** PATCH keys that file or configure a chat rather than use it: a PATCH of only these leaves `updatedAt` (the list order) alone. */
-const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread']);
+const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 'effort', 'folders', 'projectId', 'projectPinned', 'memoryExcluded', 'sortOrder', 'unread']);
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -178,6 +179,7 @@ export function chatsRoutes(container: Container): Hono {
       patch.archivedAt = body.archivedAt === null ? null : Number(body.archivedAt);
     }
     if (body.autoMode !== undefined) patch.autoMode = optionalBoolean(body.autoMode, 'autoMode', false);
+    if (body.planMode !== undefined) patch.planMode = optionalBoolean(body.planMode, 'planMode', false);
     if (body.effort !== undefined) {
       if (body.effort !== null && !isClaudeEffort(body.effort)) {
         throw new HTTPException(400, { message: `"effort" must be null or one of ${CLAUDE_EFFORTS.join(', ')}.` });
@@ -220,8 +222,17 @@ export function chatsRoutes(container: Container): Hono {
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
     getChatOrThrow(container, id);
+    // A chat in control of the computer stops controlling it, and its reply is cancelled
+    // (spec 2026-10-12-computer-use-design section 1). `stop` logs a driver it can't tell; the chat is deleted all the same.
+    await container.computer?.stop(id).catch((err: unknown) => console.error(`[grunt-server] couldn't stop computer use for chat ${id}:`, err));
     container.store.chats.delete(id);
     container.memory?.cancel(id);
+    // Its sandbox agent, mounts and home folder in the VM go with it (spec 2026-10-12-sandbox-design). Best effort,
+    // and before the sweep below, which can fail the request on purpose.
+    await container.sandbox?.release(id).catch((err: unknown) => console.error(`[grunt-server] couldn't release the sandbox of chat ${id}:`, err));
+    // The chat's browser goes with it (spec 2026-10-12-model-browser-design §5).
+    // Not awaited: a browser still starting would hold the response up.
+    void container.browser?.close(id).catch((err: unknown) => console.error(`[grunt-server] couldn't close the browser of chat ${id}:`, err));
     // Deleting a chat cascades its attachment rows away in SQLite (ON
     // DELETE CASCADE) -- sweep for any blob that left orphaned as a result.
     // `sweepOrphanedBlobs` swallows filesystem-level failures (a locked
@@ -273,6 +284,8 @@ export function chatsRoutes(container: Container): Hono {
     // reload too (#819). One row per message; a later one would win.
     const usage: Record<string, RecordedUsage> = {};
     for (const u of container.store.usage.list(chat.id)) {
+      // A sub-agent's row hangs off the same reply; the compare tabs show the reply's own cost.
+      if (u.subagentCallId) continue;
       usage[u.messageId] = {
         tokensIn: u.tokensIn,
         tokensOut: u.tokensOut,
@@ -480,6 +493,8 @@ export function subscribeAutoTitle(container: Container): () => void {
 
     const chat = container.store.chats.get(message.chatId);
     if (!chat) return;
+    // A scheduled run's own chat keeps the title it was made with ("Weekly report · 12 Oct 2026").
+    if (container.store.schedules.madeChat(chat.id)) return;
 
     const completedCount = collectMessageTree(container.store, message.chatId).filter(
       (m) => m.role === 'assistant' && m.status === 'complete'

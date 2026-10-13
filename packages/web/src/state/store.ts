@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ScheduleTarget } from '@grunt/core/domain/schedule.js';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Connection, ModelInfo, Profile } from '@grunt/core/types/config.js';
@@ -38,6 +39,9 @@ export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnect
  * is gone by then (a menu item).
  */
 export type ProjectPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
+
+/** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
+export type SchedulesPageState = { prefill?: ScheduleTarget };
 
 export interface GruntState {
   // --- reference data (connections/models/profiles CRUD) -------------------
@@ -98,6 +102,8 @@ export interface GruntState {
   appPendingApprovals: Record<string, PendingApprovalSummary>;
   /** Replies being written anywhere in the app: chat id by message id (#824). */
   appRunningTurns: Record<string, string>;
+  /** Chats controlling this computer (computer use), by chat id, with their last action (`actionSummary`: never typed text). */
+  computerSessions: Record<string, { lastAction?: string }>;
   /** Bumped each time another machine's changes are applied here: open chats reload their messages. */
   syncRevision: number;
   /**
@@ -173,6 +179,8 @@ export interface GruntState {
   applyTurnEvent(event: TurnEvent): void;
   /** Removes an approval prompt locally (the server says the request no longer exists), wherever it is showing. */
   dropApproval(requestId: string): void;
+  /** Drops a question or plan card the server no longer knows (a 404 on answering). */
+  dropAsk(askId: string): void;
 
   /**
    * Reconciles an SSE `hello` reply (sent on connect and on every
@@ -210,6 +218,12 @@ export interface GruntState {
   projectPage: ProjectPageState | null;
   openProjectPage(page: ProjectPageState): void;
   closeProjectPage(): void;
+  /** The open Scheduled overlay, or null. App renders it. */
+  schedulesPage: SchedulesPageState | null;
+  openSchedules(prefill?: ScheduleTarget): void;
+  closeSchedules(): void;
+  /** Bumped by every schedule event, so the overlay re-reads the list. */
+  schedulesVersion: number;
 }
 
 /**
@@ -263,6 +277,11 @@ function saveInspectorCollapsed(collapsed: boolean): void {
 
 function bump(counts: Record<string, number>, chatId: string): Record<string, number> {
   return { ...counts, [chatId]: (counts[chatId] ?? 0) + 1 };
+}
+
+/** A computer session as the banner keeps it: a last action only when it is text. */
+function computerSessionOf(lastAction: unknown): { lastAction?: string } {
+  return typeof lastAction === 'string' ? { lastAction } : {};
 }
 
 export const useGruntStore = create<GruntState>()((set) => ({
@@ -371,6 +390,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
   setHotkeyStatus: (status) => set({ hotkeyStatus: status }),
   appPendingApprovals: {},
   appRunningTurns: {},
+  computerSessions: {},
   syncRevision: 0,
   chatReloads: {},
   machines: null,
@@ -379,6 +399,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set({
       appPendingApprovals: Object.fromEntries(hello.pendingApprovals.map((p) => [p.requestId, p])),
       appRunningTurns: Object.fromEntries((hello.runningTurns ?? []).map((t) => [t.messageId, t.chatId])),
+      computerSessions: Object.fromEntries((hello.computerSessions ?? []).map((c) => [c.chatId, computerSessionOf(c.lastAction)])),
     }),
   applyAppEvent: (event) =>
     set((state) => {
@@ -394,8 +415,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
         case 'chat-deleted':
           return { chats: state.chats.filter((c) => c.id !== event.chatId), ...withPanes(forgetChat(synced(state), event.chatId)) };
         case 'approval-requested': {
-          const { chatId, messageId, requestId, toolName } = event;
-          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName } } };
+          const { chatId, messageId, requestId, toolName, kind } = event;
+          return { appPendingApprovals: { ...state.appPendingApprovals, [requestId]: { chatId, messageId, requestId, toolName, ...(kind ? { kind } : {}) } } };
         }
         case 'approval-resolved': {
           if (!(event.requestId in state.appPendingApprovals)) return state;
@@ -427,6 +448,20 @@ export const useGruntStore = create<GruntState>()((set) => ({
         }
         case 'sync-applied':
           return { syncRevision: state.syncRevision + 1 };
+        case 'schedules-changed':
+        case 'schedule-run-started':
+        case 'schedule-run-finished':
+          return { schedulesVersion: state.schedulesVersion + 1 };
+        case 'computer-session': {
+          const next = { ...state.computerSessions };
+          if (event.active) {
+            // An event with no last action (the session started, say) keeps the one already shown.
+            next[event.chatId] = typeof event.lastAction === 'string' ? computerSessionOf(event.lastAction) : (next[event.chatId] ?? {});
+          } else {
+            delete next[event.chatId];
+          }
+          return { computerSessions: next };
+        }
         default:
           return state;
       }
@@ -511,6 +546,20 @@ export const useGruntStore = create<GruntState>()((set) => ({
       };
     }),
 
+  dropAsk: (askId) =>
+    set((state) => {
+      let changed = false;
+      const extras = { ...state.extras };
+      for (const [messageId, e] of Object.entries(state.extras)) {
+        const asks = e.pendingAsks ?? [];
+        if (asks.some((a) => a.id === askId)) {
+          extras[messageId] = { ...e, pendingAsks: asks.filter((a) => a.id !== askId) };
+          changed = true;
+        }
+      }
+      return changed ? { extras } : {};
+    }),
+
   dropApproval: (requestId) =>
     set((state) => {
       let changed = false;
@@ -580,10 +629,14 @@ export const useGruntStore = create<GruntState>()((set) => ({
   projectPage: null,
   openProjectPage: (page) => set({ projectPage: page }),
   closeProjectPage: () => set({ projectPage: null }),
+  schedulesPage: null,
+  openSchedules: (prefill) => set({ schedulesPage: prefill ? { prefill } : {} }),
+  closeSchedules: () => set({ schedulesPage: null }),
+  schedulesVersion: 0,
 }));
 
-/** How many tool calls are waiting for approval across the whole app. */
-export const selectPendingApprovalCount = (s: GruntState): number => Object.keys(s.appPendingApprovals).length;
+/** How many tool calls are waiting for approval across the whole app (the tray's count: questions and plans aren't counted). */
+export const selectPendingApprovalCount = (s: GruntState): number => Object.values(s.appPendingApprovals).filter((p) => p.kind === undefined).length;
 
 // Tabs, layout and panes, and whether the inspector is collapsed, are remembered on this device.
 useGruntStore.subscribe((state, previous) => {

@@ -104,6 +104,8 @@ async function readStream(res: Response, onEvent: (e: StreamEvent, all: StreamEv
 }
 
 describe('running a chat on the machine it runs on', () => {
+  // Load-sensitive: about a second on its own, but two servers, a pairing and an approval round trip can go past
+  // the default 5 s while the whole suite runs, so it gets 20 s.
   it("the laptop sends a turn in the PC's chat; the PC runs it in its own folder, the laptop's approval answers it, and the PC's audit says so", async () => {
     const { pc, laptop, chatId, profileId } = await setup();
     expect(laptop.container.store.chats.get(chatId)!.runsOn).toBe(pc.id);
@@ -140,6 +142,23 @@ describe('running a chat on the machine it runs on', () => {
     const audit = pc.container.store.audit.list(chatId);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ grantedBy: 'ask:once', decidedOnNode: laptop.id });
+  }, 20_000);
+
+  it("the laptop answers a question asked by the PC's reply; the answer reaches the PC's model", async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: '#ask' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+    await readStream(stream, async (e) => {
+      const ask = (e.data as { type?: string; ask?: { id: string } }).ask;
+      if (e.data.type === 'ask-request' && ask) {
+        const answered = await laptop.api('POST', `/api/asks/${ask.id}/answer`, { answers: ['Blue'] });
+        expect(answered.status).toBe(200);
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'complete';
+    });
+    const parts = pc.container.store.messages.get(replyId)!.parts;
+    expect(JSON.stringify(parts)).toContain('Blue');
   });
 
   it('a cancel from the laptop stops the reply on the PC', async () => {
@@ -218,6 +237,30 @@ describe('running a chat on the machine it runs on', () => {
     await laptop.container.peers!.syncerOrNull()!.pullFrom(pc.id);
     await pc.container.peers!.syncerOrNull()!.pullFrom(laptop.id);
     for (const m of [pc, laptop]) expect(m.container.store.messages.get(replyId)!.status).toBe('cancelled');
+  });
+
+  it('a cut-off reply keeps its sub-agent cards closed, not queued or running', async () => {
+    const { pc, laptop, chatId, profileId } = await setup();
+    const patched = await pc.api('PATCH', `/api/profiles/${profileId}`, { toolPolicy: { fs: 'read', shell: false, mcpServerIds: [], approvalMode: 'always_ask', subagents: true } });
+    expect(patched.status).toBe(200);
+    const stream = await laptop.api('GET', `/api/chats/${chatId}/stream`);
+    const res = await laptop.api('POST', `/api/chats/${chatId}/turns`, { parentId: null, parts: [{ type: 'text', text: '#subagents #tool note.txt' }], profileIds: [profileId] });
+    const replyId = ((await res.json()) as { assistantMessageIds: string[] }).assistantMessageIds[0]!;
+
+    let stopped = false;
+    await readStream(stream, async (e) => {
+      // The first helper waits on its card: the PC goes away while it's running.
+      if (!stopped && e.data.type === 'approval-request' && (e.data.request as { subagent?: unknown } | undefined)?.subagent) {
+        stopped = true;
+        await pc.container.peers!.listener.stop();
+      }
+      return e.data.type === 'status' && e.data.messageId === replyId && e.data.status === 'error';
+    });
+
+    const cards = laptop.container.store.messages.get(replyId)!.parts.filter((p) => p.type === 'subagent');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.every((c) => c.status !== 'queued' && c.status !== 'running')).toBe(true);
+    expect(cards.find((c) => c.label === 'First helper')).toMatchObject({ status: 'error', error: 'PC stopped responding while this sub-agent was working.' });
   });
 
   it('a relayed reply whose connection goes silent ends here within the idle limit, but a quiet one kept alive does not', async () => {

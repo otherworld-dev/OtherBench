@@ -2,24 +2,30 @@ import { existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HookCallback, McpServerConfig, Options, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
+import { CLEAN_CHAT_AGENT_TOOLS, agentDisallowedTools } from '@grunt/core/domain/agent-tools.js';
 import { ARTIFACT_TOOL } from '@grunt/core/domain/artifacts.js';
+import { MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
 import { RECALL_TOOL } from '@grunt/core/domain/recall.js';
+import { PLAN_TOOL, runPlanCommand } from '@grunt/core/domain/thread-tools.js';
+import { toolContextFor } from '@grunt/core/domain/tool-context.js';
+import { listedName, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_ATTACHMENTS, OMISSION_REASONS, omissionNote, selectWithinBudget, withinAfterLoad, type Omission } from '@grunt/core/domain/request-budget.js';
+import { sniffToolImageMime } from '@grunt/core/domain/tool-images.js';
 import type { ChatEngine, ConnectionTestResult, DiscoveredModel, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
-import type { ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
-import type { Connection } from '@grunt/core/types/config.js';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { AskInput, ToolContext, ToolProvider, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import type { Connection, ToolPolicy } from '@grunt/core/types/config.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import type { PlanUsage } from '@grunt/core/types/usage.js';
 import { canUseToolFor, createGate, permissionDeniedHook, preToolUseHook, type Gate, type GruntTool } from './approval.js';
-import { gruntArtifactTool, gruntArtifactToolName, gruntMcpServer, gruntRecallTool, gruntRecallToolName, gruntServerName, type GruntServerTool } from './grunt-server.js';
+import { gruntArtifactTool, gruntMcpServer, gruntPlanTool, gruntRecallTool, gruntServerName, gruntToolName, type GruntServerTool } from './grunt-server.js';
 import { backendOf, buildChildEnv, CLAUDE_BACKEND } from './env.js';
 import { autoModeUnavailable, classifyClaudeCodeFailure, isMissingSessionError } from './errors.js';
 import { SdkEventMapper } from './events.js';
 import { renderHistory } from './history.js';
 import { LivePool, LiveProcess, liveKey, PromptQueue, type GruntServerSwitches, type TurnBinding } from './live.js';
 import { toPlanUsage } from './plan-usage.js';
-import { buildRelay, relayServerTool, type Relay } from './relay.js';
+import { buildRelay, currentRelayed, relayServerTool, runRelayed, type Relay } from './relay.js';
 import { pickSession, SessionClaims, type SessionPlan } from './session.js';
+import { ApprovalTickets } from './tickets.js';
 
 export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => AsyncIterable<SDKMessage> & {
   interrupt(): Promise<unknown>;
@@ -31,7 +37,8 @@ export type QueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options:
 
 export interface ClaudeCodeEngineDeps {
   query: QueryFn;
-  approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'>;
+  /** `askUser` answers Claude Code's AskUserQuestion and Grunt's propose_plan through cards; without it both are refused. */
+  approvals: Pick<ToolProvider, 'requestApproval' | 'recordAgentDenial'> & Partial<Pick<ToolProvider, 'askUser'>>;
   /** Model listing for an endpoint backend (e.g. Ollama), supplied by the server. */
   listEndpointModels: (conn: Connection, token: string | null) => Promise<DiscoveredModel[]>;
   /** Defaults to `process.env`. */
@@ -42,8 +49,13 @@ export interface ClaudeCodeEngineDeps {
   liveIdleMs?: number;
   /** How many idle Claude Code processes are kept. Defaults to 3. */
   maxLive?: number;
-  /** Runs an `artifact` tool call for a reply (Deck #896): the server's executor. Without it, Claude Code gets no artifact tool. */
-  artifactTool?: (ctx: { chatId: string; messageId: string }, args: unknown) => Promise<unknown>;
+  /**
+   * Runs an `artifact` tool call for a reply (Deck #896): the server's
+   * executor. `mcpServerIds` are the profile's, so a live declaration (spec
+   * 2026-10-12-live-artifacts) is checked against its tools. Without it,
+   * Claude Code gets no artifact tool.
+   */
+  artifactTool?: (ctx: { chatId: string; messageId: string; mcpServerIds: string[] }, args: unknown) => Promise<unknown>;
   /** Runs a `recall` tool call for a reply (spec 2026-10-09-recall-design): the server's executor. Without it, Claude Code gets no recall tool. */
   recallTool?: (ctx: { chatId: string }, args: unknown) => Promise<unknown>;
   /**
@@ -55,12 +67,16 @@ export interface ClaudeCodeEngineDeps {
    */
   scratchRoot?: string;
   /**
-   * The ToolSpecs of the given MCP servers' tools, as an API model gets them
-   * but ungated (GruntToolProvider.relayMcpTools): relayed to Claude Code
-   * through Grunt's server, each call approved by the gate first (spec
-   * 2026-10-11-claude-code-clean-chat-and-mcp-design §2). Without it, no relay.
+   * What Grunt relays to Claude Code through its own server for this policy,
+   * as an API model gets it but ungated (GruntToolProvider.relayTools): the
+   * allowlisted MCP servers' tools (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2),
+   * the sandboxed run_command when the shell runs in the sandbox (spec
+   * 2026-10-12-sandbox-design), and the browser when the profile turns it on
+   * (spec 2026-10-12-model-browser-design §4). The gate approves each call
+   * first, and a tool that describes its calls (the browser) runs only with
+   * the arguments the gate approved. Without it, no relay.
    */
-  relayTools?: (serverIds: string[]) => ToolSpec[];
+  relayTools?: (policy: ToolPolicy) => ToolSpec[];
   /** Builds Grunt's MCP server from its name and tools; defaults to the SDK's in-process server. Tests pass a fake. */
   mcpServer?: (name: string, tools: GruntServerTool[]) => McpServerConfig;
 }
@@ -105,8 +121,22 @@ const lightweightOptions = (): Pick<Options, 'settingSources' | 'strictMcpConfig
 
 const textOf = (m: CanonMessage | undefined): string => (m?.parts ?? []).filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n');
 
-/** Filenames of the new message's non-image attachments, which Claude Code turns do not receive. */
-const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? []).flatMap((p) => (p.type === 'file' ? [p.filename] : []));
+/**
+ * The names of the new message's non-image attachments, which Claude Code
+ * turns do not receive, as they go into the transcript's notice and into the
+ * prompt: each cleaned by core's `listedName` (one line, no control or hidden
+ * character, at most 80 characters, no quote, no bracket that could close a
+ * note, no comma that could pass for two names). A name with nothing left in
+ * it is still listed, so the file is not dropped from the count.
+ */
+const skippedFiles = (m: CanonMessage | undefined): string[] => (m?.parts ?? []).flatMap((p) => (p.type === 'file' ? [listedName(p.filename) || 'unnamed file'] : []));
+
+/** The transcript's line about the new message's images that were not sent (how many, and each reason once), or null when all were. */
+function omittedImagesNotice(omitted: Omission[]): string | null {
+  if (omitted.length === 0) return null;
+  const reasons = [...new Set(omitted.map((why) => OMISSION_REASONS[why]))];
+  return `Not sent to Claude Code: ${omitted.length} ${omitted.length === 1 ? 'image' : 'images'} (${reasons.join('; ')}).`;
+}
 
 /**
  * Runs Grunt turns through the local Claude Code install via the Agent SDK
@@ -158,11 +188,16 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const backend = backendOf(conn);
     const plan = pickSession({ history: req.messages, backend, cwd, latestMessageForSession: req.latestMessageForSession, claims: this.claims });
     try {
-      const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean);
+      // The new message's images are read once, before either attempt: a retry sends the same ones, and
+      // what was left out is said once, in the same notice as the files.
+      const images = await this.newImages(req);
+      const leftOut = omittedImagesNotice(images.omitted);
+      if (leftOut !== null) notice.text = notice.text === null ? leftOut : `${notice.text} ${leftOut}`;
+      const first = yield* this.runTurn(req, plan, backend, notice, cwd, clean, images.blocks);
       // A stopped turn never starts a second Claude Code process.
       if (first === 'missing-session' && !req.signal.aborted) {
         yield { type: 'notice', text: "The earlier Claude Code session couldn't be found, so Grunt started a new Claude Code session with this chat's history." };
-        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean);
+        yield* this.runTurn(req, { mode: 'fresh' }, backend, notice, cwd, clean, images.blocks);
       }
     } finally {
       if (plan.mode === 'continue') this.claims.release(plan.sessionId);
@@ -184,7 +219,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     backend: string,
     notice: PendingNotice,
     cwd: string,
-    clean: boolean
+    clean: boolean,
+    images: ContentBlock[]
   ): AsyncGenerator<EngineEvent, 'done' | 'missing-session'> {
     const flushNotice = function* (): Generator<EngineEvent> {
       const text = notice.text;
@@ -193,38 +229,54 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield { type: 'notice', text };
     };
     const profile = req.profile;
-    const content = await this.userContent(req, plan.mode === 'fresh');
+    const content = this.userContent(req, plan.mode === 'fresh', images);
 
     // Auto mode needs the Claude login; an endpoint backend always runs in
     // default mode (spec 2026-10-03-claude-code-auto-mode-design section 4).
     const autoMode = req.autoMode === true && backend === CLAUDE_BACKEND;
-    const gateCtx: ToolContext = {
-      chatId: req.chatId,
-      messageId: req.messageId,
-      profileId: profile.id,
-      // A clean chat's scratch folder is not a workspace: the gate refuses path tools there.
-      workspaceRoot: clean ? null : cwd,
-      ...(req.folders && req.folders.length > 0 ? { folders: req.folders } : {}),
-      signal: req.signal,
-    };
+    // The reply's tool context: ids, folder (none for a clean chat, whose
+    // scratch folder is not a workspace), extra folders, the plan gate and the
+    // unattended flag.
+    const gateCtx: ToolContext = toolContextFor(req);
+    const approvals = this.deps.approvals;
+    const askUser = approvals.askUser ? (ctx: ToolContext, input: AskInput) => approvals.askUser!(ctx, input) : undefined;
     // Artifacts (Deck #896) and recall (spec 2026-10-09-recall-design): a
     // process's Grunt server has each tool or not from its start, so the
     // switches are part of the process key.
     const { artifactTool, recallTool } = this.deps;
-    // The profile's MCP servers, relayed through the same server (relay.ts).
-    const serverIds = profile.toolPolicy.mcpServerIds;
-    const relay = buildRelay(this.deps.relayTools && serverIds.length > 0 ? this.deps.relayTools(serverIds) : []);
+    // The profile's MCP servers, the sandboxed run_command when its shell
+    // runs in the sandbox, and the browser when it is on, relayed through the
+    // same server (relay.ts). A clean chat has no folder for a command to run
+    // in, so it gets no run_command; it does get the browser, which needs none.
+    const relayed = this.deps.relayTools ? this.deps.relayTools(profile.toolPolicy).filter((s) => !(clean && s.source === 'sandbox')) : [];
+    const relay = buildRelay(relayed);
     const own: GruntServerSwitches = {
       artifacts: artifactTool !== undefined && profile.toolPolicy.artifacts !== false,
       recall: recallTool !== undefined && profile.toolPolicy.recall !== false,
+      plan: req.plan !== undefined && askUser !== undefined,
       relay: relay.hash,
     };
+    const tickets = new ApprovalTickets();
     const binding: TurnBinding = {
-      gate: createGate({ approvals: this.deps.approvals, policy: profile.toolPolicy, ctx: gateCtx, autoMode }),
+      gate: createGate({
+        approvals: this.deps.approvals,
+        policy: profile.toolPolicy,
+        ctx: gateCtx,
+        autoMode,
+        onApproved: (spec, input, args) => tickets.add(spec.name, input, args),
+      }),
       ...(autoMode ? { permissionDenied: permissionDeniedHook({ approvals: this.deps.approvals, ctx: gateCtx }) } : {}),
-      ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId }, args) } : {}),
+      ...(artifactTool && own.artifacts ? { artifact: (args: unknown) => artifactTool({ chatId: req.chatId, messageId: req.messageId, mcpServerIds: profile.toolPolicy.mcpServerIds }, args) } : {}),
       ...(recallTool && own.recall ? { recall: (args: unknown) => recallTool({ chatId: req.chatId }, args) } : {}),
-      ...(relay.tools.size > 0 ? { relay: (spec: ToolSpec, args: unknown) => spec.execute(args, gateCtx) } : {}),
+      ...(own.plan && askUser ? { plan: (args: unknown) => runPlanCommand(askUser, gateCtx, args) } : {}),
+      // The current reply's spec for that tool, not the one the process started
+      // with (an edit to the sandbox allowlist or the browser's blocked sites
+      // applies without a new process), and only if it is the kind of tool the
+      // gate approved: see currentRelayed, which fails closed (the browser
+      // branch's `?? spec` fallback to the old spec is not kept). A tool that
+      // describes its calls then runs only with its approval ticket: runRelayed.
+      ...(relay.tools.size > 0 ? { relay: async (approved: ToolSpec, args: unknown) => runRelayed(currentRelayed(relay, approved), args, gateCtx, tickets) } : {}),
+      tickets,
     };
     const options = this.processOptions(req, cwd, autoMode, clean);
     const key = liveKey(options, { backend, token: profile.apiKey }, own);
@@ -245,6 +297,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const renames = new Map<string, string>();
     if (live.artifactTool) renames.set(live.artifactTool, ARTIFACT_TOOL);
     if (live.recallTool) renames.set(live.recallTool, RECALL_TOOL);
+    if (live.planTool) renames.set(live.planTool, PLAN_TOOL);
     for (const [claudeName, apiName] of live.relayNames) renames.set(claudeName, apiName);
     const mapper = new SdkEventMapper(renames.size > 0 ? renames : undefined);
     let sawInit = false;
@@ -293,6 +346,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       yield* flushNotice();
       yield { type: 'error', error: classifyClaudeCodeFailure(text, { backend, modelId: profile.modelId, rateLimitResetsAt, autoMode }) };
     } finally {
+      tickets.clear();
       req.signal.removeEventListener('abort', onAbort);
       // Only a cleanly finished reply leaves its process waiting for the next message.
       if (finished && !req.signal.aborted && !live.isClosed) this.pool.release(live);
@@ -317,7 +371,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
       // A clean chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design
       // §1): none of the user's Claude Code settings, CLAUDE.md, skills, hooks
       // or MCP config, no coding-agent prompt, and of the built-in tools only
-      // web search and fetch. Its MCP tools are Grunt's own server's.
+      // web search and fetch, the checklist and questions. Its MCP tools are Grunt's own server's.
       return {
         cwd,
         model: profile.modelId,
@@ -327,7 +381,8 @@ export class ClaudeCodeChatEngine implements ChatEngine {
         settingSources: [],
         strictMcpConfig: true,
         settings: { disableSkillShellExecution: true },
-        tools: profile.toolPolicy.agentWeb === false ? [] : ['WebSearch', 'WebFetch'],
+        // Web search and fetch, plus the checklist and questions (spec 2026-10-12-thread-cards-design section 6).
+        tools: [...(profile.toolPolicy.agentWeb === false ? [] : ['WebSearch', 'WebFetch']), ...CLEAN_CHAT_AGENT_TOOLS],
         disallowedTools: agentDisallowedTools(profile.toolPolicy),
         ...(profile.systemPrompt ? { systemPrompt: profile.systemPrompt } : {}),
         ...(profile.params.thinkingBudgetTokens ? { thinking: { type: 'enabled', budgetTokens: profile.params.thinkingBudgetTokens } } : {}),
@@ -376,20 +431,23 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     // The gate passes its artifact and recall tools without a card, matching
     // those exact names, so no project MCP config can name a server to get
     // the same pass.
-    const server = own.artifacts || own.recall || relay.tools.size > 0 ? gruntServerName() : null;
-    const ownArtifactTool = server && own.artifacts ? gruntArtifactToolName(server) : null;
-    const ownRecallTool = server && own.recall ? gruntRecallToolName(server) : null;
+    const server = own.artifacts || own.recall || own.plan || relay.tools.size > 0 ? gruntServerName() : null;
+    const ownArtifactTool = server && own.artifacts ? gruntToolName(server, ARTIFACT_TOOL) : null;
+    const ownRecallTool = server && own.recall ? gruntToolName(server, RECALL_TOOL) : null;
+    const ownPlanTool = server && own.plan ? gruntToolName(server, PLAN_TOOL) : null;
     // A relayed tool is matched by its exact name on this process's server, like artifact and recall.
-    const relayed = new Map<string, ToolSpec>(server ? [...relay.tools].map(([name, spec]) => [`mcp__${server}__${name}`, spec] as const) : []);
+    const relayed = new Map<string, ToolSpec>(server ? [...relay.tools].map(([name, spec]) => [gruntToolName(server, name), spec] as const) : []);
     const ownTool = (toolName: string): GruntTool | { relay: ToolSpec } | undefined => {
       if (toolName === ownArtifactTool) return 'artifact';
       if (toolName === ownRecallTool) return 'recall';
+      if (toolName === ownPlanTool) return 'plan';
       const spec = relayed.get(toolName);
       return spec ? { relay: spec } : undefined;
     };
     const tools: GruntServerTool[] = [
       ...(own.artifacts ? [gruntArtifactTool(() => live?.binding?.artifact)] : []),
       ...(own.recall ? [gruntRecallTool(() => live?.binding?.recall)] : []),
+      ...(own.plan ? [gruntPlanTool(() => live?.binding?.plan)] : []),
       ...[...relay.tools].map(([name, spec]) => relayServerTool(name, spec, () => live?.binding?.relay)),
     ];
     const gate: Gate = (toolName, toolInput, signal, opts) => {
@@ -423,6 +481,7 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     const process = new LiveProcess(key, input, abortController, this.deps.query({ prompt: input, options: full }));
     process.artifactTool = ownArtifactTool;
     process.recallTool = ownRecallTool;
+    process.planTool = ownPlanTool;
     for (const [claudeName, spec] of relayed) process.relayNames.set(claudeName, spec.name);
     live = process;
     for (const p of this.processes) if (p.isClosed) this.processes.delete(p);
@@ -430,21 +489,57 @@ export class ClaudeCodeChatEngine implements ChatEngine {
     return process;
   }
 
-  /** The new user message as content blocks: seeded history for a fresh session, text, and images when the model takes them. */
-  private async userContent(req: EngineRequest, fresh: boolean): Promise<ContentBlock[]> {
+  /**
+   * The new message's images, when the model takes them, as what goes to
+   * Claude Code in their place: an image block, or the note for one left out
+   * (the notes the API engine writes), in the order of the parts. They are
+   * picked from the references and the sizes their rows state before any is
+   * read (the same selector the API engine uses): the newest few, each within
+   * the upload cap and all together within the request's room, each file once;
+   * the type sent is the one the bytes have. Nothing is left out silently:
+   * `omitted` says why for each, for the transcript's notice.
+   */
+  private async newImages(req: EngineRequest): Promise<{ blocks: ContentBlock[]; omitted: Omission[] }> {
+    const last = req.messages[req.messages.length - 1];
+    const blocks: ContentBlock[] = [];
+    const omitted: Omission[] = [];
+    const images = (last?.parts ?? []).filter((p): p is Extract<Part, { type: 'image' }> => p.type === 'image');
+    if (images.length === 0 || !req.loadAttachment || !(req.profile.model?.supportsVision ?? true)) return { blocks, omitted };
+    const leaveOut = (why: Omission): void => {
+      omitted.push(why);
+      blocks.push({ type: 'text', text: omissionNote(why) });
+    };
+    const distinct = [...new Map(images.map((p) => [p.attachmentId, p])).values()];
+    const limits = { maxCount: MAX_REQUEST_ATTACHMENTS, maxEach: MAX_HISTORY_ATTACHMENT_BYTES, maxTotal: MAX_REQUEST_ATTACHMENT_BYTES };
+    const newestFirst = [...distinct].reverse().map((p) => ({ key: p.attachmentId, size: req.attachmentSize ? req.attachmentSize(p.attachmentId) : undefined }));
+    const verdicts = selectWithinBudget(newestFirst, limits);
+    const loaded = { bytes: 0 };
+    for (const part of distinct) {
+      const verdict = verdicts.get(part.attachmentId) ?? 'unknown';
+      if (verdict !== 'load') {
+        leaveOut(verdict);
+        continue;
+      }
+      const bytes = await req.loadAttachment(part.attachmentId);
+      if (!withinAfterLoad(bytes.length, loaded, limits)) {
+        leaveOut(bytes.length > limits.maxEach ? 'too-large' : 'over-budget');
+        continue;
+      }
+      const mediaType = sniffToolImageMime(bytes);
+      if (mediaType === null) leaveOut('not-image');
+      else blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: bytes.toString('base64') } });
+    }
+    return { blocks, omitted };
+  }
+
+  /** The new user message as content blocks: seeded history for a fresh session, text, then its images (see `newImages`). */
+  private userContent(req: EngineRequest, fresh: boolean, images: ContentBlock[]): ContentBlock[] {
     const last = req.messages[req.messages.length - 1];
     const history = fresh ? renderHistory(req.messages) : '';
-    const blocks: ContentBlock[] = [];
-    for (const part of last?.parts ?? []) {
-      if (part.type === 'image' && req.loadAttachment && (req.profile.model?.supportsVision ?? true)) {
-        const bytes = await req.loadAttachment(part.attachmentId);
-        blocks.push({ type: 'image', source: { type: 'base64', media_type: part.mime, data: bytes.toString('base64') } });
-      }
-    }
     const skipped = skippedFiles(last);
     const note = skipped.length > 0 ? `\n\n(Attached files not sent, because Claude Code turns in Grunt only receive images: ${skipped.join(', ')}.)` : '';
     const text = [history, textOf(last)].filter((s) => s.length > 0).join('\n\n') + note;
-    return [{ type: 'text', text }, ...blocks];
+    return [{ type: 'text', text }, ...images];
   }
 
   /**

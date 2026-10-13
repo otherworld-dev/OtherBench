@@ -185,7 +185,7 @@ describe('Inspector session spend', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 4.5,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 100, tokensOut: 50, tokensCached: 0, tokensReasoning: 0, completeCount: 2, cancelledCount: 0, unmeasuredErrorCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 100, tokensOut: 50, tokensCached: 0, tokensReasoning: 0, completeCount: 2, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
       })
     );
 
@@ -202,7 +202,7 @@ describe('Inspector session spend', () => {
         totalMeasuredCost: 2,
         totalCancelledCount: 1,
         totalUnmeasuredErrorCount: 1,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 2, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 1, unmeasuredErrorCount: 1 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 2, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 1, unmeasuredErrorCount: 1, subagentCount: 0 }],
       })
     );
 
@@ -239,7 +239,7 @@ describe('Inspector session spend', () => {
     mockedUsageGet.mockResolvedValue(
       makeRollup({
         totalMeasuredCost: 3,
-        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 3, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0 }],
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 3, tokensIn: 10, tokensOut: 10, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
       })
     );
     useGruntStore.getState().applyTurnEvent({ messageId: 'm1', type: 'status', status: 'complete' });
@@ -445,8 +445,8 @@ describe('Inspector MCP server health', () => {
 
   it('renders each server\'s live status and tool count, and lets a manual refresh be triggered', async () => {
     mockedMcpList.mockResolvedValue([
-      { id: 'srv-1', name: 'Filesystem MCP', transport: 'stdio', enabled: true, status: 'ok', lastError: null, toolCount: 3 },
-      { id: 'srv-2', name: 'Broken Server', transport: 'http', enabled: true, status: 'error', lastError: 'connection refused', toolCount: 0 },
+      { id: 'srv-1', name: 'Filesystem MCP', transport: 'stdio', enabled: true, status: 'ok', lastError: null, toolCount: 3, auth: null },
+      { id: 'srv-2', name: 'Broken Server', transport: 'http', enabled: true, status: 'error', lastError: 'connection refused', toolCount: 0, auth: null },
     ]);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
 
@@ -460,6 +460,18 @@ describe('Inspector MCP server health', () => {
     expect(mockedMcpRefresh).toHaveBeenCalledWith('srv-1');
   });
 
+  it('shows a server that needs sign-in, with a pointer to Settings', async () => {
+    mockedMcpList.mockResolvedValue([
+      { id: 'srv-h', name: 'Hosted Docs', transport: 'http', enabled: true, status: 'needs_auth', lastError: 'This server needs you to sign in.', toolCount: 0, auth: { state: 'needs_sign_in', account: null, signedInAt: null, pending: false, error: null } },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    const section = await within(mcpHealthSection()).findByTestId('mcp-health');
+    expect(within(section).getByText('needs sign-in')).toBeInTheDocument();
+    expect(within(section).getByText('Hosted Docs: needs sign-in (Settings > MCP servers).')).toBeInTheDocument();
+    expect(within(section).getByTestId('mcp-status-dot')).toHaveAttribute('data-status', 'needs_auth');
+  });
+
   it('shows an error state, not a crash, when the health fetch fails', async () => {
     mockedMcpList.mockRejectedValue(new Error('down'));
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
@@ -471,8 +483,8 @@ describe("Inspector MCP servers on the chat's profile", () => {
   afterEach(cleanup);
 
   const servers = [
-    { id: 'srv-1', name: 'nextcloud', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 73 },
-    { id: 'srv-2', name: 'blender', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 9 },
+    { id: 'srv-1', name: 'nextcloud', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 73, auth: null },
+    { id: 'srv-2', name: 'blender', transport: 'stdio' as const, enabled: true, status: 'ok' as const, lastError: null, toolCount: 9, auth: null },
   ];
   const opus = (mcpServerIds: string[]) =>
     makeProfile({ name: 'Claude Opus 5.5', toolPolicy: { fs: 'off', shell: false, mcpServerIds, approvalMode: 'ask_on_mutate' } });
@@ -546,6 +558,38 @@ describe('Inspector tool grants', () => {
     expect(within(grantsSection()).getByTestId('grant-g1')).toBeInTheDocument();
   });
 
+  it('shows the site a browser grant is for', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g4', chatId: null, profileId: null, toolName: 'browser', source: 'browser', scope: 'always', constraint: { host: 'example.com' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    await within(grantsSection()).findByTestId('grant-g4');
+    expect(within(grantsSection()).getByText(/example\.com/)).toBeInTheDocument();
+  });
+
+  it('shows the program a computer-use grant is for, in full, so two apps can be told apart', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g5', chatId: null, profileId: null, toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE' }, expiresAt: null },
+      { id: 'g6', chatId: 'chat-1', profileId: null, toolName: 'computer', source: 'computer', scope: 'chat', constraint: { app: 'C:\\Program Files\\Notepad++\\notepad.exe' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const excel = await within(grantsSection()).findByTestId('grant-g5');
+    expect(excel).toHaveTextContent('always · C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE');
+    expect(within(excel).getByText('C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE').tagName).toBe('BDI');
+    expect(within(grantsSection()).getByTestId('grant-g6')).toHaveTextContent('this chat · C:\\Program Files\\Notepad++\\notepad.exe');
+  });
+
+  it("spells out hidden characters in a stored grant's app rather than letting them reorder or hide text", async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g7', chatId: null, profileId: null, toolName: 'computer', source: 'computer', scope: 'always', constraint: { app: 'C:\\Apps\\exe.\u202eTXT\u200b.exe' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = await within(grantsSection()).findByTestId('grant-g7');
+    expect(row).toHaveTextContent('C:\\Apps\\exe.<U+202E>TXT<U+200B>.exe');
+    expect(row.textContent).not.toContain('\u202e');
+    expect(row.textContent).not.toContain('\u200b');
+  });
+
   it('shows the pinned command for a commandExact grant (the default shape for an "Always allow" shell grant)', async () => {
     mockedGrantsList.mockResolvedValue([
       { id: 'g3', chatId: null, profileId: null, toolName: 'run_command', source: 'shell', scope: 'always', constraint: { commandExact: 'npm test' }, expiresAt: null },
@@ -553,6 +597,26 @@ describe('Inspector tool grants', () => {
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     await within(grantsSection()).findByTestId('grant-g3');
     expect(within(grantsSection()).getByText(/npm test/)).toBeInTheDocument();
+  });
+
+  it('shows the host of a network grant, so it can be seen and revoked', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g4', chatId: null, profileId: null, toolName: 'sandbox_network', source: 'network', scope: 'always', constraint: { host: 'pypi.org' }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = await within(grantsSection()).findByTestId('grant-g4');
+    expect(row).toHaveTextContent('pypi.org');
+    await userEvent.setup().click(within(row).getByRole('button', { name: 'Revoke grant for sandbox_network' }));
+    expect(mockedGrantsRevoke).toHaveBeenCalledWith('g4');
+  });
+
+  it('shows which live artifact call a live grant is for', async () => {
+    mockedGrantsList.mockResolvedValue([
+      { id: 'g4', chatId: 'chat-1', profileId: 'p1', toolName: 'mcp__Live__lookup', source: 'mcp', scope: 'chat', constraint: { live: { artifactId: 'art', callId: 'value', hash: 'h', serverId: 'srv-live' } }, expiresAt: null },
+    ]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const row = await within(grantsSection()).findByTestId('grant-g4');
+    expect(row).toHaveTextContent('this chat · live artifact call value');
   });
 
   it('shows an honest empty state with no chat selected, and never calls the API', () => {
@@ -581,15 +645,22 @@ describe('Inspector audit trail', () => {
     expect(list).not.toHaveTextContent('[redacted]'); // the redaction happened server-side; this just must not defeat it by rendering raw args
   });
 
+  it('labels a live artifact call', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'l1', chatId: 'chat-1', messageId: 'm1', toolName: 'mcp__Live__lookup', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'live:3aa2d2fd', createdAt: 1000 }]);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    const list = await within(auditSection()).findByTestId('audit-trail');
+    expect(within(within(list).getByTestId('audit-l1')).getByText('live artifact')).toHaveAttribute('title', 'live:3aa2d2fd');
+  });
+
   it('shows short labels for how each call was authorised, keeping the raw value in a tooltip', async () => {
-    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'deny:cancelled', 'auto', 'deny:auto', 'weird:thing'];
+    const raws = ['auto_read', 'policy', 'grant:3aa2d2fd-fccb-4d62-a505-86f4357ae984', 'ask:once', 'ask:chat', 'ask:always', 'deny:policy', 'deny:user', 'deny:cancelled', 'auto', 'deny:auto', 'deny:unattended', 'weird:thing'];
     mockedAuditList.mockResolvedValue(
       raws.map((grantedBy, i) => ({ id: `g${i}`, chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy, createdAt: 1000 + i })),
     );
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     const list = await within(auditSection()).findByTestId('audit-trail');
-    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (12)' }));
-    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'weird:thing'];
+    await userEvent.setup().click(within(auditSection()).getByRole('button', { name: 'Show all (13)' }));
+    const labels = ['auto-read', 'policy', 'grant', 'asked: once', 'asked: this chat', 'asked: always', 'denied by policy', 'denied by you', 'stopped (not denied)', 'auto mode', 'blocked by auto mode', 'refused: nobody to approve (scheduled run)', 'weird:thing'];
     raws.forEach((raw, i) => {
       const label = within(within(list).getByTestId(`audit-g${i}`)).getByText(labels[i]!);
       expect(label).toHaveAttribute('title', raw);
@@ -835,5 +906,34 @@ describe('Inspector other folders', () => {
     render(<Inspector chat={{ ...withFolders([]), runsOn: 'node-pc' }} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
     expect(within(foldersSection()).queryByRole('button', { name: 'Choose…' })).toBeNull();
     mockedIsDesktop.mockReturnValue(false);
+  });
+});
+
+describe('Inspector Progress', () => {
+  beforeEach(() => {
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+  const todoCall = { type: 'tool-call' as const, id: 't1', name: 'update_todos', args: { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing' }] } };
+
+  it("lists each running reply's checklist, named by profile in a compare, and hides once none is running", () => {
+    useGruntStore.setState({ messages: {
+      a: makeMessage('a', { parts: [todoCall] }),
+      b: makeMessage('b', { parts: [todoCall], producedBy: { profileId: 'p2', profileName: 'Beta', connectionId: 'c1', modelId: 'm' } }),
+    } });
+    const { rerender } = render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Progress' })).toBeInTheDocument();
+    expect(screen.getByText('Alpha')).toBeInTheDocument();
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    expect(screen.getAllByTestId('todo-checklist')).toHaveLength(2);
+    useGruntStore.setState({ messages: { a: makeMessage('a', { parts: [todoCall], status: 'complete' }) } });
+    rerender(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(screen.queryByRole('heading', { name: 'Progress' })).toBeNull();
+  });
+
+  it('words a plan refusal in the audit trail', async () => {
+    mockedAuditList.mockResolvedValue([{ id: 'x', chatId: 'chat-1', messageId: 'm', toolName: 'write_file', argsRedacted: {}, resultSummary: 'error: plan_mode', durationMs: 1, grantedBy: 'deny:plan', createdAt: Date.now() }] as never);
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
+    expect(await screen.findByText('refused: no plan approved yet')).toBeInTheDocument();
   });
 });

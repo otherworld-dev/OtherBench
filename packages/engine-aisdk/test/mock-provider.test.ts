@@ -3,7 +3,9 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
 import type { ResolvedProfile } from '@grunt/core/types/config.js';
-import { MockChatEngine } from '../src/mock-provider.js';
+import { checkOfficeContent } from '@grunt/core/domain/office-spec.js';
+import { createPlanGate, PLAN_APPROVED, PLAN_REFUSAL, planChangesText, UNATTENDED_PLAN } from '@grunt/core/domain/thread-tools.js';
+import { LISTS_REPLY, MockChatEngine, OFFICE_SAMPLES } from '../src/mock-provider.js';
 
 function makeResolvedProfile(): ResolvedProfile {
   return {
@@ -229,6 +231,21 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#live-artifact trigger', () => {
+    it('creates the dash page through the real artifact tool, declaring a live call to the named tool', async () => {
+      const execute = vi.fn(async (_args: unknown) => ({ ok: true, command: 'create', slug: 'dash', number: 1 }));
+      const artifact: ToolSpec = { name: 'artifact', description: '', parameters: {}, risk: 'read', source: 'artifact', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#live-artifact mcp__Live__lookup', { tools: [artifact] })));
+      const args = execute.mock.calls[0]![0] as Record<string, unknown>;
+      expect(args).toMatchObject({ command: 'create', id: 'dash', kind: 'html', title: 'Live dashboard' });
+      expect(JSON.parse(args['live'] as string)).toEqual({ calls: [{ id: 'value', tool: 'mcp__Live__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] });
+      expect(args['content']).toContain('<script src="grunt-live.js"></script>');
+      expect(args['content']).toContain("grunt.live('value', { key: 'b' })");
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'artifact', isError: false }));
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+  });
+
   describe('#recall trigger', () => {
     it('#recall searches with the rest of the line through the real tool, then names the chats it found', async () => {
       const execute = vi.fn(async () => ({ projects: [], chats: [{ chatId: 'c1', title: 'Staging box', date: '2026-10-01', role: 'user', messageId: 'm1', snippet: 'zebrafish' }] }));
@@ -246,6 +263,224 @@ describe('MockChatEngine', () => {
       expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall nothing', { tools: [recall] }))))).toBe('I found nothing.');
       const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall nothing')));
       expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'recall', isError: true }));
+    });
+  });
+
+  describe('#run trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+    it('#run calls the offered run_command with the rest of the line, then reports its output', async () => {
+      const execute = vi.fn(async () => ({ command: 'uname -s', exitCode: 0, output: 'Linux\n', sandbox: true, cwd: '/mnt/e/ws' }));
+      const tool: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run uname -s\nthanks', { tools: [tool], workspaceRoot: '/ws' })));
+      expect(execute).toHaveBeenCalledWith({ command: 'uname -s' }, expect.objectContaining({ chatId: 'chat-1', workspaceRoot: '/ws' }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'run_command', args: { command: 'uname -s' } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'run_command', isError: false }));
+      expect(text(events)).toBe('I ran it in the sandbox: Linux');
+    });
+
+    it("#run hands the tool the reply's plan gate and the unattended flag, like every other call", async () => {
+      const execute = vi.fn(async () => ({ exitCode: 0, output: '', sandbox: true }));
+      const tool: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute };
+      const plan = createPlanGate();
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls', { tools: [tool], workspaceRoot: '/ws', plan, unattended: true })));
+      expect(execute).toHaveBeenCalledWith({ command: 'ls' }, expect.objectContaining({ plan, unattended: true }));
+    });
+
+    it('#run says so when the command did not run, or no run_command was offered', async () => {
+      const refused: ToolSpec = { name: 'run_command', description: '', parameters: {}, risk: 'execute', source: 'sandbox', execute: async () => ({ error: true, code: 'not_set_up', message: 'nope' }) };
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls', { tools: [refused] }))))).toMatch(/^The command didn't run: /);
+      const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#run ls')));
+      expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'run_command', isError: true }));
+    });
+  });
+
+  describe('#subagents trigger', () => {
+    it('makes two subagent calls whose executes overlap, then answers with both results', async () => {
+      let running = 0;
+      let most = 0;
+      const execute = vi.fn(async (args: unknown, ctx: ToolContext) => {
+        running += 1;
+        most = Math.max(most, running);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        running -= 1;
+        return `answer to ${(args as { prompt: string }).prompt} (${ctx.toolCallId})`;
+      });
+      const subagent: ToolSpec = { name: 'subagent', description: '', parameters: {}, risk: 'read', source: 'subagent', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#subagents read #tool notes.txt\nthanks', { tools: [subagent] })));
+
+      const calls = events.filter((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>[];
+      expect(calls.map((c) => c.args)).toEqual([
+        { description: 'First helper', prompt: 'read #tool notes.txt' },
+        { description: 'Second helper', prompt: 'Say hello.' },
+      ]);
+      expect(most).toBe(2);
+      expect(execute.mock.calls.map(([, ctx]) => ctx.toolCallId)).toEqual(calls.map((c) => c.id));
+      expect(events.filter((e) => e.type === 'tool-result')).toHaveLength(2);
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+      expect(text).toContain('Sub-agents answered: 1) answer to read #tool notes.txt');
+      expect(text).toContain('2) answer to Say hello.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('says so when no subagent tool is offered', async () => {
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#subagents anything')));
+      expect(events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('')).toBe('No subagent tool was offered.');
+      expect(events.some((e) => e.type === 'tool-call')).toBe(false);
+    });
+
+    it("gives a sub-agent's read_file the sub-agent tag", async () => {
+      const seen: ToolContext[] = [];
+      const readFile: ToolSpec = { name: 'read_file', description: '', parameters: {}, risk: 'read', source: 'fs', execute: async (_a, ctx) => { seen.push(ctx); return 'text'; } };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('read #tool a.txt', { tools: [readFile], subagent: { callId: 'c1', label: 'First helper', parentProfileId: 'p' } })));
+      expect(seen[0]?.subagent).toEqual({ callId: 'c1', label: 'First helper', parentProfileId: 'p' });
+    });
+  });
+
+  describe('#browser trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+    const browserWith = (result: unknown): ToolSpec => ({ name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => result });
+
+    it('#browser opens the address through the real tool, then names the first heading', async () => {
+      const execute = vi.fn(async () => ({ about: 'x', url: 'http://127.0.0.1:4766/', title: 'Fixture', snapshot: '- heading "Fixture heading" [level=1] [ref=e1]\n- heading "Second" [level=2] [ref=e2]' }));
+      const browser: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/\nthanks', { tools: [browser] })));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', name: 'browser', args: { command: 'open', url: 'http://127.0.0.1:4766/' } }));
+      expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'browser', isError: false }));
+      expect(text(events)).toBe('The page says: Fixture heading.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    const heading = async (snapshot: string) =>
+      text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browserWith({ snapshot })] }))));
+
+    it('#browser reads a heading from a key Playwright wrapped in single quotes', async () => {
+      expect(await heading(`- 'heading "Q: why?" [level=2] [ref=e8]'`)).toBe('The page says: Q: why?.');
+    });
+
+    it('#browser decodes the JSON name: escaped quote, newline and unicode', async () => {
+      expect(await heading(`- 'heading "Say \\"hi\\"" [level=1] [ref=e1]'`)).toBe('The page says: Say "hi".');
+      expect(await heading(`- heading "Caf\\u00e9 \\"x\\"" [level=1] [ref=e1]`)).toBe('The page says: Café "x".');
+    });
+
+    it('#browser undoes the doubled apostrophe of a wrapped key', async () => {
+      expect(await heading(`- 'heading "Adam''s page: home" [level=1] [ref=e1]'`)).toBe("The page says: Adam's page: home.");
+    });
+
+    it('#browser skips an empty-named heading for the next real one', async () => {
+      expect(await heading('- heading "" [level=2] [ref=e1]\n- heading [level=2] [ref=e2]\n  - heading "Real" [level=1] [ref=e3]')).toBe('The page says: Real.');
+    });
+
+    it('#browser ignores page text that only mentions a heading', async () => {
+      expect(await heading('- paragraph [ref=e1]: the heading "decoy" is below\n- heading "Real" [level=1] [ref=e2]')).toBe('The page says: Real.');
+      expect(await heading('- paragraph [ref=e1]: the heading "decoy" is below')).toBe('The page has no heading.');
+    });
+
+    it('#browser says so when the page has no heading', async () => {
+      const browser = browserWith({ snapshot: '- paragraph [ref=e1]' });
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser http://127.0.0.1:4766/', { tools: [browser] }))))).toBe('The page has no heading.');
+    });
+
+    it("#browser hands the tool the reply's plan gate, the unattended flag, its call id and a sub-agent's tag, like every other call", async () => {
+      const execute = vi.fn(async () => ({ snapshot: '' }));
+      const browser: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute };
+      const plan = createPlanGate();
+      const subagent = { callId: 'c1', label: 'First helper', parentProfileId: 'p-parent' };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/', { tools: [browser], plan, unattended: true, subagent })));
+      expect(execute).toHaveBeenCalledWith(
+        { command: 'open', url: 'https://example.com/' },
+        expect.objectContaining({ plan, unattended: true, subagent, profileId: 'p-parent', toolCallId: expect.stringMatching(/^mock-browser-/) })
+      );
+    });
+
+    it('#browser says so when the tool failed or was not offered', async () => {
+      const failing: ToolSpec = { name: 'browser', description: '', parameters: {}, risk: 'mutate', source: 'browser', execute: async () => ({ error: true, code: 'approval_denied', message: 'The user denied this tool call.' }) };
+      expect(text(await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/', { tools: [failing] }))))).toBe("The browser didn't work: The user denied this tool call.");
+      const bare = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#browser https://example.com/')));
+      expect(bare).toContainEqual(expect.objectContaining({ type: 'tool-result', name: 'browser', isError: true }));
+    });
+  });
+
+  describe('#computer trigger', () => {
+    const text = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+    const results = (events: EngineEvent[]) => events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');
+    const computerWith = (execute: ToolSpec['execute']): ToolSpec => ({ name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute });
+
+    it("hands the tool the reply's plan gate, the unattended flag, its call id and a sub-agent's tag, like every other call (integration)", async () => {
+      const execute = vi.fn(async () => ({ error: true, code: 'plan_mode', message: 'No.' }));
+      const plan = createPlanGate();
+      const subagent = { callId: 'c1', label: 'First helper', parentProfileId: 'p-parent' };
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#computer', { tools: [computerWith(execute)], plan, unattended: true, subagent })));
+      expect(execute).toHaveBeenCalledWith(
+        { action: 'screenshot' },
+        expect.objectContaining({ plan, unattended: true, subagent, profileId: 'p-parent', toolCallId: expect.stringMatching(/^mock-computer-/) })
+      );
+    });
+
+    it('looks first, then clicks and types through the real tool, passing its results on as they are, then answers slowly', async () => {
+      const calls: unknown[] = [];
+      const contexts: ToolContext[] = [];
+      const shot = [{ type: 'text', text: 'Screenshot, 1366×768.' }, { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }];
+      const computer = computerWith(async (args, ctx) => {
+        calls.push(args);
+        contexts.push(ctx);
+        return shot;
+      });
+      const sleep = fakeSleep();
+      const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#computer', { tools: [computer] })));
+
+      expect(calls).toEqual([{ action: 'screenshot' }, { action: 'left_click', coordinate: [10, 20] }, { action: 'type', text: 'hello from the mock' }]);
+      expect(contexts.map((c) => [c.chatId, c.messageId, c.profileId])).toEqual(Array(3).fill(['chat-1', 'msg-req-1', 'profile-1']));
+      const calledWith = events.filter((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call');
+      expect(calledWith.map((e) => [e.name, e.args])).toEqual(calls.map((args) => ['computer', args]));
+      // Each result is the tool's own value (an array with its image), not a JSON string, so the runner keeps the images.
+      expect(results(events).map((r) => [r.id, r.name, r.result, r.isError])).toEqual(calledWith.map((c) => [c.id, 'computer', shot, false]));
+      // A slow tail Stop can land in: 20 chunks a second apart.
+      expect(events.filter((e) => e.type === 'text-delta')).toHaveLength(20);
+      expect(sleep.mock.calls.map((call) => call[0])).toEqual(Array(20).fill(1000));
+      expect(text(events)).toBe('I clicked and typed in the fake app, and now I will keep talking slowly, one word at a time.');
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('stops at the first step that fails and says why, quickly', async () => {
+      const calls: unknown[] = [];
+      const denied = { error: true, code: 'approval_denied', message: 'The user denied this tool call.' };
+      const computer = computerWith(async (args) => {
+        calls.push(args);
+        return (args as { action: string }).action === 'screenshot' ? [{ type: 'text', text: 'Screenshot, 1366×768.' }] : denied;
+      });
+      const sleep = fakeSleep();
+      const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#computer', { tools: [computer] })));
+
+      expect(calls).toEqual([{ action: 'screenshot' }, { action: 'left_click', coordinate: [10, 20] }]);
+      expect(results(events).map((r) => [r.result, r.isError])).toEqual([
+        [[{ type: 'text', text: 'Screenshot, 1366×768.' }], false],
+        [denied, true],
+      ]);
+      expect(text(events)).toBe("The computer didn't work: The user denied this tool call.");
+      expect(sleep.mock.calls.every((call) => call[0] < 1000)).toBe(true);
+      expect(events.at(-1)).toMatchObject({ type: 'finish' });
+    });
+
+    it('says so when no computer tool was offered', async () => {
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#computer')));
+      expect(results(events)).toHaveLength(1);
+      expect(results(events)[0]).toMatchObject({ name: 'computer', isError: true });
+      expect(text(events)).toBe("The computer didn't work: No computer tool was offered.");
+    });
+
+    it('does nothing more once the reply is stopped during a step', async () => {
+      const controller = new AbortController();
+      const calls: unknown[] = [];
+      const computer = computerWith(async (args) => {
+        calls.push(args);
+        controller.abort();
+        return [{ type: 'text', text: 'Screenshot, 1366×768.' }];
+      });
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#computer', { tools: [computer], signal: controller.signal })));
+      expect(calls).toEqual([{ action: 'screenshot' }]);
+      expect(results(events)).toHaveLength(0);
+      expect(events.some((e) => e.type === 'text-delta' || e.type === 'finish')).toBe(false);
     });
   });
 
@@ -342,6 +577,106 @@ describe('MockChatEngine', () => {
     });
   });
 
+  describe('#todos, #ask and #plan triggers', () => {
+    const textOf = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+    it('#todos updates the checklist three times through the real tool, then says it is done', async () => {
+      const execute = vi.fn(async () => 'Checklist updated.');
+      const todos: ToolSpec = { name: 'update_todos', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      const sleep = fakeSleep();
+      const events = await drain(new MockChatEngine({ sleep }).stream(makeRequest('#todos', { tools: [todos] })));
+      const calls = events.filter((e) => e.type === 'tool-call') as Extract<EngineEvent, { type: 'tool-call' }>[];
+      expect(calls.map((c) => c.name)).toEqual(['update_todos', 'update_todos', 'update_todos']);
+      expect((calls[0]!.args as { todos: { status: string }[] }).todos.map((t) => t.status)).toEqual(['in_progress', 'pending']);
+      expect((calls[2]!.args as { todos: { status: string }[] }).todos.map((t) => t.status)).toEqual(['completed', 'completed']);
+      expect(execute).toHaveBeenCalledTimes(3);
+      expect(sleep.mock.calls.filter(([ms]) => ms === 1500)).toHaveLength(2);
+      expect(textOf(events)).toBe('All done.');
+    });
+
+    it('#ask asks which colour through the real tool and repeats the answer', async () => {
+      const execute = vi.fn(async () => 'User has answered your questions: "Which colour?"="Blue".');
+      const ask: ToolSpec = { name: 'ask_user', description: '', parameters: {}, risk: 'read', source: 'thread', execute };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#ask', { tools: [ask] })));
+      expect((execute.mock.calls[0]![0] as { questions: { question: string; options: { label: string }[] }[] }).questions[0]).toMatchObject({ question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] });
+      expect(textOf(events)).toBe('You said: User has answered your questions: "Which colour?"="Blue".');
+    });
+
+    it('#plan is refused a write, revises its plan after changes, and writes once approved', async () => {
+      const writes: unknown[] = [];
+      const writeFile: ToolSpec = {
+        name: 'write_file', description: '', parameters: {}, risk: 'mutate', source: 'fs',
+        execute: async (args, ctx) => {
+          if (ctx.plan && !ctx.plan.approved) return { error: true, code: 'plan_mode', message: PLAN_REFUSAL };
+          writes.push(args);
+          return 'Wrote planned.txt';
+        },
+      };
+      const answers = [planChangesText('smaller'), PLAN_APPROVED];
+      const plans: string[] = [];
+      const propose: ToolSpec = {
+        name: 'propose_plan', description: '', parameters: {}, risk: 'read', source: 'thread',
+        execute: async (args, ctx) => {
+          plans.push((args as { plan: string }).plan);
+          const answer = answers.shift()!;
+          if (answer === PLAN_APPROVED) ctx.plan?.approve();
+          return answer;
+        },
+      };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#plan', { tools: [writeFile, propose], plan: createPlanGate() })));
+      expect(events.filter((e) => e.type === 'tool-call').map((e) => (e as { name: string }).name)).toEqual(['write_file', 'propose_plan', 'propose_plan', 'write_file']);
+      expect(plans).toEqual(['1. Write planned.txt', '1. Write planned.txt (revised)']);
+      expect(writes).toEqual([{ path: 'planned.txt', content: 'planned' }]);
+      expect(textOf(events)).toBe('Done: Wrote planned.txt');
+    });
+
+    it('#plan stops proposing on an unattended answer and writes nothing', async () => {
+      const writeFile: ToolSpec = { name: 'write_file', description: '', parameters: {}, risk: 'mutate', source: 'fs', execute: async () => ({ error: true, code: 'plan_mode', message: PLAN_REFUSAL }) };
+      const propose: ToolSpec = { name: 'propose_plan', description: '', parameters: {}, risk: 'read', source: 'thread', execute: vi.fn(async () => UNATTENDED_PLAN) };
+      const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#plan', { tools: [writeFile, propose], plan: createPlanGate() })));
+      expect(propose.execute).toHaveBeenCalledTimes(1);
+      expect(events.filter((e) => e.type === 'tool-call')).toHaveLength(2);
+      expect(textOf(events)).toContain('No plan was approved');
+    });
+  });
+
+  describe('unattended turns', () => {
+    it('#tool, #artifact and #recall hand their tool an unattended context when the turn is unattended, and only then', async () => {
+      const seen: Record<string, boolean | undefined> = {};
+      const spec = (name: string, source: ToolSpec['source']): ToolSpec => ({
+        name,
+        description: '',
+        parameters: {},
+        risk: 'read',
+        source,
+        execute: async (_args: unknown, ctx: ToolContext) => {
+          seen[name] = ctx.unattended;
+          return name === 'recall' ? { projects: [], chats: [] } : { ok: true };
+        },
+      });
+      const tools = [spec('read_file', 'fs'), spec('artifact', 'artifact'), spec('recall', 'recall')];
+
+      for (const prompt of ['#tool notes.txt', '#artifact', '#recall x']) {
+        await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest(prompt, { tools, unattended: true, workspaceRoot: '/ws' })));
+      }
+      expect(seen).toEqual({ read_file: true, artifact: true, recall: true });
+
+      await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#recall x', { tools })));
+      expect(seen['recall']).toBeUndefined();
+    });
+  });
+
+  describe('#lists', () => {
+    it('replies with Markdown lists, line breaks kept (the word-chunked replies lose them)', async () => {
+      const engine = new MockChatEngine({ sleep: fakeSleep() });
+      const events = await drain(engine.stream(makeRequest('#lists')));
+      const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
+      expect(text).toBe(LISTS_REPLY);
+      expect(text).toContain('\n3. Third step\n');
+      expect(events.at(-1)?.type).toBe('finish');
+    });
+  });
+
   describe('#echo-system', () => {
     function systemMessage(text: string): CanonMessage {
       return { id: 'system:p', chatId: 'chat-1', parentId: null, role: 'system', parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 0 };
@@ -361,5 +696,58 @@ describe('MockChatEngine', () => {
       const text = events.filter((e) => e.type === 'text-delta').map((e) => (e as Extract<EngineEvent, { type: 'text-delta' }>).text).join('');
       expect(text).toBe('No system prompt.');
     });
+  });
+});
+
+const replyText = (events: EngineEvent[]) => events.filter((e) => e.type === 'text-delta').map((e) => (e as { text: string }).text).join('');
+
+describe('#office trigger', () => {
+  const artifactTool = () => {
+    const execute = vi.fn(async () => ({ ok: true, command: 'create', slug: 'x', number: 1 }));
+    const tool: ToolSpec = { name: 'artifact', description: '', parameters: {}, risk: 'read', source: 'artifact', execute };
+    return { tool, execute };
+  };
+
+  it('#office spreadsheet makes the budget through the real artifact tool, then answers', async () => {
+    const { tool, execute } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office spreadsheet', { tools: [tool] })));
+    const call = events.find((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call')!;
+    expect(call.args).toMatchObject({ command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Mock budget' });
+    expect(JSON.parse((call.args as { content: string }).content).sheets[0].rows[3]).toEqual(['Total', '=SUM(B2:B3)']);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(replyText(events)).toBe('I made the file.');
+    expect(events.at(-1)).toMatchObject({ type: 'finish' });
+  });
+
+  it('#office document makes the memo', async () => {
+    const { tool } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office document', { tools: [tool] })));
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool-call', args: expect.objectContaining({ id: 'memo', kind: 'document', title: 'Mock memo', content: expect.stringContaining('# Quarterly memo') }) }));
+  });
+
+  it('#office presentation makes the deck', async () => {
+    const { tool } = artifactTool();
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office presentation', { tools: [tool] })));
+    const call = events.find((e): e is Extract<EngineEvent, { type: 'tool-call' }> => e.type === 'tool-call')!;
+    expect(call.args).toMatchObject({ id: 'deck', kind: 'presentation', title: 'Mock deck' });
+    expect(JSON.parse((call.args as { content: string }).content).slides.map((s: { title: string }) => s.title)).toEqual(['Mock review', 'Highlights']);
+  });
+
+  it('#office with a kind it has no sample for falls through to the usual reply', async () => {
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(makeRequest('#office banana')));
+    expect(events.some((e) => e.type === 'tool-call')).toBe(false);
+  });
+
+  it('every sample passes the checks the artifact tool runs', () => {
+    for (const [kind, sample] of Object.entries(OFFICE_SAMPLES)) expect(checkOfficeContent(kind, sample.content), kind).toBeNull();
+  });
+});
+
+describe('#echo-user trigger', () => {
+  it("replies with the latest user message's text as the request carries it, an attached file's text included", async () => {
+    const req = makeRequest('#echo-user');
+    req.messages[0]!.parts.push({ type: 'text', text: '<attached-file name="memo.docx">\nGrunt reads this memo\n</attached-file>' });
+    const events = await drain(new MockChatEngine({ sleep: fakeSleep() }).stream(req));
+    expect(replyText(events)).toContain('Grunt reads this memo');
   });
 });

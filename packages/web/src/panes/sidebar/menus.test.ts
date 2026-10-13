@@ -11,13 +11,13 @@ function project(id: string, name: string): Project {
 }
 
 function chatHandlers(): ChatMenuHandlers {
-  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), setProjectPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
+  return { openInTab: vi.fn(), rename: vi.fn(), setPinned: vi.fn(), setProjectPinned: vi.fn(), reorder: vi.fn(), moveTo: vi.fn(), moveToNewProject: vi.fn(), exportAs: vi.fn(), schedule: vi.fn(), setMemoryExcluded: vi.fn(), archive: vi.fn(), unarchive: vi.fn(), requestDelete: vi.fn() };
 }
 
 describe('chatMenuItems', () => {
   it('offers Open in new tab (Go to tab once open), Rename, Pin, Move to project…, Archive and Delete…, and Unpin for a pinned chat', () => {
     expect(chatMenuItems(chat(), [], chatHandlers(), null, true)[0]!.label).toBe('Go to tab');
-    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
+    expect(chatMenuItems(chat(), [], chatHandlers()).map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move to project…', "Don't add to memory", 'Schedule…', 'Export…', 'Archive', 'Delete…']);
     expect(chatMenuItems(chat({ pinned: true }), [], chatHandlers()).find((i) => i.id === 'pin')!.label).toBe('Unpin');
   });
 
@@ -26,7 +26,7 @@ describe('chatMenuItems', () => {
     const h = chatHandlers();
 
     const items = chatMenuItems(chat({ projectId: 'a' }), projects, h);
-    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Pin in project', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
+    expect(items.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Pin in project', 'Move to project…', "Don't add to memory", 'Schedule…', 'Export…', 'Archive', 'Delete…']);
     items.find((i) => i.id === 'memory')!.onSelect!();
     expect(h.setMemoryExcluded).toHaveBeenLastCalledWith(true);
 
@@ -53,7 +53,7 @@ describe('chatMenuItems', () => {
   it('offers Move up and Move down after Pin when given the chat\'s place, disabled at the ends', () => {
     const h = chatHandlers();
     const middle = chatMenuItems(chat(), [], h, { index: 1, count: 3 });
-    expect(middle.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', "Don't add to memory", 'Export…', 'Archive', 'Delete…']);
+    expect(middle.map((i) => i.label)).toEqual(['Open in new tab', 'Rename', 'Pin', 'Move up', 'Move down', 'Move to project…', "Don't add to memory", 'Schedule…', 'Export…', 'Archive', 'Delete…']);
     middle.find((i) => i.id === 'up')!.onSelect!();
     expect(h.reorder).toHaveBeenLastCalledWith(-1);
     middle.find((i) => i.id === 'down')!.onSelect!();
@@ -62,6 +62,13 @@ describe('chatMenuItems', () => {
     expect(chatMenuItems(chat(), [], h, { index: 0, count: 3 }).find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(chatMenuItems(chat(), [], h, { index: 2, count: 3 }).find((i) => i.id === 'down')!.disabled).toBe(true);
     expect(chatMenuItems(chat(), [], h).some((i) => i.id === 'up' || i.id === 'down')).toBe(false);
+  });
+
+  it('offers Schedule… for a chat that is not archived, and it calls schedule', () => {
+    const h = chatHandlers();
+    chatMenuItems(chat(), [], h).find((i) => i.id === 'schedule')!.onSelect!();
+    expect(h.schedule).toHaveBeenCalled();
+    expect(chatMenuItems(chat({ archivedAt: 5 }), [], h).some((i) => i.id === 'schedule')).toBe(false);
   });
 
   it('Export… offers Markdown and JSON and passes the format on', () => {
@@ -132,14 +139,20 @@ describe('chatMenuItems', () => {
 });
 
 describe('projectMenuItems', () => {
-  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), move: vi.fn(), requestDelete: vi.fn() });
+  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), schedule: vi.fn(), move: vi.fn(), requestDelete: vi.fn() });
 
   it('offers the project actions, with Move up disabled first and Move down disabled last', () => {
     const first = projectMenuItems(0, 3, h());
-    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'Move up', 'Move down', 'Delete…']);
+    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'Schedule…', 'Move up', 'Move down', 'Delete…']);
     expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
     expect(projectMenuItems(2, 3, h()).find((i) => i.id === 'down')!.disabled).toBe(true);
+  });
+
+  it('offers Schedule…, which calls schedule', () => {
+    const handlers = h();
+    projectMenuItems(0, 1, handlers).find((i) => i.id === 'schedule')!.onSelect!();
+    expect(handlers.schedule).toHaveBeenCalled();
   });
 
   it('Move up and Move down call move with the direction', () => {

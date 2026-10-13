@@ -5,11 +5,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
+import { FAKE_COMPUTER_APP, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { FakeFactory, fakeProxy } from '../../../tools/test/browser/fakes.js';
 import { createApp } from '../../src/app.js';
+import { parseApprovalChoice } from '../../src/routes/tools.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -350,6 +354,21 @@ describe('MCP server routes', () => {
     expect(mcpManager.listFor([created.id])).toHaveLength(0);
   });
 
+  it('a PATCH that changes a connected server\'s env restarts it so the change takes effect', async () => {
+    const createRes = await app().request('/api/mcp-servers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Restartable', transport: 'stdio', command: process.execPath, args: [FIXTURE_PATH], env: { A: 'one' } }),
+    });
+    const { id } = (await createRes.json()) as { id: string };
+    await waitFor(() => mcpManager.health().find((h) => h.id === id)?.status === 'ok');
+    const before = mcpManager.listFor([id])[0]!.client;
+
+    await app().request(`/api/mcp-servers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ env: { A: 'two' } }) });
+    await waitFor(() => mcpManager.health().find((h) => h.id === id)?.status === 'ok');
+    expect(mcpManager.listFor([id])[0]!.client).not.toBe(before);
+  });
+
   it('refresh forces a reconnect and 404s for an unknown server', async () => {
     store.mcpServers.create({
       id: 'srv-x',
@@ -363,6 +382,7 @@ describe('MCP server routes', () => {
       enabled: true,
       status: 'unknown',
       toolsCache: null,
+      oauth: null,
     });
     await mcpManager.sync();
     await waitFor(() => mcpManager.health()[0]?.status === 'ok');
@@ -403,7 +423,7 @@ describe('Import from Claude Desktop', () => {
 
   it('lists the servers it finds by name, never with their values, marking ones Grunt has and ones it cannot use', async () => {
     config();
-    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await app().request('/api/mcp-servers/import/claude-desktop');
     expect(res.status).toBe(200);
     const text = await res.text();
@@ -427,7 +447,7 @@ describe('Import from Claude Desktop', () => {
 
   it('imports the chosen servers, their values going into the secret store, and skips the rest with reasons', async () => {
     config();
-    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null });
+    store.mcpServers.create({ id: 'existing', name: 'blender', transport: 'stdio', command: NO_SUCH, args: [], envRefs: {}, url: null, headerRefs: {}, enabled: false, status: 'unknown', toolsCache: null, oauth: null });
     const res = await postImport({ names: ['Home Assistant', 'blender', 'legacy', 'ghost'] });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
@@ -439,6 +459,14 @@ describe('Import from Claude Desktop', () => {
     expect(Object.keys(row.envRefs).sort()).toEqual(['HOMEASSISTANT_TOKEN', 'HOMEASSISTANT_URL']);
     expect(await secrets.get(row.envRefs['HOMEASSISTANT_TOKEN']!)).toBe('very-secret-token');
     expect(JSON.stringify(row)).not.toContain('very-secret-token');
+  });
+
+  it('skips an http server whose address holds a user name or password', async () => {
+    writeConfig(JSON.stringify({ mcpServers: { sneaky: { type: 'http', url: 'https://good.example@evil.example/mcp' } } }));
+    const body = (await (await postImport({ names: ['sneaky'] })).json()) as { imported: string[]; skipped: { name: string; reason: string }[] };
+    expect(body.imported).toEqual([]);
+    expect(body.skipped).toEqual([{ name: 'sneaky', reason: "A server address can't hold a user name or password. Send credentials in a header instead." }]);
+    expect(store.mcpServers.list()).toEqual([]);
   });
 
   const profile = (id: string, mcpServerIds: string[]) =>
@@ -581,6 +609,90 @@ describe('Approval routes', () => {
     expect(unknown.status).toBe(404);
   });
 
+  it("keeps a browser site's host through an 'always' answer, and refuses a host that is not a string", () => {
+    expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } })).toEqual({
+      choice: 'always',
+      constraint: { host: 'example.com' },
+    });
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 42 } })).toThrow(/constraint\.host/);
+    expect(parseApprovalChoice({ choice: 'always', constraint: { commandExact: 'npm test' } })).toMatchObject({
+      constraint: { commandExact: 'npm test' },
+    });
+  });
+
+  it("an 'always' answer with a host stores a browser grant for that site", async () => {
+    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
+    const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
+    const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
+    container.toolProvider = provider;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const tool = (await provider.listTools(policy)).find((t) => t.name === 'browser')!;
+    const run = tool.execute(
+      { command: 'open', url: 'https://example.com/page' },
+      { chatId: 'chat-b', messageId: 'msg-b', profileId: 'profile-b', workspaceRoot: '/x', signal: new AbortController().signal }
+    );
+    for (let i = 0; i < 20 && requests.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(requests).toHaveLength(1);
+    const res = await app().request(`/api/approvals/${requests[0]!.id}/resolve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ choice: 'always', constraint: { host: 'example.com' } }),
+    });
+    expect(res.status).toBe(200);
+    await run.catch(() => {});
+    const grants = store.grants.list().filter((g) => g.source === 'browser');
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({ toolName: 'browser', scope: 'always', constraint: { host: 'example.com' } });
+  });
+
+  it("a browser card's 'always' answer is held to the sandbox network's rules: one key, the card's own host, stored canonical", async () => {
+    store.chats.create({ id: 'chat-b', title: 'B', profileId: 'profile-b', headMessageId: null, pinned: false, archivedAt: null } as never);
+    const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, browser: true };
+    const browser = new BrowserManager({ factory: new FakeFactory(), startProxy: fakeProxy().start });
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { browser });
+    container.toolProvider = provider;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const tool = (await provider.listTools(policy)).find((t) => t.name === 'browser')!;
+    const open = async (constraint: unknown): Promise<number> => {
+      const before = requests.length;
+      const run = tool.execute(
+        { command: 'open', url: 'https://example.com/page' },
+        { chatId: 'chat-b', messageId: 'msg-b', profileId: 'profile-b', workspaceRoot: '/x', signal: new AbortController().signal }
+      );
+      for (let i = 0; i < 20 && requests.length === before; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(requests).toHaveLength(before + 1);
+      const id = requests[before]!.id;
+      const post = (body: unknown) => app().request(`/api/approvals/${id}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await post({ choice: 'always', constraint });
+      // A refused body leaves the card waiting; take it down so the call ends.
+      if (res.status !== 200) expect((await post({ choice: 'deny' })).status).toBe(200);
+      await run.catch(() => {});
+      return res.status;
+    };
+    const browserGrants = () => store.grants.list().filter((g) => g.source === 'browser');
+
+    // The route refuses a second key and a key it doesn't know, as it does for a network card.
+    expect(await open({ host: 'example.com', pathPrefix: '.' })).toBe(400);
+    expect(await open({ host: 'example.com', site: 'example.com' })).toBe(400);
+    // The broker refuses another site, a subdomain and no site at all: the call was approved once, and nothing is stored.
+    expect(await open({ host: 'evil.test' })).toBe(200);
+    expect(await open({ host: 'www.example.com' })).toBe(200);
+    expect(await open(null)).toBe(200);
+    expect(browserGrants()).toEqual([]);
+    // The card's own host, in another spelling: stored canonical.
+    expect(await open({ host: 'EXAMPLE.com.' })).toBe(200);
+    expect(browserGrants()).toEqual([expect.objectContaining({ toolName: 'browser', scope: 'always', chatId: null, constraint: { host: 'example.com' } })]);
+    // And a network call for the same host gets nothing from it.
+    expect(store.grants.list().filter((g) => g.source === 'network')).toEqual([]);
+  });
+
   it('rejects a malformed choice with 400', async () => {
     const res = await app().request('/api/approvals/whatever/resolve', {
       method: 'POST',
@@ -588,5 +700,146 @@ describe('Approval routes', () => {
       body: JSON.stringify({ choice: 'maybe' }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("keeps a computer grant's app through an 'always' answer exactly as it came, and refuses one that is not a string", () => {
+    const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    expect(parseApprovalChoice({ choice: 'always', constraint: { app } })).toEqual({ choice: 'always', constraint: { app } });
+    // The broker judges the key (`appKey`); nothing on the way may repair it. Spaces at the ends, another
+    // letter case, forward slashes, an accented letter composed and decomposed, a look-alike letter, an
+    // empty string and a hidden character all arrive as they were sent.
+    const asSent = [
+      ' C:\\Apps\\Tool.exe ',
+      'c:\\APPS\\tool.EXE',
+      'C:/Apps/Tool.exe',
+      'C:\\Users\\Jos\u00e9\\Tool.exe',
+      'C:\\Users\\Jose\u0301\\Tool.exe',
+      'C:\\Apps\\\u212a.exe',
+      'C:\\Apps\\Tool\u200b.exe',
+      'C:\\Apps\\Tool.exe\r\n',
+      '',
+    ];
+    for (const raw of asSent) {
+      const parsed = parseApprovalChoice({ choice: 'always', constraint: { app: raw } });
+      expect(parsed, JSON.stringify(raw)).toEqual({ choice: 'always', constraint: { app: raw } });
+      expect((parsed as { constraint: { app: string } }).constraint.app === raw, JSON.stringify(raw)).toBe(true);
+    }
+    for (const bad of [42, null, true, ['C:\\Apps\\Tool.exe'], { path: 'C:\\Apps\\Tool.exe' }]) {
+      expect(() => parseApprovalChoice({ choice: 'always', constraint: { app: bad } }), JSON.stringify(bad)).toThrow(/"constraint\.app" must be a string\./);
+    }
+    // The other keys are untouched by it, and an app is only there when one was sent.
+    expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } })).toEqual({ choice: 'always', constraint: { host: 'example.com' } });
+    expect('app' in ((parseApprovalChoice({ choice: 'always', constraint: { host: 'example.com' } }) as { constraint: object }).constraint)).toBe(false);
+    // One key at a time, as for a host (integration): an app beside anything else is refused here, before the broker.
+    for (const extra of [{ host: 'example.com' }, { commandExact: 'x' }, { pathPrefix: '/' }]) {
+      expect(() => parseApprovalChoice({ choice: 'always', constraint: { app, ...extra } }), JSON.stringify(extra)).toThrow(/must set only one key/);
+    }
+    expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toEqual({ choice: 'always', constraint: null });
+  });
+
+  it("an 'always' answer with the card's app stores a computer grant for exactly that app; one that is not a string is a 400 and stores nothing", async () => {
+    store.chats.create({ id: 'chat-c', title: 'C', profileId: 'profile-c', headMessageId: null, pinned: false, archivedAt: null } as never);
+    const policy = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const, computer: true };
+    const driver = new FakeComputerDriver();
+    const provider = new GruntToolProvider(store, new PermissionBroker(store), mcpManager, { computer: driver });
+    container.toolProvider = provider;
+    const requests: ApprovalRequest[] = [];
+    provider.onApprovalEvent((e) => {
+      if (e.type === 'request') requests.push(e.request);
+    });
+    const tool = (await provider.listTools(policy)).find((t) => t.name === 'computer')!;
+    const ctx = { chatId: 'chat-c', messageId: 'msg-c', profileId: 'profile-c', workspaceRoot: null, signal: new AbortController().signal };
+    // A point is in the last screenshot's pixels, so the chat looks first (no card for a look).
+    await tool.execute({ action: 'screenshot' }, ctx);
+    const run = tool.execute({ action: 'left_click', coordinate: [10, 20] }, ctx);
+    await waitFor(() => requests.length === 1);
+    const resolve = (constraint: unknown) =>
+      app().request(`/api/approvals/${requests[0]!.id}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ choice: 'always', constraint }) });
+
+    expect((await resolve({ app: 42 })).status).toBe(400);
+    expect(store.grants.list()).toEqual([]);
+    expect(driver.actions).toEqual([]);
+
+    const key = (requests[0]!.args as { app: string }).app;
+    expect(key).toBe(FAKE_COMPUTER_APP.path);
+    expect((await resolve({ app: key })).status).toBe(200);
+    await run;
+    const grants = store.grants.list().filter((g) => g.source === 'computer');
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({ toolName: 'computer', scope: 'always' });
+    expect(grants[0]!.constraint).toEqual({ app: 'C:\\Program Files\\Fake App\\FakeApp.exe' });
+    expect(driver.actions.map((a) => a.action)).toEqual([{ action: 'left_click', coordinate: [10, 20] }]);
+  });
+
+  it('rejects a malformed choice with 400', async () => {
+    const res = await app().request('/api/approvals/whatever/resolve', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ choice: 'maybe' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('parseApprovalChoice: sandbox network grants', () => {
+  it('keeps the host of an "always" constraint', () => {
+    expect(parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org' } })).toMatchObject({ choice: 'always', constraint: { host: 'pypi.org' } });
+  });
+
+  it('refuses a host that is not a string', () => {
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 42 } })).toThrow('"constraint.host" must be a string.');
+  });
+
+  it.each([[''], ['a'.repeat(254)]])('refuses a host of the wrong size (%#)', (host) => {
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host } })).toThrow('"constraint.host" must be 1-253 characters.');
+  });
+
+  it('refuses a constraint that mixes keys, and one with a key Grunt does not know', () => {
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org', commandExact: 'ls' } })).toThrow('"constraint" must set only one key.');
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { pathPrefix: 'src', commandPrefix: 'git' } })).toThrow('"constraint" must set only one key.');
+    expect(() => parseApprovalChoice({ choice: 'always', constraint: { host: 'pypi.org', extra: 1 } })).toThrow('"constraint" has an unknown key "extra".');
+  });
+
+  it('still takes a single path or command key, and an empty constraint as none', () => {
+    expect(parseApprovalChoice({ choice: 'always', constraint: { commandExact: 'ls' } })).toMatchObject({ constraint: { commandExact: 'ls' } });
+    expect(parseApprovalChoice({ choice: 'always', constraint: {} })).toMatchObject({ choice: 'always', constraint: null });
+  });
+});
+
+describe('Ask routes', () => {
+  const post = (path: string, body: unknown) => app().request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const ctx = () => ({ chatId: 'chat-1', messageId: 'msg-1', profileId: 'p1', workspaceRoot: null, signal: new AbortController().signal });
+
+  async function pendingQuestion(): Promise<{ id: string; outcome: Promise<unknown> }> {
+    let id = '';
+    const off = toolProvider.onApprovalEvent((e) => {
+      if (e.type === 'ask') id = e.ask.id;
+    });
+    const outcome = toolProvider.askUser(ctx(), { kind: 'question', toolName: 'ask_user', questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] });
+    off();
+    return { id, outcome };
+  }
+
+  it('answers a pending question, then 404s the same id', async () => {
+    const { id, outcome } = await pendingQuestion();
+    const res = await post(`/api/asks/${id}/answer`, { answers: ['Blue'] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ answered: true });
+    expect(await outcome).toEqual({ reply: { answers: ['Blue'] } });
+    expect((await post(`/api/asks/${id}/answer`, { answers: ['Blue'] })).status).toBe(404);
+  });
+
+  it('400s a reply of the wrong kind with its reason, and a body of the wrong shape', async () => {
+    const { id } = await pendingQuestion();
+    const wrongKind = await post(`/api/asks/${id}/answer`, { approve: true });
+    expect(wrongKind.status).toBe(400);
+    expect(JSON.stringify(await wrongKind.json())).toContain('question');
+    for (const bad of [{}, { answers: 'Blue' }, { declined: false }, { approve: true, changes: 'x' }, { changes: 3 }]) {
+      expect((await post(`/api/asks/${id}/answer`, bad)).status).toBe(400);
+    }
+  });
+
+  it('404s an unknown id', async () => {
+    expect((await post('/api/asks/never-existed/answer', { declined: true })).status).toBe(404);
   });
 });

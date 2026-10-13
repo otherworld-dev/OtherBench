@@ -5,7 +5,7 @@ import type { PaneState } from './panes.js';
 import { useGruntStore } from './store.js';
 
 /**
- * What a chat's dot says: a tool call is waiting for approval, a reply is
+ * What a chat's dot says: an approval, question or plan is waiting for the user, a reply is
  * being written, or a reply finished that the user hasn't had on screen since
  * (`Chat.unread`).
  */

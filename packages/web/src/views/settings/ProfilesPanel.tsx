@@ -1,11 +1,15 @@
 import { useEffect, useState, type JSX } from 'react';
-import type { FsMode, ModelParams, Profile } from '@grunt/core/types/config.js';
+import { DEFAULT_SANDBOX_HOSTS, type FsMode, type ModelParams, type Profile, type ShellRuns } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
-import { ApiError, api, type CreateProfileBody } from '../../state/api.js';
+import { ApiError, api, type CreateProfileBody, type ToolPolicyBody } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
 import { machineName } from '../../state/machines.js';
+import { useComputerUseAvailable } from '../../lib/computerUse.js';
 
 const HEX_COLOUR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+const SUBAGENTS_HELP =
+  "Lets this profile hand jobs to sub-agents that work on their own, several at once. They get at most this profile's tools, and their tool calls ask you the same way. Each one's tokens are counted.";
 
 function errorMessage(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
@@ -73,6 +77,37 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
   const [artifacts, setArtifacts] = useState(profile?.toolPolicy.artifacts ?? true);
   // Recall (spec 2026-10-09-recall-design): on unless the profile turned it off.
   const [recall, setRecall] = useState(profile?.toolPolicy.recall ?? true);
+  // Where run_command runs (spec 2026-10-12-sandbox-design): this machine, or the sandbox.
+  const [shellRuns, setShellRuns] = useState<ShellRuns>(profile?.toolPolicy.shellRuns ?? 'host');
+  const [hostsText, setHostsText] = useState((profile?.toolPolicy.sandboxHosts ?? DEFAULT_SANDBOX_HOSTS).join('\n'));
+  // Whether this machine's sandbox is set up; asked only once "in the sandbox" is chosen.
+  const [sandboxReady, setSandboxReady] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!shell || shellRuns !== 'sandbox') return;
+    setSandboxReady(null);
+    let cancelled = false;
+    api.sandbox
+      .status()
+      .then((st) => {
+        if (!cancelled) setSandboxReady(st.state === 'ready');
+      })
+      .catch(() => {
+        if (!cancelled) setSandboxReady(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shell, shellRuns]);
+  // Sub-agents (spec 2026-10-12-api-subagents-design): off unless turned on; API profiles only.
+  const [subagents, setSubagents] = useState(profile?.toolPolicy.subagents ?? false);
+  // The model's browser (spec 2026-10-12-model-browser-design): off unless the profile turns it on.
+  const [browser, setBrowser] = useState(profile?.toolPolicy.browser ?? false);
+  // Computer use (spec 2026-10-12-computer-use-design section 7): off unless the profile turns it on. Shown only where
+  // this server can offer it (GET /api/computer/status); the stored value is sent either way, so editing a profile
+  // on a machine with no driver never turns it off.
+  const [computer, setComputer] = useState(profile?.toolPolicy.computer ?? false);
+  const computerUse = useComputerUseAvailable();
+  const [blockedSites, setBlockedSites] = useState((profile?.toolPolicy.browserBlockedHosts ?? []).join('\n'));
   const [approvalMode, setApprovalMode] = useState<'always_ask' | 'ask_on_mutate'>(profile?.toolPolicy.approvalMode ?? 'always_ask');
   const [mcpServerIds, setMcpServerIds] = useState<string[]>(profile?.toolPolicy.mcpServerIds ?? []);
   const [agentWeb, setAgentWeb] = useState(profile?.toolPolicy.agentWeb ?? true);
@@ -129,6 +164,29 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
     if (maxOutputTokens !== undefined) params.maxOutputTokens = maxOutputTokens as number;
     if (thinkingBudgetTokens !== undefined) params.thinkingBudgetTokens = thinkingBudgetTokens as number;
 
+    const hosts = hostsText
+      .split(/\r?\n/)
+      .map((h) => h.trim())
+      .filter((h) => h.length > 0);
+    const defaultHosts = hosts.length === DEFAULT_SANDBOX_HOSTS.length && hosts.every((h, i) => h === DEFAULT_SANDBOX_HOSTS[i]);
+    // Only what matters, so a profile that never used the sandbox keeps its policy exactly as it was.
+    const sandboxFields: Pick<ToolPolicyBody, 'shellRuns' | 'sandboxHosts'> =
+      shellRuns === 'sandbox'
+        ? { shellRuns, ...(defaultHosts ? (profile?.toolPolicy.sandboxHosts ? { sandboxHosts: null } : {}) : { sandboxHosts: hosts }) }
+        : profile?.toolPolicy.shellRuns !== undefined
+          ? { shellRuns }
+          : {};
+    // Sent only while Browser is on: with it off the box is hidden, and whatever it holds (a typo the server would
+    // refuse, unseen) stays out of the request. The server then keeps the profile's saved list as it is.
+    const blocked = browser
+      ? {
+          browserBlockedHosts: blockedSites
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0),
+        }
+      : {};
+
     const body: CreateProfileBody = {
       name: name.trim(),
       description: description.trim().length > 0 ? description.trim() : null,
@@ -137,7 +195,21 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
       modelId,
       systemPrompt: systemPrompt.trim().length > 0 ? systemPrompt.trim() : null,
       params,
-      toolPolicy: isClaudeCode ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall } : { fs, shell, approvalMode, mcpServerIds, artifacts, recall },
+      toolPolicy: isClaudeCode
+        ? { fs, shell, approvalMode, mcpServerIds, agentWeb, agentMcp, artifacts, recall, browser, computer, ...blocked, ...sandboxFields }
+        : {
+            fs,
+            shell,
+            approvalMode,
+            mcpServerIds,
+            artifacts,
+            recall,
+            browser,
+            computer,
+            ...blocked,
+            ...sandboxFields,
+            ...(subagents || profile?.toolPolicy.subagents !== undefined ? { subagents } : {}),
+          },
       isDefault,
       useGlobalMemory,
     };
@@ -388,6 +460,27 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             <input type="checkbox" aria-label="Search past chats" checked={recall} onChange={(e) => setRecall(e.target.checked)} />
             Search past chats
           </label>
+          {!isClaudeCode && (
+            <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title={SUBAGENTS_HELP}>
+              <input type="checkbox" aria-label="Sub-agents" checked={subagents} onChange={(e) => setSubagents(e.target.checked)} />
+              Sub-agents
+            </label>
+          )}
+          <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]" title="The model's own browser, with no logins. Asks before each new website.">
+            <input type="checkbox" aria-label="Browser" checked={browser} onChange={(e) => setBrowser(e.target.checked)} />
+            Browser
+          </label>
+          {computerUse && (
+            <label className="flex flex-col gap-0.5 self-end pb-1 text-xs text-[var(--text)]">
+              <span className="flex items-center gap-1.5">
+                <input type="checkbox" aria-label="Computer use" checked={computer} onChange={(e) => setComputer(e.target.checked)} />
+                Computer use
+              </span>
+              <span className="text-[var(--text-muted)]">
+                Lets the model see your screen and use apps you approve, while you&apos;re at this computer. Desktop app on Windows only.
+              </span>
+            </label>
+          )}
           {isClaudeCode && (
             <>
               <label className="flex items-center gap-1.5 self-end pb-1 text-xs text-[var(--text)]">
@@ -406,6 +499,67 @@ function ProfileForm({ profile, mcpServers, mcpServersFailed, onSaved, onDeleted
             </>
           )}
         </div>
+        {!isClaudeCode && <p className="mt-1 text-xs text-[var(--text-muted)]">{SUBAGENTS_HELP}</p>}
+        {shell && (
+          <div data-testid="sandbox-shell-settings" className="mt-3 space-y-2">
+            <label className="flex max-w-xs flex-col gap-1 text-xs text-[var(--text-muted)]">
+              Shell runs
+              <select
+                aria-label="Shell runs"
+                value={shellRuns}
+                onChange={(e) => setShellRuns(e.target.value as ShellRuns)}
+                className="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1 text-sm text-[var(--text)]"
+              >
+                <option value="host">on this machine</option>
+                <option value="sandbox">in the sandbox</option>
+              </select>
+            </label>
+            {shellRuns === 'sandbox' && (
+              <>
+                <label className="flex flex-col gap-1 text-xs text-[var(--text-muted)]">
+                  The sandbox can reach
+                  <textarea
+                    aria-label="The sandbox can reach"
+                    rows={6}
+                    value={hostsText}
+                    onChange={(e) => setHostsText(e.target.value)}
+                    className="rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 font-mono text-xs text-[var(--text)]"
+                  />
+                </label>
+                <p className="text-xs text-[var(--text-muted)]">
+                  One host per line. *.example.com covers its subdomains, and :443 after a host allows only that port. Reaching any other host asks you
+                  first. An empty list asks about every host.
+                </p>
+                <button type="button" onClick={() => setHostsText(DEFAULT_SANDBOX_HOSTS.join('\n'))} className="btn px-2 py-1 text-xs">
+                  Reset to defaults
+                </button>
+                {sandboxReady === false && (
+                  <p data-testid="sandbox-not-ready-note" className="text-xs text-[var(--warn)]">
+                    The sandbox isn&rsquo;t set up on this machine yet: set it up in Settings &gt; Sandbox.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+        )}
+        {browser && (
+          <div className="mt-2 flex w-full flex-col gap-1 text-xs text-[var(--text)]">
+            <p className="text-[var(--text-muted)]">The model's own browser, with no logins. Asks before each new website.</p>
+            <label className="flex flex-col gap-1">
+              <span>
+                Blocked sites <span className="text-[var(--text-muted)]">(one per line; each also blocks its subdomains)</span>
+              </span>
+              <textarea
+                aria-label="Blocked sites"
+                rows={3}
+                value={blockedSites}
+                onChange={(e) => setBlockedSites(e.target.value)}
+                placeholder="example.com"
+                className="rounded border border-[var(--border)] bg-[var(--bg)] px-1.5 py-1 font-mono text-xs text-[var(--text)]"
+              />
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Claude Code profiles too: Grunt relays these servers into their chats (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §2). */}

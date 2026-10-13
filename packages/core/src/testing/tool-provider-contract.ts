@@ -2,8 +2,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import type { ApprovalChoice, ToolApprovalEvent, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, AskInput, ToolApprovalEvent, ToolContext, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
 import type { ToolPolicy } from '../types/config.js';
+import { UNATTENDED_REASON } from '../domain/permissions.js';
 
 /** An MCP server the contract needs the provider under test to expose as connected. */
 export interface ContractMcpServer {
@@ -33,7 +34,10 @@ const MCP_SERVERS: ContractMcpServer[] = [
  * and must return a provider that exposes exactly those as connected MCP servers, plus
  * Grunt's built-in tools (named `read_file`, `write_file`, `run_command`; fs read:
  * read-risk `source: 'fs'`; fs write: mutate-risk `source: 'fs'`; shell: a
- * `source: 'shell'` tool). Listing assertions discover tools by `source`/`risk`;
+ * `source: 'shell'` tool). When the policy's `shellRuns` is `'sandbox'`, `run_command`
+ * must be the provider's sandboxed one (`source: 'sandbox'`) backed by a sandbox that
+ * runs every command successfully (the real provider's factory passes a ready
+ * `FakeSandbox`). Listing assertions discover tools by `source`/`risk`;
  * the execution assertions use those three names with real arguments against a real
  * temp workspace, so the real provider genuinely runs them.
  *
@@ -102,12 +106,17 @@ export function runToolProviderContract(
 
     const names = (specs: ToolSpec[]) => specs.map((s) => s.name);
 
+    // Thread tools (spec 2026-10-12-thread-cards-design) are offered whatever
+    // the policy; this contract is about fs, shell and MCP, so it reads the
+    // listing without them. Their own listing is pinned in tools/test/thread-tools.test.ts.
+    const listed = async (p: ToolPolicy): Promise<ToolSpec[]> => (await provider.listTools(p)).filter((t) => t.source !== 'thread');
+
     it('offers no tools when everything is off', async () => {
-      expect(await provider.listTools(policy())).toEqual([]);
+      expect(await listed(policy())).toEqual([]);
     });
 
     it('fs "read" offers only read-risk fs tools, and at least one', async () => {
-      const tools = await provider.listTools(policy({ fs: 'read' }));
+      const tools = await listed(policy({ fs: 'read' }));
       expect(tools.length).toBeGreaterThan(0);
       for (const t of tools) {
         expect(t.source).toBe('fs');
@@ -116,30 +125,30 @@ export function runToolProviderContract(
     });
 
     it('fs "readwrite" offers every read tool plus at least one mutate tool', async () => {
-      const read = await provider.listTools(policy({ fs: 'read' }));
-      const rw = await provider.listTools(policy({ fs: 'readwrite' }));
+      const read = await listed(policy({ fs: 'read' }));
+      const rw = await listed(policy({ fs: 'readwrite' }));
       expect(rw.every((t) => t.source === 'fs')).toBe(true);
       expect(rw.some((t) => t.risk === 'mutate')).toBe(true);
       for (const n of names(read)) expect(names(rw)).toContain(n);
     });
 
     it('shell is offered iff policy.shell, and only then', async () => {
-      const on = await provider.listTools(policy({ shell: true }));
+      const on = await listed(policy({ shell: true }));
       expect(on.length).toBeGreaterThan(0);
       expect(on.every((t) => t.source === 'shell' && t.risk === 'execute')).toBe(true);
-      const off = await provider.listTools(policy({ fs: 'readwrite', shell: false }));
+      const off = await listed(policy({ fs: 'readwrite', shell: false }));
       expect(off.some((t) => t.source === 'shell')).toBe(false);
     });
 
     it('combines fs and shell tools, with unique names', async () => {
-      const tools = await provider.listTools(policy({ fs: 'readwrite', shell: true }));
+      const tools = await listed(policy({ fs: 'readwrite', shell: true }));
       expect(tools.some((t) => t.source === 'fs')).toBe(true);
       expect(tools.some((t) => t.source === 'shell')).toBe(true);
       expect(new Set(names(tools)).size).toBe(tools.length);
     });
 
     it('every listed spec is well-formed', async () => {
-      const tools = await provider.listTools(policy({ fs: 'readwrite', shell: true }));
+      const tools = await listed(policy({ fs: 'readwrite', shell: true }));
       for (const t of tools) {
         expect(typeof t.name).toBe('string');
         expect(t.name.length).toBeGreaterThan(0);
@@ -153,12 +162,12 @@ export function runToolProviderContract(
     });
 
     it('naming an MCP server that is not connected contributes no tools and does not throw', async () => {
-      expect(await provider.listTools(policy({ mcpServerIds: ['no-such-server'] }))).toEqual([]);
+      expect(await listed(policy({ mcpServerIds: ['no-such-server'] }))).toEqual([]);
     });
 
     it('listTools is repeatable: the same policy yields the same tool names', async () => {
       const p = policy({ fs: 'readwrite', shell: true });
-      expect(names(await provider.listTools(p))).toEqual(names(await provider.listTools(p)));
+      expect(names(await listed(p))).toEqual(names(await listed(p)));
     });
 
     it('refreshMcp of an unknown server resolves', async () => {
@@ -167,6 +176,28 @@ export function runToolProviderContract(
 
     it('shutdown resolves', async () => {
       await expect(provider.shutdown()).resolves.toBeUndefined();
+    });
+
+    it('askUser raises an ask and waits for answerAsk, which refuses a wrong-kind reply and an unknown id', async () => {
+      const events: ToolApprovalEvent[] = [];
+      provider.onApprovalEvent((e) => events.push(e));
+      const input: AskInput = { kind: 'plan', toolName: 'propose_plan', plan: '1. Do it' };
+      const outcome = provider.askUser(ctx(), input);
+      const ask = events.find((e) => e.type === 'ask');
+      if (ask?.type !== 'ask') throw new Error('no ask event');
+      expect(ask.ask).toMatchObject({ ...input, chatId: 'chat-1', messageId: 'msg-1' });
+      expect(provider.answerAsk('no-such-ask', { approve: true })).toBe('unknown');
+      expect(provider.answerAsk(ask.ask.id, { answers: ['x'] })).toEqual({ invalid: expect.any(String) });
+      expect(provider.answerAsk(ask.ask.id, { approve: true })).toBe('answered');
+      expect(await outcome).toEqual({ reply: { approve: true } });
+      expect(events.some((e) => e.type === 'ask-resolved' && e.askId === ask.ask.id)).toBe(true);
+    });
+
+    it('askUser in an unattended run answers at once with no event', async () => {
+      const events: ToolApprovalEvent[] = [];
+      provider.onApprovalEvent((e) => events.push(e));
+      expect(await provider.askUser(ctx({ unattended: true }), { kind: 'plan', toolName: 'propose_plan', plan: '1. x' })).toEqual({ unattended: true });
+      expect(events).toEqual([]);
     });
 
     it('onApprovalEvent returns an unsubscribe function that is safe to call twice', () => {
@@ -185,14 +216,14 @@ export function runToolProviderContract(
     });
 
     it('requestApproval allows a read-risk fs call under ask_on_mutate with a workspace', async () => {
-      const [read] = await provider.listTools(policy({ fs: 'read' }));
+      const [read] = await listed(policy({ fs: 'read' }));
       expect(read).toBeDefined();
       const out = await provider.requestApproval(read as ToolSpec, {}, policy({ fs: 'read' }), ctx());
       expect(out).toMatchObject({ allowed: true });
     });
 
     it('requestApproval denies a call the policy forbids', async () => {
-      const [shell] = await provider.listTools(policy({ shell: true }));
+      const [shell] = await listed(policy({ shell: true }));
       expect(shell).toBeDefined();
       const out = await provider.requestApproval(shell as ToolSpec, { command: 'ls' }, policy({ shell: false }), ctx());
       expect(out).toMatchObject({ allowed: false });
@@ -200,7 +231,7 @@ export function runToolProviderContract(
     });
 
     it('requestApproval denies an fs call when the chat has no workspace', async () => {
-      const [read] = await provider.listTools(policy({ fs: 'read' }));
+      const [read] = await listed(policy({ fs: 'read' }));
       const out = await provider.requestApproval(read as ToolSpec, {}, policy({ fs: 'read' }), ctx({ workspaceRoot: null }));
       expect(out).toMatchObject({ allowed: false });
     });
@@ -226,7 +257,7 @@ export function runToolProviderContract(
     }
 
     async function tool(p: ToolPolicy, toolName: string): Promise<ToolSpec> {
-      const found = (await provider.listTools(p)).find((t) => t.name === toolName);
+      const found = (await listed(p)).find((t) => t.name === toolName);
       if (!found) throw new Error(`expected "${toolName}" to be listed`);
       return found;
     }
@@ -360,19 +391,19 @@ export function runToolProviderContract(
     // ---- MCP ----
 
     it('MCP tools are offered only for enabled servers, tagged with their serverId', async () => {
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'] }));
       expect(tools).toHaveLength(2);
       for (const t of tools) {
         expect(t.source).toBe('mcp');
         expect(t.serverId).toBe('srv-a');
       }
       expect(tools.map((t) => t.risk).sort()).toEqual(['mutate', 'read']);
-      expect(await provider.listTools(policy({ mcpServerIds: ['srv-b'] }))).toHaveLength(1);
+      expect(await listed(policy({ mcpServerIds: ['srv-b'] }))).toHaveLength(1);
     });
 
     it('a read-risk MCP tool under ask_on_mutate runs without asking; a mutate-risk one asks', async () => {
       const w = watch({ choice: 'once' });
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'] }));
       const read = tools.find((t) => t.risk === 'read') as ToolSpec;
       const mutate = tools.find((t) => t.risk === 'mutate') as ToolSpec;
       expect(isToolError(await read.execute({}, ctx()))).toBe(false);
@@ -384,13 +415,13 @@ export function runToolProviderContract(
 
     it('a mutate-risk MCP tool denied by the user returns approval_denied; under always_ask even a read-risk one asks', async () => {
       const w = watch({ choice: 'deny' });
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'], approvalMode: 'always_ask' }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'], approvalMode: 'always_ask' }));
       for (const t of tools) expect(isToolError(await t.execute({}, ctx()), 'approval_denied')).toBe(true);
       expect(w.requests).toHaveLength(2);
     });
 
     it('requestApproval for an MCP tool: allowed when read-risk, denied when its server is not enabled', async () => {
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-a'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-a'] }));
       const read = tools.find((t) => t.risk === 'read') as ToolSpec;
       expect(await provider.requestApproval(read, {}, policy({ mcpServerIds: ['srv-a'] }), ctx())).toMatchObject({ allowed: true });
       expect(await provider.requestApproval(read, {}, policy({ mcpServerIds: ['srv-b'] }), ctx())).toMatchObject({ allowed: false });
@@ -398,7 +429,7 @@ export function runToolProviderContract(
     });
 
     it('colliding tool names are de-duplicated with a numeric suffix, in order, and each still executes its own tool', async () => {
-      const tools = await provider.listTools(policy({ mcpServerIds: ['srv-b', 'srv-c'] }));
+      const tools = await listed(policy({ mcpServerIds: ['srv-b', 'srv-c'] }));
       expect(tools).toHaveLength(2);
       const [first, second] = names(tools) as [string, string];
       expect(second).toBe(`${first}_2`);
@@ -421,8 +452,8 @@ export function runToolProviderContract(
 
     it('requestApproval denies each source when policy forbids it, without raising a request', async () => {
       const w = watch();
-      const [write] = (await provider.listTools(policy({ fs: 'readwrite' }))).filter((t) => t.risk === 'mutate');
-      const [shell] = await provider.listTools(policy({ shell: true }));
+      const [write] = (await listed(policy({ fs: 'readwrite' }))).filter((t) => t.risk === 'mutate');
+      const [shell] = await listed(policy({ shell: true }));
       expect(await provider.requestApproval(write as ToolSpec, WRITE_ARGS, policy({ fs: 'read' }), ctx())).toMatchObject({ allowed: false });
       expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: false }), ctx())).toMatchObject({ allowed: false });
       expect(await provider.requestApproval(agent('Bash', 'execute'), { command: 'ls' }, policy({ shell: false }), ctx())).toMatchObject({ allowed: false });
@@ -473,9 +504,71 @@ export function runToolProviderContract(
 
     it('deferAsk does not defer fs, shell or mcp tools: those still ask', async () => {
       const w = watch({ choice: 'once' });
-      const [shell] = await provider.listTools(policy({ shell: true }));
+      const [shell] = await listed(policy({ shell: true }));
       expect(await provider.requestApproval(shell as ToolSpec, SHELL_ARGS, policy({ shell: true }), ctx(), { deferAsk: true })).toMatchObject({ allowed: true, grantedBy: 'ask:once' });
       expect(w.requests).toHaveLength(1);
+    });
+
+    // ---- The sandboxed shell (spec 2026-10-12-sandbox-design) ----
+
+    it('shellRuns "sandbox" swaps the host run_command for the sandboxed one: exactly one, never both', async () => {
+      for (const [shellRuns, source] of [['sandbox', 'sandbox'], ['host', 'shell'], [undefined, 'shell']] as const) {
+        const tools = (await provider.listTools(policy({ shell: true, shellRuns }))).filter((t) => t.name === 'run_command');
+        expect(tools.map((t) => t.source)).toEqual([source]);
+      }
+      // Thread tools are offered to every profile; no shell of either kind is.
+      expect((await provider.listTools(policy({ shell: false, shellRuns: 'sandbox' }))).filter((t) => t.source !== 'thread')).toEqual([]);
+    });
+
+    it('a sandboxed command runs with no card under ask_on_mutate, and asks under always_ask', async () => {
+      const w = watch({ choice: 'once' });
+      const quiet = await tool(policy({ shell: true, shellRuns: 'sandbox' }), 'run_command');
+      expect(isToolError(await quiet.execute(SHELL_ARGS, ctx()))).toBe(false);
+      expect(w.requests).toHaveLength(0);
+      const asking = await tool(policy({ shell: true, shellRuns: 'sandbox', approvalMode: 'always_ask' }), 'run_command');
+      expect(isToolError(await asking.execute(SHELL_ARGS, ctx()))).toBe(false);
+      expect(w.requests[0]?.request).toMatchObject({ toolName: 'run_command', source: 'sandbox', risk: 'execute' });
+    });
+
+    it('a sandboxed command with no workspace is refused without a card', async () => {
+      const w = watch();
+      const t = await tool(policy({ shell: true, shellRuns: 'sandbox' }), 'run_command');
+      expect(isToolError(await t.execute(SHELL_ARGS, ctx({ workspaceRoot: null })), 'permission_denied')).toBe(true);
+      expect(w.requests).toHaveLength(0);
+    });
+
+    // ---- unattended (scheduled) runs: nobody can answer a card ----
+
+    it('under unattended, a call that would ask is refused as approval_unavailable, raising no card', async () => {
+      const w = watch({ choice: 'once' });
+      const shell = await tool(policy({ shell: true }), 'run_command');
+      const out = await shell.execute(SHELL_ARGS, ctx({ unattended: true }));
+      expect(isToolError(out, 'approval_unavailable')).toBe(true);
+      expect((out as { message: string }).message).toBe(UNATTENDED_REASON);
+      expect(w.events).toHaveLength(0);
+    });
+
+    it('under unattended, what needs no card still runs: policy allows and earlier grants; denials stay denials', async () => {
+      const read = await tool(policy({ fs: 'read' }), 'read_file');
+      expect(isToolError(await read.execute(READ_ARGS, ctx({ unattended: true })))).toBe(false);
+
+      const w = watch({ choice: 'chat' });
+      const write = await tool(policy({ fs: 'readwrite' }), 'write_file');
+      expect(isToolError(await write.execute(WRITE_ARGS, ctx()))).toBe(false);
+      expect(isToolError(await write.execute(WRITE_ARGS, ctx({ unattended: true })))).toBe(false);
+      expect(w.requests).toHaveLength(1);
+
+      const shell = await tool(policy({ shell: true }), 'run_command');
+      expect(isToolError(await shell.execute(SHELL_ARGS, ctx({ unattended: true, workspaceRoot: null })), 'permission_denied')).toBe(true);
+    });
+
+    it('requestApproval under unattended refuses an ask, even one auto mode could take, and allows what needs no card', async () => {
+      const w = watch({ choice: 'once' });
+      expect(
+        await provider.requestApproval(agent('Bash', 'execute'), { command: 'npm test' }, policy({ shell: true }), ctx({ unattended: true }), { deferAsk: true })
+      ).toEqual({ allowed: false, reason: UNATTENDED_REASON });
+      expect(await provider.requestApproval(agent('Read', 'read'), { path: 'a.txt' }, policy({ fs: 'read' }), ctx({ unattended: true }))).toMatchObject({ allowed: true });
+      expect(w.requests).toHaveLength(0);
     });
   });
 }

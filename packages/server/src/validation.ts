@@ -1,4 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
+import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
 
 /** Small, dependency-free request-body validators shared by the route modules. Each throws a 400 `HTTPException` (Hono's built-in error type, which the app's default error handling already converts to a proper JSON response) on a bad value. */
 
@@ -175,4 +176,23 @@ export function optionalWorkspaceRoot(value: unknown, field: string): string | n
     throw new HTTPException(400, { message: `"${field}" must be a native absolute path, e.g. "/home/user/project" -- got "${trimmed}".` });
   }
   return trimmed;
+}
+
+/** Most hosts a profile's sandbox allowlist may name (spec 2026-10-12-sandbox-design). */
+export const MAX_SANDBOX_HOSTS = 200;
+/** Re-exported: the rule lives in core, where the sandbox applies it again on every run. */
+export { sandboxHostProblem };
+
+/** `toolPolicy.sandboxHosts`: trimmed, lower-cased, de-duplicated and checked. */
+export function parseSandboxHosts(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
+    throw new HTTPException(400, { message: '"toolPolicy.sandboxHosts" must be an array of strings, or null for the defaults.' });
+  }
+  const hosts = [...new Set(value.map((v) => v.trim().toLowerCase()).filter((v) => v.length > 0))];
+  if (hosts.length > MAX_SANDBOX_HOSTS) throw new HTTPException(400, { message: `"toolPolicy.sandboxHosts" may list at most ${MAX_SANDBOX_HOSTS} hosts.` });
+  for (const host of hosts) {
+    const problem = sandboxHostProblem(host);
+    if (problem) throw new HTTPException(400, { message: `"toolPolicy.sandboxHosts": "${host}" ${problem}.` });
+  }
+  return hosts;
 }

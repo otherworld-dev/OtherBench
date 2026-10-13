@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
+import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
+import { NO_APPROVAL_REASON, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { GruntServerTool } from './grunt-server.js';
+import type { ApprovalTickets } from './tickets.js';
 
 /**
  * Relaying Grunt's MCP servers into Claude Code (spec
@@ -44,15 +47,77 @@ export function buildRelay(specs: ToolSpec[]): Relay {
   return { tools, hash: createHash('sha256').update(JSON.stringify(shape)).digest('hex') };
 }
 
+/**
+ * The spec to run for a relayed call the gate approved as `approved` (the spec
+ * the process started with). It is this reply's own spec for that tool, so an
+ * edit that leaves the tool's shape alone (the sandbox allowlist) applies
+ * without a new process. Fail closed: a tool this reply doesn't relay is
+ * refused rather than run from the old spec, and so is one whose source or
+ * risk differs from what the gate approved (a card for one kind of tool must
+ * never run another).
+ */
+export function currentRelayed(relay: Relay, approved: ToolSpec): ToolSpec {
+  const current = relay.tools.get(relayName(approved.name));
+  if (!current) throw new Error(`"${approved.name}" is not relayed for this reply.`);
+  if (current.source !== approved.source || current.risk !== approved.risk) throw new Error(`"${approved.name}" changed since it was approved, so it was not run.`);
+  return current;
+}
+
+/** A relayed call with no ticket: core's one sentence for a call nothing approved. */
+export const NO_TICKET = NO_APPROVAL_REASON;
+
+/**
+ * Runs a relayed call for the running reply, with the spec `currentRelayed`
+ * chose. A spec with `describeCall` (the
+ * browser, the computer tool) runs only with the arguments its approval
+ * ticket holds, never with Claude Code's raw input; with no ticket nothing
+ * runs. Other specs (MCP tools, the sandboxed run_command) run as before.
+ *
+ * The ticket is this engine's half of the rule: it ties Claude Code's raw
+ * input to what the gate approved for this reply. The tool provider holds the
+ * other half itself: the `execute` of a spec from `relayGruntTools` runs only
+ * an argument object its own `requestApproval` approved, for the same chat,
+ * reply and profile, once, and audits what came of it. So a call that got
+ * past this function some other way still runs nothing.
+ */
+export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext, tickets: ApprovalTickets): Promise<unknown> {
+  if (!spec.describeCall) return spec.execute(args, ctx);
+  const ticket = tickets.take(spec.name, args);
+  if (!ticket) return { error: true, code: 'no_approval', message: NO_TICKET };
+  return spec.execute(ticket.args, ctx);
+}
+
 /** The running reply's relay executor, or undefined when no Grunt reply is running. */
 type CurrentRelay = () => ((spec: ToolSpec, args: unknown) => Promise<unknown>) | undefined;
 
-function errorResult(text: string): CallToolResult {
-  return { content: [{ type: 'text', text }], isError: true };
+/**
+ * An error as MCP content. `about` is the line a tool put first in its error
+ * to say whose words the message holds (the computer tool: content from the
+ * screen, not from the user); it stays first, as an item of its own.
+ */
+function errorResult(text: string, about?: unknown): CallToolResult {
+  const said: { type: 'text'; text: string }[] = typeof about === 'string' && about.length > 0 ? [{ type: 'text', text: about }] : [];
+  return { content: [...said, { type: 'text', text }], isError: true };
 }
 
-function isToolError(value: unknown): value is { error: true; message: string } {
+function isToolError(value: unknown): value is { error: true; message: string; about?: unknown } {
   return typeof value === 'object' && value !== null && (value as { error?: unknown }).error === true && typeof (value as { message?: unknown }).message === 'string';
+}
+
+/**
+ * What each running reply has been given in images so far, so a loop of calls
+ * cannot hand Claude Code more than one reply may show. Keyed by the reply's
+ * executor, which lives exactly as long as the reply.
+ */
+const imageBudgets = new WeakMap<object, ToolImageBudget>();
+
+function budgetFor(run: object): ToolImageBudget {
+  let budget = imageBudgets.get(run);
+  if (!budget) {
+    budget = { images: 0, bytes: 0 };
+    imageBudgets.set(run, budget);
+  }
+  return budget;
 }
 
 /**
@@ -71,11 +136,25 @@ export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRe
       if (!run) return errorResult('No Grunt reply is waiting on this tool call.');
       try {
         const out = await run(spec, args);
-        if (isToolError(out)) return errorResult(out.message);
-        if (Array.isArray(out)) return { content: out as CallToolResult['content'] };
+        if (isToolError(out)) return errorResult(out.message, out.about);
+        if (Array.isArray(out)) {
+          // MCP content goes to Claude Code only after the same screening an API
+          // model's tool result gets: images by their bytes and within the reply's
+          // budget, audio and resource blobs as a note. Nothing from here is stored.
+          const screened = screenToolResult(out, budgetFor(run), LIVE_IMAGE_LIMITS);
+          if (screened.forged) console.warn(`[claude-code relay] a "${spec.name}" result carried a reference to a stored image; removed.`);
+          return { content: screened.result as CallToolResult['content'] };
+        }
         return { content: [{ type: 'text', text: JSON.stringify(out) }] };
       } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        // The tool provider answers a computer call's every failure itself, so this is not reached for one. Were it,
+        // the words could be the desktop app's: one clean line of them, under the line that says so (core's builder).
+        if (spec.source === 'computer') {
+          const failed = screenContentError('computer_failed', desktopTextForResult(message));
+          return errorResult(failed.message, failed.about);
+        }
+        return errorResult(message);
       }
     },
   };

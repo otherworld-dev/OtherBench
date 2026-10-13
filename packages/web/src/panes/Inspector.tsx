@@ -1,5 +1,7 @@
-import { useEffect, useState, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from 'react';
+import { latestTodos } from '@grunt/core/domain/thread-tools.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
+import { pathForCard } from '@grunt/core/domain/computer-apps.js';
 import type { AuditEntry, Chat, Grant } from '@grunt/core/ports/store.js';
 import type { Profile } from '@grunt/core/types/config.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
@@ -13,6 +15,7 @@ import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
 import { FolderList } from '../components/FolderList.js';
+import { TodoChecklist } from '../components/TodoChecklist.js';
 import { isClaudeCodeProfile } from '../components/Composer.js';
 
 export interface InspectorProps {
@@ -35,6 +38,34 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
 
 function EmptyState({ children }: { children: ReactNode }): JSX.Element {
   return <p className="text-sm text-[var(--text-faint)]">{children}</p>;
+}
+
+/** Running replies' checklists (spec 2026-10-12-thread-cards-design §7); the section exists only while one is running with a checklist. */
+function ProgressSection({ chatId }: { chatId: string }): JSX.Element | null {
+  const messages = useGruntStore((s) => s.messages);
+  const running = useMemo(
+    () =>
+      Object.values(messages)
+        .filter((m) => m.chatId === chatId && m.role === 'assistant' && m.status === 'streaming')
+        .flatMap((m) => {
+          const todos = latestTodos(m.parts);
+          return todos ? [{ id: m.id, profileName: m.producedBy?.profileName ?? 'Assistant', todos }] : [];
+        }),
+    [messages, chatId]
+  );
+  if (running.length === 0) return null;
+  return (
+    <Section title="Progress">
+      <div className="space-y-2">
+        {running.map((r) => (
+          <div key={r.id}>
+            {running.length > 1 && <div className="text-xs text-[var(--text-muted)]">{r.profileName}</div>}
+            <TodoChecklist todos={r.todos} streaming />
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
 }
 
 function formatCost(cost: number): string {
@@ -387,6 +418,7 @@ const MCP_STATUS_COLOR: Record<McpServerHealth['status'], string> = {
   connecting: 'bg-[var(--accent)] animate-pulse',
   error: 'bg-[var(--danger)]',
   unknown: 'bg-[var(--text-faint)]',
+  needs_auth: 'bg-[var(--warn)]',
 };
 
 function StatusDot({ status }: { status: McpServerHealth['status'] }): JSX.Element {
@@ -477,7 +509,7 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
                 <span className="min-w-0 flex-1 truncate">{s.name}</span>
               </span>
             </label>
-            <span className={`text-xs text-[var(--text-muted)] ${dim}`}>{s.enabled ? `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}` : 'disabled'}</span>
+            <span className={`text-xs text-[var(--text-muted)] ${dim}`}>{!s.enabled ? 'disabled' : s.status === 'needs_auth' ? 'needs sign-in' : `${s.toolCount} tool${s.toolCount === 1 ? '' : 's'}`}</span>
             <button
               type="button"
               aria-label={`Refresh ${s.name}`}
@@ -502,6 +534,17 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
             .map((s) => (
               <p key={s.id} className="text-xs text-[var(--danger)]">
                 {s.name}: {s.lastError}
+              </p>
+            ))}
+        </div>
+      )}
+      {servers.some((s) => s.status === 'needs_auth') && (
+        <div className="space-y-1 pt-1">
+          {servers
+            .filter((s) => s.status === 'needs_auth')
+            .map((s) => (
+              <p key={s.id} className="text-xs text-[var(--warn)]">
+                {`${s.name}: needs sign-in (Settings > MCP servers).`}
               </p>
             ))}
         </div>
@@ -547,13 +590,22 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
     <div data-testid="grants-list" className="space-y-2">
       {shown.map((g) => (
         <div key={g.id} data-testid={`grant-${g.id}`} className="flex items-center gap-2 text-sm">
-          <span className="min-w-0 flex-1 truncate">
+          {/* A computer grant's app is shown whole (it wraps), so two grants for different programs can be told apart. */}
+          <span className={`min-w-0 flex-1 ${g.constraint?.app ? 'break-all' : 'truncate'}`}>
             <span className="font-medium">{g.toolName}</span>
             <span className="ml-1.5 text-xs text-[var(--text-muted)]">
               {g.scope === 'always' ? 'always' : 'this chat'}
               {g.constraint?.pathPrefix ? ` · ${g.constraint.pathPrefix}` : ''}
+              {g.constraint?.host ? ` · ${g.constraint.host}` : ''}
               {g.constraint?.commandExact ? ` · ${g.constraint.commandExact}` : ''}
               {g.constraint?.commandPrefix ? ` · ${g.constraint.commandPrefix} (any arguments)` : ''}
+              {g.constraint?.live ? ` · live artifact call ${g.constraint.live.callId}` : ''}
+              {g.constraint?.app ? (
+                <>
+                  {' · '}
+                  <bdi>{pathForCard(g.constraint.app)}</bdi>
+                </>
+              ) : null}
             </span>
           </span>
           <button
@@ -582,6 +634,7 @@ function formatAuditTime(createdAt: number): string {
 /** Short, human label for how a gated call was authorised; the raw value stays available as a tooltip. Unknown values pass through. */
 function grantedByLabel(grantedBy: string): string {
   if (grantedBy.startsWith('grant:')) return 'grant';
+  if (grantedBy.startsWith('live:')) return 'live artifact';
   switch (grantedBy) {
     case 'auto_read': return 'auto-read';
     case 'policy': return 'policy';
@@ -593,6 +646,8 @@ function grantedByLabel(grantedBy: string): string {
     case 'auto': return 'auto mode';
     case 'deny:cancelled': return 'stopped (not denied)';
     case 'deny:auto': return 'blocked by auto mode';
+    case 'deny:plan': return 'refused: no plan approved yet';
+    case 'deny:unattended': return 'refused: nobody to approve (scheduled run)';
     default: return grantedBy;
   }
 }
@@ -805,6 +860,8 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       <Section title="Project">
         {chat ? <InspectorProject chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
+
+      {chat && <ProgressSection chatId={chat.id} />}
 
       {chat && memoryProject && (
         <Section title="Project memory">

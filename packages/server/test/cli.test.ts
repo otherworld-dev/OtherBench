@@ -1,6 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createHttpsServer, request as httpsRequest } from 'node:https';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
@@ -8,13 +13,28 @@ import { DatabaseLockedError } from '../src/db-lock.js';
 import {
   AnnounceWithoutTokenError,
   assertServeSecurity,
+  consoleToStderr,
+  DesktopRpcWithoutAnnounceError,
   isLoopbackHost,
   main,
   NonLoopbackWithoutTokenError,
   parseServeArgs,
   runServe,
   sameScriptPath,
+  SHUTDOWN_WAIT_MS,
 } from '../src/cli.js';
+import {
+  InsecurePublicUrlError,
+  InvalidTrustProxyError,
+  LoginFileError,
+  NoPasswordError,
+  RemoteNeedsHttpsError,
+  RemoteWithAnnounceError,
+  TlsConflictError,
+  TlsWithoutPublicUrlError,
+} from '../src/remote/errors.js';
+import { PasswordFile } from '../src/remote/password.js';
+import { FAST, PASSWORD } from './remote/helpers.js';
 
 function fakeContainer(): Container {
   const store = new InMemoryStore();
@@ -62,6 +82,8 @@ function fakeStdio() {
     stdout: { write: (s: string) => { writes.push(s); return true; } },
     stdin: new PassThrough(),
     exit: vi.fn(),
+    // Never the real one here: it would rewire this test process's own console.
+    consoleToStderr: vi.fn(),
   };
 }
 
@@ -195,6 +217,43 @@ describe('runServe desktop mode', () => {
     expect(io.exit).toHaveBeenCalledWith(0);
   });
 
+  it("waits for the container's background shutdown (the sandbox's agents and mounts) before exiting", async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    const container = await deps.createContainer();
+    let settle!: () => void;
+    container.settled = () => new Promise<void>((resolve) => (settle = resolve));
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    io.stdin.end();
+    await tick();
+    expect(deps.containerClose).toHaveBeenCalledTimes(1);
+    expect(io.exit).not.toHaveBeenCalled();
+
+    settle();
+    await tick();
+    expect(io.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("exits anyway when the background shutdown takes longer than the desktop shell's grace", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const deps = fakeDeps();
+      const io = fakeStdio();
+      const container = await deps.createContainer();
+      container.settled = () => new Promise<void>(() => undefined);
+      await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+      io.stdin.end();
+      await tick();
+      expect(io.exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SHUTDOWN_WAIT_MS);
+      expect(io.exit).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refuses --announce without a token and never builds the container', async () => {
     const deps = fakeDeps();
     const io = fakeStdio();
@@ -209,10 +268,11 @@ describe('runServe desktop mode', () => {
 
     await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
 
-    const appOptions = deps.createApp.mock.calls[0]![1] as { token: string; corsOrigins: string[]; hostCheckPort?: () => number };
+    const appOptions = deps.createApp.mock.calls[0]![1] as { token: string; corsOrigins: string[]; hostCheckPort?: () => number; oauthCallbackPort?: () => number };
     expect(appOptions.token).toBe('tok');
     expect(appOptions.corsOrigins).toEqual(['http://tauri.localhost']);
     expect(appOptions.hostCheckPort?.()).toBe(EPHEMERAL_PORT);
+    expect(appOptions.oauthCallbackPort?.()).toBe(EPHEMERAL_PORT);
   });
 
   it('applies no Host check when bound to a non-loopback address', async () => {
@@ -221,8 +281,9 @@ describe('runServe desktop mode', () => {
 
     await runServe(['--host', '0.0.0.0', '--token', 'secret'], { ...deps, ...io }, {});
 
-    const appOptions = deps.createApp.mock.calls[0]![1] as { hostCheckPort?: () => number };
+    const appOptions = deps.createApp.mock.calls[0]![1] as { hostCheckPort?: () => number; oauthCallbackPort?: () => number };
     expect(appOptions.hostCheckPort).toBeUndefined();
+    expect(appOptions.oauthCallbackPort).toBeDefined(); // the callback still works when 127.0.0.1 is among the bound addresses
   });
 
   it('writes nothing to stdout and ignores stdin outside announce mode (browser mode unchanged)', async () => {
@@ -236,6 +297,154 @@ describe('runServe desktop mode', () => {
     expect(io.writes).toEqual([]);
     expect(deps.fakeServerHandle.close).not.toHaveBeenCalled();
     expect(io.exit).not.toHaveBeenCalled();
+  });
+});
+
+describe('runServe with the desktop channel (--desktop-rpc)', () => {
+  /** The driver `runServe` handed to `createContainer`, if any. Nothing here is a shell: stdin and stdout are in-memory. */
+  const driverOf = (deps: ReturnType<typeof fakeDeps>): ComputerDriver | undefined =>
+    (deps.createContainer.mock.calls[0] as unknown as [{ computer?: ComputerDriver }])[0].computer;
+
+  it('parses --desktop-rpc, off by default', () => {
+    expect(parseServeArgs([]).desktopRpc).toBe(false);
+    expect(parseServeArgs(['--announce', '--desktop-rpc']).desktopRpc).toBe(true);
+  });
+
+  /** This launch's word, from the announce line. */
+  const rpcWordOf = (io: ReturnType<typeof fakeStdio>): string => (JSON.parse(io.writes[0]!) as { rpc: string }).rpc;
+
+  it("says hello to the shell after the announce line, which carries this launch's word, and hands the container a driver that is not available yet", async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    const word = rpcWordOf(io);
+    expect(word).toMatch(/^[0-9a-f]{32}$/);
+    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT},"rpc":"${word}"}\n`, `GRUNT-RPC ${word} {"id":1,"method":"computer.hello","params":{}}\n`]);
+    const computer = driverOf(deps)!;
+    expect(computer.available()).toBe(false);
+    expect(computer.reservedKeys()).toBeNull();
+    // The shell's own lines carry no word.
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
+    await vi.waitFor(() => expect(computer.available()).toBe(true));
+    expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']);
+  });
+
+  it('makes a new word for every launch', async () => {
+    const words = new Set<string>();
+    for (let i = 0; i < 5; i += 1) {
+      const io = fakeStdio();
+      await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { GRUNT_TOKEN: 'tok' });
+      words.add(rpcWordOf(io));
+    }
+    expect(words.size).toBe(5);
+  });
+
+  it('sends what the console would write to stdout to stderr, in --desktop-rpc mode only, before anything is written', async () => {
+    const io = fakeStdio();
+    io.consoleToStderr.mockImplementation(() => expect(io.writes).toEqual([]));
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...fakeDeps(), ...io }, { GRUNT_TOKEN: 'tok' });
+    expect(io.consoleToStderr).toHaveBeenCalledTimes(1);
+    for (const argv of [['--port', '0', '--announce'], ['--port', '0']]) {
+      const other = fakeStdio();
+      await runServe(argv, { ...fakeDeps(), ...other }, { GRUNT_TOKEN: 'tok' });
+      expect(other.consoleToStderr).not.toHaveBeenCalled();
+    }
+  });
+
+  it('consoleToStderr: every console method that writes to stdout writes to the stream it is given instead', () => {
+    const out: string[] = [];
+    const stream = new PassThrough();
+    stream.on('data', (chunk: Buffer) => out.push(chunk.toString('utf8')));
+    const untouched = vi.fn();
+    const target = { log: untouched, info: untouched, debug: untouched, dir: untouched, table: untouched, error: untouched, warn: untouched } as unknown as Console;
+    consoleToStderr(target, stream);
+    target.log('a log line');
+    target.info('an info line');
+    target.debug('a debug line');
+    target.dir({ x: 1 });
+    expect(untouched).not.toHaveBeenCalled();
+    expect(out.join('')).toBe('a log line\nan info line\na debug line\n{ x: 1 }\n');
+    // warn and error already go to stderr: left as they are.
+    expect(target.warn).toBe(untouched);
+    expect(target.error).toBe(untouched);
+  });
+
+  it('a shell that says computer use is off, as it ships, leaves the driver unavailable, and it is sent nothing more', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":false,"shortcuts":["Ctrl+Shift+Space"],"sessions":0}}\n');
+    await vi.waitFor(() => expect(computer.reservedKeys()).toEqual(['Ctrl+Shift+Space']));
+    expect(computer.available()).toBe(false);
+    expect((await computer.ensureSession('c', 'Budget')).ok).toBe(false);
+    expect(io.writes).toHaveLength(2);
+  });
+
+  it('a shell that never answers the hello leaves the driver unavailable, and it is sent nothing more', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    expect(computer.available()).toBe(false);
+    expect(await computer.ensureSession('c', 'Budget')).toEqual({ ok: false, reason: "Computer use isn't available in the desktop app right now." });
+    expect(await computer.act('c', { action: 'type', text: 'x' }, { app: 'C:\\x.exe', shellView: false, windowId: 'w', pid: 1, startedAt: 's' })).toMatchObject({ ok: false });
+    expect(io.writes).toHaveLength(2);
+  });
+
+  it('without --desktop-rpc there is no channel and no driver, and nothing more is written', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    expect(driverOf(deps)).toBeUndefined();
+    expect(io.writes).toEqual([`{"port":${EPHEMERAL_PORT}}\n`]);
+  });
+
+  it('refuses --desktop-rpc without --announce (a server started by hand, or a sign-in server), before anything is built', async () => {
+    for (const argv of [
+      ['--port', '0', '--desktop-rpc'],
+      ['--port', '0', '--desktop-rpc', '--host', '0.0.0.0', '--token', 'secret'],
+      ['--port', '0', '--desktop-rpc', '--public-url', 'https://grunt.example.com', '--tls', 'auto'],
+    ]) {
+      const deps = fakeDeps();
+      const io = fakeStdio();
+      await expect(runServe(argv, { ...deps, ...io }, { GRUNT_TOKEN: 'tok' }), argv.join(' ')).rejects.toThrow(DesktopRpcWithoutAnnounceError);
+      expect(deps.createContainer).not.toHaveBeenCalled();
+      expect(io.writes).toEqual([]);
+      expect(io.consoleToStderr).not.toHaveBeenCalled();
+    }
+    // And a sign-in server can't have --announce, so it can't have the channel with it either.
+    expect(() => assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true, publicUrls: ['https://grunt.example.com'], tls: 'auto' })).toThrow(RemoteWithAnnounceError);
+    expect(assertServeSecurity({ host: '127.0.0.1', token: 't', announce: true, desktopRpc: true })).toBe('token');
+  });
+
+  it('main() prints the refusal and exits 1', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exit = vi.fn();
+    await main(['serve', '--desktop-rpc'], { ...fakeDeps(), ...fakeStdio(), exit, env: {} });
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errors).toHaveBeenCalledWith("Error: Refusing to start: --desktop-rpc only works with --announce (the desktop app's own launch).");
+    errors.mockRestore();
+  });
+
+  it('still closes and exits when stdin closes, and the driver is not available from then on', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    await runServe(['--port', '0', '--announce', '--desktop-rpc'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+    const computer = driverOf(deps)!;
+    io.stdin.write('GRUNT-RPC {"id":1,"result":{"platform":"win32","version":"0.1.0","available":true,"shortcuts":[],"sessions":0}}\n');
+    await vi.waitFor(() => expect(computer.available()).toBe(true));
+
+    io.stdin.end();
+    await tick();
+
+    expect(deps.fakeServerHandle.close).toHaveBeenCalledTimes(1);
+    expect(deps.containerClose).toHaveBeenCalledTimes(1);
+    expect(io.exit).toHaveBeenCalledWith(0);
+    expect(computer.available()).toBe(false);
+    expect(computer.reservedKeys()).toBeNull();
+    expect(io.writes).toHaveLength(2);
   });
 });
 
@@ -342,6 +551,173 @@ describe('main() CLI entry', () => {
     await main(['bogus'], { ...deps, exit });
 
     expect(exit).toHaveBeenCalledWith(1);
+    errorSpy.mockRestore();
+  });
+});
+
+describe('parseServeArgs: sign-in flags', () => {
+  it('has none by default', () => {
+    expect(parseServeArgs([])).toMatchObject({ publicUrls: [], tls: null, tlsCert: null, tlsKey: null, trustProxies: [] });
+  });
+
+  it('parses repeated --public-url and --trust-proxy, --tls auto, --tls-cert and --tls-key', () => {
+    const o = parseServeArgs([
+      '--public-url', 'https://grunt.lan:4747', '--public-url', 'https://192.168.1.5:4747',
+      '--trust-proxy', '127.0.0.1', '--trust-proxy', '10.0.0.2',
+      '--tls', 'auto', '--tls-cert', '/c.pem', '--tls-key', '/k.pem',
+    ]);
+    expect(o).toMatchObject({
+      publicUrls: ['https://grunt.lan:4747', 'https://192.168.1.5:4747'],
+      trustProxies: ['127.0.0.1', '10.0.0.2'],
+      tls: 'auto',
+      tlsCert: '/c.pem',
+      tlsKey: '/k.pem',
+    });
+  });
+
+  it.each([['--tls', 'files'], ['--tls']])('refuses %s with anything but "auto"', (...args) => {
+    expect(() => parseServeArgs(args)).toThrow(TlsConflictError);
+  });
+});
+
+describe('assertServeSecurity: the whole matrix', () => {
+  const base = { host: '127.0.0.1', token: null, publicUrls: [] as string[], tls: null, tlsCert: null, tlsKey: null, trustProxies: [] as string[] };
+  const signIn = { ...base, host: '0.0.0.0', publicUrls: ['https://grunt.lan:4747'] };
+
+  it('keeps open and token modes as they were', () => {
+    expect(assertServeSecurity(base)).toBe('open');
+    expect(assertServeSecurity({ ...base, token: 't' })).toBe('token');
+    expect(assertServeSecurity({ ...base, host: '0.0.0.0', token: 't' })).toBe('token');
+    expect(() => assertServeSecurity({ ...base, host: '0.0.0.0' })).toThrow(NonLoopbackWithoutTokenError);
+  });
+
+  it('turns sign-in on for a public URL with an HTTPS route, even on a non-loopback bind with no token', () => {
+    expect(assertServeSecurity({ ...signIn, tls: 'auto' })).toBe('login');
+    expect(assertServeSecurity({ ...signIn, tlsCert: '/c', tlsKey: '/k' })).toBe('login');
+    expect(assertServeSecurity({ ...signIn, host: '127.0.0.1', trustProxies: ['127.0.0.1'] })).toBe('login');
+    expect(assertServeSecurity({ ...signIn, tls: 'auto', token: 't' })).toBe('login');
+  });
+
+  it('refuses each unsafe or contradictory combination by name', () => {
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['http://grunt.lan:4747'] })).toThrow(InsecurePublicUrlError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', publicUrls: ['https://grunt.lan/grunt'] })).toThrow(InsecurePublicUrlError);
+    expect(() => assertServeSecurity(signIn)).toThrow(RemoteNeedsHttpsError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', token: 't', announce: true })).toThrow(RemoteWithAnnounceError);
+    expect(() => assertServeSecurity({ ...base, tls: 'auto' })).toThrow(TlsWithoutPublicUrlError);
+    expect(() => assertServeSecurity({ ...base, trustProxies: ['127.0.0.1'] })).toThrow(TlsWithoutPublicUrlError);
+    expect(() => assertServeSecurity({ ...base, tlsCert: '/c', tlsKey: '/k' })).toThrow(TlsWithoutPublicUrlError);
+    expect(() => assertServeSecurity({ ...signIn, tls: 'auto', tlsCert: '/c', tlsKey: '/k' })).toThrow(TlsConflictError);
+    expect(() => assertServeSecurity({ ...signIn, tlsCert: '/c' })).toThrow(TlsConflictError);
+    expect(() => assertServeSecurity({ ...signIn, trustProxies: ['10.0.0.0/8'] })).toThrow(InvalidTrustProxyError);
+  });
+});
+
+describe('runServe in sign-in mode', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'grunt-cli-signin-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const setPassword = () => new PasswordFile(join(dir, 'login.json'), Date.now, FAST).write(PASSWORD);
+
+  it('refuses without a password and never builds the container', async () => {
+    const deps = fakeDeps();
+
+    await expect(runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {})).rejects.toThrow(NoPasswordError);
+    expect(deps.createContainer).not.toHaveBeenCalled();
+  });
+
+  it('refuses with a plain LoginFileError, not a raw I/O error, when login.json cannot be read', async () => {
+    const deps = fakeDeps();
+    // A directory where the file should be: reading it fails with EISDIR, not ENOENT.
+    mkdirSync(join(dir, 'login.json'));
+
+    const run = runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {});
+
+    await expect(run).rejects.toThrow(LoginFileError);
+    await expect(run).rejects.toThrow(/login\.json is not a usable password file \(couldn't read it: /);
+    expect(deps.createContainer).not.toHaveBeenCalled();
+  });
+
+  it('serves HTTPS with its own certificate, TLS 1.2 at least, and hands createApp the sign-in setup and a Host check', async () => {
+    await setPassword();
+    const deps = fakeDeps();
+
+    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--port', '0', '--public-url', 'https://grunt.test', '--tls', 'auto'], deps, {});
+
+    const serveOpts = deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown; serverOptions?: { key: string; cert: string; minVersion: string } };
+    expect(serveOpts.createServer).toBe(createHttpsServer);
+    expect(serveOpts.serverOptions?.minVersion).toBe('TLSv1.2');
+    expect(serveOpts.serverOptions?.key).toContain('PRIVATE KEY');
+    expect(serveOpts.serverOptions?.cert).toBe(readFileSync(join(dir, 'https', 'server.crt'), 'utf8'));
+    const appOptions = deps.createApp.mock.calls[0]![1] as { remote: { publicHosts: string[]; tls: { mode: string } } | null; hostCheckPort?: () => number };
+    expect(appOptions.remote?.publicHosts).toEqual(['grunt.test']);
+    expect(appOptions.remote?.tls.mode).toBe('auto');
+    expect(appOptions.hostCheckPort?.()).toBe(EPHEMERAL_PORT);
+    expect(handle.scheme).toBe('https');
+    expect(handle.publicUrls).toEqual(['https://grunt.test']);
+    expect(handle.notes.join('\n')).toMatch(/SHA-256 [0-9A-F]{2}(:[0-9A-F]{2}){31}/);
+    expect(handle.notes.join('\n')).toMatch(/only listens on this machine/);
+    handle.close();
+  });
+
+  it('serves plain HTTP behind a trusted proxy', async () => {
+    await setPassword();
+    const deps = fakeDeps();
+
+    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--public-url', 'https://box.tail.ts.net', '--trust-proxy', '127.0.0.1'], deps, {});
+
+    const serveOpts = deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown };
+    expect(serveOpts.createServer).toBeUndefined();
+    expect(handle.scheme).toBe('http');
+    expect(handle.notes.join('\n')).not.toMatch(/only listens on this machine/);
+    handle.close();
+  });
+
+  it('gives createApp no sign-in setup in the desktop mode', async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+
+    const handle = await runServe(['--port', '0', '--announce', '--cors-origin', 'http://tauri.localhost'], { ...deps, ...io }, { GRUNT_TOKEN: 'tok' });
+
+    expect((deps.createApp.mock.calls[0]![1] as { remote: unknown }).remote).toBeNull();
+    expect((deps.serve.mock.calls[0]![0] as unknown as { createServer?: unknown }).createServer).toBeUndefined();
+    expect(handle.scheme).toBe('http');
+  });
+
+  it('answers /api/health over real HTTPS, trusting only the CA it made', async () => {
+    await setPassword();
+    const handle = await runServe(['--db', join(dir, 'grunt.db'), '--port', '0', '--public-url', 'https://grunt.test', '--tls', 'auto'], { createContainer: async () => fakeContainer() }, {});
+    try {
+      const ca = readFileSync(join(dir, 'https', 'grunt-ca.crt'), 'utf8');
+      const answer = await new Promise<string>((resolve, reject) => {
+        const req = httpsRequest({ host: '127.0.0.1', port: handle.port, path: '/api/health', ca, servername: 'grunt.test', agent: false }, (res) => {
+          let body = '';
+          res.on('data', (d: Buffer) => (body += d.toString()));
+          res.on('end', () => resolve(`${res.statusCode} ${body}`));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      expect(answer).toMatch(/^200 \{"status":"ok"/);
+    } finally {
+      handle.close();
+    }
+  });
+});
+
+describe('main() with sign-in', () => {
+  it('prints a sign-in start-up refusal as an error and exits 1', async () => {
+    const deps = fakeDeps();
+    const exit = vi.fn();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await main(['serve', '--public-url', 'http://grunt.lan'], { ...deps, exit, env: {} });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/^Error: Refusing to start: --public-url/));
     errorSpy.mockRestore();
   });
 });

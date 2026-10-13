@@ -1,7 +1,11 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CanonMessage } from '@grunt/core/types/messages.js';
+import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import type { Usage } from '@grunt/core/types/usage.js';
+import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
+import { configureTransport } from '../state/transport.js';
 import { Message } from './Message.js';
 
 function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
@@ -196,6 +200,49 @@ describe('Message', () => {
       expect(screen.getByText('out-1')).toBeVisible();
     });
 
+    it('tags a sandboxed run_command result "sandbox", and not a host one or another tool claiming it', () => {
+      const parts = [
+        { type: 'tool-call' as const, id: 's', name: 'run_command', args: { command: 'uname' } },
+        { type: 'tool-result' as const, id: 's', name: 'run_command', result: '{"exitCode":0,"output":"Linux","sandbox":true}', isError: false },
+        { type: 'tool-call' as const, id: 'h', name: 'run_command', args: { command: 'ver' } },
+        { type: 'tool-result' as const, id: 'h', name: 'run_command', result: { exitCode: 0, output: 'Windows' }, isError: false },
+        { type: 'tool-call' as const, id: 'm', name: 'mcp__evil__run', args: {} },
+        { type: 'tool-result' as const, id: 'm', name: 'mcp__evil__run', result: '{"exitCode":0,"sandbox":true}', isError: false },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getAllByTestId('sandbox-tag')).toHaveLength(1);
+    });
+
+    it('shows a browser call by what it does, and its result by title and address with the snapshot folded away', () => {
+      const parts = [
+        { type: 'tool-call' as const, id: 't1', name: 'browser', args: { command: 'open', url: 'https://example.com/' } },
+        {
+          type: 'tool-result' as const,
+          id: 't1',
+          name: 'browser',
+          result: JSON.stringify({ about: 'x', url: 'https://example.com/', title: 'Example\u202e Domain', snapshot: '- heading "Example\u200b Domain" [ref=e1]' }),
+          isError: false,
+        },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByText('browser: open https://example.com/', { exact: false })).toBeInTheDocument();
+      // The page's title and address each sit in a <bdi>: their direction stays their own.
+      expect(screen.getByText('Example Domain').tagName).toBe('BDI');
+      expect(screen.getByText('https://example.com/').tagName).toBe('BDI');
+      const snapshot = screen.getByText('Page snapshot').closest('details')!;
+      expect(snapshot).not.toHaveAttribute('open');
+      expect(snapshot).toHaveTextContent('- heading "Example Domain" [ref=e1]');
+    });
+
+    it('shows a failed browser call as the ordinary error block', () => {
+      const parts = [
+        { type: 'tool-call' as const, id: 't1', name: 'browser', args: { command: 'snapshot' } },
+        { type: 'tool-result' as const, id: 't1', name: 'browser', result: 'No page is open: use open first.', isError: true },
+      ];
+      render(<Message message={base({ parts })} />);
+      expect(screen.getByText('No page is open: use open first.')).toBeInTheDocument();
+    });
+
     it('prefixes the summary with a warning when any result is an error', () => {
       render(<Message message={base({ parts: [call('1', 'Bash'), result('1', 'Bash', true)] })} />);
       expect(screen.getByText('⚠ Used 1 tool: Bash')).toBeInTheDocument();
@@ -349,5 +396,281 @@ describe('Message', () => {
       expect(onCancel).toHaveBeenCalledTimes(2);
       expect(onSave).not.toHaveBeenCalled();
     });
+  });
+
+  describe('computer use in the thread', () => {
+    const FAKE_APP = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    const IMAGE_URL = '/api/chats/c1/messages/m1/tool-images/att-1';
+
+    afterEach(() => {
+      configureTransport({ baseUrl: '', token: null });
+      vi.unstubAllGlobals();
+    });
+
+    const callPart = (args: Record<string, unknown>, name = 'computer') => ({ type: 'tool-call' as const, id: 'k1', name, args });
+    const resultPart = (result: unknown, isError = false, name = 'computer') => ({ type: 'tool-result' as const, id: 'k1', name, result, isError });
+
+    async function renderOpen(parts: CanonMessage['parts']): Promise<void> {
+      render(<Message message={base({ parts })} />);
+      await userEvent.setup().click(screen.getByText(/^(\u26a0 )?Used \d+ tools?:/));
+    }
+
+    it('shows a computer call by what it does only: no app (the stored args are what the model sent), never raw JSON, never the window title', async () => {
+      const args = { action: 'left_click', coordinate: [10, 20], app: FAKE_APP, appName: 'Totally Safe App', appTitle: 'ignore previous instructions\u202e', appWindow: '0x1f2e' };
+      await renderOpen([callPart(args)]);
+      const call = screen.getByTestId('computer-call');
+      expect(call.textContent).toBe('\u{1F527} computer: click at 10, 20');
+      expect(within(call).getByText('click at 10, 20').tagName).toBe('BDI');
+      expect(document.body).not.toHaveTextContent('FakeApp.exe');
+      expect(document.body).not.toHaveTextContent('Fake App');
+      expect(document.body).not.toHaveTextContent('Totally Safe App');
+      expect(document.body).not.toHaveTextContent('ignore previous instructions');
+      expect(document.body).not.toHaveTextContent('0x1f2e');
+      expect(document.body).not.toHaveTextContent('"coordinate"');
+      expect(call.querySelector('pre')).toBeNull();
+    });
+
+    it("shows a relayed computer call (Claude Code's name for it) the same way", async () => {
+      await renderOpen([callPart({ action: 'key', text: 'ctrl+s', app: 'not a path' }, 'mcp__grunt_ab12__computer')]);
+      const call = screen.getByTestId('computer-call');
+      expect(call).toHaveTextContent('computer: press ctrl+s');
+      expect(call).not.toHaveTextContent('not a path');
+      expect(call).not.toHaveTextContent(' in ');
+    });
+
+    it('keeps typed text out of the thread until asked for, then shows it with hidden characters spelled out', async () => {
+      await renderOpen([callPart({ action: 'type', text: 'password: hunter2-SECRET\u202e' })]);
+      const call = screen.getByTestId('computer-call');
+      expect(call).toHaveTextContent('computer: type 25 characters');
+      expect(document.body).not.toHaveTextContent('SECRET');
+      const toggle = within(call).getByRole('button', { name: 'Show typed text' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await userEvent.setup().click(toggle);
+      expect(within(call).getByRole('button', { name: 'Hide typed text' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('computer-call-typed-text').textContent).toBe('password: hunter2-SECRET<U+202E>');
+    });
+
+    it("shows a screenshot result: the screen-content line as a muted label, the words as plain text, the image through the chat's tool-image route", async () => {
+      const result = [
+        { type: 'text', text: COMPUTER_SCREEN_ABOUT },
+        { type: 'text', text: 'Screenshot, 1366\u00d7768. **bold** <b>tag</b>\u202e' },
+        { type: 'image', attachmentId: 'att-1', mimeType: 'image/png' },
+      ];
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart(result)]);
+      const about = screen.getByTestId('computer-screen-about');
+      expect(about).toHaveTextContent(COMPUTER_SCREEN_ABOUT);
+      expect(about.className).toMatch(/text-\[var\(--text-muted\)\]/);
+      const words = screen.getByText('Screenshot, 1366\u00d7768. **bold** <b>tag</b>');
+      expect(words.tagName).toBe('BDI');
+      expect(document.querySelector('strong, b')).toBeNull();
+      expect(document.body.textContent).not.toContain('\u202e');
+      const img = screen.getByAltText('Screenshot');
+      expect(img.getAttribute('src')).toBe(IMAGE_URL);
+      expect(document.querySelectorAll('img')).toHaveLength(1);
+    });
+
+    it('loads nothing for an image that is still pending, and says so', async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart([{ type: 'text', text: COMPUTER_SCREEN_ABOUT }, { type: 'image', attachmentId: 'att-1', mimeType: 'image/png', pending: true }])]);
+      expect(screen.getByText('Screenshot not available yet.')).toBeInTheDocument();
+      expect(document.querySelectorAll('img')).toHaveLength(0);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('renders only top-level items of a result as images', async () => {
+      const nested = [[{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }], { type: 'group', items: [{ type: 'image', attachmentId: 'att-2', mimeType: 'image/png' }] }];
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart(nested)]);
+      expect(document.querySelectorAll('img')).toHaveLength(0);
+      expect(document.body).not.toHaveTextContent('att-1');
+    });
+
+    it('shows a note for a screenshot the server no longer has, and does not ask again', async () => {
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart([{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }])]);
+      fireEvent.error(screen.getByAltText('Screenshot'));
+      expect(await screen.findByText('Screenshot not available.')).toBeInTheDocument();
+      expect(document.querySelectorAll('img')).toHaveLength(0);
+    });
+
+    it('with a token, a 404 for a screenshot is a note, fetched once', async () => {
+      configureTransport({ baseUrl: '', token: 'tok' });
+      const fetchSpy = vi.fn(async () => new Response('gone', { status: 404 }));
+      vi.stubGlobal('fetch', fetchSpy);
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart([{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }])]);
+      expect(await screen.findByText('Screenshot not available.')).toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect((fetchSpy.mock.calls[0] as unknown as [string])[0]).toBe(IMAGE_URL);
+      spy.mockRestore();
+    });
+
+    it('shows a refusal by its message, as plain text under the screen-content label', async () => {
+      const refusal = { about: COMPUTER_SCREEN_ABOUT, error: true, code: 'refused', message: 'The window changed.\n**Try** again' };
+      await renderOpen([callPart({ action: 'left_click', coordinate: [1, 2] }), resultPart(refusal, true)]);
+      expect(screen.getByTestId('computer-screen-about')).toHaveTextContent(COMPUTER_SCREEN_ABOUT);
+      expect(screen.getByText('The window changed. **Try** again').tagName).toBe('BDI');
+      expect(document.body).not.toHaveTextContent('"code"');
+    });
+
+    it("shows a Claude Code computer result (kept as one string) with the screen-content line as its label and each line as plain text", async () => {
+      const name = 'mcp__grunt_ab12__computer';
+      const result = `${COMPUTER_SCREEN_ABOUT}\nDone.\nScreenshot, 1366×768. **bold**‮`;
+      await renderOpen([callPart({ action: 'left_click', coordinate: [1, 2] }, name), resultPart(result, false, name)]);
+      const about = screen.getByTestId('computer-screen-about');
+      expect(about).toHaveTextContent(COMPUTER_SCREEN_ABOUT);
+      expect(screen.getByText('Done.').tagName).toBe('BDI');
+      expect(screen.getByText('Screenshot, 1366×768. **bold**').tagName).toBe('BDI');
+      // The label is not repeated as body text, and nothing is glued to it.
+      expect(screen.getAllByText(COMPUTER_SCREEN_ABOUT, { exact: false })).toHaveLength(1);
+      expect(document.body.textContent).not.toContain('‮');
+      expect(document.querySelector('strong')).toBeNull();
+    });
+
+    it('shows a string result without the screen-content line as plain text, with no label', async () => {
+      await renderOpen([callPart({ action: 'wait' }), resultPart('Waited 1 s.')]);
+      expect(screen.queryByTestId('computer-screen-about')).toBeNull();
+      expect(screen.getByText('Waited 1 s.').tagName).toBe('BDI');
+    });
+
+    it('leaves other tools as they were: the call as JSON, a text result as it is', async () => {
+      await renderOpen([
+        { type: 'tool-call', id: 'g1', name: 'Glob', args: { pattern: '**/*.ts' } },
+        { type: 'tool-result', id: 'g1', name: 'Glob', result: 'a.ts\nb.ts', isError: false },
+      ]);
+      expect(screen.getByText('🔧 Glob')).toBeInTheDocument();
+      expect(screen.getByText(JSON.stringify({ pattern: '**/*.ts' }, null, 2), { normalizer: (s) => s }).tagName).toBe('PRE');
+      expect(screen.getByText('a.ts\nb.ts', { normalizer: (s) => s }).tagName).toBe('PRE');
+      expect(screen.queryByTestId('computer-call')).toBeNull();
+    });
+
+    it("shows an image another tool returned through the same route, and the rest of that tool's result as before", async () => {
+      await renderOpen([
+        { type: 'tool-call', id: 'g1', name: 'snap', args: {} },
+        { type: 'tool-result', id: 'g1', name: 'snap', result: [{ type: 'text', text: 'one image' }, { type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }], isError: false },
+      ]);
+      expect(screen.getByAltText('Image from snap').getAttribute('src')).toBe(IMAGE_URL);
+      expect(screen.getByText('one image').tagName).toBe('PRE');
+    });
+  });
+});
+
+describe('Message thread cards', () => {
+  afterEach(cleanup);
+  const todos = (status: string) => ({ todos: [{ content: 'Read', status, activeForm: 'Reading' }, { content: 'Write', status: 'pending', activeForm: 'Writing' }] });
+
+  it('shows the checklist from the latest todo call and leaves todo calls out of the tool group', () => {
+    render(<Message message={base({ status: 'streaming', parts: [
+      { type: 'tool-call', id: 't1', name: 'update_todos', args: todos('in_progress') },
+      { type: 'tool-result', id: 't1', name: 'update_todos', result: 'Checklist updated.', isError: false },
+      { type: 'tool-call', id: 't2', name: 'read_file', args: { path: 'a.txt' } },
+      { type: 'tool-result', id: 't2', name: 'read_file', result: 'x', isError: false },
+      { type: 'tool-call', id: 't3', name: 'TodoWrite', args: todos('completed') },
+      { type: 'text', text: 'Working' },
+    ] })} />);
+    expect(screen.getByTestId('todo-checklist')).toHaveTextContent('1 of 2 done');
+    expect(screen.getByText('Used 1 tool: read_file')).toBeInTheDocument();
+    expect(screen.queryByText(/update_todos|TodoWrite/)).toBeNull();
+  });
+
+  it('shows an answered question and a decided plan as records, and nothing for one still waiting', () => {
+    render(<Message message={base({ parts: [
+      { type: 'tool-call', id: 'q1', name: 'ask_user', args: { questions: [{ question: 'Which colour?', header: 'C', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }] } },
+      { type: 'tool-result', id: 'q1', name: 'ask_user', result: 'User has answered your questions: "Which colour?"="Blue".', isError: false },
+      { type: 'tool-call', id: 'p1', name: 'propose_plan', args: { plan: '1. Paint' } },
+      { type: 'tool-result', id: 'p1', name: 'propose_plan', result: 'The user approved the plan.', isError: false },
+      { type: 'tool-call', id: 'q2', name: 'AskUserQuestion', args: { questions: [] } },
+    ] })} />);
+    expect(screen.getByTestId('question-record')).toHaveTextContent('Which colour?');
+    expect(screen.getByTestId('question-record')).toHaveTextContent('"Which colour?"="Blue"');
+    expect(screen.getByTestId('plan-record')).toHaveTextContent('Plan · The user approved the plan.');
+    expect(screen.getAllByTestId('question-record')).toHaveLength(1);
+    expect(screen.queryByText(/Used \d+ tool/)).toBeNull();
+  });
+
+  it('still renders a plan record when the plan call has no result value', () => {
+    render(<Message message={base({ parts: [
+      { type: 'tool-call', id: 'p1', name: 'propose_plan', args: { plan: '1. Paint' } },
+      { type: 'tool-result', id: 'p1', name: 'propose_plan', result: undefined, isError: false },
+    ] })} />);
+    expect(screen.getByTestId('plan-record')).toBeInTheDocument();
+  });
+
+  it('renders pending question and plan cards after any approval cards, wired to onAnswerAsk', async () => {
+    const onAnswerAsk = vi.fn(async () => {});
+    const question = { kind: 'question' as const, toolName: 'ask_user', id: 'a1', chatId: 'c1', messageId: 'm1', questions: [{ question: 'Which?', header: '', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] };
+    const plan = { kind: 'plan' as const, toolName: 'propose_plan', id: 'a2', chatId: 'c1', messageId: 'm1', plan: '1. x' };
+    render(<Message message={base({ status: 'streaming' })} pendingAsks={[question, plan]} onAnswerAsk={onAnswerAsk} />);
+    expect(screen.getByTestId('ask-card-a1')).toHaveAttribute('data-kind', 'question');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Approve plan' }));
+    expect(onAnswerAsk).toHaveBeenCalledWith('a2', { approve: true });
+  });
+});
+
+describe('Message sub-agent cards', () => {
+  afterEach(cleanup);
+
+  const card = (over: Partial<Extract<Part, { type: 'subagent' }>> = {}): Part => ({
+    type: 'subagent', callId: 'call-1', label: 'Check the logs', prompt: 'Look in logs/ for errors.', profileId: 'p', profileName: 'Cheap', modelId: 'small-1', status: 'complete',
+    usage: { tokensIn: 1200, tokensOut: 80, tokensCached: 0, tokensReasoning: 0 },
+    parts: [{ type: 'tool-call', id: 't1', name: 'read_file', args: { path: 'logs/a.log' } }, { type: 'text', text: 'One error at noon.' }],
+    ...over,
+  });
+  const parentCall: Part = { type: 'tool-call', id: 'call-1', name: 'subagent', args: { description: 'Check the logs', prompt: 'Look in logs/ for errors.' } };
+  const parentResult: Part = { type: 'tool-result', id: 'call-1', name: 'subagent', result: 'One error at noon.', isError: false };
+
+  it('shows a closed card with label, profile, model, status and tokens, and hides the carded call and result', () => {
+    render(<Message message={base({ parts: [parentCall, card(), parentResult, { type: 'text', text: 'The helper found one error.' }] })} />);
+    const el = screen.getByTestId('subagent-card');
+    expect(el.tagName).toBe('DETAILS');
+    expect(el).not.toHaveAttribute('open');
+    expect(el).toHaveAttribute('data-status', 'complete');
+    expect(el).toHaveTextContent('◇ Check the logs');
+    expect(el).toHaveTextContent('Cheap');
+    expect(el).toHaveTextContent('small-1');
+    expect(el).toHaveTextContent('done');
+    expect(el).toHaveTextContent('1,200 in · 80 out');
+    expect(screen.queryByText(/Used 1 tool: subagent/)).not.toBeInTheDocument();
+    expect(screen.getByText('The helper found one error.')).toBeInTheDocument();
+  });
+
+  it("shows the sub-agent's prompt, its own tools and text when opened", async () => {
+    render(<Message message={base({ parts: [card()] })} />);
+    await userEvent.setup().click(screen.getByTestId('subagent-card').querySelector('summary')!);
+    expect(screen.getByTestId('subagent-card')).toHaveAttribute('open');
+    expect(screen.getByText('Look in logs/ for errors.')).toBeVisible();
+    expect(screen.getByText('Used 1 tool: read_file')).toBeVisible();
+    expect(screen.getByText('One error at noon.')).toBeVisible();
+  });
+
+  it('shows working while the reply streams, and stopped for an unfinished card on a finished reply', () => {
+    const { rerender } = render(<Message message={base({ status: 'streaming', parts: [card({ status: 'running', usage: undefined })] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('working…');
+    rerender(<Message message={base({ status: 'cancelled', parts: [card({ status: 'running', usage: undefined })] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveAttribute('data-status', 'cancelled');
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('stopped');
+    rerender(<Message message={base({ status: 'streaming', parts: [card({ status: 'queued', usage: undefined })] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('waiting to start');
+  });
+
+  it('says it needs your approval while one of its calls waits on a card', () => {
+    const request: ApprovalRequest = { id: 'r1', chatId: 'c1', messageId: 'm1', toolName: 'read_file', risk: 'read', source: 'fs', args: { path: 'a' }, summary: 'read_file(a)', subagent: { callId: 'call-1', label: 'Check the logs', parentProfileId: 'p' } };
+    render(<Message message={base({ status: 'streaming', parts: [card({ status: 'running', usage: undefined })] })} pendingApprovals={[request]} onResolveApproval={vi.fn()} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('needs your approval');
+  });
+
+  it('renders a card with no parts and usage missing its token counts without crashing', () => {
+    const broken = { ...card({ usage: { tokensOut: 5 } as unknown as Usage }), parts: undefined } as unknown as Part;
+    render(<Message message={base({ parts: [broken] })} />);
+    const el = screen.getByTestId('subagent-card');
+    expect(el).toHaveTextContent('done');
+    expect(el).not.toHaveTextContent(/ in · /);
+  });
+
+  it('shows a failed card with its error, and a refused subagent call with no card in the tool group', () => {
+    render(<Message message={base({ parts: [card({ status: 'error', error: 'Rate limited.', usage: undefined }), { type: 'tool-call', id: 'call-9', name: 'subagent', args: {} }, { type: 'tool-result', id: 'call-9', name: 'subagent', result: { error: true, code: 'subagent_limit' }, isError: true }] })} />);
+    expect(screen.getByTestId('subagent-card')).toHaveTextContent('failed');
+    expect(screen.getByText('Rate limited.')).toBeInTheDocument();
+    expect(screen.getByText(/Used 1 tool: subagent/)).toBeInTheDocument();
   });
 });

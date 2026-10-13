@@ -13,16 +13,20 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     api: {
       profiles: { list: vi.fn(), create: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       mcpServers: { list: vi.fn() },
+      sandbox: { status: vi.fn() },
+      computer: { status: vi.fn() },
     },
   };
 });
 
-import { api } from '../../state/api.js';
+import { api, ApiError } from '../../state/api.js';
 
 const mockedCreate = vi.mocked(api.profiles.create);
 const mockedPatch = vi.mocked(api.profiles.patch);
 const mockedDelete = vi.mocked(api.profiles.delete);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
+const mockedSandboxStatus = vi.mocked(api.sandbox.status);
+const mockedComputerStatus = vi.mocked(api.computer.status);
 
 function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -33,6 +37,7 @@ function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServe
     status: 'ok',
     lastError: null,
     toolCount: 2,
+    auth: null,
     ...overrides,
   };
 }
@@ -95,6 +100,8 @@ function reset(): void {
   mockedPatch.mockReset();
   mockedDelete.mockReset();
   mockedMcpList.mockReset().mockResolvedValue([]);
+  mockedSandboxStatus.mockReset().mockResolvedValue({ state: 'ready', packages: [], machine: 'This machine' });
+  mockedComputerStatus.mockReset().mockResolvedValue({ computerUse: false });
 }
 
 describe('ProfilesPanel', () => {
@@ -117,6 +124,67 @@ describe('ProfilesPanel', () => {
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ artifacts: false }) })));
   });
 
+  it.each([
+    ['says computerUse: false', () => mockedComputerStatus.mockResolvedValue({ computerUse: false })],
+    ['answers 401', () => mockedComputerStatus.mockRejectedValue(new ApiError(401, 'Unauthorized'))],
+    ['answers 404', () => mockedComputerStatus.mockRejectedValue(new ApiError(404, 'Not Found'))],
+    ['cannot be reached', () => mockedComputerStatus.mockRejectedValue(new TypeError('Failed to fetch'))],
+  ])('hides the Computer use switch where the server %s, and keeps a profile’s stored value', async (_label, arrange) => {
+    arrange();
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await waitFor(() => expect(mockedComputerStatus).toHaveBeenCalled());
+    expect(screen.queryByRole('checkbox', { name: 'Computer use' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ computer: true }) })));
+  });
+
+  it('shows the Computer use switch, off by default, with its hint, when the server can offer it', async () => {
+    mockedComputerStatus.mockResolvedValue({ computerUse: true });
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Hands');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = await screen.findByRole('checkbox', { name: 'Computer use' });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText("Lets the model see your screen and use apps you approve, while you're at this computer. Desktop app on Windows only.")).toBeInTheDocument();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ computer: true }) })));
+  });
+
+  it('shows a profile with computer use on as checked, and turning it off saves false', async () => {
+    mockedComputerStatus.mockResolvedValue({ computerUse: true });
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    const box = await screen.findByRole('checkbox', { name: 'Computer use' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ computer: false }) })));
+  });
+
   it("saves the Search past chats switch in the profile's tools, on by default", async () => {
     useGruntStore.getState().setConnections([makeConnection()]);
     useGruntStore.getState().setModels([makeModel()]);
@@ -134,6 +202,53 @@ describe('ProfilesPanel', () => {
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ recall: false }) })));
+  });
+
+  it("saves the Sub-agents switch for an API profile, off by default", async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Splitter');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Sub-agents' });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/hand jobs to sub-agents that work on their own/)).toBeInTheDocument();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ subagents: true }) })));
+  });
+
+  it('hides the Sub-agents switch for a Claude Code profile', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    useGruntStore.getState().setProfiles([makeProfile({ connectionId: 'cc', modelId: 'sonnet' })]);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByLabelText('Bash')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Sub-agents' })).not.toBeInTheDocument();
+  });
+
+  it('can turn sub-agents off again for a profile that had them on', async () => {
+    const profile = makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', subagents: true } });
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([profile]);
+    mockedPatch.mockResolvedValue(profile);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    const box = screen.getByRole('checkbox', { name: 'Sub-agents' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ subagents: false }) })));
   });
 
   beforeEach(reset);
@@ -184,10 +299,84 @@ describe('ProfilesPanel', () => {
           name: 'Fast local',
           connectionId: 'conn-1',
           modelId: 'llama3.2',
-          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true },
+          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true, browser: false, computer: false },
         })
       )
     );
+  });
+
+  it('saves the Browser switch, off by default, and its blocked sites one per line', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Researcher');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = screen.getByRole('checkbox', { name: 'Browser' });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByLabelText('Blocked sites')).toBeNull();
+    await user.click(box);
+    expect(screen.getByText("The model's own browser, with no logins. Asks before each new website.")).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Blocked sites'), 'ads.test{enter}{enter} tracker.example ');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ browser: true, browserBlockedHosts: ['ads.test', 'tracker.example'] }) }))
+    );
+  });
+
+  it("pre-fills Browser and the blocked sites when editing, and doesn't send the hidden box once Browser is unticked", async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([
+      makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', browser: true, browserBlockedHosts: ['ads.test', 'tracker.example'] } }),
+    ]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByRole('checkbox', { name: 'Browser' })).toBeChecked();
+    expect(screen.getByLabelText('Blocked sites')).toHaveValue('ads.test\ntracker.example');
+
+    // A bad entry typed, then Browser unticked: the box is gone, and so is what it held.
+    await user.type(screen.getByLabelText('Blocked sites'), '{enter}https://not a host');
+    await user.click(screen.getByRole('checkbox', { name: 'Browser' }));
+    expect(screen.queryByLabelText('Blocked sites')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1));
+    const sent = mockedPatch.mock.calls[0]![1].toolPolicy as Record<string, unknown>;
+    expect(sent['browser']).toBe(false);
+    expect('browserBlockedHosts' in sent).toBe(false);
+  });
+
+  it('shows why the server refused a blocked site (400), in the form', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    const refusal = '"https://ads.test" isn\'t a website name. Use a name like example.com, one per line.';
+    mockedCreate.mockRejectedValue(new ApiError(400, refusal));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Researcher');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    await user.click(screen.getByRole('checkbox', { name: 'Browser' }));
+    await user.type(screen.getByLabelText('Blocked sites'), 'https://ads.test');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ browser: true, browserBlockedHosts: ['https://ads.test'] }) }));
+    // The form stays open with what was typed, so it can be put right.
+    expect(screen.getByLabelText('Blocked sites')).toHaveValue('https://ads.test');
+    errorLog.mockRestore();
   });
 
   it('requires a model to be chosen before saving', async () => {
@@ -427,7 +616,7 @@ describe('ProfilesPanel', () => {
       await user.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() =>
-        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true } }))
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true, browser: false, computer: false } }))
       );
     });
 
@@ -512,6 +701,126 @@ describe('ProfilesPanel', () => {
       expect(mockedPatch).toHaveBeenCalledWith(
         'profile-1',
         expect.objectContaining({ toolPolicy: expect.objectContaining({ agentWeb: false, agentMcp: true }) })
+      )
+    );
+  });
+});
+
+describe('ProfilesPanel: where the shell runs', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  async function newProfileWithShell(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Sandboxed');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    expect(screen.queryByLabelText('Shell runs')).toBeNull();
+    await user.click(screen.getByLabelText('Shell access'));
+  }
+
+  it('choosing "in the sandbox" saves shellRuns, and leaves the default allowlist out', async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    expect(screen.getByLabelText('The sandbox can reach')).toHaveValue('registry.npmjs.org\npypi.org\nfiles.pythonhosted.org');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ shell: true, shellRuns: 'sandbox' }) })));
+    expect(mockedCreate.mock.calls[0]![0].toolPolicy).not.toHaveProperty('sandboxHosts');
+  });
+
+  it('saves an edited allowlist, one host per line', async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    const hosts = screen.getByLabelText('The sandbox can reach');
+    await user.clear(hosts);
+    await user.type(hosts, 'pypi.org{Enter}*.example.com');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ sandboxHosts: ['pypi.org', '*.example.com'] }) })));
+  });
+
+  it("says when the sandbox isn't set up on this machine", async () => {
+    mockedSandboxStatus.mockResolvedValue({ state: 'not_set_up', packages: [], machine: 'This machine' });
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    expect(screen.queryByTestId('sandbox-not-ready-note')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    expect(await screen.findByTestId('sandbox-not-ready-note')).toHaveTextContent('Settings > Sandbox');
+  });
+
+  it('"Reset to defaults" on a profile with its own list sends null', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    const own = makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', sandboxHosts: ['example.org'], mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    useGruntStore.getState().setProfiles([own]);
+    mockedPatch.mockResolvedValue(own);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    expect(screen.getByLabelText('The sandbox can reach')).toHaveValue('example.org');
+    await user.click(screen.getByRole('button', { name: 'Reset to defaults' }));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ shellRuns: 'sandbox', sandboxHosts: null }) })));
+  });
+
+  it('switching a sandboxed profile back to this machine saves shellRuns "host"', async () => {
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    const sandboxed = makeProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns: 'sandbox', mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    useGruntStore.getState().setProfiles([sandboxed]);
+    mockedPatch.mockResolvedValue(sandboxed);
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'host');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ shellRuns: 'host' }) })));
+  });
+
+  it("shows the server's message when it refuses the allowlist", async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    mockedCreate.mockRejectedValue(new ApiError(400, '"toolPolicy.sandboxHosts": "localhost" is not a hostname the sandbox can reach.'));
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    const hosts = screen.getByLabelText('The sandbox can reach');
+    await user.clear(hosts);
+    await user.type(hosts, 'localhost');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(await screen.findByText(/"localhost" is not a hostname/)).toBeInTheDocument();
+  });
+
+  it('a blank allowlist means ask for every host, and is sent as an empty list', async () => {
+    const user = userEvent.setup();
+    await newProfileWithShell(user);
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    await user.clear(screen.getByLabelText('The sandbox can reach'));
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ shellRuns: 'sandbox', sandboxHosts: [] }) })));
+  });
+
+  it('a Claude Code profile can run its shell in the sandbox too', async () => {
+    useGruntStore.getState().setConnections([makeConnection({ id: 'cc', name: 'Claude Code', kind: 'claude_code' })]);
+    useGruntStore.getState().setModels([makeModel({ connectionId: 'cc', modelId: 'sonnet' })]);
+    mockedCreate.mockResolvedValue(makeProfile({ id: 'new-profile' }));
+    const user = userEvent.setup();
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Claude sandboxed');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'cc');
+    await user.click(screen.getByLabelText('Bash'));
+    await user.selectOptions(screen.getByLabelText('Shell runs'), 'sandbox');
+    const hosts = screen.getByLabelText('The sandbox can reach');
+    await user.clear(hosts);
+    await user.type(hosts, 'example.org');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(mockedCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ toolPolicy: expect.objectContaining({ shell: true, shellRuns: 'sandbox', sandboxHosts: ['example.org'], agentWeb: true }) })
       )
     );
   });

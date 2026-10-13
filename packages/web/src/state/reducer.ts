@@ -1,24 +1,8 @@
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
-import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalRequest, UserAsk } from '@grunt/core/ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part } from '@grunt/core/types/messages.js';
 import type { Usage } from '@grunt/core/types/usage.js';
-
-/**
- * Appends streamed text (or reasoning) onto `parts`, merging into the
- * trailing part when it is already the same kind. Mirrors
- * `TurnRunner`'s private `appendDelta` (packages/core/src/domain/turn.ts) --
- * duplicated rather than imported because that one is a module-private
- * implementation detail of the server's own checkpointing, not part of any
- * package's public surface, and the two need not evolve in lockstep.
- */
-function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): Part[] {
-  const last = parts.at(-1);
-  if (last && last.type === kind) {
-    const merged = { ...last, text: last.text + text } as Part;
-    return [...parts.slice(0, -1), merged];
-  }
-  return [...parts, { type: kind, text } as Part];
-}
+import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/domain/parts.js';
 
 /** Everything a single message accrues from its `TurnEvent`s that isn't part of `CanonMessage` itself. */
 export interface MessageExtras {
@@ -34,6 +18,8 @@ export interface MessageExtras {
    * `event.messageId`).
    */
   pendingApprovals: ApprovalRequest[];
+  /** Questions and plans this message's tool calls are waiting on (spec 2026-10-12-thread-cards-design). Absent means none. */
+  pendingAsks?: UserAsk[];
 }
 
 export const emptyExtras: MessageExtras = { usage: null, pendingApprovals: [] };
@@ -100,13 +86,25 @@ export function applyEventToMessage(
         message,
         extras: { ...extras, pendingApprovals: extras.pendingApprovals.filter((r) => r.id !== event.requestId) },
       };
+    case 'ask-request':
+      return { message, extras: { ...extras, pendingAsks: [...(extras.pendingAsks ?? []), event.ask] } };
+    case 'ask-resolved':
+      return { message, extras: { ...extras, pendingAsks: (extras.pendingAsks ?? []).filter((a) => a.id !== event.askId) } };
+    case 'subagent':
+      // The same fold the server checkpoints with (core domain/parts.ts), so a
+      // live card and one rebuilt from the store agree. A hello replay starts
+      // from clean parts (applyHelloBuffer), so it never doubles a card. A
+      // malformed event (a bad relay, a newer server) is ignored, not folded.
+      if (typeof event.callId !== 'string' || !isSubagentEvent(event.event)) return { message, extras };
+      return { message: { ...message, parts: applySubagentEvent(message.parts, event.callId, event.event) }, extras };
     default:
       return { message, extras };
   }
 }
 
 function withoutApprovals(extras: MessageExtras): MessageExtras {
-  return extras.pendingApprovals.length === 0 ? extras : { ...extras, pendingApprovals: [] };
+  if (extras.pendingApprovals.length === 0 && (extras.pendingAsks ?? []).length === 0) return extras;
+  return { ...extras, pendingApprovals: [], pendingAsks: [] };
 }
 
 /** Folds a whole ordered list of events onto a message, in order. */

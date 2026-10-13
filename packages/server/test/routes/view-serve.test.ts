@@ -6,8 +6,9 @@ import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { createApp } from '../../src/app.js';
 import type { Container } from '../../src/container.js';
-import { parseRange, relativeOf, viewServeRoutes } from '../../src/routes/view-serve.js';
+import { livePolicy, parseRange, relativeOf, sandboxPolicy, viewServeRoutes } from '../../src/routes/view-serve.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
+import { LIVE_CLIENT_JS } from '../../src/view/live-client.js';
 import { VIEW_LINK_TTL_MS, ViewLinks } from '../../src/view/links.js';
 
 let container: Container;
@@ -230,5 +231,87 @@ describe('relativeOf and parseRange', () => {
     expect(parseRange('bytes=8-100', 10)).toEqual({ start: 8, end: 9 });
     expect(parseRange('bytes=0-1,4-5', 10)).toBeNull();
     for (const bad of ['bytes=10-', 'bytes=5-2', 'bytes=-0', 'bytes=-']) expect(parseRange(bad, 10)).toBe('bad');
+  });
+});
+
+describe('live artifact pages (spec 2026-10-12-live-artifacts)', () => {
+  const LIVE = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} }] };
+  const STRICT = (id: string) =>
+    `sandbox allow-scripts allow-forms; default-src 'none'; script-src 'unsafe-inline' http://127.0.0.1:4747/view/${id}/grunt-live.js; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'`;
+
+  async function artifactLink(app: ReturnType<typeof createApp>, versionId: string): Promise<string> {
+    const res = await app.request('/api/view/links', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chatId: 'c1', artifactVersionId: versionId }) });
+    return ((await res.json()) as { url: string }).url;
+  }
+
+  beforeEach(() => {
+    container.store.artifacts.create({ id: 'art', chatId: 'c1', slug: 'dash', kind: 'html', language: null, createdAt: 1 });
+    container.store.artifacts.addVersion({ id: 'live', artifactId: 'art', title: 'Dash', content: '<p>live</p>', madeBy: 'model', messageId: null, parentVersionId: null, createdAt: 2, live: LIVE });
+    container.store.artifacts.addVersion({ id: 'plain', artifactId: 'art', title: 'Dash', content: '<p>plain</p>', madeBy: 'model', messageId: null, parentVersionId: 'live', createdAt: 3 });
+  });
+
+  it('serves a live version under the strict policy with DNS prefetch off, and its helper beside it', async () => {
+    const app = createApp(container);
+    const url = await artifactLink(app, 'live');
+    const id = url.split('/')[2]!;
+    expect(livePolicy(`http://127.0.0.1:4747/view/${id}/`)).toBe(STRICT(id));
+    const page = await app.request(`http://127.0.0.1:4747${url}`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toBe('<p>live</p>');
+    expect(page.headers.get('Content-Security-Policy')).toBe(STRICT(id));
+    expect(page.headers.get('X-DNS-Prefetch-Control')).toBe('off');
+    const helper = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js`);
+    expect(helper.status).toBe(200);
+    expect(helper.headers.get('Content-Type')).toBe('text/javascript; charset=utf-8');
+    expect(helper.headers.get('Content-Security-Policy')).toBe(STRICT(id));
+    expect(await helper.text()).toBe(LIVE_CLIENT_JS);
+  });
+
+  it('sends a policy with every response under a live link: refusals are sandboxed with no sources, and the helper headers are fixed', async () => {
+    const app = createApp(container);
+    const url = await artifactLink(app, 'live');
+    const id = url.split('/')[2]!;
+    for (const path of [`/view/${id}/other.js`, `/view/${id}/dash.html/x`, `/view/${id}/..%2Fdash.html`, `/view/${id}/sub/grunt-live.js`, '/view/not-a-link/grunt-live.js']) {
+      const res = await app.request(`http://127.0.0.1:4747${path}`);
+      expect(res.status, path).toBe(404);
+      expect(res.headers.get('Content-Security-Policy'), path).toBe("default-src 'none'; sandbox");
+      expect(res.headers.get('X-Content-Type-Options'), path).toBe('nosniff');
+    }
+    // Nothing a request carries changes what the helper is served with.
+    const plain = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js`);
+    const odd = await app.request(`http://127.0.0.1:4747/view/${id}/grunt-live.js?x=1`, {
+      headers: { Range: 'bytes=0-3', Origin: 'https://exfil.invalid', Accept: 'text/html', Cookie: 'a=b', 'Content-Security-Policy': "script-src *", 'Sec-Fetch-Dest': 'document' },
+    });
+    expect(odd.status).toBe(200);
+    expect([...odd.headers.entries()]).toEqual([...plain.headers.entries()]);
+    expect(Object.fromEntries(plain.headers.entries())).toEqual({
+      'cache-control': 'no-store',
+      'content-disposition': 'inline',
+      'content-security-policy': STRICT(id),
+      'content-type': 'text/javascript; charset=utf-8',
+      'referrer-policy': 'no-referrer',
+      'x-content-type-options': 'nosniff',
+      'x-dns-prefetch-control': 'off',
+    });
+    expect(await odd.text()).toBe(LIVE_CLIENT_JS);
+  });
+
+  it('keeps the ordinary sandbox for a plain version, which has no helper', async () => {
+    const app = createApp(container);
+    const url = await artifactLink(app, 'plain');
+    const id = url.split('/')[2]!;
+    const page = await app.request(`http://127.0.0.1:4747${url}`);
+    expect(page.headers.get('Content-Security-Policy')).toBe(sandboxPolicy(`http://127.0.0.1:4747/view/${id}/`));
+    expect(page.headers.get('X-DNS-Prefetch-Control')).toBeNull();
+    expect((await app.request(`/view/${id}/grunt-live.js`)).status).toBe(404);
+  });
+
+  it('the helper is small, has no eval, freezes grunt and answers only its parent', () => {
+    expect(Buffer.byteLength(LIVE_CLIENT_JS, 'utf8')).toBeLessThan(2048);
+    expect(LIVE_CLIENT_JS).not.toMatch(/eval|new Function/);
+    expect(LIVE_CLIENT_JS).toContain("grunt: 'live-call'");
+    expect(LIVE_CLIENT_JS).toContain('e.source !== parent');
+    expect(LIVE_CLIENT_JS).toContain('Object.freeze');
+    expect(LIVE_CLIENT_JS).toContain('45000');
   });
 });

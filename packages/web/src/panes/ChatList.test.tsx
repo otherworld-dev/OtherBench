@@ -1139,3 +1139,18 @@ describe('ChatList export (#820)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't export the chat: disk full");
   });
 });
+
+describe('ChatList footer row', () => {
+  const actionsRow = () => screen.getByRole('button', { name: '+ New chat' }).parentElement!;
+
+  it('stays a single line by default, so the desktop and open-mode sidebar are unchanged', () => {
+    render(<ChatList footer={<button type="button">Extra</button>} />);
+    expect(actionsRow()).not.toHaveClass('flex-wrap');
+    expect(within(actionsRow()).getByRole('button', { name: 'Extra' })).toBeInTheDocument();
+  });
+
+  it('can wrap onto a second line, so a fourth button stays reachable at phone width', () => {
+    render(<ChatList wrapFooter footer={<button type="button">Extra</button>} />);
+    expect(actionsRow()).toHaveClass('flex-wrap');
+  });
+});

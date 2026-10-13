@@ -39,3 +39,14 @@ Each `*.json` is the raw array of `SDKMessage` objects from one `query()` run (w
 
 - An in-process server built as an MCP `McpServer` with its own `tools/list` and `tools/call` handlers (a JSON input schema, no zod), passed as `{ type: 'sdk', name, instance }`, works: with `settingSources: []`, `strictMcpConfig: true` and `tools: []`, init listed only `mcp__probe__echo_raw`, the model (haiku) called it with `{ text: 'ping' }`, and the result came back as `PING-RAW`.
 - So Grunt's own server can carry tools relayed from Grunt's MCP servers with their real schemas, and a clean chat (no settings, no built-in tools) still gets its MCP tools.
+
+## Thread tools (probe-thread-tools.mjs, SDK 0.3.287, 2026-10-12)
+
+Decision: ASK_PATH=hook, TODO_FLAG=env
+
+- Answering from the hook (haiku, `settingSources: []`): the PreToolUse hook's `allow` with `updatedInput.answers` (`{ "<question text>": "Blue" }`) worked. The AskUserQuestion tool result read `Your questions have been answered: "Which colour do you prefer?"="Blue". You can now continue with these answers in mind.` and the model replied "Blue". `canUseTool` was NOT called for it (`canUseToolCalls` empty), so the hook pre-empts it as with other tools.
+- Refusing from the hook: a `deny` with a reason gave an error tool result, `PreToolUse:AskUserQuestion hook error: PROBE-DENIED: nobody is here to answer.` (the reason is carried but wrapped in that prefix), AskUserQuestion appeared in `permission_denials`, and the turn finished with `success` (the model explained it could not ask).
+- Todos on sonnet (folder-chat settings): default init lacks TodoWrite; `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` lists it; `allowedTools: ['TodoWrite']` also lists it (but the SDK warns `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`: a bare `allowedTools` entry auto-approves the tool before `canUseTool`, so hooks must gate it); TaskCreate not seen in any of the three (the list has `Task`, the subagent tool, only). Haiku with `settingSources: []` lists TodoWrite by default.
+- Clean chat (`tools: ['WebSearch', 'WebFetch', 'TodoWrite', 'AskUserQuestion']`, `strictMcpConfig`): init lists exactly those four; the round trip worked (answered Blue through the hook, no `canUseTool` call).
+- `disallowedTools: ['EnterPlanMode', 'ExitPlanMode']`: init lacks them (the runs without it list both).
+- Side note: the three sonnet folder-style runs loaded the user's own MCP servers into init (`mcp__blender__*`, `mcp__nextcloud__*`, ...), and which ones connected varied from run to run; not relevant to the decision.

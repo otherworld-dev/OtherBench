@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import type { ChatEngine, EngineEvent, EngineRequest } from '../ports/chat-engine.js';
+import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
 import type { Chat, Store } from '../ports/store.js';
-import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec } from '../ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
-import type { ResolvedProfile } from '../types/config.js';
+import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
 import type { ResolvedFolder, WorkspaceStatus } from '../types/workspace.js';
 import type { PricingSnapshot, Usage } from '../types/usage.js';
 import { estimateCost } from '../types/usage.js';
@@ -12,12 +12,24 @@ import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
 import { projectInstructionsPrompt } from './projects.js';
-import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
+import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, defuse, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
 import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
+import { sandboxFoldersPrompt } from './sandbox-paths.js';
+import { LIVE_ARTIFACTS_GUIDANCE } from './live-artifacts.js';
+import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
 import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
+import { appendDelta } from './parts.js';
+import type { SubagentEvent } from './parts.js';
+import { SubagentRunner } from './subagent.js';
+
+// `appendDelta` lives in parts.ts now (the web folds with it too); kept exported here for peer/forward.ts.
+export { appendDelta } from './parts.js';
+import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from './attachment-binding.js';
+import { bindToolImages, keepToolImages, MAX_TOOL_IMAGE_BYTES, toolImageBound, type SaveToolImage } from './tool-images.js';
+import { MAX_REQUEST_ATTACHMENTS, omissionNote } from './request-budget.js';
 
 /**
  * One event out of a turn's lifecycle, tagged with the message id it
@@ -36,6 +48,9 @@ export type TurnEvent = { messageId: string } & (
   | { type: 'status'; status: MessageStatus }
   | { type: 'approval-request'; request: ApprovalRequest }
   | { type: 'approval-resolved'; requestId: string; choice: ApprovalChoice['choice'] }
+  /** A question or plan card raised by this reply's tool call (spec 2026-10-12-thread-cards-design), relayed like approvals. */
+  | { type: 'ask-request'; ask: UserAsk }
+  | { type: 'ask-resolved'; askId: string }
   /**
    * The capability-fallback disclosure (task 21 decision #3), synthesised by
    * `runVariant` itself -- like `approval-request`/`approval-resolved`, this
@@ -49,6 +64,8 @@ export type TurnEvent = { messageId: string } & (
    * the first token, rather than only after its next full reload.
    */
   | { type: 'notice'; text: string }
+  /** A sub-agent's progress (spec 2026-10-12-api-subagents-design), folded into the reply's parts with `applySubagentEvent`. */
+  | { type: 'subagent'; callId: string; event: SubagentEvent }
 );
 
 export interface TurnInput {
@@ -56,6 +73,14 @@ export interface TurnInput {
   parentId: string | null;
   userParts: Part[];
   profiles: ResolvedProfile[];
+  /**
+   * A scheduled run with nobody watching (spec 2026-10-12-scheduled-tasks-design):
+   * the request is marked unattended, so tool calls that would raise a card are
+   * refused, and Claude Code's auto mode is off whatever the chat says. Only
+   * the schedule service sets it; no route reads it from a request body.
+   * `retry` and `regenerate` never set it: a person is pressing the button.
+   */
+  unattended?: boolean;
 }
 
 /**
@@ -124,6 +149,12 @@ export interface TurnRunnerOptions {
   /** How often (ms) a streaming variant's partial parts may be re-checkpointed to the store. */
   checkpointIntervalMs?: number;
   /**
+   * Resolves a profile by id for a sub-agent that runs as another profile
+   * (the server passes profile-resolution.ts's `resolveProfile`). Without
+   * it, a sub-agent can only run as the reply's own profile.
+   */
+  resolveProfile?: (id: string) => Promise<ResolvedProfile>;
+  /**
    * Supplies the tools a variant's `EngineRequest.tools` is populated with
    * (task 26). Omitted (the default) preserves the pre-task-26 behaviour of
    * every existing test and caller that constructs a `TurnRunner` without
@@ -149,6 +180,21 @@ export interface TurnRunnerOptions {
   loadAttachment?: (id: string) => Promise<Buffer>;
   /** Whether a folder exists, for resolving a chat's workspace. Defaults to `fs.existsSync`. */
   pathExists?: (path: string) => boolean;
+  /**
+   * A folder's real path (its on-disk case, and a mapped drive's UNC path),
+   * for naming where the sandbox mounts it in the system prompt; it should
+   * hand back the path unchanged when it can't tell. Defaults to the path as
+   * it is. The server wires `realpathSync.native`, as the sandbox mounts by.
+   */
+  canonicalPath?: (path: string) => string;
+  /**
+   * Stores an image a tool returned (spec 2026-10-12-computer-use-design
+   * section 6) and returns its attachment id. The container wires it to the
+   * blob store plus an attachment row on the reply, so blob GC keeps it.
+   * Without it, images in tool results are dropped to a text note: base64 is
+   * never broadcast or stored either way.
+   */
+  saveToolImage?: SaveToolImage;
 }
 
 const DEFAULT_CHECKPOINT_INTERVAL_MS = 500;
@@ -184,23 +230,6 @@ class WorkspaceUnresolvedError extends Error {
 const ZERO_USAGE: Usage = { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 };
 
 /**
- * Appends streamed text (or reasoning) onto `parts`, merging into the
- * trailing part when it is already the same kind (the common case -- a
- * run of `text-delta` events building up one paragraph) rather than
- * fragmenting one logical span of text into one `Part` per network chunk.
- * A different kind arriving (e.g. a tool-call between two text spans, or
- * the very first delta) starts a new part instead.
- */
-export function appendDelta(parts: Part[], kind: 'text' | 'reasoning', text: string): Part[] {
-  const last = parts.at(-1);
-  if (last && last.type === kind) {
-    const merged = { ...last, text: last.text + text } as Part;
-    return [...parts.slice(0, -1), merged];
-  }
-  return [...parts, { type: kind, text } as Part];
-}
-
-/**
  * The honest, human-readable disclosure text for `degradeImagesForVision`'s
  * result -- task 21 decision #3 ("the user must be told which happened, not
  * silently downgraded"). Lists every degraded attachment's real filename
@@ -211,6 +240,39 @@ function degradedAttachmentsNotice(degraded: { filename: string }[], modelId: st
   const names = degraded.map((d) => `"${d.filename}"`).join(', ');
   const noun = degraded.length === 1 ? 'image attachment' : 'image attachments';
   return `${degraded.length} ${noun} (${names}) sent as text to "${modelId}" because this model does not support image input.`;
+}
+
+/**
+ * A file name as one plain line for a fence, a placeholder or a notice: control
+ * characters and line separators (U+0085, U+2028, U+2029) become spaces, double
+ * quotes single ones, `<`, `>` and `&` underscores, and bidirectional controls
+ * (U+202A-202E, U+2066-2069) are dropped, so nothing in it can close the fence,
+ * open a tag or reorder the text around it.
+ */
+function fileLabel(filename: string): string {
+  const plain = filename
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ')
+    .replace(/[\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/"/g, "'")
+    .replace(/[<>&]/g, '_')
+    .trim();
+  return defuse(plain, 'attached-file');
+}
+
+/**
+ * An attached file's text as the model gets it (spec 2026-10-12-office-files
+ * §2): fenced and named, with anything inside that would close the fence
+ * early defused. It's the user's file, so it may carry instructions; the
+ * fence says where it starts and ends.
+ */
+export function fencedFileText(filename: string, text: string): string {
+  return `<attached-file name="${fileLabel(filename)}">\n${defuse(text, 'attached-file')}\n</attached-file>`;
+}
+
+/** The notice's sentence for attached files Grunt had no text for. */
+function unreadFilesNotice(unread: { filename: string }[], modelId: string): string {
+  const names = unread.map((u) => `"${fileLabel(u.filename)}"`).join(', ');
+  return `Grunt couldn't read ${names} as text, so ${modelId} didn't get ${unread.length === 1 ? 'it' : 'them'}.`;
 }
 
 /**
@@ -228,8 +290,11 @@ export class TurnRunner {
   private readonly generateId: () => string;
   private readonly checkpointIntervalMs: number;
   private readonly toolProvider?: ToolProvider;
+  private readonly resolveProfile?: (id: string) => Promise<ResolvedProfile>;
   private readonly loadAttachment?: (id: string) => Promise<Buffer>;
   private readonly pathExists: (path: string) => boolean;
+  private readonly canonicalPath: (path: string) => string;
+  private readonly saveToolImage?: SaveToolImage;
   private readonly listeners = new Set<(e: TurnEvent) => void>();
   private readonly controllers = new Map<string, AbortController>();
   /** chatId -> the global memory block it last got, when, and the user saves it reflects. */
@@ -244,13 +309,25 @@ export class TurnRunner {
     this.generateId = options.generateId ?? randomUUID;
     this.checkpointIntervalMs = options.checkpointIntervalMs ?? DEFAULT_CHECKPOINT_INTERVAL_MS;
     this.toolProvider = options.toolProvider;
+    this.resolveProfile = options.resolveProfile;
     this.loadAttachment = options.loadAttachment;
     this.pathExists = options.pathExists ?? existsSync;
+    this.canonicalPath = options.canonicalPath ?? ((p) => p);
+    this.saveToolImage = options.saveToolImage;
     this.toolProvider?.onApprovalEvent((event) => {
-      if (event.type === 'request') {
-        this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
-      } else {
-        this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+      switch (event.type) {
+        case 'request':
+          this.emit({ messageId: event.request.messageId, type: 'approval-request', request: event.request });
+          break;
+        case 'resolved':
+          this.emit({ messageId: event.messageId, type: 'approval-resolved', requestId: event.requestId, choice: event.choice });
+          break;
+        case 'ask':
+          this.emit({ messageId: event.ask.messageId, type: 'ask-request', ask: event.ask });
+          break;
+        case 'ask-resolved':
+          this.emit({ messageId: event.messageId, type: 'ask-resolved', askId: event.askId });
+          break;
       }
     });
   }
@@ -347,7 +424,7 @@ export class TurnRunner {
     // `.catch` here is a last-resort backstop against a bug in that catch
     // logic turning into an unhandled rejection.
     for (const { message, profile } of variants) {
-      void this.runVariant(input.chatId, userMessage.id, message.id, profile).catch((err: unknown) => {
+      void this.runVariant(input.chatId, userMessage.id, message.id, profile, input.unattended === true).catch((err: unknown) => {
         console.error(`[TurnRunner] variant ${message.id} failed outside its own error handling:`, err);
       });
     }
@@ -413,6 +490,13 @@ export class TurnRunner {
       throw new Error(`retry: message "${messageId}" is ${message.status}, not error -- only an errored message can be retried`);
     }
 
+    // The images the failed run stored for this reply are tied to nothing once
+    // its parts are cleared: they go with them, so a retry starts the reply's
+    // image budget from zero without the old ones piling up behind it. (Blobs
+    // nothing references any more are collected by the server's sweep.)
+    for (const stranded of this.store.attachments.list(chatId)) {
+      if (stranded.messageId === messageId) this.store.attachments.delete(stranded.id);
+    }
     this.store.messages.updateParts(messageId, []);
     this.store.messages.updateStatus(messageId, 'streaming'); // omitting `error` clears it -- see MessageRepo.updateStatus's doc.
     this.emit({ messageId, type: 'status', status: 'streaming' });
@@ -489,13 +573,15 @@ export class TurnRunner {
     chatId: string,
     userMessageId: string,
     messageId: string,
-    profile: ResolvedProfile
+    profile: ResolvedProfile,
+    unattended = false
   ): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(messageId, controller);
     const startedAt = this.now();
 
     let parts: Part[] = [];
+    const imageBudget = { kept: 0 };
     let lastCheckpointAt = this.now();
     let status: MessageStatus = 'complete';
     let error: SerializedError | null = null;
@@ -504,6 +590,8 @@ export class TurnRunner {
     // teardown abort below -- that one must not turn a clean finish into a
     // cancellation.
     let cancelled = false;
+    // This reply's sub-agent runner, when it offers the subagent tool.
+    let subagents: SubagentRunner | null = null;
 
     const checkpoint = (force: boolean): void => {
       const nowTs = this.now();
@@ -538,6 +626,7 @@ export class TurnRunner {
       const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
+      const planMode = chat?.planMode === true;
       // Listed fresh per variant (not cached on the runner) so each variant's
       // request reflects THIS profile's own toolPolicy, and so a grant
       // revoked or an MCP server re-enabled between turns is picked up on
@@ -546,18 +635,62 @@ export class TurnRunner {
       // long-lived internally; this call is just "what does this policy
       // currently allow", not "go reconnect everything".
       const listed = this.toolProvider ? await this.toolProvider.listTools(profile.toolPolicy) : [];
-      // Artifacts and recall are on by default, so a model that can't use
+      // Artifacts, recall, the thread tools and sub-agents are offered by
+      // the profile's switches (or on by default), so a model that can't use
       // tools (as its model row says) isn't sent a tool it would refuse the
       // whole request over.
-      const tools = profile.model?.supportsTools === false ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall') : listed;
+      const usable =
+        profile.model?.supportsTools === false
+          ? listed.filter((t) => t.source !== 'artifact' && t.source !== 'recall' && t.source !== 'thread' && t.source !== 'subagent')
+          : listed;
+      // Claude Code runs its own sub-agents (Task/Agent); Grunt's tool is for API profiles only.
+      const offered = profile.connection.kind === 'claude_code' ? usable.filter((t) => t.source !== 'subagent') : usable;
+      // propose_plan only while the chat's Plan mode is on (spec 2026-10-12-thread-cards-design §4).
+      const tools = planMode ? offered : offered.filter((t) => !(t.source === 'thread' && t.name === PLAN_TOOL));
+      // One gate per reply: compare variants, retries and the next message each start closed.
+      const plan = planMode && tools.some((t) => t.source === 'thread' && t.name === PLAN_TOOL) ? createPlanGate() : undefined;
       const canRecall = tools.some((t) => t.source === 'recall');
       const requestProfile = this.withRecall(
-        this.withArtifacts(this.withTools(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), tools), tools),
+        this.withArtifacts(this.withTools(this.withSandbox(this.withFolders(this.withProjectMemory(this.withProjectInstructions(this.withGlobalMemory(profile, chat, canRecall), chat), chat), folders), workspaceRoot, folders), tools), tools),
         canRecall
       );
       // Other machines' folder paths in tool calls and results, as they are
       // on this machine (spec §6); the stored messages are untouched.
-      const history = this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId);
+      const translated = this.withPlanNote(
+        this.withArtifactsList(translateForNode(this.buildRequestMessages(userMessageId, requestProfile), selfNodeId, locationPaths), tools, chatId, userMessageId),
+        plan !== undefined,
+        userMessageId
+      );
+      // The attachments the history names are checked LAST, after every rewrite
+      // above (so nothing can change a reference once it has passed): an
+      // image or file of the user's must be in this chat, and an image a tool
+      // result refers to must be stored for this chat and the message that holds
+      // it. Anything else is a note, and the turn goes on.
+      const history = bindToolImages(
+        bindHistoryAttachments(translated, (id) => this.attachmentInChat(id, chatId)),
+        chatId,
+        (id) => this.store.attachments.get(id)
+      );
+      // The only way an engine gets a stored tool image's bytes back: for this
+      // chat, a message on this thread, and the row stored for exactly that
+      // pair. Anything else (an id from tool output, another chat's history)
+      // gets nothing, and no blob is read.
+      const threadIds = new Set(history.map((m) => m.id));
+      const loadStored = this.loadAttachment;
+      const toolImageRow = (ref: { chatId: string; messageId: string; attachmentId: string }): { size: number } | null => {
+        if (ref.chatId !== chatId || !threadIds.has(ref.messageId)) return null;
+        const row = this.store.attachments.get(ref.attachmentId);
+        return row && toolImageBound(row, chatId, ref.messageId) ? { size: row.size } : null;
+      };
+      const loadToolImage: ToolImageLoader | undefined = loadStored
+        ? async (ref) => {
+            if (toolImageRow(ref) === null) return null;
+            const bytes = await loadStored(ref.attachmentId);
+            return bytes.length > MAX_TOOL_IMAGE_BYTES ? null : bytes;
+          }
+        : undefined;
+      const toolImageSize: ToolImageSizer | undefined = loadStored ? (ref) => toolImageRow(ref)?.size ?? null : undefined;
+      const attachmentSize = loadStored ? (id: string): number | null => (this.attachmentInChat(id, chatId) ? (this.store.attachments.get(id)?.size ?? null) : null) : undefined;
 
       // Capability fallback (task 21): degrade every `image` part in THIS
       // variant's own copy of history when its profile's model doesn't
@@ -569,7 +702,10 @@ export class TurnRunner {
       // to accept images, since sending bytes it silently drops would be
       // worse than a placeholder it can at least read as text.
       const vision = profile.model?.supportsVision ?? false;
-      const { messages: requestMessages, degraded } = this.degradeImagesForVision(history, vision);
+      const { messages: visionMessages, degraded } = this.degradeImagesForVision(history, vision);
+      // Attached files (spec 2026-10-12-office-files §2): text for every
+      // engine, except a PDF for one that takes PDFs.
+      const { messages: requestMessages, unread } = this.filesForModel(visionMessages, profile.connection.kind !== 'claude_code');
       // The LIVE emit of this notice is deliberately deferred to inside the
       // loop below (its first iteration), NOT fired here -- see the comment
       // at that call site for why emitting it this early loses a real race
@@ -577,13 +713,47 @@ export class TurnRunner {
       // (`parts`/`checkpoint`) has no such race -- a direct store write, not
       // a broadcast -- so that part happens right away regardless.
       let pendingNoticeText: string | null = null;
-      if (degraded.length > 0) {
-        pendingNoticeText = degradedAttachmentsNotice(degraded, profile.modelId);
+      const notices = [
+        ...(degraded.length > 0 ? [degradedAttachmentsNotice(degraded, profile.modelId)] : []),
+        ...(unread.length > 0 ? [unreadFilesNotice(unread, profile.modelId)] : []),
+      ];
+      if (notices.length > 0) {
+        // One notice holds both sentences when both apply.
+        pendingNoticeText = notices.join(' ');
         parts = [{ type: 'notice', text: pendingNoticeText }];
         // Forced (not throttled): the disclosure must be visible even if the
         // stream that follows errors out before its first checkpoint-worthy
         // event -- see this method's `checkpoint` doc.
         checkpoint(true);
+      }
+
+      if (this.toolProvider && tools.some((t) => t.source === 'subagent')) {
+        subagents = new SubagentRunner({
+          store: this.store,
+          engine: this.engine,
+          toolProvider: this.toolProvider,
+          ...(this.resolveProfile ? { resolveProfile: this.resolveProfile } : {}),
+          canonicalPath: this.canonicalPath,
+          // The reply's plan gate and unattended flag go with every sub-agent it starts.
+          ...(plan ? { plan } : {}),
+          ...(unattended ? { unattended: true } : {}),
+          // A sub-agent's tool images are kept like this reply's own, against it and under its one budget.
+          keepImages: (result, toolName) => keepToolImages(result, this.saveToolImage, chatId, messageId, imageBudget, toolName),
+          now: this.now,
+          generateId: this.generateId,
+          chatId,
+          messageId,
+          parent: profile,
+          workspaceRoot,
+          folders,
+          signal: controller.signal,
+          emit: (callId, event) => this.emit({ messageId, type: 'subagent', callId, event }),
+          updateParts: (fn, force) => {
+            parts = fn(parts);
+            checkpoint(force);
+          },
+          writeUsage: (subProfile, subUsage, latencyMs, callId) => this.writeUsage(chatId, messageId, subProfile, subUsage, latencyMs, callId),
+        });
       }
 
       const request: EngineRequest = {
@@ -595,10 +765,18 @@ export class TurnRunner {
         messageId,
         workspaceRoot,
         ...(folders.length > 0 ? { folders } : {}),
-        loadAttachment: this.loadAttachment,
+        ...(subagents ? { subagents } : {}),
+        ...(this.loadAttachment ? { loadAttachment: this.chatScopedLoader(this.loadAttachment, chatId) } : {}),
+        ...(loadToolImage ? { loadToolImage } : {}),
+        ...(toolImageSize ? { toolImageSize } : {}),
+        ...(attachmentSize ? { attachmentSize } : {}),
         purpose: 'turn',
-        autoMode,
+        // Nobody can catch what auto mode's classifier allows in a scheduled
+        // run, so it is never used there (the classifier isn't a security boundary).
+        autoMode: unattended ? false : autoMode,
+        ...(unattended ? { unattended: true } : {}),
         ...(effort ? { effort } : {}),
+        ...(plan ? { plan } : {}),
         latestMessageForSession: (sessionId: string) => this.store.messages.latestBySession(chatId, sessionId)?.id ?? null,
       };
 
@@ -635,38 +813,45 @@ export class TurnRunner {
           this.store.messages.updateEngineMeta(messageId, event.meta);
           continue;
         }
-        this.emit({ messageId, ...event });
+        // Images in a tool result go to the blob store before anyone sees
+        // the result (spec 2026-10-12-computer-use-design section 6): base64
+        // never reaches an SSE client or a message row.
+        const out: EngineEvent =
+          event.type === 'tool-result'
+            ? { ...event, result: await keepToolImages(event.result, this.saveToolImage, chatId, messageId, imageBudget, event.name) }
+            : event;
+        this.emit({ messageId, ...out });
 
-        switch (event.type) {
+        switch (out.type) {
           case 'notice':
-            parts = [...parts, { type: 'notice', text: event.text }];
+            parts = [...parts, { type: 'notice', text: out.text }];
             checkpoint(true);
             break;
           case 'text-delta':
-            parts = appendDelta(parts, 'text', event.text);
+            parts = appendDelta(parts, 'text', out.text);
             checkpoint(false);
             break;
           case 'reasoning-delta':
-            parts = appendDelta(parts, 'reasoning', event.text);
+            parts = appendDelta(parts, 'reasoning', out.text);
             checkpoint(false);
             break;
           case 'tool-call':
-            parts = [...parts, { type: 'tool-call', id: event.id, name: event.name, args: event.args }];
+            parts = [...parts, { type: 'tool-call', id: out.id, name: out.name, args: out.args }];
             checkpoint(true);
             break;
           case 'tool-result':
             parts = [
               ...parts,
-              { type: 'tool-result', id: event.id, name: event.name, result: event.result, isError: event.isError },
+              { type: 'tool-result', id: out.id, name: out.name, result: out.result, isError: out.isError },
             ];
             checkpoint(true);
             break;
           case 'finish':
-            usage = event.usage;
+            usage = out.usage;
             break;
           case 'error':
-            status = event.error.kind === 'cancelled' ? 'cancelled' : 'error';
-            error = event.error;
+            status = out.error.kind === 'cancelled' ? 'cancelled' : 'error';
+            error = out.error;
             break;
           default:
             break;
@@ -689,6 +874,12 @@ export class TurnRunner {
       controller.abort();
     }
 
+    // Every sub-agent was told to stop by the abort above (or finished
+    // before the stream did). Wait for each to send its `end` and write its
+    // usage, so the stored parts never keep a running sub-agent and every
+    // `end` goes out before this reply's terminal status.
+    if (subagents) await subagents.settled();
+
     // The engine can end a stream cleanly on abort (no `error` event at
     // all -- MockChatEngine and this package's own `FakeChatEngine` both
     // do this, mirroring `streamText`'s observed behaviour, see
@@ -698,8 +889,16 @@ export class TurnRunner {
       status = 'cancelled';
     }
 
-    checkpoint(true);
-    this.store.messages.updateStatus(messageId, status, error);
+    // The end is announced even when these writes fail -- above all when the
+    // chat was deleted mid-reply and its messages cascaded away. Listeners
+    // (the stream registry, the schedule service) wait on this event to let
+    // the reply go; without it they would wait until a restart.
+    try {
+      checkpoint(true);
+      this.store.messages.updateStatus(messageId, status, error);
+    } catch (err) {
+      console.error(`[TurnRunner] variant ${messageId} could not record its end:`, err);
+    }
     this.emit({ messageId, type: 'status', status });
 
     // Usage is recorded whenever the engine reported it, regardless of the
@@ -733,6 +932,23 @@ export class TurnRunner {
    * `Profile`, not in the tree -- so this is assembled fresh per variant
    * rather than read back from the store.
    */
+  /** Whether attachment `id` may be replayed in chat `chatId`: its row is in that chat, within the size cap, and was sent in a message of that chat. */
+  private attachmentInChat(id: string, chatId: string): boolean {
+    const row = this.store.attachments.get(id);
+    if (!row || row.chatId !== chatId || !(row.size >= 0 && row.size <= MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    return attachmentBound(row, row.messageId === null ? null : (this.store.messages.get(row.messageId)?.chatId ?? null));
+  }
+
+  /** `load` for one chat: it refuses an attachment `attachmentInChat` would not let through, and bytes over the cap, so no engine can read across chats by id. */
+  private chatScopedLoader(load: (id: string) => Promise<Buffer>, chatId: string): (id: string) => Promise<Buffer> {
+    return async (id) => {
+      if (!this.attachmentInChat(id, chatId)) throw new Error(`Attachment "${id}" is not available in this chat.`);
+      const bytes = await load(id);
+      if (bytes.length > MAX_HISTORY_ATTACHMENT_BYTES) throw new Error(`Attachment "${id}" is over the size limit.`);
+      return bytes;
+    };
+  }
+
   private buildRequestMessages(userMessageId: string, profile: ResolvedProfile): CanonMessage[] {
     const history = this.store.messages.pathToRoot(userMessageId);
     if (!profile.systemPrompt) return history;
@@ -848,6 +1064,18 @@ export class TurnRunner {
   }
 
   /**
+   * The profile with the "# Sandbox" block (spec 2026-10-12-sandbox-design,
+   * "Model guidance") when its shell runs in the sandbox: what run_command is
+   * and where the workspace and each extra folder are in it. A chat with no
+   * workspace can't run sandboxed commands at all, so it gets none.
+   */
+  private withSandbox(profile: ResolvedProfile, workspaceRoot: string | null, folders: ResolvedFolder[]): ResolvedProfile {
+    if (workspaceRoot === null || !runsShellInSandbox(profile.toolPolicy)) return profile;
+    const block = sandboxFoldersPrompt(workspaceRoot, folders, this.canonicalPath);
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
+  /**
    * The profile with a note naming the tools this turn offers appended to its
    * system prompt, so a change to them mid-chat reaches the model even when
    * its own earlier replies say otherwise. Claude Code runs its own tools and
@@ -861,12 +1089,15 @@ export class TurnRunner {
 
   /**
    * The artifacts guidance (Deck #896) in the system prompt of a turn that
-   * can make artifacts, for either engine. It never changes; the branch's
-   * artifacts go with the user's message (withArtifactsList).
+   * can make artifacts, for either engine, plus the live-artifact part (spec
+   * 2026-10-12-live-artifacts) for a profile with MCP servers. Both are fixed
+   * text, so the prompt stays the same per profile; the branch's artifacts go
+   * with the user's message (withArtifactsList).
    */
   private withArtifacts(profile: ResolvedProfile, tools: readonly ToolSpec[]): ResolvedProfile {
     if (!tools.some((t) => t.source === 'artifact')) return profile;
-    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${ARTIFACTS_GUIDANCE}` : ARTIFACTS_GUIDANCE };
+    const guidance = profile.toolPolicy.mcpServerIds.length > 0 ? `${ARTIFACTS_GUIDANCE}\n\n${LIVE_ARTIFACTS_GUIDANCE}` : ARTIFACTS_GUIDANCE;
+    return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${guidance}` : guidance };
   }
 
   /** When to use the recall tool (spec 2026-10-09-recall-design), for a turn that offers it. Fixed text, so it never churns the prompt. */
@@ -885,6 +1116,12 @@ export class TurnRunner {
     if (!tools.some((t) => t.source === 'artifact')) return messages;
     const note = artifactsListNote(artifactsOnBranch(this.store, chatId, branchOf(this.store, userMessageId)));
     return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: note }] } : m));
+  }
+
+  /** While Plan mode is on, a note at the end of the user's message in this request only (the stored message is untouched). */
+  private withPlanNote(messages: CanonMessage[], planning: boolean, userMessageId: string): CanonMessage[] {
+    if (!planning) return messages;
+    return messages.map((m) => (m.id === userMessageId ? { ...m, parts: [...m.parts, { type: 'text' as const, text: PLAN_MODE_NOTE }] } : m));
   }
 
   /**
@@ -947,13 +1184,67 @@ export class TurnRunner {
     return { messages: next, degraded };
   }
 
+  /**
+   * Attached files as the model gets them (spec 2026-10-12-office-files §2),
+   * on this variant's own copy of the messages. A PDF stays a file for an
+   * engine that takes PDFs (`pdfNative`: every connection but Claude Code).
+   * Every other file part becomes its attachment's extracted text, fenced and
+   * named, or a placeholder naming it when there is none: providers refuse
+   * most file types outright, which used to fail the whole turn. The stored
+   * messages are untouched.
+   */
+  private filesForModel(
+    messages: CanonMessage[],
+    pdfNative: boolean
+  ): { messages: CanonMessage[]; unread: { attachmentId: string; filename: string }[] } {
+    const unread: { attachmentId: string; filename: string }[] = [];
+    const seen = new Set<string>();
+    // The request's attachment count cap (computer use's ruling 17: at most
+    // MAX_REQUEST_ATTACHMENTS, the newest kept) counts the user's images and
+    // files as the engines will, newest first, each attachment once. A file
+    // sent as its text is held to it too: one that isn't among the newest is
+    // left out with the same note the engines give, not sent as text instead.
+    // The other way round as well: once a file is text the engines no longer
+    // count it, so an image or a PDF past the window is left out here too,
+    // or older images would ride on the slots the newer files' text took.
+    const counted = new Set<string>();
+    for (let m = messages.length - 1; m >= 0 && counted.size < MAX_REQUEST_ATTACHMENTS; m--) {
+      const parts = messages[m]!.role === 'system' ? [] : messages[m]!.parts;
+      for (let i = parts.length - 1; i >= 0 && counted.size < MAX_REQUEST_ATTACHMENTS; i--) {
+        const part = parts[i]!;
+        if (part.type === 'file' || part.type === 'image') counted.add(part.attachmentId);
+      }
+    }
+    const next = messages.map((message) => {
+      if (message.role === 'system' || !message.parts.some((p) => p.type === 'file' || p.type === 'image')) return message;
+      const parts = message.parts.map((part): Part => {
+        if (part.type === 'image') return counted.has(part.attachmentId) ? part : { type: 'text', text: omissionNote('over-budget') };
+        if (part.type !== 'file') return part;
+        const attachment = this.store.attachments.get(part.attachmentId);
+        const filename = attachment?.filename ?? part.filename;
+        if (!counted.has(part.attachmentId)) return { type: 'text', text: omissionNote('over-budget', filename) };
+        if (pdfNative && part.mime === 'application/pdf') return part;
+        if (attachment?.extractedText) return { type: 'text', text: fencedFileText(filename, attachment.extractedText) };
+        if (!seen.has(part.attachmentId)) {
+          seen.add(part.attachmentId);
+          unread.push({ attachmentId: part.attachmentId, filename });
+        }
+        const mime = part.mime.replace(/[^\w.+/-]/g, '');
+        return { type: 'text', text: `[Attached file "${fileLabel(filename)}" (${mime}) couldn't be read as text, so it wasn't sent.]` };
+      });
+      return { ...message, parts };
+    });
+    return { messages: next, unread };
+  }
+
   /** Re-reads the model row at finish time (not the possibly-stale `ResolvedProfile.model` captured when the request began) so pricing reflects whatever is current right now. */
   private writeUsage(
     chatId: string,
     messageId: string,
     profile: ResolvedProfile,
     usage: Usage,
-    latencyMs: number
+    latencyMs: number,
+    subagentCallId?: string
   ): void {
     const currentModel = profile.model ? this.store.models.get(profile.model.id) : null;
     const pricingSnapshot: PricingSnapshot = currentModel
@@ -979,6 +1270,7 @@ export class TurnRunner {
       costEstimate: estimateCost(usage, pricingSnapshot),
       pricingSnapshot,
       latencyMs,
+      ...(subagentCallId ? { subagentCallId } : {}),
     });
   }
 }

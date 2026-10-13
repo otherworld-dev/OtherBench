@@ -3,14 +3,19 @@ import {
   artifactFileName,
   artifactsOnBranch,
   artifactsListNote,
+  ARTIFACT_TOOL_DESCRIPTION,
+  ARTIFACT_TOOL_PARAMETERS,
   ARTIFACTS_GUIDANCE,
   branchOf,
   currentVersion,
   MAX_ARTIFACT_BYTES,
   runArtifactCommand,
   slugify,
+  versionFileName,
 } from '../src/domain/artifacts.js';
+import { OFFICE_GUIDANCE } from '../src/domain/office-spec.js';
 import type { ArtifactVersion } from '../src/ports/store.js';
+import type { RiskClass } from '../src/ports/tool-provider.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
 
 /** A chat with a root user message u1 and two sibling replies a1 and a2 (two branches). */
@@ -200,5 +205,124 @@ describe('artifact helpers', () => {
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: 'py' })).toBe('lib.py');
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: null })).toBe('lib.txt');
     expect(artifactFileName({ slug: 'lib', kind: 'code', language: '../evil' })).toBe('lib.txt');
+  });
+});
+
+describe('office artifacts', () => {
+  const BUDGET = JSON.stringify({ sheets: [{ name: 'Budget', rows: [['Items', 'Cost'], ['Widgets', 12], ['Gadgets', 30.5], ['Total', '=SUM(B2:B3)']] }] });
+
+  it('refuses an invalid spreadsheet with the place to fix, and makes nothing', () => {
+    const store = setup();
+    const out = run(store, 'a1', { command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Budget', content: '{"sheets":[{"name":"Budget","rows":[["=SUM(B2:B3"]]}]}' });
+    expect(out).toEqual({ error: true, code: 'bad_content', message: `sheets[0].rows[0][0]: "=SUM(B2:B3" has an unclosed parenthesis. The artifact wasn't changed.` });
+    expect(store.artifacts.listByChat('c1')).toEqual([]);
+  });
+
+  it('refuses a document over the line limit with bad_content, and makes nothing', () => {
+    const store = setup();
+    const out = run(store, 'a1', { command: 'create', id: 'memo', kind: 'document', title: 'Memo', content: Array.from({ length: 6001 }, () => 'x').join('\n') });
+    expect(out).toEqual({ error: true, code: 'bad_content', message: "The document has 6,001 lines; Grunt makes Word files of at most 6,000 lines. Split it into more than one document. The artifact wasn't changed." });
+    expect(store.artifacts.listByChat('c1')).toEqual([]);
+  });
+
+  it('refuses an update whose find-and-replace breaks the JSON, leaving the current version', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'budget', kind: 'spreadsheet', title: 'Budget', content: BUDGET });
+    expect(run(store, 'a3', { command: 'update', id: 'budget', find: '"Items"', replace: '"Items' })).toMatchObject({ error: true, code: 'bad_content', message: expect.stringMatching(/^The content isn't valid JSON/) });
+    expect(run(store, 'a3', { command: 'view', id: 'budget' })).toMatchObject({ number: 1, content: BUDGET });
+  });
+
+  it('refuses a rewrite into a spreadsheet that is not JSON', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'memo', kind: 'markdown', title: 'Memo', content: '# Memo' });
+    expect(run(store, 'a3', { command: 'rewrite', id: 'memo', kind: 'spreadsheet', content: '# Memo' })).toMatchObject({ error: true, code: 'bad_content' });
+  });
+
+  it('rewrites a markdown note into a document as it is, and names the files .docx and .xlsx', () => {
+    const store = setup();
+    run(store, 'a1', { command: 'create', id: 'memo', kind: 'markdown', title: 'Memo', content: '# Memo\n\nText' });
+    expect(run(store, 'a3', { command: 'rewrite', id: 'memo', kind: 'document', content: '# Memo\n\nText' })).toMatchObject({ ok: true, kind: 'document', number: 2 });
+    expect(run(store, 'a3', { command: 'view', id: 'memo' })).toMatchObject({ kind: 'document', content: '# Memo\n\nText' });
+    expect(versionFileName({ slug: 'memo' }, { kind: 'document', language: null })).toBe('memo.docx');
+    expect(versionFileName({ slug: 'budget' }, { kind: 'spreadsheet', language: null })).toBe('budget.xlsx');
+  });
+
+  it('checks a presentation, and names it .pptx', () => {
+    const store = setup();
+    expect(run(store, 'a1', { command: 'create', id: 'deck', kind: 'presentation', title: 'Deck', content: '{"slides":[{"layout":"chart","title":"X"}]}' })).toMatchObject({ error: true, code: 'bad_content', message: expect.stringMatching(/^slides\[0\]\.layout: /) });
+    expect(run(store, 'a1', { command: 'create', id: 'deck', kind: 'presentation', title: 'Deck', content: '{"slides":[{"layout":"title","title":"X"}]}' })).toMatchObject({ ok: true, kind: 'presentation' });
+    expect(versionFileName({ slug: 'deck' }, { kind: 'presentation', language: null })).toBe('deck.pptx');
+  });
+
+  it('offers the new kinds to the model and tells it their formats', () => {
+    expect(ARTIFACT_TOOL_PARAMETERS.properties.kind.enum).toEqual(expect.arrayContaining(['document', 'spreadsheet', 'presentation']));
+    expect(ARTIFACTS_GUIDANCE).toContain(OFFICE_GUIDANCE);
+    expect(ARTIFACT_TOOL_DESCRIPTION).toMatch(/document, spreadsheet and presentation/);
+  });
+});
+
+describe('live artifacts in the executor (spec 2026-10-12-live-artifacts)', () => {
+  const LIVE = { calls: [{ id: 'value', tool: 'mcp__s__lookup', args: { key: { $param: 'key' } }, params: { key: { enum: ['a', 'b'], default: 'a' } } }] };
+  const TOOLS = new Map<string, RiskClass>([['mcp__s__lookup', 'read'], ['mcp__s__set_value', 'mutate']]);
+  const runLive = (store: InMemoryStore, messageId: string, args: unknown, tools: ReadonlyMap<string, RiskClass> = TOOLS) =>
+    runArtifactCommand(store, { chatId: 'c1', messageId, liveTools: () => tools }, args, () => 1000);
+
+  it('stores a declaration on create, as JSON text or an object, and says the user allows it in the viewer', () => {
+    const store = setup();
+    const made = runLive(store, 'a1', { command: 'create', id: 'dash', kind: 'html', title: 'Dash', content: '<p></p>', live: JSON.stringify(LIVE) });
+    expect(made).toMatchObject({ ok: true, live: { calls: ['value'], note: 'The user allows these calls in the viewer before the page gets data.' } });
+    expect(store.artifacts.getVersion((made as { versionId: string }).versionId)!.live).toEqual(LIVE);
+    expect(runLive(store, 'a1', { command: 'create', id: 'dash2', kind: 'html', title: 'Dash', content: '', live: LIVE })).toMatchObject({ ok: true, live: { calls: ['value'] } });
+    // Not given (absent, null or ''): a plain page, with no live summary.
+    const plain = runLive(store, 'a1', { command: 'create', id: 'plain', kind: 'html', title: 'Plain', content: '', live: null });
+    expect(plain).toMatchObject({ ok: true });
+    expect(plain).not.toHaveProperty('live');
+  });
+
+  it('refuses live on a kind other than html, and a broken declaration with its rule', () => {
+    const store = setup();
+    expect(runLive(store, 'a1', { command: 'create', kind: 'markdown', title: 'N', content: '', live: LIVE })).toEqual({ error: true, code: 'bad_args', message: '"live" only works on html artifacts.' });
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: '{"calls":[{"id":"x","tool":"read_file"}]}' })).toMatchObject({ error: true, code: 'bad_live', message: expect.stringMatching(/live call "x"/) });
+  });
+
+  it("with the profile's tools to hand, refuses an unknown tool and one that can change things", () => {
+    const store = setup();
+    const unknown = { calls: [{ id: 'x', tool: 'mcp__s__nope', args: {} }] };
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: unknown })).toMatchObject({ error: true, code: 'unknown_tool', message: expect.stringContaining('mcp__s__lookup') });
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: unknown }, new Map())).toMatchObject({ code: 'unknown_tool', message: expect.stringContaining('This profile has no MCP tools') });
+    const mutating = { calls: [{ id: 'x', tool: 'mcp__s__set_value', args: {} }] };
+    expect(runLive(store, 'a1', { command: 'create', kind: 'html', title: 'N', content: '', live: mutating })).toEqual({
+      error: true,
+      code: 'not_read_only',
+      message: '"mcp__s__set_value" can change things, and a live artifact can only use read-only tools (its server must mark them read-only).',
+    });
+  });
+
+  it('keeps the declaration through update and a rewrite without live; {"calls":[]} clears it, and so does a new kind', () => {
+    const store = setup();
+    runLive(store, 'a1', { command: 'create', id: 'dash', kind: 'html', title: 'Dash', content: '<p>1</p>', live: LIVE });
+    expect(runLive(store, 'a3', { command: 'update', id: 'dash', find: '1', replace: '2' })).toMatchObject({ ok: true, live: { calls: ['value'] } });
+    expect(runLive(store, 'a3', { command: 'rewrite', id: 'dash', content: '<p>3</p>' })).toMatchObject({ ok: true, live: { calls: ['value'] } });
+    expect(run(store, 'a3', { command: 'view', id: 'dash' })).toMatchObject({ live: LIVE });
+
+    const plain = runLive(store, 'a3', { command: 'rewrite', id: 'dash', content: '<p>4</p>', live: '{"calls":[]}' });
+    expect(plain).toMatchObject({ ok: true });
+    expect(plain).not.toHaveProperty('live');
+    expect(run(store, 'a3', { command: 'view', id: 'dash' })).toMatchObject({ live: null });
+
+    runLive(store, 'a3', { command: 'rewrite', id: 'dash', content: '<p>5</p>', live: LIVE });
+    runLive(store, 'a3', { command: 'rewrite', id: 'dash', kind: 'markdown', content: '# five' });
+    expect(run(store, 'a3', { command: 'view', id: 'dash' })).toMatchObject({ kind: 'markdown', live: null });
+    expect(runLive(store, 'a3', { command: 'rewrite', id: 'dash', kind: 'svg', content: '<svg/>', live: LIVE })).toMatchObject({ error: true, code: 'bad_args' });
+  });
+
+  it('lists a live version with its call count', () => {
+    const store = setup();
+    runLive(store, 'a1', { command: 'create', id: 'dash', kind: 'html', title: 'Dash', content: '', live: LIVE });
+    expect(artifactsListNote(artifactsOnBranch(store, 'c1', branchOf(store, 'a1')))).toContain('- dash: "Dash" (html, v1, live: 1 calls)');
+  });
+
+  it('declares live as a string in the tool schema, so every provider takes it', () => {
+    expect(ARTIFACT_TOOL_PARAMETERS.properties.live.type).toBe('string');
   });
 });

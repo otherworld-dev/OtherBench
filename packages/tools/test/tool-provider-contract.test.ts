@@ -1,5 +1,5 @@
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
-import { InMemoryStore } from '@grunt/core/testing/fakes.js';
+import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { runToolProviderContract } from '@grunt/core/testing/tool-provider-contract.js';
 import { GruntToolProvider } from '../src/provider.js';
 import type { McpClient } from '../src/mcp/client.js';
@@ -26,5 +26,5 @@ runToolProviderContract('GruntToolProvider', ({ mcpServers }) => {
         })),
     refresh: async () => {},
     shutdown: async () => {},
-  });
+  }, { sandbox: new FakeSandbox({ ready: true }) });
 });

@@ -5,7 +5,11 @@ import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config
 import type { CanonMessage, Part } from '../src/types/messages.js';
 import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
+import { toolContextFor } from '../src/domain/tool-context.js';
 import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
+import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
+import { LIVE_ARTIFACTS_GUIDANCE } from '../src/domain/live-artifacts.js';
+import { MAX_REQUEST_ATTACHMENTS, omissionNote } from '../src/domain/request-budget.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -440,6 +444,34 @@ describe('TurnRunner.run', () => {
     expect(usageRows.some((u) => u.messageId === otherId)).toBe(false);
   });
 
+  it("still announces the reply's end when its chat was deleted mid-stream and the final writes throw", async () => {
+    const store = new InMemoryStore();
+    const { engine, push } = manualEngine();
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const backstop = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'Go' }], profiles: [makeResolvedProfile()] });
+    await flush();
+    const messageId = result.assistantMessageIds[0] as string;
+    push(messageId, { type: 'text-delta', text: 'Partial' });
+    await flush();
+
+    // DELETE /api/chats/:id: the message cascades away, so writing to it throws (as SQLite's repo does).
+    const gone = (): never => {
+      throw new Error(`message: not found: ${messageId}`);
+    };
+    vi.spyOn(store.messages, 'updateParts').mockImplementation(gone);
+    vi.spyOn(store.messages, 'updateStatus').mockImplementation(gone);
+    runner.cancel(messageId);
+    await flush();
+
+    expect(events.filter((e) => e.type === 'status')).toEqual([{ messageId, type: 'status', status: 'cancelled' }]);
+    expect(backstop.mock.calls.some((call) => String(call[0]).includes('failed outside its own error handling'))).toBe(false);
+    backstop.mockRestore();
+  });
+
   it('a throwing listener does not corrupt the variant or block other listeners from receiving every event', async () => {
     const store = new InMemoryStore();
     const { engine, push } = manualEngine();
@@ -628,24 +660,39 @@ describe('TurnRunner names the tools a turn can use', () => {
     };
 
     const first = await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
-    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'calc', kind: 'html', language: null, createdAt: 1 });
-    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Calc', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
+    const a = store.artifacts.create({ id: 'art', chatId: 'chat-1', slug: 'tracker', kind: 'html', language: null, createdAt: 1 });
+    store.artifacts.addVersion({ id: 'v1', artifactId: a.id, title: 'Tracker', content: '<p></p>', madeBy: 'model', messageId: first, parentVersionId: null, createdAt: 2 });
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: fs('off') }));
     await turn(runner, store, first, makeResolvedProfile({ toolPolicy: { ...fs('off'), artifacts: false } }));
 
     // The system prompt doesn't change with the artifacts, so Claude Code keeps its process and every engine its prompt cache.
     expect(engine.requests[0]!.profile.systemPrompt).toContain('# Artifacts');
     expect(engine.requests[1]!.profile.systemPrompt).toBe(engine.requests[0]!.profile.systemPrompt);
-    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('calc');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('tracker');
     // The list rides on the user's message in the request only.
     expect(noteOf(0)).toContain('This chat has no artifacts on this branch yet.');
-    expect(noteOf(1)).toContain('- calc: "Calc" (html, v1)');
+    expect(noteOf(1)).toContain('- tracker: "Tracker" (html, v1)');
     const sent = engine.requests[1]!.messages.at(-1)!;
     expect(sent.role).toBe('user');
     expect(store.messages.get(sent.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
     // Artifacts off: neither.
     expect(engine.requests[2]!.profile.systemPrompt ?? '').not.toContain('# Artifacts');
     expect(noteOf(2)).not.toContain('Artifacts on this branch');
+  });
+
+  it('adds the live-artifact guidance only for a profile with MCP servers', async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const engine = new FakeChatEngine([finish]);
+    const artifact = { name: 'artifact', description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'artifact' as const, execute: async () => null };
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: [artifact] }) });
+
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: fs('off') }));
+    await turn(runner, store, null, makeResolvedProfile({ toolPolicy: { ...fs('off'), mcpServerIds: ['srv-1'] } }));
+
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('# Artifacts');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('# Live artifacts');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain(LIVE_ARTIFACTS_GUIDANCE);
   });
 
   it("offers no artifact tool, and says nothing of artifacts, to a model that can't use tools", async () => {
@@ -858,21 +905,274 @@ describe('TurnRunner capability fallback for image attachments', () => {
     expect(noVisionReq.messages.at(-1)!.parts.some((p) => p.type === 'image')).toBe(false);
   });
 
-  it('threads TurnRunnerOptions.loadAttachment through onto every EngineRequest', async () => {
+  it('threads TurnRunnerOptions.loadAttachment through onto every EngineRequest, scoped to the chat it is for', async () => {
     const store = new InMemoryStore();
     const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
     const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
     const runner = new TurnRunner(store, engine, { loadAttachment });
+    store.attachments.create(makeAttachment({ id: 'att-mine', chatId: 'chat-1' }));
+    store.attachments.create(makeAttachment({ id: 'att-theirs', chatId: 'chat-2', messageId: null }));
 
     await runner.run({
       chatId: 'chat-1',
       parentId: null,
-      userParts: [{ type: 'text', text: 'hi' }],
+      userParts: [{ type: 'text', text: 'hi' }, { type: 'image', attachmentId: 'att-mine', mime: 'image/png' }],
       profiles: [makeResolvedProfile()],
     });
     await flush();
 
-    expect(engine.requests[0]?.loadAttachment).toBe(loadAttachment);
+    const load = engine.requests[0]!.loadAttachment!;
+    expect((await load('att-mine')).toString()).toBe('bytes');
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+    await expect(load('att-theirs')).rejects.toThrow('not available in this chat');
+    await expect(load('no-such-id')).rejects.toThrow('not available in this chat');
+    expect(loadAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns an image or file part naming another chat\'s attachment (a synced message) into a note, and the turn still runs', async () => {
+    const store = new InMemoryStore();
+    store.attachments.create(makeAttachment({ id: 'att-theirs', chatId: 'chat-2', messageId: 'theirs-msg' }));
+    store.attachments.create(makeAttachment({ id: 'att-unsent', chatId: 'chat-1', messageId: null }));
+    store.attachments.create(makeAttachment({ id: 'att-orphan-msg', chatId: 'chat-1', messageId: 'no-such-message' }));
+    store.attachments.create(makeAttachment({ id: 'att-huge', chatId: 'chat-1', messageId: 'u1', size: 26 * 1024 * 1024 }));
+    store.attachments.create(makeAttachment({ id: 'att-ok', chatId: 'chat-1', messageId: 'u1' }));
+    store.messages.create({
+      id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null,
+      parts: [
+        { type: 'text', text: 'look' },
+        { type: 'image', attachmentId: 'att-theirs', mime: 'image/png' },
+        { type: 'file', attachmentId: 'att-unsent', mime: 'application/pdf', filename: 'a.pdf' },
+        { type: 'image', attachmentId: 'att-orphan-msg', mime: 'image/png' },
+        { type: 'file', attachmentId: 'att-huge', mime: 'application/pdf', filename: 'b.pdf' },
+        { type: 'image', attachmentId: 'att-ok', mime: 'image/png' },
+      ],
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const runner = new TurnRunner(store, engine, { loadAttachment });
+    // Vision on, so an image part reaches the engine as an image unless it was turned into a note.
+    const profile = makeResolvedProfile({ model: { id: 'm', connectionId: 'conn-1', modelId: 'model-1', displayName: 'M', source: 'manual', supportsVision: true, supportsTools: true, supportsReasoning: false, contextWindow: null, maxOutput: null, priceInPer1m: null, priceOutPer1m: null, priceCachedPer1m: null, currency: 'USD' } });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: 'u1', userParts: [{ type: 'text', text: 'and?' }], profiles: [profile] });
+    await flush();
+
+    expect(store.messages.get(result.assistantMessageIds[0]!)?.status).toBe('complete');
+    const sent = engine.requests[0]!.messages.find((m) => m.id === 'u1')!;
+    expect(sent.parts.map((p) => (p.type === 'text' ? p.text : p.type === 'image' || p.type === 'file' ? p.attachmentId : p.type))).toEqual([
+      'look',
+      "[attachment omitted: it doesn't belong to this chat]",
+      "[attachment omitted: it doesn't belong to this chat]",
+      "[attachment omitted: it doesn't belong to this chat]",
+      "[attachment omitted: it doesn't belong to this chat]",
+      'att-ok',
+    ]);
+    // The stored message is untouched.
+    expect(store.messages.get('u1')!.parts).toHaveLength(6);
+    expect(store.messages.get('u1')!.parts[1]).toMatchObject({ type: 'image', attachmentId: 'att-theirs' });
+  });
+
+  it('replays an image a Cowork import made (its id is `<line uuid>:image:<n>`): the part is sent as an image and its bytes can be loaded', async () => {
+    const imported = '3f2b8c1e-9d4a-4c1b-8e7f-0a1b2c3d4e5f:image:1';
+    const store = new InMemoryStore();
+    store.attachments.create(makeAttachment({ id: imported, chatId: 'chat-1', messageId: 'u1', filename: 'image-1.png' }));
+    store.messages.create({
+      id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null,
+      parts: [{ type: 'image', attachmentId: imported, mime: 'image/png' }, { type: 'text', text: 'What is on this receipt?' }],
+    });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const loadAttachment = vi.fn(async () => Buffer.from('bytes'));
+    const runner = new TurnRunner(store, engine, { loadAttachment });
+    const profile = makeResolvedProfile({ model: makeModel({ supportsVision: true }) });
+
+    await runner.run({ chatId: 'chat-1', parentId: 'u1', userParts: [{ type: 'text', text: 'and?' }], profiles: [profile] });
+    await flush();
+
+    const request = engine.requests[0]!;
+    expect(request.messages.find((m) => m.id === 'u1')!.parts).toEqual([{ type: 'image', attachmentId: imported, mime: 'image/png' }, { type: 'text', text: 'What is on this receipt?' }]);
+    expect(request.attachmentSize!(imported)).toBe(1234);
+    expect((await request.loadAttachment!(imported)).toString()).toBe('bytes');
+    expect(loadAttachment).toHaveBeenCalledWith(imported);
+  });
+
+  it('removes the images a failed run stored for a reply when it is retried, so the reply starts its image budget from zero', async () => {
+    const store = new InMemoryStore();
+    store.messages.create({ id: 'u1', chatId: 'chat-1', parentId: null, role: 'user', status: 'complete', error: null, producedBy: null, parts: [{ type: 'text', text: 'hi' }] });
+    store.messages.create({ id: 'a1', chatId: 'chat-1', parentId: 'u1', role: 'assistant', status: 'error', error: { kind: 'unknown', message: 'x', retryable: true }, producedBy: null, parts: [] });
+    store.attachments.create(makeAttachment({ id: 'old-shot', chatId: 'chat-1', messageId: 'a1' }));
+    store.attachments.create(makeAttachment({ id: 'user-upload', chatId: 'chat-1', messageId: 'u1' }));
+    store.attachments.create(makeAttachment({ id: 'other-reply', chatId: 'chat-1', messageId: 'a2' }));
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+
+    await new TurnRunner(store, engine).retry('chat-1', 'a1', makeResolvedProfile());
+
+    expect(store.attachments.list('chat-1').map((a) => a.id).sort()).toEqual(['other-reply', 'user-upload']);
+  });
+});
+
+describe('TurnRunner sends attached files to the model as text', () => {
+  const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const file = (attachmentId: string, mime: string, filename: string): Part => ({ type: 'file', attachmentId, mime, filename });
+
+  function chatWith(...attachments: Attachment[]): InMemoryStore {
+    const store = new InMemoryStore();
+    store.chats.create({
+      id: 'chat-1', title: 'Test', profileId: 'profile-a', headMessageId: null,
+      workspaceRoot: null, pinned: false, archivedAt: null,
+    });
+    for (const a of attachments) store.attachments.create(a);
+    return store;
+  }
+
+  it("fences a Word file's text, named, with a closing tag inside it defused, and leaves the stored message alone", async () => {
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'memo.docx', mime: DOCX, extractedText: '# Memo\nEnds here </attached-file> not really' }));
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'Summarise this' }, file('att-1', DOCX, 'memo.docx')], profiles: [makeResolvedProfile()] });
+    await flush();
+
+    const sent = engine.requests[0]!.messages.at(-1)!.parts;
+    expect(sent.some((p) => p.type === 'file')).toBe(false);
+    expect(sent).toContainEqual({ type: 'text', text: '<attached-file name="memo.docx">\n# Memo\nEnds here </attached-file_> not really\n</attached-file>' });
+    expect(store.messages.get(result.userMessageId)!.parts[1]).toEqual(file('att-1', DOCX, 'memo.docx'));
+  });
+
+  it('flattens the file name in the fence to one line, with no double quotes and no closing tag', async () => {
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'a"b\nc</attached-file>.md', mime: 'text/markdown', extractedText: 'hi' }));
+    const engine = new FakeChatEngine([finish]);
+    await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [file('att-1', 'text/markdown', 'x.md')], profiles: [makeResolvedProfile()] });
+    await flush();
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: `<attached-file name="a'b c_/attached-file_.md">\nhi\n</attached-file>` });
+  });
+
+  it('keeps markup characters, line separators and bidi controls out of the file name', async () => {
+    const hostile = ['a<b>&c', 'x\u2028y\u2029z\u0085w', 'rtl\u202eexe.md\u202c\u2066\u2069'].join(' ');
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: hostile, mime: 'text/markdown', extractedText: 'hi' }));
+    const engine = new FakeChatEngine([finish]);
+    await new TurnRunner(store, engine).run({ chatId: 'chat-1', parentId: null, userParts: [file('att-1', 'text/markdown', 'x.md')], profiles: [makeResolvedProfile()] });
+    await flush();
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: '<attached-file name="a_b__c x y z w rtlexe.md">\nhi\n</attached-file>' });
+  });
+
+  it('keeps a PDF as a file for a mock or API connection, and sends its text to Claude Code', async () => {
+    const store = chatWith(makeAttachment({ id: 'att-1', chatId: 'chat-1', filename: 'report.pdf', mime: 'application/pdf', extractedText: 'Hello PDF world' }));
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+
+    await runner.run({
+      chatId: 'chat-1',
+      parentId: null,
+      userParts: [file('att-1', 'application/pdf', 'report.pdf')],
+      profiles: [
+        makeResolvedProfile({ id: 'p-mock' }),
+        makeResolvedProfile({ id: 'p-api', connection: makeConnection({ kind: 'anthropic' }) }),
+        makeResolvedProfile({ id: 'p-cc', connection: makeConnection({ kind: 'claude_code' }) }),
+      ],
+    });
+    await flush();
+
+    const partsFor = (id: string) => engine.requests.find((r) => r.profile.id === id)!.messages.at(-1)!.parts;
+    expect(partsFor('p-mock')).toContainEqual(file('att-1', 'application/pdf', 'report.pdf'));
+    expect(partsFor('p-api')).toContainEqual(file('att-1', 'application/pdf', 'report.pdf'));
+    expect(partsFor('p-cc')).toContainEqual({ type: 'text', text: '<attached-file name="report.pdf">\nHello PDF world\n</attached-file>' });
+    expect(partsFor('p-cc').some((p) => p.type === 'file')).toBe(false);
+  });
+
+  it('sends a placeholder for a file with no text, and says so in the same one notice as an image fallback', async () => {
+    const store = chatWith(
+      makeAttachment({ id: 'img', chatId: 'chat-1', filename: 'photo.png', mime: 'image/png', extractedText: null }),
+      makeAttachment({ id: 'old', chatId: 'chat-1', filename: 'old.xlsx', mime: XLSX, extractedText: null }),
+    );
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    const profile = makeResolvedProfile({ modelId: 'no-vision-model', model: makeModel({ modelId: 'no-vision-model', supportsVision: false }) });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'image', attachmentId: 'img', mime: 'image/png' }, file('old', XLSX, 'old.xlsx')], profiles: [profile] });
+    await flush();
+
+    expect(engine.requests[0]!.messages.at(-1)!.parts).toContainEqual({ type: 'text', text: `[Attached file "old.xlsx" (${XLSX}) couldn't be read as text, so it wasn't sent.]` });
+    const notices = events.filter((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.text).toContain('photo.png');
+    expect(notices[0]!.text).toContain(`Grunt couldn't read "old.xlsx" as text, so no-vision-model didn't get it.`);
+    const reply = store.messages.get(result.assistantMessageIds[0]!)!;
+    expect(reply.parts.filter((p) => p.type === 'notice')).toHaveLength(1);
+  });
+
+  it("holds a file sent as its text to the request's attachment count cap: one past the newest 20 is a note, never its text (integration)", async () => {
+    // Computer use's ruling 17 (at most MAX_REQUEST_ATTACHMENTS, the newest kept) beside office files: the stricter
+    // rule wins, so a Word file's text counts as one of the request's attachments like the bytes of a PDF or an image.
+    const ids = Array.from({ length: MAX_REQUEST_ATTACHMENTS + 2 }, (_, i) => `doc-${String(i).padStart(2, '0')}`);
+    const store = chatWith(...ids.map((id) => makeAttachment({ id, chatId: 'chat-1', filename: `${id}.docx`, mime: DOCX, extractedText: `text of ${id}` })));
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    // The oldest two first, on their own message; the newest twenty on the next.
+    const first = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'old' }, file(ids[0]!, DOCX, `${ids[0]}.docx`), file(ids[1]!, DOCX, `${ids[1]}.docx`)], profiles: [makeResolvedProfile()] });
+    await flush();
+    await runner.run({ chatId: 'chat-1', parentId: first.assistantMessageIds[0]!, userParts: [{ type: 'text', text: 'new' }, ...ids.slice(2).map((id) => file(id, DOCX, `${id}.docx`))], profiles: [makeResolvedProfile()] });
+    await flush();
+
+    const sent = JSON.stringify(engine.requests[1]!.messages);
+    for (const id of ids.slice(2)) expect(sent).toContain(`text of ${id}`);
+    for (const id of ids.slice(0, 2)) {
+      expect(sent).not.toContain(`text of ${id}`);
+      expect(sent).toContain(JSON.stringify(omissionNote('over-budget', `${id}.docx`)).slice(1, -1));
+    }
+    // The first request had only its own two, well within the cap.
+    expect(JSON.stringify(engine.requests[0]!.messages)).toContain('text of doc-00');
+  });
+
+  it('leaves out older images (and PDFs) past the newest 20 too, when newer files sent as text took the slots (integration)', async () => {
+    // The other direction of the cap: once the files are text the engines count only the images left, so five older
+    // images beside twenty newer Word files would otherwise send twenty-five attachments.
+    const docs = Array.from({ length: MAX_REQUEST_ATTACHMENTS }, (_, i) => `doc-${String(i).padStart(2, '0')}`);
+    const images = ['img-a', 'img-b', 'img-c', 'img-d', 'img-e'];
+    const store = chatWith(
+      ...docs.map((id) => makeAttachment({ id, chatId: 'chat-1', filename: `${id}.docx`, mime: DOCX, extractedText: `text of ${id}` })),
+      ...images.map((id) => makeAttachment({ id, chatId: 'chat-1', filename: `${id}.png`, mime: 'image/png', extractedText: null })),
+      makeAttachment({ id: 'old-pdf', chatId: 'chat-1', filename: 'old.pdf', mime: 'application/pdf', extractedText: 'old pdf text' }),
+    );
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    const vision = makeResolvedProfile({ model: makeModel({ supportsVision: true }) });
+    const first = await runner.run({
+      chatId: 'chat-1', parentId: null,
+      userParts: [{ type: 'text', text: 'old' }, ...images.map((id): Part => ({ type: 'image', attachmentId: id, mime: 'image/png' })), file('old-pdf', 'application/pdf', 'old.pdf')],
+      profiles: [vision],
+    });
+    await flush();
+    // The first request is within the cap: the images go as images.
+    expect(engine.requests[0]!.messages.at(-1)!.parts.filter((p) => p.type === 'image')).toHaveLength(5);
+    await runner.run({ chatId: 'chat-1', parentId: first.assistantMessageIds[0]!, userParts: [{ type: 'text', text: 'new' }, ...docs.map((id) => file(id, DOCX, `${id}.docx`))], profiles: [vision] });
+    await flush();
+
+    const messages = engine.requests[1]!.messages;
+    const parts = messages.flatMap((m) => m.parts);
+    expect(parts.filter((p) => p.type === 'image' || p.type === 'file')).toEqual([]);
+    for (const id of docs) expect(JSON.stringify(messages)).toContain(`text of ${id}`);
+    const old = messages.find((m) => m.parts.some((p) => p.type === 'text' && p.text === 'old'))!;
+    expect(old.parts.filter((p) => p.type === 'text' && p.text === omissionNote('over-budget'))).toHaveLength(5);
+    expect(old.parts).toContainEqual({ type: 'text', text: omissionNote('over-budget', 'old.pdf') });
+    expect(JSON.stringify(messages)).not.toContain('old pdf text');
+  });
+
+  it('names every unread file once, as "them"', async () => {
+    const store = chatWith(
+      makeAttachment({ id: 'a', chatId: 'chat-1', filename: 'a.pptx', mime: 'application/octet-stream', extractedText: null }),
+      makeAttachment({ id: 'b', chatId: 'chat-1', filename: 'b.bin', mime: 'application/octet-stream', extractedText: null }),
+    );
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine);
+    const events: TurnEvent[] = [];
+    runner.on((e) => events.push(e));
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [file('a', 'application/octet-stream', 'a.pptx'), file('b', 'application/octet-stream', 'b.bin'), file('a', 'application/octet-stream', 'a.pptx')], profiles: [makeResolvedProfile({ modelId: 'm' })] });
+    await flush();
+    const notice = events.find((e): e is TurnEvent & { type: 'notice' } => e.type === 'notice');
+    expect(notice?.text).toBe(`Grunt couldn't read "a.pptx", "b.bin" as text, so m didn't get them.`);
   });
 });
 
@@ -1884,5 +2184,181 @@ describe('TurnRunner.regenerate', () => {
       id: 'orphan', chatId: 'chat-1', parentId: null, role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null,
     });
     await expect(runner.regenerate({ chatId: 'chat-1', messageId: orphan.id, profile })).rejects.toMatchObject({ code: 'no_parent' });
+  });
+});
+
+describe('TurnRunner tells a sandboxed shell where the folders are', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+
+  async function systemPromptFor(shellRuns: 'host' | 'sandbox', options: { root?: string; canonicalPath?: (path: string) => string } = {}): Promise<string> {
+    const store = new InMemoryStore('node-pc');
+    store.chats.create({
+      id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null,
+      workspace: { kind: 'machine', nodeId: 'node-pc', root: options.root ?? 'E:\\Git\\Grunt' },
+      folders: [{ workspace: { kind: 'machine', nodeId: 'node-pc', root: 'D:\\Refs' }, access: 'read' }],
+    });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { pathExists: () => true, ...(options.canonicalPath ? { canonicalPath: options.canonicalPath } : {}) });
+    const profile = makeResolvedProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+    return engine.requests[0]!.messages.find((m) => m.role === 'system')?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+  }
+
+  it("adds the workspace's and each folder's sandbox path when the profile's shell runs in the sandbox", async () => {
+    const system = await systemPromptFor('sandbox');
+    expect(system).toContain('# Sandbox');
+    expect(system).toContain('The workspace E:\\Git\\Grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
+  });
+
+  it('adds nothing when the shell runs on this machine', async () => {
+    expect(await systemPromptFor('host')).not.toContain('# Sandbox');
+  });
+
+  it('names a folder typed in another case at its real path, which is where the sandbox mounts it', async () => {
+    const onDisk: Record<string, string> = { 'e:\\git\\grunt': 'E:\\Git\\Grunt', 'd:\\refs': 'D:\\Refs' };
+    const system = await systemPromptFor('sandbox', { root: 'e:\\git\\grunt', canonicalPath: (p) => onDisk[p.toLowerCase()] ?? p });
+    expect(system).toContain('The workspace e:\\git\\grunt is /mnt/e/Git/Grunt in the sandbox');
+    expect(system).toContain('D:\\Refs is /mnt/d/Refs in the sandbox (read-only)');
+  });
+});
+
+describe('TurnRunner relays asks', () => {
+  it("relays a tool's ask and its end as TurnEvents tagged with the reply", async () => {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const provider = new FakeToolProvider();
+    const engine: ChatEngine = {
+      async *stream(req: EngineRequest): AsyncIterable<EngineEvent> {
+        const outcome = await provider.askUser(toolContextFor(req), {
+          kind: 'question',
+          toolName: 'ask_user',
+          questions: [{ question: 'Which colour?', header: 'Colour', options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }], multiSelect: false }],
+        });
+        yield { type: 'text-delta', text: JSON.stringify(outcome) };
+        yield { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+      },
+      async listModels() {
+        return [];
+      },
+      async testConnection() {
+        return { ok: true, message: 'ok', latencyMs: 0 };
+      },
+    };
+    const runner = new TurnRunner(store, engine, { toolProvider: provider });
+    const events: TurnEvent[] = [];
+    runner.on((e) => {
+      events.push(e);
+      if (e.type === 'ask-request') provider.answerAsk(e.ask.id, { answers: ['Blue'] });
+    });
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'ask me' }], profiles: [makeResolvedProfile()] });
+    const id = assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    const request = events.find((e) => e.type === 'ask-request') as Extract<TurnEvent, { type: 'ask-request' }>;
+    expect(request).toMatchObject({ messageId: id, ask: { kind: 'question', chatId: 'chat-1', messageId: id } });
+    expect(events).toContainEqual({ messageId: id, type: 'ask-resolved', askId: request.ask.id });
+    expect(store.messages.get(id)!.parts).toEqual([{ type: 'text', text: JSON.stringify({ reply: { answers: ['Blue'] } }) }]);
+  });
+});
+
+describe('TurnRunner plan mode', () => {
+  const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
+  const stub = (name: string) => ({ name, description: '', parameters: { type: 'object', properties: {} }, risk: 'read' as const, source: 'thread' as const, execute: async () => null });
+  const thread = [stub('update_todos'), stub('ask_user'), stub('propose_plan')];
+  const textOf = (m: CanonMessage): string => m.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
+
+  function setup(planMode: boolean) {
+    const store = new InMemoryStore();
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null, planMode });
+    const engine = new FakeChatEngine([finish]);
+    const runner = new TurnRunner(store, engine, { toolProvider: new FakeToolProvider({ tools: thread }) });
+    return { store, engine, runner };
+  }
+  async function send(runner: TurnRunner, store: InMemoryStore, profiles: ResolvedProfile[] = [makeResolvedProfile()]): Promise<string[]> {
+    const { assistantMessageIds } = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'write it' }], profiles });
+    for (const id of assistantMessageIds) await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('complete'));
+    return assistantMessageIds;
+  }
+
+  it('with plan mode off, offers no propose_plan, makes no gate and adds no note', async () => {
+    const { store, engine, runner } = setup(false);
+    await send(runner, store);
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toEqual(['update_todos', 'ask_user']);
+    expect(req.plan).toBeUndefined();
+    expect(textOf(req.messages.at(-1)!)).toBe('write it');
+  });
+
+  it('with plan mode on, offers propose_plan, gives the reply a closed gate and notes it on the request only', async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store);
+    const req = engine.requests[0]!;
+    expect(req.tools.map((t) => t.name)).toContain('propose_plan');
+    expect(req.plan?.approved).toBe(false);
+    expect(textOf(req.messages.at(-1)!)).toBe(`write it\n${PLAN_MODE_NOTE}`);
+    expect(store.messages.get(req.messages.at(-1)!.id)!.parts).toEqual([{ type: 'text', text: 'write it' }]);
+  });
+
+  it('gives each compare variant its own gate, and the next message a fresh closed one', async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store, [makeResolvedProfile(), makeResolvedProfile({ id: 'profile-2', name: 'Two' })]);
+    const [a, b] = engine.requests;
+    expect(a!.plan).not.toBe(b!.plan);
+    a!.plan!.approve();
+    expect(b!.plan!.approved).toBe(false);
+    await send(runner, store);
+    expect(engine.requests[2]!.plan!.approved).toBe(false);
+  });
+
+  it("offers no thread tools to a model that can't use tools, and so no gate", async () => {
+    const { store, engine, runner } = setup(true);
+    await send(runner, store, [makeResolvedProfile({ model: makeModel({ supportsTools: false }) })]);
+    expect(engine.requests[0]!.tools).toEqual([]);
+    expect(engine.requests[0]!.plan).toBeUndefined();
+    expect(textOf(engine.requests[0]!.messages.at(-1)!)).toBe('write it');
+  });
+});
+
+describe('unattended turns (scheduled runs)', () => {
+  const usage = { tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0 };
+  const newChat = (store: InMemoryStore) =>
+    store.chats.create({ id: 'chat-1', title: 't', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+
+  it('marks the request unattended and turns auto mode off, even in a chat with Auto on', async () => {
+    const store = new InMemoryStore();
+    const engine = new FakeChatEngine([{ type: 'finish', usage, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+    store.chats.update('chat-1', { autoMode: true });
+
+    await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()], unattended: true });
+
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    expect(engine.requests[0]!.unattended).toBe(true);
+    expect(engine.requests[0]!.autoMode).toBe(false);
+  });
+
+  it('leaves an ordinary run, a retry and a regenerate attended', async () => {
+    const store = new InMemoryStore();
+    let calls = 0;
+    const engine = new FakeChatEngine(() =>
+      calls++ === 0
+        ? [{ type: 'error', error: { kind: 'transient', message: 'boom', retryable: true } }]
+        : [{ type: 'finish', usage, finishReason: 'stop' }]
+    );
+    const runner = new TurnRunner(store, engine);
+    newChat(store);
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    const id = result.assistantMessageIds[0]!;
+    await vi.waitFor(() => expect(store.messages.get(id)!.status).toBe('error'));
+    await runner.retry('chat-1', id, makeResolvedProfile());
+    expect(store.messages.get(id)!.status).toBe('complete');
+    const regenerated = await runner.regenerate({ chatId: 'chat-1', messageId: id, profile: makeResolvedProfile() });
+    await vi.waitFor(() => expect(store.messages.get(regenerated.assistantMessageId)!.status).toBe('complete'));
+
+    expect(engine.requests).toHaveLength(3);
+    expect(engine.requests.map((r) => r.unattended)).toEqual([undefined, undefined, undefined]);
   });
 });

@@ -1,11 +1,22 @@
 import { useState, type JSX } from 'react';
-import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, ApprovalRequest, AskReply, UserAsk } from '@grunt/core/ports/tool-provider.js';
+import { isAskTool, isPlanTool, isTodoTool, latestTodos, parsePlan, parseQuestions } from '@grunt/core/domain/thread-tools.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
+import { SUBAGENT_TOOL_NAME } from '@grunt/core/domain/parts.js';
+import { isSandboxResult } from '../lib/sandbox.js';
 import { api } from '../state/api.js';
+import { actionSummary, COMPUTER_SCREEN_ABOUT, typedTextForCard } from '@grunt/core/domain/computer-apps.js';
+import { isToolImageRef, type ToolImageRef } from '@grunt/core/domain/tool-images.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
 import { AttachmentChip } from './AttachmentChip.js';
+import { AuthedImage } from './AuthedImage.js';
 import { MarkdownBody } from './MarkdownBody.js';
+import { PlanCard } from './PlanCard.js';
+import { QuestionCard } from './QuestionCard.js';
+import { SubagentCard } from './SubagentCard.js';
+import { TodoChecklist } from './TodoChecklist.js';
 import { artifactOutcomeOf, isArtifactTool, toolPath } from '../viewer/paths.js';
+import { browserCallLabel, browserPageOf, displayLines, oneLine } from '../viewer/browser.js';
 import { useViewer } from '../viewer/ViewerContext.js';
 
 function NoticeBlock({ text }: { text: string }): JSX.Element {
@@ -53,9 +64,168 @@ function ReasoningBlock({ text }: { text: string }): JSX.Element {
   );
 }
 
+/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__grunt_<hex>__computer`). */
+const COMPUTER_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?computer$/;
+
+function isComputerTool(name: string): boolean {
+  return COMPUTER_TOOL_NAME.test(name);
+}
+
+/** The reply a tool result belongs to: a tool's images are served only for that chat and that message. */
+interface ToolImageScope {
+  chatId: string;
+  messageId: string;
+}
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+/** A line about a tool's image or item, in the muted note style. */
+function ToolItemNote({ text }: { text: string }): JSX.Element {
+  return (
+    <p role="note" className="text-[var(--text-muted)] italic">
+      {text}
+    </p>
+  );
+}
+
+/**
+ * An image a tool returned, loaded only through the chat and reply that hold
+ * it (`toolImageUrl`). If it can't be loaded (a 404: the row is gone or
+ * belongs elsewhere), it says so once and is never asked for again.
+ */
+function ToolImage({ item, scope, alt, noun }: { item: ToolImageRef; scope: ToolImageScope; alt: string; noun: string }): JSX.Element {
+  const [missing, setMissing] = useState(false);
+  if (missing) return <ToolItemNote text={`${noun} not available.`} />;
+  return (
+    <AuthedImage
+      src={api.attachments.toolImageUrl(scope.chatId, scope.messageId, item.attachmentId)}
+      alt={alt}
+      onError={() => setMissing(true)}
+      onFailed={() => setMissing(true)}
+      className="max-h-48 max-w-full rounded border border-[var(--border)]"
+    />
+  );
+}
+
+/**
+ * How the thread shows a computer call: what it does (`actionSummary`, which
+ * never holds typed text), and nothing else. No app: the stored call holds the
+ * model's own arguments, not the described target, so any app in them is only
+ * what the model claimed (the approval card names the real one). Never the raw
+ * arguments either: they can carry a window title and the text to type. Typed
+ * text stays behind a toggle.
+ */
+function ComputerCallBlock({ args }: { args: unknown }): JSX.Element {
+  const [showTyped, setShowTyped] = useState(false);
+  const typed = typedTextForCard(args);
+  return (
+    <div data-testid="computer-call" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+      <span className="font-medium">
+        {'\u{1F527}'} computer: <bdi>{oneLine(actionSummary(args))}</bdi>
+      </span>
+      {typed !== null && (
+        <>
+          <button type="button" aria-expanded={showTyped} onClick={() => setShowTyped((v) => !v)} className="ml-2 underline decoration-dotted">
+            {showTyped ? 'Hide typed text' : 'Show typed text'}
+          </button>
+          {showTyped && (
+            <pre data-testid="computer-call-typed-text" className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all">
+              <bdi>{typed}</bdi>
+            </pre>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The fixed line a computer result starts with, as a small label rather than body text. */
+function ScreenAboutLabel(): JSX.Element {
+  return (
+    <p data-testid="computer-screen-about" className="text-[10px] text-[var(--text-muted)]">
+      {COMPUTER_SCREEN_ABOUT}
+    </p>
+  );
+}
+
+/** Words in a computer result: untrusted, one plain line, never markdown or HTML. */
+function ComputerText({ text }: { text: unknown }): JSX.Element {
+  return (
+    <p className="break-words">
+      <bdi>{oneLine(text)}</bdi>
+    </p>
+  );
+}
+
+/** One top-level item of a computer result. */
+function ComputerResultItem({ item, scope }: { item: unknown; scope: ToolImageScope }): JSX.Element {
+  const record = recordOf(item);
+  if (record?.['type'] === 'text') {
+    return record['text'] === COMPUTER_SCREEN_ABOUT ? <ScreenAboutLabel /> : <ComputerText text={record['text']} />;
+  }
+  if (isToolImageRef(item)) {
+    if (item.pending === true) return <ToolItemNote text="Screenshot not available yet." />;
+    return <ToolImage item={item} scope={scope} alt="Screenshot" noun="Screenshot" />;
+  }
+  return <ToolItemNote text="(Part of this result can't be shown here.)" />;
+}
+
+/**
+ * A computer result: the screen-content line as a label, the words as plain
+ * text, a screenshot through the chat's tool-image route. Only the top-level
+ * items of an array are looked at; an error is its message.
+ */
+function ComputerResultBlock({ result, isError, scope }: { result: unknown; isError: boolean; scope: ToolImageScope }): JSX.Element {
+  const record = recordOf(result);
+  let body: JSX.Element | JSX.Element[];
+  if (Array.isArray(result)) {
+    body = result.map((item, i) => <ComputerResultItem key={i} item={item} scope={scope} />);
+  } else if (typeof result === 'string') {
+    // Claude Code's results are kept as their text, one item per line (engine-claude-code/src/events.ts): the
+    // screen-content line is the label, and each line after it is plain text. A result stored before that had
+    // its items run together, so the line is taken off the front whatever follows it.
+    const labelled = result.startsWith(COMPUTER_SCREEN_ABOUT);
+    const lines = (labelled ? result.slice(COMPUTER_SCREEN_ABOUT.length) : result).split('\n').filter((l) => l.trim().length > 0);
+    body = (
+      <>
+        {labelled && <ScreenAboutLabel />}
+        {lines.map((l, i) => (
+          <ComputerText key={i} text={l} />
+        ))}
+      </>
+    );
+  } else if (record !== null && typeof record['message'] === 'string') {
+    body = (
+      <>
+        {record['about'] === COMPUTER_SCREEN_ABOUT && <ScreenAboutLabel />}
+        <ComputerText text={record['message']} />
+      </>
+    );
+  } else {
+    body = <ToolItemNote text="(This result can't be shown here.)" />;
+  }
+  return (
+    <div className={`my-1 rounded border px-2 py-1 text-xs ${isError ? 'border-[var(--danger)]' : 'border-[var(--border)]'} bg-[var(--bg-sunken)]`}>
+      <span className="font-medium">{isError ? '\u26a0\ufe0f' : '\u21b3'} computer result</span>
+      <div className="mt-1 space-y-1">{body}</div>
+    </div>
+  );
+}
+
 function ToolCallBlock({ name, args }: { name: string; args: unknown }): JSX.Element {
   const viewer = useViewer();
   const path = viewer ? toolPath(name, args) : null;
+  // After the hook above, so the hooks run in the same order for every tool.
+  if (isComputerTool(name)) return <ComputerCallBlock args={args} />;
+  if (name === 'browser') {
+    return (
+      <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+        <span className="font-medium">🔧 browser: {browserCallLabel(args)}</span>
+      </div>
+    );
+  }
   return (
     <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <span className="font-medium">🔧 {name}</span>
@@ -69,16 +239,62 @@ function ToolCallBlock({ name, args }: { name: string; args: unknown }): JSX.Ele
   );
 }
 
-function ToolResultBlock({ name, result, isError }: { name: string; result: unknown; isError: boolean }): JSX.Element {
+/** One top-level item of another tool's result that holds an image: as before (text as is, anything else as JSON), the image through the tool-image route. */
+function ToolResultItem({ name, item, scope }: { name: string; item: unknown; scope: ToolImageScope }): JSX.Element {
+  if (isToolImageRef(item)) {
+    if (item.pending === true) return <ToolItemNote text="Image not available yet." />;
+    return <ToolImage item={item} scope={scope} alt={`Image from ${name}`} noun="Image" />;
+  }
+  // An image that isn't a stored reference (nothing should reach here as one) is never dumped as data.
+  if (recordOf(item)?.['type'] === 'image') return <ToolItemNote text="[image not shown]" />;
+  const text = recordOf(item)?.['type'] === 'text' ? recordOf(item)?.['text'] : undefined;
+  return <pre className="overflow-x-auto whitespace-pre-wrap">{typeof text === 'string' ? text : JSON.stringify(item, null, 2)}</pre>;
+}
+
+function ToolResultBlock({ name, result, isError, scope }: { name: string; result: unknown; isError: boolean; scope: ToolImageScope }): JSX.Element {
+  if (isComputerTool(name)) return <ComputerResultBlock result={result} isError={isError} scope={scope} />;
+  const page = name === 'browser' && !isError ? browserPageOf(result) : null;
+  if (page) {
+    // Page-derived text: plain, sanitised, and the snapshot folded away (what the model saw is unchanged).
+    return (
+      <div className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
+        <div className="font-medium">
+          ↳ <bdi>{oneLine(page.title) || 'Untitled page'}</bdi>
+        </div>
+        <div className="truncate font-mono text-[var(--text-muted)]">
+          <bdi>{oneLine(page.url)}</bdi>
+        </div>
+        <details className="mt-1">
+          <summary className="cursor-pointer text-[var(--text-muted)] select-none">Page snapshot</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap">{displayLines(page.snapshot)}</pre>
+        </details>
+      </div>
+    );
+  }
+  // Only a result that holds an image (at its top level) changes shape; every other result renders as it always has.
+  const items = Array.isArray(result) && result.some((item) => recordOf(item)?.['type'] === 'image') ? (result as unknown[]) : null;
   return (
     <div className={`my-1 rounded border px-2 py-1 text-xs ${isError ? 'border-[var(--danger)]' : 'border-[var(--border)]'} bg-[var(--bg-sunken)]`}>
       <span className="font-medium">{isError ? '⚠️' : '↳'} {name} result</span>
-      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>
+      {isSandboxResult(name, result) && (
+        <span data-testid="sandbox-tag" title="Ran in Grunt's sandbox" className="ml-2 rounded-sm border border-[var(--border)] px-1 text-[10px] tracking-wide text-[var(--text-muted)] uppercase">
+          sandbox
+        </span>
+      )}
+      {items ? (
+        <div className="mt-1 space-y-1">
+          {items.map((item, i) => (
+            <ToolResultItem key={i} name={name} item={item} scope={scope} />
+          ))}
+        </div>
+      ) : (
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>
+      )}
     </div>
   );
 }
 
-function renderPart(part: Part, key: number): JSX.Element | null {
+function renderPart(part: Part, key: number, scope: ToolImageScope): JSX.Element | null {
   switch (part.type) {
     case 'text':
       return <MarkdownBody key={key} text={part.text} />;
@@ -87,7 +303,7 @@ function renderPart(part: Part, key: number): JSX.Element | null {
     case 'tool-call':
       return <ToolCallBlock key={key} name={part.name} args={part.args} />;
     case 'tool-result':
-      return <ToolResultBlock key={key} name={part.name} result={part.result} isError={part.isError} />;
+      return <ToolResultBlock key={key} name={part.name} result={part.result} isError={part.isError} scope={scope} />;
     case 'notice':
       return <NoticeBlock key={key} text={part.text} />;
     case 'image':
@@ -136,21 +352,66 @@ function toolGroupSummary(run: ToolPart[]): string {
 }
 
 /** A collapsed-by-default block for one run of consecutive tool calls/results; expanding shows the unchanged per-part blocks. */
-function ToolGroup({ run }: { run: ToolPart[] }): JSX.Element {
+function ToolGroup({ run, scope }: { run: ToolPart[]; scope: ToolImageScope }): JSX.Element {
   return (
     <details className="my-1 rounded border border-[var(--border)] bg-[var(--bg-sunken)] px-2 py-1 text-xs">
       <summary className="cursor-pointer font-medium text-[var(--text-muted)] select-none">{toolGroupSummary(run)}</summary>
-      <div className="mt-1">{run.map((p, i) => renderPart(p, i))}</div>
+      <div className="mt-1">{run.map((p, i) => renderPart(p, i, scope))}</div>
     </details>
   );
+}
+
+type ToolCallPart = Extract<Part, { type: 'tool-call' }>;
+type ToolResultPart = Extract<Part, { type: 'tool-result' }>;
+
+/** An answered question or a decided plan (spec 2026-10-12-thread-cards-design §7), outside the tool fold like an artifact card. */
+function ThreadRecord({ call, result }: { call: ToolCallPart; result: ToolResultPart }): JSX.Element {
+  const text = typeof result.result === 'string' ? result.result : (JSON.stringify(result.result) ?? '');
+  if (isPlanTool(call.name)) {
+    const plan = parsePlan(call.args);
+    return (
+      <details data-testid="plan-record" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-xs">
+        <summary className="cursor-pointer font-medium select-none">Plan · {text.split('\n')[0]}</summary>
+        {typeof plan === 'string' && (
+          <div className="mt-1">
+            <MarkdownBody text={plan} />
+          </div>
+        )}
+      </details>
+    );
+  }
+  const questions = parseQuestions(call.args);
+  return (
+    <div data-testid="question-record" className="my-1 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-xs">
+      {Array.isArray(questions) && (
+        <ul className="font-medium">
+          {questions.map((q, i) => (
+            <li key={i}>{q.question}</li>
+          ))}
+        </ul>
+      )}
+      <p className={`mt-1 whitespace-pre-wrap ${result.isError ? 'text-[var(--danger)]' : 'text-[var(--text-muted)]'}`}>{text}</p>
+    </div>
+  );
+}
+
+/** What `renderParts` needs to know about the reply around the parts it renders. */
+interface RenderContext {
+  /** The reply's approval cards still waiting, to mark the sub-agent that raised one. */
+  pendingApprovals: ApprovalRequest[];
+  replyStreaming: boolean;
+  /** The reply the parts belong to: a tool's images (a sub-agent's included) are served only for it. */
+  scope: ToolImageScope;
 }
 
 /**
  * Renders a message's parts, folding each run of consecutive tool-call/tool-result parts into one `ToolGroup`.
  * An artifact call that made a version (Deck #896) is a card instead, outside the fold; one still running,
  * failed or only viewing folds with the rest, so its error stays visible.
+ * A sub-agent is a card where its part sits, with its own parts rendered inside.
  */
-function renderParts(parts: Part[]): JSX.Element[] {
+function renderParts(parts: Part[], ctx: RenderContext): JSX.Element[] {
+  const { scope } = ctx;
   const out: JSX.Element[] = [];
   let run: ToolPart[] = [];
   let runStart = 0;
@@ -159,14 +420,43 @@ function renderParts(parts: Part[]): JSX.Element[] {
   // Cards made while a run of tools is open wait for it, so parallel calls stay in one group.
   let cards: JSX.Element[] = [];
   const flush = (): void => {
-    if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} />);
+    if (run.length > 0) out.push(<ToolGroup key={`tools-${runStart}`} run={run} scope={scope} />);
     run = [];
     out.push(...cards);
     cards = [];
   };
   const carded = new Set(parts.flatMap((p) => (p.type === 'tool-result' && isArtifactTool(p.name) && artifactOutcomeOf(p.result) ? [p.id] : [])));
+  // Todo calls are shown as the checklist, never as tools. Question and plan
+  // calls show as their record once answered; while waiting, only the card shows.
+  const results = new Map(parts.flatMap((p) => (p.type === 'tool-result' ? [[p.id, p] as const] : [])));
+  const recorded = new Set(parts.flatMap((p) => (p.type === 'tool-call' && (isAskTool(p.name) || isPlanTool(p.name)) ? [p.id] : [])));
+  // A sub-agent shows as its card; the parent's own subagent call and result
+  // for it are hidden. A subagent call with no card (refused before it
+  // started) stays in the tool group, so its error shows.
+  const subagentCards = new Set(parts.flatMap((p) => (p.type === 'subagent' ? [p.callId] : [])));
   parts.forEach((p, i) => {
+    if ((p.type === 'tool-call' || p.type === 'tool-result') && p.name === SUBAGENT_TOOL_NAME && subagentCards.has(p.id)) return;
+    if (p.type === 'subagent') {
+      flush();
+      out.push(
+        <SubagentCard
+          key={`subagent-${p.callId}`}
+          part={p}
+          replyStreaming={ctx.replyStreaming}
+          awaitingApproval={ctx.pendingApprovals.some((r) => r.subagent?.callId === p.callId)}
+        >
+          {renderParts(p.parts ?? [], ctx)}
+        </SubagentCard>
+      );
+      return;
+    }
     if (p.type === 'tool-call' || p.type === 'tool-result') {
+      if (isTodoTool(p.name)) return;
+      if (recorded.has(p.id)) {
+        const result = p.type === 'tool-call' ? results.get(p.id) : undefined;
+        if (p.type === 'tool-call' && result) (run.length > 0 ? cards : out).push(<ThreadRecord key={i} call={p} result={result} />);
+        return;
+      }
       if (carded.has(p.id)) {
         // A carded call shows as its result's card.
         if (p.type === 'tool-result') (run.length > 0 ? cards : out).push(<ArtifactCard key={i} result={p.result} />);
@@ -177,7 +467,7 @@ function renderParts(parts: Part[]): JSX.Element[] {
       return;
     }
     flush();
-    const el = renderPart(p, i);
+    const el = renderPart(p, i, scope);
     if (el) out.push(el);
   });
   flush();
@@ -319,6 +609,10 @@ export interface MessageProps {
   pendingApprovals?: ApprovalRequest[];
   /** Required whenever `pendingApprovals` is non-empty; omitted (with an empty array) everywhere a message can never have one, e.g. read-only historical views. */
   onResolveApproval?: (requestId: string, choice: ApprovalChoice) => Promise<void>;
+  /** Questions and plans this message's tool calls are waiting on (spec 2026-10-12-thread-cards-design). Rendered after the approval cards. */
+  pendingAsks?: UserAsk[];
+  /** Required whenever `pendingAsks` is non-empty. */
+  onAnswerAsk?: (askId: string, reply: AskReply) => Promise<void>;
   /** Shows the `‹ 2 / 3 ›` switcher: this message has non-compare siblings (a regenerated reply, an edited prompt). */
   branch?: BranchInfo;
   /** Offers "Regenerate" (assistant messages). Omit where it doesn't apply, e.g. a compare turn's variants. */
@@ -355,6 +649,8 @@ export function Message({
   onReopenVariants,
   pendingApprovals = [],
   onResolveApproval,
+  pendingAsks = [],
+  onAnswerAsk,
   branch,
   onRegenerate,
   onEdit,
@@ -372,6 +668,7 @@ export function Message({
   const userAttachmentParts = isUser
     ? message.parts.filter((p): p is Extract<Part, { type: 'image' | 'file' }> => p.type === 'image' || p.type === 'file')
     : [];
+  const todos = isUser ? null : latestTodos(message.parts);
 
   return (
     <article
@@ -419,10 +716,14 @@ export function Message({
         <MessageEditor message={message} editing={editing} />
       ) : (
       <div className={isUser ? 'whitespace-pre-wrap text-sm' : ''}>
-        {isUser ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n') : renderParts(message.parts)}
+        {isUser
+          ? message.parts.map((p) => (p.type === 'text' ? p.text : '')).join('\n')
+          : renderParts(message.parts, { pendingApprovals, replyStreaming: message.status === 'streaming', scope: { chatId: message.chatId, messageId: message.id } })}
         {message.status === 'streaming' && <span className="streaming-caret" aria-label="streaming" />}
       </div>
       )}
+
+      {todos && <TodoChecklist todos={todos} streaming={message.status === 'streaming'} />}
 
       {userAttachmentParts.length > 0 && !editing && (
         <div className="flex flex-wrap gap-1.5">
@@ -440,6 +741,18 @@ export function Message({
           {pendingApprovals.map((request) => (
             <ApprovalPrompt key={request.id} request={request} onResolve={onResolveApproval} />
           ))}
+        </div>
+      )}
+
+      {pendingAsks.length > 0 && onAnswerAsk && (
+        <div className="space-y-1">
+          {pendingAsks.map((ask) =>
+            ask.kind === 'question' ? (
+              <QuestionCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
+            ) : (
+              <PlanCard key={ask.id} ask={ask} profileName={label} onAnswer={onAnswerAsk} />
+            )
+          )}
         </div>
       )}
 

@@ -207,6 +207,30 @@ body {
 .markdown-body li {
   margin: 0.15em 0;
 }
+/* Tailwind's reset sets list-style: none on every list, so the markers are put back here. */
+.markdown-body ul {
+  list-style-type: disc;
+}
+.markdown-body ul > li > ul {
+  list-style-type: circle;
+}
+.markdown-body ul > li > ul > li > ul {
+  list-style-type: square;
+}
+.markdown-body ol {
+  list-style-type: decimal;
+}
+/* Child chains, so only same-type nesting changes the marker: an ol inside a ul inside an ol stays decimal. */
+.markdown-body ol > li > ol {
+  list-style-type: lower-alpha;
+}
+.markdown-body ol > li > ol > li > ol {
+  list-style-type: lower-roman;
+}
+/* GFM task lists (remark-gfm: li.task-list-item holding a checkbox) show the checkbox, not a bullet. */
+.markdown-body li.task-list-item {
+  list-style: none;
+}
 .markdown-body blockquote {
   border-left: 3px solid var(--border-strong);
   margin: 0.5em 0;

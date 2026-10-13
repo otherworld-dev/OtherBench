@@ -1,5 +1,6 @@
 import type { Attachment, Chat, UsageRecord } from '../ports/store.js';
 import type { CanonMessage, Part } from '../types/messages.js';
+import { actionSummary } from './computer-apps.js';
 import { activePath, extendToTip, isCompareSet, siblingsOf } from './tree.js';
 
 /**
@@ -52,6 +53,18 @@ export function shownPath(messages: CanonMessage[], headMessageId: string | null
   return [...path, ...extendToTip(messages, path.at(-1)!.id)];
 }
 
+/** Control characters (newlines included) and the Unicode line and paragraph separators. */
+const LINE_BREAKERS = new RegExp(`[\\x00-\\x1f\\x7f-\\x9f${String.fromCharCode(0x2028, 0x2029)}]`, 'g');
+
+/** Text for one line of HTML (a `<summary>`): line breakers become spaces, and `&`, `<`, `>` are escaped, so model-written text can't end the element or add markup. */
+function inlineHtml(text: string): string {
+  return text
+    .replace(LINE_BREAKERS, ' ')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 /** A fenced code block whose fence is longer than any run of backticks inside it, so content can't close it early. */
 export function fenced(content: string, lang = ''): string {
   const longest = Math.max(2, ...[...content.matchAll(/`+/g)].map((m) => m[0].length));
@@ -72,6 +85,9 @@ function asText(value: unknown): string {
   }
 }
 
+/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__grunt_<hex>__computer`), as the thread tells it. */
+const COMPUTER_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?computer$/;
+
 function partToMarkdown(part: Part, attachmentName: (id: string) => string | null): string {
   switch (part.type) {
     case 'text':
@@ -83,11 +99,22 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
     case 'file':
       return `*[File: ${part.filename}]*`;
     case 'tool-call':
+      // A computer call is what it does, as the thread shows it (`actionSummary`): never the text a type action
+      // types, which is only on the card and behind the thread's toggle. The JSON export keeps the call whole.
+      if (COMPUTER_TOOL_NAME.test(part.name)) return `**Tool call:** \`${part.name}\`: ${actionSummary(part.args)}`;
       return `**Tool call:** \`${part.name}\`\n\n${fenced(cut(asText(part.args)), 'json')}`;
     case 'tool-result':
       return `**${part.isError ? 'Tool error' : 'Tool result'}:** \`${part.name}\`\n\n${fenced(cut(asText(part.result)))}`;
     case 'notice':
       return `*${part.text}*`;
+    case 'subagent': {
+      const text = part.parts
+        .filter((p): p is Extract<Part, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n\n');
+      const body = [`**Prompt:**\n\n${fenced(cut(part.prompt))}`, text].filter((s) => s.length > 0).join('\n\n');
+      return `<details>\n<summary>Sub-agent: ${inlineHtml(part.label)} (${inlineHtml(part.profileName)}, ${inlineHtml(part.modelId)}), ${part.status}</summary>\n\n${body}\n\n</details>`;
+    }
   }
 }
 

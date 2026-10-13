@@ -58,7 +58,7 @@ describe('ChatRow', () => {
     cleanup();
 
     renderRow({ status: 'waiting' });
-    expect(screen.getByRole('img', { name: 'waiting for approval' })).toHaveAttribute('data-status', 'waiting');
+    expect(screen.getByRole('img', { name: 'waiting for you' })).toHaveAttribute('data-status', 'waiting');
   });
 
   it('selects on click and marks the active row', async () => {

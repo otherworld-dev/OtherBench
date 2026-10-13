@@ -5,6 +5,7 @@ import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import { createApp } from '../src/app.js';
 import type { Container } from '../src/container.js';
+import { refuseCrossSiteWrites } from '../src/cross-site.js';
 import { announceLine, corsAllowlist, exitOnStdinClose, hostCheck } from '../src/desktop.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 
@@ -35,6 +36,13 @@ describe('announceLine', () => {
     expect(line.endsWith('\n')).toBe(true);
     expect(line.indexOf('\n')).toBe(line.length - 1);
     expect(JSON.parse(line)).toEqual({ port: 51234 });
+  });
+
+  it("carries this launch's word for the desktop channel when there is one, and only then", () => {
+    const line = announceLine(51234, '0123456789abcdef0123456789abcdef');
+    expect(line.indexOf('\n')).toBe(line.length - 1);
+    expect(JSON.parse(line)).toEqual({ port: 51234, rpc: '0123456789abcdef0123456789abcdef' });
+    expect(announceLine(51234, null)).toBe('{"port":51234}\n');
   });
 });
 
@@ -79,6 +87,20 @@ describe('hostCheck', () => {
     const res = await app.request('/x', { headers: { Host: '127.0.0.1:50123' } });
 
     expect(res.status).toBe(200);
+  });
+
+  it('also lets the public hosts through when given, and only then', async () => {
+    const app = new Hono();
+    app.use('*', hostCheck(() => 4747, ['grunt.lan:4747', '[fd00::5]:4747']));
+    app.get('/x', (c) => c.text('ok'));
+
+    for (const host of ['grunt.lan:4747', 'GRUNT.LAN:4747', '[fd00::5]:4747', '127.0.0.1:4747']) {
+      expect((await app.request('/x', { headers: { Host: host } })).status, host).toBe(200);
+    }
+    for (const host of ['grunt.lan', 'grunt.lan:4748', 'evil.example:4747']) {
+      expect((await app.request('/x', { headers: { Host: host } })).status, host).toBe(421);
+    }
+    expect((await appWithHostCheck(4747).request('/api/ping', { headers: { Host: 'grunt.lan:4747' } })).status).toBe(421);
   });
 });
 
@@ -192,7 +214,7 @@ describe('cross-site writes to the API (Deck #897)', () => {
       { 'Sec-Fetch-Site': 'cross-site' },
       { 'Sec-Fetch-Site': 'same-site' },
       { Origin: 'http://127.0.0.1:4748' },
-    ]) {
+    ] as Record<string, string>[]) {
       const res = await post(app, headers);
       expect(res.status, JSON.stringify(headers)).toBe(403);
       expect(await res.json(), JSON.stringify(headers)).toMatchObject({ error: expect.stringMatching(/another site/) });
@@ -208,7 +230,7 @@ describe('cross-site writes to the API (Deck #897)', () => {
       { Origin: 'http://localhost:5173', 'Sec-Fetch-Site': 'same-origin' },
       { Origin: APP_ORIGIN, 'Sec-Fetch-Site': 'cross-site' },
       {},
-    ]) {
+    ] as Record<string, string>[]) {
       expect((await post(app, headers)).status, JSON.stringify(headers)).toBe(201);
     }
   });
@@ -235,5 +257,20 @@ describe('cross-site writes to the API (Deck #897)', () => {
   it('leaves reads alone: CORS already keeps another site from reading the answer', async () => {
     const res = await createApp(makeContainer()).request('/api/chats', { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } });
     expect(res.status).toBe(200);
+  });
+
+  it('treats an https own origin on a TLS request, and the public origins, as its own; still refuses others and null', async () => {
+    const app = new Hono();
+    app.use('/api/*', refuseCrossSiteWrites(['https://grunt.lan:4747']));
+    app.post('/api/x', (c) => c.body(null, 204));
+    const write = (url: string, headers: Record<string, string>) => app.request(url, { method: 'POST', headers });
+
+    // Safari before 16.4 sends Origin but no Sec-Fetch-Site.
+    expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'https://box.tail.ts.net' })).status).toBe(204);
+    // Behind a TLS proxy the request reaches Grunt as http; the public origin still counts.
+    expect((await write('http://grunt.lan:4747/api/x', { Host: 'grunt.lan:4747', Origin: 'https://grunt.lan:4747' })).status).toBe(204);
+    expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'http://box.tail.ts.net' })).status).toBe(403);
+    expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'https://evil.example' })).status).toBe(403);
+    expect((await write('https://box.tail.ts.net/api/x', { Host: 'box.tail.ts.net', Origin: 'null' })).status).toBe(403);
   });
 });

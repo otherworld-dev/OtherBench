@@ -1,25 +1,56 @@
 //! The global hotkey and the quick-chat window it opens (v2 plan, Task 37).
 
+use std::sync::Mutex;
+
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// The quick-chat window's label (tauri.conf.json).
 pub const QUICK: &str = "quick";
 
-/// Makes `accelerator` (e.g. "Ctrl+Alt+G") the one global hotkey, replacing
-/// any earlier one. On failure -- it doesn't parse, or another app holds it --
-/// no hotkey is left registered and the error says why; the caller (Settings
-/// → Desktop) shows it and can put the old one back.
-pub fn set(app: &AppHandle, accelerator: &str) -> Result<(), String> {
+/// The longest accelerator the shell registers: the server reads no shortcut
+/// longer than this (shell-wire-spec.md, `computer.hello`).
+pub const MAX_ACCELERATOR: usize = 256;
+
+/// The quick-chat accelerator registered now, exactly as it was registered,
+/// so `set` replaces only it (the computer-use stop hotkey, computer.rs, is
+/// registered beside it) and the computer-use channel can report it.
+static CURRENT: Mutex<Option<String>> = Mutex::new(None);
+
+/// The quick-chat hotkey registered now, if any, as it was registered.
+pub fn registered() -> Option<String> {
+    CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Makes `accelerator` (e.g. "Ctrl+Alt+G") the quick-chat hotkey, replacing
+/// the earlier one. On failure -- it doesn't parse, is too long, is the
+/// computer-use stop hotkey, or another app holds it -- no quick-chat hotkey
+/// is left registered and the error says why; the caller (Settings
+/// → Desktop) shows it and can put the old one back. `changed` is called
+/// after every attempt, so the computer-use channel can report the list.
+pub fn set(app: &AppHandle, accelerator: &str, changed: impl FnOnce()) -> Result<(), String> {
     let shortcuts = app.global_shortcut();
-    shortcuts.unregister_all().map_err(|e| e.to_string())?;
-    shortcuts
-        .on_shortcut(accelerator, |app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                toggle_quick(app);
-            }
-        })
-        .map_err(|e| e.to_string())
+    let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(previous) = current.take() {
+        let _ = shortcuts.unregister(previous.as_str());
+    }
+    let outcome = if accelerator.chars().count() > MAX_ACCELERATOR {
+        Err(format!("A shortcut is at most {MAX_ACCELERATOR} characters."))
+    } else if crate::computer::is_stop_hotkey(accelerator) {
+        Err(format!("{} stops computer use; pick another shortcut.", crate::computer::STOP_HOTKEY))
+    } else {
+        shortcuts
+            .on_shortcut(accelerator, |app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    toggle_quick(app);
+                }
+            })
+            .map(|()| *current = Some(accelerator.to_string()))
+            .map_err(|e| e.to_string())
+    };
+    drop(current);
+    changed();
+    outcome
 }
 
 /// Shows the quick-chat window on the monitor the cursor is on, or hides it

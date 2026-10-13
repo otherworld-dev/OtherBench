@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -16,6 +17,7 @@ import { AppEventBus } from '../../src/stream/events.js';
 
 interface SyncNode {
   name: string;
+  db: DatabaseSync;
   store: SqliteStore;
   secrets: FakeSecretStore;
   blobs: BlobStore;
@@ -57,6 +59,7 @@ function syncNode(name: string, options: { schemaVersion?: number; fallbackMs?: 
   service.attachSyncer(syncer);
   const node: SyncNode = {
     name,
+    db,
     store,
     secrets,
     blobs,
@@ -173,13 +176,101 @@ describe('syncing two machines over the peer listener', () => {
     expect(laptop.store.attachments.get('a-good')!.storagePath).not.toBe('');
     expect(laptop.store.attachments.get('a-bad')!.storagePath).toBe('');
     expect(laptop.store.attachments.get('a-unsent')).toBeNull();
-    expect(laptop.store.sync.missingBlobs()).toEqual([{ id: 'a-bad', sha256: bad.sha256 }]);
+    expect(laptop.store.sync.missingBlobs()).toEqual([{ id: 'a-bad', sha256: bad.sha256, size: bad.size }]);
     expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${unsent.sha256}` })).status).toBe(404);
 
     // The PC's copy is mended: the next sync fetches it.
     writeFileSync(bad.path, 'bytes about to be corrupted');
     await laptop.syncer.pullFrom('node-PC');
     expect(laptop.store.sync.missingBlobs()).toEqual([]);
+  });
+
+  it('drops a blob longer than its row says it is, whether it comes from the peer or is already here', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    const honest = await pc.blobs.put(Buffer.from('exactly as long'));
+    const liar = await pc.blobs.put(Buffer.from('this blob is much longer than its row claims'));
+    const known = await pc.blobs.put(Buffer.from('this one is already on the laptop, and also too long'));
+    await laptop.blobs.put(Buffer.from('this one is already on the laptop, and also too long'));
+    const make = (id: string, blob: { sha256: string; path: string }, size: number) =>
+      pc.store.attachments.create({ id, chatId: 'chat', messageId: 'u1', filename: `${id}.png`, mime: 'image/png', size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+    make('a-honest', honest, honest.size);
+    make('a-liar', liar, 3);
+    make('a-known', known, 3);
+    await pairNodes(pc, laptop);
+
+    await laptop.syncer.pullFrom('node-PC');
+
+    expect(laptop.store.attachments.get('a-honest')!.storagePath).not.toBe('');
+    expect(laptop.store.attachments.get('a-liar')!.storagePath).toBe('');
+    expect(laptop.store.attachments.get('a-known')!.storagePath).toBe('');
+    expect(laptop.store.sync.missingBlobs().map((m) => m.id)).toEqual(['a-known', 'a-liar']);
+  });
+
+  it('asks for no blob, and keeps none, for a row that does not state a usable size (text, a fraction, negative, not finite, over the cap)', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    // Blobs the PC would serve (each is sent in a message there); one of them is also on the laptop already.
+    const blobs = [];
+    for (let i = 0; i < 7; i++) {
+      const blob = await pc.blobs.put(Buffer.from(`file number ${i}, which the PC really has`));
+      pc.store.attachments.create({ id: `pc-${i}`, chatId: 'chat', messageId: 'u1', filename: `f${i}.png`, mime: 'image/png', size: blob.size, sha256: blob.sha256, storagePath: blob.path, extractedText: null });
+      blobs.push(blob);
+    }
+    await laptop.blobs.put(Buffer.from('file number 6, which the PC really has'));
+    await pairNodes(pc, laptop);
+
+    // What a store could hand over from old rows: the syncer itself must not act on any of these sizes.
+    const sizes: unknown[] = ['big', Number.NaN, 1.5, -1, Number.POSITIVE_INFINITY, 64 * 1024 * 1024 + 1, 'big'];
+    const rows = sizes.map((size, i) => ({ id: `pc-${i}`, sha256: blobs[i]!.sha256, size: size as number }));
+    const sync = laptop.store.sync!;
+    const realMissing = sync.missingBlobs.bind(sync);
+    sync.missingBlobs = () => rows;
+    const asked: string[] = [];
+    const realCall = laptop.service.call.bind(laptop.service);
+    laptop.service.call = ((nodeId: string, request: { method: string; path: string }, limits?: unknown) => {
+      asked.push(request.path);
+      return (realCall as (...args: unknown[]) => unknown)(nodeId, request, limits);
+    }) as typeof laptop.service.call;
+
+    await laptop.syncer.pullFrom('node-PC');
+
+    expect(asked.filter((p) => p.startsWith('/peer/blobs/'))).toEqual([]);
+    for (let i = 0; i < 7; i++) expect(laptop.store.attachments.get(`pc-${i}`)!.storagePath, `pc-${i}`).toBe('');
+    for (let i = 0; i < 6; i++) await expect(laptop.blobs.get(blobs[i]!.sha256), `pc-${i}`).rejects.toThrow();
+
+    // With its real rows back (sizes as the PC stated them), the same pull fetches every one.
+    sync.missingBlobs = realMissing;
+    await laptop.syncer.pullFrom('node-PC');
+    expect(asked.filter((p) => p.startsWith('/peer/blobs/'))).toHaveLength(6);
+    expect(laptop.store.sync!.missingBlobs()).toEqual([]);
+  });
+
+  it('offers no file row and serves no blob for a file that is not bound to a message of its own chat', async () => {
+    const pc = syncNode('PC');
+    const laptop = syncNode('Laptop');
+    seed(pc);
+    pc.store.chats.create({ id: 'other', title: 'Another chat', profileId: 'p1', headMessageId: null, workspace: null, pinned: false, archivedAt: null });
+    const fine = await pc.blobs.put(Buffer.from('sent in its own chat'));
+    const wrong = await pc.blobs.put(Buffer.from('filed under another chat'));
+    const insert = pc.db.prepare('INSERT INTO attachment (id, chat_id, message_id, filename, mime, size, sha256, storage_path, extracted_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)');
+    // Written past the repo (which refuses a mismatch), as a row from an older build would be.
+    insert.run('a-fine', 'chat', 'u1', 'fine.png', 'image/png', fine.size, fine.sha256, fine.path);
+    insert.run('a-wrong', 'other', 'u1', 'wrong.png', 'image/png', wrong.size, wrong.sha256, wrong.path);
+    await pairNodes(pc, laptop);
+
+    await laptop.syncer.pullFrom('node-PC');
+
+    expect(JSON.stringify(await pc.syncer.changesFor(0, 1000))).toContain('a-fine');
+    expect(JSON.stringify(await pc.syncer.changesFor(0, 1000))).not.toContain('a-wrong');
+    expect(laptop.store.attachments.get('a-fine')).not.toBeNull();
+    expect(laptop.store.attachments.get('a-wrong')).toBeNull();
+    expect(await pc.syncer.blob(fine.sha256)).not.toBeNull();
+    expect(await pc.syncer.blob(wrong.sha256)).toBeNull();
+    expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${wrong.sha256}` })).status).toBe(404);
+    expect((await laptop.service.call('node-PC', { method: 'GET', path: `/peer/blobs/${'0'.repeat(64)}` })).status).toBe(404);
   });
 
   it('refuses to sync with a machine on a different schema, saying which to update', async () => {

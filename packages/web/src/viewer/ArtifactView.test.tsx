@@ -1,26 +1,33 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ArtifactVersion } from '@grunt/core/ports/store.js';
 
 vi.mock('../state/api.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../state/api.js')>()),
-  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn() }, view: { openArtifact: vi.fn() } },
+  api: { artifacts: { get: vi.fn(), version: vi.fn(), edit: vi.fn(), save: vi.fn(), file: vi.fn(), live: { status: vi.fn(), allow: vi.fn(), revoke: vi.fn(), call: vi.fn() } }, view: { openArtifact: vi.fn() } },
 }));
 
 vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
 
+// The sheet preview names a column header per column on every render, so counting these counts redraws of the table.
+vi.mock('@grunt/core/domain/office-spec.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@grunt/core/domain/office-spec.js')>();
+  return { ...actual, columnName: vi.fn(actual.columnName) };
+});
+
+import { columnName } from '@grunt/core/domain/office-spec.js';
 import { saveFile } from '../lib/saveFile.js';
-import { ApiError, api, type ArtifactDetail } from '../state/api.js';
+import { ApiError, api, type ArtifactDetail, type LiveStatus } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { ArtifactView } from './ArtifactView.js';
 
 const version = (id: string, number: number, content: string, madeBy: 'model' | 'user' = 'model', kind: ArtifactVersion['kind'] = 'html'): ArtifactVersion => ({
-  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
+  id, artifactId: 'art', number, title: 'Calc', content, kind, language: kind === 'code' ? 'ts' : null, live: null, madeBy, messageId: 'm', parentVersionId: null, createdAt: number,
 });
 const detail = (kind: 'html' | 'markdown' | 'code' = 'html'): ArtifactDetail => {
   const fileName = kind === 'html' ? 'calc.html' : kind === 'markdown' ? 'calc.md' : 'calc.ts';
-  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName };
+  const each = { title: 'Calc', madeBy: 'model' as const, kind, language: kind === 'code' ? 'ts' : null, fileName, live: 0 };
   return {
     artifact: { id: 'art', chatId: 'c1', slug: 'calc', kind, language: kind === 'code' ? 'ts' : null, createdAt: 1 },
     fileName,
@@ -124,7 +131,7 @@ describe('ArtifactView', () => {
     await waitFor(() => expect(box).toHaveValue('<p>v2</p>'));
     await user.clear(box);
     await user.type(box, '<p>mine</p>');
-    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html' }] });
+    vi.mocked(api.artifacts.get).mockResolvedValue({ ...detail(), currentVersionId: 'v4', versions: [...detail().versions, { id: 'v4', number: 4, title: 'Calc', madeBy: 'user', createdAt: 4, onBranch: true, kind: 'html', language: null, fileName: 'calc.html', live: 0 }] });
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(api.artifacts.edit).toHaveBeenCalledWith('c1', 'art', { content: '<p>mine</p>', fromVersionId: 'v2' });
     await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v4/calc.html'));
@@ -154,5 +161,311 @@ describe('ArtifactView', () => {
     render(<ArtifactView chatId="c1" item={item} />);
     await screen.findByTitle('calc.html');
     expect(screen.queryByRole('button', { name: 'Save to workspace' })).toBeNull();
+  });
+
+  const officeDetail = (kind: 'document' | 'spreadsheet' | 'presentation', fileName: string): ArtifactDetail => {
+    const each = { title: 'Budget', madeBy: 'model' as const, kind, language: null, fileName, live: 0 };
+    return {
+      artifact: { id: 'art', chatId: 'c1', slug: 'budget', kind, language: null, createdAt: 1 },
+      fileName,
+      currentVersionId: 'v2',
+      versions: [{ ...each, id: 'v2', number: 2, createdAt: 2, onBranch: true }],
+    };
+  };
+  const SHEET = JSON.stringify({ sheets: [{ name: 'Budget', rows: [['Items', 'Cost'], ['Total', '=SUM(B2:B3)']] }] });
+
+  it('previews a spreadsheet from its source and downloads the made .xlsx', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    const blob = new Blob(['PK']);
+    vi.mocked(api.artifacts.file).mockReset().mockResolvedValue(blob);
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByText('=SUM(B2:B3)')).toBeInTheDocument();
+    expect(api.view.openArtifact).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(api.artifacts.file).toHaveBeenCalledWith('c1', 'art', 'v2');
+    expect(saveFile).toHaveBeenLastCalledWith(blob, 'budget.xlsx');
+    // Source still shows the JSON.
+    await user.click(screen.getByRole('button', { name: 'Source' }));
+    await waitFor(() => expect(document.querySelector('pre code')?.textContent).toBe(SHEET));
+  });
+
+  it('says why a download failed and keeps the preview', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.file).mockReset().mockRejectedValue(new ApiError(422, "Couldn't make budget.xlsx: sheets[0].rows[0][0]: bad"));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't make budget.xlsx");
+    expect(screen.getByText('=SUM(B2:B3)')).toBeInTheDocument();
+  });
+
+  it('previews a document as a page', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('document', 'memo.docx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, '# Quarterly memo', 'model', 'document'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByRole('heading', { name: 'Quarterly memo' })).toBeInTheDocument();
+  });
+
+  it('previews a presentation as slides', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('presentation', 'deck.pptx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, JSON.stringify({ slides: [{ layout: 'title', title: 'Mock review' }] }), 'model', 'presentation'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    expect(await screen.findByText('Mock review')).toBeInTheDocument();
+    expect(screen.getByRole('figure', { name: 'Slide 1' })).toBeInTheDocument();
+  });
+
+  it('keeps your draft and says why when an edit is refused', async () => {
+    vi.mocked(api.artifacts.edit).mockRejectedValue(new ApiError(400, 'sheets: must be a list of 1-50 sheets'));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const box = screen.getByRole('textbox', { name: 'Artifact source' });
+    await waitFor(() => expect(box).toHaveValue('<p>v2</p>'));
+    await user.type(box, '!');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('sheets: must be a list of 1-50 sheets');
+    expect(screen.getByRole('textbox', { name: 'Artifact source' })).toHaveValue('<p>v2</p>!');
+  });
+
+  const twoSheets = (): ArtifactDetail => {
+    const one = officeDetail('spreadsheet', 'budget.xlsx');
+    return { ...one, versions: [{ ...one.versions[0]!, id: 'v1', number: 1, createdAt: 1 }, ...one.versions] };
+  };
+  const failingDownload = async (): Promise<ReturnType<typeof userEvent.setup>> => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(twoSheets());
+    vi.mocked(api.artifacts.version).mockImplementation(async (_c, _a, id) => version(id, id === 'v1' ? 1 : 2, SHEET, 'model', 'spreadsheet'));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    return user;
+  };
+
+  it('clears a failed download when you move to another version', async () => {
+    vi.mocked(api.artifacts.file).mockReset().mockRejectedValue(new ApiError(422, "Couldn't make budget.xlsx: bad"));
+    const user = await failingDownload();
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't make budget.xlsx");
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Version' }), 'v1');
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(await screen.findByText('=SUM(B2:B3)')).toBeInTheDocument();
+  });
+
+  it("doesn't show a download's late failure against the version you moved to", async () => {
+    let fail: (err: unknown) => void = () => {};
+    vi.mocked(api.artifacts.file).mockReset().mockReturnValue(new Promise<Blob>((_resolve, reject) => { fail = reject; }));
+    const user = await failingDownload();
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Version' }), 'v1');
+    await waitFor(() => expect(api.artifacts.version).toHaveBeenCalledWith('c1', 'art', 'v1'));
+    await screen.findByText('=SUM(B2:B3)');
+    await act(async () => fail(new ApiError(422, "Couldn't make budget.xlsx: bad")));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('clears a refused edit when you cancel it', async () => {
+    vi.mocked(api.artifacts.edit).mockRejectedValue(new ApiError(400, 'sheets: must be a list of 1-50 sheets'));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Artifact source' })).toHaveValue('<p>v2</p>'));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('alert');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(await screen.findByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('keeps the view when saving to the workspace fails', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.save).mockRejectedValueOnce(new ApiError(422, "Couldn't make budget.xlsx: bad"));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Save to workspace' }));
+    await user.click(screen.getByRole('button', { name: 'Save file' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't make budget.xlsx");
+    expect(screen.getByText('=SUM(B2:B3)')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Save as' })).toBeInTheDocument();
+  });
+
+  it('clears a failed save once a later save works', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.save).mockReset().mockRejectedValueOnce(new ApiError(422, "Couldn't make budget.xlsx: bad")).mockResolvedValueOnce({ path: 'C:\\ws\\budget.xlsx' });
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Save to workspace' }));
+    await user.click(screen.getByRole('button', { name: 'Save file' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't make budget.xlsx");
+    await user.click(screen.getByRole('button', { name: 'Save file' }));
+    expect(await screen.findByText('Saved to C:\\ws\\budget.xlsx')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows an Office download is being made and waits, so a second click queues nothing, then works again', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    let finish: (blob: Blob) => void = () => {};
+    vi.mocked(api.artifacts.file).mockReset().mockReturnValueOnce(new Promise<Blob>((resolve) => { finish = resolve; }));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    const busy = await screen.findByRole('button', { name: 'Making file…' });
+    expect(busy).toBeDisabled();
+    expect(busy).toHaveAttribute('aria-busy', 'true');
+    await user.click(busy);
+    expect(api.artifacts.file).toHaveBeenCalledTimes(1);
+    const blob = new Blob(['PK']);
+    await act(async () => finish(blob));
+    expect(await screen.findByRole('button', { name: 'Download' })).toBeEnabled();
+    expect(saveFile).toHaveBeenLastCalledWith(blob, 'budget.xlsx');
+  });
+
+  it('enables Download again after a download fails', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.file).mockReset().mockRejectedValue(new ApiError(422, "Couldn't make budget.xlsx: bad"));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    await screen.findByRole('alert');
+    expect(screen.getByRole('button', { name: 'Download' })).toBeEnabled();
+  });
+
+  it("doesn't redraw the sheet when something else in the viewer changes", async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(officeDetail('spreadsheet', 'budget.xlsx'));
+    vi.mocked(api.artifacts.version).mockResolvedValue(version('v2', 2, SHEET, 'model', 'spreadsheet'));
+    vi.mocked(api.artifacts.file).mockReset().mockRejectedValue(new ApiError(422, "Couldn't make budget.xlsx: bad"));
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByText('=SUM(B2:B3)');
+    const drawn = vi.mocked(columnName).mock.calls.length;
+    expect(drawn).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Save to workspace' }));
+    await user.type(screen.getByRole('textbox', { name: 'Save as' }), 'x');
+    await user.click(screen.getByRole('button', { name: 'Download' }));
+    await screen.findByRole('alert');
+    expect(vi.mocked(columnName).mock.calls.length).toBe(drawn);
+  });
+});
+
+describe('ArtifactView live pages (spec 2026-10-12-live-artifacts)', () => {
+  const liveDetail = (): ArtifactDetail => {
+    const d = detail();
+    return { ...d, versions: d.versions.map((v) => ({ ...v, live: 1 })) };
+  };
+  const liveStatus = (state: 'allowed' | 'needs_ok'): LiveStatus => ({
+    machine: { id: 'n1', name: 'Desk' }, runsOn: null, profile: { id: 'p', name: 'Sonnet' },
+    calls: [{ callId: 'value', tool: 'mcp__Live__lookup', serverName: 'Live', toolName: 'lookup', description: '', state, args: {}, params: {} }],
+  });
+
+  beforeEach(() => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(liveDetail());
+    vi.mocked(api.artifacts.live.status).mockReset().mockResolvedValue(liveStatus('needs_ok'));
+    vi.mocked(api.artifacts.live.allow).mockReset().mockResolvedValue(liveStatus('allowed'));
+    vi.mocked(api.artifacts.live.revoke).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("doesn't load the page until it knows which calls are allowed", async () => {
+    let answer!: (s: LiveStatus) => void;
+    vi.mocked(api.artifacts.live.status).mockReturnValue(new Promise<LiveStatus>((r) => (answer = r)));
+    render(<ArtifactView chatId="c1" item={item} />);
+    await waitFor(() => expect(api.artifacts.live.status).toHaveBeenCalledWith('c1', 'art', 'v2'));
+    expect(screen.queryByTitle('calc.html')).toBeNull();
+    act(() => answer(liveStatus('needs_ok')));
+    expect(await screen.findByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('Allow calls the API, then reloads the frame on a fresh link and shows the strip', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Allow live data' }));
+    expect(api.artifacts.live.allow).toHaveBeenCalledWith('c1', 'art', 'v2');
+    await waitFor(() => expect(api.view.openArtifact).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('button', { name: 'Stop live data' })).toBeInTheDocument();
+  });
+
+  it('Not now hides the panel for this view', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('region', { name: 'Live data' })).toBeNull();
+    expect(screen.getByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('Stop live data revokes, reloads the status and the frame', async () => {
+    vi.mocked(api.artifacts.live.status).mockResolvedValueOnce(liveStatus('allowed')).mockResolvedValue(liveStatus('needs_ok'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Stop live data' }));
+    expect(api.artifacts.live.revoke).toHaveBeenCalledWith('c1', 'art');
+    expect(await screen.findByRole('button', { name: 'Allow live data' })).toBeInTheDocument();
+    await waitFor(() => expect(api.view.openArtifact).toHaveBeenCalledTimes(2));
+  });
+
+  it('closes the page when it loads a second document, and Reopen brings it back', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    const frame = await screen.findByTitle('calc.html');
+    fireEvent.load(frame);
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+    fireEvent.load(frame);
+    expect(await screen.findByText('This page went to another address, so Grunt closed it.')).toBeInTheDocument();
+    expect(screen.queryByTitle('calc.html')).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Reopen' }));
+    const again = await screen.findByTitle('calc.html');
+    expect(again).not.toBe(frame);
+    fireEvent.load(again);
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+  });
+
+  it('switching versions loads a new page without reading it as the page leaving', async () => {
+    render(<ArtifactView chatId="c1" item={item} />);
+    fireEvent.load(await screen.findByTitle('calc.html'));
+    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'Version' }), 'v1');
+    await waitFor(() => expect(screen.getByTitle('calc.html')).toHaveAttribute('src', '/view/x-v1/calc.html'));
+    fireEvent.load(screen.getByTitle('calc.html'));
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+  });
+
+  it('Refresh mounts a new frame on a fresh link, whose first load is not read as the page leaving', async () => {
+    vi.mocked(api.artifacts.live.status).mockResolvedValue(liveStatus('allowed'));
+    render(<ArtifactView chatId="c1" item={item} />);
+    const frame = await screen.findByTitle('calc.html');
+    fireEvent.load(frame);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(api.view.openArtifact).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTitle('calc.html')).not.toBe(frame));
+    fireEvent.load(screen.getByTitle('calc.html'));
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+    expect(screen.getByTitle('calc.html')).toBeInTheDocument();
+  });
+
+  it('showing Source and coming back mounts a new frame, whose first load is not read as the page leaving', async () => {
+    const user = userEvent.setup();
+    render(<ArtifactView chatId="c1" item={item} />);
+    fireEvent.load(await screen.findByTitle('calc.html'));
+    await user.click(screen.getByRole('button', { name: 'Source' }));
+    await waitFor(() => expect(screen.queryByTitle('calc.html')).toBeNull());
+    await user.click(screen.getByRole('button', { name: 'Source' }));
+    fireEvent.load(await screen.findByTitle('calc.html'));
+    expect(screen.queryByText(/went to another address/)).toBeNull();
+  });
+
+  it('a plain page has no live bar and asks for no status', async () => {
+    vi.mocked(api.artifacts.get).mockResolvedValue(detail());
+    render(<ArtifactView chatId="c1" item={item} />);
+    await screen.findByTitle('calc.html');
+    expect(api.artifacts.live.status).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: 'Live data' })).toBeNull();
   });
 });

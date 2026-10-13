@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
+import type { ToolSpec } from '../src/ports/tool-provider.js';
 import type { ResolvedProfile } from '../src/types/config.js';
-import { FakeChatEngine, InMemoryStore, FakeSecretStore, FakeToolProvider } from '../src/testing/fakes.js';
+import { FakeChatEngine, InMemoryStore, FakeSecretStore, FakeToolProvider, FakeSandbox } from '../src/testing/fakes.js';
+import type { SandboxRunRequest } from '../src/ports/sandbox.js';
 import { runSecretStoreContract } from '../src/testing/secret-store-contract.js';
 import { runToolProviderContract } from '../src/testing/tool-provider-contract.js';
 import { runStoreContract } from '../src/testing/store-contract.js';
@@ -147,6 +149,69 @@ describe('FakeSecretStore', () => {
   });
 });
 
+describe('FakeSandbox', () => {
+  const req = (over: Partial<SandboxRunRequest> = {}): SandboxRunRequest => ({
+    chatId: 'c1',
+    command: 'ls',
+    timeoutMs: 120_000,
+    workspaceRoot: 'E:\\Git\\Grunt',
+    folders: [],
+    writable: true,
+    allowedHosts: [],
+    signal: new AbortController().signal,
+    askHost: async () => true,
+    ...over,
+  });
+
+  it('refuses to run until set up, naming the machine, then answers with a sandbox result', async () => {
+    const sandbox = new FakeSandbox({ machine: () => 'Gigabyte' });
+    expect((await sandbox.status()).state).toBe('not_set_up');
+    await expect(sandbox.run(req())).rejects.toMatchObject({ name: 'SandboxError', code: 'not_set_up', message: "The sandbox isn't set up on Gigabyte." });
+    await sandbox.setup();
+    expect(sandbox.setupCalls).toBe(1);
+    expect(await sandbox.status()).toMatchObject({ state: 'ready', machine: 'Gigabyte', versions: { runtime: '0.0.79' } });
+    expect(await sandbox.run(req())).toMatchObject({ command: 'ls', exitCode: 0, sandbox: true, cwd: '/mnt/e/Git/Grunt', timeoutMsUsed: 120_000 });
+    expect(sandbox.requests).toHaveLength(2);
+  });
+
+  it('asks about the scripted hosts through the request and records the answers', async () => {
+    const sandbox = new FakeSandbox({ ready: true, askHosts: [{ host: 'example.com', port: 443 }] });
+    await sandbox.run(req({ askHost: async (host) => host === 'example.com' }));
+    expect(sandbox.asked).toEqual([{ host: 'example.com', port: 443, allowed: true }]);
+  });
+
+  it('keeps packages, and records releases and close', async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    await sandbox.setPackages(['ffmpeg']);
+    expect((await sandbox.status()).packages).toEqual(['ffmpeg']);
+    await sandbox.release('c1');
+    await sandbox.close();
+    expect(sandbox.released).toEqual(['c1']);
+    expect(sandbox.closed).toBe(true);
+    await sandbox.remove();
+    expect((await sandbox.status()).state).toBe('not_set_up');
+  });
+});
+
+describe('FakeToolProvider and the sandboxed shell', () => {
+  it('offers the sandboxed run_command instead of the host one when the shell runs in the sandbox', async () => {
+    const provider = new FakeToolProvider();
+    const base = { fs: 'off' as const, shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const, artifacts: false, recall: false };
+    expect((await provider.listTools({ ...base, shellRuns: 'sandbox' })).map((t) => [t.name, t.source])).toEqual([['run_command', 'sandbox']]);
+    expect((await provider.listTools(base)).map((t) => [t.name, t.source])).toEqual([['run_command', 'shell']]);
+  });
+});
+
+describe('FakeToolProvider', () => {
+  it('offers its subagent tool only when the policy turns sub-agents on', async () => {
+    const subagent: ToolSpec = { name: 'subagent', description: '', parameters: {}, risk: 'read', source: 'subagent', execute: async () => 'ok' };
+    const provider = new FakeToolProvider({ tools: [subagent] });
+    const base = { fs: 'off' as const, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const };
+    expect((await provider.listTools(base)).map((t) => t.name)).toEqual([]);
+    expect((await provider.listTools({ ...base, subagents: true })).map((t) => t.name)).toEqual(['subagent']);
+  });
+});
+
 // The shared behavioural contract (packages/core/src/testing/store-contract.ts) is
 // authored here and run against InMemoryStore now, so it cannot drift from what
 // Task 9's real SQLite adapter will be held to later -- that is the whole point of
@@ -155,3 +220,15 @@ runStoreContract('InMemoryStore', () => new InMemoryStore());
 
 runSecretStoreContract('FakeSecretStore', () => new FakeSecretStore());
 runToolProviderContract('FakeToolProvider', ({ mcpServers }) => new FakeToolProvider({ mcpServers }));
+
+describe('FakeToolProvider live calls', () => {
+  it('refuses every live call', async () => {
+    const provider = new FakeToolProvider();
+    const call = { id: 'value', tool: 'mcp__s__lookup', args: {}, params: {} };
+    const req = { chatId: 'c', profileId: 'p', policy: { fs: 'off' as const, shell: false, mcpServerIds: ['s'], approvalMode: 'always_ask' as const }, artifactId: 'a', calls: [{ call, hash: 'h' }] };
+    expect(provider.liveStatus(req)).toEqual([expect.objectContaining({ callId: 'value', state: 'unavailable' })]);
+    expect(provider.allowLive(req)[0]!.state).toBe('unavailable');
+    expect(provider.revokeLive()).toBe(0);
+    expect(await provider.runLiveCall({ chatId: 'c', messageId: 'm', profileId: 'p', policy: req.policy, artifactId: 'a', callId: 'value', hash: 'h', toolName: call.tool, args: {}, fresh: false, signal: new AbortController().signal })).toMatchObject({ ok: false, code: 'not_available' });
+  });
+});

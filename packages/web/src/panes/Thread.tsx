@@ -1,9 +1,10 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { activePath, childrenOf, extendToTip, isCompareSet, siblingsOf } from '@grunt/core/domain/tree.js';
-import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, AskReply } from '@grunt/core/ports/tool-provider.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { Composer } from '../components/Composer.js';
+import { ComputerBanner } from '../components/ComputerBanner.js';
 import { UnreachableBanner } from '../components/UnreachableBanner.js';
 import { WorkspacePrompt } from '../components/WorkspacePrompt.js';
 import { Message } from '../components/Message.js';
@@ -14,6 +15,7 @@ import { useGruntStore } from '../state/store.js';
 import { DEFAULT_VIEWER, useViewerStore, viewerFor } from '../viewer/state.js';
 import { ViewerContext, viewerActionsFor } from '../viewer/ViewerContext.js';
 import { ViewerPanel } from '../viewer/ViewerPanel.js';
+import { useBrowserAutoOpen } from '../viewer/useBrowserAutoOpen.js';
 import { ConversationStrip } from './ConversationStrip.js';
 import { Splitter } from './Splitter.js';
 
@@ -79,6 +81,9 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     () => (chatId ? Object.values(messages).filter((m) => m.chatId === chatId) : []),
     [messages, chatId]
   );
+  useBrowserAutoOpen(chatId, chatMessages, viewer.open);
+  // The viewer bar's Browser button: shown once the model has used the browser in this chat.
+  const browserUsed = useMemo(() => chatMessages.some((m) => m.parts.some((p) => p.type === 'tool-call' && p.name === 'browser')), [chatMessages]);
   const path = useMemo(() => {
     if (!chat?.headMessageId) return [];
     try {
@@ -287,6 +292,19 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
     }
   }
 
+  /** Answers a question or plan card; a 404 (already settled, turn ended, server restarted) drops the dead card. */
+  async function answerAsk(askId: string, reply: AskReply): Promise<void> {
+    try {
+      await api.asks.answer(askId, reply);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        useGruntStore.getState().dropAsk(askId);
+        return;
+      }
+      throw err;
+    }
+  }
+
   async function retryVariant(variant: CanonMessage): Promise<void> {
     setRetryingIds((s) => new Set(s).add(variant.id));
     // Optimistic, local-only: clears the failed attempt's parts/error so the
@@ -350,6 +368,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                           retryingIds={retryingIds}
                           onClose={() => setReopenedParentId(null)}
                           onResolveApproval={resolveApproval}
+                          onAnswerAsk={answerAsk}
                         />
                       );
                     }
@@ -362,6 +381,8 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                         onReopenVariants={compare ? () => setReopenedParentId(m.parentId) : undefined}
                         pendingApprovals={extras[m.id]?.pendingApprovals ?? []}
                         onResolveApproval={resolveApproval}
+                        pendingAsks={extras[m.id]?.pendingAsks ?? []}
+                        onAnswerAsk={answerAsk}
                         branch={
                           !compare && siblings.length > 1
                             ? {
@@ -405,6 +426,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
                     onRetry={(v) => void retryVariant(v)}
                     retryingIds={retryingIds}
                     onResolveApproval={resolveApproval}
+                    onAnswerAsk={answerAsk}
                     onActiveChange={setShownVariantId}
                   />
                 )}
@@ -423,6 +445,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
           <div data-testid="branch-announcer" role="status" aria-live="polite" className="sr-only">
             {announcement}
           </div>
+          <ComputerBanner chat={chat} />
           <UnreachableBanner chat={chat} />
           <WorkspacePrompt chat={chat} />
           <Composer
@@ -450,7 +473,7 @@ export function Thread({ chat }: { chat: Chat | null }): JSX.Element {
               }}
             />
             <div style={{ flex: `${share} 1 0` }} className="min-h-0 min-w-0">
-              <ViewerPanel chat={chat} />
+              <ViewerPanel chat={chat} browserUsed={browserUsed} />
             </div>
           </>
         )}

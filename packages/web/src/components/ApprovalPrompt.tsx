@@ -1,6 +1,10 @@
 import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
+import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
+import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
+import { oneLine, revealHidden } from '../viewer/browser.js';
+import { ComputerApprovalPrompt } from './ComputerApprovalPrompt.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -17,6 +21,23 @@ const RISK_LABEL: Record<ApprovalRequest['risk'], string> = {
 /** A Claude Code shell-category tool (Bash, PowerShell, ...) -- grants are scoped like Grunt's own shell tool. */
 function isAgentShell(request: ApprovalRequest): boolean {
   return request.source === 'agent' && classifyAgentTool(request.toolName).category === 'shell';
+}
+
+/**
+ * A sandbox_network card's host and port (spec 2026-10-12-sandbox-design,
+ * "Cards and audit"), or null for any other card. The host is shown, and
+ * granted, in its canonical form (lower-case, punycode for an IDN): a
+ * look-alike name must not read as pypi.org on the card, and the broker only
+ * accepts a grant naming the card's own canonical host. A name with no
+ * canonical form never reaches a card (the broker refuses it first); its raw
+ * spelling is shown as-is.
+ */
+function networkTarget(request: ApprovalRequest): { host: string; port: number | null } | null {
+  if (request.source !== 'network') return null;
+  const args = request.args as Record<string, unknown> | null;
+  const raw = args && typeof args['host'] === 'string' ? args['host'] : null;
+  if (raw === null) return null;
+  return { host: canonicalHost(raw) ?? raw, port: args && typeof args['port'] === 'number' ? args['port'] : null };
 }
 
 /**
@@ -45,8 +66,17 @@ function deriveAlwaysConstraint(
   request: ApprovalRequest,
   allowAnyArgs: boolean
 ): Extract<ApprovalChoice, { choice: 'always' }>['constraint'] {
+  // A network grant is for one host, any port: "always reach anything" is never one click.
+  const network = networkTarget(request);
+  if (network) return { host: network.host };
   const args = request.args as Record<string, unknown> | null;
-  if ((request.source === 'shell' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
+  // A browser grant is for the one site the card names (spec 2026-10-12-model-browser-design §6), by the same rule as
+  // the network's: exactly `{ host }`, the card's own, in its canonical spelling. The broker refuses anything else.
+  if (request.source === 'browser') {
+    const site = args && typeof args['host'] === 'string' ? args['host'] : null;
+    return site === null ? null : { host: normaliseHost(site) ?? site };
+  }
+  if ((request.source === 'shell' || request.source === 'sandbox' || isAgentShell(request)) && args && typeof args['command'] === 'string') {
     return allowAnyArgs ? { commandPrefix: args['command'] } : { commandExact: args['command'] };
   }
   if ((request.source === 'fs' || isAgentFileTool(request)) && args && typeof args['path'] === 'string') {
@@ -69,7 +99,7 @@ function isAgentFileTool(request: ApprovalRequest): boolean {
 /** True when this request's args carry a shell `command` string -- the only case `deriveAlwaysConstraint` has a prefix/exact choice to make at all. */
 function isShellCommandRequest(request: ApprovalRequest): boolean {
   const args = request.args as Record<string, unknown> | null;
-  return (request.source === 'shell' || isAgentShell(request)) && !!args && typeof args['command'] === 'string';
+  return (request.source === 'shell' || request.source === 'sandbox' || isAgentShell(request)) && !!args && typeof args['command'] === 'string';
 }
 
 /**
@@ -81,7 +111,7 @@ function isShellCommandRequest(request: ApprovalRequest): boolean {
  * `PermissionBroker.resolve` accepts (packages/core/src/domain/
  * permissions.ts) -- no fifth option exists to invent here.
  */
-export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
+function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Explicit, secondary opt-in for a `commandPrefix` "always" grant -- see
@@ -90,6 +120,18 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
   // meaningless (and hidden) otherwise.
   const [allowAnyArgs, setAllowAnyArgs] = useState(false);
   const isShellCommand = isShellCommandRequest(request);
+  const network = networkTarget(request);
+  // A browser card names the site (`args.host`, which the server takes from the page's committed address). Everything else
+  // it shows from the page (`target`, the address in the summary) is untrusted text, so it is shown as plain, labelled lines.
+  const browserArgs = request.source === 'browser' && request.args && typeof request.args === 'object' ? (request.args as Record<string, unknown>) : null;
+  const browserHost = browserArgs && typeof browserArgs['host'] === 'string' ? browserArgs['host'] : null;
+  const typedText = browserArgs && browserArgs['command'] === 'type' && typeof browserArgs['text'] === 'string' ? browserArgs['text'] : null;
+  const browserTarget = browserArgs ? oneLine(browserArgs['target']) : '';
+  const labels = network
+    ? { once: 'Once', chat: 'This chat', always: 'Always' }
+    : browserHost !== null
+      ? { once: 'Allow once', chat: 'Allow for this chat (this site)', always: `Always allow ${browserHost}` }
+      : { once: 'Allow once', chat: 'Allow for this chat', always: 'Always allow' };
 
   async function choose(choice: ApprovalChoice): Promise<void> {
     setPending(true);
@@ -113,14 +155,50 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
       data-testid={`approval-prompt-${request.id}`}
       className="my-1 space-y-2 rounded-sm border border-l-[3px] border-[var(--warn)] bg-[var(--bg-raised)] px-3 py-2 text-sm"
     >
+      {request.subagent && (
+        <p data-testid="approval-subagent" className="text-xs text-[var(--text-muted)]">
+          Sub-agent: {request.subagent.label}
+          {request.subagent.profileName !== undefined && ` (runs as ${request.subagent.profileName})`}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <span aria-hidden="true">🔒</span>
-        <span>
-          Wants to run <strong>{request.toolName}</strong>
-          <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
-        </span>
+        {network ? (
+          <span data-testid="approval-network-question">
+            Let the sandbox reach <strong>{network.host}</strong>
+            {network.port !== null ? ` (port ${network.port})` : ''}?
+          </span>
+        ) : browserHost !== null ? (
+          <span>
+            Let the model use <strong>{browserHost}</strong>?
+          </span>
+        ) : (
+          <span>
+            Wants to run <strong>{request.toolName}</strong>
+            {request.source === 'sandbox' ? ' in the sandbox' : ''}
+            <span className="ml-1 text-xs text-[var(--text-muted)]">({RISK_LABEL[request.risk]})</span>
+          </span>
+        )}
       </div>
-      <p className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">{request.summary}</p>
+      {/* A network card's question already says it all. Every browser card's summary can carry the page's or the model's text (an address), whether or not a site was named. */}
+      {!network && (
+        <p data-testid="approval-summary" className="rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono text-xs break-all">
+          {browserArgs !== null ? <bdi>{oneLine(request.summary)}</bdi> : request.summary}
+        </p>
+      )}
+      {browserTarget !== '' && (
+        <p data-testid="approval-browser-target" className="text-xs text-[var(--text-muted)] break-all">
+          Element on the page: &ldquo;<bdi>{browserTarget}</bdi>&rdquo;
+        </p>
+      )}
+      {typedText !== null && (
+        <div className="text-xs">
+          <span className="text-[var(--text-muted)]">It will type:</span>
+          <pre data-testid="approval-typed-text" className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-sm bg-[var(--bg-sunken)] px-2 py-1 font-mono">
+            {revealHidden(typedText)}
+          </pre>
+        </div>
+      )}
       {isShellCommand && (
         <div className="space-y-1">
           <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
@@ -158,7 +236,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'once' })}
           className="btn btn-primary px-2 py-1"
         >
-          Allow once
+          {labels.once}
         </button>
         <button
           type="button"
@@ -167,7 +245,7 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'chat' })}
           className="btn px-2 py-1"
         >
-          Allow for this chat
+          {labels.chat}
         </button>
         <button
           type="button"
@@ -176,10 +254,16 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
           onClick={() => void choose({ choice: 'always', constraint: deriveAlwaysConstraint(request, allowAnyArgs) })}
           className="btn px-2 py-1"
         >
-          Always allow
+          {labels.always}
         </button>
       </div>
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
+}
+
+/** One card per kind of request: computer use has its own (per app); everything else the standard one. A dispatcher, so no hook runs conditionally. */
+export function ApprovalPrompt(props: ApprovalPromptProps): JSX.Element {
+  if (props.request.source === 'computer') return <ComputerApprovalPrompt {...props} />;
+  return <StandardApprovalPrompt {...props} />;
 }

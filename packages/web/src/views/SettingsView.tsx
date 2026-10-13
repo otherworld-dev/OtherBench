@@ -1,5 +1,6 @@
 import { useState, type JSX } from 'react';
 import { isDesktop } from '../desktop/bridge.js';
+import { useAuthStore } from '../state/auth.js';
 import { ConnectionsPanel } from './settings/ConnectionsPanel.js';
 import { AppearancePanel } from './settings/AppearancePanel.js';
 import { DesktopPanel } from './settings/DesktopPanel.js';
@@ -10,8 +11,10 @@ import { ModelsPanel } from './settings/ModelsPanel.js';
 import { ProfilesPanel } from './settings/ProfilesPanel.js';
 import { MemoryPanel } from './settings/MemoryPanel.js';
 import { ImportPanel } from './settings/ImportPanel.js';
+import { SandboxPanel } from './settings/SandboxPanel.js';
+import { RemoteAccessPanel } from './settings/RemoteAccessPanel.js';
 
-type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'import' | 'appearance' | 'desktop';
+type Tab = 'connections' | 'models' | 'profiles' | 'memory' | 'locations' | 'machines' | 'mcpServers' | 'sandbox' | 'import' | 'appearance' | 'remote' | 'desktop';
 
 const TAB_LABEL: Record<Tab, string> = {
   connections: 'Connections',
@@ -21,8 +24,10 @@ const TAB_LABEL: Record<Tab, string> = {
   locations: 'Locations',
   machines: 'Machines',
   mcpServers: 'MCP Servers',
+  sandbox: 'Sandbox',
   import: 'Import',
   appearance: 'Appearance',
+  remote: 'Remote access',
   desktop: 'Desktop',
 };
 
@@ -42,8 +47,9 @@ export interface SettingsViewProps {
  */
 export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
   const [tab, setTab] = useState<Tab>('connections');
-  // The Desktop tab only exists inside the desktop app.
-  const tabs = (Object.keys(TAB_LABEL) as Tab[]).filter((t) => t !== 'desktop' || isDesktop());
+  const signInMode = useAuthStore((s) => s.mode === 'login');
+  // The Desktop tab only exists inside the desktop app; Remote access only in sign-in mode.
+  const tabs = (Object.keys(TAB_LABEL) as Tab[]).filter((t) => (t !== 'desktop' || isDesktop()) && (t !== 'remote' || signInMode));
 
   return (
     <div data-testid="settings-view" className="fixed inset-0 z-30 flex flex-col bg-[var(--bg)]">
@@ -78,8 +84,10 @@ export function SettingsView({ onClose }: SettingsViewProps): JSX.Element {
         {tab === 'locations' && <LocationsPanel />}
         {tab === 'machines' && <MachinesPanel />}
         {tab === 'mcpServers' && <McpServersPanel />}
+        {tab === 'sandbox' && <SandboxPanel />}
         {tab === 'import' && <ImportPanel />}
         {tab === 'appearance' && <AppearancePanel />}
+        {tab === 'remote' && <RemoteAccessPanel />}
         {tab === 'desktop' && <DesktopPanel />}
       </div>
     </div>

@@ -6,10 +6,12 @@ import { HTTPException } from 'hono/http-exception';
 import { artifactFileName, artifactsOnBranch, artifactTitleOk, currentVersion, MAX_ARTIFACT_BYTES, MAX_ARTIFACT_TITLE, versionFileName } from '@grunt/core/domain/artifacts.js';
 import { containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
 import { activePath, extendToTip } from '@grunt/core/domain/tree.js';
-import type { Artifact, Chat, Store } from '@grunt/core/ports/store.js';
+import { checkOfficeContent, isOfficeKind } from '@grunt/core/domain/office-spec.js';
+import type { Artifact, ArtifactVersion, Chat, Store } from '@grunt/core/ports/store.js';
 import { AlreadyExistsError, openVerified } from '@grunt/tools/fs-tools.js';
 import type { Container } from '../container.js';
 import { ambiguousOnWindows, chatRoots, OUTSIDE_MESSAGE, viewFailure } from '../view/roots.js';
+import { contentDisposition } from './attachments.js';
 import { collectMessageTree } from './chats.js';
 
 /** The branch the chat shows (its head extended to the tip, as the thread displays it), and that branch's newest message. */
@@ -27,7 +29,7 @@ export function chatBranch(store: Store, chat: Chat): { onBranch: (messageId: st
   }
 }
 
-function requireJson(c: Context): void {
+export function requireJson(c: Context): void {
   if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) throw new HTTPException(415, { message: 'Send the request as JSON.' });
 }
 
@@ -37,11 +39,28 @@ function chatOrThrow(container: Container, id: string): Chat {
   return chat;
 }
 
-function artifactOrThrow(container: Container, chatId: string, artifactId: string): { chat: Chat; artifact: Artifact } {
+export function artifactOrThrow(container: Container, chatId: string, artifactId: string): { chat: Chat; artifact: Artifact } {
   const chat = chatOrThrow(container, chatId);
   const artifact = container.store.artifacts.get(artifactId);
   if (!artifact || artifact.chatId !== chat.id) throw new HTTPException(404, { message: 'Artifact not found in this chat.' });
   return { chat, artifact };
+}
+
+/**
+ * The file a version downloads or saves as (spec 2026-10-12-office-files §4):
+ * an Office kind's made .docx/.xlsx/.pptx, any other kind's text as UTF-8.
+ * The writers load on first use, as unpdf does. A source that can't be made
+ * is a 422 naming the file, before anything is written anywhere.
+ */
+async function versionFile(artifact: Artifact, version: ArtifactVersion): Promise<{ name: string; bytes: Buffer }> {
+  const name = versionFileName(artifact, version);
+  if (!isOfficeKind(version.kind)) return { name, bytes: Buffer.from(version.content, 'utf8') };
+  const { renderOfficeFile } = await import('../office/render.js');
+  try {
+    return { name, bytes: await renderOfficeFile(version.kind, version.content, version.title) };
+  } catch (err) {
+    throw new HTTPException(422, { message: `Couldn't make ${name}: ${err instanceof Error ? err.message : String(err)}` });
+  }
 }
 
 /**
@@ -61,6 +80,7 @@ export function artifactsRoutes(container: Container): Hono {
       artifacts: artifactsOnBranch(store, chat.id, onBranch).map(({ artifact, current }) => ({
         id: artifact.id, slug: artifact.slug, kind: current.kind, language: current.language,
         title: current.title, versionId: current.id, number: current.number, madeBy: current.madeBy,
+        live: current.live?.calls.length ?? 0,
       })),
     });
   });
@@ -78,6 +98,7 @@ export function artifactsRoutes(container: Container): Hono {
       versions: versions.map((v) => ({
         id: v.id, number: v.number, title: v.title, madeBy: v.madeBy, createdAt: v.createdAt, onBranch: v.messageId !== null && onBranch(v.messageId),
         kind: v.kind, language: v.language, fileName: versionFileName(artifact, v),
+        live: v.live?.calls.length ?? 0,
       })),
     });
   });
@@ -87,6 +108,24 @@ export function artifactsRoutes(container: Container): Hono {
     const version = store.artifacts.getVersion(c.req.param('versionId'));
     if (!version || version.artifactId !== artifact.id) throw new HTTPException(404, { message: 'Version not found.' });
     return c.json(version);
+  });
+
+  app.get('/chats/:id/artifacts/:artifactId/versions/:versionId/file', async (c) => {
+    const { artifact } = artifactOrThrow(container, c.req.param('id'), c.req.param('artifactId'));
+    const version = store.artifacts.getVersion(c.req.param('versionId'));
+    if (!version || version.artifactId !== artifact.id) throw new HTTPException(404, { message: 'Version not found.' });
+    const file = await versionFile(artifact, version);
+    // Always a download, never shown: the same headers as an attachment that isn't an inert image.
+    return new Response(new Uint8Array(file.bytes), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': contentDisposition('attachment', file.name),
+        'Content-Length': String(file.bytes.length),
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
+      },
+    });
   });
 
   app.put('/chats/:id/artifacts/:artifactId', async (c) => {
@@ -102,13 +141,16 @@ export function artifactsRoutes(container: Container): Hono {
     const { onBranch, tip } = chatBranch(store, chat);
     const versions = store.artifacts.versionInfos(artifact.id);
     const from = (typeof body.fromVersionId === 'string' ? versions.find((v) => v.id === body.fromVersionId) : undefined) ?? currentVersion(versions, onBranch) ?? versions.at(-1) ?? null;
+    // An Office source is checked as the tool checks it (spec §3): your edit is the kind it was made from.
+    const problem = checkOfficeContent(from?.kind ?? artifact.kind, body.content);
+    if (problem) throw new HTTPException(400, { message: problem });
     const version = store.artifacts.addVersion({
       id: randomUUID(),
       artifactId: artifact.id,
       title: typeof body.title === 'string' ? body.title.trim() : (from?.title ?? artifact.slug),
       content: body.content,
-      // Your edit is the kind of the version it was made from.
-      ...(from ? { kind: from.kind, language: from.language } : {}),
+      // Your edit is the kind of the version it was made from, with its live calls (spec 2026-10-12-live-artifacts).
+      ...(from ? { kind: from.kind, language: from.language, live: from.kind === 'html' ? from.live : null } : {}),
       madeBy: 'user',
       messageId: tip,
       parentVersionId: from?.id ?? null,
@@ -137,6 +179,8 @@ export function artifactsRoutes(container: Container): Hono {
       throw err;
     }
     if (!located.writable) throw new HTTPException(403, { message: 'That folder is read-only for this chat.' });
+    // Make the file before opening anything, so one that can't be made (a 422) writes nothing.
+    const file = await versionFile(artifact, version);
     // Not O_TRUNC: a file is only cut down once the verified open says what it is (fs-tools' write_file).
     let opened: Awaited<ReturnType<typeof openVerified>>;
     try {
@@ -148,7 +192,7 @@ export function artifactsRoutes(container: Container): Hono {
     }
     try {
       if (opened.existed && body.replace !== true) return c.json({ error: `${opened.resolved} already exists.`, exists: true }, 409);
-      const buf = Buffer.from(version.content, 'utf8');
+      const buf = file.bytes;
       await opened.handle.write(buf, 0, buf.length, 0);
       await opened.handle.truncate(buf.length);
     } finally {

@@ -5,6 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } fr
 import { z } from 'zod';
 import { ARTIFACT_KINDS, ARTIFACT_TOOL, ARTIFACT_TOOL_DESCRIPTION } from '@grunt/core/domain/artifacts.js';
 import { RECALL_TOOL, RECALL_TOOL_DESCRIPTION } from '@grunt/core/domain/recall.js';
+import { PLAN_TOOL, PLAN_TOOL_DESCRIPTION, PLAN_TOOL_PARAMETERS } from '@grunt/core/domain/thread-tools.js';
 
 const SHAPE = {
   command: z.enum(['create', 'update', 'rewrite', 'view']),
@@ -15,6 +16,9 @@ const SHAPE = {
   language: z.string().optional(),
   find: z.string().optional(),
   replace: z.string().optional(),
+  // Live artifacts (spec 2026-10-12-live-artifacts): JSON text. The executor
+  // takes an object too, since this server's raw handler doesn't validate.
+  live: z.string().optional(),
 };
 
 /**
@@ -32,7 +36,7 @@ export interface GruntServerTool {
 
 /**
  * A fresh name for one process's Grunt server. The gate lets that server's
- * artifact and recall tools through without a card, so the name must be one a project's
+ * artifact, recall and plan tools through as Grunt's, so the name must be one a project's
  * MCP config can't take: any fixed name (`grunt`) could be registered by a
  * repo's `.mcp.json`, and its tool would get the same pass.
  */
@@ -40,9 +44,9 @@ export function gruntServerName(): string {
   return `grunt_${randomBytes(8).toString('hex')}`;
 }
 
-/** Claude Code's name for the artifact tool on the server `server`. */
-export function gruntArtifactToolName(server: string): string {
-  return `mcp__${server}__${ARTIFACT_TOOL}`;
+/** Claude Code's name for Grunt's tool `tool` on the server `server`. */
+export function gruntToolName(server: string, tool: string): string {
+  return `mcp__${server}__${tool}`;
 }
 
 /** The running reply's executor for one of Grunt's tools, or undefined when none is running or the profile turns the tool off. */
@@ -71,11 +75,6 @@ export function gruntArtifactTool(current: Current): GruntServerTool {
   };
 }
 
-/** Claude Code's name for the recall tool on the server `server`. */
-export function gruntRecallToolName(server: string): string {
-  return `mcp__${server}__${RECALL_TOOL}`;
-}
-
 const RECALL_SHAPE = {
   command: z.enum(['search', 'read']),
   query: z.string().optional(),
@@ -91,6 +90,26 @@ export function gruntRecallTool(current: Current): GruntServerTool {
     description: RECALL_TOOL_DESCRIPTION,
     inputSchema: jsonSchemaOf(RECALL_SHAPE),
     call: (args) => answer(current, args, 'Searching past chats is turned off for this profile, or no Grunt reply is running.'),
+  };
+}
+
+/** Like `answer`, but a string outcome goes back as it is: the plan tool's result is words for the model, not data. */
+async function answerText(current: Current, args: unknown, off: string): Promise<CallToolResult> {
+  const run = current();
+  const outcome = run ? await run(args) : { error: true, code: 'unavailable', message: off };
+  const isError = typeof outcome === 'object' && outcome !== null && (outcome as { error?: unknown }).error === true;
+  const message = isError ? (outcome as { message?: unknown }).message : undefined;
+  const text = typeof outcome === 'string' ? outcome : typeof message === 'string' ? message : JSON.stringify(outcome);
+  return { content: [{ type: 'text' as const, text }], isError };
+}
+
+/** `propose_plan` as Claude Code sees it, on Grunt's server, only while the reply is planning (spec 2026-10-12-thread-cards-design §6). */
+export function gruntPlanTool(current: Current): GruntServerTool {
+  return {
+    name: PLAN_TOOL,
+    description: PLAN_TOOL_DESCRIPTION,
+    inputSchema: PLAN_TOOL_PARAMETERS,
+    call: (args) => answerText(current, args, 'Plan mode is off for this reply, or no Grunt reply is running.'),
   };
 }
 

@@ -1,7 +1,8 @@
-import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, McpServer, Project, ProjectMemoryVersion, PublicAttachment } from '@grunt/core/ports/store.js';
+import type { AppSettings, Artifact, ArtifactKind, ArtifactVersion, AuditEntry, Chat, GlobalMemory, GlobalMemoryVersion, Grant, LiveParam, McpServer, Project, ProjectMemoryVersion, PublicAttachment, ScheduleRun, ScheduleView } from '@grunt/core/ports/store.js';
+import type { ScheduleRule } from '@grunt/core/domain/schedule.js';
 import type { MemoryFailure, MemoryUpdateOutcome, MemoryVersionSummary, ProjectMemoryView } from '@grunt/core/domain/memory.js';
 import type { UsageRollup } from '@grunt/core/domain/usage-rollup.js';
-import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
+import type { ApprovalChoice, AskReply, LiveCallOutcome, LiveCallStatus } from '@grunt/core/ports/tool-provider.js';
 import type { ClaudeEffort, Connection, ConnectionKind, ModelInfo, ModelParams, Profile, ToolPolicy } from '@grunt/core/types/config.js';
 import type { ImportPreview, ImportStart, ImportStatus } from '@grunt/core/types/claude-import.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
@@ -9,8 +10,23 @@ import type { PlanUsage, RecordedUsage } from '@grunt/core/types/usage.js';
 import type { FolderAccess, Location, LocationPath, NodeInfo, Workspace } from '@grunt/core/types/workspace.js';
 import type { InferredMapping } from '@grunt/core/domain/workspace.js';
 import type { PublicPeer } from '@grunt/core/types/peer.js';
+import type { SandboxStatus } from '@grunt/core/ports/sandbox.js';
 import type { McpServerHealth } from '@grunt/tools/mcp/manager.js';
 import { apiFetch, apiUrl } from './transport.js';
+
+/** What `GET /api/auth/status` says (packages/server/src/remote/auth.ts's `AuthStatusBody`). */
+export interface AuthStatus {
+  mode: 'open' | 'token' | 'login';
+  signedIn: boolean;
+  /** Sign-in with Grunt's own certificate: the login page offers it. */
+  caDownload?: boolean;
+  session?: { expiresAt: number; remember: boolean };
+  remote?: {
+    publicUrls: string[];
+    tls: { mode: 'auto' | 'files' | 'proxy'; notAfter?: number; caFingerprint?: string; names?: string[] };
+    trustProxies: string[];
+  };
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -37,6 +53,25 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** `POST /api/schedules` (spec 2026-10-12-scheduled-tasks-design). The server sets the time zone. */
+export interface CreateScheduleBody {
+  name: string;
+  prompt: string;
+  profileId: string;
+  target: { chatId: string } | { projectId: string };
+  rule: ScheduleRule;
+  enabled?: boolean;
+}
+
+/** `PATCH /api/schedules/:id`: any of these; the target can't change. */
+export interface PatchScheduleBody {
+  name?: string;
+  prompt?: string;
+  profileId?: string;
+  rule?: ScheduleRule;
+  enabled?: boolean;
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {
@@ -74,7 +109,9 @@ export type ViewKind = 'image' | 'video' | 'pdf' | 'html' | 'markdown' | 'text' 
 export interface ViewOpened { path: string; name: string; kind: ViewKind; url: string | null; size: number }
 
 /** One artifact in a chat's list (Deck #896): its current version on the branch the chat shows. */
-export interface ArtifactSummary { id: string; slug: string; kind: ArtifactKind; language: string | null; title: string; versionId: string; number: number; madeBy: 'model' | 'user' }
+export interface ArtifactSummary { id: string; slug: string; kind: ArtifactKind; language: string | null; title: string; versionId: string; number: number; madeBy: 'model' | 'user';
+  /** How many live calls it declares (spec 2026-10-12-live-artifacts); 0 for a plain one. */
+  live: number }
 
 /** One artifact with every version, each marked on or off the chat's branch. */
 export interface ArtifactDetail {
@@ -82,11 +119,36 @@ export interface ArtifactDetail {
   fileName: string;
   currentVersionId: string | null;
   /** Each version is its own kind (a note made into a page), with its own file name. */
-  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean; kind: ArtifactKind; language: string | null; fileName: string }[];
+  versions: { id: string; number: number; title: string; madeBy: 'model' | 'user'; createdAt: number; onBranch: boolean; kind: ArtifactKind; language: string | null; fileName: string;
+    /** How many live calls it declares (spec 2026-10-12-live-artifacts); 0 for a plain one. */
+    live: number }[];
 }
+
+/** A live page's calls as the viewer shows them (spec 2026-10-12-live-artifacts). */
+export interface LiveStatus {
+  /** The machine the calls run on: the one serving this UI. */
+  machine: { id: string; name: string };
+  /** Set when the chat runs on another machine. */
+  runsOn: { id: string; name: string } | null;
+  profile: { id: string; name: string };
+  calls: (LiveCallStatus & { args: Record<string, unknown>; params: Record<string, LiveParam> })[];
+}
+
+/** What one live call came back as: the server's outcome, or one the viewer gave itself. */
+export type LiveOutcome = LiveCallOutcome | { ok: false; code: 'bad_params' | 'busy'; message: string };
 export interface ViewText { path: string; content: string; truncated: boolean; size: number }
 export interface ViewRoot { path: string; label: string; access: FolderAccess; workspace: boolean }
 export interface ViewEntry { name: string; path: string; type: 'dir' | 'file' }
+/** A chat's browser as the server reports it (spec 2026-10-12-model-browser-design §5); `elsewhere` names the machine running it. */
+export interface BrowserLiveState {
+  open: boolean;
+  url?: string | null;
+  title?: string | null;
+  host?: string | null;
+  holder?: string | null;
+  elsewhere?: string;
+}
+export type BrowserLiveEvent = { type: 'state'; state: BrowserLiveState } | { type: 'frame'; seq: number; jpeg: string };
 
 export interface CreateConnectionBody {
   name: string;
@@ -100,6 +162,9 @@ export interface CreateConnectionBody {
   syncSecret?: boolean;
 }
 
+/** A tool policy as the profiles API takes it: `sandboxHosts: null` puts the default allowlist back. */
+export type ToolPolicyBody = Omit<ToolPolicy, 'sandboxHosts'> & { sandboxHosts?: string[] | null };
+
 export interface CreateProfileBody {
   name: string;
   description?: string | null;
@@ -108,14 +173,14 @@ export interface CreateProfileBody {
   modelId: string;
   systemPrompt?: string | null;
   params?: ModelParams;
-  toolPolicy?: ToolPolicy;
+  toolPolicy?: ToolPolicyBody;
   isDefault?: boolean;
   /** Absent means on. */
   useGlobalMemory?: boolean;
 }
 
 /** `PATCH /api/profiles/:id`: any `CreateProfileBody` field, and only the `toolPolicy` fields to change (the server keeps the rest). */
-export type ProfilePatchBody = Partial<Omit<CreateProfileBody, 'toolPolicy'>> & { toolPolicy?: Partial<ToolPolicy> };
+export type ProfilePatchBody = Partial<Omit<CreateProfileBody, 'toolPolicy'>> & { toolPolicy?: Partial<ToolPolicyBody> };
 
 /** What `GET /api/memory/global` and its writes return (spec 2026-10-08-global-memory-design §3). */
 export interface GlobalMemoryView {
@@ -173,6 +238,8 @@ export type ChatPatchBody = Partial<{
   /** The machine its turns run on: this one or a paired one (v2 spec §5). */
   runsOn: string;
   pinned: boolean;
+  /** Plan first, from the next message (spec 2026-10-12-thread-cards-design §4). */
+  planMode: boolean;
   /** Pinned at the top of its own project's group; refused (400) for a chat with no project. */
   projectPinned: boolean;
   archivedAt: number | null;
@@ -330,6 +397,10 @@ export interface CreateMcpServerBody {
   /** Plaintext header VALUES -- same rules as `env` above, including the PATCH-only `null` ("keep") sentinel. */
   headers?: Record<string, string | null>;
   enabled?: boolean;
+  /** Sign-in app: a hand-registered client ID (null clears it). Only sent when changed. */
+  oauthClientId?: string | null;
+  /** Its secret, write-only like headers: a string sets it, null removes it, absent keeps it. */
+  oauthClientSecret?: string | null;
 }
 
 /**
@@ -341,6 +412,14 @@ export interface CreateMcpServerBody {
 export const api = {
   /** `platform` is the SERVER's `process.platform` (e.g. "win32"), not the browser's -- see routes/health.ts. Used to validate a chat's workspace root against the OS that will actually resolve it. */
   health: () => request<{ status: string; time: string; platform: string }>('/health'),
+  /** Sign-in (spec 2026-10-12-remote-access §3). Asked only in a browser, never in the desktop app. */
+  auth: {
+    status: () => request<AuthStatus>('/auth/status'),
+    login: (password: string, remember: boolean) => post<{ expiresAt: number }>('/auth/login', { password, remember }),
+    logout: () => post<void>('/auth/logout'),
+    logoutAll: () => post<void>('/auth/logout-all'),
+    changePassword: (current: string, next: string) => post<{ expiresAt: number }>('/auth/password', { current, next }),
+  },
 
   connections: {
     list: () => request<Connection[]>('/connections'),
@@ -382,6 +461,14 @@ export const api = {
       if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
       return res.blob();
     },
+    /** Ends the chat's computer-use session and stops its reply (the banner's Stop): `POST /api/chats/:id/computer/stop`. */
+    stopComputer: (id: string) => post<void>(`/chats/${encodeURIComponent(id)}/computer/stop`),
+  },
+
+  /** Computer use (spec 2026-10-12-computer-use-design section 7). */
+  computer: {
+    /** Whether this server can offer the computer tool (the desktop shell on Windows said it can). Authenticated. */
+    status: () => request<{ computerUse: boolean }>('/computer/status'),
   },
 
   projects: {
@@ -457,6 +544,14 @@ export const api = {
     patch: (body: Partial<AppSettings>) => patch<AppSettings>('/settings', body),
   },
 
+  /** Settings > Sandbox (spec 2026-10-12-sandbox-design): Set up and Repair start a job (202; poll status), Remove, the extra packages (202). */
+  sandbox: {
+    status: () => request<SandboxStatus>('/sandbox'),
+    setup: () => post<SandboxStatus>('/sandbox/setup'),
+    remove: () => post<SandboxStatus>('/sandbox/remove'),
+    setPackages: (packages: string[]) => put<SandboxStatus>('/sandbox/packages', { packages }),
+  },
+
   /** Import from claude.ai (spec 2026-10-09-claude-import-design §5): the running or last import, a preview, and a start (202). */
   claudeImport: {
     status: () => request<ImportStatus>('/import/claude'),
@@ -472,6 +567,17 @@ export const api = {
     get: (chatId?: string) => request<UsageRollup>(`/usage${chatId ? `?chatId=${encodeURIComponent(chatId)}` : ''}`),
   },
 
+  /** Scheduled tasks: local to the server machine. Run now answers 409 with a reason when it can't start. */
+  schedules: {
+    list: () => request<ScheduleView[]>('/schedules'),
+    create: (body: CreateScheduleBody) => post<ScheduleView>('/schedules', body),
+    patch: (id: string, body: PatchScheduleBody) => patch<ScheduleView>(`/schedules/${id}`, body),
+    delete: (id: string) => del(`/schedules/${id}`),
+    /** Newest first. */
+    runs: (id: string) => request<ScheduleRun[]>(`/schedules/${id}/runs`),
+    run: (id: string) => post<ScheduleRun>(`/schedules/${id}/run`),
+  },
+
   claude: {
     /** The Claude login's plan usage (Deck #825), null when there's no plan to show. `refresh` asks for a fresher reading, as after a reply. */
     planUsage: (refresh = false) => request<{ usage: PlanUsage | null }>(`/claude/plan-usage${refresh ? '?refresh=1' : ''}`),
@@ -483,6 +589,19 @@ export const api = {
     version: (chatId: string, artifactId: string, versionId: string) => request<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}`),
     edit: (chatId: string, artifactId: string, body: { content: string; title?: string; fromVersionId?: string }) => put<ArtifactVersion>(`/chats/${chatId}/artifacts/${artifactId}`, body),
     save: (chatId: string, artifactId: string, body: { versionId: string; path: string; replace?: boolean }) => post<{ path: string }>(`/chats/${chatId}/artifacts/${artifactId}/save`, body),
+    /** The version as the file it downloads as (spec 2026-10-12-office-files §4): the made .docx/.xlsx/.pptx, or the text. */
+    file: async (chatId: string, artifactId: string, versionId: string): Promise<Blob> => {
+      const res = await apiFetch(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/file`);
+      if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
+      return res.blob();
+    },
+    live: {
+      status: (chatId: string, artifactId: string, versionId: string) => request<LiveStatus>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/live`),
+      allow: (chatId: string, artifactId: string, versionId: string) => post<LiveStatus>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/live/allow`, {}),
+      revoke: (chatId: string, artifactId: string) => del(`/chats/${chatId}/artifacts/${artifactId}/live`),
+      call: (chatId: string, artifactId: string, versionId: string, callId: string, body: { params?: Record<string, unknown>; fresh?: boolean }) =>
+        post<LiveOutcome>(`/chats/${chatId}/artifacts/${artifactId}/versions/${versionId}/live/calls/${encodeURIComponent(callId)}`, body),
+    },
   },
   view: {
     open: (chatId: string, path: string) => post<ViewOpened>('/view/links', { chatId, path }),
@@ -490,6 +609,10 @@ export const api = {
     text: (chatId: string, path: string) => request<ViewText>(`/view/text?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),
     roots: (chatId: string) => request<{ roots: ViewRoot[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}`),
     dir: (chatId: string, path: string) => request<{ path: string; entries: ViewEntry[] }>(`/view/dirs?chatId=${encodeURIComponent(chatId)}&path=${encodeURIComponent(path)}`),
+  },
+  browser: {
+    state: (chatId: string) => request<BrowserLiveState>(`/chats/${chatId}/browser`),
+    close: (chatId: string) => del(`/chats/${chatId}/browser`),
   },
 
   turns: {
@@ -511,6 +634,14 @@ export const api = {
     patch: (id: string, body: Partial<CreateMcpServerBody>) => patch<McpServer>(`/mcp-servers/${id}`, body),
     delete: (id: string) => del(`/mcp-servers/${id}`),
     refresh: (id: string) => post<void>(`/mcp-servers/${id}/refresh`),
+    /** Starts a browser sign-in (spec 2026-10-12-mcp-oauth-design §6); the caller opens `authorizationUrl`. */
+    signIn: (id: string) => post<{ authorizationUrl: string }>(`/mcp-servers/${id}/sign-in`),
+    cancelSignIn: (id: string) => post<void>(`/mcp-servers/${id}/sign-in/cancel`),
+    /** Paste-back: finishes a sign-in from the address a browser on another device ended on. */
+    completeSignIn: (id: string, url: string) => post<{ signedIn: true }>(`/mcp-servers/${id}/sign-in/complete`, { url }),
+    /** Forgets the sign-in here; the provider isn't told. */
+    signOut: (id: string) => post<void>(`/mcp-servers/${id}/sign-out`),
+    signInRedirectUri: () => request<{ redirectUri: string | null }>('/mcp-servers/sign-in/redirect-uri'),
     /** The MCP servers in Claude Desktop's config: names, commands and the NAMES of their env vars and headers, never the values. */
     claudeDesktop: () => request<ClaudeDesktopListing>('/mcp-servers/import/claude-desktop'),
     /** Imports the named servers; their env and header values go server-side into the secret store. */
@@ -532,6 +663,11 @@ export const api = {
     resolve: (requestId: string, choice: ApprovalChoice) => post<{ resolved: boolean }>(`/approvals/${requestId}/resolve`, choice),
   },
 
+  asks: {
+    /** Answers a question or plan card; 404 once it's settled, 400 when the reply doesn't fit it. */
+    answer: (askId: string, reply: AskReply) => post<{ answered: boolean }>(`/asks/${askId}/answer`, reply),
+  },
+
   attachments: {
     upload: (chatId: string, file: File) => uploadFile<PublicAttachment>(`/chats/${chatId}/attachments`, file),
     list: (chatId: string) => request<PublicAttachment[]>(`/chats/${chatId}/attachments`),
@@ -546,6 +682,13 @@ export const api = {
     delete: (id: string) => del(`/attachments/${id}`),
     /** Not fetched via `request` -- rendered through `AuthedImage`, which adds the token when there is one. */
     contentUrl: (id: string) => apiUrl(`/attachments/${id}/content`),
+    /**
+     * An image a tool returned (a screenshot), by the chat and the reply that hold
+     * it -- the server serves it only for that exact pair, and as a 404 otherwise.
+     * Use this, not `contentUrl`, for the images in a tool result.
+     */
+    toolImageUrl: (chatId: string, messageId: string, attachmentId: string) =>
+      apiUrl(`/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/tool-images/${encodeURIComponent(attachmentId)}`),
     /**
      * True only for the narrow raster-image allowlist that
      * `GET /attachments/:id/content` (packages/server/src/routes/

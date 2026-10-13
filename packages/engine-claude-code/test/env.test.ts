@@ -11,7 +11,7 @@ describe('env', () => {
   });
   it('strips API credentials in any case for the Claude login', () => {
     const env = buildChildEnv({ PATH: '/bin', ANTHROPIC_API_KEY: 'k', anthropic_auth_token: 't', Anthropic_Base_Url: 'x' }, conn(null), null, 'sonnet');
-    expect(env).toEqual({ PATH: '/bin' });
+    expect(env).toEqual({ PATH: '/bin', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' });
   });
   it.each([null, 'http://localhost:11434'])('drops parent Claude Code session variables in any case (base URL %s)', (baseUrl) => {
     const env = buildChildEnv({ PATH: '/bin', CLAUDECODE: '1', claude_code_entrypoint: 'cli', Claude_Code_SSE_Port: '1234', CLAUDE_CONFIG_DIR: '/cfg' }, conn(baseUrl), null, 'm');
@@ -20,12 +20,15 @@ describe('env', () => {
   });
   it("never lets an extra folder's CLAUDE.md load, whatever Grunt's own environment says", () => {
     const env = buildChildEnv({ PATH: '/bin', claude_code_additional_directories_claude_md: '1' }, conn(null), null, 'sonnet');
-    expect(env).toEqual({ PATH: '/bin' });
+    expect(env).toEqual({ PATH: '/bin', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' });
   });
   it('points Claude Code at an endpoint with a token and the chosen model for background calls', () => {
     const env = buildChildEnv({ PATH: '/bin', ANTHROPIC_API_KEY: 'k' }, conn('http://localhost:11434/'), null, 'qwen3-coder:30b');
     expect(env).toMatchObject({ PATH: '/bin', ANTHROPIC_BASE_URL: 'http://localhost:11434', ANTHROPIC_AUTH_TOKEN: 'grunt-local', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'qwen3-coder:30b', ANTHROPIC_SMALL_FAST_MODEL: 'qwen3-coder:30b' });
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(buildChildEnv({}, conn('http://h'), 'secret', 'm').ANTHROPIC_AUTH_TOKEN).toBe('secret');
+  });
+  it('turns the todo tools on for every model and backend', () => {
+    for (const b of [null, 'http://h']) expect(buildChildEnv({}, conn(b), null, 'm').CLAUDE_CODE_ENABLE_TODO_TOOLS).toBe('1');
   });
 });

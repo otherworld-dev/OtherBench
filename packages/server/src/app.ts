@@ -1,9 +1,13 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { Container } from './container.js';
 import { refuseCrossSiteWrites } from './cross-site.js';
 import { corsAllowlist, hostCheck } from './desktop.js';
+import { authGate, authRoutes } from './remote/auth.js';
+import type { RemoteAccess } from './remote/index.js';
 import { attachmentsRoutes } from './routes/attachments.js';
+import { browserRoutes } from './routes/browser.js';
+import { computerRoutes } from './routes/computer.js';
 import { chatsRoutes, searchRoutes } from './routes/chats.js';
 import { eventsRoutes } from './routes/events.js';
 import { fsRoutes } from './routes/fs.js';
@@ -17,11 +21,16 @@ import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
 import { memoryRoutes } from './routes/memory.js';
 import { projectsRoutes } from './routes/projects.js';
+import { sandboxRoutes } from './routes/sandbox.js';
+import { schedulesRoutes } from './routes/schedules.js';
 import { settingsRoutes } from './routes/settings.js';
+import { mcpSignInRoutes, oauthRedirectUri } from './routes/mcp-sign-in.js';
+import { oauthCallbackRoutes } from './routes/oauth-callback.js';
 import { toolsRoutes } from './routes/tools.js';
 import { turnsRoutes } from './routes/turns.js';
 import { usageRoutes } from './routes/usage.js';
 import { artifactsRoutes } from './routes/artifacts.js';
+import { liveArtifactsRoutes } from './routes/live-artifacts.js';
 import { claudeRoutes } from './routes/claude.js';
 import { viewRoutes } from './routes/view.js';
 import { viewServeRoutes } from './routes/view-serve.js';
@@ -58,36 +67,50 @@ export interface AppOptions {
    * loopback; unset (tests, non-loopback binds) checks nothing.
    */
   hostCheckPort?: () => number;
+  /**
+   * Sign-in mode (`--public-url`, spec 2026-10-12-remote-access): the
+   * password, sessions, limiter and public URLs. When set, `/api` also takes
+   * the session cookie, the Host check also accepts the public hosts, and
+   * `/view/` links only work from the address that made them. Unset (null)
+   * in open and token modes, which behave exactly as before.
+   */
+  remote?: RemoteAccess | null;
+  /**
+   * The port the server actually bound, for MCP sign-in's redirect address
+   * `http://127.0.0.1:<port>/oauth/callback` (spec 2026-10-12-mcp-oauth-design §5).
+   * Unset (most tests): sign-in answers 503. In sign-in mode the redirect is
+   * the first public origin instead, and this port is not used.
+   */
+  oauthCallbackPort?: () => number;
 }
 
 export function createApp(container: Container, options: AppOptions = {}): Hono {
   const app = new Hono();
 
+  const remote = options.remote ?? null;
+  const token = options.token ?? null;
+
   if (options.hostCheckPort) {
-    app.use('*', hostCheck(options.hostCheckPort));
+    app.use('*', hostCheck(options.hostCheckPort, remote?.publicHosts ?? []));
   }
   if (options.corsOrigins && options.corsOrigins.length > 0) {
     app.use('/api/*', corsAllowlist(options.corsOrigins));
   }
   // Every mode (Deck #897): browser mode has no token to stop another site's form.
-  app.use('/api/*', refuseCrossSiteWrites(options.corsOrigins ?? []));
+  app.use('/api/*', refuseCrossSiteWrites([...(options.corsOrigins ?? []), ...(remote?.publicOrigins ?? [])]));
 
   app.route('/api', healthRoutes());
+  // Sign-in, sign-out and what mode this is (every mode); before the gated routes.
+  app.route('/api/auth', authRoutes({ token, remote }));
 
   // One store of viewer links per server (Deck #826): the authed route makes them, the open /view route serves them.
   const viewLinks = new ViewLinks();
+  // Sign-in mode: a /view/ link only works from the address that made it.
+  const clientOf = remote ? (c: Context): string => remote.clientAddress(c) ?? 'unknown' : undefined;
 
   const authed = new Hono();
-  if (options.token) {
-    const token = options.token;
-    authed.use('*', async (c, next) => {
-      const header = c.req.header('Authorization');
-      if (header !== `Bearer ${token}`) {
-        throw new HTTPException(401, { message: 'Missing or invalid bearer token.' });
-      }
-      await next();
-    });
-  }
+  // Open mode (no token, no sign-in) mounts no gate, as before.
+  if (token || remote) authed.use('*', authGate({ token, remote }));
   authed.route('/connections', connectionsRoutes(container));
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));
@@ -117,10 +140,24 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // Artifacts (Deck #896): full paths under /chats/:id/artifacts; chatsRoutes
   // owns /chats/:id itself and nothing under /artifacts.
   authed.route('/', artifactsRoutes(container));
+  // Live artifacts (spec 2026-10-12-live-artifacts): full paths under
+  // /chats/:id/artifacts/:artifactId/.../live, none of which artifactsRoutes owns.
+  authed.route('/', liveArtifactsRoutes(container));
+  // The model's browser (spec 2026-10-12-model-browser-design §5): full paths
+  // under /chats/:id/browser; nothing else owns them. Behind the auth gate and
+  // the cross-site write check like the rest; never on the peer listener.
+  authed.route('/', browserRoutes(container));
+  // Computer use (spec 2026-10-12-computer-use-design section 7): POST /chats/:id/computer/stop, the
+  // thread banner's Stop, and GET /computer/status, whether the tool can be offered here. Behind the
+  // auth gate and the cross-site write check; never on the peer listener.
+  authed.route('/', computerRoutes(container));
   authed.route('/usage', usageRoutes(container));
+  authed.route('/schedules', schedulesRoutes(container));
   authed.route('/claude', claudeRoutes(container));
   authed.route('/import', importRoutes(container));
-  authed.route('/view', viewRoutes(container, viewLinks));
+  // This machine's sandbox VM (spec 2026-10-12-sandbox-design). Never on the peer listener.
+  authed.route('/sandbox', sandboxRoutes(container));
+  authed.route('/view', viewRoutes(container, viewLinks, clientOf));
   authed.route('/events', eventsRoutes(container));
   authed.route('/fs', fsRoutes());
   // toolsRoutes, like turnsRoutes, defines full paths under several
@@ -130,6 +167,12 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // chatsRoutes/turnsRoutes: those own /chats, /chats/:id, /chats/:id/messages,
   // /chats/:id/turns, /chats/:id/stream, /chats/:id/head, /messages/:id/cancel.
   authed.route('/', toolsRoutes(container));
+  // MCP sign-in (spec 2026-10-12-mcp-oauth-design §5): full paths under /mcp-servers/:id/sign-in… and /mcp-servers/sign-in/redirect-uri. No collisions with toolsRoutes: GET /mcp-servers/:id matches two segments only.
+  // In sign-in mode Grunt's own port may speak only HTTPS, so the loopback http address wouldn't load: the redirect is the public origin (it passes the Host check, and works behind a trusted proxy).
+  const publicOrigin = remote?.publicOrigins[0] ?? null;
+  const redirectUri = (): string | null =>
+    remote ? (publicOrigin ? `${publicOrigin}/oauth/callback` : null) : oauthRedirectUri(options.oauthCallbackPort?.());
+  authed.route('/', mcpSignInRoutes(container, redirectUri));
   // attachmentsRoutes, like turnsRoutes/toolsRoutes, defines full paths under
   // two different prefixes (/chats/:id/attachments, /attachments/:id[/content])
   // rather than one fixed one, so it also mounts at the authed app's own
@@ -138,7 +181,24 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   authed.route('/', attachmentsRoutes(container));
   app.route('/api', authed);
   // Viewer links (Deck #826): no token, the id is the capability. Before the static UI, which would answer every other path.
-  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts));
+  app.route('/view', viewServeRoutes(viewLinks, (link) => linkStillAllowed(container, link), container.store.artifacts, clientOf));
+
+  // MCP sign-in's redirect lands here, in every mode: no token or session (the system browser has none), Host check still applies, its own headers. Before the static UI, which would answer every other path.
+  app.route('/oauth', oauthCallbackRoutes(container));
+
+  // Sign-in with --tls auto: the CA a device installs to trust Grunt (spec §4). No sign-in needed:
+  // it's public, and the device checks its fingerprint against what `grunt serve` printed.
+  const caDer = remote?.tls.mode === 'auto' ? remote.tls.caDer : undefined;
+  if (caDer) {
+    app.get('/grunt-ca.crt', (c) =>
+      c.body(new Uint8Array(caDer), 200, {
+        'Content-Type': 'application/x-x509-ca-cert',
+        'Content-Disposition': 'attachment; filename="grunt-ca.crt"',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store',
+      })
+    );
+  }
 
   if (options.webDistDir) {
     mountStatic(app, { webDistDir: options.webDistDir });

@@ -318,6 +318,21 @@ describe('chats CRUD', () => {
     expect((await json(off))['autoMode']).toBe(false);
   });
 
+  it('turns plan mode on and off via PATCH planMode, without moving the chat in the list, and refuses a non-boolean', async () => {
+    const created = await createChat();
+    const id = created['id'] as string;
+    expect(created['planMode']).toBe(false);
+    const before = container.store.chats.get(id)!.updatedAt;
+    const on = await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planMode: true }) });
+    expect(on.status).toBe(200);
+    const onBody = await json(on);
+    expect(onBody['planMode']).toBe(true);
+    expect(onBody['updatedAt']).toBe(before);
+    const bad = await app().request(`/api/chats/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planMode: 'yes' }) });
+    expect(bad.status).toBe(400);
+    expect(container.store.chats.get(id)!.planMode).toBe(true);
+  });
+
   it('rejects a non-boolean autoMode with 400 and leaves the chat unchanged', async () => {
     const created = await createChat();
     const id = created['id'] as string;
@@ -646,6 +661,19 @@ describe('GET /api/chats/:id/messages', () => {
     });
   });
 
+  it("keeps a reply's own cost in the usage map: a sub-agent's row never replaces it", async () => {
+    const chatId = (await createChat())['id'] as string;
+    container.store.messages.create({ id: 'u-1', chatId, parentId: null, role: 'user', parts: [], status: 'complete', error: null, producedBy: null });
+    container.store.messages.create({ id: 'a-1', chatId, parentId: 'u-1', role: 'assistant', parts: [], status: 'complete', error: null, producedBy: null });
+    const pricingSnapshot = { priceInPer1m: 3, priceOutPer1m: 15, priceCachedPer1m: null, currency: 'USD' };
+    const row = { chatId, messageId: 'a-1', profileId: 'profile-1', connectionId: 'conn-1', modelId: 'model-1', tokensCached: 0, tokensReasoning: 0, costEstimate: null, pricingSnapshot, latencyMs: 5 };
+    container.store.usage.create({ ...row, id: 'own', tokensIn: 100, tokensOut: 50 });
+    container.store.usage.create({ ...row, id: 'sub', tokensIn: 9, tokensOut: 9, subagentCallId: 'call-1' });
+
+    const body = (await json(await app().request(`/api/chats/${chatId}/messages`))) as { usage: Record<string, { tokensIn: number }> };
+    expect(body.usage['a-1']?.tokensIn).toBe(100);
+  });
+
   it('404s for an unknown chat', async () => {
     const res = await app().request('/api/chats/nope/messages');
     expect(res.status).toBe(404);
@@ -682,6 +710,25 @@ describe('GET /api/search', () => {
 // ---------------------------------------------------------------------------
 
 describe('auto-title', () => {
+  it("leaves alone the title of a chat a scheduled run made", async () => {
+    const created = await createChat();
+    const chatId = created['id'] as string;
+    container.store.projects.create({ id: 'proj-s', name: 'Sched', workspace: null, defaultProfileId: null });
+    container.store.schedules.create({
+      id: 'sched', name: 'Weekly', prompt: 'p', profileId: 'profile-1', target: { kind: 'project', projectId: 'proj-s' },
+      rule: { cadence: 'daily', time: '09:00' }, timezone: 'UTC', enabled: false, nextRunAt: null,
+    });
+    container.store.schedules.addRun({ id: 'run', scheduleId: 'sched', trigger: 'manual', dueAt: null, startedAt: 1, status: 'running', chatId, createdChat: true });
+    const titleBefore = container.store.chats.get(chatId)!.title;
+
+    const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], 'hello');
+    push(assistantMessageIds[0] as string, FINISH);
+    await flush();
+
+    expect(requests.filter((r) => r.messageId !== assistantMessageIds[0])).toEqual([]);
+    expect(container.store.chats.get(chatId)!.title).toBe(titleBefore);
+  });
+
   it('generates a title from the same profile after the first assistant message completes', async () => {
     const created = await createChat();
     const chatId = created['id'] as string;

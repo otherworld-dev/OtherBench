@@ -7,7 +7,7 @@ import { useGruntStore } from '../state/store.js';
 import { Thread } from './Thread.js';
 import { useViewerStore, viewerFor } from '../viewer/state.js';
 
-vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: () => <aside aria-label="Viewer" /> }));
+vi.mock('../viewer/ViewerPanel.js', () => ({ ViewerPanel: ({ browserUsed }: { browserUsed?: boolean }) => <aside aria-label="Viewer" data-browser-used={String(browserUsed)} /> }));
 
 vi.mock('../state/api.js', () => ({
   api: {
@@ -18,9 +18,10 @@ vi.mock('../state/api.js', () => ({
       regenerate: vi.fn(),
       create: vi.fn(),
     },
-    chats: { patch: vi.fn() },
+    chats: { patch: vi.fn(), stopComputer: vi.fn(async () => {}) },
     attachments: { upload: vi.fn(), list: vi.fn(), delete: vi.fn(), contentUrl: (id: string) => id, previewable: () => false },
     approvals: { resolve: vi.fn() },
+    asks: { answer: vi.fn() },
   },
   ApiError: class ApiError extends Error {
     readonly status: number;
@@ -123,6 +124,28 @@ describe('Thread', () => {
     expect(viewerFor(useViewerStore.getState().viewers, 'chat-1').open).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Viewer' }));
     expect(screen.queryByRole('complementary', { name: 'Viewer' })).toBeNull();
+  });
+
+  it('shows the computer-use banner above the composer only while this chat controls the computer', () => {
+    useGruntStore.setState({ chats: [makeChat()] });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.queryByTestId('computer-banner')).toBeNull();
+    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'click at 1, 2' }));
+    expect(screen.getByTestId('computer-banner')).toHaveTextContent('Grunt is controlling this computer.');
+    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: false }));
+    expect(screen.queryByTestId('computer-banner')).toBeNull();
+  });
+
+  it("tells the viewer the model used the browser only from this chat's own messages", () => {
+    useViewerStore.setState({ viewers: {} });
+    useViewerStore.getState().setOpen('chat-1', true);
+    const browserCall = (id: string, chatId: string) =>
+      ({ id, chatId, parentId: null, role: 'assistant', parts: [{ type: 'tool-call', id: `t-${id}`, name: 'browser', args: {} }], status: 'complete', error: null, producedBy: null, createdAt: 1 }) as unknown as CanonMessage;
+    useGruntStore.setState({ chats: [makeChat(), makeChat({ id: 'chat-2' })], messages: { other: browserCall('other', 'chat-2') } });
+    render(<ThreadForChat chatId="chat-1" />);
+    expect(screen.getByRole('complementary', { name: 'Viewer' })).toHaveAttribute('data-browser-used', 'false');
+    act(() => useGruntStore.setState((s) => ({ messages: { ...s.messages, mine: browserCall('mine', 'chat-1') } })));
+    expect(screen.getByRole('complementary', { name: 'Viewer' })).toHaveAttribute('data-browser-used', 'true');
   });
 
   // CRITICAL reproduction (task 19/20 brief): Thread must scope tree
@@ -489,6 +512,93 @@ describe('Thread approval prompts that were discarded server-side', () => {
     expect(screen.getByTestId('approval-prompt-req-1')).toBeInTheDocument();
     act(() => useGruntStore.getState().applyTurnEvent({ messageId: 'reply', type: 'status', status: 'cancelled' }));
     expect(screen.queryByTestId('approval-prompt-req-1')).not.toBeInTheDocument();
+  });
+});
+
+describe('Thread question and plan cards', () => {
+  beforeEach(reset);
+  afterEach(cleanup);
+
+  function setup(): void {
+    const root = makeMessage('root', 'chat-1', { role: 'user' });
+    const reply = variantMessage('reply', 'root', { status: 'streaming' });
+    useGruntStore.getState().loadMessages('chat-1', [root, reply], null);
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'ask-request',
+      ask: { kind: 'question', toolName: 'ask_user', id: 'ask-1', chatId: 'chat-1', messageId: 'reply', questions: [{ question: 'Which?', header: '', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] },
+    });
+  }
+
+  it('sends the reply, and leaves the card for the ask-resolved event to remove', async () => {
+    setup();
+    vi.mocked(api.asks.answer).mockResolvedValue({ answered: true });
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    expect(api.asks.answer).toHaveBeenCalledWith('ask-1', { declined: true });
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
+  });
+
+  it('drops the card when the server says it is already settled (404), instead of leaving a dead card with a retry error', async () => {
+    setup();
+    vi.mocked(api.asks.answer).mockRejectedValue(new ApiError(404, 'unknown or already settled'));
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    await waitFor(() => expect(screen.queryByTestId('ask-card-ask-1')).not.toBeInTheDocument());
+    expect(screen.queryByText(/Could not send/)).not.toBeInTheDocument();
+  });
+
+  it("shows a question card, a plan card, a computer card and the computer banner together, each answered on its own (integration)", async () => {
+    setup();
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'ask-request',
+      ask: { kind: 'plan', toolName: 'propose_plan', id: 'plan-1', chatId: 'chat-1', messageId: 'reply', plan: '1. Open the sheet' },
+    });
+    const app = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    useGruntStore.getState().applyTurnEvent({
+      messageId: 'reply',
+      type: 'approval-request',
+      request: {
+        id: 'req-c', chatId: 'chat-1', messageId: 'reply', toolName: 'computer', risk: 'mutate', source: 'computer', summary: 'Use FakeApp.exe: click at 10, 20',
+        args: { action: 'left_click', coordinate: [10, 20], app, appName: 'FakeApp.exe', appTitle: 'Fake', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' },
+      },
+    });
+    useGruntStore.setState({ chats: [makeChat({ headMessageId: 'reply' })] });
+    render(<ThreadForChat chatId="chat-1" />);
+    act(() => useGruntStore.getState().applyAppEvent({ type: 'computer-session', chatId: 'chat-1', active: true, lastAction: 'screenshot' }));
+
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
+    expect(screen.getByTestId('ask-card-plan-1')).toHaveAttribute('data-kind', 'plan');
+    expect(screen.getByTestId('approval-prompt-req-c')).toBeInTheDocument();
+    expect(screen.getByTestId('computer-headline')).toBeInTheDocument();
+    expect(screen.getByTestId('computer-banner')).toBeInTheDocument();
+
+    // The banner's Stop is the chat's own: the cards stay until their own events take them down.
+    await userEvent.click(within(screen.getByTestId('computer-banner')).getByRole('button', { name: /Stop/ }));
+    expect(api.chats.stopComputer).toHaveBeenCalledWith('chat-1');
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-prompt-req-c')).toBeInTheDocument();
+    // And the question card still answers its own question.
+    vi.mocked(api.asks.answer).mockResolvedValue({ answered: true });
+    await userEvent.click(within(screen.getByTestId('ask-card-ask-1')).getByRole('button', { name: 'Skip' }));
+    expect(api.asks.answer).toHaveBeenCalledWith('ask-1', { declined: true });
+  });
+
+  it('keeps the card (and lets the user retry) on any other failure', async () => {
+    setup();
+    vi.mocked(api.asks.answer).mockRejectedValue(new ApiError(500, 'boom'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<Thread chat={makeChat({ headMessageId: 'reply' })} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Skip' }));
+
+    await screen.findByText(/Could not send that answer/);
+    expect(screen.getByTestId('ask-card-ask-1')).toBeInTheDocument();
   });
 });
 

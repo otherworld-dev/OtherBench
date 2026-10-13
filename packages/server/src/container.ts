@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -10,9 +10,12 @@ import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { reconcileInterruptedTurns } from '@grunt/core/domain/reconcile.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
+import type { Sandbox } from '@grunt/core/ports/sandbox.js';
+import type { ComputerDriver } from '@grunt/core/ports/computer.js';
 import type { SecretStore } from '@grunt/core/ports/secret-store.js';
 import type { Store } from '@grunt/core/ports/store.js';
 import type { ToolProvider } from '@grunt/core/ports/tool-provider.js';
+import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { AiSdkChatEngine } from '@grunt/engine-aisdk/engine.js';
 import { ProviderRegistry } from '@grunt/engine-aisdk/registry.js';
 import { ClaudeCodeChatEngine, type QueryFn } from '@grunt/engine-claude-code/engine.js';
@@ -22,9 +25,14 @@ import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { runMigrations, SCHEMA_VERSION } from '@grunt/store-sqlite/migrations/index.js';
 import { createSecretStore } from '@grunt/store-sqlite/secret-store.js';
 import { SqliteStore } from '@grunt/store-sqlite/store.js';
+import { liveToolRisks } from '@grunt/tools/artifact-tool.js';
+import { ChromiumSessions } from '@grunt/tools/browser/chromium.js';
+import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
+import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
+import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
 import { ClaudeImportService } from './import/claude-import.js';
 import { defaultCoworkRoot } from './import/cowork-reader.js';
@@ -39,10 +47,15 @@ import { forwardedApi, RemoteRuns } from './peer/forward.js';
 import { PeerService } from './peer/service.js';
 import { Syncer } from './peer/syncer.js';
 import { resolveProfile } from './profile-resolution.js';
+import { createSandbox } from './sandbox.js';
 import { subscribeAutoTitle } from './routes/chats.js';
+import { ScheduleService } from './schedule/service.js';
 import { AppEventBus, markUnreadOnFinish, withChatEvents } from './stream/events.js';
 import { StreamRegistry } from './stream/registry.js';
 import type { StreamTimings } from './stream/sse.js';
+import { startTurn } from './turn-start.js';
+import { workspaceResolver } from './workspace-view.js';
+import { toolImageSaver } from './tool-images.js';
 
 /** The wired-up dependency set every route handler is given. */
 export interface Container {
@@ -56,6 +69,12 @@ export interface Container {
   streamRegistry: StreamRegistry;
   /** Assembles fs/shell/MCP tools and gates every call behind `PermissionBroker` (task 26) -- shared by `turnRunner` (via `TurnRunnerOptions.toolProvider`) and routes/tools.ts (approval resolution, MCP refresh). */
   toolProvider: ToolProvider;
+  /**
+   * This machine's sandbox for profiles whose shell runs there (spec
+   * 2026-10-12-sandbox-design). Always set by `createContainer`; optional so
+   * route tests can build a Container without one.
+   */
+  sandbox?: Sandbox;
   /** Owns live MCP server connections; `toolProvider` reads its cached tools, routes/tools.ts calls `sync()` after any write to the `mcp_server` table. */
   mcpManager: McpServerManager;
   /**
@@ -75,6 +94,12 @@ export interface Container {
    * can build a Container without one.
    */
   memory?: MemoryServices;
+  /**
+   * Scheduled tasks (spec 2026-10-12-scheduled-tasks-design): runs due
+   * schedules unattended. Always set by `createContainer`; optional so route
+   * tests can build a Container without one.
+   */
+  schedules?: ScheduleService;
   /**
    * Import from claude.ai (spec 2026-10-09-claude-import-design). Always set
    * by `createContainer`; optional so route tests can build a Container
@@ -99,18 +124,74 @@ export interface Container {
   peers?: PeerService;
   /** Keepalive and idle limits for streams; unset means the defaults in stream/sse.ts. */
   streamTimings?: StreamTimings;
+  /**
+   * The model's browsers (spec 2026-10-12-model-browser-design): always set
+   * by `createContainer` (nothing launches until a call); optional so route
+   * tests can leave it out or pass a fake.
+   */
+  browser?: BrowserPort;
+  /**
+   * Computer use (spec 2026-10-12-computer-use-design section 7): the
+   * control sessions over the driver, which is the desktop shell's on
+   * Windows and the fake one under GRUNT_COMPUTER_FAKE_DRIVER=1 (tests only).
+   * Absent when there is no driver, and then no profile is offered the
+   * `computer` tool whatever it says.
+   */
+  computer?: ComputerSessions;
   close(): void;
+  /**
+   * After close(): settles (never rejects) once the shutdown work close() starts without waiting has finished:
+   * the sandbox closing its agents and unmounting its folders in the VM. Always set by `createContainer`.
+   */
+  settled?(): Promise<void>;
+}
+
+/** `GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS` (tests only): ports on 127.0.0.1 the model's browser may reach. */
+export function loopbackPortsFromEnv(value: string | undefined): number[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => /^\d+$/.test(s)) // decimal digits only: no 0x1F90, 1e3 or +80
+    .map(Number)
+    .filter((n) => n >= 1 && n <= 65535);
+}
+
+/**
+ * The loopback ports the model's browser may reach (from
+ * GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS) without Grunt's own: its API and peer
+ * listeners are never a test fixture, and the browser reaching them would be
+ * the model driving Grunt. `dropped` lists what was taken out.
+ */
+export function withoutOwnPorts(ports: readonly number[], own: readonly (number | undefined)[]): { ports: number[]; dropped: number[] } {
+  const mine = new Set(own.filter((p): p is number => p !== undefined && p > 0));
+  return { ports: ports.filter((p) => !mine.has(p)), dropped: ports.filter((p) => mine.has(p)) };
 }
 
 export interface ContainerOptions {
   dbPath: string;
   secretsPath: string;
+  /** The port Grunt's API listens on, when known (0 = any free port): never one the model's browser may reach. */
+  apiPort?: number;
   /** The peer listener's port (default 4748; 0 = any free port). */
   peerPort?: number;
   /** Addresses the peer listener binds (default every interface). */
   peerHosts?: string[];
   /** Keepalive and idle limits for streams (defaults in stream/sse.ts); tests shorten them. */
   streamTimings?: StreamTimings;
+  /** The port the API ends up on (cli.ts knows it after binding); the sandbox's self-test checks the VM can't reach it. */
+  serverPort?: () => number | null;
+  /** The desktop shell's computer-use driver; cli.ts passes it only when the shell asked for the desktop channel. */
+  computer?: ComputerDriver;
+}
+
+/** A folder's real path (on-disk case, a mapped drive as its UNC path), as the sandbox mounts it; the path itself when that can't be read. */
+export function realFolderPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
 }
 
 function isEnoent(err: unknown): boolean {
@@ -275,9 +356,57 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   const registry = new ProviderRegistry();
   const aisdkEngine = new AiSdkChatEngine(registry);
 
-  const broker = new PermissionBroker(store);
+  // Read once at start; set only by the e2e run (spec 2026-10-12-model-browser-design §5).
+  const loopback = withoutOwnPorts(loopbackPortsFromEnv(process.env['GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS']), [options.apiPort, options.peerPort ?? DEFAULT_PEER_PORT]);
+  if (loopback.dropped.length > 0) {
+    console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS names Grunt's own port(s) ${loopback.dropped.join(', ')}; the model's browser may not reach them, so they are left out.`);
+  }
+  const allowLoopbackPorts = loopback.ports;
+  if (allowLoopbackPorts.length > 0) {
+    console.warn(`[grunt-server] GRUNT_BROWSER_ALLOW_LOOPBACK_PORTS is set: the model's browser may reach 127.0.0.1 on port(s) ${allowLoopbackPorts.join(', ')}. This is for tests only.`);
+  }
+  const broker = new PermissionBroker(store, { allowLoopbackPorts });
   const mcpManager = new McpServerManager(store, secrets);
-  const toolProvider = new GruntToolProvider(store, broker, mcpManager);
+  // Next to the database, like its attachments; a :memory: database (tests) uses the temp folder.
+  const dataDir = options.dbPath === ':memory:' ? join(tmpdir(), `grunt-data-${process.pid}`) : dirname(options.dbPath);
+  const sandbox = await createSandbox({ store, dataDir, serverPort: options.serverPort ?? (() => null) });
+  // Lazy: no Chromium starts until the first browser call.
+  const browser = new BrowserManager({ factory: new ChromiumSessions(), allowLoopbackPorts });
+  // Computer use: the shell's driver when the CLI passed one (the desktop
+  // channel exists: the shell started this server with --desktop-rpc). It is
+  // not available, and the tool is not offered, until the shell has said
+  // hello with computer use on. For tests only, GRUNT_COMPUTER_FAKE_DRIVER=1
+  // wires a fake that touches nothing. Read once. With neither (a server
+  // started by hand, one that takes sign-ins) there is no driver, and no
+  // profile is offered the tool.
+  const fakeComputer = options.computer === undefined && process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1';
+  if (fakeComputer) {
+    console.warn('[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.');
+  }
+  const computerDriver = options.computer ?? (fakeComputer ? new FakeComputerDriver() : undefined);
+  // One chat in control at a time; every start, action and end announced for
+  // the banner; Stop cancels the chat's reply. `turnRunner` exists by the
+  // time anything calls cancelChat. The tool provider is given the sessions,
+  // not the driver: every call goes through them, and the tool's own
+  // "session stopped" hook (it forgets that chat's last screenshot) listens
+  // to them, so it hears the ends the server makes itself too. The sessions
+  // also take the desktop driver's word that the shell started over
+  // (`onReset`), which the fake has no need to give.
+  const computer = computerDriver
+    ? new ComputerSessions(computerDriver, {
+        emit: (e) => events.emit(e),
+        cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
+        chatExists: (chatId) => store.chats.get(chatId) !== null,
+      })
+    : undefined;
+  if (computer) {
+    // A start nobody waits for any more, or a session never used, does not outlive the chat's last reply.
+    endSessionsLeftWithoutAReply(events, computer);
+    // Nor does a session outlive its chat: one deleted through the store, or by a paired machine's changes.
+    // (The profile and connection routes, whose deletes cascade past every event, call endIfChatGone themselves.)
+    endSessionsOfChatsThatAreGone(events, computer);
+  }
+  const toolProvider = new GruntToolProvider(store, broker, mcpManager, { sandbox, browser, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');
   const engine = new RoutingChatEngine(
@@ -287,11 +416,13 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       approvals: toolProvider,
       listEndpointModels: endpointModelLister(aisdkEngine),
       // Artifacts (Deck #896) and recall: the same executors as the API engines' tools.
-      artifactTool: async (ctx, args) => runArtifactCommand(store, ctx, args),
+      // A live declaration may name only the profile's read-only MCP tools (relayed names are normalised).
+      artifactTool: async (ctx, args) =>
+        runArtifactCommand(store, { chatId: ctx.chatId, messageId: ctx.messageId, liveTools: () => liveToolRisks(toolProvider.relayMcpTools(ctx.mcpServerIds)) }, args),
       recallTool: async (ctx, args) => runRecallCommand(store, ctx, args),
-      // Clean chats, and the profile's MCP servers relayed through Grunt's own server.
+      // Clean chats; the profile's MCP servers, its sandboxed run_command and the browser (when it is on), relayed through Grunt's own server.
       scratchRoot: claudeScratchRoot,
-      relayTools: (serverIds) => toolProvider.relayMcpTools(serverIds),
+      relayTools: (policy) => toolProvider.relayTools(policy),
     })
   );
   // "Connect on enable" (task 25/26 brief): reconcile live MCP connections
@@ -305,6 +436,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
 
   const turnRunner = new TurnRunner(store, engine, {
     toolProvider,
+    // The sandbox mounts a folder at its real path (on-disk case), so the prompt names that one.
+    canonicalPath: realFolderPath,
+    // A sub-agent can run as another profile (spec 2026-10-12-api-subagents-design).
+    resolveProfile: (id: string) => resolveProfile({ store, secrets }, id),
     // Closes the gap `engine.ts`'s own docstring calls out (task 14):
     // `AiSdkChatEngine` has no filesystem/store access of its own, so
     // without this every real (vision-on) image/file part would fail with
@@ -332,6 +467,9 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         throw new Error(`Attachment "${attachment.filename}" (${id}) is missing or unreadable.`);
       }
     },
+    // An image a tool returns (a screenshot) goes to the blob store, with a
+    // row on the reply, before the result is broadcast or stored.
+    saveToolImage: toolImageSaver(store, blobStore),
   });
   const streamRegistry = new StreamRegistry(turnRunner, store);
   events.attach(turnRunner, store);
@@ -377,6 +515,8 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     if (e.type === 'turn-started' || e.type === 'turn-finished') peers.announce('activity', peers.activity());
   });
 
+  // What close() set going without waiting, for settled().
+  let sandboxClosed: Promise<void> = Promise.resolve();
   const container: Container = {
     store,
     events,
@@ -389,7 +529,10 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     turnRunner,
     streamRegistry,
     toolProvider,
+    sandbox,
     mcpManager,
+    browser,
+    ...(computer ? { computer } : {}),
     claudeScratchRoot,
     blobStore,
     memory,
@@ -401,8 +544,16 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
       // First: aborts in-flight summariser and import calls and stops new ones before the store goes away.
       claudeImport.dispose();
       memory.dispose();
+      // Before the engine and store go: stops the schedule timer and its reply listeners.
+      container.schedules?.dispose();
+      // Computer use ends with the server: the driver is told, and nothing starts afterwards.
+      computer?.dispose();
+      // Every chat's browser, the Chromium process and its proxy. Not awaited (close is synchronous).
+      void browser.closeAll().catch((err: unknown) => console.error('[grunt-server] error closing the model browser:', err));
       // Claude Code processes kept alive between replies.
       engine.dispose();
+      // The sandbox's agents and mounts. Not awaited, like the tool provider below (settled() waits for it). Before the store closes: it may still write its state.
+      sandboxClosed = sandbox.close().catch((err: unknown) => console.error('[grunt-server] error closing the sandbox:', err));
       store.close();
       // Best-effort, not awaited: `close()` is a synchronous port method
       // used throughout the test suite without an await, and disconnecting
@@ -428,6 +579,7 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
         void rm(importRoot, { recursive: true, force: true }).catch(() => undefined);
       }
     },
+    settled: () => sandboxClosed,
   };
   // Exactly once per container -- see subscribeAutoTitle's doc comment for
   // why calling it more than once would be a bug (duplicate title-gen races).
@@ -438,6 +590,24 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   } catch (err) {
     // Never let the memory sweep stop the server starting.
     console.warn('[grunt-server] project memory startup sweep failed:', err);
+  }
+  // Scheduled tasks: built after the memory services, started after their sweep, and
+  // after the app event bus is attached to the turn runner (events.runningTurns() is
+  // what tells the service a chat is busy).
+  container.schedules = new ScheduleService({
+    store,
+    turnRunner,
+    startTurn: (input) => startTurn(container, input),
+    resolveProfile: (id) => resolveProfile({ store, secrets }, id),
+    resolveWorkspace: (ws) => workspaceResolver(container)(ws),
+    isChatBusy: (chatId) => events.runningTurns().some((t) => t.chatId === chatId),
+    emit: (e) => events.emit(e),
+  });
+  try {
+    container.schedules.start();
+  } catch (err) {
+    // Never let the scheduler stop the server starting.
+    console.warn('[grunt-server] scheduled tasks failed to start:', err);
   }
   // Listening for paired machines only if there are any. A failed bind
   // (another Grunt on this port, say) leaves this machine working alone

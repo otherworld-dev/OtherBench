@@ -4,6 +4,7 @@ import type { PricingSnapshot } from '../types/usage.js';
 import type { ExtraFolder, FolderView, Location, LocationPath, NodeInfo, Workspace, WorkspaceStatus } from '../types/workspace.js';
 import type { Peer } from '../types/peer.js';
 import type { ChangeBatch, ChangeRow } from '../domain/sync.js';
+import type { ScheduleRule, ScheduleRunStatus, ScheduleTarget, ScheduleTrigger } from '../domain/schedule.js';
 
 // --- connections ---------------------------------------------------------
 
@@ -83,6 +84,13 @@ export interface Chat {
    * TurnRunner on every turn. Other engines ignore it.
    */
   autoMode: boolean;
+  /**
+   * Plan mode (spec 2026-10-12-thread-cards-design §4): every new message
+   * plans first; tools that change things are refused until the user approves
+   * the reply's plan. Read fresh by TurnRunner on every reply. Repositories
+   * always fill it (false by default); optional only so older objects type-check.
+   */
+  planMode?: boolean;
   /**
    * Claude Code's effort for this chat's turns, chosen in the chat window;
    * absent or null follows the user's Claude Code settings. Read fresh by
@@ -317,6 +325,14 @@ export interface SettingsRepo {
   get(): AppSettings;
   /** Applies the keys `patch` defines and returns the full settings. */
   update(patch: Partial<AppSettings>): AppSettings;
+  /**
+   * A machine-local value kept beside the settings (the same `app_setting`
+   * table, never synced and never in `get()`), e.g. the sandbox's state
+   * (key `sandbox`). Null when unset or unreadable.
+   */
+  getValue(key: string): unknown;
+  /** Stores `value` as JSON under `key`; null removes it. Throws for an AppSettings key, which `update()` owns. */
+  setValue(key: string, value: unknown): void;
 }
 
 // --- messages ----------------------------------------------------------------
@@ -416,6 +432,12 @@ export interface UsageRecord {
   costEstimate: number | null;
   pricingSnapshot: PricingSnapshot;
   latencyMs: number;
+  /**
+   * Set on a sub-agent's own usage row (spec 2026-10-12-api-subagents-design):
+   * the parent's `subagent` tool call id. The row hangs off the parent reply
+   * (`messageId`) but carries the sub-agent's profile, connection and model.
+   */
+  subagentCallId?: string;
 }
 
 export interface UsageRepo {
@@ -427,6 +449,23 @@ export interface UsageRepo {
 }
 
 // --- mcp servers ----------------------------------------------------------------
+
+/**
+ * An http MCP server's sign-in summary (spec 2026-10-12-mcp-oauth-design §2).
+ * Never a token or a secret value: tokens, registered clients and a
+ * hand-registered client's secret live in `SecretStore` under
+ * `mcp:<id>:oauth:*` (`McpOAuthStore`, packages/tools/src/mcp/oauth-store.ts).
+ */
+export interface McpServerOAuth {
+  /** A client ID registered by hand with the server's sign-in provider. Null: Grunt registers itself. */
+  clientId: string | null;
+  /** SecretStore reference of that client's secret, if it has one. Never the value. */
+  clientSecretRef: string | null;
+  /** "Signed in as …": from the provider's id_token, when it sends one. Display only. */
+  account: string | null;
+  /** When the current sign-in completed (ms). Null: not signed in. */
+  signedInAt: number | null;
+}
 
 export interface McpServer {
   id: string;
@@ -450,6 +489,8 @@ export interface McpServer {
   enabled: boolean;
   status: 'unknown' | 'ok' | 'error';
   toolsCache: unknown;
+  /** Null for stdio servers and for http servers that never signed in or set a client ID. */
+  oauth: McpServerOAuth | null;
 }
 
 export interface McpServerRepo {
@@ -495,11 +536,42 @@ export interface Grant {
    * - `commandExact`: the command must equal this string exactly (modulo
    *   surrounding whitespace). What a `'chat'`-scope shell approval is
    *   stored as.
+   * - `host`: one host, for a `sandbox_network` grant (`source: 'network'`)
+   *   or a browser grant (`source: 'browser'`, spec
+   *   2026-10-12-model-browser-design): exact on the canonical spelling (so
+   *   case-insensitive), any port, never a subdomain. Every network and
+   *   browser grant carries one; one without never matches. The grant's
+   *   source is part of the match: a browser grant never covers the sandbox's
+   *   network, and a network grant never covers the browser.
+   *
+   * - `live`: a live artifact's call (spec 2026-10-12-live-artifacts): only
+   *   `PermissionBroker.grantLive` makes one, only a live call
+   *   (`ToolContext.live`) can match it, and it matches nothing else.
+   *   `serverId` is the MCP server the tool came from when it was allowed,
+   *   so a server renamed or replaced into the tool's name doesn't inherit
+   *   it. Grants stored before it existed have none and never match.
+   *
+   * - `app`: computer use's target app (`source: 'computer'`, spec
+   *   2026-10-12-computer-use-design): its key, the program's canonical
+   *   path exactly as the desktop shell resolved it (`appKey`,
+   *   domain/computer-apps.ts, checks it and never changes it). Matched with
+   *   `===`, never by name, case-folding or prefix, so `Downloads\EXCEL.EXE`
+   *   can't ride on Excel's grant. A stored value that isn't a valid key
+   *   matches nothing. A grant of one source never covers another: an `app`
+   *   is only ever matched for a computer call, a `host` only for a network
+   *   or browser call.
    *
    * Persisted as a JSON blob (`"constraint"` TEXT), so adding a key here
    * needs no migration.
    */
-  constraint: { pathPrefix?: string; commandPrefix?: string; commandExact?: string } | null;
+  constraint: {
+    pathPrefix?: string;
+    commandPrefix?: string;
+    commandExact?: string;
+    host?: string;
+    app?: string;
+    live?: { artifactId: string; callId: string; hash: string; serverId: string };
+  } | null;
   expiresAt: number | null;
 }
 
@@ -596,15 +668,41 @@ export interface SyncRepo {
   /** Where an attachment's blob is on this machine, recorded without counting as a change. */
   setStoragePath(attachmentId: string, path: string): void;
   /** Attachments that came from another machine whose blob isn't here yet. */
-  missingBlobs(): { id: string; sha256: string }[];
+  missingBlobs(): { id: string; sha256: string; size: number }[];
   /** Whether a blob belongs to a file that has been sent in a message (only those leave this machine). */
   isSentBlob(sha256: string): boolean;
   /** Observes a stamp from another machine (its clock runs ahead, say). */
   observe(hlc: string): void;
 }
 
-/** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, or a code file. */
-export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code';
+/**
+ * A value a live artifact's page may choose for one of its calls (spec
+ * 2026-10-12-live-artifacts): one of a fixed list, or a whole number in a
+ * range. Never free text.
+ */
+export type LiveParam =
+  | { enum: (string | number | boolean)[]; default: string | number | boolean }
+  | { type: 'integer'; minimum: number; maximum: number; default: number };
+
+/**
+ * One data call a live html artifact declares: a read-only MCP tool
+ * (`mcp__<server>__<tool>`) with fixed arguments, where an argument that is
+ * exactly `{ "$param": name }` takes that parameter's value.
+ */
+export interface LiveCall {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  params: Record<string, LiveParam>;
+}
+
+/** The data calls an html artifact version declares; see `parseLiveSpec`. */
+export interface LiveSpec {
+  calls: LiveCall[];
+}
+
+/** What an artifact is (Deck #896): a web page, a Markdown document, a Mermaid or SVG diagram, a code file, or (Deck #928) a Word document, Excel spreadsheet or PowerPoint deck made from Markdown or JSON. */
+export type ArtifactKind = 'html' | 'markdown' | 'mermaid' | 'svg' | 'code' | 'document' | 'spreadsheet' | 'presentation';
 
 /** Standalone content the model made in a chat (spec 2026-10-07-artifacts); its content lives in its versions. */
 export interface Artifact {
@@ -630,6 +728,12 @@ export interface ArtifactVersion {
   kind: ArtifactKind;
   /** A code version's language (ts, py), else null. */
   language: string | null;
+  /**
+   * The data calls this version's page may make each time it's opened (spec
+   * 2026-10-12-live-artifacts), or null for a plain version. Only html
+   * versions have one.
+   */
+  live: LiveSpec | null;
   madeBy: 'model' | 'user';
   /** The reply that made it (your edit: the newest message on the branch you were on). Not a foreign key: it may arrive by sync before its message. */
   messageId: string | null;
@@ -640,8 +744,8 @@ export interface ArtifactVersion {
 /** A version without its content: what lists and the branch's current version need. */
 export type ArtifactVersionInfo = Omit<ArtifactVersion, 'content'>;
 
-/** A version to add: everything but its number, with kind and language defaulting to the artifact's. */
-export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language'> & { kind?: ArtifactKind; language?: string | null };
+/** A version to add: everything but its number, with kind and language defaulting to the artifact's and `live` to null. */
+export type NewArtifactVersion = Omit<ArtifactVersion, 'number' | 'kind' | 'language' | 'live'> & { kind?: ArtifactKind; language?: string | null; live?: LiveSpec | null };
 
 export interface ArtifactRepo {
   create(a: Artifact): Artifact;
@@ -657,6 +761,112 @@ export interface ArtifactRepo {
   getVersion(id: string): ArtifactVersion | null;
   /** Oldest (lowest number) first. */
   versions(artifactId: string): ArtifactVersion[];
+}
+
+// --- schedules (spec 2026-10-12-scheduled-tasks-design) ------------------------
+
+/**
+ * A prompt run on a profile on a timetable, with nobody there. Lives and runs
+ * only on the machine that made it (never synced in phase 1). `timezone` is
+ * that machine's IANA zone when it was made. `nextRunAt` is null while paused.
+ */
+export interface Schedule {
+  id: string;
+  name: string;
+  prompt: string;
+  profileId: string;
+  target: ScheduleTarget;
+  rule: ScheduleRule;
+  timezone: string;
+  enabled: boolean;
+  nextRunAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  /**
+   * Set only when the stored rule can't be read (a hand-edited row, say): why.
+   * Such a schedule comes back disabled with a placeholder rule and never runs.
+   */
+  invalid?: string;
+}
+
+/** What `ScheduleRepo.create` takes: timestamps default to now. */
+export type NewSchedule = Omit<Schedule, 'createdAt' | 'updatedAt' | 'invalid'> & { createdAt?: number; updatedAt?: number };
+
+/** What `ScheduleRepo.update` may change. The target is fixed once made. */
+export type SchedulePatch = Partial<Pick<Schedule, 'name' | 'prompt' | 'profileId' | 'rule' | 'enabled' | 'nextRunAt' | 'updatedAt'>>;
+
+/** One run of a schedule, kept in its history (the newest `SCHEDULE_RUNS_KEPT`). */
+export interface ScheduleRun {
+  id: string;
+  scheduleId: string;
+  trigger: ScheduleTrigger;
+  /** The slot it ran for; null for Run now. */
+  dueAt: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  status: ScheduleRunStatus;
+  /** Why it didn't start, the reply's error, or "Stopped after 30 minutes."; else null. */
+  detail: string | null;
+  /** The chat it wrote in; null before it has one, or once that chat is deleted. */
+  chatId: string | null;
+  /** The run made `chatId` (a project target): auto-title leaves such chats alone. */
+  createdChat: boolean;
+  userMessageId: string | null;
+  messageId: string | null;
+  /** How many of the reply's tool calls were refused for needing an approval (`deny:unattended` audit rows). */
+  refusedCalls: number;
+}
+
+export type NewScheduleRun = Pick<ScheduleRun, 'id' | 'scheduleId' | 'trigger' | 'dueAt' | 'startedAt' | 'status'> &
+  Partial<Pick<ScheduleRun, 'finishedAt' | 'detail' | 'chatId' | 'createdChat' | 'userMessageId' | 'messageId' | 'refusedCalls'>>;
+
+export type ScheduleRunPatch = Partial<Omit<ScheduleRun, 'id' | 'scheduleId'>>;
+
+/** A schedule as the API returns it (server routes/schedules.ts): the row plus what the UI shows with it. */
+export interface ScheduleView extends Schedule {
+  /** The target chat's title or the project's name; '' if it's gone. */
+  targetName: string;
+  /** `describeRule(rule)`. */
+  describe: string;
+  /** A run of it is being set up or written right now. */
+  running: boolean;
+  /** The run whose reply is being written now (what Stop stops); null while none is, or one is still being set up. Not always `lastRun`: a slot it overran is recorded after it. */
+  activeRun: { runId: string; messageId: string } | null;
+  lastRun: ScheduleRun | null;
+  /** `unattendedWarnings` for its profile and target. */
+  warnings: string[];
+}
+
+/**
+ * Schedules and their runs. Local only: no change tracking. Deleting a
+ * schedule's target chat, project or profile deletes it (and its runs);
+ * deleting a run's chat keeps the run with `chatId: null`.
+ */
+export interface ScheduleRepo {
+  /** Throws on a duplicate id. */
+  create(s: NewSchedule): Schedule;
+  get(id: string): Schedule | null;
+  /** Oldest made first. */
+  list(): Schedule[];
+  /** Throws for an unknown id. */
+  update(id: string, patch: SchedulePatch): Schedule;
+  /** Also deletes its runs. A no-op for an unknown id. */
+  delete(id: string): void;
+  /** Enabled schedules whose `nextRunAt` is at or before `now`, oldest due first (then oldest made, then id). */
+  due(now: number): Schedule[];
+  /** Adds a run (defaults: no finish, detail, chat, ids; 0 refused) and prunes the schedule's runs to the newest `SCHEDULE_RUNS_KEPT`. Throws for an unknown schedule. */
+  addRun(r: NewScheduleRun): ScheduleRun;
+  /** Merges `patch` into the run; null (and nothing written) when the run is gone. */
+  updateRun(id: string, patch: ScheduleRunPatch): ScheduleRun | null;
+  /** Newest first (by `startedAt`, then the order added). */
+  runs(scheduleId: string): ScheduleRun[];
+  lastRun(scheduleId: string): ScheduleRun | null;
+  /** The newest run with status `complete`, or null. */
+  lastCompleted(scheduleId: string): ScheduleRun | null;
+  /** Every run with status `running`, across all schedules. */
+  runningRuns(): ScheduleRun[];
+  /** Whether some run created this chat. */
+  madeChat(chatId: string): boolean;
 }
 
 export interface Store {
@@ -680,6 +890,8 @@ export interface Store {
   mcpServers: McpServerRepo;
   grants: GrantRepo;
   audit: AuditRepo;
+  /** Scheduled tasks (spec 2026-10-12-scheduled-tasks-design): local, never synced. */
+  schedules: ScheduleRepo;
   /**
    * Runs `fn` as one unit: SQLite commits everything it writes together, or
    * rolls it all back when it throws (the error is rethrown). Inside an open

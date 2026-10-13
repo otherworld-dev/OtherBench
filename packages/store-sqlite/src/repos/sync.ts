@@ -1,8 +1,11 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { artifactTitleOk, isArtifactKind, isArtifactLanguage, isArtifactSlug, MAX_ARTIFACT_BYTES } from '@grunt/core/domain/artifacts.js';
+import { parseLiveSpec } from '@grunt/core/domain/live-artifacts.js';
 import { compareHlc, maxHlc } from '@grunt/core/domain/hlc.js';
 import { SYNC_TABLES, connectionSecretRef, isSha256, isSyncTable, mergeChatFields, mergeRow, type ChangeBatch, type ChangeRow, type SyncRow, type SyncTable } from '@grunt/core/domain/sync.js';
 import type { SyncApplyResult, SyncRepo } from '@grunt/core/ports/store.js';
+import { attachmentBound, bindHistoryAttachments, MAX_HISTORY_ATTACHMENT_BYTES } from '@grunt/core/domain/attachment-binding.js';
+import { attachmentRowShapeOk, bindToolImageParts, isToolImageMime, MAX_TOOL_IMAGE_BYTES, type ToolImageRow } from '@grunt/core/domain/tool-images.js';
 import type { Part } from '@grunt/core/types/messages.js';
 import type { SyncClock } from './clock.js';
 import { deriveSearchText } from './messages.js';
@@ -19,6 +22,19 @@ const LOCAL_COLUMNS: Partial<Record<SyncTable, string[]>> = {
   message: ['search_text'],
 };
 const STAMP_COLUMNS = ['hlc', 'field_hlc'];
+
+/**
+ * THE rule for a file that may travel: an attachment is bound when it was sent
+ * in a message, that message exists, and the message belongs to the attachment's
+ * own chat (which exists). Every path that offers a file row, offers its bytes,
+ * asks for its bytes or accepts its row uses this (SQL here, `isBound` for a row
+ * being applied), so none can disagree about what a file is bound to. The JS
+ * form is core's `attachmentBound`; a test proves the two agree.
+ */
+export const BOUND_ATTACHMENT_SQL = `EXISTS (SELECT 1 FROM message m WHERE m.id = a.message_id AND m.chat_id = a.chat_id)`;
+
+/** The facts of an attachment that never change once it is sent: a peer can't re-point or swap one. */
+const ATTACHMENT_FIXED_FACTS = ['chat_id', 'sha256', 'mime', 'size'] as const;
 
 /** Each table's key columns; most are keyed on `id`. */
 const KEYS: Partial<Record<SyncTable, string[]>> = {
@@ -59,7 +75,27 @@ function artifactRowOk(row: SyncRow): boolean {
   return isArtifactSlug(row['slug']) && isArtifactKind(row['kind']) && languageOk(row['language']);
 }
 
-/** A version row as Grunt makes one: a one-line title, a whole number from 1, a known kind and maker, at most 1 MB. */
+/** Longer than any declaration parseLiveSpec takes (32 KB canonical), with room for whitespace. */
+const MAX_LIVE_TEXT = 64 * 1024;
+
+/** A version's live declaration (spec 2026-10-12-live-artifacts): none, or one Grunt would make, and only on an html version. */
+function liveOk(row: SyncRow): boolean {
+  const live = row['live'];
+  if (live === null || live === undefined) return true;
+  if (typeof live !== 'string' || live.length > MAX_LIVE_TEXT || row['kind'] !== 'html') return false;
+  const parsed = parseLiveSpec(live);
+  return parsed.ok && parsed.spec !== null;
+}
+
+/** Rewrites a valid `live` to the form Grunt itself stores (names normalised, args and params filled in), so a peer's spelling never reaches the store. */
+function canonicaliseLive(row: SyncRow): void {
+  const live = row['live'];
+  if (typeof live !== 'string') return;
+  const parsed = parseLiveSpec(live);
+  if (parsed.ok && parsed.spec !== null) row['live'] = JSON.stringify(parsed.spec);
+}
+
+/** A version row as Grunt makes one: a one-line title, a whole number from 1, a known kind and maker, at most 1 MB, and a live declaration Grunt could have made. */
 function artifactVersionRowOk(row: SyncRow): boolean {
   const { title, number, content } = row;
   return (
@@ -67,8 +103,48 @@ function artifactVersionRowOk(row: SyncRow): boolean {
     typeof number === 'number' && Number.isInteger(number) && number >= 1 &&
     isArtifactKind(row['kind']) && languageOk(row['language']) &&
     (row['made_by'] === 'model' || row['made_by'] === 'user') &&
-    typeof content === 'string' && Buffer.byteLength(content, 'utf8') <= MAX_ARTIFACT_BYTES
+    typeof content === 'string' && Buffer.byteLength(content, 'utf8') <= MAX_ARTIFACT_BYTES &&
+    liveOk(row)
   );
+}
+
+/** A file row that a batch wrote: its id, and the chat and message its row names. */
+interface ArrivedFile {
+  id: string;
+  chatId: unknown;
+  messageId: unknown;
+}
+
+/**
+ * The attachment ids a stored message is still waiting for: every `pending`
+ * mention in its parts (a user's image or file part, or an image reference in
+ * a tool result). Nothing for parts that do not parse.
+ */
+function pendingMentions(partsJson: string): string[] {
+  let parts: unknown;
+  try {
+    parts = JSON.parse(partsJson);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parts)) return [];
+  const waitingFor = (item: unknown): string | null => {
+    if (typeof item !== 'object' || item === null) return null;
+    const v = item as { pending?: unknown; attachmentId?: unknown };
+    return v.pending === true && typeof v.attachmentId === 'string' ? v.attachmentId : null;
+  };
+  const ids: string[] = [];
+  for (const part of parts as unknown[]) {
+    const own = waitingFor(part);
+    if (own !== null) ids.push(own);
+    const result = typeof part === 'object' && part !== null ? (part as { type?: unknown; result?: unknown }) : null;
+    if (result?.type !== 'tool-result' || !Array.isArray(result.result)) continue;
+    for (const item of result.result as unknown[]) {
+      const held = waitingFor(item);
+      if (held !== null) ids.push(held);
+    }
+  }
+  return ids;
 }
 
 export class SqliteSyncRepo implements SyncRepo {
@@ -93,14 +169,19 @@ export class SqliteSyncRepo implements SyncRepo {
     this.db.prepare('UPDATE attachment SET storage_path = ? WHERE id = ?').run(path, attachmentId);
   }
 
-  missingBlobs(): { id: string; sha256: string }[] {
-    const rows = this.db.prepare("SELECT id, sha256 FROM attachment WHERE storage_path = '' ORDER BY id").all() as { id: string; sha256: string }[];
-    return rows.filter((r) => isSha256(r.sha256));
+  missingBlobs(): { id: string; sha256: string; size: number }[] {
+    // Only a file bound to a message of its own chat is ever fetched or given a local blob.
+    const rows = this.db.prepare(`SELECT a.id, a.sha256, a.size FROM attachment a WHERE a.storage_path = '' AND ${BOUND_ATTACHMENT_SQL} ORDER BY a.id`).all() as { id: string; sha256: string; size: unknown }[];
+    // And only one whose row states a size a blob can be held to (what `attachmentRowOk` asks of a row on apply): an
+    // older row may hold text or a fraction there, which no caller could cap a download by.
+    const sized = (r: { id: string; sha256: string; size: unknown }): r is { id: string; sha256: string; size: number } =>
+      typeof r.size === 'number' && Number.isInteger(r.size) && r.size >= 0 && r.size <= MAX_HISTORY_ATTACHMENT_BYTES;
+    return rows.filter(sized).filter((r) => isSha256(r.sha256));
   }
 
   isSentBlob(sha256: string): boolean {
     if (!isSha256(sha256)) return false;
-    return this.db.prepare('SELECT 1 FROM attachment WHERE sha256 = ? AND message_id IS NOT NULL LIMIT 1').get(sha256) !== undefined;
+    return this.db.prepare(`SELECT 1 FROM attachment a WHERE a.sha256 = ? AND ${BOUND_ATTACHMENT_SQL} LIMIT 1`).get(sha256) !== undefined;
   }
 
   private columns(tbl: string): string[] {
@@ -118,6 +199,20 @@ export class SqliteSyncRepo implements SyncRepo {
 
   private exists(tbl: SyncTable, id: unknown): boolean {
     return typeof id === 'string' && this.db.prepare(`SELECT 1 FROM ${tbl} WHERE ${keyWhere(tbl)}`).get(id) !== undefined;
+  }
+
+  /** `BOUND_ATTACHMENT_SQL` for a row that is being offered or applied (it may not be in the table yet). */
+  private isBound(chatId: unknown, messageId: unknown): boolean {
+    if (typeof chatId !== 'string' || typeof messageId !== 'string') return false;
+    const message = this.db.prepare('SELECT chat_id FROM message WHERE id = ?').get(messageId) as { chat_id: string } | undefined;
+    return attachmentBound({ chatId, messageId }, message?.chat_id ?? null);
+  }
+
+  /** Whether message `id` is one a peer is sent (everything but a reply still streaming). */
+  private messageOfferable(id: unknown): boolean {
+    if (typeof id !== 'string') return false;
+    const message = this.db.prepare('SELECT status FROM message WHERE id = ?').get(id) as { status: string } | undefined;
+    return message !== undefined && message.status !== 'streaming';
   }
 
   private tombstone(tbl: SyncTable, id: string): string | null {
@@ -141,9 +236,12 @@ export class SqliteSyncRepo implements SyncRepo {
       if (!isSyncTable(e.tbl)) continue;
       const row = this.select(e.tbl, e.row_id);
       if (row) {
-        // Not yet: a reply still streaming, or a file not yet sent. Each is logged again when it is.
+        // Not yet: a reply still streaming is logged again when it stops (the trigger).
         if (e.tbl === 'message' && row['status'] === 'streaming') continue;
-        if (e.tbl === 'attachment' && row['message_id'] === null) continue;
+        // A file is offered only bound to a message of its own chat, and only once that message can be
+        // offered itself (a peer turns a file down when its message is missing). A file of a reply that
+        // is still streaming is logged again, behind the message, when the reply stops (`updateStatus`).
+        if (e.tbl === 'attachment' && !(this.isBound(row['chat_id'], row['message_id']) && this.messageOfferable(row['message_id']))) continue;
         rows.push(this.toUpsert(e.tbl, e.row_id, row));
       } else {
         const hlc = this.tombstone(e.tbl, e.row_id);
@@ -158,6 +256,8 @@ export class SqliteSyncRepo implements SyncRepo {
     const drop = new Set([...STAMP_COLUMNS, ...(LOCAL_COLUMNS[tbl] ?? [])]);
     const row: SyncRow = {};
     for (const [k, v] of Object.entries(raw)) if (!drop.has(k)) row[k] = v;
+    // Offered as it would be accepted: a message's references to files are checked here too, whatever was stored before.
+    if (tbl === 'message') this.bindMessageImages(row, id, 'drop');
     const change: ChangeRow = { tbl, id, op: 'upsert', hlc: raw['hlc'] as string, row };
     if (tbl === 'chat') change.fieldHlc = JSON.parse((raw['field_hlc'] as string) || '{}') as Record<string, string>;
     return change;
@@ -181,17 +281,24 @@ export class SqliteSyncRepo implements SyncRepo {
     this.db.exec('BEGIN');
     try {
       const pendingHeads: { chatId: string; head: string; stamp: string }[] = [];
+      const arrived: ArrivedFile[] = [];
       for (const u of upserts) {
         const outcome = u.tbl === 'chat' ? this.applyChat(u, pendingHeads) : this.applyRow(u);
         if (outcome) {
           result.applied++;
           result.written.push({ tbl: u.tbl, id: u.id });
-          if (u.tbl === 'attachment') result.attachments.push({ id: u.id, sha256: u.row['sha256'] as string });
+          if (u.tbl === 'attachment') {
+            result.attachments.push({ id: u.id, sha256: u.row['sha256'] as string });
+            arrived.push({ id: u.id, chatId: u.row['chat_id'], messageId: u.row['message_id'] });
+          }
         } else {
           result.skipped++;
         }
       }
       this.resolveHeads(pendingHeads);
+      // Second phase: every message that came in this batch (or earlier) and names a file that has
+      // only now arrived (or changed) is checked again against it, and verified or turned into a note.
+      this.reverifyWaiting(arrived);
       for (const d of deletes) {
         if (this.applyDelete(d)) result.applied++;
         else result.skipped++;
@@ -277,20 +384,144 @@ export class SqliteSyncRepo implements SyncRepo {
     }
     // A file's hash names its blob on disk: anything but a SHA-256 is refused.
     if (u.tbl === 'attachment' && !isSha256(row['sha256'])) return false;
+    if (u.tbl === 'attachment') {
+      // A file travels only bound to a message of its own chat.
+      if (!this.isBound(row['chat_id'], row['message_id'])) return false;
+      if (!this.attachmentRowOk(row)) return false;
+      // A file stays what it was, in the chat and on the message it was sent with:
+      // another machine can't re-point an attachment id it knows at a different chat
+      // or reply, or swap its content or type, which would make any message's
+      // reference to it show that file. Its extracted text (what a model that can't
+      // take images is sent instead of the file) is set once: it may arrive where there
+      // was none, and is never changed after. (Last-writer-wins applies to its name only.)
+      if (local) {
+        if (ATTACHMENT_FIXED_FACTS.some((k) => local[k] !== row[k])) return false;
+        if (local['extracted_text'] != null && local['extracted_text'] !== row['extracted_text']) return false;
+        if (local['message_id'] != null && local['message_id'] !== row['message_id']) return false;
+      }
+      // Delete wins for good: an id that was removed is never made again with a new binding.
+      if (this.tombstone('attachment', u.id) !== null) return false;
+    }
     // Artifact rows reach the model's prompt and the viewer: only what Grunt itself could have made.
     if (u.tbl === 'artifact' && !artifactRowOk(row)) return false;
-    if (u.tbl === 'artifact_version' && !artifactVersionRowOk(row)) return false;
+    if (u.tbl === 'artifact_version') {
+      if (!artifactVersionRowOk(row)) return false;
+      canonicaliseLive(row);
+    }
     // A machine's own folder for a location is its to set; another machine
     // may only fill it in where there's none yet (adopting a location).
     if (u.tbl === 'location_path' && row['node_id'] === this.selfId() && local) return false;
     const tomb = this.tombstone(u.tbl, u.id);
     if (mergeRow((local?.['hlc'] as string | undefined) ?? null, u.hlc, tomb, u.tbl === 'location_path') === 'skip') return false;
     if (!this.parentsPresent(u.tbl, row)) return false;
+    if (u.tbl === 'message') this.bindMessageImages(row, u.id, 'hold');
     // Columns only this machine sets get their defaults on a new row.
     const insertOnly: Record<string, unknown> = u.tbl === 'attachment' ? { storage_path: '' } : {};
     this.upsert(u.tbl, row, { hlc: u.hlc }, insertOnly);
     if (tomb !== null) this.db.prepare('DELETE FROM tombstone WHERE tbl = ? AND row_id = ?').run(u.tbl, u.id);
     return true;
+  }
+
+  /**
+   * An attachment row as Grunt itself makes one (modelled on `artifactRowOk` and
+   * `artifactVersionRowOk` above): the shape core checks for every file, a size
+   * within the upload cap, and, for a file on an assistant reply (a tool's image),
+   * a raster type within the per-image cap. A user's upload keeps its own rules.
+   */
+  private attachmentRowOk(row: SyncRow): boolean {
+    if (!attachmentRowShapeOk({ id: row['id'], filename: row['filename'], mime: row['mime'], size: row['size'] }, MAX_HISTORY_ATTACHMENT_BYTES)) return false;
+    const holder = this.db.prepare('SELECT role FROM message WHERE id = ?').get(row['message_id'] as string) as { role: string } | undefined;
+    if (holder?.role === 'assistant') return isToolImageMime(row['mime']) && (row['size'] as number) <= MAX_TOOL_IMAGE_BYTES;
+    return true;
+  }
+
+  /** The attachment row `id` as the binding checks read it: every field exactly as stored, null when there is none. */
+  private fileFacts(id: string): ToolImageRow | null {
+    const a = this.select('attachment', id);
+    return a ? ({ chatId: a['chat_id'], messageId: a['message_id'], mime: a['mime'], size: a['size'] } as ToolImageRow) : null;
+  }
+
+  /** A message's parts with their files checked (see `bindMessageImages`); the same array when nothing changed. */
+  private boundParts(chatId: string, id: string, parts: Part[], missing: 'hold' | 'drop'): Part[] {
+    // Images a tool result refers to: the file must be here and be this chat's and this message's.
+    const toolBound = bindToolImageParts(parts, chatId, id, (attachmentId) => this.fileFacts(attachmentId), missing);
+    // Images and files the user sent: a file that is here must be this chat's and bound; one that is not here
+    // yet is marked pending (not replayable) when `missing` is 'hold', and a note otherwise.
+    const [carrier] = bindHistoryAttachments(
+      [{ id, chatId, parentId: null, role: 'user', parts: toolBound, status: 'complete', error: null, producedBy: null, createdAt: 0 }],
+      (attachmentId) => {
+        const a = this.select('attachment', attachmentId);
+        if (a === null) return missing === 'hold' ? 'pending' : false;
+        return a['chat_id'] === chatId && this.isBound(a['chat_id'], a['message_id']);
+      }
+    );
+    const bound = carrier!.parts;
+    return JSON.stringify(bound) === JSON.stringify(parts) ? parts : bound;
+  }
+
+  /**
+   * A synced message's references to files are checked against the files here
+   * and no reference passes on a missing file or a null field. A file that has
+   * not arrived (`'hold'`, on apply) leaves the reference marked `pending`,
+   * which nothing replays or serves; `reverifyMessage` clears the mark, or
+   * turns the reference into a note, when the file arrives. On a read or an
+   * offer (`'drop'`) it is a note.
+   */
+  private bindMessageImages(row: SyncRow, id: string, missing: 'hold' | 'drop'): void {
+    const chatId = row['chat_id'];
+    if (typeof row['parts'] !== 'string' || typeof chatId !== 'string') return;
+    let parts: Part[];
+    try {
+      parts = JSON.parse(row['parts']) as Part[];
+    } catch {
+      return;
+    }
+    if (!Array.isArray(parts)) return;
+    const bound = this.boundParts(chatId, id, parts, missing);
+    if (bound !== parts) row['parts'] = JSON.stringify(bound);
+  }
+
+  /**
+   * The messages to check again now that `files` have arrived or changed: the
+   * message each file was sent in, and every other message of the file's own
+   * chat that holds a pending mention of it (an edit-and-resend sibling names
+   * the same file, which stays on its first message). One pass per chat over
+   * the messages that hold any pending mark at all (a cheap text test on the
+   * stored parts, then a parse), so the work is bounded by that chat. A
+   * message of another chat is never looked at: no file of this chat can
+   * verify it, and every read turns its reference into a note.
+   */
+  private reverifyWaiting(files: ArrivedFile[]): void {
+    const messages = new Set<string>();
+    const byChat = new Map<string, Set<string>>();
+    for (const file of files) {
+      if (typeof file.messageId === 'string') messages.add(file.messageId);
+      if (typeof file.chatId !== 'string') continue;
+      const ids = byChat.get(file.chatId) ?? new Set<string>();
+      byChat.set(file.chatId, ids.add(file.id));
+    }
+    const waiting = this.db.prepare(`SELECT id, parts FROM message WHERE chat_id = ? AND instr(parts, '"pending"') > 0`);
+    for (const [chatId, ids] of byChat) {
+      for (const row of waiting.all(chatId) as { id: string; parts: string }[]) {
+        if (pendingMentions(row.parts).some((attachmentId) => ids.has(attachmentId))) messages.add(row.id);
+      }
+    }
+    for (const messageId of messages) this.reverifyMessage(messageId);
+  }
+
+  /** Checks a stored message's files again (a file of its has just arrived). The stamp is untouched: nothing here is a change to send. */
+  private reverifyMessage(messageId: string): void {
+    const message = this.select('message', messageId);
+    if (!message || typeof message['parts'] !== 'string' || typeof message['chat_id'] !== 'string') return;
+    let parts: Part[];
+    try {
+      parts = JSON.parse(message['parts']) as Part[];
+    } catch {
+      return;
+    }
+    if (!Array.isArray(parts)) return;
+    const bound = this.boundParts(message['chat_id'], messageId, parts, 'hold');
+    if (bound !== parts) this.db.prepare('UPDATE message SET parts = ?, search_text = ? WHERE id = ?').run(JSON.stringify(bound), deriveSearchText(bound), messageId);
   }
 
   private applyChat(u: Extract<ChangeRow, { op: 'upsert' }>, pendingHeads: { chatId: string; head: string; stamp: string }[]): boolean {

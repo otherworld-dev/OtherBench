@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
+import { toolContextFor } from '@grunt/core/domain/tool-context.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.js';
@@ -110,6 +111,16 @@ describe('AppEventBus', () => {
     bus.emit({ type: 'turn-finished', chatId: 'c', messageId: 'm2', status: 'cancelled' });
     expect(bus.pendingApprovals()).toEqual([]);
   });
+
+  it('keeps the kind of a pending question or plan for the hello', () => {
+    const bus = new AppEventBus();
+    bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' });
+    bus.emit({ type: 'approval-requested', chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' });
+    expect(bus.pendingApprovals()).toEqual([
+      { chatId: 'c', messageId: 'm1', requestId: 'a1', toolName: 'ask_user', kind: 'question' },
+      { chatId: 'c', messageId: 'm1', requestId: 'r1', toolName: 'write_file' },
+    ]);
+  });
 });
 
 describe('app-wide events', () => {
@@ -215,6 +226,21 @@ describe('app-wide events', () => {
     events.emit({ type: 'turn-finished', chatId: 'deleted', messageId: 'm3', status: 'complete' });
 
     expect(seen.map((e) => e.type)).toEqual(['turn-finished', 'turn-finished']);
+  });
+
+  it('a question emits approval-requested with kind question, the hello lists it, and the turn finishing clears it', async () => {
+    const hanging = hangingEngine();
+    build(hanging.engine);
+    container.store.chats.create({ id: 'chat-1', title: 'Chat', profileId: 'profile-1', headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    const { assistantMessageIds } = (await (await post('/api/chats/chat-1/turns', { parts: [{ type: 'text', text: 'ask' }], profileIds: ['profile-1'] })).json()) as { assistantMessageIds: string[] };
+    const messageId = assistantMessageIds[0]!;
+    void container.toolProvider.askUser(toolContextFor(hanging.requests[0]!), { kind: 'question', toolName: 'ask_user', questions: [{ question: 'Which?', header: 'H', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: false }] });
+    await flush();
+    const requested = seen.find((e) => e.type === 'approval-requested');
+    expect(requested).toMatchObject({ chatId: 'chat-1', messageId, toolName: 'ask_user', kind: 'question' });
+    expect(events.pendingApprovals()).toHaveLength(1);
+    container.turnRunner.cancel(messageId);
+    await vi.waitFor(() => expect(events.pendingApprovals()).toEqual([]));
   });
 
   it('deleting a project announces each chat it moved to No project', async () => {
