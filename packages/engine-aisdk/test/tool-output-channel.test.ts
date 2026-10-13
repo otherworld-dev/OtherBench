@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -92,8 +92,26 @@ const engineFor = (provider: unknown): AiSdkChatEngine => new AiSdkChatEngine({ 
 /** Every Anthropic request body any test here sent: each is checked by `expectWellFormed` when its test ends. */
 const anthropicBodies: Record<string, unknown>[] = [];
 
+/**
+ * The AI SDK's warnings, collected instead of printed. A test that expects
+ * one takes it with `takeWarnings`; any other fails the test it came from.
+ */
+const warnings: string[] = [];
+const takeWarnings = (): string[] => warnings.splice(0);
+const sdkGlobals = globalThis as { AI_SDK_LOG_WARNINGS?: unknown };
+let previousLogger: unknown;
+
+beforeEach(() => {
+  previousLogger = sdkGlobals.AI_SDK_LOG_WARNINGS;
+  sdkGlobals.AI_SDK_LOG_WARNINGS = (options: { warnings: { type: string; message?: string; feature?: string }[] }) => {
+    for (const warning of options.warnings) warnings.push(warning.message ?? `${warning.type}: ${String(warning.feature)}`);
+  };
+});
+
 afterEach(() => {
+  sdkGlobals.AI_SDK_LOG_WARNINGS = previousLogger;
   for (const body of anthropicBodies.splice(0)) expectWellFormed(body);
+  expect(takeWarnings(), 'warnings from the AI SDK').toEqual([]);
 });
 
 /**
@@ -128,11 +146,11 @@ const googleChunk = (parts: Record<string, unknown>[]) => ({
   usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
 });
 const GOOGLE_END = data([googleChunk([{ text: 'Done.' }])]);
-/** One Gemini turn asking for a screenshot and a click. */
+/** One Gemini turn asking for a screenshot and a click (signed, as Gemini 3 signs its calls). */
 const GOOGLE_CALLS = data([
   googleChunk([
-    { functionCall: { id: 'call-1', name: 'computer', args: { action: 'screenshot' } } },
-    { functionCall: { id: 'call-2', name: 'computer', args: { action: 'left_click', coordinate: [1, 0] } } },
+    { functionCall: { id: 'call-1', name: 'computer', args: { action: 'screenshot' } }, thoughtSignature: 'sig-1' },
+    { functionCall: { id: 'call-2', name: 'computer', args: { action: 'left_click', coordinate: [1, 0] } }, thoughtSignature: 'sig-2' },
   ]),
 ]);
 
@@ -392,6 +410,8 @@ describe('tool output only ever reaches a model inside a tool result', () => {
         expect(JSON.stringify(body)).not.toContain('inlineData');
       }
       expect(responses[1]!.content).toEqual(REFUSED);
+      // Stored calls carry no thought signature, so for Gemini 3 the SDK puts in its documented stand-in and says so.
+      if (modelId === 'gemini-3-pro') expect(takeWarnings()).toEqual([expect.stringContaining('without a `thoughtSignature`')]);
     });
 
     it.each([['openai_compatible'], ['ollama']] as [ConnectionKind][])('%s (chat completions): text only, in the tool message', async (kind) => {
