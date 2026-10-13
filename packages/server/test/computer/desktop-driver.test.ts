@@ -486,6 +486,30 @@ describe('DesktopComputerDriver: ending a session', () => {
     }
   });
 
+  it('an end while the start dialog is still up goes to the shell too, and a yes that still comes is the caller\'s to end', async () => {
+    const { driver, shell } = await connected();
+    shell.override = (method) => (method === 'computer.start' ? 'silent' : undefined);
+    const starting = driver.ensureSession('c', 'Budget');
+    await tick();
+    // Stop while the dialog is up: the shell is told (it cancels the dialog), and the start then says no.
+    await expect(driver.endSession('c')).resolves.toBeUndefined();
+    expect(shell.methods()).toEqual(['computer.hello', 'computer.start', 'computer.end']);
+    shell.answer(shell.idOf('computer.start'), { ok: false, reason: 'cancelled' });
+    expect(await starting).toEqual({ ok: false, reason: 'cancelled' });
+
+    // A shell that says yes all the same: the answer is handed on as it is, and the next end is asked of the shell again.
+    const again = driver.ensureSession('c', 'Budget');
+    await tick();
+    await driver.endSession('c');
+    shell.sessions.add('c');
+    shell.answer(shell.idOf('computer.start'), { ok: true });
+    expect(await again).toEqual({ ok: true });
+    shell.override = () => undefined;
+    await driver.endSession('c');
+    expect(shell.sessions.has('c')).toBe(false);
+    expect(await driver.act('c', TYPE, EXPECT)).toEqual({ ok: false, reason: COMPUTER_NO_SESSION_REASON });
+  });
+
   it('on a channel that has closed: resolves when it has nothing to end, and sends nothing', async () => {
     const { driver, shell } = await connected();
     shell.close();

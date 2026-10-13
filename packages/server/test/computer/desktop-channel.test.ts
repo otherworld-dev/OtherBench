@@ -308,6 +308,24 @@ describe('DesktopChannel', () => {
     expect(logged.mock.calls).toEqual([['[grunt-server] dropped a line from the desktop app that was longer than 64 bytes.']]);
   });
 
+  it('reads nothing out of a line it has dropped, even when its end looks like a message', async () => {
+    const { fromShell, toShell } = pipes();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const channel = new DesktopChannel(fromShell, toShell, { maxLineBytes: 64, timeoutMs: 5000 });
+    const call = channel.call('computer.act', {});
+    // One long line whose last piece, arriving on its own, is a whole answer to the call that is waiting.
+    fromShell.write('A'.repeat(64));
+    fromShell.write('B');
+    await tick();
+    fromShell.write(`${RPC_PREFIX}{"id":1,"result":"smuggled"}\n`);
+    await tick();
+    expect(channel.pendingCalls).toBe(1);
+    expect(channel.droppedLines).toBe(1);
+    expect(channel.bufferedBytes).toBe(0);
+    reply(fromShell, { id: 1, result: 'the real answer' });
+    expect(await call).toBe('the real answer');
+  });
+
   it('a line of exactly the limit is read, one byte more is not', async () => {
     const { fromShell, toShell } = pipes();
     vi.spyOn(console, 'error').mockImplementation(() => {});
