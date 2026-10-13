@@ -1,11 +1,12 @@
 import { BROWSER_COMMANDS, BROWSER_TOOL, browserCommandRisk, isBrowserCommand, normaliseHost, siteOf, type BrowserCommand } from '@grunt/core/domain/browser-hosts.js';
-import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { NO_APPROVAL_REASON, type DescribedCall, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { BrowserManager, ChatBrowser } from './manager.js';
 import { BrowserBusyError, PageMovedError, StaleRefError, type ActionGuard } from './session.js';
 import { MAX_NOTE_CHARS, MAX_TARGET_CHARS, cutSnapshot, pageText, refLines } from './snapshot.js';
 
 export const NO_PAGE = 'No page is open: use open first.';
-const NO_APPROVAL = 'Grunt has no approval for this call.';
+/** Arguments that carry no approved site or page: core's one sentence for a call nothing approved. */
+const NO_APPROVAL = NO_APPROVAL_REASON;
 
 /** The line every page result carries (spec §2, "Untrusted content"). */
 export function aboutPage(host: string): string {

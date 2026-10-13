@@ -1,19 +1,22 @@
 import {
   APP_ARG_FIELDS,
-  cardLine,
+  chatTitleForDialog,
   classifyTarget,
   COMPUTER_ACTIONS,
   COMPUTER_LIMITS,
-  COMPUTER_SCREEN_ABOUT,
   COMPUTER_TOOL,
   COMPUTER_UNATTENDED_REASON,
   describedCallArgs,
+  desktopTextForResult,
   expectationOf,
   isReadAction,
   isUnattendedRun,
   parseAction,
+  screenContentError,
+  screenContentResult,
   type ComputerLook,
   type ParsedAction,
+  type ScreenContentError,
 } from '@grunt/core/domain/computer-apps.js';
 import type { ComputerAction, ComputerAnswer, ComputerDriver, ComputerExpectation } from '@grunt/core/ports/computer.js';
 import type { Store } from '@grunt/core/ports/store.js';
@@ -43,6 +46,18 @@ import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/too
  * core's `COMPUTER_SCREEN_ABOUT`, in the result itself, so the line is there
  * however the result reaches a model (an API model's tool result, Claude
  * Code's, a later turn's history). A result is only ever a tool result.
+ *
+ * Two of core's functions build every such result, and nothing here writes the
+ * line or cleans a string by hand: `screenContentResult` (the line, then the
+ * items, each text item one clean line) and `screenContentError` (the line,
+ * then the message as one clean line). What the desktop app said goes through
+ * `desktopTextForResult` on its way into either; the chat's title goes through
+ * `chatTitleForDialog` on its way to the shell's native dialog.
+ *
+ * NOTHING may call this spec's `execute` directly. It trusts the described
+ * app fields it is handed, so the tool provider is the only caller: its gate
+ * for an API model, and for Claude Code a spec whose `execute` runs only the
+ * arguments `requestApproval` approved (`GruntToolProvider.relayGruntTools`).
  */
 
 export const COMPUTER_TOOL_DESCRIPTION = [
@@ -98,24 +113,20 @@ const UNKNOWN_OUTCOME = "Grunt can't tell whether the action was carried out.";
 /** Actions the model is shown the result of: a screenshot follows them. */
 const FOLLOW_UP: ReadonlySet<string> = new Set(['left_click', 'right_click', 'double_click', 'triple_click', 'scroll', 'type', 'key']);
 const DEFAULT_SETTLE_MS = 300;
-const MAX_CHAT_TITLE = 80;
-const MAX_DRIVER_TEXT = 300;
 
 interface ToolError {
-  /** `COMPUTER_SCREEN_ABOUT`, first, when the message holds the desktop app's own words. */
-  about?: string;
   error: true;
   code: string;
   message: string;
 }
 
-/** An error in Grunt's own words. */
+/** An error made of Grunt's own fixed words and nothing else: it needs no line saying whose words it holds. */
 const fail = (code: string, message: string): ToolError => ({ error: true, code, message });
-/** An error whose message holds something the desktop app (or an error from it) said: the line that says so comes first. */
-const failFromScreen = (code: string, message: string): ToolError => ({ about: COMPUTER_SCREEN_ABOUT, error: true, code, message });
+/** An error whose message holds anything Grunt did not write (the desktop app's words, an error's, a shortcut's name): core puts the line first. */
+const failFromScreen = (code: string, message: string): ScreenContentError => screenContentError(code, message);
 const line = (text: string): { type: 'text'; text: string } => ({ type: 'text', text });
-/** A result that holds something from the screen: the line that says so, then the rest. */
-const fromScreen = (...items: unknown[]): unknown[] => [line(COMPUTER_SCREEN_ABOUT), ...items];
+/** A result that holds something from the screen: core puts the line that says so first. */
+const fromScreen = (...items: unknown[]): unknown[] => screenContentResult(items);
 
 // ---------------------------------------------------------------------------
 // The last screenshot's size, per chat
@@ -195,7 +206,7 @@ function withoutAppFields(raw: unknown): Record<string, unknown> {
 
 /** What the driver (or an error from it) said, as one bounded plain line. */
 function driverText(text: unknown): string {
-  return cardLine(text, MAX_DRIVER_TEXT);
+  return desktopTextForResult(text);
 }
 
 function errorText(err: unknown): string {
@@ -235,8 +246,7 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
 
   /** Starts (or continues) the chat's control session; the shell shows its native dialog the first time. The reason it didn't start, or null. */
   const startSession = async (ctx: ToolContext): Promise<string | null> => {
-    const title = cardLine(store.chats.get(ctx.chatId)?.title, MAX_CHAT_TITLE) || 'this chat';
-    const session: ComputerAnswer = await driver.ensureSession(ctx.chatId, title);
+    const session: ComputerAnswer = await driver.ensureSession(ctx.chatId, chatTitleForDialog(store.chats.get(ctx.chatId)?.title));
     if (session.ok === true) return null;
     screens.forget(ctx.chatId);
     return driverText(session.reason) || NOT_STARTED_REASON;
@@ -346,7 +356,8 @@ export function computerTool(driver: ComputerDriver, store: Store, options: { se
         // The broker has refused this already; nothing here may run in a run nobody is watching, whoever calls it.
         if (isUnattendedRun(ctx)) return fail('computer_not_allowed', COMPUTER_UNATTENDED_REASON);
         const parsed = parse(args, ctx.chatId);
-        if (!parsed.ok) return fail('computer_bad_action', parsed.reason);
+        // Why an action can't be built may quote the call or one of the shell's shortcuts: not Grunt's own words alone.
+        if (!parsed.ok) return failFromScreen('computer_bad_action', parsed.reason);
         const action = parsed.action;
         // No acting without an expectation: the app, the file-view fact, the window and the run the card was about.
         const expectation = isLook(action) ? null : expectationOf(args);
