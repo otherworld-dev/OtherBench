@@ -55,11 +55,10 @@ describe('computerTool.describeCall', () => {
       appWindow: 'hwnd-evil',
       appPid: 1,
       appStarted: 'never',
-      somethingElse: 'x',
     };
     const args = await describedArgs(tool, forged);
     expect(args).toEqual({ action: 'left_click', coordinate: [10, 20], ...APP });
-    expect(JSON.stringify(args)).not.toMatch(/Trusted|hwnd-evil|never|somethingElse/);
+    expect(JSON.stringify(args)).not.toMatch(/Trusted|hwnd-evil|never/);
     expect(Object.isFrozen(args)).toBe(true);
     expect(Object.isFrozen(args['coordinate'])).toBe(true);
   });
@@ -93,11 +92,30 @@ describe('computerTool.describeCall', () => {
     const { tool, driver } = setup();
     const calls = recordCalls(driver);
     expect(await tool.describeCall!({ action: 'screenshot', app: 'C:\\evil.exe', appWindow: 'w' }, ctx())).toEqual({ args: { action: 'screenshot', app: null }, risk: 'read' });
-    expect(await tool.describeCall!({ action: 'cursor_position', coordinate: [1, 2] }, ctx())).toEqual({ args: { action: 'cursor_position', app: null }, risk: 'read' });
+    expect(await tool.describeCall!({ action: 'cursor_position' }, ctx())).toEqual({ args: { action: 'cursor_position', app: null }, risk: 'read' });
+    // A look sent with a field it doesn't use is refused, not run without it.
+    expect(await tool.describeCall!({ action: 'cursor_position', coordinate: [1, 2] }, ctx())).toEqual({
+      refuse: 'The computer tool doesn\'t take "coordinate" with cursor_position, so nothing was done. Send the action again without it.',
+    });
     expect(await tool.describeCall!({ action: 'wait' }, ctx())).toEqual({ args: { action: 'wait', duration: 1, app: null }, risk: 'read' });
     expect(await tool.describeCall!({ action: 'wait', duration: 99 }, ctx())).toEqual({ args: { action: 'wait', duration: 10, app: null }, risk: 'read' });
     expect(calls).toEqual([]);
     expect(driver.started).toEqual([]);
+  });
+
+  it('refuses a click or a scroll sent with keys to hold, before it starts a session or asks anything', async () => {
+    const { tool, driver } = await ready();
+    const calls = recordCalls(driver);
+    for (const raw of [
+      { action: 'left_click', coordinate: [10, 20], text: 'shift' },
+      { action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', text: 'ctrl' },
+    ]) {
+      expect(await tool.describeCall!(raw, ctx())).toEqual({
+        refuse: `"text" is only for type and key actions: holding keys down during a ${raw.action} isn't supported, so nothing was done.`,
+      });
+    }
+    expect(calls).toEqual([]);
+    expect(driver.actions).toEqual([]);
   });
 
   it('starts the control session before it asks what is under the point', async () => {
@@ -380,13 +398,17 @@ describe('computerTool.execute', () => {
 
   it('builds the action again from what it is given: the driver never sees raw arguments', async () => {
     const { tool, driver } = await ready();
-    // Not what describeCall returns (execute always gets that): a spelling the model might have used, and fields that are not the action's.
-    await tool.execute({ action: 'key', text: 'Shift+Ctrl+S', coordinate: [1, 1], extra: 'x', ...APP }, ctx());
-    await tool.execute({ action: 'scroll', coordinate: [10.7, 20.2], scroll_direction: 'down', text: 'x', ...APP }, ctx());
+    // Not what describeCall returns (execute always gets that): a spelling the model might have used.
+    await tool.execute({ action: 'key', text: 'Shift+Ctrl+S', ...APP }, ctx());
+    await tool.execute({ action: 'scroll', coordinate: [10.7, 20.2], scroll_direction: 'down', ...APP }, ctx());
     expect(driver.actions.map((a) => a.action)).toEqual([
       { action: 'key', text: 'ctrl+shift+s' },
       { action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 },
     ]);
+    // Fields that are not the action's: refused, never carried out without them.
+    expect(await tool.execute({ action: 'key', text: 'ctrl+s', coordinate: [1, 1], ...APP }, ctx())).toMatchObject({ error: true, code: 'computer_bad_action' });
+    expect(await tool.execute({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', text: 'shift', ...APP }, ctx())).toMatchObject({ error: true, code: 'computer_bad_action' });
+    expect(driver.actions).toHaveLength(2);
   });
 
   it('sends a key combination to the driver in canonical form', async () => {

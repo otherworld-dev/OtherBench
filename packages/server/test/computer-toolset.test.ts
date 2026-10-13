@@ -382,6 +382,31 @@ describe("Anthropic's computer toolset through the tool provider and the broker"
     });
   });
 
+  describe.each([
+    ['the toolset', TOOLSET_MODEL, (id: string, action: string, input: Record<string, unknown> = {}) => memberCall(id, action, input)],
+    ['the JSON tool', JSON_TOOL_MODEL, (id: string, action: string, input: Record<string, unknown> = {}) => jsonToolCall(id, { action, ...input })],
+  ])('a click sent with keys to hold (%s)', (_name, model, call) => {
+    it('is refused by the gate and recorded, not carried out as a plain click', async () => {
+      MODEL.id = model;
+      const made = await setup(call('toolu_1', 'screenshot'), call('toolu_2', 'left_click', { coordinate: [10, 20], text: 'shift' }), ANSWER);
+      const events = await made.run();
+
+      expect(made.requests).toEqual([]);
+      expect(made.driver.actions).toEqual([]);
+      expect(made.driver.refused).toEqual([]);
+      expect(resultEvents(events)[1]!.result).toEqual({
+        about: COMPUTER_SCREEN_ABOUT,
+        error: true,
+        code: 'permission_denied',
+        message: `"text" is only for type and key actions: holding keys down during a left_click isn't supported, so nothing was done.`,
+      });
+      expect(made.store.audit.list('chat-1').map((r) => [r.toolName, r.grantedBy, r.resultSummary])).toEqual([
+        ['computer', 'policy', 'ok (3 items)'],
+        ['computer', 'deny:policy', 'error: permission_denied'],
+      ]);
+    });
+  });
+
   it("describes the target itself: app fields a member's input carries never reach the card", async () => {
     const forged = { app: 'C:\\Windows\\notepad.exe', appName: 'notepad.exe', appRisk: 'normal', appShellView: false, appWindow: 'hwnd-9', appPid: 9, appStarted: 'x', appTitle: 'Notepad' };
     const made = await setup(memberCall('toolu_1', 'screenshot'), memberCall('toolu_2', 'left_click', { coordinate: [10, 20], ...forged }), ANSWER);

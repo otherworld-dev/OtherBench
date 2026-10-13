@@ -547,12 +547,13 @@ function declaredFields(spec: ToolSpec): string[] {
  *     naming the field, rather than run without it: a click sent with
  *     `repeat: 3` that ran once would leave the model and the transcript
  *     believing it ran three times. This refusal is the engine's own and
- *     leaves no audit row: the gate cannot be asked instead, because core's
- *     `parseAction` (what the tool describes a call with) reads past a field
- *     it does not know, so a call sent there with the field kept would be
- *     approved and carried out once.
+ *     leaves no audit row. Core's `parseAction` now refuses a field an action
+ *     doesn't use as well, so the gate would refuse the call too; this stays
+ *     as a second line.
  *   - Otherwise the action and the declared fields it carries, in a fresh
- *     object, and nothing else.
+ *     object, and nothing else. A declared field the action doesn't use
+ *     (`text` on a click, which Anthropic's tools use for keys to hold) goes
+ *     on to the gate, which refuses it and records it.
  */
 function memberArgs(input: unknown, fields: readonly string[]): { args: Record<string, unknown> } | { refuse: string } {
   const member = typeof input === 'object' && input !== null && !Array.isArray(input) ? (input as Record<string, unknown>) : null;

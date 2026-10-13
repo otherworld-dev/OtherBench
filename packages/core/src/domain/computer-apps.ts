@@ -667,6 +667,47 @@ function frozenPoint(point: [number, number]): [number, number] {
 
 const SCROLL_DIRECTIONS = ['up', 'down', 'left', 'right'] as const;
 
+/** The fields each action is carried out with, besides `action`. Anything else the model sends with it is refused (`unusedFieldsProblem`). */
+const ACTION_FIELDS: Readonly<Record<ComputerActionName, readonly string[]>> = Object.freeze({
+  screenshot: [],
+  cursor_position: [],
+  wait: ['duration'],
+  mouse_move: ['coordinate'],
+  left_click: ['coordinate'],
+  right_click: ['coordinate'],
+  double_click: ['coordinate'],
+  triple_click: ['coordinate'],
+  scroll: ['coordinate', 'scroll_direction', 'scroll_amount'],
+  type: ['text'],
+  key: ['text'],
+});
+
+const POINTER_ACTIONS: ReadonlySet<string> = new Set(['mouse_move', 'left_click', 'right_click', 'double_click', 'triple_click', 'scroll']);
+
+/**
+ * Why an action can't be carried out as sent because it carries a field it
+ * does not use, or null. Anthropic's computer tools put keys to hold in
+ * `text` on a click or a scroll, and their toolset takes `repeat`, `region`
+ * and more: run without them, a shift-click would be a plain click and the
+ * model would be told it was done. A field left out, or written as `null`
+ * (as some models write a missing value), is not there. The fields a
+ * described target occupies (`APP_ARG_FIELDS`) are core's own and are read
+ * elsewhere: the model's own are thrown away before an action is parsed, and
+ * described arguments, which hold them, must still parse.
+ */
+function unusedFieldsProblem(a: Record<string, unknown>, action: ComputerActionName): string | null {
+  const used = ACTION_FIELDS[action];
+  const unused = Object.keys(a).filter(
+    (field) => field !== 'action' && !used.includes(field) && !(APP_ARG_FIELDS as readonly string[]).includes(field) && a[field] !== undefined && a[field] !== null
+  );
+  if (unused.length === 0) return null;
+  if (unused.includes('text') && POINTER_ACTIONS.has(action)) {
+    return `"text" is only for type and key actions: holding keys down during a ${action} isn't supported, so nothing was done.`;
+  }
+  const names = unused.map((field) => `"${cardLine(field, 40)}"`).join(', ');
+  return `The computer tool doesn't take ${names} with ${action}, so nothing was done. Send the action again without ${unused.length === 1 ? 'it' : 'them'}.`;
+}
+
 /** An action that only looks, in the one form it is carried out in. A wait's `duration` (seconds) is already held to the cap. */
 export type ComputerLook = { action: 'screenshot' } | { action: 'cursor_position' } | { action: 'wait'; duration: number };
 
@@ -715,6 +756,10 @@ void NO_ACTION_OUTSIDE_THE_LIST;
  * model's own arguments.
  *
  *   - the action is exactly one of `COMPUTER_ACTIONS`;
+ *   - it carries no field that action does not use (`text` on a click,
+ *     `coordinate` on a key, a field the tool doesn't know): it would be
+ *     carried out without it. The fields in `APP_ARG_FIELDS` are not the
+ *     model's and are passed over here;
  *   - a coordinate passes `coordinateOf` (with `bounds`, the last
  *     screenshot's size, when given);
  *   - a scroll has a direction from the four and a whole amount from 1 to 10
@@ -744,6 +789,8 @@ export function parseAction(args: unknown, options: { bounds?: { width: number; 
   if (a === null || !isComputerAction(action)) {
     return no(`"${cardLine(action, 40)}" isn't a computer action Grunt can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.`);
   }
+  const unused = unusedFieldsProblem(a, action);
+  if (unused !== null) return no(unused);
   switch (action) {
     case 'screenshot':
     case 'cursor_position':

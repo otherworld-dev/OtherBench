@@ -518,9 +518,10 @@ describe('parsing a whole action', () => {
   }
 
   it('gives back the one form of an action that is carried out, built from validated values only', () => {
-    expect(parsed({ action: 'screenshot', coordinate: 'ignored', text: 'x' })).toEqual({ action: 'screenshot' });
+    expect(parsed({ action: 'screenshot' })).toEqual({ action: 'screenshot' });
     expect(parsed({ action: 'cursor_position' })).toEqual({ action: 'cursor_position' });
-    expect(parsed({ action: 'left_click', coordinate: [512.7, 300.2], extra: 'x', app: 'whatever' })).toEqual({ action: 'left_click', coordinate: [512, 300] });
+    // The fields a described target occupies are core's own: they are read elsewhere, never refused here.
+    expect(parsed({ action: 'left_click', coordinate: [512.7, 300.2], app: 'whatever' })).toEqual({ action: 'left_click', coordinate: [512, 300] });
     expect(parsed({ action: 'mouse_move', coordinate: [1, 2] })).toEqual({ action: 'mouse_move', coordinate: [1, 2] });
     expect(parsed({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 })).toEqual({ action: 'scroll', coordinate: [10, 20], scroll_direction: 'down', scroll_amount: 3 });
     expect(parsed({ action: 'type', text: 'hello\n\tworld' })).toEqual({ action: 'type', text: 'hello\n\tworld' });
@@ -537,6 +538,63 @@ describe('parsing a whole action', () => {
     expect(refused({ action: 'x'.repeat(5000) }).length).toBeLessThan(250);
   });
 
+  it('refuses an action that carries a field it does not use, rather than do it without', () => {
+    // A click sent with keys to hold (as Anthropic's computer tools write a shift-click) would otherwise be a plain click.
+    for (const action of ['left_click', 'right_click', 'double_click', 'triple_click', 'mouse_move']) {
+      expect(refused({ action, coordinate: [1, 2], text: 'shift' }), action).toBe(
+        `"text" is only for type and key actions: holding keys down during a ${action} isn't supported, so nothing was done.`
+      );
+    }
+    expect(refused({ action: 'scroll', coordinate: [1, 2], scroll_direction: 'down', text: 'ctrl' })).toBe(
+      `"text" is only for type and key actions: holding keys down during a scroll isn't supported, so nothing was done.`
+    );
+    const notTaken = (fields: string, action: string, them = false): string =>
+      `The computer tool doesn't take ${fields} with ${action}, so nothing was done. Send the action again without ${them ? 'them' : 'it'}.`;
+    expect(refused({ action: 'screenshot', text: 'x' })).toBe(notTaken('"text"', 'screenshot'));
+    expect(refused({ action: 'wait', duration: 1, text: 'x' })).toBe(notTaken('"text"', 'wait'));
+    for (const action of ['type', 'key']) expect(refused({ action, text: 'a', coordinate: [1, 2] }), action).toBe(notTaken('"coordinate"', action));
+    for (const action of ['screenshot', 'cursor_position', 'wait']) expect(refused({ action, coordinate: [1, 2] }), action).toBe(notTaken('"coordinate"', action));
+    expect(refused({ action: 'cursor_position', coordinate: [1, 2], text: 'a' })).toBe(notTaken('"coordinate", "text"', 'cursor_position', true));
+    for (const action of ['left_click', 'mouse_move', 'type', 'screenshot']) {
+      const args = { action, coordinate: [1, 2], text: 'a', scroll_direction: 'down', scroll_amount: 2 };
+      if (action !== 'type') delete (args as Record<string, unknown>)['text'];
+      if (action === 'type' || action === 'screenshot') delete (args as Record<string, unknown>)['coordinate'];
+      expect(refused(args), action).toBe(notTaken('"scroll_direction", "scroll_amount"', action, true));
+    }
+    for (const action of ['left_click', 'scroll', 'type', 'key', 'screenshot']) {
+      const args: Record<string, unknown> = { action, duration: 2 };
+      if (action === 'left_click' || action === 'scroll') args['coordinate'] = [1, 2];
+      if (action === 'scroll') args['scroll_direction'] = 'up';
+      if (action === 'type' || action === 'key') args['text'] = 'a';
+      expect(refused(args), action).toBe(notTaken('"duration"', action));
+    }
+    // A field the tool doesn't know at all (the toolset's own `repeat`, `region`...), named as one clean line.
+    expect(refused({ action: 'left_click', coordinate: [1, 2], repeat: 3 })).toBe(notTaken('"repeat"', 'left_click'));
+    expect(refused({ action: 'screenshot', 'evil\u202e\nfield': 1 })).toBe(notTaken('"evil field"', 'screenshot'));
+    // A field left out or written as null (as some models write a missing value) is not there.
+    expect(parsed({ action: 'left_click', coordinate: [1, 2], text: undefined, duration: null })).toEqual({ action: 'left_click', coordinate: [1, 2] });
+    expect(parsed({ action: 'screenshot', coordinate: null, text: null, scroll_direction: null, scroll_amount: null, duration: null })).toEqual({ action: 'screenshot' });
+  });
+
+  it("still parses described arguments: the fields core adds are not the model's", () => {
+    const target = Object.freeze({ kind: 'app', key: 'C:\\Windows\\notepad.exe', name: 'notepad.exe', title: 'Untitled', risk: 'normal', shellView: false, windowId: 'hwnd-1', pid: 4242, startedAt: '2026-10-12T09:00:00.000Z' } as const);
+    const actions: unknown[] = [
+      { action: 'left_click', coordinate: [1, 2] },
+      { action: 'scroll', coordinate: [1, 2], scroll_direction: 'down', scroll_amount: 3 },
+      { action: 'type', text: 'hello' },
+      { action: 'key', text: 'ctrl+s' },
+    ];
+    for (const input of actions) {
+      const result = parseAction(input, { reserved: [] });
+      if (!result.ok || !('text' in result.action || 'coordinate' in result.action)) throw new Error(`Expected ${JSON.stringify(input)} to parse`);
+      const args = describedCallArgs(result.action as never, target);
+      expect(parseAction(args, { reserved: [] }), JSON.stringify(input)).toEqual({ ok: true, action: result.action });
+      expect(actionSummary(args)).not.toMatch(/\?$/);
+    }
+    // A look's described arguments carry `app: null`.
+    expect(parsed({ action: 'wait', duration: 2, app: null })).toEqual({ action: 'wait', duration: 2 });
+  });
+
   it('holds a coordinate to the screenshot', () => {
     const shot = { bounds: { width: 1366, height: 768 } };
     expect(parsed({ action: 'left_click', coordinate: [1365.9, 767.9] }, shot)).toEqual({ action: 'left_click', coordinate: [1365, 767] });
@@ -544,7 +602,7 @@ describe('parsing a whole action', () => {
     expect(refused({ action: 'scroll', coordinate: [10, 768], scroll_direction: 'down' }, shot)).toBe('That point is outside the last screenshot. Take a screenshot and use a point inside it.');
     for (const coordinate of [undefined, [1], [1, 2, 3], ['1', 2], [-1, 5], [Number.NaN, 1], '512,300', [1e308, 5], [2147483648, 0], [32768, 1]]) {
       for (const action of ['mouse_move', 'left_click', 'right_click', 'double_click', 'triple_click', 'scroll']) {
-        expect(refused({ action, coordinate, scroll_direction: 'down' }, shot), `${action} ${JSON.stringify(coordinate)}`).toBe(
+        expect(refused({ action, coordinate, ...(action === 'scroll' ? { scroll_direction: 'down' } : {}) }, shot), `${action} ${JSON.stringify(coordinate)}`).toBe(
           `A ${action} action needs "coordinate": [x, y], two numbers in the last screenshot's pixels.`
         );
       }
@@ -973,7 +1031,6 @@ describe('round 2: one described target for the card, the grant, the risk and th
       appWindow: 'hwnd-1',
       appPid: 4242,
       appStarted: '2026-10-12T09:00:00.000Z',
-      somethingElse: 'x',
     };
     const parsed = parseAction(forged);
     if (!parsed.ok || parsed.action.action !== 'left_click') throw new Error('expected a click');
@@ -1043,9 +1100,15 @@ describe('round 2: nothing can hold a key or a button down', () => {
       key: ['action', 'text'],
     };
     for (const [action, fields] of Object.entries(whole)) {
-      const result = parseAction({ action, coordinate: [1, 2], scroll_direction: 'down', text: action === 'key' ? 'ctrl+s' : 'x', duration: 5, hold: true, down: true, release: false }, { reserved: [] });
+      const given: Record<string, unknown> = { action, coordinate: [1, 2], scroll_direction: 'down', text: action === 'key' ? 'ctrl+s' : 'x' };
+      for (const field of Object.keys(given)) if (!fields.includes(field)) delete given[field];
+      const result = parseAction(given, { reserved: [] });
       if (!result.ok) throw new Error(`Expected ${action} to parse`);
       expect(Object.keys(result.action).sort(), action).toEqual(fields);
+      // A field that would ask to hold something, or make it last, is refused rather than dropped.
+      for (const extra of [{ duration: 5 }, { hold: true }, { down: true }, { release: false }]) {
+        expect(parseAction({ ...given, ...extra }, { reserved: [] }).ok, `${action} ${JSON.stringify(extra)}`).toBe(false);
+      }
     }
   });
 });

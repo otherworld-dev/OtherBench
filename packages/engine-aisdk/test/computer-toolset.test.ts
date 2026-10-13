@@ -399,11 +399,14 @@ describe('the toolset: what reaches the computer tool', () => {
     expect(contentOf(results[1]!)).toEqual(byId.get('toolu_2'));
   });
 
-  it('refuses an undeclared field itself because the gate would not: core reads past a field it does not know, so the call would run', () => {
-    // Why this refusal is the engine's and leaves no audit row: sent through the gate with the field kept, core's
-    // parseAction (what the computer tool's describeCall checks with) accepts it and the click would be carried out once.
+  it('refuses an undeclared field itself, and the gate would refuse it too: core refuses a field an action does not use', () => {
+    // The engine's refusal is a second line: sent through the gate with the field kept, core's parseAction (what the
+    // computer tool's describeCall checks with) refuses it as well, so the click is never carried out without it.
     for (const field of ['repeat', 'region', 'start_coordinate']) {
-      expect(parseAction({ action: 'left_click', coordinate: [10, 20], [field]: 3 }), field).toEqual({ ok: true, action: { action: 'left_click', coordinate: [10, 20] } });
+      expect(parseAction({ action: 'left_click', coordinate: [10, 20], [field]: 3 }), field).toEqual({
+        ok: false,
+        reason: `The computer tool doesn't take "${field}" with left_click, so nothing was done. Send the action again without it.`,
+      });
     }
   });
 

@@ -23,10 +23,15 @@ function ctx(over: Partial<ToolContext> = {}): ToolContext {
   return { chatId: 'chat-1', messageId: 'msg-1', profileId: 'profile-1', workspaceRoot: null, signal: new AbortController().signal, ...over };
 }
 
-/** A described click: what the tool's describeCall hands the broker. `app: null` leaves the app fields out. */
+/**
+ * A described click: what the tool's describeCall hands the broker. `app: null` leaves the app fields out. An `extra`
+ * that makes it a type or key action leaves the point out too (those actions have none) unless it gives one.
+ */
 function click(app: unknown = EXCEL, extra: Record<string, unknown> = {}): Record<string, unknown> {
   const described = app === null ? {} : { app, appName: 'whatever the caller says', appTitle: 'Book1', appRisk: app === CMD ? 'high' : 'normal', appShellView: false, appWindow: 'hwnd-1', appPid: 4242, appStarted: 't0' };
-  return { action: 'left_click', coordinate: [512, 300], ...described, ...extra };
+  const args: Record<string, unknown> = { action: 'left_click', coordinate: [512, 300], ...described, ...extra };
+  if (!('coordinate' in extra) && (args['action'] === 'type' || args['action'] === 'key')) delete args['coordinate'];
+  return args;
 }
 
 function expectAsk(decision: Decision): Extract<Decision, { kind: 'ask' }> {
@@ -97,8 +102,10 @@ describe('PermissionBroker and computer use', () => {
     for (const duration of [Number.NaN, Number.POSITIVE_INFINITY, -1, '5', {}]) {
       expect(broker.decide(COMPUTER, { action: 'wait', duration }, policy(), ctx()), String(duration)).toEqual({ kind: 'deny', reason: "Grunt can't carry out that action as it was sent, so it didn't run it." });
     }
-    // Whatever else the call carries, it is still only a look: the tool runs it by the same name.
-    expect(broker.decide(COMPUTER, { action: 'screenshot', coordinate: [1, 2], text: 'x', app: CMD }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    // An app a look's arguments name changes nothing: it is still only a look.
+    expect(broker.decide(COMPUTER, { action: 'screenshot', app: CMD }, policy(), ctx())).toEqual({ kind: 'allow', grantedBy: 'policy' });
+    // A look carrying fields it doesn't use is not let through as a look: it is refused like any other call it can't carry out.
+    expect(broker.decide(COMPUTER, { action: 'screenshot', coordinate: [1, 2], text: 'x', app: CMD }, policy(), ctx())).toEqual({ kind: 'deny', reason: "Grunt can't carry out that action as it was sent, so it didn't run it." });
   });
 
   it('never lets an action that is not exactly a known name through, with or without a grant', () => {
@@ -306,14 +313,16 @@ describe('PermissionBroker and computer use', () => {
     // Each names Excel AND carries a second key that a click on Notepad can be made to satisfy.
     const beside: Record<string, unknown>[] = [{ commandExact: 'x' }, { commandPrefix: 'x' }, { host: 'example.com' }, { pathPrefix: '/' }];
     for (const extra of beside) grant(EXCEL, { constraint: { app: EXCEL, ...extra } });
+    // A call can't carry the other key's fields at all: a click with them is refused before any grant is looked at.
     const riding = { command: 'x', host: 'example.com', path: '/' };
-    expect(broker.decide(COMPUTER, click(NOTEPAD, riding), policy(), ctx()).kind).toBe('ask');
-    expect(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL, riding), policy(), ctx()).kind).toBe('ask');
+    for (const app of [NOTEPAD, DOWNLOADED_EXCEL, EXCEL]) expect(broker.decide(COMPUTER, click(app, riding), policy(), ctx()).kind).toBe('deny');
+    expect(broker.decide(COMPUTER, click(NOTEPAD), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(DOWNLOADED_EXCEL), policy(), ctx()).kind).toBe('ask');
     // Nor do they cover Excel itself: a grant that is not exactly one app is no grant.
-    expect(broker.decide(COMPUTER, click(EXCEL, riding), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx()).kind).toBe('ask');
     grant(EXCEL);
-    expect(broker.decide(COMPUTER, click(EXCEL, riding), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
-    expect(broker.decide(COMPUTER, click(NOTEPAD, riding), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, click(EXCEL), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    expect(broker.decide(COMPUTER, click(NOTEPAD), policy(), ctx()).kind).toBe('ask');
   });
 
   it('refuses to store anything when the call no longer names a valid app by the time it is answered', () => {
