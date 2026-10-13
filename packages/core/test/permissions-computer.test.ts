@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PermissionBroker, type Decision } from '../src/domain/permissions.js';
+import { PermissionBroker, SUBAGENT_COMPUTER_REFUSAL, type Decision } from '../src/domain/permissions.js';
 import type { Grant } from '../src/ports/store.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
@@ -485,6 +485,17 @@ describe('the app grant beside the host and live grants (cowork-parity integrati
     const writeAsk = expectAsk(broker.decide(WRITE, { path: 'a.txt' }, wide(), ctx({ workspaceRoot: '/ws' })));
     expect(() => broker.resolve(writeAsk.request.id, { choice: 'always', constraint: { app: EXCEL } })).toThrow(/only a pathPrefix/);
     expect(store.grants.list()).toEqual([]);
+  });
+
+  it("refuses a sub-agent's computer call whatever policy it comes with, the looks included, with no card and whatever grants exist", () => {
+    row('c-ok', 'computer', 'computer', { app: EXCEL });
+    const asSubagent = ctx({ subagent: { callId: 'call-1', label: 'Helper', parentProfileId: 'profile-1' } });
+    for (const args of [{ action: 'screenshot', app: null }, { action: 'cursor_position', app: null }, click()]) {
+      expect(broker.decide(COMPUTER, args, wide(), asSubagent), JSON.stringify(args)).toEqual({ kind: 'deny', reason: SUBAGENT_COMPUTER_REFUSAL });
+    }
+    expect(broker.pendingCount).toBe(0);
+    // The parent's own call is covered by the same grant.
+    expect(broker.decide(COMPUTER, click(), wide(), ctx())).toMatchObject({ kind: 'allow', grantId: 'c-ok' });
   });
 
   it('never lets computer use feed a live artifact: not eligible, no live grant made, and a live context is refused', () => {

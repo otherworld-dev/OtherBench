@@ -333,6 +333,11 @@ export class PermissionBroker {
     // else needs a grant for the app the tool's describeCall resolved, or a
     // card; with no app at all it is refused (fail closed).
     if (tool.source === 'computer') {
+      // Never a sub-agent's, whatever policy it came with (its own policy has
+      // computer use off: SUBAGENT_POLICY_RULES). Nobody watches a sub-agent's
+      // screen, and its start would put the native dialog up for a job the
+      // user never asked to watch. As for the thread and subagent tools.
+      if (ctx.subagent) return { kind: 'deny', reason: SUBAGENT_COMPUTER_REFUSAL };
       // Fail closed: only a plain `false`, or nothing at all, says someone is
       // there. Any other value (a string, a number, null) counts as unattended.
       if (isUnattendedRun(ctx)) return { kind: 'deny', reason: COMPUTER_UNATTENDED_REASON, unattended: true };
@@ -718,6 +723,9 @@ export class PermissionBroker {
  * what happened and how to let the call run next time.
  */
 /** A thread tool (question, plan, checklist) called from inside a sub-agent. */
+/** A computer call made from inside a sub-agent. */
+export const SUBAGENT_COMPUTER_REFUSAL = "A sub-agent can't use the computer. Say in your answer what needs doing on screen, and the reply that started you can do it.";
+
 export const SUBAGENT_THREAD_REFUSAL = "A sub-agent can't ask the user, propose a plan or keep the reply's checklist. Put what you need to say in your answer.";
 
 export const UNATTENDED_REASON =

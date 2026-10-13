@@ -290,11 +290,12 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
         checked += 1;
         // The broker keeps the thread tools and the subagent tool from a sub-agent whatever the policies say.
         if (spec.source === 'thread' || spec.source === 'subagent') expect(subKind, context).toBe('deny');
-        // And computer use, looks included: its policy never has it on.
+        // And computer use, looks included: its policy never has it on, and the broker refuses one in a
+        // sub-agent's context whatever policy it comes with (the parent's own, here, as parentKind).
         if (spec.source === 'computer') {
           expect(subKind, context).toBe('deny');
+          expect(parentKind, context).toBe('deny');
           computerChecked += 1;
-          if (parentKind === 'allow') parentComputerAllowed += 1;
         }
         if (subKind === 'allow') {
           allowed += 1;
@@ -314,6 +315,7 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
         if (spec.source === 'subagent') continue; // refused inside a sub-agent, allowed for a parent that has the switch on
         const d = broker.decide(spec, args, sub, ctx);
         const p = broker.decide(spec, args, parent, parentCtx);
+        if (spec.source === 'computer' && p.kind === 'allow') parentComputerAllowed += 1;
         if (d.kind === 'ask') broker.discard(d.request.id);
         if (p.kind === 'ask') broker.discard(p.request.id);
         expect(RANK[d.kind], `case ${i}, ${spec.name} (${spec.source}), parent's own context`).toBeLessThanOrEqual(RANK[p.kind]);
@@ -325,8 +327,8 @@ describe('a sub-agent is never allowed more than the reply that started it', () 
     // The browser's calls among them, by a grant for the site and by the ask-on-mutate read pass.
     expect(browserAllowed.grant).toBeGreaterThan(10);
     expect(browserAllowed.read).toBeGreaterThan(10);
-    // Computer calls were checked in every case, and the parent's own policy did let some through (a look, or its
-    // grant), so a sub-agent's refusal is the rule's doing, not a policy that never had computer use on.
+    // Computer calls were checked in every case, and the parent in its own context did let some through (a look, or
+    // its grant), so a sub-agent's refusal is the rule's doing, not a policy that never had computer use on.
     expect(computerChecked).toBe(CASES * CALLS.filter(([spec]) => spec.source === 'computer').length);
     expect(parentComputerAllowed).toBeGreaterThan(10);
   });
