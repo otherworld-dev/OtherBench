@@ -171,6 +171,13 @@ export function profilesRoutes(container: Container): Hono {
     }
 
     const updated = container.store.profiles.update(id, patch);
+    // Computer use turned off on this profile: the chat on it that holds the computer (in control, or its
+    // start dialog up) is stopped as by the banner's Stop. Its session ends and its replies are cancelled,
+    // so a reply already running can't carry on with a tool the profile no longer allows.
+    if (updated.toolPolicy.computer !== true) {
+      const holder = container.computer?.holder() ?? null;
+      if (holder !== null && container.store.chats.get(holder)?.profileId === id) await container.computer?.stop(holder);
+    }
     // Spec section 5: an archived profile stops being any project's default.
     if (updated.archivedAt !== null) {
       clearProjectDefaultProfile(container.store, id);

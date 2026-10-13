@@ -5,7 +5,9 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
+import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { createApp } from '../../src/app.js';
+import { ComputerSessions } from '../../src/computer/sessions.js';
 import type { Container } from '../../src/container.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -187,6 +189,39 @@ describe('POST /api/profiles', () => {
     const off = (await (await patch(profile.id, { computer: false })).json()) as Body;
     expect(off.toolPolicy.computer).toBe(false);
     expect(container.store.profiles.get(profile.id)?.toolPolicy.computer).toBe(false);
+  });
+
+  it("turning computer use off on a profile ends the session of the chat using it and cancels that chat's replies, and no other chat's", async () => {
+    const driver = new FakeComputerDriver();
+    const cancelled: string[] = [];
+    const sessions = new ComputerSessions(driver, { emit: () => {}, cancelChat: (chatId) => cancelled.push(chatId), chatExists: (chatId) => container.store.chats.get(chatId) !== null });
+    container.computer = sessions;
+    const make = async (toolPolicy: unknown): Promise<string> => {
+      const res = await app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
+      return ((await res.json()) as { id: string }).id;
+    };
+    const patch = (id: string, toolPolicy: unknown) =>
+      app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolPolicy }) });
+    const on = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true };
+    const used = await make(on);
+    const other = await make(on);
+    for (const [id, profileId] of [['chat-1', used], ['chat-2', other]] as const) {
+      container.store.chats.create({ id, title: id, profileId, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    }
+    expect(await sessions.ensureSession('chat-1', 'chat-1')).toMatchObject({ ok: true });
+
+    // A change that leaves it on, and turning it off on a profile no chat in control uses, change nothing.
+    expect((await patch(used, { fs: 'read' })).status).toBe(200);
+    expect((await patch(other, { computer: false })).status).toBe(200);
+    expect(sessions.activeChat()).toBe('chat-1');
+    expect(driver.ended).toEqual([]);
+    expect(cancelled).toEqual([]);
+
+    // Unticking it on the profile the chat in control uses is Stop for that chat.
+    expect((await patch(used, { computer: false })).status).toBe(200);
+    expect(sessions.activeChat()).toBeNull();
+    expect(driver.ended).toEqual(['chat-1']);
+    expect(cancelled).toEqual(['chat-1']);
   });
 
   it('rejects a missing name with 400', async () => {
