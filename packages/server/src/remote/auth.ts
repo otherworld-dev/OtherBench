@@ -172,16 +172,34 @@ function tooMany(c: Context, retryAfterSec: number, message: string): Response {
   return c.json({ error: message }, 429, { 'Retry-After': String(retryAfterSec) });
 }
 
+function lockedOut(c: Context, remote: RemoteAccess, address: string): Response | null {
+  const limited = remote.limiter.check(address);
+  if (limited.ok) return null;
+  remote.log(`[grunt-server] sign-in refused for ${address}: too many tries`);
+  return tooMany(c, limited.retryAfterSec, tooManyMessage(limited.retryAfterSec));
+}
+
 /**
  * Runs one password check under the limiter: 429 while locked or busy, 503
  * when there's no password file, `wrongStatus` for a wrong password. The
- * record on success.
+ * record on success. The global slow-down is waited out first, before the
+ * password file is read, so a right password waits as long as a wrong one;
+ * the request's body has already been read and nothing is held meanwhile.
  */
 async function checkPassword(c: Context, remote: RemoteAccess, address: string, password: string, wrongStatus: 401 | 403): Promise<PasswordRecord | Response> {
-  const limited = remote.limiter.check(address);
-  if (!limited.ok) {
-    remote.log(`[grunt-server] sign-in refused for ${address}: too many tries`);
-    return tooMany(c, limited.retryAfterSec, tooManyMessage(limited.retryAfterSec));
+  const locked = lockedOut(c, remote, address);
+  if (locked) return locked;
+  const waited = await remote.limiter.slowDown(c.req.raw.signal);
+  if (waited.kind === 'busy') {
+    remote.log(`[grunt-server] sign-in refused for ${address}: too many attempts already waiting`);
+    return tooMany(c, waited.retryAfterSec, 'Sign-in is busy. Try again in a few seconds.');
+  }
+  // Nobody reads this: the client has gone.
+  if (waited.kind === 'gone') return c.body(null, 408);
+  if (waited.delayedMs > 0) {
+    // Other attempts from this address may have locked it while this one waited.
+    const lockedSince = lockedOut(c, remote, address);
+    if (lockedSince) return lockedSince;
   }
   const release = remote.limiter.acquire();
   if (!release) return tooMany(c, 1, 'Busy checking another sign-in. Try again in a moment.');
