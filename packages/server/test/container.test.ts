@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
 import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
 import { encodeHlc } from '@grunt/core/domain/hlc.js';
 import type { SaveToolImage } from '@grunt/core/domain/tool-images.js';
@@ -547,7 +548,7 @@ describe('computer use wiring', () => {
       expect(container.computer).toBeInstanceOf(ComputerSessions);
       const tool = (await container.toolProvider.listTools(on)).find((t) => t.name === 'computer')!;
       // The tool's own call starts the session through the sessions, which announce it.
-      expect(await tool.execute({ action: 'screenshot' }, ctxFor('c1'))).toMatchObject([{ type: 'text' }, { type: 'image', mimeType: 'image/png' }]);
+      expect(await tool.execute({ action: 'screenshot' }, ctxFor('c1'))).toMatchObject([{ type: 'text', text: COMPUTER_SCREEN_ABOUT }, { type: 'text' }, { type: 'image', mimeType: 'image/png' }]);
       expect(container.computer!.activeChat()).toBe('c1');
       expect(container.events!.computerSessions()).toEqual([{ chatId: 'c1' }]);
       // A second chat's tool call is refused by them: the driver is never asked, so no second dialog.
