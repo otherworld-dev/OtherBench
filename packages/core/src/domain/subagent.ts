@@ -12,6 +12,7 @@ import { normaliseHost } from './browser-hosts.js';
 import { applySubagentEvent, foldSubagentContent, type SubagentEndStatus, type SubagentEvent } from './parts.js';
 import { RECALL_GUIDANCE } from './recall.js';
 import { sandboxFoldersPrompt } from './sandbox-paths.js';
+import { keepToolImages } from './tool-images.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { extraFoldersPrompt } from './workspace.js';
 
@@ -516,6 +517,14 @@ export interface SubagentRunnerDeps {
   plan?: PlanGate;
   /** The parent reply is a scheduled run with nobody watching: so is every sub-agent, which can raise no card either. */
   unattended?: boolean;
+  /**
+   * Keeps the images in a tool result the way the parent reply's own are kept
+   * (spec 2026-10-12-computer-use-design section 6): stored in the blob store
+   * against the PARENT reply, under its image budget, and swapped for a
+   * reference. TurnRunner passes its own; without it they become a note.
+   * Either way no base64 goes into a sub-agent's broadcast or stored copy.
+   */
+  keepImages?: (result: unknown, toolName: string) => Promise<unknown>;
   now: () => number;
   generateId: () => string;
   chatId: string;
@@ -536,9 +545,10 @@ export interface SubagentRunnerDeps {
  * Tool sources a sub-agent never gets, whatever its policy says (defence in
  * depth: the narrowed policy already turns artifacts and sub-agents off).
  * `thread` is the thread-cards tools (ask the user, todos, plans), if that
- * work landed: a sub-agent can't ask anyone anything.
+ * work landed: a sub-agent can't ask anyone anything. `computer` is computer
+ * use, which its policy never has on either (`SUBAGENT_POLICY_RULES`).
  */
-const NEVER_FOR_SUBAGENTS: ReadonlySet<string> = new Set(['subagent', 'artifact', 'thread']);
+const NEVER_FOR_SUBAGENTS: ReadonlySet<string> = new Set(['subagent', 'artifact', 'thread', 'computer']);
 
 const sameName = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 
@@ -577,6 +587,11 @@ export class SubagentRunner implements SubagentHost {
   private readonly callIds = new Set<string>();
 
   constructor(private readonly deps: SubagentRunnerDeps) {}
+
+  /** The parent's way of keeping a tool result's images, else a note in place of each (never base64 in the copy). */
+  private keepImages(result: unknown, toolName: string): Promise<unknown> {
+    return this.deps.keepImages ? this.deps.keepImages(result, toolName) : keepToolImages(result, undefined, this.deps.chatId, this.deps.messageId, { kept: 0 }, toolName);
+  }
 
   run(input: unknown, ctx: ToolContext): Promise<unknown> {
     const job = this.runOne(input, ctx);
@@ -644,7 +659,9 @@ export class SubagentRunner implements SubagentHost {
         this.send(callId, { type: 'running' }, true);
         const tools = await this.toolsFor(chosen, narrowed.policy);
         const request = this.requestFor(chosen, narrowed.policy, shellWithheld, label, prompt, callId, tools, child.signal, ctx);
-        for await (const event of this.deps.engine.stream(request)) {
+        for await (const raw of this.deps.engine.stream(request)) {
+          // Images a tool returned are kept like the parent's before anything is broadcast or stored.
+          const event: EngineEvent = raw.type === 'tool-result' ? { ...raw, result: await this.keepImages(raw.result, raw.name) } : raw;
           const subEvent = toSubagentEvent(event);
           if (subEvent) {
             parts = foldSubagentContent(parts, subEvent);

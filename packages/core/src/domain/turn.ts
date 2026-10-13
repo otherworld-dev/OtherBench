@@ -736,6 +736,8 @@ export class TurnRunner {
           // The reply's plan gate and unattended flag go with every sub-agent it starts.
           ...(plan ? { plan } : {}),
           ...(unattended ? { unattended: true } : {}),
+          // A sub-agent's tool images are kept like this reply's own, against it and under its one budget.
+          keepImages: (result, toolName) => keepToolImages(result, this.saveToolImage, chatId, messageId, imageBudget, toolName),
           now: this.now,
           generateId: this.generateId,
           chatId,

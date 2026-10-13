@@ -8,6 +8,8 @@ import { FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import type { SubagentEvent, SubagentPart } from '../src/domain/parts.js';
 import { createPlanGate } from '../src/domain/thread-tools.js';
 import { toolContextFor } from '../src/domain/tool-context.js';
+import { IMAGE_NOT_KEPT, keepToolImages } from '../src/domain/tool-images.js';
+import { FAKE_PNG } from '../src/testing/fake-computer.js';
 import { SUBAGENT_NO_SHELL_NOTE, SUBAGENT_PLAN_NOTE, SUBAGENT_RESULT_COPY_MAX_CHARS, SubagentRunner, type SubagentRunnerDeps } from '../src/domain/subagent.js';
 
 const USAGE: Usage = { tokensIn: 40, tokensOut: 8, tokensCached: 0, tokensReasoning: 0 };
@@ -388,6 +390,53 @@ describe('SubagentRunner', () => {
     expect(typeof stored.result).toBe('string');
     expect((stored.result as string).length).toBeLessThan(SUBAGENT_RESULT_COPY_MAX_CHARS + 200);
     expect(stored.result as string).toContain('9000 characters');
+  });
+
+  it("keeps a tool result's images like the parent's (stored, a reference in the copy), or a note without a keeper: never base64", async () => {
+    // Integration (computer use x sub-agents): an MCP tool can return an image; the parent's results have theirs
+    // stored before anything is broadcast, and a sub-agent's copy (broadcast and stored too) gets the same.
+    const png = FAKE_PNG.toString('base64');
+    const shot = [{ type: 'text', text: 'Chart:' }, { type: 'image', data: png, mimeType: 'image/png' }, { type: 'audio', data: png, mimeType: 'audio/wav' }];
+    const engine = childEngine(async function* () {
+      yield { type: 'tool-call', id: 't1', name: 'read_file', args: {} };
+      yield { type: 'tool-result', id: 't1', name: 'read_file', result: shot, isError: false };
+      yield* answer('Seen.');
+    });
+    const kept: { result: unknown; toolName: string }[] = [];
+    const keeper = harness(engine, {
+      keepImages: async (result, toolName) => {
+        kept.push({ result, toolName });
+        return keepToolImages(result, async () => 'att-1', 'chat-1', 'reply-1', { kept: 0 }, toolName);
+      },
+    });
+    expect(await keeper.runner.run({ description: 'A', prompt: 'p' }, keeper.ctx('call-1'))).toBe('Seen.');
+    expect(kept.map((k) => k.toolName)).toEqual(['read_file']);
+    const storedCopy = JSON.stringify(sub(keeper.parts(), 'call-1')!.parts);
+    const sent = JSON.stringify(keeper.events.map((e) => e.event));
+    for (const text of [storedCopy, sent]) {
+      expect(text).not.toContain(png);
+      expect(text).toContain('"attachmentId":"att-1"');
+      expect(text).toContain('[audio omitted');
+    }
+
+    const bare = harness(childEngine(async function* () {
+      yield { type: 'tool-call', id: 't1', name: 'read_file', args: {} };
+      yield { type: 'tool-result', id: 't1', name: 'read_file', result: shot, isError: false };
+      yield* answer('Seen.');
+    }));
+    await bare.runner.run({ description: 'A', prompt: 'p' }, bare.ctx('call-2'));
+    const noted = JSON.stringify(sub(bare.parts(), 'call-2')!.parts);
+    expect(noted).not.toContain(png);
+    expect(noted).toContain(IMAGE_NOT_KEPT);
+  });
+
+  it('never offers a sub-agent the computer tool, whatever the provider lists', async () => {
+    const computer: ToolSpec = { name: 'computer', description: '', parameters: {}, risk: 'mutate', source: 'computer', execute: async () => 'clicked' };
+    const engine = childEngine(() => answer('Done.'));
+    const h = harness(engine, {}, new FakeToolProvider({ tools: [readFile, computer] }));
+    await h.runner.run({ description: 'A', prompt: 'p' }, h.ctx('call-1'));
+    expect(engine.requests[0]!.tools.map((t) => t.name)).toEqual(['read_file']);
+    expect(engine.requests[0]!.profile.toolPolicy.computer).toBe(false);
   });
 
   it('marks the card failed when the engine errors or the sub-agent writes no answer', async () => {
