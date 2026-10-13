@@ -1,6 +1,6 @@
 import { useEffect, useState, type JSX } from 'react';
 import { ChartIcon, GearIcon, SignOutIcon } from './components/icons.js';
-import { isQuickView } from './desktop/bridge.js';
+import { isIndicatorView, isQuickView } from './desktop/bridge.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
 import { ChatList } from './panes/ChatList.js';
 import { Inspector } from './panes/Inspector.js';
@@ -16,13 +16,19 @@ import { useOpenArgs } from './desktop/useOpenArgs.js';
 import { useTrayStatus } from './desktop/useTrayStatus.js';
 import { useAppEvents } from './state/useAppEvents.js';
 import { usePaneShortcuts } from './state/usePaneShortcuts.js';
+import { IndicatorView } from './views/IndicatorView.js';
 import { QuickChat } from './views/QuickChat.js';
 import { ProjectView } from './views/ProjectView.js';
 import { SettingsView } from './views/SettingsView.js';
 import { UsageView } from './views/UsageView.js';
 
-/** The quick-chat window gets its own small view (`?view=quick`); everything else is the main app. */
+/**
+ * The quick-chat window gets its own small view (`?view=quick`), and so does
+ * the computer-use indicator bar (`?view=indicator`); everything else is the
+ * main app.
+ */
 export function App(): JSX.Element {
+  if (isIndicatorView()) return <IndicatorView />;
   return isQuickView() ? <QuickChat /> : <MainApp />;
 }
 
