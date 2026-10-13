@@ -5,7 +5,7 @@ import type { EngineEvent, EngineRequest } from '@grunt/core/ports/chat-engine.j
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { ConnectionKind, ResolvedProfile } from '@grunt/core/types/config.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
-import { COMPUTER_ACTIONS, desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_ACTIONS, desktopTextForResult, parseAction, screenContentError } from '@grunt/core/domain/computer-apps.js';
 import { IMAGE_NOT_KEPT_LIMIT, MAX_TOOL_IMAGE_BYTES, TOOL_IMAGE_REF_REMOVED } from '@grunt/core/domain/tool-images.js';
 import { AiSdkChatEngine, COMPUTER_TOOLSET_CONFIGS, COMPUTER_TOOLSET_MODELS, usesComputerToolset } from '../src/engine.js';
 import type { ProviderHandle } from '../src/registry.js';
@@ -397,6 +397,14 @@ describe('the toolset: what reaches the computer tool', () => {
     expect(results.map((b) => b['tool_use_id'])).toEqual(['toolu_1', 'toolu_2', 'toolu_3', 'toolu_4', 'toolu_5']);
     expect(contentOf(results[0]!)).toEqual(byId.get('toolu_1'));
     expect(contentOf(results[1]!)).toEqual(byId.get('toolu_2'));
+  });
+
+  it('refuses an undeclared field itself because the gate would not: core reads past a field it does not know, so the call would run', () => {
+    // Why this refusal is the engine's and leaves no audit row: sent through the gate with the field kept, core's
+    // parseAction (what the computer tool's describeCall checks with) accepts it and the click would be carried out once.
+    for (const field of ['repeat', 'region', 'start_coordinate']) {
+      expect(parseAction({ action: 'left_click', coordinate: [10, 20], [field]: 3 }), field).toEqual({ ok: true, action: { action: 'left_click', coordinate: [10, 20] } });
+    }
   });
 
   it('refuses every field but the action when the spec declares no other', async () => {

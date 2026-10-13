@@ -546,7 +546,11 @@ function declaredFields(spec: ToolSpec): string[] {
  *     `start_coordinate`, which Grunt does nothing with. It is refused here,
  *     naming the field, rather than run without it: a click sent with
  *     `repeat: 3` that ran once would leave the model and the transcript
- *     believing it ran three times.
+ *     believing it ran three times. This refusal is the engine's own and
+ *     leaves no audit row: the gate cannot be asked instead, because core's
+ *     `parseAction` (what the tool describes a call with) reads past a field
+ *     it does not know, so a call sent there with the field kept would be
+ *     approved and carried out once.
  *   - Otherwise the action and the declared fields it carries, in a fresh
  *     object, and nothing else.
  */
