@@ -767,7 +767,12 @@ impl Inner {
             return reply.err(NO_CURSOR, None);
         };
         let same_screen = desktop.screen_size().is_ok_and(|s| s == (shot.screen_w, shot.screen_h));
-        match desktop.cursor() {
+        let read = desktop.cursor();
+        if live.ended() {
+            // An end came while it was read: abandoned, as a queued request is.
+            return reply.err(NO_SESSION, Some(rpc::NO_SESSION_CODE));
+        }
+        match read {
             Ok((x, y)) if same_screen => match shot.from_screen(x, y) {
                 Some((x, y)) => reply.ok(json!({ "x": x, "y": y })),
                 None => reply.err(NO_CURSOR, None),
@@ -797,7 +802,12 @@ impl Inner {
             let (sx, sy) = shot.to_screen(x as u32, y as u32);
             Where::Point(sx, sy)
         };
-        match desktop.facts(&at) {
+        let found = desktop.facts(&at);
+        if live.ended() {
+            // An end came while it was looked up: abandoned, as a queued request is.
+            return reply.err(NO_SESSION, Some(rpc::NO_SESSION_CODE));
+        }
+        match found {
             Ok(facts) => reply.ok(facts.to_json()),
             Err(why) => refuse(reply, &why),
         }
