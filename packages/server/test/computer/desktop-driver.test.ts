@@ -566,6 +566,52 @@ describe('DesktopComputerDriver: starting a session', () => {
     expect(MAX_TRACKED_CHATS).toBe(64);
   });
 
+  it('a start that waited on an earlier end, and was stopped meanwhile, sends no computer.start', async () => {
+    const { driver, shell } = await inSession({ driver: { endTimeoutMs: 2000 } });
+    // The shell won't confirm the end of c: it stays on record as one the shell may hold.
+    shell.override = (method) => (method === 'computer.end' ? { result: { ok: false, reason: 'a key would not come up' } } : undefined);
+    await expect(driver.endSession('c')).rejects.toThrow('a key would not come up');
+    // The next start waits while that end is asked again; Stop comes for the starting chat meanwhile.
+    shell.override = silentOn('computer.end');
+    const starting = driver.ensureSession('x', 'Other');
+    await tick();
+    const stopping = driver.endSession('x');
+    for (const r of shell.asked.filter((q) => q.method === 'computer.end').slice(-2)) shell.answer(r.id, { ok: true });
+    await stopping;
+    expect(await starting).toEqual({ ok: false, reason: 'Control was stopped before it started, so nothing was started.' });
+    expect(shell.sent('computer.start').filter((p) => (p as { chatId: string }).chatId === 'x')).toEqual([]);
+  });
+
+  it('a start for a chat id that is not one clean line of 1 to 128 characters is refused, and nothing is sent', async () => {
+    const { driver, shell } = await connected();
+    const before = shell.lines.length;
+    for (const chatId of ['', 'x'.repeat(129), 'two\nlines', ' padded', 'tab\there', 'zero​width', 'lone \ud800 surrogate', 'bidi ‮']) {
+      expect(await driver.ensureSession(chatId, 'Budget'), JSON.stringify(chatId)).toEqual({ ok: false, reason: "That chat can't control this computer: its id can't be sent to the desktop app." });
+      await expect(driver.endSession(chatId)).resolves.toBeUndefined();
+    }
+    expect(shell.lines).toHaveLength(before);
+    expect(await driver.ensureSession('x'.repeat(128), 'Budget')).toEqual({ ok: true });
+  });
+
+  it('sends a title of at most 80 characters, the ellipsis included', async () => {
+    const { driver, shell } = await connected();
+    const titles: [string, string][] = [
+      ['Budget', 'Budget'],
+      ['a'.repeat(80), 'a'.repeat(80)],
+      ['a'.repeat(81), `${'a'.repeat(79)}…`],
+      ['b'.repeat(500), `${'b'.repeat(79)}…`],
+      ['\u{1F5B1}'.repeat(100), `${'\u{1F5B1}'.repeat(79)}…`],
+      ['', 'this chat'],
+      ['line one\nline two', 'line one line two'],
+    ];
+    for (const [i, [title, sent]] of titles.entries()) {
+      await driver.ensureSession(`chat-${i}`, title);
+      const got = (shell.sent('computer.start').at(-1) as { title: string }).title;
+      expect(got, title.slice(0, 20)).toBe(sent);
+      expect(Array.from(got).length).toBeLessThanOrEqual(80);
+    }
+  });
+
   it('waits two minutes for the dialog, ten more for a late answer, and under the sessions limit for an end', () => {
     expect(START_TIMEOUT_MS).toBe(120_000);
     expect(START_LATE_WATCH_MS).toBe(600_000);

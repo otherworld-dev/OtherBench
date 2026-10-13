@@ -42,8 +42,10 @@ export const MAX_SHORTCUT_LENGTH = 256;
 
 /** The longest text taken from the shell into a reason, in characters. */
 const MAX_REASON = 300;
-/** The longest chat id taken from one of the shell's events. */
+/** The longest chat id sent to, or taken from, the shell. */
 const MAX_CHAT_ID = 128;
+/** The longest title sent with `computer.start`, in code points, an ellipsis included. */
+export const MAX_DIALOG_TITLE = 80;
 
 export const DESKTOP_NOT_AVAILABLE_REASON = "Computer use isn't available in the desktop app right now.";
 export const DESKTOP_GONE_REASON = 'The desktop app went away.';
@@ -66,7 +68,10 @@ export const DESKTOP_ENDED_AFTER = 'Grunt has ended the control session, so noth
 /** The same, when the shell did not confirm that end. */
 export const DESKTOP_END_UNCONFIRMED_AFTER = "Grunt asked the desktop app to end the control session and couldn't confirm that it did.";
 
-const TOO_MANY_REASON = 'Grunt is keeping track of too many control sessions; stop one first.';
+/** What a start is refused with for a chat id that is not one clean line of 1 to 128 characters. Nothing is sent for it. */
+export const DESKTOP_BAD_CHAT_REASON = "That chat can't control this computer: its id can't be sent to the desktop app.";
+const START_STOPPED_REASON = 'Control was stopped before it started, so nothing was started.';
+const TOO_MANY_REASON ='Grunt is keeping track of too many control sessions; stop one first.';
 const START_TIMEOUT_REASON = "The desktop app didn't answer the request to control this computer in time, so nothing was started.";
 const START_UNREADABLE_REASON = "The desktop app's answer couldn't be read, so nothing was started.";
 const START_REFUSED_REASON = 'The desktop app refused to start controlling this computer.';
@@ -160,7 +165,19 @@ function shortcutList(value: unknown): readonly string[] | null {
   return Object.freeze(list);
 }
 
-/** A chat id from the shell that is safe to hand on and to log: one short clean line, exactly as sent. */
+/**
+ * The chat's title for the native dialog: one clean line of at most
+ * `MAX_DIALOG_TITLE` code points, the ellipsis of a cut one included.
+ * (`ComputerSessions` has already made it core's `chatTitleForDialog`, which
+ * can be one longer with its ellipsis; this is the last word before the wire.)
+ */
+function dialogTitle(title: unknown): string {
+  const whole = cardLine(title, Number.POSITIVE_INFINITY);
+  if (whole === '') return 'this chat';
+  return Array.from(whole).length <= MAX_DIALOG_TITLE ? whole : cardLine(whole, MAX_DIALOG_TITLE - 1);
+}
+
+/** A chat id that is safe to send, hand on and log: one short clean line (no lone surrogate, no hidden or control character), exactly as given. */
 function isChatId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_CHAT_ID && cardLine(value, MAX_CHAT_ID) === value;
 }
@@ -265,6 +282,8 @@ export class DesktopComputerDriver implements ComputerDriver {
   private readonly starts = new Map<string, Promise<ComputerAnswer>>();
   /** The end each chat has with the shell right now. */
   private readonly ends = new Map<string, Promise<void>>();
+  /** Starts still waiting on earlier ends, their request not yet written: told when their chat is stopped meanwhile. */
+  private readonly startsWaiting = new Map<string, { stopped: boolean }>();
   /** Chats the shell may still hold something for: an end it did not confirm. */
   private readonly doubtful = new Set<string>();
   private readonly stoppedListeners = new Set<(chatId: string, why: ComputerStopReason) => void>();
@@ -324,6 +343,8 @@ export class DesktopComputerDriver implements ComputerDriver {
   }
 
   ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
+    // A chat id that is not one clean line is never sent: nothing can have been started for it.
+    if (!isChatId(chatId)) return Promise.resolve(refusal(DESKTOP_BAD_CHAT_REASON));
     // One start per chat with the shell at a time: whoever asks meanwhile gets its answer.
     const asking = this.starts.get(chatId);
     if (asking !== undefined) return asking;
@@ -346,6 +367,7 @@ export class DesktopComputerDriver implements ComputerDriver {
    * use is on), there is nothing to end and it resolves.
    */
   endSession(chatId: string): Promise<void> {
+    this.stopWaitingStart(chatId);
     return this.end(chatId);
   }
 
@@ -689,19 +711,32 @@ export class DesktopComputerDriver implements ComputerDriver {
 
   private async start(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
     // Nothing is started while the shell may still hold something this side asked it to end.
-    for (const waiting of [...this.doubtful]) {
+    const pending = [...this.doubtful];
+    if (pending.length > 0) {
+      const waiting = { stopped: false };
+      this.startsWaiting.set(chatId, waiting);
       try {
-        await this.end(waiting);
-      } catch {
-        // The first one that fails is enough: the rest would only make the caller wait longer for the same answer.
-        throw new Error(DESKTOP_END_PENDING_REASON);
+        for (const chat of pending) {
+          try {
+            await this.end(chat);
+          } catch {
+            // The first one that fails is enough: the rest would only make the caller wait longer for the same answer.
+            throw new Error(DESKTOP_END_PENDING_REASON);
+          }
+        }
+      } finally {
+        if (this.startsWaiting.get(chatId) === waiting) this.startsWaiting.delete(chatId);
       }
+      // Looked at again after the wait: a chat stopped meanwhile, or a shell that went away, gets no dialog.
+      if (waiting.stopped) return refusal(START_STOPPED_REASON);
+      const off = this.unusable();
+      if (off !== null) return refusal(off);
     }
     let answer: unknown;
     try {
       answer = await this.channel.call(
         'computer.start',
-        { chatId, title: chatTitle },
+        { chatId, title: dialogTitle(chatTitle) },
         // Given up on at the limit, its place freed; only a note is kept, so that an answer that still comes is seen.
         { timeoutMs: this.startTimeoutMs, late: { forMs: this.startLateMs, answer: (late) => this.lateStart(chatId, late) } }
       );
@@ -764,7 +799,15 @@ export class DesktopComputerDriver implements ComputerDriver {
     });
   }
 
+  /** A start of the chat that is still waiting on earlier ends will send nothing. */
+  private stopWaitingStart(chatId: string): void {
+    const waiting = this.startsWaiting.get(chatId);
+    if (waiting !== undefined) waiting.stopped = true;
+  }
+
   private end(chatId: string): Promise<void> {
+    // Never sent: nothing can have been started for a chat id that isn't one clean line.
+    if (!isChatId(chatId)) return Promise.resolve();
     const known = this.tracked(chatId);
     const token = this.sessions.get(chatId)?.token;
     // First, and before anything is awaited: nothing more is looked at, sent or done for the chat from here.
@@ -809,6 +852,7 @@ export class DesktopComputerDriver implements ComputerDriver {
     if (!isChatId(chatId)) return;
     const said = params['why'];
     const why = (typeof said === 'string' && STOP_REASONS.includes(said) ? said : 'button') as ComputerStopReason;
+    this.stopWaitingStart(chatId);
     this.drop(chatId);
     this.doubtful.delete(chatId);
     for (const cb of [...this.stoppedListeners]) {
