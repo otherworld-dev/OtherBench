@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { desktopTextForResult, screenContentError } from '@grunt/core/domain/computer-apps.js';
 import { LIVE_IMAGE_LIMITS, screenToolResult, type ToolImageBudget } from '@grunt/core/domain/tool-images.js';
-import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { NO_APPROVAL_REASON, type ToolContext, type ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import type { GruntServerTool } from './grunt-server.js';
 import type { ApprovalTickets } from './tickets.js';
 
@@ -46,13 +47,21 @@ export function buildRelay(specs: ToolSpec[]): Relay {
   return { tools, hash: createHash('sha256').update(JSON.stringify(shape)).digest('hex') };
 }
 
-export const NO_TICKET = 'Grunt has no approval for this call.';
+/** A relayed call with no ticket: core's one sentence for a call nothing approved. */
+export const NO_TICKET = NO_APPROVAL_REASON;
 
 /**
  * Runs a relayed call for the running reply. A spec with `describeCall` (the
- * browser) runs only with the arguments its approval ticket holds, never with
- * Claude Code's raw input; with no ticket nothing runs. Other specs (MCP
- * tools) run as before.
+ * browser, the computer tool) runs only with the arguments its approval
+ * ticket holds, never with Claude Code's raw input; with no ticket nothing
+ * runs. Other specs (MCP tools) run as before.
+ *
+ * The ticket is this engine's half of the rule: it ties Claude Code's raw
+ * input to what the gate approved for this reply. The tool provider holds the
+ * other half itself: the `execute` of a spec from `relayGruntTools` runs only
+ * an argument object its own `requestApproval` approved, for the same chat,
+ * reply and profile, once, and audits what came of it. So a call that got
+ * past this function some other way still runs nothing.
  */
 export async function runRelayed(spec: ToolSpec, args: unknown, ctx: ToolContext, tickets: ApprovalTickets): Promise<unknown> {
   if (!spec.describeCall) return spec.execute(args, ctx);
@@ -121,7 +130,14 @@ export function relayServerTool(name: string, spec: ToolSpec, current: CurrentRe
         }
         return { content: [{ type: 'text', text: JSON.stringify(out) }] };
       } catch (err) {
-        return errorResult(err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        // The tool provider answers a computer call's every failure itself, so this is not reached for one. Were it,
+        // the words could be the desktop app's: one clean line of them, under the line that says so (core's builder).
+        if (spec.source === 'computer') {
+          const failed = screenContentError('computer_failed', desktopTextForResult(message));
+          return errorResult(failed.message, failed.about);
+        }
+        return errorResult(message);
       }
     },
   };
