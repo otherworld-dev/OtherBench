@@ -1,3 +1,4 @@
+import type { FsMode } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 
 /**
@@ -132,8 +133,27 @@ export function planMounts(chats: readonly (readonly MountNeed[])[]): PlannedMou
 }
 
 /**
- * The system-prompt block for a profile whose shell runs in the sandbox: what
- * run_command is, and where the workspace and each extra folder are in it.
+ * The system-prompt block for a profile whose shell runs in the sandbox but
+ * whose file access is off: the sandbox gives its commands none of the chat's
+ * folders (SandboxRunRequest.fs), so the block names none.
+ */
+export const SANDBOX_NO_FILES_PROMPT = [
+  '# Sandbox',
+  "run_command runs bash in a Linux sandbox, not on this machine, and Windows programs aren't available there. File access is off for this profile, so the sandbox has none of this chat's folders: not the workspace, not the extra folders, nothing else from this machine. Each command starts in its own home folder (~), which keeps what is put there for the rest of the chat; work there or in $TMPDIR. Reaching a host that isn't on the allowlist asks the user first.",
+].join('\n');
+
+/**
+ * The sandbox block for a profile's file access (`ToolPolicy.fs`): with it
+ * off, SANDBOX_NO_FILES_PROMPT; otherwise sandboxFoldersPrompt.
+ */
+export function sandboxPrompt(fs: FsMode, workspaceRoot: string, folders: readonly ResolvedFolder[], canonical?: (path: string) => string): string {
+  return fs === 'off' ? SANDBOX_NO_FILES_PROMPT : sandboxFoldersPrompt(workspaceRoot, folders, canonical);
+}
+
+/**
+ * The system-prompt block for a profile whose shell runs in the sandbox (with
+ * file access): what run_command is, and where the workspace and each extra
+ * folder are in it.
  * `canonical` gives a folder's real path (its on-disk case), which is where
  * the sandbox mounts it: the VM's paths are case-sensitive, so a folder typed
  * in another case must still be announced at the path that exists there.

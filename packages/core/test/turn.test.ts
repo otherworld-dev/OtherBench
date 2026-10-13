@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { Attachment } from '../src/ports/store.js';
 import type { ChatEngine, EngineEvent, EngineRequest } from '../src/ports/chat-engine.js';
-import type { Connection, ModelInfo, ResolvedProfile } from '../src/types/config.js';
+import type { Connection, FsMode, ModelInfo, ResolvedProfile } from '../src/types/config.js';
 import type { CanonMessage, Part } from '../src/types/messages.js';
 import { FakeChatEngine, FakeToolProvider, InMemoryStore } from '../src/testing/fakes.js';
 import { InvalidAttachmentReferenceError, RegenerateError, TurnRunner, type TurnEvent } from '../src/domain/turn.js';
@@ -10,6 +10,7 @@ import { availableToolsPrompt } from '../src/domain/tools-prompt.js';
 import { PLAN_MODE_NOTE } from '../src/domain/thread-tools.js';
 import { LIVE_ARTIFACTS_GUIDANCE } from '../src/domain/live-artifacts.js';
 import { MAX_REQUEST_ATTACHMENTS, omissionNote } from '../src/domain/request-budget.js';
+import { SANDBOX_NO_FILES_PROMPT } from '../src/domain/sandbox-paths.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -2190,7 +2191,7 @@ describe('TurnRunner.regenerate', () => {
 describe('TurnRunner tells a sandboxed shell where the folders are', () => {
   const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
 
-  async function systemPromptFor(shellRuns: 'host' | 'sandbox', options: { root?: string; canonicalPath?: (path: string) => string } = {}): Promise<string> {
+  async function systemPromptFor(shellRuns: 'host' | 'sandbox', options: { root?: string; canonicalPath?: (path: string) => string; fs?: FsMode } = {}): Promise<string> {
     const store = new InMemoryStore('node-pc');
     store.chats.create({
       id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, pinned: false, archivedAt: null,
@@ -2199,11 +2200,18 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
     });
     const engine = new FakeChatEngine([finish]);
     const runner = new TurnRunner(store, engine, { pathExists: () => true, ...(options.canonicalPath ? { canonicalPath: options.canonicalPath } : {}) });
-    const profile = makeResolvedProfile({ toolPolicy: { fs: 'readwrite', shell: true, shellRuns, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
+    const profile = makeResolvedProfile({ toolPolicy: { fs: options.fs ?? 'readwrite', shell: true, shellRuns, mcpServerIds: [], approvalMode: 'ask_on_mutate' } });
     const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile] });
     await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
     return engine.requests[0]!.messages.find((m) => m.role === 'system')?.parts.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
   }
+
+  it("with file access off, names no folder's sandbox path: the command runs in its own home with none of them", async () => {
+    const system = await systemPromptFor('sandbox', { fs: 'off' });
+    expect(system).toContain(SANDBOX_NO_FILES_PROMPT);
+    expect(system).not.toMatch(/\/mnt\//);
+    expect(system).not.toContain('in the sandbox (read-only)');
+  });
 
   it("adds the workspace's and each folder's sandbox path when the profile's shell runs in the sandbox", async () => {
     const system = await systemPromptFor('sandbox');

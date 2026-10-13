@@ -11,7 +11,7 @@ import { availableOn } from './availability.js';
 import { normaliseHost } from './browser-hosts.js';
 import { applySubagentEvent, foldSubagentContent, type SubagentEndStatus, type SubagentEvent } from './parts.js';
 import { RECALL_GUIDANCE } from './recall.js';
-import { sandboxFoldersPrompt } from './sandbox-paths.js';
+import { sandboxPrompt } from './sandbox-paths.js';
 import { keepToolImages } from './tool-images.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { extraFoldersPrompt } from './workspace.js';
@@ -392,7 +392,7 @@ export async function runSubagentTool(args: unknown, ctx: ToolContext): Promise<
 /**
  * A sub-agent's system prompt: its profile's own prompt, the role, the
  * folders note, any `notes` for this run (the sandbox note from
- * `sandboxFoldersPrompt` when its run_command is the sandboxed one,
+ * `sandboxPrompt` when its run_command is the sandboxed one,
  * `SUBAGENT_PLAN_NOTE` while a plan is waiting), the tools note and recall
  * guidance when recall is offered. No memory and no project text: the parent
  * puts what it needs in the prompt.
@@ -799,7 +799,8 @@ export class SubagentRunner implements SubagentHost {
     const plan = ctx.plan ?? this.deps.plan;
     const unattended = ctx.unattended === true || this.deps.unattended === true;
     // Its run_command is the sandboxed one (the narrowed policy decides): say where the folders are in there, as the parent's prompt does.
-    const sandboxNote = workspaceRoot !== null && tools.some((t) => t.source === 'sandbox') ? sandboxFoldersPrompt(workspaceRoot, folders, this.deps.canonicalPath) : null;
+    // With the narrowed file access off, it names no folders: the sandbox gives that command none.
+    const sandboxNote = workspaceRoot !== null && tools.some((t) => t.source === 'sandbox') ? sandboxPrompt(policy.fs, workspaceRoot, folders, this.deps.canonicalPath) : null;
     const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), [
       sandboxNote,
       shellWithheld ? SUBAGENT_NO_SHELL_NOTE : null,
