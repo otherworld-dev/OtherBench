@@ -1,4 +1,4 @@
-import { useEffect, useState, type ImgHTMLAttributes, type JSX } from 'react';
+import { useEffect, useRef, useState, type ImgHTMLAttributes, type JSX } from 'react';
 import { authHeaders, hasToken } from '../state/transport.js';
 
 /**
@@ -8,9 +8,22 @@ import { authHeaders, hasToken } from '../state/transport.js';
  * URL, revoked when the component unmounts or `src` changes. In browser
  * mode there is no token and `src` is used as-is, exactly as before.
  */
-export function AuthedImage({ src, ...rest }: ImgHTMLAttributes<HTMLImageElement> & { src: string }): JSX.Element | null {
+export function AuthedImage({
+  src,
+  onFailed,
+  ...rest
+}: ImgHTMLAttributes<HTMLImageElement> & {
+  src: string;
+  /** Called once when the image can't be fetched with the token (a 404, a network error). The `<img>`'s own `onError` covers the direct case. */
+  onFailed?: () => void;
+}): JSX.Element | null {
   const direct = !hasToken();
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  // Read through a ref so a new callback each render doesn't refetch the image.
+  const failed = useRef(onFailed);
+  useEffect(() => {
+    failed.current = onFailed;
+  });
 
   useEffect(() => {
     if (direct) return;
@@ -25,7 +38,9 @@ export function AuthedImage({ src, ...rest }: ImgHTMLAttributes<HTMLImageElement
         setObjectUrl(created);
       })
       .catch((err: unknown) => {
-        if (!controller.signal.aborted) console.error(`[grunt-web] failed to load image ${src}:`, err);
+        if (controller.signal.aborted) return;
+        console.error(`[grunt-web] failed to load image ${src}:`, err);
+        failed.current?.();
       });
     return () => {
       controller.abort();

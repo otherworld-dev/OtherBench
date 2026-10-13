@@ -416,6 +416,14 @@ export const api = {
       if (!res.ok) throw new ApiError(res.status, await extractErrorMessage(res));
       return res.blob();
     },
+    /** Ends the chat's computer-use session and stops its reply (the banner's Stop): `POST /api/chats/:id/computer/stop`. */
+    stopComputer: (id: string) => post<void>(`/chats/${encodeURIComponent(id)}/computer/stop`),
+  },
+
+  /** Computer use (spec 2026-10-12-computer-use-design section 7). */
+  computer: {
+    /** Whether this server can offer the computer tool (the desktop shell on Windows said it can). Authenticated. */
+    status: () => request<{ computerUse: boolean }>('/computer/status'),
   },
 
   projects: {

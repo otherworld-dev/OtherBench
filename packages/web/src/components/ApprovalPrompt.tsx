@@ -2,6 +2,7 @@ import { useState, type JSX } from 'react';
 import type { ApprovalChoice, ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { classifyAgentTool } from '@grunt/core/domain/agent-tools.js';
 import { oneLine, revealHidden } from '../viewer/browser.js';
+import { ComputerApprovalPrompt } from './ComputerApprovalPrompt.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -86,7 +87,7 @@ function isShellCommandRequest(request: ApprovalRequest): boolean {
  * `PermissionBroker.resolve` accepts (packages/core/src/domain/
  * permissions.ts) -- no fifth option exists to invent here.
  */
-export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
+function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Explicit, secondary opt-in for a `commandPrefix` "always" grant -- see
@@ -215,4 +216,10 @@ export function ApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
+}
+
+/** One card per kind of request: computer use has its own (per app); everything else the standard one. A dispatcher, so no hook runs conditionally. */
+export function ApprovalPrompt(props: ApprovalPromptProps): JSX.Element {
+  if (props.request.source === 'computer') return <ComputerApprovalPrompt {...props} />;
+  return <StandardApprovalPrompt {...props} />;
 }

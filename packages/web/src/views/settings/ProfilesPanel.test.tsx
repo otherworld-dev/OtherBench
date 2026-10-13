@@ -13,6 +13,7 @@ vi.mock('../../state/api.js', async (importOriginal) => {
     api: {
       profiles: { list: vi.fn(), create: vi.fn(), get: vi.fn(), patch: vi.fn(), delete: vi.fn() },
       mcpServers: { list: vi.fn() },
+      computer: { status: vi.fn() },
     },
   };
 });
@@ -23,6 +24,7 @@ const mockedCreate = vi.mocked(api.profiles.create);
 const mockedPatch = vi.mocked(api.profiles.patch);
 const mockedDelete = vi.mocked(api.profiles.delete);
 const mockedMcpList = vi.mocked(api.mcpServers.list);
+const mockedComputerStatus = vi.mocked(api.computer.status);
 
 function makeMcpServerHealth(overrides: Partial<McpServerHealth> = {}): McpServerHealth {
   return {
@@ -96,6 +98,7 @@ function reset(): void {
   mockedPatch.mockReset();
   mockedDelete.mockReset();
   mockedMcpList.mockReset().mockResolvedValue([]);
+  mockedComputerStatus.mockReset().mockResolvedValue({ computerUse: false });
 }
 
 describe('ProfilesPanel', () => {
@@ -116,6 +119,67 @@ describe('ProfilesPanel', () => {
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ artifacts: false }) })));
+  });
+
+  it.each([
+    ['says computerUse: false', () => mockedComputerStatus.mockResolvedValue({ computerUse: false })],
+    ['answers 401', () => mockedComputerStatus.mockRejectedValue(new ApiError(401, 'Unauthorized'))],
+    ['answers 404', () => mockedComputerStatus.mockRejectedValue(new ApiError(404, 'Not Found'))],
+    ['cannot be reached', () => mockedComputerStatus.mockRejectedValue(new TypeError('Failed to fetch'))],
+  ])('hides the Computer use switch where the server %s, and keeps a profile’s stored value', async (_label, arrange) => {
+    arrange();
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    await waitFor(() => expect(mockedComputerStatus).toHaveBeenCalled());
+    expect(screen.queryByRole('checkbox', { name: 'Computer use' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ computer: true }) })));
+  });
+
+  it('shows the Computer use switch, off by default, with its hint, when the server can offer it', async () => {
+    mockedComputerStatus.mockResolvedValue({ computerUse: true });
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    mockedCreate.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByRole('button', { name: '+ New profile' }));
+    await user.type(screen.getByLabelText('Profile name'), 'Hands');
+    await user.selectOptions(screen.getByLabelText('Connection'), 'conn-1');
+    await user.selectOptions(screen.getByLabelText('Model'), 'llama3.2');
+    const box = await screen.findByRole('checkbox', { name: 'Computer use' });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText("Lets the model see your screen and use apps you approve, while you're at this computer. Desktop app on Windows only.")).toBeInTheDocument();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: expect.objectContaining({ computer: true }) })));
+  });
+
+  it('shows a profile with computer use on as checked, and turning it off saves false', async () => {
+    mockedComputerStatus.mockResolvedValue({ computerUse: true });
+    useGruntStore.getState().setConnections([makeConnection()]);
+    useGruntStore.getState().setModels([makeModel()]);
+    useGruntStore.getState().setProfiles([makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true } })]);
+    mockedPatch.mockResolvedValue(makeProfile());
+    const user = userEvent.setup();
+
+    render(<ProfilesPanel />);
+    await user.click(screen.getByTestId('profile-row-profile-1'));
+    const box = await screen.findByRole('checkbox', { name: 'Computer use' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledWith('profile-1', expect.objectContaining({ toolPolicy: expect.objectContaining({ computer: false }) })));
   });
 
   it("saves the Search past chats switch in the profile's tools, on by default", async () => {
@@ -185,7 +249,7 @@ describe('ProfilesPanel', () => {
           name: 'Fast local',
           connectionId: 'conn-1',
           modelId: 'llama3.2',
-          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true, browser: false },
+          toolPolicy: { fs: 'read', shell: true, approvalMode: 'always_ask', mcpServerIds: [], artifacts: true, recall: true, browser: false, computer: false },
         })
       )
     );
@@ -502,7 +566,7 @@ describe('ProfilesPanel', () => {
       await user.click(screen.getByRole('button', { name: /^save$/i }));
 
       await waitFor(() =>
-        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true, browser: false } }))
+        expect(mockedCreate).toHaveBeenCalledWith(expect.objectContaining({ toolPolicy: { fs: 'off', shell: false, approvalMode: 'always_ask', mcpServerIds: ['mcp-1'], artifacts: true, recall: true, browser: false, computer: false } }))
       );
     });
 

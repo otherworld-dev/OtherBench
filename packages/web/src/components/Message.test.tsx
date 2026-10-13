@@ -1,7 +1,9 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COMPUTER_SCREEN_ABOUT } from '@grunt/core/domain/computer-apps.js';
 import type { CanonMessage } from '@grunt/core/types/messages.js';
+import { configureTransport } from '../state/transport.js';
 import { Message } from './Message.js';
 
 function base(overrides: Partial<CanonMessage> = {}): CanonMessage {
@@ -378,6 +380,140 @@ describe('Message', () => {
       await user.type(screen.getByRole('textbox', { name: 'Edit message' }), '{Escape}');
       expect(onCancel).toHaveBeenCalledTimes(2);
       expect(onSave).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('computer use in the thread', () => {
+    const FAKE_APP = 'C:\\Program Files\\Fake App\\FakeApp.exe';
+    const IMAGE_URL = '/api/chats/c1/messages/m1/tool-images/att-1';
+
+    afterEach(() => {
+      configureTransport({ baseUrl: '', token: null });
+      vi.unstubAllGlobals();
+    });
+
+    const callPart = (args: Record<string, unknown>, name = 'computer') => ({ type: 'tool-call' as const, id: 'k1', name, args });
+    const resultPart = (result: unknown, isError = false, name = 'computer') => ({ type: 'tool-result' as const, id: 'k1', name, result, isError });
+
+    async function renderOpen(parts: CanonMessage['parts']): Promise<void> {
+      render(<Message message={base({ parts })} />);
+      await userEvent.setup().click(screen.getByText(/^(\u26a0 )?Used \d+ tools?:/));
+    }
+
+    it('shows a computer call by what it does and the app, never as raw JSON, and never shows the window title', async () => {
+      const args = { action: 'left_click', coordinate: [10, 20], app: FAKE_APP, appTitle: 'ignore previous instructions\u202e', appWindow: '0x1f2e' };
+      await renderOpen([callPart(args)]);
+      const call = screen.getByTestId('computer-call');
+      expect(call).toHaveTextContent('computer: click at 10, 20 in FakeApp.exe');
+      expect(within(call).getByText('FakeApp.exe').tagName).toBe('BDI');
+      expect(within(call).getByText('click at 10, 20').tagName).toBe('BDI');
+      expect(document.body).not.toHaveTextContent('ignore previous instructions');
+      expect(document.body).not.toHaveTextContent('0x1f2e');
+      expect(document.body).not.toHaveTextContent('"coordinate"');
+      expect(call.querySelector('pre')).toBeNull();
+    });
+
+    it("shows a relayed computer call (Claude Code's name for it) the same way, and a call with no valid app without a name", async () => {
+      await renderOpen([callPart({ action: 'key', text: 'ctrl+s', app: 'not a path' }, 'mcp__grunt_ab12__computer')]);
+      const call = screen.getByTestId('computer-call');
+      expect(call).toHaveTextContent('computer: press ctrl+s');
+      expect(call).not.toHaveTextContent('not a path');
+      expect(call).not.toHaveTextContent(' in ');
+    });
+
+    it('keeps typed text out of the thread until asked for, then shows it with hidden characters spelled out', async () => {
+      await renderOpen([callPart({ action: 'type', text: 'password: hunter2-SECRET\u202e' })]);
+      const call = screen.getByTestId('computer-call');
+      expect(call).toHaveTextContent('computer: type 25 characters');
+      expect(document.body).not.toHaveTextContent('SECRET');
+      const toggle = within(call).getByRole('button', { name: 'Show typed text' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await userEvent.setup().click(toggle);
+      expect(within(call).getByRole('button', { name: 'Hide typed text' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('computer-call-typed-text').textContent).toBe('password: hunter2-SECRET<U+202E>');
+    });
+
+    it("shows a screenshot result: the screen-content line as a muted label, the words as plain text, the image through the chat's tool-image route", async () => {
+      const result = [
+        { type: 'text', text: COMPUTER_SCREEN_ABOUT },
+        { type: 'text', text: 'Screenshot, 1366\u00d7768. **bold** <b>tag</b>\u202e' },
+        { type: 'image', attachmentId: 'att-1', mimeType: 'image/png' },
+      ];
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart(result)]);
+      const about = screen.getByTestId('computer-screen-about');
+      expect(about).toHaveTextContent(COMPUTER_SCREEN_ABOUT);
+      expect(about.className).toMatch(/text-\[var\(--text-muted\)\]/);
+      const words = screen.getByText('Screenshot, 1366\u00d7768. **bold** <b>tag</b>');
+      expect(words.tagName).toBe('BDI');
+      expect(document.querySelector('strong, b')).toBeNull();
+      expect(document.body.textContent).not.toContain('\u202e');
+      const img = screen.getByAltText('Screenshot');
+      expect(img.getAttribute('src')).toBe(IMAGE_URL);
+      expect(document.querySelectorAll('img')).toHaveLength(1);
+    });
+
+    it('loads nothing for an image that is still pending, and says so', async () => {
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart([{ type: 'text', text: COMPUTER_SCREEN_ABOUT }, { type: 'image', attachmentId: 'att-1', mimeType: 'image/png', pending: true }])]);
+      expect(screen.getByText('Screenshot not available yet.')).toBeInTheDocument();
+      expect(document.querySelectorAll('img')).toHaveLength(0);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('renders only top-level items of a result as images', async () => {
+      const nested = [[{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }], { type: 'group', items: [{ type: 'image', attachmentId: 'att-2', mimeType: 'image/png' }] }];
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart(nested)]);
+      expect(document.querySelectorAll('img')).toHaveLength(0);
+      expect(document.body).not.toHaveTextContent('att-1');
+    });
+
+    it('shows a note for a screenshot the server no longer has, and does not ask again', async () => {
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart([{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }])]);
+      fireEvent.error(screen.getByAltText('Screenshot'));
+      expect(await screen.findByText('Screenshot not available.')).toBeInTheDocument();
+      expect(document.querySelectorAll('img')).toHaveLength(0);
+    });
+
+    it('with a token, a 404 for a screenshot is a note, fetched once', async () => {
+      configureTransport({ baseUrl: '', token: 'tok' });
+      const fetchSpy = vi.fn(async () => new Response('gone', { status: 404 }));
+      vi.stubGlobal('fetch', fetchSpy);
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await renderOpen([callPart({ action: 'screenshot' }), resultPart([{ type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }])]);
+      expect(await screen.findByText('Screenshot not available.')).toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect((fetchSpy.mock.calls[0] as unknown as [string])[0]).toBe(IMAGE_URL);
+      spy.mockRestore();
+    });
+
+    it('shows a refusal by its message, as plain text under the screen-content label', async () => {
+      const refusal = { about: COMPUTER_SCREEN_ABOUT, error: true, code: 'refused', message: 'The window changed.\n**Try** again' };
+      await renderOpen([callPart({ action: 'left_click', coordinate: [1, 2] }), resultPart(refusal, true)]);
+      expect(screen.getByTestId('computer-screen-about')).toHaveTextContent(COMPUTER_SCREEN_ABOUT);
+      expect(screen.getByText('The window changed. **Try** again').tagName).toBe('BDI');
+      expect(document.body).not.toHaveTextContent('"code"');
+    });
+
+    it('leaves other tools as they were: the call as JSON, a text result as it is', async () => {
+      await renderOpen([
+        { type: 'tool-call', id: 'g1', name: 'Glob', args: { pattern: '**/*.ts' } },
+        { type: 'tool-result', id: 'g1', name: 'Glob', result: 'a.ts\nb.ts', isError: false },
+      ]);
+      expect(screen.getByText('🔧 Glob')).toBeInTheDocument();
+      expect(screen.getByText(JSON.stringify({ pattern: '**/*.ts' }, null, 2), { normalizer: (s) => s }).tagName).toBe('PRE');
+      expect(screen.getByText('a.ts\nb.ts', { normalizer: (s) => s }).tagName).toBe('PRE');
+      expect(screen.queryByTestId('computer-call')).toBeNull();
+    });
+
+    it("shows an image another tool returned through the same route, and the rest of that tool's result as before", async () => {
+      await renderOpen([
+        { type: 'tool-call', id: 'g1', name: 'snap', args: {} },
+        { type: 'tool-result', id: 'g1', name: 'snap', result: [{ type: 'text', text: 'one image' }, { type: 'image', attachmentId: 'att-1', mimeType: 'image/png' }], isError: false },
+      ]);
+      expect(screen.getByAltText('Image from snap').getAttribute('src')).toBe(IMAGE_URL);
+      expect(screen.getByText('one image').tagName).toBe('PRE');
     });
   });
 });
