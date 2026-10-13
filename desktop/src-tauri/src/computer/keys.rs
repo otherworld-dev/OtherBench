@@ -194,6 +194,45 @@ mod tests {
         "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
     ];
 
+    /// Core's source, read when the tests are built: the table can't drift from it.
+    const CORE_SOURCE: &str = include_str!("../../../../packages/core/src/domain/computer-keys.ts");
+
+    /// The names core's `key(...)` calls and loops define, in order, and its `KEY_MODIFIERS`.
+    fn names_in_core(src: &str) -> (Vec<String>, Vec<String>) {
+        let mut names = Vec::new();
+        for line in src.lines().map(str::trim) {
+            if let Some(rest) = line.strip_prefix("key('") {
+                names.push(rest[..rest.find('\'').expect("a quoted key name")].to_string());
+            } else if line.starts_with("for ") && line.contains(") key(") {
+                if let Some(at) = line.find("n <= ") {
+                    let upto: u32 = line[at + 5..].split(';').next().unwrap().trim().parse().expect("a function key count");
+                    assert!(line.contains("key(`f${n}`)"), "an unknown loop in core's key table: {line}");
+                    names.extend((1..=upto).map(|n| format!("f{n}")));
+                } else {
+                    let open = line.find(" of '").expect("a loop over a string literal") + 5;
+                    let literal = &line[open..open + line[open..].find('\'').unwrap()];
+                    names.extend(literal.chars().map(String::from));
+                }
+            } else {
+                assert!(!line.starts_with("key("), "an unknown kind of key definition in core: {line}");
+            }
+        }
+        let modifiers_at = src.find("KEY_MODIFIERS: readonly string[] = Object.freeze([").expect("KEY_MODIFIERS in core");
+        let rest = &src[modifiers_at..];
+        let rest = &rest[rest.find("freeze([").unwrap() + "freeze([".len()..];
+        let list = &rest[..rest.find(']').unwrap()];
+        let modifiers = list.split(',').map(|m| m.trim().trim_matches('\'').to_string()).collect();
+        (names, modifiers)
+    }
+
+    #[test]
+    fn the_table_is_exactly_cores_as_its_source_says() {
+        let (names, modifiers) = names_in_core(CORE_SOURCE);
+        let ours: Vec<String> = KEYS.iter().map(|k| k.name.to_string()).collect();
+        assert_eq!(ours, names, "the shell's key table differs from packages/core/src/domain/computer-keys.ts");
+        assert_eq!(MODIFIERS.map(|m| m.0.to_string()).to_vec(), modifiers);
+    }
+
     #[test]
     fn knows_every_name_core_sends_and_nothing_else() {
         let ours: Vec<&str> = KEYS.iter().map(|k| k.name).collect();
