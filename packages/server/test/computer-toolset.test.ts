@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COMPUTER_ACTIONS } from '@grunt/core/domain/computer-apps.js';
 import { PermissionBroker } from '@grunt/core/domain/permissions.js';
 import { FAKE_COMPUTER_APP, FAKE_PNG, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { InMemoryStore } from '@grunt/core/testing/fakes.js';
@@ -74,6 +75,7 @@ async function setup(...replies: string[]) {
     vi.fn(async (url: unknown, init?: RequestInit) => {
       urls.push(String(url));
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      everyBody.push(bodies[bodies.length - 1]!);
       return new Response(replies[bodies.length - 1] ?? ANSWER, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     })
   );
@@ -123,8 +125,38 @@ function resultsIn(body: Record<string, unknown>): Block[] {
 
 const resultEvents = (events: EngineEvent[]): Extract<EngineEvent, { type: 'tool-result' }>[] => events.filter((e): e is Extract<EngineEvent, { type: 'tool-result' }> => e.type === 'tool-result');
 
+/** Every request body a test here sent: each is checked when its test ends. */
+const everyBody: Record<string, unknown>[] = [];
+
+/**
+ * What the Messages API insists on, over a whole outgoing body (the same check
+ * as in packages/engine-aisdk/test/computer-toolset.test.ts): a `tool_result`
+ * answers a `tool_use` of the assistant message just before it, every
+ * `tool_use` is answered in the message just after it, and a `tool_use` that
+ * names the toolset is one of its members that is turned on.
+ */
+function expectWellFormed(body: Record<string, unknown>): void {
+  const messages = body['messages'] as { role: string; content: Block[] | string }[];
+  const blocks = (i: number, type: string): Block[] => {
+    const content = messages[i]?.content;
+    return Array.isArray(content) ? content.filter((b) => b['type'] === type) : [];
+  };
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i]!.role === 'assistant') {
+      const uses = blocks(i, 'tool_use');
+      expect(blocks(i + 1, 'tool_result').map((b) => b['tool_use_id']).sort(), `message ${i}: every tool_use is answered in the next message`).toEqual(uses.map((b) => b['id']).sort());
+      for (const use of uses) if (use['toolset_name'] !== undefined) expect(COMPUTER_ACTIONS as readonly unknown[], `message ${i}`).toContain(use['name']);
+    } else {
+      const asked = messages[i - 1]?.role === 'assistant' ? blocks(i - 1, 'tool_use').map((b) => b['id']) : [];
+      for (const result of blocks(i, 'tool_result')) expect(asked, `message ${i}: a tool_result has its tool_use just before it`).toContain(result['tool_use_id']);
+    }
+    if (i > 0) expect(messages[i]!.role, `message ${i}: roles alternate`).not.toBe(messages[i - 1]!.role);
+  }
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  for (const body of everyBody.splice(0)) expectWellFormed(body);
 });
 
 describe("Anthropic's computer toolset through the tool provider and the broker", () => {
@@ -195,7 +227,7 @@ describe("Anthropic's computer toolset through the tool provider and the broker"
     expect(made.store.audit.list('chat-1').map((r) => r.grantedBy)).toEqual(['policy', 'ask:once']);
   });
 
-  it('starts no control session and asks nothing for a member that is not a phase-1 action', async () => {
+  it('starts no control session and asks nothing for a member that is not a phase-1 action, and records the refusal', async () => {
     const made = await setup(memberCall('toolu_1', 'left_click_drag', { start_coordinate: [1, 2], coordinate: [30, 40] }), memberCall('toolu_2', 'hold_key', { text: 'shift', duration: 5 }), ANSWER);
     const events = await made.run();
 
@@ -203,9 +235,27 @@ describe("Anthropic's computer toolset through the tool provider and the broker"
     expect(made.driver.actions).toEqual([]);
     expect(made.driver.refused).toEqual([]);
     expect(made.requests).toEqual([]);
-    expect(resultEvents(events).map((e) => (e.result as { code?: string }).code)).toEqual(['computer_bad_action', 'computer_bad_action']);
-    // The tool was never asked: there is no call for the audit to record.
-    expect(made.store.audit.list('chat-1')).toEqual([]);
+    // Refused by the gate, like an unknown action of the JSON tool, and in the audit like one.
+    const refusal = (name: string) => ({ error: true, code: 'permission_denied', message: `"${name}" isn't a computer action Grunt can do. Use one of: ${COMPUTER_ACTIONS.join(', ')}.` });
+    expect(resultEvents(events).map((e) => e.result)).toEqual([refusal('left_click_drag'), refusal('hold_key')]);
+    const audit = made.store.audit.list('chat-1');
+    expect(audit.map((r) => [r.toolName, r.grantedBy, r.resultSummary])).toEqual([
+      ['computer', 'deny:policy', 'error: permission_denied'],
+      ['computer', 'deny:policy', 'error: permission_denied'],
+    ]);
+    // The name alone reached the gate: no point, no text.
+    expect(audit.map((r) => r.argsRedacted)).toEqual([{ action: 'left_click_drag' }, { action: 'hold_key' }]);
+    // Neither is written back to the API as a call of the toolset.
+    for (const body of made.bodies) expect(JSON.stringify(body['messages'])).not.toMatch(/"name":"(left_click_drag|hold_key)"/);
+  });
+
+  it('refuses a member call that carries a field the tool does not take, before anything is asked or done', async () => {
+    const made = await setup(memberCall('toolu_1', 'screenshot'), memberCall('toolu_2', 'left_click', { coordinate: [10, 20], repeat: 3 }), ANSWER);
+    const events = await made.run();
+
+    expect(made.requests).toEqual([]);
+    expect(made.driver.actions).toEqual([]);
+    expect((resultEvents(events)[1]!.result as { message: string }).message).toBe('The computer tool doesn\'t take "repeat" with left_click, so nothing was done. Send the action again without it.');
   });
 
   it("describes the target itself: app fields a member's input carries never reach the card", async () => {
