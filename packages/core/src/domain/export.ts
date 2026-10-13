@@ -1,5 +1,6 @@
 import type { Attachment, Chat, UsageRecord } from '../ports/store.js';
 import type { CanonMessage, Part } from '../types/messages.js';
+import { actionSummary } from './computer-apps.js';
 import { activePath, extendToTip, isCompareSet, siblingsOf } from './tree.js';
 
 /**
@@ -72,6 +73,9 @@ function asText(value: unknown): string {
   }
 }
 
+/** The computer tool, by its own name or by the name Claude Code gives the relayed one (`mcp__grunt_<hex>__computer`), as the thread tells it. */
+const COMPUTER_TOOL_NAME = /^(?:mcp__grunt_[0-9a-f]+__)?computer$/;
+
 function partToMarkdown(part: Part, attachmentName: (id: string) => string | null): string {
   switch (part.type) {
     case 'text':
@@ -83,6 +87,9 @@ function partToMarkdown(part: Part, attachmentName: (id: string) => string | nul
     case 'file':
       return `*[File: ${part.filename}]*`;
     case 'tool-call':
+      // A computer call is what it does, as the thread shows it (`actionSummary`): never the text a type action
+      // types, which is only on the card and behind the thread's toggle. The JSON export keeps the call whole.
+      if (COMPUTER_TOOL_NAME.test(part.name)) return `**Tool call:** \`${part.name}\`: ${actionSummary(part.args)}`;
       return `**Tool call:** \`${part.name}\`\n\n${fenced(cut(asText(part.args)), 'json')}`;
     case 'tool-result':
       return `**${part.isError ? 'Tool error' : 'Tool result'}:** \`${part.name}\`\n\n${fenced(cut(asText(part.result)))}`;
