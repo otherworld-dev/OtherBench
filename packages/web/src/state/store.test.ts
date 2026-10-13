@@ -487,6 +487,41 @@ describe('app-wide events (Task 34)', () => {
   });
 });
 
+describe('chats controlling the computer (computer use)', () => {
+  beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
+
+  it('keeps the chats controlling the computer from the hello and from computer-session events', () => {
+    const s = () => useGruntStore.getState();
+    expect(s().computerSessions).toEqual({});
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'c1', lastAction: 'click at 3, 4' }] });
+    expect(s().computerSessions).toEqual({ c1: { lastAction: 'click at 3, 4' } });
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c2', active: true });
+    expect(s().computerSessions['c2']).toEqual({});
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c2', active: true, lastAction: 'click at 1, 2' });
+    expect(s().computerSessions['c2']).toEqual({ lastAction: 'click at 1, 2' });
+    // An event with no lastAction keeps the last one.
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c2', active: true });
+    expect(s().computerSessions['c2']).toEqual({ lastAction: 'click at 1, 2' });
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: false });
+    expect(Object.keys(s().computerSessions)).toEqual(['c2']);
+  });
+
+  it('a hello replaces the set, and one with no computerSessions (an older server) clears it', () => {
+    const s = () => useGruntStore.getState();
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: true, lastAction: 'press ctrl+s' });
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [], computerSessions: [{ chatId: 'c3' }] });
+    expect(s().computerSessions).toEqual({ c3: {} });
+    s().applyAppHello({ pendingApprovals: [], runningTurns: [] });
+    expect(s().computerSessions).toEqual({});
+  });
+
+  it('keeps no lastAction that is not a string', () => {
+    const s = () => useGruntStore.getState();
+    s().applyAppEvent({ type: 'computer-session', chatId: 'c1', active: true, lastAction: { text: 'x' } as unknown as string });
+    expect(s().computerSessions['c1']).toEqual({});
+  });
+});
+
 describe('running replies from app-wide events (#824)', () => {
   beforeEach(() => useGruntStore.setState(useGruntStore.getInitialState(), true));
 
