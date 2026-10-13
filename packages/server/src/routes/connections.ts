@@ -238,6 +238,9 @@ export function connectionsRoutes(container: Container): Hono {
     const existing = getConnectionOrThrow(container, id);
     if (existing.secretRef) await container.secrets.delete(existing.secretRef);
     container.store.connections.delete(id);
+    // Its profiles and their chats went with it, inside the database. One of those chats may be in
+    // control of the computer: its session ends and its reply is cancelled (spec 2026-10-12-computer-use-design section 1).
+    await container.computer?.endIfChatGone();
     // Deleting a connection cascades away its models/profiles/chats and, in
     // turn, THEIR attachment rows (ON DELETE CASCADE) -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see

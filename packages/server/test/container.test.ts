@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_MEMORY_MODEL_MESSAGE } from '@grunt/core/domain/memory.js';
+import { encodeHlc } from '@grunt/core/domain/hlc.js';
 import type { SaveToolImage } from '@grunt/core/domain/tool-images.js';
 import { FAKE_PNG, FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { openDatabase } from '@grunt/store-sqlite/db.js';
 import { MIGRATIONS, runMigrations } from '@grunt/store-sqlite/migrations/index.js';
 import { COMPUTER_NO_SCREENSHOT_REASON } from '@grunt/tools/computer-tool.js';
+import { createApp } from '../src/app.js';
 import { ComputerSessions } from '../src/computer/sessions.js';
 import { ProjectMemoryService } from '../src/memory/service.js';
 import { createContainer, loopbackPortsFromEnv, resolveSecretsPassphrase, withoutOwnPorts, type Container } from '../src/container.js';
@@ -487,6 +489,8 @@ describe('computer use wiring', () => {
       }
     }
     process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '1';
+    // It says so at startup (the next test); kept out of this run's output.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const container = await open();
     try {
       expect(await names(container, on)).toContain('computer');
@@ -494,6 +498,30 @@ describe('computer use wiring', () => {
       expect(container.computer?.available()).toBe(true);
     } finally {
       container.close();
+      warn.mockRestore();
+    }
+  });
+
+  it('says so at startup when the fake driver is wired, and only then', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const about = (): string[] => warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes('GRUNT_COMPUTER_FAKE_DRIVER'));
+    try {
+      (await open()).close();
+      (await open(new FakeComputerDriver())).close();
+      process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '0';
+      (await open()).close();
+      expect(about()).toEqual([]);
+      process.env['GRUNT_COMPUTER_FAKE_DRIVER'] = '1';
+      (await open()).close();
+      expect(about()).toEqual([
+        '[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.',
+      ]);
+      // A real driver handed in wins, and then there is nothing to warn about.
+      warn.mockClear();
+      (await open(new FakeComputerDriver())).close();
+      expect(about()).toEqual([]);
+    } finally {
+      warn.mockRestore();
     }
   });
 
@@ -562,6 +590,7 @@ describe('computer use wiring', () => {
     const container = await open(driver);
     let closed = false;
     try {
+      seed(container, 'c1');
       const stopped: string[] = [];
       container.computer!.onStopped((chatId, why) => stopped.push(`${chatId}:${why}`));
       // Started and never used, and the chat's reply is over: nobody is watching it.
@@ -581,6 +610,116 @@ describe('computer use wiring', () => {
       expect(stopped).toEqual(['c1:button', 'c1:quit']);
     } finally {
       if (!closed) container.close();
+    }
+  });
+
+  /**
+   * Two profiles on two connections, a chat on each. `c1` is in control with a
+   * session it has used and a reply the app-wide stream knows is running.
+   */
+  async function inControl(driver: FakeComputerDriver): Promise<{ container: Container; cancel: ReturnType<typeof vi.spyOn> }> {
+    const container = await open(driver);
+    for (const n of ['1', '2']) {
+      container.store.connections.create({ id: `conn${n}`, name: `Mock ${n}`, kind: 'mock', baseUrl: null, secretRef: null, extraHeaders: {}, status: 'unknown', statusMessage: null, checkedAt: null });
+      container.store.profiles.create({
+        id: `prof${n}`, name: `P${n}`, description: null, colour: null, connectionId: `conn${n}`, modelId: 'mock-standard', systemPrompt: null, params: {},
+        toolPolicy: on, isDefault: false, archivedAt: null,
+      });
+      container.store.chats.create({ id: `c${n}`, title: `Chat c${n}`, profileId: `prof${n}`, headMessageId: null, workspaceRoot: null, pinned: false, archivedAt: null });
+    }
+    container.store.messages.create({ id: 'c1-reply', chatId: 'c1', parentId: null, role: 'assistant', parts: [], status: 'streaming', error: null, producedBy: null });
+    container.events!.emit({ type: 'turn-started', chatId: 'c1', messageIds: ['c1-reply'] });
+    await container.computer!.ensureSession('c1', 'Chat c1');
+    await container.computer!.screenshot('c1');
+    return { container, cancel: vi.spyOn(container.turnRunner, 'cancel') };
+  }
+
+  /** The session ended on the driver, the reply was cancelled, and another chat can start with a dialog of its own. */
+  async function expectStoppedAndFree(container: Container, driver: FakeComputerDriver, cancel: ReturnType<typeof vi.spyOn>): Promise<void> {
+    expect(container.store.chats.get('c1')).toBeNull();
+    await vi.waitFor(() => expect(driver.ended).toEqual(['c1']));
+    expect(driver.hasSession('c1')).toBe(false);
+    expect(container.computer!.activeChat()).toBeNull();
+    expect(container.events!.computerSessions()).toEqual([]);
+    expect(cancel).toHaveBeenCalledWith('c1-reply');
+    expect(await container.computer!.ensureSession('c2', 'Chat c2')).toEqual({ ok: true });
+    expect(driver.started.map((s) => s.chatId)).toEqual(['c1', 'c2']);
+  }
+
+  it("deleting the profile of the chat in control ends its session and cancels its reply", async () => {
+    const driver = new FakeComputerDriver();
+    const { container, cancel } = await inControl(driver);
+    try {
+      expect((await createApp(container).request('/api/profiles/prof1', { method: 'DELETE' })).status).toBe(204);
+      await expectStoppedAndFree(container, driver, cancel);
+    } finally {
+      container.close();
+    }
+  });
+
+  it("deleting the connection of the chat in control ends its session and cancels its reply", async () => {
+    const driver = new FakeComputerDriver();
+    const { container, cancel } = await inControl(driver);
+    try {
+      expect((await createApp(container).request('/api/connections/conn1', { method: 'DELETE' })).status).toBe(204);
+      await expectStoppedAndFree(container, driver, cancel);
+    } finally {
+      container.close();
+    }
+  });
+
+  it('deleting another profile or connection leaves the chat in control alone', async () => {
+    const driver = new FakeComputerDriver();
+    const { container, cancel } = await inControl(driver);
+    try {
+      expect((await createApp(container).request('/api/profiles/prof2', { method: 'DELETE' })).status).toBe(204);
+      expect((await createApp(container).request('/api/connections/conn2', { method: 'DELETE' })).status).toBe(204);
+      expect(container.computer!.activeChat()).toBe('c1');
+      expect(driver.ended).toEqual([]);
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      container.close();
+    }
+  });
+
+  it("a delete of the chat in control that arrives from a paired machine ends its session and cancels its reply", async () => {
+    const driver = new FakeComputerDriver();
+    const { container, cancel } = await inControl(driver);
+    try {
+      // What the syncer does with a peer's changes: apply them, then say so on the app-wide stream.
+      const result = container.store.sync!.apply([{ tbl: 'chat', id: 'c1', op: 'delete', hlc: encodeHlc(Date.now() + 60_000, 0, 'another-machine') }]);
+      expect(result.applied).toBe(1);
+      container.events!.emit({ type: 'sync-applied', nodeId: 'another-machine', changed: result.applied });
+      await expectStoppedAndFree(container, driver, cancel);
+    } finally {
+      container.close();
+    }
+  });
+
+  it("a chat deleted through the store by anything ends its session", async () => {
+    const driver = new FakeComputerDriver();
+    const { container, cancel } = await inControl(driver);
+    try {
+      container.store.chats.delete('c1');
+      await expectStoppedAndFree(container, driver, cancel);
+    } finally {
+      container.close();
+    }
+  });
+
+  it("a chat that went with nobody saying so is caught by the next start: its session is ended first", async () => {
+    const driver = new FakeComputerDriver();
+    const { container, cancel } = await inControl(driver);
+    try {
+      // A cascade inside the database, past every route and every event.
+      container.store.profiles.delete('prof1');
+      expect(container.computer!.activeChat()).toBe('c1');
+      expect(await container.computer!.ensureSession('c2', 'Chat c2')).toEqual({ ok: true });
+      expect(driver.ended).toEqual(['c1']);
+      expect(cancel).toHaveBeenCalledWith('c1-reply');
+      expect(driver.started.map((s) => s.chatId)).toEqual(['c1', 'c2']);
+    } finally {
+      container.close();
     }
   });
 

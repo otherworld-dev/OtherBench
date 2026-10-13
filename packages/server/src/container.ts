@@ -28,7 +28,7 @@ import { ChromiumSessions } from '@grunt/tools/browser/chromium.js';
 import { BrowserManager } from '@grunt/tools/browser/manager.js';
 import { McpServerManager } from '@grunt/tools/mcp/manager.js';
 import { GruntToolProvider } from '@grunt/tools/provider.js';
-import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply } from './computer/sessions.js';
+import { cancelChatReplies, ComputerSessions, endSessionsLeftWithoutAReply, endSessionsOfChatsThatAreGone } from './computer/sessions.js';
 import { acquireDbLock } from './db-lock.js';
 import type { BrowserPort } from './routes/browser.js';
 import { endpointModelLister, RoutingChatEngine } from './engine-router.js';
@@ -338,7 +338,11 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
   // Computer use: the shell's driver when the CLI passed one. For tests only,
   // GRUNT_COMPUTER_FAKE_DRIVER=1 wires a fake that touches nothing. Read once.
   // With neither there is no driver, and no profile is offered the tool.
-  const computerDriver = options.computer ?? (process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1' ? new FakeComputerDriver() : undefined);
+  const fakeComputer = options.computer === undefined && process.env['GRUNT_COMPUTER_FAKE_DRIVER'] === '1';
+  if (fakeComputer) {
+    console.warn('[grunt-server] GRUNT_COMPUTER_FAKE_DRIVER is set: computer use is carried out by a fake driver that touches nothing on this machine. This is for tests only.');
+  }
+  const computerDriver = options.computer ?? (fakeComputer ? new FakeComputerDriver() : undefined);
   // One chat in control at a time; every start, action and end announced for
   // the banner; Stop cancels the chat's reply. `turnRunner` exists by the
   // time anything calls cancelChat. The tool provider is given the sessions,
@@ -349,10 +353,16 @@ async function openContainer(options: ContainerOptions): Promise<Container> {
     ? new ComputerSessions(computerDriver, {
         emit: (e) => events.emit(e),
         cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
+        chatExists: (chatId) => store.chats.get(chatId) !== null,
       })
     : undefined;
-  // A start nobody waits for any more, or a session never used, does not outlive the chat's last reply.
-  if (computer) endSessionsLeftWithoutAReply(events, computer);
+  if (computer) {
+    // A start nobody waits for any more, or a session never used, does not outlive the chat's last reply.
+    endSessionsLeftWithoutAReply(events, computer);
+    // Nor does a session outlive its chat: one deleted through the store, or by a paired machine's changes.
+    // (The profile and connection routes, whose deletes cascade past every event, call endIfChatGone themselves.)
+    endSessionsOfChatsThatAreGone(events, computer);
+  }
   const toolProvider = new GruntToolProvider(store, broker, mcpManager, { browser, ...(computer ? { computer } : {}) });
   const claudeScratchRoot =
     options.dbPath === ':memory:' ? mkdtempSync(join(tmpdir(), 'grunt-claude-scratch-')) : join(dirname(options.dbPath), 'claude-scratch');

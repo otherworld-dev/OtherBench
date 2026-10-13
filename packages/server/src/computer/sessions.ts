@@ -24,11 +24,28 @@ export const COMPUTER_NO_SESSION_REASON = 'Grunt is not controlling this compute
 export const COMPUTER_START_STOPPED_REASON = 'Control was stopped before it started, so Grunt is not controlling this computer.';
 /** What a start answers once the server is shutting down. */
 export const COMPUTER_SHUTTING_DOWN_REASON = 'Grunt is shutting down, so it is not controlling this computer.';
+/** What a start answers while the desktop app has not confirmed that an earlier session ended. */
+export const COMPUTER_END_UNCONFIRMED_REASON = "Grunt couldn't confirm that the last control session was stopped, so nothing was started.";
+
+/** How long the driver is given to answer an end of session before the end counts as unconfirmed. */
+export const COMPUTER_END_TIMEOUT_MS = 5000;
 
 export interface ComputerSessionsDeps {
   emit: (event: SessionEvent) => void;
   /** Cancels every reply running in the chat (Stop, spec 2026-10-12-computer-use-design section 1). */
   cancelChat: (chatId: string) => void;
+  /**
+   * Whether the chat's row is still there. A chat can go without its own
+   * delete route running (its profile or connection is deleted, a paired
+   * machine deletes it): a session must not outlive it. Without this, nothing
+   * is ever ended for a missing chat.
+   */
+  chatExists?: (chatId: string) => boolean;
+}
+
+export interface ComputerSessionsOptions {
+  /** See `COMPUTER_END_TIMEOUT_MS`; tests shorten it. */
+  endTimeoutMs?: number;
 }
 
 /** Cancels each reply the app-wide stream says is running in `chatId`. */
@@ -46,6 +63,19 @@ export function cancelChatReplies(events: AppEventBus, turnRunner: Pick<TurnRunn
 export function endSessionsLeftWithoutAReply(events: AppEventBus, sessions: Pick<ComputerSessions, 'replyEnded'>): () => void {
   return events.subscribe((e) => {
     if (e.type === 'turn-finished' && !events.runningTurns().some((turn) => turn.chatId === e.chatId)) sessions.replyEnded(e.chatId);
+  });
+}
+
+/**
+ * Has `sessions` look for a holder whose chat is gone (`endIfChatGone`)
+ * whenever the app-wide stream says chats may have gone: a chat was deleted
+ * through the store, or changes from a paired machine were applied (a
+ * delete of the chat, or of its profile or connection, cascades inside the
+ * database and announces nothing of its own). Returns the unsubscribe.
+ */
+export function endSessionsOfChatsThatAreGone(events: AppEventBus, sessions: Pick<ComputerSessions, 'endIfChatGone'>): () => void {
+  return events.subscribe((e) => {
+    if (e.type === 'chat-deleted' || e.type === 'sync-applied') void sessions.endIfChatGone();
   });
 }
 
@@ -88,6 +118,15 @@ interface Start {
  * on the start dialog. Keys the driver itself had pressed are released by
  * the driver's own `endSession`, which is called at once.
  *
+ * And it stays stopped. The driver is given `COMPUTER_END_TIMEOUT_MS` to
+ * answer an end. An end it did not confirm (it threw, or did not answer in
+ * time) is remembered: the shell may still hold that session, and it would
+ * answer the chat's next start with a plain OK and no native dialog. So
+ * before the driver is asked to start anything, for any chat, every end
+ * still in flight is waited for and every unconfirmed one is tried again;
+ * unless they all succeed the start is refused. Until then no chat is in
+ * control here, so nothing is looked at or done for any chat either.
+ *
  * A start that outlives what asked for it is ended rather than kept: when
  * Stop comes, the shell says stopped, the server shuts down or the chat's
  * last reply finishes while the dialog is still up, an OK that arrives later
@@ -96,6 +135,12 @@ interface Start {
  * dialog was answered after the reply was stopped, and the tool then did
  * nothing). A session that was used stays for the chat's next reply, as the
  * spec has it, until Stop, the shell's idle limit or quit.
+ *
+ * A session does not outlive its chat. Stopping never depends on the chat's
+ * row: `stop` works for any id. Whoever removes chats calls `endIfChatGone`
+ * afterwards (the profile and connection routes, and the app-wide stream's
+ * chat-deleted and sync-applied events), and as a backstop every start and
+ * every call first ends a holder whose chat is no longer there.
  *
  * The port's stop reasons are the shell's. For an end the server makes
  * itself `'button'` stands in, and `'quit'` for shutdown.
@@ -109,31 +154,54 @@ export class ComputerSessions implements ComputerDriver {
   private used = false;
   private starting: Start | null = null;
   private disposed = false;
+  /** Ends the driver has been told of and has not answered yet. */
+  private readonly ending = new Set<Promise<boolean>>();
+  /** Chats whose end the driver did not confirm: it may still hold a session for them. */
+  private readonly unconfirmed = new Set<string>();
+  private readonly endTimeoutMs: number;
   private readonly stoppedListeners = new Set<StoppedListener>();
   private readonly offStopped: () => void;
 
   constructor(
     private readonly driver: ComputerDriver,
-    private readonly deps: ComputerSessionsDeps
+    private readonly deps: ComputerSessionsDeps,
+    options: ComputerSessionsOptions = {}
   ) {
+    this.endTimeoutMs = options.endTimeoutMs ?? COMPUTER_END_TIMEOUT_MS;
     this.offStopped = driver.onStopped((chatId, why) => {
-      const had = this.release(chatId);
+      // The shell's own word that this chat's session is over.
+      this.unconfirmed.delete(chatId);
+      this.release(chatId);
       this.notifyStopped(chatId, why);
-      if (had) this.cancelReplies(chatId);
+      // Also for a chat this server has no record of (a late OK after a start that timed out left the
+      // shell with a session): its reply must not go on and bring up a new dialog.
+      this.cancelReplies(chatId);
     });
   }
 
+  /** Whether the tool can be offered. A driver that can't say counts as no. */
   available(): boolean {
-    return this.driver.available();
+    try {
+      return this.driver.available() === true;
+    } catch (err) {
+      console.error("[grunt-server] the desktop app couldn't say whether computer use is available:", err);
+      return false;
+    }
   }
 
   activeChat(): string | null {
     return this.active;
   }
 
+  /** The chat that holds the computer: the one in control, or the one whose start dialog may be up. */
+  holder(): string | null {
+    return this.starting !== null ? this.starting.chatId : this.active;
+  }
+
   ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
     if (this.disposed) return Promise.resolve({ ok: false, reason: COMPUTER_SHUTTING_DOWN_REASON });
-    const holder = this.starting !== null ? this.starting.chatId : this.active;
+    this.dropGoneHolder();
+    const holder = this.holder();
     if (holder !== null && holder !== chatId) return Promise.resolve({ ok: false, reason: COMPUTER_OTHER_CHAT_REASON });
     // One dialog per chat: whoever asks while it is up gets its answer.
     if (this.starting !== null) return this.starting.answer;
@@ -152,22 +220,27 @@ export class ComputerSessions implements ComputerDriver {
 
   async endSession(chatId: string): Promise<void> {
     if (this.release(chatId)) this.notifyStopped(chatId, 'button');
-    await this.driver.endSession(chatId);
+    if (this.heldByAnother(chatId)) return;
+    await this.tracked(this.tellDriverToEnd(chatId));
   }
 
   /**
-   * Stop from the web app, or the chat is being deleted: end the session and
-   * cancel the chat's replies. The reply is cancelled even when the driver
-   * can't be told (that is logged, not thrown).
+   * Stop from the web app, or the chat is going: end the session and cancel
+   * the chat's replies. Works for any id, whether or not the chat still has
+   * a row. The server's record is cleared, the driver told and the replies
+   * cancelled in one tick; the driver's answer is then waited for, for a
+   * bounded time. Never throws: a driver that can't be told is logged, and
+   * the end is remembered as unconfirmed.
+   *
+   * The driver is told to end `chatId`'s session only when no other chat
+   * holds the computer: ending is how the driver lets go of the keys it
+   * pressed, and another chat's Stop must not do that to the chat in control.
    */
   async stop(chatId: string): Promise<void> {
     if (this.release(chatId)) this.notifyStopped(chatId, 'button');
-    const ended = this.endOnDriver(chatId);
-    try {
-      this.deps.cancelChat(chatId);
-    } finally {
-      await ended;
-    }
+    const ended = this.heldByAnother(chatId) ? null : this.endOnDriver(chatId);
+    this.cancelReplies(chatId);
+    if (ended !== null) await ended;
   }
 
   /**
@@ -182,6 +255,17 @@ export class ComputerSessions implements ComputerDriver {
     if (this.active === chatId ? !unused : !asking) return;
     if (this.release(chatId)) this.notifyStopped(chatId, 'button');
     void this.endOnDriver(chatId);
+  }
+
+  /**
+   * Ends the session of the chat that holds the computer when that chat no
+   * longer exists, and cancels its replies. To be called after anything that
+   * can remove chats. Does nothing when the holder's chat is still there, or
+   * when nobody said how to tell (`chatExists`).
+   */
+  async endIfChatGone(): Promise<void> {
+    const holder = this.holder();
+    if (holder !== null && this.chatIsGone(holder)) await this.stop(holder);
   }
 
   async screenshot(chatId: string): Promise<ComputerScreenshot> {
@@ -214,7 +298,7 @@ export class ComputerSessions implements ComputerDriver {
     return this.driver.reservedKeys();
   }
 
-  /** A session ended, whoever ended it: the shell, or this server (Stop, a deleted chat, a start nobody waited for, shutdown). */
+  /** A session ended, whoever ended it: the shell, or this server (Stop, a chat that is gone, a start nobody waited for, shutdown). */
   onStopped(cb: StoppedListener): () => void {
     this.stoppedListeners.add(cb);
     return () => {
@@ -227,7 +311,7 @@ export class ComputerSessions implements ComputerDriver {
     if (this.disposed) return;
     this.disposed = true;
     this.offStopped();
-    const chatId = this.starting !== null ? this.starting.chatId : this.active;
+    const chatId = this.holder();
     if (chatId !== null) {
       if (this.release(chatId)) this.notifyStopped(chatId, 'quit');
       void this.endOnDriver(chatId);
@@ -238,6 +322,15 @@ export class ComputerSessions implements ComputerDriver {
   /** Asks the driver, once, and makes of its answer what the chat's callers are all told. */
   private async begin(start: Start, chatTitle: string): Promise<ComputerAnswer> {
     const { chatId } = start;
+    // Nothing is started while the driver may still hold a session this server has ended.
+    if (this.ending.size > 0 || this.unconfirmed.size > 0) {
+      const confirmed = await this.endsConfirmed();
+      if (!confirmed || start.abandoned || this.disposed) {
+        if (this.starting === start) this.starting = null;
+        // Stopped while it waited: the driver was never asked, so there is no dialog and nothing to end.
+        return { ok: false, reason: confirmed ? COMPUTER_START_STOPPED_REASON : COMPUTER_END_UNCONFIRMED_REASON };
+      }
+    }
     let answer: ComputerAnswer;
     try {
       answer = await this.driver.ensureSession(chatId, chatTitle);
@@ -270,9 +363,36 @@ export class ComputerSessions implements ComputerDriver {
 
   /** The session `chatId` is in control with, marked as used; null when it has none here. */
   private use(chatId: string): number | null {
+    this.dropGoneHolder();
     if (this.active !== chatId) return null;
     this.used = true;
     return this.generation;
+  }
+
+  /** True when another chat than `chatId` holds the computer: the driver's session is that chat's, not this one's. */
+  private heldByAnother(chatId: string): boolean {
+    const holder = this.holder();
+    return holder !== null && holder !== chatId;
+  }
+
+  /** Whether `chatId`'s row is gone. A check that can't be made says "still there". */
+  private chatIsGone(chatId: string): boolean {
+    if (this.deps.chatExists === undefined) return false;
+    try {
+      return !this.deps.chatExists(chatId);
+    } catch (err) {
+      console.error(`[grunt-server] couldn't check whether chat ${chatId} still exists (computer use):`, err);
+      return false;
+    }
+  }
+
+  /** The backstop: a holder whose chat no longer exists is stopped before anything else is started or done. */
+  private dropGoneHolder(): void {
+    const holder = this.holder();
+    if (holder === null || !this.chatIsGone(holder)) return;
+    // Already stopped, with its dialog still up: an OK to it ends what it makes.
+    if (this.starting !== null && this.starting.chatId === holder && this.starting.abandoned && this.active !== holder) return;
+    void this.stop(holder);
   }
 
   /**
@@ -295,13 +415,62 @@ export class ComputerSessions implements ComputerDriver {
     return had;
   }
 
-  /** Tells the driver to end the chat's session (it releases what it pressed). Never throws: a driver that can't be told is logged. */
-  private async endOnDriver(chatId: string): Promise<void> {
+  /**
+   * Tells the driver to end the chat's session (it releases what it
+   * pressed) and waits for its answer, at most `endTimeoutMs`. The driver is
+   * called before this returns its promise. Rejects, and remembers the chat
+   * as unconfirmed, when the driver throws or does not answer in time.
+   */
+  private async tellDriverToEnd(chatId: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await this.driver.endSession(chatId);
+      const told = Promise.resolve(this.driver.endSession(chatId));
+      // If the limit wins the race, an answer that comes later is nobody's to handle.
+      told.catch(() => {});
+      await Promise.race([
+        told,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`The desktop app did not answer within ${this.endTimeoutMs} ms.`)), this.endTimeoutMs);
+        }),
+      ]);
+      this.unconfirmed.delete(chatId);
     } catch (err) {
-      console.error(`[grunt-server] couldn't tell the desktop app to end computer use for chat ${chatId}:`, err);
+      this.unconfirmed.add(chatId);
+      throw err;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
+  }
+
+  /** `tellDriverToEnd` that never throws: true when the driver confirmed, false (and logged) when it did not. */
+  private endOnDriver(chatId: string): Promise<boolean> {
+    return this.tracked(
+      this.tellDriverToEnd(chatId).then(
+        () => true,
+        (err: unknown) => {
+          console.error(`[grunt-server] couldn't confirm that the desktop app ended computer use for chat ${chatId}:`, err);
+          return false;
+        }
+      )
+    );
+  }
+
+  /** Keeps an end in `ending` until the driver has answered it, so a start can wait for it. */
+  private tracked<T>(end: Promise<T>): Promise<T> {
+    const settled = end.then(
+      () => true,
+      () => false
+    );
+    this.ending.add(settled);
+    void settled.then(() => this.ending.delete(settled));
+    return end;
+  }
+
+  /** Waits for every end in flight, tries every unconfirmed one again, and says whether none is left. */
+  private async endsConfirmed(): Promise<boolean> {
+    while (this.ending.size > 0) await Promise.all([...this.ending]);
+    for (const chatId of [...this.unconfirmed]) await this.endOnDriver(chatId);
+    return this.unconfirmed.size === 0;
   }
 
   private announce(event: SessionEvent): void {
@@ -326,7 +495,7 @@ export class ComputerSessions implements ComputerDriver {
     try {
       this.deps.cancelChat(chatId);
     } catch (err) {
-      console.error(`[grunt-server] couldn't cancel the replies of chat ${chatId} after computer use stopped:`, err);
+      console.error(`[grunt-server] couldn't cancel the replies of chat ${chatId}:`, err);
     }
   }
 }

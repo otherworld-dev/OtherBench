@@ -54,7 +54,11 @@ beforeEach(async () => {
   events = new AppEventBus();
   events.attach(turnRunner, store);
   driver = new FakeComputerDriver();
-  sessions = new ComputerSessions(driver, { emit: (e) => events.emit(e), cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId) });
+  sessions = new ComputerSessions(driver, {
+    emit: (e) => events.emit(e),
+    cancelChat: (chatId) => cancelChatReplies(events, turnRunner, chatId),
+    chatExists: (chatId) => store.chats.get(chatId) !== null,
+  });
   container = {
     store,
     secrets: new FakeSecretStore(),
@@ -118,6 +122,42 @@ describe('POST /api/chats/:id/computer/stop', () => {
     expect(end).not.toHaveBeenCalled();
   });
 
+  it('stops a chat that is in control even when its row is already gone, and still answers 404', async () => {
+    const replyId = await startReply('chat-1');
+    await sessions.ensureSession('chat-1', 'Budget');
+    await sessions.screenshot('chat-1');
+    // The row went some way that told nobody (a cascade); the safety net has not been tripped yet.
+    (container.store as InMemoryStore).chats.delete('chat-1');
+    expect(sessions.activeChat()).toBe('chat-1');
+
+    expect((await post('/api/chats/chat-1/computer/stop')).status).toBe(404);
+
+    expect(driver.ended).toEqual(['chat-1']);
+    expect(sessions.activeChat()).toBeNull();
+    await vi.waitFor(() => expect(container.store.messages.get(replyId)?.status).toBe('cancelled'));
+    // The computer is free: another chat starts, with a dialog of its own.
+    expect(await sessions.ensureSession('chat-2', 'Other')).toEqual({ ok: true });
+    expect(driver.started.map((s) => s.chatId)).toEqual(['chat-1', 'chat-2']);
+  });
+
+  it('stops a chat whose start dialog is still up when its row is already gone', async () => {
+    class Slow extends FakeComputerDriver {
+      answer: () => void = () => {};
+      override async ensureSession(chatId: string, chatTitle: string) {
+        await new Promise<void>((resolve) => (this.answer = resolve));
+        return super.ensureSession(chatId, chatTitle);
+      }
+    }
+    const slow = new Slow();
+    const waiting = new ComputerSessions(slow, { emit: (e) => events.emit(e), cancelChat: () => {} });
+    const starting = waiting.ensureSession('chat-1', 'Budget');
+    (container.store as InMemoryStore).chats.delete('chat-1');
+    expect((await post('/api/chats/chat-1/computer/stop', { ...container, computer: waiting })).status).toBe(404);
+    slow.answer();
+    expect((await starting).ok).toBe(false);
+    expect(slow.hasSession('chat-1')).toBe(false);
+  });
+
   it('answers 204 on a server with no driver', async () => {
     const { computer: _drop, ...without } = container;
     expect((await post('/api/chats/chat-1/computer/stop', without as Container)).status).toBe(204);
@@ -154,15 +194,38 @@ describe('computer use and the rest of the API', () => {
     errors.mockRestore();
   });
 
-  it('GET /api/health says whether computer use can be offered', async () => {
-    const computerUse = async (c: Container): Promise<unknown> => ((await (await createApp(c).request('/api/health')).json()) as { computerUse: unknown }).computerUse;
-    expect(await computerUse(container)).toBe(true);
+  it('GET /api/computer/status says whether computer use can be offered, to a signed-in caller only', async () => {
+    const status = async (c: Container): Promise<unknown> => (await createApp(c).request('/api/computer/status')).json();
+    expect(await status(container)).toEqual({ computerUse: true });
     driver.isAvailable = false;
-    expect(await computerUse(container)).toBe(false);
+    expect(await status(container)).toEqual({ computerUse: false });
     const { computer: _drop, ...without } = container;
-    expect(await computerUse(without as Container)).toBe(false);
-    // Still a liveness probe: no token needed.
-    expect((await createApp(container, { token: 'secret-token' }).request('/api/health')).status).toBe(200);
+    expect(await status(without as Container)).toEqual({ computerUse: false });
+    // A driver that can't say is "no", not a 500.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    driver.isAvailable = true;
+    vi.spyOn(driver, 'available').mockImplementation(() => {
+      throw new Error('the desktop app is gone');
+    });
+    const res = await createApp(container).request('/api/computer/status');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ computerUse: false });
+    // Behind the sign-in: with a token set, no token gets nothing.
+    const gated = createApp(container, { token: 'secret-token' });
+    expect((await gated.request('/api/computer/status')).status).toBe(401);
+    expect((await gated.request('/api/computer/status', { headers: { Authorization: 'Bearer secret-token' } })).status).toBe(200);
+    errors.mockRestore();
+  });
+
+  it('GET /api/health, which needs no sign-in, says nothing about computer use and never asks the driver', async () => {
+    const available = vi.spyOn(driver, 'available').mockImplementation(() => {
+      throw new Error('the desktop app is gone');
+    });
+    const res = await createApp(container, { token: 'secret-token' }).request('/api/health');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['platform', 'status', 'time']);
+    expect(available).not.toHaveBeenCalled();
   });
 
   it('GET /api/events opens with the chats in control and their last action, and nothing that was typed', async () => {

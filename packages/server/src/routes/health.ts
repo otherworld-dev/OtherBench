@@ -15,14 +15,15 @@ import { Hono } from 'hono';
  * only has one correct answer, and it depends on what OS the server -- not
  * necessarily the machine the browser happens to run on -- is running on.
  *
- * `computerUse` says whether the computer tool can be offered on this server
- * (the desktop shell on Windows said hello with it on); the profile editor
- * only shows the switch when it can.
+ * Nothing about computer use is said here: whether this machine offers
+ * desktop control is not for a caller who has not signed in, and a liveness
+ * probe must not depend on the desktop shell answering. That is
+ * `GET /api/computer/status` (routes/computer.ts), behind the auth gate.
  */
-export function healthRoutes(computerUse: () => boolean = () => false): Hono {
+export function healthRoutes(): Hono {
   const app = new Hono();
 
-  app.get('/health', (c) => c.json({ status: 'ok', time: new Date().toISOString(), platform: process.platform, computerUse: computerUse() }));
+  app.get('/health', (c) => c.json({ status: 'ok', time: new Date().toISOString(), platform: process.platform }));
 
   return app;
 }

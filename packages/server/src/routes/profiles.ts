@@ -184,6 +184,9 @@ export function profilesRoutes(container: Container): Hono {
     getProfileOrThrow(container, id);
     container.store.profiles.delete(id);
     clearMemoryProfile(container.store, id);
+    // Its chats went with it, inside the database. One of them may be in control of the computer:
+    // its session ends and its reply is cancelled (spec 2026-10-12-computer-use-design section 1).
+    await container.computer?.endIfChatGone();
     // Deleting a profile cascades its chats away (ON DELETE CASCADE), which
     // in turn cascades THEIR attachment rows away -- sweep for any blob
     // orphaned as a result. Filesystem-level failures are swallowed (see

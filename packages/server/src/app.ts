@@ -96,7 +96,7 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // Every mode (Deck #897): browser mode has no token to stop another site's form.
   app.use('/api/*', refuseCrossSiteWrites([...(options.corsOrigins ?? []), ...(remote?.publicOrigins ?? [])]));
 
-  app.route('/api', healthRoutes(() => container.computer?.available() === true));
+  app.route('/api', healthRoutes());
   // Sign-in, sign-out and what mode this is (every mode); before the gated routes.
   app.route('/api/auth', authRoutes({ token, remote }));
 
@@ -142,7 +142,8 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   // the cross-site write check like the rest; never on the peer listener.
   authed.route('/', browserRoutes(container));
   // Computer use (spec 2026-10-12-computer-use-design section 7): POST /chats/:id/computer/stop, the
-  // thread banner's Stop. Behind the auth gate and the cross-site write check; never on the peer listener.
+  // thread banner's Stop, and GET /computer/status, whether the tool can be offered here. Behind the
+  // auth gate and the cross-site write check; never on the peer listener.
   authed.route('/', computerRoutes(container));
   authed.route('/usage', usageRoutes(container));
   authed.route('/claude', claudeRoutes(container));
