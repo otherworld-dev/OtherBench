@@ -13,11 +13,25 @@ use crate::rpc::Handler;
 const QUICK: &str = "Ctrl+Shift+Space";
 
 fn app() -> Identity {
-    Identity { path: "C:\\Program Files\\Fake App\\FakeApp.exe".into(), shell_view: false, window_id: "100".into(), pid: 7, started_at: "133".into() }
+    Identity {
+        path: "C:\\Program Files\\Fake App\\FakeApp.exe".into(),
+        shell_view: false,
+        window_id: "100".into(),
+        pid: 7,
+        started_at: "133".into(),
+        title: "Fake App".into(),
+    }
 }
 
 fn grunt() -> Identity {
-    Identity { path: "C:\\Program Files\\Grunt\\grunt-desktop.exe".into(), shell_view: false, window_id: "900".into(), pid: 9, started_at: "1".into() }
+    Identity {
+        path: "C:\\Program Files\\Grunt\\grunt-desktop.exe".into(),
+        shell_view: false,
+        window_id: "900".into(),
+        pid: 9,
+        started_at: "1".into(),
+        title: "Grunt".into(),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -216,7 +230,6 @@ impl Desktop for Fake {
             elevated: false,
             ui_access: false,
             grunt: Some(false),
-            title: "Fake App".into(),
         })
     }
     fn identity(&self, at: &Where) -> Result<Identity, String> {
@@ -757,6 +770,30 @@ fn the_whole_expectation_is_checked_before_every_chunk() {
         assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "ctrl+s" }))["ok"], json!(false));
         assert!(h.fake.sent().is_empty());
     }
+}
+
+#[test]
+fn nothing_more_is_done_once_the_approved_window_shows_grunts_own_ui() {
+    // The same browser window, process and run: only the page changed, to Grunt's.
+    let mut grunt_page = app();
+    grunt_page.title = "Grunt [grunt-ui] - Google Chrome".into();
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    *h.fake.change_after.lock().unwrap() = Some((1, grunt_page.clone()));
+    let r = h.act("a", &t, json!({ "action": "type", "text": "y".repeat(100) }));
+    assert_eq!(r, json!({ "ok": false, "reason": act::GRUNT_UI }));
+    assert_eq!(h.fake.sends.load(Ordering::SeqCst), 1, "one chunk of 20, then the check failed");
+    // Already showing it: nothing at all, a key and a click alike.
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    h.shot("a", &t);
+    *h.fake.change_after.lock().unwrap() = Some((0, grunt_page));
+    assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "return" })), json!({ "ok": false, "reason": act::GRUNT_UI }));
+    assert_eq!(h.act("a", &t, json!({ "action": "left_click", "coordinate": [10, 10] })), json!({ "ok": false, "reason": act::GRUNT_UI }));
+    assert!(h.fake.sent().is_empty());
+    assert!(h.fake.activated.lock().unwrap().is_empty(), "never brought forward either");
 }
 
 #[test]
