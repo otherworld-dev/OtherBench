@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { COMPUTER_DESKTOP_ONLY_REASON, expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON, expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { ComputerAction } from '@grunt/core/ports/computer.js';
@@ -225,6 +225,23 @@ describe('while the computer may be in control, changes come only from the deskt
     expect(sessions.mayBeInControl()).toBe(false);
     // Once the computer is free, everything is as before.
     expect((await send('/api/chats/chat-2', { method: 'DELETE' })).status).toBe(204);
+  });
+
+  it('says what clears it when no chat holds the computer but its last end was never confirmed: a restart', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await sessions.ensureSession('chat-1', 'Budget');
+    vi.spyOn(driver, 'endSession').mockRejectedValue(new Error('the desktop app is gone'));
+    await sessions.stop('chat-1');
+    expect(sessions.holder()).toBeNull();
+    expect(sessions.mayBeInControl()).toBe(true);
+    const res = await send('/api/chats/chat-2', { method: 'DELETE' });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON, kind: 'desktop_only' });
+    // The desktop app starting over (as after a restart of Grunt) clears it.
+    sessions.shellReset();
+    expect(sessions.mayBeInControl()).toBe(false);
+    expect((await send('/api/chats/chat-2', { method: 'DELETE' })).status).toBe(204);
+    errors.mockRestore();
   });
 
   it('holds while the start dialog may be up and until an end is confirmed, not only while a chat is in control', async () => {
