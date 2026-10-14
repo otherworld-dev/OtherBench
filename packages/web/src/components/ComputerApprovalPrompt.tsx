@@ -19,7 +19,11 @@ import { oneLine, revealHidden } from '../viewer/browser.js';
  *   - the summary is `actionSummary`, which never holds typed text; a `type`
  *     call's text is only in its own scrolling box (`typedTextForCard`);
  *   - `isHighRiskApp` decides the once-only case: then only Allow once and
- *     Deny (a chat or always answer would be refused by the broker anyway).
+ *     Deny (a chat or always answer would be refused by the broker anyway);
+ *   - for a browser or an IDE that may have a lasting grant
+ *     (`describeApp(args.app).kind`), a line says plainly what one lets the
+ *     model do there: any site the browser reaches, or code and the terminal
+ *     in the IDE.
  * "Always allow" sends the key exactly as it came, as `{ app }` and nothing else.
  */
 export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
@@ -32,6 +36,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
   const key = app !== null ? app.key : null;
   const name = app !== null ? oneLine(app.name) : '';
   const onceOnly = isHighRiskApp(request.args);
+  const kind = app !== null ? app.kind : null;
   const title = oneLine(windowTitleForCard(args['appTitle']));
   const typed = typedTextForCard(request.args);
   const summary = oneLine(actionSummary(request.args));
@@ -110,7 +115,21 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
           Grunt asks every time here.{' '}
           {args['appShellView'] === true
             ? 'This is a file dialog or file view, where any file can be opened or run.'
-            : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
+            : kind !== null
+              ? "Browsers and IDEs can be allowed for longer, but Grunt couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
+              : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
+        </p>
+      )}
+      {key !== null && !onceOnly && kind === 'browser' && (
+        <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
+          <bdi>{name}</bdi> is a web browser. Allowing it for this chat or always lets the model go to any site this browser can reach, signed in
+          as you, and type and click there without asking again.
+        </p>
+      )}
+      {key !== null && !onceOnly && kind === 'ide' && (
+        <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
+          <bdi>{name}</bdi> is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it, and type
+          commands into its terminal, without asking again.
         </p>
       )}
       <div className="flex flex-wrap gap-2">
