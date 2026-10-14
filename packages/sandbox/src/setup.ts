@@ -208,13 +208,17 @@ const configureDistro: SetupStep = {
     // The next command starts it again with the new wsl.conf. Whether interop is off is tested by trying to start a
     // Windows program (interop-check.sh), not by looking for a WSLInterop registration: distros share one kernel, so
     // another distro's registration (Docker Desktop's, say) shows here too while this one can't use it. The script
-    // exits 0 with INTEROP_OFF only when every attempt fails in a way seen with interop off, and 3 when Windows
-    // answered; anything else (timed out, couldn't run) is not proof that interop is off.
+    // exits 0 with INTEROP_OFF only when every attempt fails in a way seen with interop off, 3 when it saw interop
+    // on, and 4 when it couldn't tell; anything but a clean INTEROP_OFF (a timeout included) is not proof.
     await withResources(ctx, this.name, async () => {
-      const interop = await ctx.runner.exec('root', ['/bin/sh', `${SETUP_MOUNT}/interop-check.sh`], { timeoutMs: 2 * MINUTE });
+      const interop = await ctx.runner.exec('root', ['/bin/sh', `${SETUP_MOUNT}/interop-check.sh`], { timeoutMs: 3 * MINUTE });
       const lines = interop.stdout.replace(/\0/g, '').split(/\r?\n/).map((l) => l.trim());
       if (interop.code === 0 && !interop.timedOut && lines.includes(INTEROP_OFF)) {
-        if (lines.some((l) => l.startsWith('note: '))) ctx.log('Windows interop is off in grunt-sandbox (a WSLInterop registration from another distro is visible; it is not usable here).');
+        if (lines.some((l) => l.startsWith('note: no-registration'))) {
+          ctx.log('Windows interop is off in grunt-sandbox (wsl.conf). No interop handler was active, so the check could only see the kernel refuse a Windows program.');
+        } else if (lines.some((l) => l.startsWith('note: '))) {
+          ctx.log('Windows interop is off in grunt-sandbox (a WSLInterop registration from another distro is visible; it is not usable here).');
+        }
         return;
       }
       if (interop.code === 3) {

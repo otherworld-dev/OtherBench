@@ -582,7 +582,7 @@ export class WslSandbox implements Sandbox {
         (c) =>
           this.runIn(SELF_TEST_CHAT, places, {
             command: c.command,
-            timeoutMs: 60_000,
+            timeoutMs: c.timeoutMs ?? 60_000,
             allowedHosts: c.allowedHosts,
             signal: new AbortController().signal,
             askHost: async (host) => {

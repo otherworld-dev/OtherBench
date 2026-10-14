@@ -13,6 +13,8 @@ export interface SelfTestCase {
    * folder, a typo) doesn't count as the sandbox blocking it; for an 'ok' case, to see what the sandbox said.
    */
   expectOutput?: RegExp;
+  /** How long the command may run; 60 s when absent. */
+  timeoutMs?: number;
 }
 
 /** What bash prints when a write is refused because the place is read-only or not ours. */
@@ -117,13 +119,14 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     { name: "Windows programs by path aren't there", command: '/mnt/c/Windows/System32/cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
     // The same check setup runs as root, here as grunt inside the runtime: tries to start a Windows program, also
     // pointed at each interop socket, and says INTEROP_OFF (exit 0) only if every attempt fails the way it does with
-    // interop off. Exit 3 (Windows answered) or anything unrecognised fails the self-test.
+    // interop off. Exit 3 (interop on) or 4 (couldn't tell) fails the self-test. Each attempt can take about 10 s.
     {
       name: "Windows programs can't be started, even pointed at an interop socket",
       command: `/bin/sh ${INSTALL_DIR}/interop-check.sh`,
       expect: 'ok',
       allowedHosts: none,
       expectOutput: new RegExp(`^${INTEROP_OFF}$`, 'm'),
+      timeoutMs: 180_000,
     },
     { name: '/etc/shadow is unreadable', command: 'cat /etc/shadow', expect: 'blocked', allowedHosts: none },
     { name: "a host that isn't allowlisted is refused", command: 'curl -sS -m 15 -o /dev/null https://example.com/', expect: 'blocked', allowedHosts: none },

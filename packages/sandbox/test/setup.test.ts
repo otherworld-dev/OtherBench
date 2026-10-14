@@ -172,6 +172,18 @@ describe('runSetup', () => {
     expect(outcome).toMatchObject({ message: expect.stringContaining('Invalid argument') });
   });
 
+  it('says when the check could only see the kernel refuse a Windows program (no interop handler active)', async () => {
+    const { outcome, log } = await failing((c) => (interopCheck(c) ? { stdout: 'note: no-registration (an attempt was refused by the kernel, before any interop handler)\ninterop-off\n' } : undefined));
+    expect(outcome.ok).toBe(true);
+    expect(log.some((line) => line.includes('No interop handler was active'))).toBe(true);
+  });
+
+  it('says it could not confirm (not "still on") when the check could not tell', async () => {
+    const { outcome } = await failing((c) => (interopCheck(c) ? { code: 4, stdout: 'INTEROP-UNKNOWN: running a Windows program gave exit 2: something new\n' } : undefined));
+    expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining("Couldn't confirm") });
+    expect(outcome).toMatchObject({ message: expect.stringContaining('something new') });
+  });
+
   it('fails closed: anything but a clear "interop-off" is not proof that interop is off', async () => {
     const odd: Partial<WslResult>[] = [
       { code: 0, stdout: '' }, // exit 0 without the verdict

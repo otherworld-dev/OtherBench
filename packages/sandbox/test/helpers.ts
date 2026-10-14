@@ -118,7 +118,7 @@ export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolea
 
 const MOUNT_SH = join(dirname(fileURLToPath(import.meta.url)), '..', 'resources', 'mount.sh');
 /** Git Bash on Windows (never System32\bash.exe, which would run in a WSL distro); /bin/bash elsewhere. */
-const BASH = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/bash';
+export const BASH = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : '/bin/bash';
 export const hasBash = existsSync(BASH);
 
 export interface ScriptResult {
