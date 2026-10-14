@@ -27,6 +27,13 @@ import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
  *     in the IDE.
  * "Always allow" sends the key exactly as it came, as `{ app }` and nothing else.
  */
+/** What a lasting grant for a browser lets the model do there, said plainly. */
+const BROWSER_GRANT_WORDS =
+  "Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't.";
+/** What a lasting grant for an IDE lets the model do there: as much as running any program. */
+const IDE_GRANT_WORDS =
+  'Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included.';
+
 export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,14 +130,12 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
       )}
       {key !== null && !onceOnly && kind === 'browser' && (
         <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
-          <bdi>{name}</bdi> is a web browser. Allowing it for this chat or always lets the model go to any site this browser can reach, signed in
-          as you and Grunt's own pages included, and type and click there without asking again.
+          <bdi>{name}</bdi> is a web browser. {BROWSER_GRANT_WORDS}
         </p>
       )}
       {key !== null && !onceOnly && kind === 'ide' && (
         <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
-          <bdi>{name}</bdi> is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it, and type
-          commands into its terminal, without asking again.
+          <bdi>{name}</bdi> is a code editor (IDE). {IDE_GRANT_WORDS}
         </p>
       )}
       <div className="flex flex-wrap gap-2">

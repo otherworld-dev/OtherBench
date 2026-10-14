@@ -120,7 +120,7 @@ describe('the computer-use approval card', () => {
     render(<ApprovalPrompt request={request(described(CHROME, { appName: 'chrome.exe', appTitle: 'New Tab - Google Chrome' }))} onResolve={onResolve} />);
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow chrome.exe']);
     expect(screen.getByTestId('computer-app-kind')).toHaveTextContent(
-      "chrome.exe is a web browser. Allowing it for this chat or always lets the model go to any site this browser can reach, signed in as you and Grunt's own pages included, and type and click there without asking again."
+      "chrome.exe is a web browser. Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't."
     );
     expect(screen.getByTestId('computer-app-kind').querySelector('bdi')?.textContent).toBe('chrome.exe');
     expect(screen.queryByTestId('computer-high-risk')).toBeNull();
@@ -133,7 +133,7 @@ describe('the computer-use approval card', () => {
     render(<ApprovalPrompt request={request(described(VSCODE, { appName: 'Code.exe', appTitle: 'main.ts - Visual Studio Code' }))} onResolve={onResolve} />);
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow Code.exe']);
     expect(screen.getByTestId('computer-app-kind')).toHaveTextContent(
-      'Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it, and type commands into its terminal, without asking again.'
+      "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included."
     );
     await userEvent.setup().click(screen.getByRole('button', { name: 'Allow for this chat' }));
     expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'chat' });
