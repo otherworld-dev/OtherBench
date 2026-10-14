@@ -174,16 +174,16 @@ test('(f) six wrong passwords lock this address out', async ({ page }) => {
   await expect(page.getByRole('alert')).toHaveText(/^Too many tries\. Try again in 15 minutes\.$/);
 });
 
-test('(g) under a flood of wrong passwords a new device is told when to come back, and a remembered one gets straight in', async () => {
+test('(g) under a flood of wrong passwords a clean address still signs in, a new device is told when to come back once fresh addresses spend the reserve, and a remembered one gets straight in', async () => {
   test.setTimeout(90_000);
   // No bearer token: these are sign-ins, each from its own forwarded address (127.0.0.1 is locked by (f)).
   const remembered = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const stranger = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   let next = 0;
-  const attempt = async (ctx: APIRequestContext, password: string): Promise<{ status: number; retryAfter: number; ms: number }> => {
+  const attempt = async (ctx: APIRequestContext, password: string, address?: string): Promise<{ status: number; retryAfter: number; ms: number }> => {
     next += 1;
     const started = Date.now();
-    const res = await ctx.post('/api/auth/login', { data: { password }, headers: { 'X-Forwarded-For': `203.0.113.${next}` } });
+    const res = await ctx.post('/api/auth/login', { data: { password }, headers: { 'X-Forwarded-For': address ?? `203.0.113.${next}` } });
     return { status: res.status(), retryAfter: Number(res.headers()['retry-after'] ?? 0), ms: Date.now() - started };
   };
   try {
@@ -192,7 +192,25 @@ test('(g) under a flood of wrong passwords a new device is told when to come bac
     const jar = await remembered.storageState();
     expect(jar.cookies.some((c) => c.name === '__Host-grunt_device' && c.httpOnly && c.secure && c.sameSite === 'Strict')).toBeTruthy();
 
-    // Wrong passwords from ever new addresses: each is checked (401) until the budget of 20 runs out, then refused at once (429).
+    // Addresses that keep guessing (4 tries each, short of a lock) spend what any address may and are then refused...
+    let guessersRefused = false;
+    for (let g = 0; g < 4 && !guessersRefused; g++) {
+      for (let i = 0; i < 4 && !guessersRefused; i++) {
+        const r = await attempt(stranger, `a guess ${g}.${i}`, `198.51.100.${g + 1}`);
+        if (r.status === 429) guessersRefused = true;
+        else expect(r.status).toBe(401);
+      }
+    }
+    expect(guessersRefused).toBeTruthy();
+    // ...but not the 5 checks kept for addresses that haven't guessed wrong: a new device on a clean address signs in.
+    const cleanDevice = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+    try {
+      expect((await attempt(cleanDevice, PASSWORD)).status).toBe(200);
+    } finally {
+      await cleanDevice.dispose();
+    }
+
+    // Wrong passwords from ever new addresses, each clean, spend even those (401) until the budget runs out, then are refused at once (429).
     let refused: { status: number; retryAfter: number } | null = null;
     for (let i = 0; i < 40 && refused === null; i++) {
       const r = await attempt(stranger, `wrong password from afar ${i}`);
