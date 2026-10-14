@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPUTER_DESKTOP_ONLY_REASON } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON } from '@grunt/core/domain/computer-apps.js';
 import type { ApprovalRequest } from '@grunt/core/ports/tool-provider.js';
 import { ApprovalPrompt } from '../components/ApprovalPrompt.js';
 import { ApiError } from '../state/api.js';
@@ -37,6 +37,7 @@ describe('answers while the computer is in control', () => {
 
   it("shows the server's own words when it refused an answer for not coming from the desktop app, and the usual line otherwise", () => {
     expect(answerErrorText(new ApiError(403, COMPUTER_DESKTOP_ONLY_REASON), 'fallback')).toBe(COMPUTER_DESKTOP_ONLY_REASON);
+    expect(answerErrorText(new ApiError(403, COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON), 'fallback')).toBe(COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON);
     expect(answerErrorText(new ApiError(403, 'Refused: another site'), 'fallback')).toBe('fallback');
     expect(answerErrorText(new ApiError(500, COMPUTER_DESKTOP_ONLY_REASON), 'fallback')).toBe('fallback');
     expect(answerErrorText(new Error(COMPUTER_DESKTOP_ONLY_REASON), 'fallback')).toBe('fallback');
