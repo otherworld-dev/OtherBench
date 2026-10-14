@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
 import { normaliseWindowsPath, SandboxPathError, toSandboxPath, type MountNeed } from '@grunt/core/domain/sandbox-paths.js';
-import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@grunt/core/ports/sandbox.js';
+import { SandboxError, sandboxFileAccess, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@grunt/core/ports/sandbox.js';
 import type { FsMode } from '@grunt/core/types/config.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 import { channelFromProcess } from './agent-channel.js';
@@ -434,7 +434,9 @@ export class WslSandbox implements Sandbox {
    * reach it through the writable parent. A writable folder inside a read-only one ends up read-only (the
    * runtime binds the read-only parent over the writable child), which is narrower, not wider.
    */
-  private places(chatId: string, fs: FsMode, workspaceRoot: string | null, folders: readonly ResolvedFolder[]): Places {
+  private places(chatId: string, requested: FsMode, workspaceRoot: string | null, folders: readonly ResolvedFolder[]): Places {
+    // Fails closed: any value but 'read' or 'readwrite' (a newer peer's, say) is off.
+    const fs = sandboxFileAccess(requested);
     if (fs === 'off') return { cwd: chatHome(chatId), needs: [], read: [], write: [], denyWrite: [] };
     if (workspaceRoot === null) throw new SandboxError('bad_folder', 'A sandboxed command with file access needs a workspace folder, and none was given.');
     const writable = fs === 'readwrite';

@@ -1,4 +1,4 @@
-import { isSandboxError, type Sandbox } from '@grunt/core/ports/sandbox.js';
+import { isSandboxError, sandboxFileAccess, type Sandbox } from '@grunt/core/ports/sandbox.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import { sandboxHostsOf, type ToolPolicy } from '@grunt/core/types/config.js';
 import { parseRunCommandArgs, RUN_COMMAND_PARAMETERS, toolError } from './shell-tool.js';
@@ -53,9 +53,12 @@ export type AskHost = (host: string, port: number | undefined, ctx: ToolContext,
  * up, or one that fails, the call is refused, never handed to the host shell.
  */
 export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolicy, askHost: AskHost): ToolSpec {
+  // Fails closed: any value but 'read' or 'readwrite' (a newer peer's synced profile, say) is off.
+  const fs = sandboxFileAccess(policy.fs);
+  const filesOff = fs === 'off';
   return {
     name: 'run_command',
-    description: policy.fs === 'off' ? SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION : SANDBOX_RUN_COMMAND_DESCRIPTION,
+    description: filesOff ? SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION : SANDBOX_RUN_COMMAND_DESCRIPTION,
     parameters: RUN_COMMAND_PARAMETERS,
     risk: 'execute',
     source: 'sandbox',
@@ -65,14 +68,13 @@ export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolic
       if (!ctx.workspaceRoot) return toolError('spawn_failed', 'run_command requires a workspace root, and none is configured for this chat.');
       if (ctx.signal.aborted) return toolError('aborted', 'The turn was cancelled before this command started, so it was not run.');
       if (!sandbox) return toolError('unsupported', "The sandbox isn't available on this platform yet.");
-      // File access off: none of the chat's folders go to the sandbox at all.
-      const filesOff = policy.fs === 'off';
       try {
         return await sandbox.run({
           chatId: ctx.chatId,
           command: parsed.command,
           timeoutMs: parsed.timeoutMsUsed,
-          fs: policy.fs,
+          // File access off: none of the chat's folders go to the sandbox at all.
+          fs,
           workspaceRoot: filesOff ? null : ctx.workspaceRoot,
           folders: filesOff ? [] : (ctx.folders ?? []),
           allowedHosts: sandboxHostsOf(policy),

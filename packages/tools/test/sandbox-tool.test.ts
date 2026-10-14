@@ -108,6 +108,15 @@ describe('GruntToolProvider and the sandbox', () => {
     expect((await runCommand(provider, policy({ fs: 'read' }))).description).toBe(SANDBOX_RUN_COMMAND_DESCRIPTION);
   });
 
+  it("treats a file access it doesn't know (a newer peer's synced profile) as off", async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { provider } = setup(sandbox);
+    const tool = await runCommand(provider, policy({ fs: 'everything' as never }));
+    expect(tool.description).toBe(SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION);
+    await tool.execute({ command: 'ls' }, ctx({ folders: [{ root: 'D:\\Refs', access: 'readwrite' }] }));
+    expect(sandbox.requests[0]).toMatchObject({ fs: 'off', workspaceRoot: null, folders: [] });
+  });
+
   it('asks under always_ask, as source "sandbox"', async () => {
     const { provider, events } = setup();
     answerEvery(provider, 'once');

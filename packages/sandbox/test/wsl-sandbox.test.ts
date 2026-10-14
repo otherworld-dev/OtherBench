@@ -129,6 +129,15 @@ describe('WslSandbox.run', () => {
     expect(mounts).toEqual([]);
   });
 
+  it("treats a file access it doesn't know (a newer peer's synced profile) as off: nothing mounted, nothing allowed", async () => {
+    const { sandbox, channels, mounts } = make();
+    for (const fs of ['everything', 'READWRITE', '', undefined, null]) {
+      await expect(sandbox.run(request({ fs: fs as never }))).resolves.toMatchObject({ cwd: '/home/grunt/chats/chat-1' });
+    }
+    expect(mounts).toEqual([]);
+    for (const run of channels[0]!.channel.runs()) expect(run).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+  });
+
   it('refuses a command with file access and no workspace, mounting nothing', async () => {
     const { sandbox, channels, mounts } = make();
     await expect(sandbox.run(request({ fs: 'read', workspaceRoot: null }))).rejects.toMatchObject({ code: 'bad_folder' });

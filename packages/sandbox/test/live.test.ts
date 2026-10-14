@@ -297,6 +297,8 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
           `ls '${ws}' && echo SAW-WS`,
           `ls '${refs()}' && echo SAW-REFS`,
           'echo "mnt:[$(ls -A /mnt)]"',
+          // Nor through another process's root: the command has its own process space, so no /proc/<pid>/root leads to the VM's /mnt.
+          'echo "proc-mnt:[$(ls -d /proc/[0-9]*/root/mnt/*/ 2>/dev/null | wc -l)]"',
           `echo no > '${ws}/off.txt' && echo WROTE-WS`,
           'echo home-ok > ~/off-home.txt && cat ~/off-home.txt',
         ].join('; '),
@@ -311,6 +313,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
     expect(off.output).not.toContain('WROTE-WS');
     // /mnt is an empty tmpfs in the command's view: no bind of the chat's folders is there.
     expect(off.output).toContain('mnt:[]');
+    expect(off.output).toContain('proc-mnt:[0]');
     expect(off.output).toContain('home-ok');
     expect(existsSync(join(workspaceRoot, 'off.txt'))).toBe(false);
     // The earlier command's mount is still in the VM: only the command's own view leaves it out.

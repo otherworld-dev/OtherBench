@@ -156,6 +156,10 @@ describe('sandboxPrompt', () => {
     expect(text).not.toMatch(/\/mnt|Grunt|Refs/);
   });
 
+  it("treats a file access it doesn't know as off", () => {
+    expect(sandboxPrompt('everything' as never, 'E:\\Git\\Grunt', folders)).toBe(SANDBOX_NO_FILES_PROMPT);
+  });
+
   it('with file access, is the folders block', () => {
     for (const fs of ['read', 'readwrite'] as const) expect(sandboxPrompt(fs, 'E:\\Git\\Grunt', folders)).toBe(sandboxFoldersPrompt('E:\\Git\\Grunt', folders));
   });

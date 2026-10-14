@@ -58,6 +58,14 @@ export function isStoredSandboxState(value: unknown): value is StoredSandboxStat
   );
 }
 
+/**
+ * A file access as the sandbox reads it, failing closed: 'read' and 'readwrite' are themselves, and anything else
+ * (a value from a newer peer's synced profile, a typo, nothing) is 'off', so it gets no folders.
+ */
+export function sandboxFileAccess(fs: unknown): FsMode {
+  return fs === 'read' || fs === 'readwrite' ? fs : 'off';
+}
+
 export interface SandboxRunRequest {
   chatId: string;
   command: string;

@@ -1,3 +1,4 @@
+import { sandboxFileAccess } from '../ports/sandbox.js';
 import type { FsMode } from '../types/config.js';
 import type { ResolvedFolder } from '../types/workspace.js';
 
@@ -147,7 +148,7 @@ export const SANDBOX_NO_FILES_PROMPT = [
  * off, SANDBOX_NO_FILES_PROMPT; otherwise sandboxFoldersPrompt.
  */
 export function sandboxPrompt(fs: FsMode, workspaceRoot: string, folders: readonly ResolvedFolder[], canonical?: (path: string) => string): string {
-  return fs === 'off' ? SANDBOX_NO_FILES_PROMPT : sandboxFoldersPrompt(workspaceRoot, folders, canonical);
+  return sandboxFileAccess(fs) === 'off' ? SANDBOX_NO_FILES_PROMPT : sandboxFoldersPrompt(workspaceRoot, folders, canonical);
 }
 
 /**

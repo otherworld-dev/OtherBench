@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSandboxError, isStoredSandboxState, SANDBOX_MAX_OUTPUT_BYTES, SandboxError } from '../src/ports/sandbox.js';
+import { isSandboxError, isStoredSandboxState, SANDBOX_MAX_OUTPUT_BYTES, SandboxError, sandboxFileAccess } from '../src/ports/sandbox.js';
 import { DEFAULT_SANDBOX_HOSTS, runsShellInSandbox, sandboxHostsOf, type ToolPolicy } from '../src/types/config.js';
 
 const policy = (o: Partial<ToolPolicy> = {}): ToolPolicy => ({ fs: 'readwrite', shell: true, mcpServerIds: [], approvalMode: 'ask_on_mutate', ...o });
@@ -55,5 +55,13 @@ describe('isStoredSandboxState', () => {
     expect(isStoredSandboxState({ state: 'ready' })).toBe(false);
     expect(isStoredSandboxState({ state: 'ready', packages: [1] })).toBe(false);
     expect(isStoredSandboxState(null)).toBe(false);
+  });
+});
+
+describe('sandboxFileAccess', () => {
+  it("keeps 'read' and 'readwrite' and fails closed to 'off' on anything else", () => {
+    expect(sandboxFileAccess('read')).toBe('read');
+    expect(sandboxFileAccess('readwrite')).toBe('readwrite');
+    for (const value of ['off', 'everything', 'READ', '', undefined, null, 1, {}]) expect(sandboxFileAccess(value)).toBe('off');
   });
 });
