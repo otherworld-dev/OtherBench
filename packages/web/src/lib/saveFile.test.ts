@@ -48,9 +48,9 @@ describe('saveFile', () => {
   });
 
   it("never throws: a refused or failed save is an error toast saying why", async () => {
-    saveDownload.mockRejectedValue(new Error("Grunt doesn't save .exe files: Windows would run them."));
-    await expect(saveFile(blob, 'x.exe')).resolves.toBeUndefined();
-    expect(toasts()).toEqual([expect.objectContaining({ tone: 'error', text: "Couldn't save x.exe: Grunt doesn't save .exe files: Windows would run them." })]);
+    saveDownload.mockRejectedValue(new Error('"CON.md" is a name Windows keeps for a device.'));
+    await expect(saveFile(blob, 'CON.md')).resolves.toBeUndefined();
+    expect(toasts()).toEqual([expect.objectContaining({ tone: 'error', text: 'Couldn't save CON.md: "CON.md" is a name Windows keeps for a device.' })]);
     saveDownload.mockRejectedValue('Expected the file\'s bytes.');
     await saveFile(blob, 'y.md');
     expect(toasts().at(-1)).toMatchObject({ tone: 'error', text: "Couldn't save y.md: Expected the file's bytes." });
