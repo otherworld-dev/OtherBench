@@ -49,3 +49,29 @@ export function clientAddress(c: Context, trusted: ReadonlySet<string>): string 
   }
   return peer;
 }
+
+/**
+ * What the sign-in limits count an address under: an IPv6 address by its
+ * /64 (one home or one server usually gets a whole /64, so counting each
+ * address alone would give one attacker 2^64 allowances); anything else
+ * (IPv4, `unknown`) as it is.
+ */
+export function limitKey(address: string): string {
+  if (isIP(address) !== 6) return address;
+  let s = address.toLowerCase();
+  const zone = s.indexOf('%');
+  if (zone >= 0) s = s.slice(0, zone);
+  const dotted = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number) as [number, number, number, number];
+    s = `${s.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = s.includes('::') ? (s.split('::') as [string, string]) : [s, undefined];
+  const front = head ? head.split(':') : [];
+  const back = tail === undefined || tail === '' ? [] : tail.split(':');
+  const groups = tail === undefined ? front : [...front, ...Array<string>(8 - front.length - back.length).fill('0'), ...back];
+  return `${groups
+    .slice(0, 4)
+    .map((g) => parseInt(g, 16).toString(16))
+    .join(':')}::/64`;
+}

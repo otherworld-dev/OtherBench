@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { authGate } from '../../src/remote/auth.js';
-import { MAX_DELAYED, SLOW_BASE_MS, SLOW_MAX_MS } from '../../src/remote/limiter.js';
+import { BUDGET_BURST, MAX_DELAYED, MAX_TRACKED, SLOW_MAX_MS } from '../../src/remote/limiter.js';
 import { PasswordFile } from '../../src/remote/password.js';
 import { SESSION_MS } from '../../src/remote/sessions.js';
 import { FAST, from, makeContainer, PASSWORD, remoteFixture, type RemoteFixture } from './helpers.js';
@@ -27,7 +27,9 @@ function login(opts: { password?: string; remember?: boolean; address?: string; 
   );
 }
 
-const cookieOf = (res: Response): string => res.headers.get('set-cookie')!.split(';')[0]!;
+/** The session's Set-Cookie line (a sign-in also sets the remembered-device cookie). */
+const sessionSetCookie = (res: Response): string | undefined => res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_session='));
+const cookieOf = (res: Response): string => sessionSetCookie(res)!.split(';')[0]!;
 
 async function signIn(remember = false, address = '10.0.0.7'): Promise<string> {
   const res = await login({ remember, address });
@@ -53,12 +55,12 @@ describe('sign-in mode', () => {
     const res = await login();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ expiresAt: fx.clock.now + SESSION_MS });
-    const cookie = res.headers.get('set-cookie')!;
+    const cookie = sessionSetCookie(res)!;
     expect(cookie).toMatch(/^__Host-grunt_session=[A-Za-z0-9_-]{43}; /);
     for (const part of ['Path=/', 'HttpOnly', 'Secure', 'SameSite=Strict']) expect(cookie).toContain(part);
     expect(cookie).not.toContain('Max-Age');
 
-    const remembered = (await login({ remember: true })).headers.get('set-cookie')!;
+    const remembered = sessionSetCookie(await login({ remember: true }))!;
     expect(remembered).toContain('Max-Age=2592000');
   });
 
@@ -184,7 +186,7 @@ describe('sign-in mode', () => {
   });
 });
 
-describe('the global slow-down', () => {
+describe('the global limits', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   });
@@ -192,27 +194,21 @@ describe('the global slow-down', () => {
     vi.useRealTimers();
   });
 
-  /**
-   * `n` wrong passwords, at most 4 from any one address so none is locked:
-   * the first 20 through the route (none of them is slowed), the rest
-   * straight to the limiter, since each would now wait.
-   */
-  async function wrongFromAll(n: number): Promise<void> {
-    for (let i = 0; i < n; i++) {
-      const address = `10.9.${Math.floor(i / 4)}.${i % 4}`;
-      if (i >= 20) {
-        fx.remote.limiter.fail(address);
-        continue;
-      }
-      const res = await login({ password: 'not the password', address });
-      expect(res.status).toBe(401);
-    }
+  /** `n` wrong passwords counted straight into the limiter (no budget spent), at most 4 from any one address. */
+  function failures(n: number): void {
+    for (let i = 0; i < n; i++) fx.remote.limiter.fail(`10.9.${Math.floor(i / 4) % 250}.${(i % 4) + 4 * Math.floor(i / 1000)}`);
     expect(fx.remote.limiter.globalFailures()).toBe(n);
   }
 
-  /** Real event-loop turns (setImmediate isn't faked) until `done`, so a login gets as far as it can. */
+  /** Spends the whole budget on attempts that will wait out a delay. */
+  function spendBudget(): void {
+    for (let i = 0; i < BUDGET_BURST; i++) void fx.remote.limiter.admit(`10.8.0.${i}`);
+  }
+
+  /** Real event-loop turns (setImmediate isn't faked) until `done`, or 5 s of real time: logins run scrypt and file I/O. */
   async function turnsUntil(done: () => boolean): Promise<void> {
-    for (let i = 0; i < 1000 && !done(); i++) await new Promise((r) => setImmediate(r));
+    const until = performance.now() + 5000;
+    while (!done() && performance.now() < until) await new Promise((r) => setImmediate(r));
   }
 
   /** Lets a login run up to its timer: until `n` fake timers are pending. */
@@ -234,8 +230,16 @@ describe('the global slow-down', () => {
     return app.request(req, undefined, from(address));
   }
 
-  it('makes the right password wait out the delay too, then signs in; it never refuses on the global count', async () => {
-    await wrongFromAll(40);
+  const rawDeviceCookie = (res: Response): string => {
+    const found = res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_device='));
+    expect(found).toBeDefined();
+    return found as string;
+  };
+  const deviceCookieOf = (res: Response): string => rawDeviceCookie(res).split(';')[0] as string;
+  const deviceValid = (cookie: string): boolean => fx.remote.devices.valid(cookie.slice(cookie.indexOf('=') + 1), fx.remote.passwords.epoch());
+
+  it('makes the right password wait out the delay too, then signs in; a wrong one waits and gets 401, never 429', async () => {
+    failures(40);
     const pending = settled(login({ address: '10.0.0.50' }));
     await untilWaiting();
 
@@ -252,38 +256,84 @@ describe('the global slow-down', () => {
     expect(wrong.res?.status).toBe(401);
   });
 
-  it('answers 429 with Retry-After when 50 attempts are already waiting', async () => {
-    await wrongFromAll(100);
-    for (let i = 0; i < MAX_DELAYED; i++) void fx.remote.limiter.slowDown();
+  it('answers 429 with Retry-After until the next token once the budget is spent', async () => {
+    failures(100);
+    spendBudget();
 
     const res = await login({ address: '10.0.0.50' });
 
     expect(res.status).toBe(429);
-    expect(res.headers.get('retry-after')).toBe('10');
-    expect(await res.json()).toEqual({ error: 'Sign-in is busy. Try again in a few seconds.' });
+    expect(res.headers.get('retry-after')).toBe('45');
+    expect(await res.json()).toEqual({ error: 'Too many sign-in attempts on this server right now. Try again in 45 seconds.' });
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
   });
 
-  it("frees a waiting attempt's place when its client disconnects", async () => {
-    await wrongFromAll(20);
+  it('sets a remembered-device cookie on sign-in that lets this browser skip the budget and the delay', async () => {
+    const first = await login();
+    const device = deviceCookieOf(first);
+    for (const part of ['Path=/', 'HttpOnly', 'Secure', 'SameSite=Strict', 'Max-Age=7776000']) expect(rawDeviceCookie(first)).toContain(part);
+    failures(5000);
+    spendBudget();
+    expect((await login({ address: '10.0.0.70' })).status).toBe(429);
+
+    const res = await login({ address: '10.0.0.70', headers: { Cookie: device } });
+
+    expect(res.status).toBe(200);
+    // The 19 tokens the first sign-in left are still waiting out their delay; this one didn't.
+    expect(vi.getTimerCount()).toBe(BUDGET_BURST - 1);
+    // It is not a session: on its own it opens nothing.
+    expect((await get('/api/chats', device)).status).toBe(401);
+    // A tampered one is ignored.
+    const tampered = device.slice(0, -2) + (device.endsWith('AA') ? 'BB' : 'AA');
+    expect((await login({ address: '10.0.0.71', headers: { Cookie: tampered } })).status).toBe(429);
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+  });
+
+  it('still keeps a remembered device to the per-address lockout', async () => {
+    const device = deviceCookieOf(await login());
+    for (let i = 0; i < 5; i++) fx.remote.limiter.fail('10.0.0.80');
+
+    const res = await login({ address: '10.0.0.80', headers: { Cookie: device } });
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('900');
+  });
+
+  it('forgets every remembered device on a password change and on "Sign out everywhere"', async () => {
+    const signedIn = await login({ remember: true });
+    const device = deviceCookieOf(signedIn);
+    const other = deviceCookieOf(await login({ address: '10.0.0.8' }));
+    expect(deviceValid(device)).toBe(true);
+
+    const changed = await post('/api/auth/password', cookieOf(signedIn), { current: PASSWORD, next: 'a brand new password' });
+    expect(changed.status).toBe(200);
+    expect(deviceValid(device)).toBe(false);
+    expect(deviceValid(other)).toBe(false);
+    const renewed = deviceCookieOf(changed);
+    expect(deviceValid(renewed)).toBe(true);
+
+    const out = await post('/api/auth/logout-all', cookieOf(changed));
+    expect(out.status).toBe(204);
+    expect(deviceValid(renewed)).toBe(false);
+    expect(out.headers.getSetCookie().some((c) => c.startsWith('__Host-grunt_device=;') && c.includes('Max-Age=0'))).toBe(true);
+  });
+
+  it("frees a waiting attempt's place and timer when its client disconnects", async () => {
+    failures(20);
     const gone = new AbortController();
     const leaving = settled(abortableLogin(gone.signal, '10.0.0.50'));
     await untilWaiting();
-    for (let i = 1; i < MAX_DELAYED; i++) void fx.remote.limiter.slowDown();
-    expect((await login({ address: '10.0.0.51' })).status).toBe(429);
+    expect(fx.remote.limiter.stats().waiting).toBe(1);
 
     gone.abort();
     await turnsUntil(() => leaving.res !== null);
     expect(leaving.res?.status).toBe(408);
-    const instead = settled(login({ address: '10.0.0.52' }));
-    await untilWaiting(MAX_DELAYED);
-    await vi.advanceTimersByTimeAsync(SLOW_BASE_MS);
-    await turnsUntil(() => instead.res !== null);
-    expect(instead.res?.status).toBe(200);
+    expect(fx.remote.limiter.stats()).toMatchObject({ waiting: 0, running: 0 });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('keeps the per-address lockout as it was, and checks it again after the wait', async () => {
-    await wrongFromAll(20);
+    failures(20);
     for (let i = 0; i < 4; i++) fx.remote.limiter.fail('10.0.0.60');
     const pending = settled(login({ address: '10.0.0.60' }));
     await untilWaiting();
@@ -300,6 +350,64 @@ describe('the global slow-down', () => {
     const locked = await login({ address: '10.0.0.60' });
     expect(locked.status).toBe(429);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('slows a password change down too, and refuses it if the session ended while it waited', async () => {
+    const cookie = cookieOf(await login());
+    failures(40);
+    const pending = settled(post('/api/auth/password', cookie, { current: PASSWORD, next: 'a brand new password' }));
+    await untilWaiting();
+    await vi.advanceTimersByTimeAsync(1249);
+    expect(pending.res).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await turnsUntil(() => pending.res !== null);
+    expect(pending.res?.status).toBe(200);
+
+    const current = cookieOf(pending.res as Response);
+    const second = settled(post('/api/auth/password', current, { current: 'a brand new password', next: 'not going to happen' }));
+    await untilWaiting();
+    expect((await post('/api/auth/logout', current)).status).toBe(204);
+    await vi.advanceTimersByTimeAsync(1250);
+    await turnsUntil(() => second.res !== null);
+    expect(second.res?.status).toBe(401);
+    // The password is still the first change's.
+    const record = fx.remote.passwords.read();
+    const { verifyPassword } = await import('../../src/remote/password.js');
+    expect(await verifyPassword('a brand new password', record!)).toBe(true);
+  });
+
+  it('holds 500 wrong passwords sent at once within every cap, and still lets a remembered device in at once', async () => {
+    const device = deviceCookieOf(await login({ address: '10.0.0.99' }));
+    failures(100);
+    const flood = Array.from({ length: 500 }, (_, i) => settled(login({ password: 'not the password', address: `10.50.${Math.floor(i / 250)}.${i % 250}` })));
+    const admitted = BUDGET_BURST - 1;
+    await turnsUntil(() => flood.filter((f) => f.res !== null).length >= 500 - admitted && vi.getTimerCount() >= admitted);
+
+    const stats = fx.remote.limiter.stats();
+    expect(stats.waiting).toBe(admitted);
+    expect(stats.waiting).toBeLessThanOrEqual(MAX_DELAYED);
+    expect(stats.waitingAddresses).toBeLessThanOrEqual(MAX_DELAYED);
+    expect(vi.getTimerCount()).toBe(admitted);
+    const refused = flood.filter((f) => f.res !== null).map((f) => f.res as Response);
+    expect(refused).toHaveLength(500 - admitted);
+    for (const res of refused) {
+      expect(res.status).toBe(429);
+      const after = Number(res.headers.get('retry-after'));
+      expect(after).toBeGreaterThanOrEqual(1);
+      expect(after).toBeLessThanOrEqual(55);
+    }
+
+    // A remembered device goes straight in; a new one is told when to come back, never locked out.
+    expect((await login({ address: '10.0.0.98', headers: { Cookie: device } })).status).toBe(200);
+    const stranger = await login({ address: '10.0.0.97' });
+    expect(stranger.status).toBe(429);
+    expect(Number(stranger.headers.get('retry-after'))).toBeLessThanOrEqual(55);
+
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+    await turnsUntil(() => flood.every((f) => f.res !== null));
+    expect(flood.filter((f) => f.res?.status === 401)).toHaveLength(admitted);
+    expect(fx.remote.limiter.stats()).toMatchObject({ waiting: 0, queued: 0, running: 0 });
+    expect(fx.remote.limiter.stats().tracked).toBeLessThanOrEqual(MAX_TRACKED);
   });
 });
 
