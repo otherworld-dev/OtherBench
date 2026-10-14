@@ -357,8 +357,11 @@ const withAndWithout64 = (stems: readonly string[]): string[] => stems.flatMap((
  * (2026-10-14): a browser may have "this chat" and "always" grants, pinned to
  * its exact program path like any app's. Such a grant is broad, and the card
  * says so: the model can go to any site the browser reaches, signed in as the
- * person, devtools and Grunt's own pages in a tab included. Internet Explorer
- * (`iexplore`) is not here: it runs ActiveX and is on the high-risk list.
+ * person, download and open files (which can run programs) and open other
+ * apps from links. A window showing Grunt's own UI (`showsGruntUi`) and the
+ * browser's undocked developer tools (`isDevToolsTitle`) are refused even so;
+ * another Grunt the browser can reach is not. Internet Explorer (`iexplore`)
+ * is not here: it runs ActiveX and is on the high-risk list.
  */
 export const BROWSER_STEMS: readonly string[] = Object.freeze(['chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'chromium']);
 
@@ -366,7 +369,8 @@ export const BROWSER_STEMS: readonly string[] = Object.freeze(['chrome', 'msedge
  * IDEs, by file name without `.exe`, lower case, terminals inside them and
  * all. Adam's ruling (2026-10-14): an IDE may have "this chat" and "always"
  * grants, pinned to its exact program path; the card says that lets the model
- * edit and run code there and type into its terminal. Not here, so still
+ * edit and run code there and type into its terminal, which is as good as
+ * running any program as the person, Grunt included. Not here, so still
  * asked about every time: editors that are not IDEs (`notepad++`,
  * `sublime_text`) and JetBrains Gateway (`gateway`), a client for another
  * machine.
