@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { DEVICE_MS, DeviceKeys } from '../../src/remote/devices.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEVICE_MS, type DeviceKeyIo, DeviceKeys } from '../../src/remote/devices.js';
 
 let dir: string;
 let path: string;
@@ -49,6 +49,63 @@ describe('DeviceKeys', () => {
 
     expect(k.valid(value, 'epoch1')).toBe(false);
     expect(keys().valid(value, 'epoch1')).toBe(false);
+  });
+
+  it('gives the id of a valid cookie, and null for anything else', () => {
+    const k = keys();
+    const { value } = k.issue('epoch1');
+
+    expect(k.idOf(value, 'epoch1')).toBe(value.split('.')[0]);
+    expect(k.idOf(value, 'epoch2')).toBeNull();
+  });
+
+  it('deletes the old key file when a new key cannot be saved, so a restart keeps the devices forgotten', () => {
+    const log = vi.fn();
+    let failWrites = false;
+    const io: DeviceKeyIo = {
+      write: (p, data) => {
+        if (failWrites) throw new Error('disk full');
+        writeFileSync(p, data);
+      },
+      rename: (from, to) => renameSync(from, to),
+      unlink: (p) => unlinkSync(p),
+    };
+    const k = new DeviceKeys(path, () => clock.now, log, io);
+    const { value } = k.issue('epoch1');
+    failWrites = true;
+
+    k.rotate();
+
+    expect(k.valid(value, 'epoch1')).toBe(false);
+    expect(existsSync(path)).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/so the old one was deleted/));
+    // After a restart, a new key: the cookie stays worthless.
+    expect(keys().valid(value, 'epoch1')).toBe(false);
+  });
+
+  it('says loudly when it can neither save a new key nor delete the old one', () => {
+    const log = vi.fn();
+    const io: DeviceKeyIo = {
+      write: (p, data) => writeFileSync(p, data),
+      rename: (from, to) => renameSync(from, to),
+      unlink: (p) => unlinkSync(p),
+    };
+    const k = new DeviceKeys(path, () => clock.now, log, io);
+    k.issue('epoch1');
+    const broken: DeviceKeyIo = {
+      write: () => {
+        throw new Error('disk full');
+      },
+      rename: () => {},
+      unlink: () => {
+        throw Object.assign(new Error('access denied'), { code: 'EPERM' });
+      },
+    };
+    const stuck = new DeviceKeys(path, () => clock.now, log, broken);
+
+    stuck.rotate();
+
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/COULDN'T SAVE OR DELETE .*Delete the file by hand/));
   });
 
   it('replaces a broken key file, which only forgets the devices', () => {
