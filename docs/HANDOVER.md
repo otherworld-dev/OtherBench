@@ -324,15 +324,54 @@ of work landed after that plan closed out:
       (it still waits for a check slot, ahead of ordinary attempts, and is
       still subject to the per-address lockout and the waiting caps). A
       password change (new epoch) or *Sign out everywhere* (a new key)
-      forgets every one. Nothing is kept per device. **The trade-off:**
-      under a flood, a browser that has signed in before gets straight in,
-      but a brand-new device can be told to come back in up to about a
-      minute, again and again while the flood lasts.
+      forgets every one. Nothing is kept per device. The cookie's HMAC is
+      checked in `checkPassword` before the attempt waits for anything; a
+      forged, expired or old-password one counts as no cookie.
+    - **The reserve for clean addresses** (fix round 2). An address (an
+      IPv6 /64) with no wrong password in the last 24 hours and no running
+      lock is clean (`isClean`). 5 of the budget's 20 tokens and 5 of the
+      50 waiting places are kept for clean addresses and remembered
+      devices, and clean addresses queue for a check slot ahead of the
+      rest (devices first). They are the same tokens, so the 100-an-hour
+      bound holds. A refused attempt checks no password and doesn't make
+      its address unclean; a wrong password does, for a day; a correct
+      sign-in makes it clean again. The last-failure memory is capped at
+      10,000 addresses, more than the ~2,400 failures the budget allows in
+      a day. **What is guaranteed:** addresses that have guessed wrong
+      can't spend the reserve however hard they flood, so a correct
+      sign-in from a clean address gets a token within its 10 s wait while
+      the reserve has one (the hour-long flood test in `limiter.test.ts`
+      lets one in every five minutes and none waits more than 10 s).
+      **What isn't:** every address is clean until its first wrong
+      password, so an attacker can spend the reserve with fresh addresses
+      (IPv4 addresses or IPv6 /64s). Each takes at most 2 tokens (the
+      per-address waiting cap) and is then unclean for a day, and the
+      reserve refills by at most one token every 45 s, so keeping it empty
+      takes about 1,900 fresh addresses a day (plus 5 to empty it). An
+      attacker with that many can make a brand-new device wait its turn
+      (Retry-After up to 55 s) for as long as it keeps going; only a
+      remembered device is admitted whatever the flood.
+    - **Whose address.** The key is the socket's address, or with
+      `--trust-proxy` the right-most `X-Forwarded-For` hop that isn't a
+      trusted proxy; nothing the client sends (a header, a cookie) chooses
+      it, so one address can't lock out or unclean another. Within an
+      IPv6 /64 they share one count by design.
+    - **One verifier.** `checkPassword` in `remote/auth.ts` is the only
+      caller of `verifyPassword` and asks the limiter before reading the
+      password file or running scrypt; `/login` and `/password` are its
+      only callers (`test/remote/single-verifier.test.ts` reads the source
+      to keep it so). A form or text body gets 415 and HEAD, OPTIONS and
+      GET on those routes 404 before any check; sign-out and *Sign out
+      everywhere* take no password. The device cookie's check reads the
+      password epoch, which looks at `login.json` at most once a second,
+      as every signed-in request already does.
     - **Logs.** `SIGN-IN IS SLOWED DOWN FOR EVERYONE` each time the delay
       grows; while it is on, wrong passwords are logged as one line a
       minute with the count and the number of addresses.
     - Tests: `server/test/remote/limiter.test.ts`, `auth.test.ts` (fake
-      timers, including 500 wrong passwords at once) and `devices.test.ts`;
+      timers, including 500 wrong passwords at once, every path to a
+      check and both proxy cases), `devices.test.ts` and
+      `single-verifier.test.ts`;
       `web/e2e/remote-access.spec.ts` (g), whose server trusts 127.0.0.1 as
       a proxy so it can sign in from many forwarded addresses; its port is
       `GRUNT_E2E_REMOTE_PORT` (default 4781).
@@ -731,8 +770,10 @@ password checks run in any hour, the old lockout's number, and every
 attempt is slowed down once wrong passwords pile up, but sign-in never
 closes for everyone: a browser that has signed in before (a signed
 remembered-device cookie, which is not a session) skips the budget and the
-delay, while a new device can be told to come back during a flood (see
-"Sign-in limits" under Remote access); `/view/` links work only from
+delay, a clean address (no wrong password in a day) has 5 checks kept for
+it, and a new device can still be told to come back during a flood by an
+attacker with about 1,900 fresh addresses a day (see "Sign-in limits"
+under Remote access); `/view/` links work only from
 the address that made them (weak behind shared NAT, nothing behind a proxy
 that sends no `X-Forwarded-For`); and `frame-ancestors 'none'` on the UI in
 every mode. With `--tls auto` the first visit is trust-on-first-use: only
@@ -1814,7 +1855,7 @@ surprise.
 | Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
 | The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
 | Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
-| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout. A budget of 100 password checks in any hour (a bucket of 20, one more every 45 s) plus a slow-down from 20 wrong passwords in the last hour (625 ms, doubling per 20, up to 10 s); an attempt whose token is more than 10 s off gets 429 with `Retry-After`. A signed remembered-device cookie lets a browser that signed in before skip both. Per-address lockout unchanged, with IPv6 counted per /64; at most 50 attempts wait at once, 2 per address | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. The reviews of change 8 then required guessing to stay no faster than under the old lockout, hence the budget and the remembered device. See "Sign-in limits" under Remote access |
+| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout. A budget of 100 password checks in any hour (a bucket of 20, one more every 45 s) plus a slow-down from 20 wrong passwords in the last hour (625 ms, doubling per 20, up to 10 s); an attempt whose token is more than 10 s off gets 429 with `Retry-After`. A signed remembered-device cookie lets a browser that signed in before skip both, and 5 tokens and 5 waiting places are kept for addresses with no wrong password in a day. Per-address lockout unchanged, with IPv6 counted per /64; at most 50 attempts wait at once, 2 per address | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. The reviews of change 8 then required guessing to stay no faster than under the old lockout, hence the budget and the remembered device. See "Sign-in limits" under Remote access |
 
 ## Deviations from the original spec
 
