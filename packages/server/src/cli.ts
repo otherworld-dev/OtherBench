@@ -26,6 +26,7 @@ import { PasswordCommandError, runPasswordCommand } from './remote/password-comm
 import { parsePublicUrl } from './remote/public-url.js';
 import { checkSignIn, loginPathFor, startSignIn, type SignIn } from './remote/startup.js';
 import { expiryWarning } from './remote/tls.js';
+import { isServerOnlyEnvVar } from '@grunt/core/domain/child-env.js';
 
 /** Arbitrary default port for `grunt serve`; overridable with `--port`. */
 const DEFAULT_PORT = 4747;
@@ -325,6 +326,10 @@ export async function runServe(
   } = { ...defaultDeps, ...deps };
 
   const options = parseServeArgs(argv, env);
+  // The token is in `options` now. Nothing this server starts (a shell command, Claude Code, an MCP server, the
+  // sandbox's wsl.exe, the model's browser, a worker) may inherit it: on the desktop server it is the real barrier
+  // against anything else on the machine driving the API. Every spawn also leaves it out (core/domain/child-env.ts).
+  for (const name of Object.keys(env)) if (isServerOnlyEnvVar(name)) delete env[name];
   const mode = assertServeSecurity(options);
   const secretsPath = defaultSecretsPath(options.dbPath);
   const signInOptions = { ...options, loopback: isLoopbackHost(options.host) };

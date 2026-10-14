@@ -10,6 +10,7 @@ import { InMemoryStore, FakeSecretStore, FakeChatEngine } from '@grunt/core/test
 import type { Container } from '../src/container.js';
 import { StreamRegistry } from '../src/stream/registry.js';
 import { DatabaseLockedError } from '../src/db-lock.js';
+import { createApp as realCreateApp } from '../src/app.js';
 import {
   AnnounceWithoutTokenError,
   assertServeSecurity,
@@ -260,6 +261,22 @@ describe('runServe desktop mode', () => {
 
     await expect(runServe(['--announce'], { ...deps, ...io }, {})).rejects.toThrow(AnnounceWithoutTokenError);
     expect(deps.createContainer).not.toHaveBeenCalled();
+  });
+
+  it("deletes GRUNT_TOKEN from the environment once read, so nothing the server starts inherits it, and still signs in with it", async () => {
+    const deps = fakeDeps();
+    const io = fakeStdio();
+    const env: NodeJS.ProcessEnv = { GRUNT_TOKEN: 'tok', grunt_token: 'tok', PATH: '/bin' };
+
+    await runServe(['--port', '0', '--announce'], { ...deps, ...io }, env);
+
+    expect(env).toEqual({ PATH: '/bin' });
+    const appOptions = deps.createApp.mock.calls[0]![1] as { token: string };
+    expect(appOptions.token).toBe('tok');
+    // The app built with that token still lets the token in, and nothing else.
+    const app = realCreateApp(fakeContainer(), { token: appOptions.token });
+    expect((await app.request('/api/computer/status')).status).toBe(401);
+    expect((await app.request('/api/computer/status', { headers: { Authorization: 'Bearer tok' } })).status).toBe(200);
   });
 
   it('passes the env token, the CORS origins and a loopback Host check through to createApp', async () => {
