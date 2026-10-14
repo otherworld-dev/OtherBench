@@ -728,6 +728,7 @@ describe('WslSandbox setup and status', () => {
       (m, ch) =>
         queueMicrotask(() => {
           if (m.command.includes('/.GIT/hooks/x')) ch.finish(m.id, `\n\n${undone}`, 0);
+          else if (m.command.endsWith('/interop-check.sh')) ch.finish(m.id, 'interop-off\n', 0);
           else if (works.test(m.command)) ch.finish(m.id, '', 0);
           else ch.finish(m.id, 'bash: Read-only file system\nhttp_code=000', 1);
         }),

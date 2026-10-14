@@ -98,7 +98,8 @@ export function happyWsl(opts: { distros?: string; user?: boolean; node?: boolea
       return undefined;
     }
     const [program, ...rest] = call.argv;
-    if (program === '/usr/bin/test') return { code: 1 }; // no WSLInterop entry: interop is off
+    if (program === '/usr/bin/test') return { code: 1 }; // "not there"
+    if (program === '/bin/sh' && rest[0]?.endsWith('/interop-check.sh')) return { stdout: 'interop-off\n' };
     if (program === '/usr/bin/id') return opts.user === true ? { stdout: '1000\n' } : { code: 1, stderr: "id: 'grunt': no such user" };
     if (program === '/usr/bin/mktemp') return { stdout: `${STAGING}\n` };
     if (program === '/usr/bin/find' && (rest[0] === INSTALL_DIR || rest[0] === `${STAGING}/tree`)) return { stdout: '' }; // nothing in the install belongs to anyone but root

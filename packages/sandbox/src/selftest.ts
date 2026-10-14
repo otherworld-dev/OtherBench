@@ -1,4 +1,5 @@
 import type { SandboxRunResult } from '@grunt/core/ports/sandbox.js';
+import { INSTALL_DIR, INTEROP_OFF } from './setup.js';
 
 /** One check run inside the inner sandbox as grunt (spec 2026-10-12-sandbox-design §4, "Self-test"). */
 export interface SelfTestCase {
@@ -114,6 +115,16 @@ export function selfTestCases(p: SelfTestPlaces): SelfTestCase[] {
     },
     { name: "cmd.exe isn't there", command: 'cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
     { name: "Windows programs by path aren't there", command: '/mnt/c/Windows/System32/cmd.exe /c echo hi', expect: 'blocked', allowedHosts: none },
+    // The same check setup runs as root, here as grunt inside the runtime: tries to start a Windows program, also
+    // pointed at each interop socket, and says INTEROP_OFF (exit 0) only if every attempt fails the way it does with
+    // interop off. Exit 3 (Windows answered) or anything unrecognised fails the self-test.
+    {
+      name: "Windows programs can't be started, even pointed at an interop socket",
+      command: `/bin/sh ${INSTALL_DIR}/interop-check.sh`,
+      expect: 'ok',
+      allowedHosts: none,
+      expectOutput: new RegExp(`^${INTEROP_OFF}$`, 'm'),
+    },
     { name: '/etc/shadow is unreadable', command: 'cat /etc/shadow', expect: 'blocked', allowedHosts: none },
     { name: "a host that isn't allowlisted is refused", command: 'curl -sS -m 15 -o /dev/null https://example.com/', expect: 'blocked', allowedHosts: none },
   ];

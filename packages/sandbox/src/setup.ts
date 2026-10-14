@@ -33,7 +33,12 @@ export const RESOURCE_FILES: readonly { name: string; mode: string }[] = [
   { name: 'package.json', mode: '0644' },
   { name: 'package-lock.json', mode: '0644' },
   { name: 'mount.sh', mode: '0755' },
+  // Run with /bin/sh by setup and by the self-test (selftest.ts), so it needn't be executable.
+  { name: 'interop-check.sh', mode: '0644' },
 ];
+
+/** What interop-check.sh prints, alone on a line, when nothing in the distro can start a Windows program. */
+export const INTEROP_OFF = 'interop-off';
 
 export class SetupError extends Error {
   constructor(
@@ -200,17 +205,23 @@ const configureDistro: SetupStep = {
     });
     const t = await ctx.runner.wsl(['--terminate', DISTRO], { timeoutMs: MINUTE });
     if (t.code !== 0) throw new SetupError(this.name, `Restarting the distro failed: ${textOf(t)}`);
-    // The next command starts it again with the new wsl.conf: no WSLInterop entry means no Windows programs.
-    // `test -e` exits 1 for "not there": any other outcome (on, timed out, couldn't run) is not proof that interop is off.
-    for (const entry of ['WSLInterop', 'WSLInterop-late']) {
-      const interop = await ctx.runner.exec('root', ['/usr/bin/test', '-e', `/proc/sys/fs/binfmt_misc/${entry}`], { timeoutMs: 2 * MINUTE });
-      if (interop.code === 0) {
-        throw new SetupError(this.name, 'Windows interop is still on inside the distro after restarting it, so a command could start Windows programs. Check /etc/wsl.conf in the grunt-sandbox distro, then press Repair.');
+    // The next command starts it again with the new wsl.conf. Whether interop is off is tested by trying to start a
+    // Windows program (interop-check.sh), not by looking for a WSLInterop registration: distros share one kernel, so
+    // another distro's registration (Docker Desktop's, say) shows here too while this one can't use it. The script
+    // exits 0 with INTEROP_OFF only when every attempt fails in a way seen with interop off, and 3 when Windows
+    // answered; anything else (timed out, couldn't run) is not proof that interop is off.
+    await withResources(ctx, this.name, async () => {
+      const interop = await ctx.runner.exec('root', ['/bin/sh', `${SETUP_MOUNT}/interop-check.sh`], { timeoutMs: 2 * MINUTE });
+      const lines = interop.stdout.replace(/\0/g, '').split(/\r?\n/).map((l) => l.trim());
+      if (interop.code === 0 && !interop.timedOut && lines.includes(INTEROP_OFF)) {
+        if (lines.some((l) => l.startsWith('note: '))) ctx.log('Windows interop is off in grunt-sandbox (a WSLInterop registration from another distro is visible; it is not usable here).');
+        return;
       }
-      if (interop.code !== 1 || interop.timedOut) {
-        throw new SetupError(this.name, `Couldn't confirm that Windows interop is off in the distro (${entry}: ${interop.timedOut ? 'timed out' : `exit ${String(interop.code)}`}): ${textOf(interop)}`);
+      if (interop.code === 3) {
+        throw new SetupError(this.name, `Windows interop is still on inside the distro after restarting it, so a command could start Windows programs. Check /etc/wsl.conf in the grunt-sandbox distro, then press Repair. ${textOf(interop)}`);
       }
-    }
+      throw new SetupError(this.name, `Couldn't confirm that Windows interop is off in the distro (${interop.timedOut ? 'timed out' : `exit ${String(interop.code)}`}): ${textOf(interop)}`);
+    });
     // The distro's first start (before wsl.conf turned automount off) left a folder per drive, /mnt/c and so on,
     // root's but writable by everyone (0777, found live). mount.sh refuses to mount below a folder the grunt user
     // could change, so they are closed here. Only real folders directly under /mnt (root's own 0755 folder, so
