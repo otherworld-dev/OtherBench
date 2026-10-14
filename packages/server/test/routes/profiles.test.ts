@@ -214,8 +214,14 @@ describe('POST /api/profiles', () => {
       const res = await app().request('/api/profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...basicProfileBody, toolPolicy }) });
       return ((await res.json()) as { id: string }).id;
     };
+    // While the computer is in control, changes come only from the desktop app's own window.
+    const DESKTOP = 'http://tauri.localhost';
     const patch = (id: string, toolPolicy: unknown) =>
-      app().request(`/api/profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ toolPolicy }) });
+      createApp(container, { corsOrigins: [DESKTOP] }).request(`/api/profiles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Origin: DESKTOP },
+        body: JSON.stringify({ toolPolicy }),
+      });
     const on = { fs: 'off', shell: false, mcpServerIds: [], approvalMode: 'always_ask', computer: true };
     const used = await make(on);
     const other = await make(on);

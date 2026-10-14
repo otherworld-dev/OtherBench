@@ -6,6 +6,7 @@ import { appendDelta, applySubagentEvent, isSubagentEvent } from '@grunt/core/do
 import { interruptSubagents } from '@grunt/core/domain/reconcile.js';
 import type { Part, ProducedBy, SerializedError } from '@grunt/core/types/messages.js';
 import type { Container } from '../container.js';
+import { changesOnlyFromTheDesktopApp } from '../computer/desktop-only.js';
 import { parseApprovalChoice, parseAskReply } from '../routes/tools.js';
 import { turnsRoutes } from '../routes/turns.js';
 import { sseStream, STREAM_IDLE_TIMEOUT_MS } from '../stream/sse.js';
@@ -441,6 +442,10 @@ export interface ForwardedEnv {
 export function forwardedApi(container: Container): Hono<ForwardedEnv> {
   const app = new Hono<ForwardedEnv>();
   const self = (): string => container.store.nodes.self().id;
+
+  // While computer use may be in control of this machine, a paired machine changes nothing here (no answer,
+  // no message): that machine's UI could be open in a browser the model is using. Only Stops pass.
+  app.use('*', changesOnlyFromTheDesktopApp(container.computer, []));
 
   // A chat this machine doesn't run (its runs-on changed elsewhere and the
   // change hasn't arrived) is refused rather than run in two places.

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
+import { COMPUTER_DESKTOP_ONLY_REASON, expectationOf, parseAction } from '@grunt/core/domain/computer-apps.js';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
 import type { ComputerAction } from '@grunt/core/ports/computer.js';
@@ -78,6 +78,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
+
+/** The desktop app's own window: the one origin that may change anything while the computer is in control. */
+const DESKTOP = 'http://tauri.localhost';
+/** A browser tab of Grunt, as these tests reach the server. */
+const GRUNT_TAB = 'http://localhost';
 
 const post = (path: string, c: Container = container) => createApp(c).request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 
@@ -170,12 +175,82 @@ describe('POST /api/chats/:id/computer/stop', () => {
   });
 });
 
+describe('while the computer may be in control, changes come only from the desktop app', () => {
+  const send = (path: string, init: { method?: string; origin?: string; body?: unknown } = {}, origins: string[] = [DESKTOP]) =>
+    createApp(container, { corsOrigins: origins }).request(path, {
+      method: init.method ?? 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init.origin === undefined ? {} : { Origin: init.origin }),
+        // What a browser tab of Grunt sends with its fetches: it passes the cross-site check.
+        ...(init.origin === GRUNT_TAB ? { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' } : {}),
+      },
+      body: init.method === 'GET' ? undefined : JSON.stringify(init.body ?? {}),
+    });
+
+  it("refuses a card's answer, a question's, a message and a setting from anywhere but the desktop app's window", async () => {
+    await sessions.ensureSession('chat-1', 'Budget');
+    const writes: [string, string][] = [
+      ['POST', '/api/approvals/req-1/resolve'],
+      ['POST', '/api/asks/ask-1/answer'],
+      ['POST', '/api/chats/chat-2/turns'],
+      ['PATCH', '/api/profiles/profile-1'],
+      ['POST', '/api/mcp-servers'],
+      ['DELETE', '/api/chats/chat-2'],
+    ];
+    // A browser tab of Grunt, another site's origin, a request with no Origin at all.
+    for (const origin of [GRUNT_TAB, 'http://evil.example', undefined]) {
+      for (const [method, path] of writes) {
+        const res = await send(path, { method, origin });
+        expect(res.status, `${method} ${path} from ${String(origin)}`).toBe(403);
+        // Another site's origin is already refused by the cross-site check, in its own words.
+        if (origin !== 'http://evil.example') expect(await res.json()).toEqual({ error: COMPUTER_DESKTOP_ONLY_REASON, kind: 'desktop_only' });
+      }
+    }
+    expect(container.store.chats.get('chat-2')).not.toBeNull();
+    // With no desktop origin configured, nothing is the desktop app.
+    expect((await send('/api/approvals/req-1/resolve', { origin: DESKTOP }, [])).status).toBe(403);
+  });
+
+  it('lets the desktop app through, and reads and the two Stops from anywhere', async () => {
+    await sessions.ensureSession('chat-1', 'Budget');
+    // From the desktop app the request reaches its route (here: an unknown chat is a 404, not a 403).
+    expect((await send('/api/chats/nope', { method: 'DELETE', origin: DESKTOP })).status).toBe(404);
+    expect((await send('/api/computer/status', { method: 'GET' })).status).toBe(200);
+    expect((await send('/api/chats/chat-2', { method: 'GET', origin: GRUNT_TAB })).status).toBe(200);
+    const replyId = await startReply('chat-2');
+    expect((await send(`/api/messages/${replyId}/cancel`, { origin: GRUNT_TAB })).status).toBe(204);
+    expect((await send('/api/chats/chat-1/computer/stop')).status).toBe(204);
+    expect(sessions.holder()).toBeNull();
+    expect(sessions.mayBeInControl()).toBe(false);
+    // Once the computer is free, everything is as before.
+    expect((await send('/api/chats/chat-2', { method: 'DELETE' })).status).toBe(204);
+  });
+
+  it('holds while the start dialog may be up and until an end is confirmed, not only while a chat is in control', async () => {
+    expect(sessions.mayBeInControl()).toBe(false);
+    let answer: (ok: boolean) => void = () => {};
+    vi.spyOn(driver, 'ensureSession').mockImplementation(() => new Promise((resolve) => (answer = (ok) => resolve(ok ? { ok: true } : { ok: false, reason: 'no' }))));
+    const starting = sessions.ensureSession('chat-1', 'Budget');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(sessions.mayBeInControl()).toBe(true);
+    expect((await send('/api/chats/chat-2', { method: 'DELETE' })).status).toBe(403);
+    answer(false);
+    await starting;
+    expect(sessions.mayBeInControl()).toBe(false);
+    // Server without computer use: no gate at all.
+    const { computer: _drop, ...without } = container;
+    const res = await createApp(without as Container).request('/api/chats/chat-2', { method: 'DELETE' });
+    expect(res.status).toBe(204);
+  });
+});
+
 describe('computer use and the rest of the API', () => {
   it("deleting a chat ends its control session and cancels its reply", async () => {
     const replyId = await startReply('chat-1');
     await sessions.ensureSession('chat-1', 'Budget');
     const cancel = vi.spyOn(container.turnRunner, 'cancel');
-    const res = await createApp(container).request('/api/chats/chat-1', { method: 'DELETE' });
+    const res = await createApp(container, { corsOrigins: [DESKTOP] }).request('/api/chats/chat-1', { method: 'DELETE', headers: { Origin: DESKTOP } });
     expect(res.status).toBe(204);
     expect(driver.ended).toEqual(['chat-1']);
     expect(sessions.activeChat()).toBeNull();
@@ -212,7 +287,7 @@ describe('computer use and the rest of the API', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     await sessions.ensureSession('chat-1', 'Budget');
     vi.spyOn(driver, 'endSession').mockRejectedValue(new Error('the desktop app is gone'));
-    const res = await createApp(container).request('/api/chats/chat-1', { method: 'DELETE' });
+    const res = await createApp(container, { corsOrigins: [DESKTOP] }).request('/api/chats/chat-1', { method: 'DELETE', headers: { Origin: DESKTOP } });
     expect(res.status).toBe(204);
     expect(container.store.chats.get('chat-1')).toBeNull();
     expect(sessions.activeChat()).toBeNull();

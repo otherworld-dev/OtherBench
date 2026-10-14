@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { TurnRunner } from '@grunt/core/domain/turn.js';
 import type { ChatEngine } from '@grunt/core/ports/chat-engine.js';
+import { COMPUTER_DESKTOP_ONLY_REASON } from '@grunt/core/domain/computer-apps.js';
 import { FakeComputerDriver } from '@grunt/core/testing/fake-computer.js';
 import { FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import { createBlobStore } from '@grunt/store-sqlite/blob-store.js';
@@ -263,6 +264,21 @@ describe('computer use routes and the peer listener', () => {
     } finally {
       real.close();
     }
+  });
+
+  it('takes no answer and no change from a paired machine while the computer may be in control here; a Stop still passes', async () => {
+    await holding();
+    const api = forwardedApi(container);
+    for (const path of ['/approvals/req-1/resolve', '/asks/ask-1/answer', '/chats/c1/turns', '/messages/m1/retry']) {
+      const res = await api.request(path, { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' });
+      expect(res.status, path).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toBe(COMPUTER_DESKTOP_ONLY_REASON);
+    }
+    // Whatever Origin it claims: a paired machine is never the desktop app's window.
+    const claimed = await api.request('/approvals/req-1/resolve', { method: 'POST', headers: { ...JSON_HEADERS, Origin: 'http://tauri.localhost' }, body: '{}' }, { peerNodeId: 'node-pc' });
+    expect(claimed.status).toBe(403);
+    // A reply's Stop is not a change it could misuse.
+    expect((await api.request('/messages/m1/cancel', { method: 'POST', headers: JSON_HEADERS, body: '{}' }, { peerNodeId: 'node-pc' })).status).not.toBe(403);
   });
 
   it('the forwarded API itself has no computer route and no event stream', async () => {
