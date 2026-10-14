@@ -271,33 +271,71 @@ of work landed after that plan closed out:
   README's *Use it from another device*.
   - **Sign-in limits** (`packages/server/src/remote/limiter.ts`, used by
     `checkPassword` in `remote/auth.ts` for `/api/auth/login` and
-    `/api/auth/password`). Per address, as built: 5 wrong passwords in 15
-    minutes lock it for 15 minutes (429 with `Retry-After`, even for the
-    right password). Globally there is no lockout any more (Adam,
-    2026-10-14), only a slow-down: wrong passwords from anywhere in the last
-    hour, counted per minute, make every attempt wait before its password
-    is read, right or wrong, so the timing says nothing. Under 20 there is
-    no wait; at 20 it is 625 ms, doubling with each further 20 (1.25 s at
-    40, 2.5 s at 60, 5 s at 80) to 10 s from 100 on, the count that used to
-    close sign-in. The global count never refuses by itself. The wait is a
-    timer awaited after the body is read and before the password file is
-    read or a check slot taken, so nothing (no lock, no database) is held
-    across it. At most 50 attempts wait at once (`MAX_DELAYED`); more get
-    429 `Sign-in is busy. Try again in a few seconds.` with `Retry-After` of
-    the current wait, rounded up to whole seconds. An attempt whose client
-    disconnects stops waiting and frees its place at once (the request's
-    abort signal, which `@hono/node-server` fires on close), and the wait is
-    10 s at most, so the slow-down can hold at most 50 sockets for 10 s.
-    The address's lock is checked again after the wait, so attempts sent
-    together from one address can't all slip past a lock the first of them
-    sets. A log line says SIGN-IN IS SLOWED DOWN FOR EVERYONE each time the
-    wait grows. After the wait the two password-check slots are as before:
-    when both are busy the attempt gets 429 with `Retry-After: 1`, so under
-    a heavy attack a right password can wait out the delay and still be
-    told to try again. Tests: `server/test/remote/limiter.test.ts` and
-    `auth.test.ts` (fake timers), `web/e2e/remote-access.spec.ts` (g), which
-    starts its server with `--trust-proxy 127.0.0.1` to sign in from many
-    addresses and takes its port from `GRUNT_E2E_REMOTE_PORT` (default 4781).
+    `/api/auth/password`; change 8 and its fix round 1, 2026-10-14).
+    - **Per address**, as built: 5 wrong passwords in 15 minutes lock it
+      for 15 minutes (429 with `Retry-After`, even for the right password).
+      An IPv6 address counts as its /64 (`limitKey` in
+      `client-address.ts`), here and for the waiting cap below, since one
+      home or host usually holds a whole /64. Up to 10,000 addresses are
+      remembered; past that the oldest-used unlocked one is dropped, never
+      a lock still running (and never the address just counted), unless
+      every one is locked, when the lock that ends soonest goes.
+      `X-Forwarded-For` counts only from a `--trust-proxy` address, as
+      before.
+    - **Globally sign-in never closes** (Adam: no lockout for everyone).
+      Two limits replace the old "100 an hour, then closed":
+      - a **budget of password checks**: a token bucket of 20 that refills
+        one every 45 s (GCRA). However many addresses guess, **at most 100
+        checks run in any hour**, the old lockout's number per hour (and
+        below the up to 200 its fixed window let through across an hour's
+        boundary). The flood test in `limiter.test.ts` sends 10 wrong
+        passwords a second from new addresses for two hours and counts 180
+        checks, at most 99 in any hour. The budget applies whatever the
+        failure count, because attempts sent together all see the same low
+        count; the 20 at hand mean ordinary sign-ins never notice it.
+      - a **slow-down**: wrong passwords from anywhere in the last hour
+        (counted per minute) make every attempt wait before its password
+        is read, right or wrong, so the timing says nothing: none under 20;
+        625 ms at 20, doubling with each further 20 (1.25 s at 40, 2.5 s at
+        60, 5 s at 80) to 10 s from 100 on.
+    - **Waiting.** An attempt waits for the later of its delay and its
+      token, never more than 10 s, on one timer; a token further off than
+      that gets 429 at once (`Too many sign-in attempts on this server right
+      now. Try again in ...`, `Retry-After` until the token, at most 55 s)
+      and spends nothing. After the wait it queues (FIFO) for one of the two
+      scrypt slots instead of being refused. At most 50 attempts wait or
+      queue at once and at most 2 per address; more get 429 at once
+      (`Sign-in is busy. Try again in a few seconds.`) and make no timer.
+      Everything is decided after the body is read and before the password
+      file is read or scrypt runs; no lock or database is held. An attempt
+      whose client disconnects leaves at once, clearing its timer or its
+      queue entry (the request's abort signal, which `@hono/node-server`
+      2.1.3 fires on close; if it ever stopped, the 10 s cap and the bounded
+      queue still bound the damage). The address's lock is checked again
+      after the wait, and `/api/auth/password` checks its session again
+      before writing the new password.
+    - **Remembered devices** (`remote/devices.ts`). A successful sign-in
+      (or password change) sets `__Host-grunt_device`: a random id and an
+      expiry (90 days), HMAC-SHA256-signed with a key in `device-key.json`
+      beside `login.json` and bound to the password's epoch; `HttpOnly;
+      Secure; SameSite=Strict`, judged same-origin only like the session
+      cookie. It is not a session and opens nothing by itself: it only lets
+      that browser's password attempts skip the budget and the slow-down
+      (it still waits for a check slot, ahead of ordinary attempts, and is
+      still subject to the per-address lockout and the waiting caps). A
+      password change (new epoch) or *Sign out everywhere* (a new key)
+      forgets every one. Nothing is kept per device. **The trade-off:**
+      under a flood, a browser that has signed in before gets straight in,
+      but a brand-new device can be told to come back in up to about a
+      minute, again and again while the flood lasts.
+    - **Logs.** `SIGN-IN IS SLOWED DOWN FOR EVERYONE` each time the delay
+      grows; while it is on, wrong passwords are logged as one line a
+      minute with the count and the number of addresses.
+    - Tests: `server/test/remote/limiter.test.ts`, `auth.test.ts` (fake
+      timers, including 500 wrong passwords at once) and `devices.test.ts`;
+      `web/e2e/remote-access.spec.ts` (g), whose server trusts 127.0.0.1 as
+      a proxy so it can sign in from many forwarded addresses; its port is
+      `GRUNT_E2E_REMOTE_PORT` (default 4781).
 
 ### The model's browser (Deck #926)
 
@@ -688,12 +726,13 @@ the database) and a session cookie (`__Host-`, `HttpOnly; Secure;
 SameSite=Strict`, counted only when `Sec-Fetch-Site` says same-origin);
 HTTPS only (no plain-HTTP sign-in, no HSTS, no redirect); a Host check
 against the public URLs; the cross-site write check; 5 wrong passwords lock
-an address out for 15 minutes, and wrong passwords from anywhere slow every
-sign-in down (from 20 in the last hour; see "Sign-in limits" under Remote
-access) without ever closing it, which keeps Adam able to sign in under a
-spread-out guessing attack at the cost of letting guesses through at up to
-about 5 a second (50 waiting at once, 10 s each) rather than 100 an hour;
-`/view/` links work only from
+an address (an IPv6 /64) out for 15 minutes; globally, at most 100
+password checks run in any hour, the old lockout's number, and every
+attempt is slowed down once wrong passwords pile up, but sign-in never
+closes for everyone: a browser that has signed in before (a signed
+remembered-device cookie, which is not a session) skips the budget and the
+delay, while a new device can be told to come back during a flood (see
+"Sign-in limits" under Remote access); `/view/` links work only from
 the address that made them (weak behind shared NAT, nothing behind a proxy
 that sends no `X-Forwarded-For`); and `frame-ancestors 'none'` on the UI in
 every mode. With `--tls auto` the first visit is trust-on-first-use: only
@@ -1775,7 +1814,7 @@ surprise.
 | Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
 | The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
 | Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
-| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout: a global slow-down from 20 wrong passwords in the last hour (625 ms, doubling per 20, up to 10 s), never a refusal by count; at most 50 attempts wait at once, more get 429 with `Retry-After`. The per-address lockout is unchanged | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. See "Sign-in limits" under Remote access |
+| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout. A budget of 100 password checks in any hour (a bucket of 20, one more every 45 s) plus a slow-down from 20 wrong passwords in the last hour (625 ms, doubling per 20, up to 10 s); an attempt whose token is more than 10 s off gets 429 with `Retry-After`. A signed remembered-device cookie lets a browser that signed in before skip both. Per-address lockout unchanged, with IPv6 counted per /64; at most 50 attempts wait at once, 2 per address | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. The reviews of change 8 then required guessing to stay no faster than under the old lockout, hence the budget and the remembered device. See "Sign-in limits" under Remote access |
 
 ## Deviations from the original spec
 

@@ -220,9 +220,15 @@ open the file again.
 shell commands, browse folders anywhere on the box, attach a file by path.
 Use a long password you use nowhere else, and prefer a LAN or a tailnet to
 the open internet. Five wrong passwords from one address lock it out for 15
-minutes. Wrong passwords from anywhere slow every sign-in down instead of
-closing it: from 20 in an hour each attempt waits a moment first, up to 10
-seconds from 100 on.
+minutes. Wrong passwords from anywhere never close sign-in for everyone, but
+they slow it down: from 20 in an hour each attempt waits a moment first (up
+to 10 seconds), and at most 100 passwords are checked in any hour. When the
+server is that busy, a device that has never signed in is told how long to
+wait ("Too many sign-in attempts on this server right now. Try again in
+..."), while a browser that has signed in before is remembered (a cookie
+that is not a sign-in by itself) and goes straight to the password check.
+Changing the password or *Sign out everywhere* makes Grunt forget every
+remembered browser.
 
 ## Claude Code
 
