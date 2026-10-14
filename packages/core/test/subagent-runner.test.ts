@@ -169,7 +169,7 @@ describe('SubagentRunner', () => {
       return listTools(p);
     };
     const engine = childEngine(() => answer('ok'));
-    const h = harness(engine, { store }, provider);
+    const h = harness(engine, { store, folders: [{ root: '/refs', access: 'read' }] }, provider);
 
     await h.runner.run({ description: 'As Cheap', prompt: 'Run it.', profile: 'Cheap' }, h.ctx('call-1'));
     await h.runner.run({ description: 'As me', prompt: 'Run it.' }, h.ctx('call-2'));
@@ -181,6 +181,10 @@ describe('SubagentRunner', () => {
     expect(engine.requests[0]!.profile.systemPrompt).not.toContain('The workspace /ws');
     expect(engine.requests[1]!.profile.systemPrompt).toContain('The workspace /ws');
     expect(engine.requests[1]!.profile.systemPrompt).not.toContain(SANDBOX_NO_FILES_PROMPT);
+    // Its folders note doesn't contradict that: they are named for reference only, while the parent's own profile is told how to use them.
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('named for reference only: file access is off');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('/refs (read-only)');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('/refs (read-only)');
   });
 
   it("a host-shell parent's sub-agent run as a sandboxed profile gets no run_command at all, sandboxed or not", async () => {

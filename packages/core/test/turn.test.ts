@@ -608,7 +608,9 @@ describe("TurnRunner and the chat's folder (v2 spec §6)", () => {
     const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
     const runner = new TurnRunner(store, engine, { pathExists: (p) => p !== '/home/adam/Nextcloud/not-here' });
 
-    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    // A profile with file access: with none (and no other tool that reaches them) the note names them for reference only.
+    const profile = makeResolvedProfile({ toolPolicy: { fs: 'readwrite', shell: false, mcpServerIds: [], approvalMode: 'always_ask' } });
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [profile] });
     await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
 
     const request = engine.requests[0]!;
@@ -2211,6 +2213,16 @@ describe('TurnRunner tells a sandboxed shell where the folders are', () => {
     expect(system).toContain(SANDBOX_NO_FILES_PROMPT);
     expect(system).not.toMatch(/\/mnt\//);
     expect(system).not.toContain('in the sandbox (read-only)');
+    // The folders note doesn't contradict it: the folders are named for reference only.
+    expect(system).toContain('- D:\\Refs\n');
+    expect(system).toContain('named for reference only: file access is off');
+    expect(system).not.toContain('D:\\Refs (read-only)');
+  });
+
+  it('with file access off but a shell on this machine, the folders note still says how to use them', async () => {
+    const system = await systemPromptFor('host', { fs: 'off' });
+    expect(system).toContain('D:\\Refs (read-only)');
+    expect(system).not.toContain('named for reference only');
   });
 
   it("adds the workspace's and each folder's sandbox path when the profile's shell runs in the sandbox", async () => {

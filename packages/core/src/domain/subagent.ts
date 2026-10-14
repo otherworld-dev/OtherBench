@@ -14,7 +14,7 @@ import { RECALL_GUIDANCE } from './recall.js';
 import { sandboxPrompt } from './sandbox-paths.js';
 import { keepToolImages } from './tool-images.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
-import { extraFoldersPrompt } from './workspace.js';
+import { canReachFolders, extraFoldersPrompt } from './workspace.js';
 
 /**
  * Sub-agents for API profiles (spec 2026-10-12-api-subagents-design). This
@@ -391,14 +391,15 @@ export async function runSubagentTool(args: unknown, ctx: ToolContext): Promise<
 
 /**
  * A sub-agent's system prompt: its profile's own prompt, the role, the
- * folders note, any `notes` for this run (the sandbox note from
- * `sandboxPrompt` when its run_command is the sandboxed one,
+ * folders note (for reference only when the policy, the narrowed one, can't
+ * reach them; absent = it can), any `notes` for this run (the sandbox note
+ * from `sandboxPrompt` when its run_command is the sandboxed one,
  * `SUBAGENT_PLAN_NOTE` while a plan is waiting), the tools note and recall
  * guidance when recall is offered. No memory and no project text: the parent
  * puts what it needs in the prompt.
  */
 export function subagentSystemPrompt(
-  profile: Pick<ResolvedProfile, 'systemPrompt' | 'connection'>,
+  profile: Pick<ResolvedProfile, 'systemPrompt' | 'connection'> & { toolPolicy?: ToolPolicy },
   tools: readonly ToolSpec[],
   folders: readonly ResolvedFolder[],
   canRecall: boolean,
@@ -407,7 +408,7 @@ export function subagentSystemPrompt(
   const blocks = [
     profile.systemPrompt?.trim() || null,
     SUBAGENT_ROLE_PROMPT,
-    folders.length > 0 ? extraFoldersPrompt(folders) : null,
+    folders.length > 0 ? extraFoldersPrompt(folders, profile.toolPolicy ? canReachFolders(profile.toolPolicy) : true) : null,
     ...notes,
     tools.length > 0 && namesItsTools(profile.connection.kind) ? availableToolsPrompt(tools.map((t) => t.name)) : null,
     canRecall ? RECALL_GUIDANCE : null,
@@ -801,7 +802,7 @@ export class SubagentRunner implements SubagentHost {
     // Its run_command is the sandboxed one (the narrowed policy decides): say where the folders are in there, as the parent's prompt does.
     // With the narrowed file access off, it names no folders: the sandbox gives that command none.
     const sandboxNote = workspaceRoot !== null && tools.some((t) => t.source === 'sandbox') ? sandboxPrompt(policy.fs, workspaceRoot, folders, this.deps.canonicalPath) : null;
-    const systemPrompt = subagentSystemPrompt(chosen, tools, folders, tools.some((t) => t.source === 'recall'), [
+    const systemPrompt = subagentSystemPrompt({ ...chosen, toolPolicy: policy }, tools, folders, tools.some((t) => t.source === 'recall'), [
       sandboxNote,
       shellWithheld ? SUBAGENT_NO_SHELL_NOTE : null,
       plan && !plan.approved ? SUBAGENT_PLAN_NOTE : null,

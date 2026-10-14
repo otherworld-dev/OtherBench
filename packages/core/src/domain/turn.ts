@@ -20,7 +20,7 @@ import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } fr
 import { sandboxPrompt } from './sandbox-paths.js';
 import { LIVE_ARTIFACTS_GUIDANCE } from './live-artifacts.js';
 import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
-import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
+import { canReachFolders, extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 import { appendDelta } from './parts.js';
 import type { SubagentEvent } from './parts.js';
 import { SubagentRunner } from './subagent.js';
@@ -1056,10 +1056,13 @@ export class TurnRunner {
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
-  /** The profile with a note naming the turn's extra folders appended to its system prompt (spec 2026-10-07-extra-folders). */
+  /**
+   * The profile with a note naming the turn's extra folders appended to its system prompt (spec
+   * 2026-10-07-extra-folders); for reference only when none of its tools can reach them (canReachFolders).
+   */
   private withFolders(profile: ResolvedProfile, folders: ResolvedFolder[]): ResolvedProfile {
     if (folders.length === 0) return profile;
-    const block = extraFoldersPrompt(folders);
+    const block = extraFoldersPrompt(folders, canReachFolders(profile.toolPolicy));
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
