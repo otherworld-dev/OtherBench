@@ -4,7 +4,7 @@ import type { Grant } from '../src/ports/store.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
-import { appArgs, classifyTarget, COMPUTER_GRUNT_UI_REASON, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
 import { fakeComputerTarget } from '../src/testing/fake-computer.js';
 
 // App keys are the paths the shell resolved, compared exactly: on-disk case and all.
@@ -419,6 +419,10 @@ describe('PermissionBroker and computer use', () => {
       const args = click(CHROME, { appTitle: `${GRUNT_UI_TITLE} - Google Chrome`, ...action });
       expect(broker.decide(COMPUTER, args, policy(), ctx()), JSON.stringify(action)).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
       expect(broker.decide(COMPUTER, args, policy({ approvalMode: 'always_ask' }), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
+    }
+    // Its undocked developer tools: the same program, refused the same way.
+    for (const appTitle of ['DevTools - example.com/', 'Developer Tools - Inbox']) {
+      expect(broker.decide(COMPUTER, click(CHROME, { appTitle }), policy(), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_DEVTOOLS_REASON });
     }
     // The same browser on another page is covered by its grant.
     expect(broker.decide(COMPUTER, click(CHROME, { appTitle: 'Inbox - Google Chrome' }), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });

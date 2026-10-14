@@ -10,11 +10,14 @@ import {
   classifyTarget,
   COMPUTER_ACTIONS,
   COMPUTER_LIMITS,
+  COMPUTER_DEVTOOLS_REASON,
   COMPUTER_GRUNT_UI_REASON,
   COMPUTER_SCREEN_ABOUT,
   coordinateOf,
   describeApp,
   describedCallArgs,
+  DEVTOOLS_TITLE_PREFIXES,
+  isDevToolsTitle,
   desktopTextForResult,
   expectationOf,
   GRUNT_UI_TITLE,
@@ -1342,5 +1345,33 @@ describe("a window showing Grunt's own UI is refused, a browser tab included", (
       expect(showsGruntUi(title), title).toBe(false);
     }
     for (const notText of [undefined, null, 42, ['[grunt-ui]']]) expect(showsGruntUi(notText)).toBe(false);
+  });
+});
+
+describe("a browser's undocked developer tools are refused like Grunt's own UI", () => {
+  const CHROME = { path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', originalName: 'chrome.exe', signer: 'Google LLC' };
+  const FIREFOX = { path: 'C:\\Program Files\\Mozilla Firefox\\firefox.exe', originalName: 'firefox.exe', signer: 'Mozilla Corporation' };
+
+  it('refuses the window with no card, by the start of its title, in any letter case', () => {
+    expect(DEVTOOLS_TITLE_PREFIXES).toEqual(['devtools - ', 'developer tools - ']);
+    expect(Object.isFrozen(DEVTOOLS_TITLE_PREFIXES)).toBe(true);
+    for (const [over, title] of [
+      [CHROME, 'DevTools - example.com/'],
+      [CHROME, 'DevTools - 127.0.0.1:4747/'],
+      [CHROME, 'devtools - x'],
+      [FIREFOX, 'Developer Tools - Inbox - https://mail.example.com/'],
+      [{}, 'DevTools - anything'],
+    ] as const) {
+      expect(classifyTarget(target({ ...over, title })), title).toEqual({ kind: 'refuse', reason: COMPUTER_DEVTOOLS_REASON });
+      expect(isDevToolsTitle(title)).toBe(true);
+    }
+  });
+
+  it('leaves a title that only mentions developer tools alone', () => {
+    for (const title of ['Chrome DevTools docs - Google Chrome', 'DevTools', 'My DevTools - notes', ' DevTools - x', 'Developer Tools']) {
+      expect(classifyTarget(target({ ...CHROME, title })).kind, title).toBe('app');
+      expect(isDevToolsTitle(title), title).toBe(false);
+    }
+    for (const notText of [undefined, null, 42]) expect(isDevToolsTitle(notText)).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appArgs, classifyTarget, COMPUTER_GRUNT_UI_REASON, expectationOf, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, expectationOf, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
 import type { ComputerAction, ComputerExpectation } from '../src/ports/computer.js';
 import {
   FAKE_COMPUTER_APP,
@@ -157,6 +157,9 @@ describe('FakeComputerDriver', () => {
     expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: COMPUTER_GRUNT_UI_REASON });
     driver.changeForeground(fakeComputerTarget({ title: GRUNT_UI_TITLE }));
     expect(await driver.act('c1', { action: 'type', text: 'hi' }, EXPECT)).toEqual({ ok: false, reason: COMPUTER_GRUNT_UI_REASON });
+    // Or once it is the browser's undocked developer tools.
+    driver.pointTarget = fakeComputerTarget({ title: 'DevTools - example.com/' });
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: COMPUTER_DEVTOOLS_REASON });
     expect(driver.actions).toEqual([]);
     driver.pointTarget = FAKE_COMPUTER_APP;
     expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: true });

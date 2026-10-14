@@ -7,6 +7,7 @@ import {
   actionSummary,
   appKey,
   COMPUTER_BAD_ACTION_REASON,
+  COMPUTER_DEVTOOLS_REASON,
   COMPUTER_GRUNT_UI_REASON,
   COMPUTER_NO_APP_REASON,
   COMPUTER_NO_WINDOW_REASON,
@@ -15,6 +16,7 @@ import {
   describeApp,
   expectationOf,
   isComputerAction,
+  isDevToolsTitle,
   isHighRiskApp,
   isReadAction,
   isUnattendedRun,
@@ -370,6 +372,7 @@ export class PermissionBroker {
       // any grant is looked at: `classifyTarget` refuses it first, and this is
       // the backstop, so no grant for the browser ever reaches Grunt's cards.
       if (showsGruntUi(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON };
+      if (isDevToolsTitle(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_DEVTOOLS_REASON };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the

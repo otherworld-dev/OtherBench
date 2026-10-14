@@ -86,6 +86,26 @@ export const GRUNT_UI_TITLE = `Grunt ${GRUNT_UI_TITLE_MARKER}`;
 export function showsGruntUi(title: unknown): boolean {
   return typeof title === 'string' && asciiLower(title).includes(GRUNT_UI_TITLE_MARKER);
 }
+
+export const COMPUTER_DEVTOOLS_REASON = "That's a browser's developer tools window, which can run any script in the pages it inspects, so Grunt doesn't control it.";
+
+/**
+ * The titles an undocked developer tools window starts with: Chrome's and
+ * Edge's (`DevTools - example.com/`) and Firefox's (`Developer Tools - ...`).
+ * It belongs to the browser's own process, so a lasting grant for the browser
+ * would otherwise reach a console that runs any script in a page (Grunt's
+ * own included). Refused like Grunt's UI, by `classifyTarget`, the broker and
+ * the shell before every step (`DEVTOOLS_TITLE_PREFIXES` in
+ * desktop/src-tauri/src/computer/facts.rs, which must stay the same).
+ */
+export const DEVTOOLS_TITLE_PREFIXES: readonly string[] = Object.freeze(['devtools - ', 'developer tools - ']);
+
+/** Whether a window title is that of an undocked developer tools window (`DEVTOOLS_TITLE_PREFIXES`, any letter case). */
+export function isDevToolsTitle(title: unknown): boolean {
+  if (typeof title !== 'string') return false;
+  const lower = asciiLower(title);
+  return DEVTOOLS_TITLE_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
 export const COMPUTER_UNCHECKED_REASON = "Grunt couldn't check what kind of window that is, so it didn't use it.";
 export const COMPUTER_NO_WINDOW_REASON = "Grunt couldn't pin down which window that is, so it didn't use it.";
 export const COMPUTER_BAD_ACTION_REASON = "Grunt can't carry out that action as it was sent, so it didn't run it.";
@@ -576,7 +596,8 @@ export type ClassifiedTarget = Readonly<{ kind: 'refuse'; reason: string }> | De
  * refusal or high risk, never an ordinary app.
  *
  * Refused: no valid path; a Grunt window or program; a window whose title shows Grunt's UI
- * (`showsGruntUi`, a browser tab of Grunt, say); an elevated process;
+ * (`showsGruntUi`, a browser tab of Grunt, say); a browser's undocked developer
+ * tools (`isDevToolsTitle`); an elevated process;
  * one with UI access; a flag for any of those that isn't a boolean; no
  * window, pid or start time to bind the action to.
  *
@@ -617,6 +638,8 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   if (t['grunt'] === true || byKey === 'grunt' || byOriginalName === 'grunt') return refuse(COMPUTER_GRUNT_REASON);
   // Grunt's UI in any window (a browser tab, say), by the whole title as the shell read it, before it is cut for the card.
   if (showsGruntUi(t['title'])) return refuse(COMPUTER_GRUNT_UI_REASON);
+  // A browser's undocked developer tools: a console for any page, Grunt's included.
+  if (isDevToolsTitle(t['title'])) return refuse(COMPUTER_DEVTOOLS_REASON);
   if (t['grunt'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
   if (t['elevated'] === true) return refuse(`${said} is running as administrator, so Grunt can't control it.`);
   if (t['elevated'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
