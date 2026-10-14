@@ -18,6 +18,7 @@
     "allow-hide-quick",
     "allow-open-chat",
     "allow-show-notification",
-    "allow-open-site"
+    "allow-open-site",
+    "allow-save-download"
   ]
 }

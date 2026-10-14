@@ -1,4 +1,5 @@
-//! Desktop notifications whose click opens the chat they're about (#775).
+//! Desktop notifications whose click opens the chat they're about (#775), or
+//! shows a finished download in its folder.
 //!
 //! tauri-plugin-notification can't report a click on desktop, so on Windows
 //! the toast is shown here directly, with an activation handler that brings
@@ -7,17 +8,29 @@
 
 use tauri::AppHandle;
 
-/// Shows a notification; clicking it opens `chat_id` in the main window (Windows).
-pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>) -> Result<(), String> {
+/// Shows a notification; clicking it opens `chat_id` in the main window, or shows `reveal_path` in Explorer
+/// (Windows). A path outside the user's Downloads folder is never revealed.
+pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>, reveal_path: Option<String>) -> Result<(), String> {
+    let reveal = reveal_path.filter(|p| in_downloads(app, std::path::Path::new(p)));
     #[cfg(windows)]
     {
-        windows::show(app, title, body, chat_id)
+        windows::show(app, title, body, chat_id, reveal)
     }
     #[cfg(not(windows))]
     {
-        let _ = chat_id;
+        let _ = (chat_id, reveal);
         use tauri_plugin_notification::NotificationExt;
         app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+    }
+}
+
+/// Whether `path` is a file directly in the user's Downloads folder, where `save_download` puts them.
+fn in_downloads(app: &AppHandle, path: &std::path::Path) -> bool {
+    use tauri::Manager;
+    let Ok(dir) = app.path().download_dir() else { return false };
+    match (path.parent().and_then(|p| p.canonicalize().ok()), dir.canonicalize().ok()) {
+        (Some(parent), Some(dir)) => parent == dir && path.is_file(),
+        _ => false,
     }
 }
 
@@ -43,12 +56,17 @@ mod windows {
         }
     }
 
-    pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>) -> Result<(), String> {
+    pub fn show(app: &AppHandle, title: &str, body: &str, chat_id: Option<String>, reveal: Option<String>) -> Result<(), String> {
         let handle = app.clone();
         Toast::new(&app_id(app))
             .title(title)
             .text1(body)
             .on_activated(move |_action| {
+                if let Some(path) = &reveal {
+                    use tauri_plugin_opener::OpenerExt;
+                    let _ = handle.opener().reveal_item_in_dir(path);
+                    return Ok(());
+                }
                 crate::tray::show_main(&handle);
                 if let Some(id) = &chat_id {
                     let _ = handle.emit_to("main", "open-chat", id.clone());

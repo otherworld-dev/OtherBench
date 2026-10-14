@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod computer;
+mod download;
 mod hotkey;
 mod notify;
 mod rpc;
@@ -89,10 +90,23 @@ fn computer_stop(app: tauri::AppHandle) {
     computer::stop_from_shell(&app, "button");
 }
 
-/// A desktop notification; clicking it opens `chat_id` (notify.rs).
+/// A desktop notification; clicking it opens `chat_id`, or shows `reveal_path` in its folder (notify.rs).
 #[tauri::command]
-fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id: Option<String>) -> Result<(), String> {
-    notify::show(&app, &title, &body, chat_id)
+fn show_notification(app: tauri::AppHandle, title: String, body: String, chat_id: Option<String>, reveal_path: Option<String>) -> Result<(), String> {
+    notify::show(&app, &title, &body, chat_id, reveal_path)
+}
+
+/// Saves a download from the web app in the user's Downloads folder (download.rs) and returns its full path.
+/// The file comes as the raw request body; its name, percent-encoded, in the `x-grunt-name` header.
+#[tauri::command]
+async fn save_download(app: tauri::AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Expected the file's bytes.".into());
+    };
+    let name = request.headers().get("x-grunt-name").and_then(|v| v.to_str().ok()).ok_or("Expected the file's name.")?;
+    let name = download::decode_name(name)?;
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    download::save(&dir, &name, bytes).map(|p| p.display().to_string())
 }
 
 /// Opens a website from a chat in its own window, with no access to Grunt (site.rs).
@@ -183,7 +197,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { launch: launch.clone(), server: server.clone(), args: Mutex::new(Some(std::env::args().collect())) })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site, computer_stop])
+        .invoke_handler(tauri::generate_handler![bootstrap, set_tray_status, launch_args, set_hotkey, hide_quick, open_chat, show_notification, open_site, computer_stop, save_download])
         // Closing the main window hides it; the app keeps running in the
         // tray until Quit, so in-flight replies aren't cut off.
         .on_window_event(|window, event| {

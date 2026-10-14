@@ -185,12 +185,12 @@ export function ArtifactView({ chatId, item }: { chatId: string; item: Extract<V
     setActionError(null);
     // Office kinds download as the file the server makes; the rest as their text.
     if (!isOfficeKind(version.kind)) {
-      saveFile(new Blob([version.content], { type: 'text/plain' }), shown.fileName);
+      await saveFile(new Blob([version.content], { type: 'text/plain' }), shown.fileName);
       return;
     }
     setDownloading(true);
     try {
-      saveFile(await api.artifacts.file(chatId, item.artifactId, version.id), shown.fileName);
+      await saveFile(await api.artifacts.file(chatId, item.artifactId, version.id), shown.fileName);
     } catch (err) {
       failAction(version.id, err);
     } finally {
