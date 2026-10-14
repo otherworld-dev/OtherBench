@@ -12,6 +12,7 @@ import { expect, request as playwrightRequest, test, type APIRequestContext, typ
  * webServer, which keeps serving every other spec in open mode. It trusts
  * 127.0.0.1 as a proxy so (g) can sign in from many addresses with
  * `X-Forwarded-For`; the browser sends none, so it is still 127.0.0.1.
+ * (a)-(f) spend 11 of the budget's 20 password checks; (g) spends the rest.
  */
 
 const webDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -173,32 +174,45 @@ test('(f) six wrong passwords lock this address out', async ({ page }) => {
   await expect(page.getByRole('alert')).toHaveText(/^Too many tries\. Try again in 15 minutes\.$/);
 });
 
-test('(g) twenty wrong passwords from anywhere slow every sign-in down, but never close it', async () => {
+test('(g) under a flood of wrong passwords a new device is told when to come back, and a remembered one gets straight in', async () => {
   test.setTimeout(90_000);
   // No bearer token: these are sign-ins, each from its own forwarded address (127.0.0.1 is locked by (f)).
-  const anon = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  const remembered = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  const stranger = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   let next = 0;
-  const attempt = async (password: string): Promise<{ status: number; ms: number }> => {
+  const attempt = async (ctx: APIRequestContext, password: string): Promise<{ status: number; retryAfter: number; ms: number }> => {
     next += 1;
     const started = Date.now();
-    const res = await anon.post('/api/auth/login', { data: { password }, headers: { 'X-Forwarded-For': `203.0.113.${next}` } });
-    return { status: res.status(), ms: Date.now() - started };
+    const res = await ctx.post('/api/auth/login', { data: { password }, headers: { 'X-Forwarded-For': `203.0.113.${next}` } });
+    return { status: res.status(), retryAfter: Number(res.headers()['retry-after'] ?? 0), ms: Date.now() - started };
   };
   try {
-    const before = await attempt(PASSWORD);
-    expect(before.status).toBe(200);
+    // A sign-in leaves a remembered-device cookie in this context's jar.
+    expect((await attempt(remembered, PASSWORD)).status).toBe(200);
+    const jar = await remembered.storageState();
+    expect(jar.cookies.some((c) => c.name === '__Host-grunt_device' && c.httpOnly && c.secure && c.sameSite === 'Strict')).toBeTruthy();
 
-    // At most 6 wrong passwords so far ((a) and (f)), so this makes 20 to 26: a 625 ms wait for everyone.
-    for (let i = 0; i < 20; i++) expect((await attempt(`wrong password from afar ${i}`)).status).toBe(401);
+    // Wrong passwords from ever new addresses: each is checked (401) until the budget of 20 runs out, then refused at once (429).
+    let refused: { status: number; retryAfter: number } | null = null;
+    for (let i = 0; i < 40 && refused === null; i++) {
+      const r = await attempt(stranger, `wrong password from afar ${i}`);
+      if (r.status === 429) refused = r;
+      else expect(r.status).toBe(401);
+    }
+    expect(refused).not.toBeNull();
+    expect(refused!.retryAfter).toBeGreaterThanOrEqual(1);
+    expect(refused!.retryAfter).toBeLessThanOrEqual(55);
 
-    const slowed = await attempt(PASSWORD);
-    expect(slowed.status).toBe(200);
-    expect(slowed.ms).toBeGreaterThanOrEqual(600);
-    expect(slowed.ms).toBeGreaterThan(before.ms + 300);
-    const wrong = await attempt('one more wrong password');
-    expect(wrong.status).toBe(401);
-    expect(wrong.ms).toBeGreaterThanOrEqual(600);
+    // The right password from a new device is told when to come back, never locked out...
+    const fresh = await attempt(stranger, PASSWORD);
+    expect(fresh.status).toBe(429);
+    expect(fresh.retryAfter).toBeGreaterThanOrEqual(1);
+    // ...while the remembered device skips the queue and signs in at once.
+    const back = await attempt(remembered, PASSWORD);
+    expect(back.status).toBe(200);
+    expect(back.ms).toBeLessThan(5000);
   } finally {
-    await anon.dispose();
+    await remembered.dispose();
+    await stranger.dispose();
   }
 });
