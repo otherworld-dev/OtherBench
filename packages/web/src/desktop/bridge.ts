@@ -67,12 +67,25 @@ export async function isMainWindowFocused(): Promise<boolean> {
 
 /**
  * Shows a desktop notification through the shell (desktop/src-tauri/src/notify.rs).
- * On Windows clicking it opens `chatId` in the main window. No-op in a browser.
+ * On Windows clicking it opens `chatId` in the main window, or, with `revealPath` (a
+ * file in Downloads), shows that file in Explorer. No-op in a browser.
  */
-export async function showNotification(title: string, body: string, chatId: string | null = null): Promise<void> {
+export async function showNotification(title: string, body: string, chatId: string | null = null, revealPath: string | null = null): Promise<void> {
   if (!isDesktop()) return;
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('show_notification', { title, body, chatId });
+  await invoke('show_notification', { title, body, chatId, revealPath });
+}
+
+/**
+ * Saves `blob` in the user's Downloads folder through the shell (desktop/src-tauri/src/download.rs)
+ * and returns its full path; the shell picks `name (1).ext` and so on when the name is taken, and
+ * refuses names Windows would run. Null in a browser, which saves downloads itself.
+ */
+export async function saveDownload(blob: Blob, name: string): Promise<string | null> {
+  if (!isDesktop()) return null;
+  const { invoke } = await import('@tauri-apps/api/core');
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  return invoke<string>('save_download', bytes, { headers: { 'x-grunt-name': encodeURIComponent(name) } });
 }
 
 /** Makes `accelerator` the global quick-chat hotkey. Rejects with the reason (unparsable, or taken by another app). */

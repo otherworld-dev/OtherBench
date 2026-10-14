@@ -34,6 +34,10 @@ test('exports a chat as Markdown and as JSON from its menu', async ({ page }) =>
 
   const md = await exportAs('Markdown (shown conversation)');
   expect(md.suggestedFilename()).toMatch(/\.md$/);
+  // A toast says it downloaded. In a browser there's no folder to show: the browser decides where it went.
+  const toast = page.getByTestId('toast').filter({ hasText: `Downloaded ${md.suggestedFilename()}` });
+  await expect(toast).toBeVisible();
+  await expect(toast.getByRole('button', { name: 'Show in folder' })).toHaveCount(0);
   const text = readFileSync((await md.path())!, 'utf8');
   expect(text).toContain(`## You\n\n${question}`);
   // Which profile answers depends on what earlier specs left as the default, so match any "Profile (model)" heading.

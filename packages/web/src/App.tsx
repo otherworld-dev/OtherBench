@@ -1,4 +1,5 @@
 import { useEffect, useState, type JSX } from 'react';
+import { Toaster } from './components/Toaster.js';
 import { ChartIcon, ClockIcon, GearIcon, SignOutIcon } from './components/icons.js';
 import { isIndicatorView, isQuickView } from './desktop/bridge.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from './lib/useMediaQuery.js';
@@ -132,6 +133,7 @@ function MainApp(): JSX.Element {
       style={{ gridTemplateColumns: 'min(var(--sidebar-w, 16.25rem), 40vw) minmax(0, 1fr)' }}
       data-narrow={isNarrow || undefined}
     >
+      <Toaster />
       {unreachable && (
         <div
           role="alert"

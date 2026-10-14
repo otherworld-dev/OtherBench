@@ -31,6 +31,7 @@ import {
   openSite,
   pickFolder,
   revealPath,
+  saveDownload,
   setHotkey,
   setTrayStatus,
   showNotification,
@@ -146,7 +147,24 @@ describe('desktop bridge', () => {
 
     invoke.mockResolvedValue(undefined);
     await showNotification('Trip', 'Reply finished', 'c1');
-    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1' });
+    expect(invoke).toHaveBeenCalledWith('show_notification', { title: 'Trip', body: 'Reply finished', chatId: 'c1', revealPath: null });
+    await showNotification('Download complete', 'x.md is in Downloads', null, 'C:/Users/a/Downloads/x.md');
+    expect(invoke).toHaveBeenLastCalledWith('show_notification', { title: 'Download complete', body: 'x.md is in Downloads', chatId: null, revealPath: 'C:/Users/a/Downloads/x.md' });
+  });
+
+  it('saveDownload sends the bytes raw with the name percent-encoded in a header, and returns the path; null in a browser', async () => {
+    const blob = new Blob(['hello'], { type: 'text/plain' });
+    await expect(saveDownload(blob, 'x.md')).resolves.toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+
+    enterDesktop();
+    invoke.mockResolvedValue('C:/Users/a/Downloads/Trip plans (1).md');
+    await expect(saveDownload(blob, 'Trip plans é.md')).resolves.toBe('C:/Users/a/Downloads/Trip plans (1).md');
+    const [command, body, options] = invoke.mock.calls.at(-1)!;
+    expect(command).toBe('save_download');
+    expect(body).toBeInstanceOf(Uint8Array);
+    expect(new TextDecoder().decode(body as Uint8Array)).toBe('hello');
+    expect(options).toEqual({ headers: { 'x-grunt-name': 'Trip%20plans%20%C3%A9.md' } });
   });
 
   it("setTrayStatus sends the pending-approval count and the machines' status lines to the shell, and does nothing in a browser", async () => {

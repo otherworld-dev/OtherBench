@@ -170,7 +170,7 @@ impl Desktop for WinDesktop {
 
     fn channel_off(&self) {
         self.tooltip(Some(crate::tray::COMPUTER_OFF_TOOLTIP.to_string()));
-        let _ = crate::notify::show(&self.app, "Grunt", "Computer use is off until Grunt restarts.", None);
+        let _ = crate::notify::show(&self.app, "Grunt", "Computer use is off until Grunt restarts.", None, None);
     }
 
     fn indicator_action(&self, label: &str) {

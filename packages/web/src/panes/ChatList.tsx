@@ -343,7 +343,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   async function exportChat(chat: Chat, format: 'markdown' | 'json'): Promise<void> {
     setError(null);
     try {
-      saveFile(await api.chats.export(chat.id, format), exportFilename(chat.title, format === 'json' ? 'json' : 'md'));
+      await saveFile(await api.chats.export(chat.id, format), exportFilename(chat.title, format === 'json' ? 'json' : 'md'));
     } catch (err) {
       console.error(`[grunt-web] failed to export chat ${chat.id}:`, err);
       setError(errorText(err, "Couldn't export the chat"));
