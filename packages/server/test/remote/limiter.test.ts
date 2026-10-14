@@ -3,6 +3,8 @@ import {
   type Admission,
   BUDGET_BURST,
   BUDGET_REFILL_MS,
+  BUDGET_RESERVED,
+  CLEAN_WINDOW_MS,
   FAILURE_WINDOW_MS,
   GLOBAL_BUCKET_MS,
   GLOBAL_WINDOW_MS,
@@ -391,6 +393,159 @@ describe('LoginLimiter under an hour-long flood from many addresses', () => {
     expect(Date.now() - start).toBeGreaterThanOrEqual(2 * 3600 * 1000);
     // eslint-disable-next-line no-console
     console.log(`flood: ${checks.length} checks in 2 hours, at most ${worst} in any hour; ${busy} refused at once`);
+  });
+});
+
+describe('LoginLimiter: the reserve for clean addresses', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls an address clean until it guesses wrong, its /64 included, for a day or until it signs in', () => {
+    const { clock, limiter: l } = limiter();
+    expect(l.isClean('10.0.0.1')).toBe(true);
+    l.fail('10.0.0.1');
+    expect(l.isClean('10.0.0.1')).toBe(false);
+    expect(l.isClean('10.0.0.2')).toBe(true);
+    l.fail('2001:db8:0:1::1');
+    expect(l.isClean('2001:db8:0:1::99')).toBe(false);
+
+    clock.now += CLEAN_WINDOW_MS - 1;
+    expect(l.isClean('10.0.0.1')).toBe(false);
+    clock.now += 1;
+    expect(l.isClean('10.0.0.1')).toBe(true);
+
+    l.fail('10.0.0.4');
+    l.succeed('10.0.0.4');
+    expect(l.isClean('10.0.0.4')).toBe(true);
+  });
+
+  it('remembers a bounded number of wrong-password addresses for the reserve', () => {
+    const { limiter: l } = limiter(2);
+    l.fail('10.0.0.1');
+    l.fail('10.0.0.2');
+    l.fail('10.0.0.3');
+
+    expect(l.isClean('10.0.0.1')).toBe(true);
+    expect(l.isClean('10.0.0.3')).toBe(false);
+  });
+
+  it('keeps 5 of the 20 tokens from addresses that have guessed wrong, for a clean one', async () => {
+    const { limiter: l } = limiter();
+    for (let i = 0; i < 30; i++) l.fail(`10.7.0.${i}`);
+    for (let i = 0; i < BUDGET_BURST - BUDGET_RESERVED; i++) void l.admit(`10.7.0.${i}`);
+    expect(await l.admit('10.7.0.20')).toMatchObject({ kind: 'busy', why: 'budget' });
+    expect(l.stats().budget).toBe(BUDGET_RESERVED);
+
+    const clean = await Promise.race([l.admit('192.168.1.50'), new Promise<null>((r) => setImmediate(() => r(null)))]);
+    expect(clean?.kind ?? 'waiting').not.toBe('busy');
+    expect(l.stats().budget).toBe(BUDGET_RESERVED - 1);
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+  });
+
+  it('can be spent by fresh addresses, at most 2 tokens each, which are then not clean for a day', async () => {
+    const { limiter: l } = limiter();
+    for (let i = 0; i < 30; i++) l.fail(`10.7.0.${i}`);
+    for (let i = 0; i < BUDGET_BURST - BUDGET_RESERVED; i++) void l.admit(`10.7.0.${i}`);
+
+    const grabbed: string[] = [];
+    for (const fresh of ['203.0.113.1', '203.0.113.1', '203.0.113.1', '203.0.113.2', '203.0.113.2', '203.0.113.3']) {
+      grabbed.push(await Promise.race([l.admit(fresh).then((a) => a.kind), new Promise<string>((r) => setImmediate(() => r('waiting')))]));
+    }
+    // Each waits out the delay on a token; the third from .1 is over its 2 places; .3 takes the last token.
+    expect(grabbed).toEqual(['waiting', 'waiting', 'busy', 'waiting', 'waiting', 'waiting']);
+    expect(l.stats().budget).toBe(0);
+    expect(await l.admit('192.168.1.50')).toMatchObject({ kind: 'busy', why: 'budget' });
+    l.fail('203.0.113.1');
+    expect(l.isClean('203.0.113.1')).toBe(false);
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+  });
+
+  it('serves a clean address ahead of the rest in the queue for a check slot, after remembered devices', async () => {
+    const { limiter: l } = limiter();
+    const held: Array<() => void> = [];
+    for (let i = 0; i < MAX_CONCURRENT_CHECKS; i++) {
+      const a = await l.admit(`192.0.2.${i}`, { device: true });
+      if (a.kind === 'go') held.push(a.release);
+    }
+    l.fail('10.0.0.1');
+    const order: string[] = [];
+    const note = (name: string) => (a: Admission) => {
+      order.push(name);
+      if (a.kind === 'go') a.release();
+    };
+    void l.admit('10.0.0.1').then(note('dirty'));
+    void l.admit('10.0.0.2').then(note('clean'));
+    void l.admit('10.0.0.3', { device: true }).then(note('device'));
+    await Promise.resolve();
+
+    held[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual(['device', 'clean', 'dirty']);
+  });
+});
+
+describe('LoginLimiter under an hour-long flood from addresses that keep guessing', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('admits a clean address every time within its 10 s wait, and still runs at most 100 checks in any hour', async () => {
+    const l = new LoginLimiter({ log: () => {} });
+    // 4000 addresses that have each guessed wrong once (as many as 4 per address go before a lock).
+    const pool = Array.from({ length: 4000 }, (_, i) => `10.${(i >> 8) & 255}.${i & 255}.1`);
+    for (const address of pool) l.fail(address);
+    const checks: number[] = [];
+    const cleanWaits: number[] = [];
+    let next = 0;
+    let refusedClean = 0;
+    const attacker = () => {
+      const address = pool[next++ % pool.length]!;
+      if (!l.check(address).ok) return;
+      void l.admit(address).then((a) => {
+        if (a.kind !== 'go') return;
+        checks.push(Date.now());
+        l.fail(address);
+        a.release();
+      });
+    };
+
+    for (let second = 0; second < 3600; second++) {
+      for (let i = 0; i < 10; i++) attacker();
+      if (second % 300 === 150) {
+        // Every five minutes, someone signs in correctly from a clean address of their own.
+        const started = Date.now();
+        void l.admit(`192.168.${second % 256}.${Math.floor(second / 256)}`).then((a) => {
+          if (a.kind !== 'go') {
+            refusedClean += 1;
+            return;
+          }
+          checks.push(Date.now());
+          cleanWaits.push(Date.now() - started);
+          a.release();
+        });
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+
+    expect(refusedClean).toBe(0);
+    expect(cleanWaits).toHaveLength(12);
+    expect(Math.max(...cleanWaits)).toBeLessThanOrEqual(SLOW_MAX_MS + 1000);
+    let worst = 0;
+    for (let i = 0, j = 0; j < checks.length; j++) {
+      while (checks[j]! - checks[i]! >= GLOBAL_WINDOW_MS) i++;
+      worst = Math.max(worst, j - i + 1);
+    }
+    expect(worst).toBeLessThanOrEqual(100);
+    // eslint-disable-next-line no-console
+    console.log(`dirty flood: ${checks.length} checks in the hour, at most ${worst} in any hour; clean sign-ins waited at most ${Math.max(...cleanWaits)} ms`);
   });
 });
 
