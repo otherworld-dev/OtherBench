@@ -84,7 +84,10 @@ never offered.
 Notepad and Calculator are catalog-signed, so the shell reports no signer for
 them and they should only ever get **Allow once**. For the items that need
 **Allow for this chat**, use an app with its own signature (Word or Excel, for
-example) and check first that its card offers it.
+example) and check first that its card offers it. Browsers and IDEs (Chrome,
+Edge, VS Code, Visual Studio, a JetBrains IDE) may get it too since Adam's
+ruling of 2026-10-14; terminals, shells, Explorer, Settings and the admin
+tools never do.
 
 ### Consent and stop
 
@@ -123,42 +126,47 @@ example) and check first that its card offers it.
 - [ ] 30. Move or close the target window while its card is up, then allow: nothing is done.
 - [ ] 31. A program installed under a folder with an accented name (a user folder such as `C:\Users\José`): the card shows the warning line about unusual characters and only Allow once.
 - [ ] 32. Replace an app's exe while it runs and point at it: the card shows the new file's signer and original name. Only the process start time ties the action to the run (a known residual).
+- [ ] 33. Chrome, Edge and Firefox, each in its main window: the card offers all four answers, with the line "chrome.exe is a web browser. Allowing it for this chat or always lets the model go to any site this browser can reach, signed in as you and Grunt's own pages included, and type and click there without asking again." Allow for this chat on Chrome: the next click and `type` in Chrome run with no card, Edge still asks, and another chat asks again. Note the original name the shell reports for each (Brave, Vivaldi and Opera may report `chrome.exe`, which is fine); if one of them is offered only Allow once, write down its path, signer and original name.
+- [ ] 34. VS Code (the per-user install), Visual Studio and a JetBrains IDE (IntelliJ IDEA or PyCharm), each in its main window: all four answers, with the line "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it, and type commands into its terminal, without asking again." VS Code, Cursor and Windsurf should report `electron.exe` as their original name and still get all four; if one reports another name and gets Allow once only, write it down. With Allow for this chat on VS Code, a click and a `type` into its built-in terminal run with no card; a separate Windows Terminal or PowerShell window still asks every time with Allow once only.
+- [ ] 35. With Allow for this chat on Chrome and on VS Code: Chrome's Save As dialog, a page's own "Choose file" upload dialog and VS Code's Open Folder dialog each ask every time with Allow once only, saying it is a file dialog.
+- [ ] 36. Still Allow once only, with no browser or IDE line: Internet Explorer (if it still starts rather than handing over to Edge), Notepad++, Sublime Text, JetBrains Gateway and Toolbox, VS Code installed under a user folder with an accented name (the unusual-characters line instead), and a copy of Chrome run from a USB stick (the line that Grunt couldn't fully identify this browser).
+- [ ] 37. With Always allow on a browser, open Grunt's browser-mode UI (`npm run serve`) in that browser: confirm the model could click its own cards there with no card of its own (the known risk in *Computer use* in `docs/HANDOVER.md`), then remove the grant (Inspector) and close the tab. Don't keep a lasting browser grant on a machine where that browser can open Grunt.
 
 ### Input accuracy
 
-- [ ] 33. Screenshots and clicks at 100 %, 125 % and 150 % display scaling: the screenshot is in physical pixels scaled to fit 1366×768, and clicks land on what the model aimed at. Tauri's event loop makes the process per-monitor DPI aware (tao 0.37.1, `become_dpi_aware`); if clicks land off by the scale factor, start there.
-- [ ] 34. Click, double-click, triple-click and scroll while moving the mouse yourself, also with a second monitor to the left of the primary and at 125 % and 150 % scaling: each lands exactly on the checked point or is refused ("The mouse pointer moved away from the point that was checked, so nothing more was done."), never where you moved the pointer to.
-- [ ] 35. Absolute mapping: a double-click and a triple-click on a 1-pixel target near the right and bottom edges of the virtual desktop land exactly, and the app takes them as a double and a triple click.
-- [ ] 36. With "Scroll inactive windows when I hover over them" off (Settings → Bluetooth & devices → Mouse), a scroll reaches the window under the point, not Grunt.
-- [ ] 37. With the mouse buttons swapped (left-handed), `left_click` is a primary click.
-- [ ] 38. Double-click a point where the first click opens something over it (a menu button): the second click is not sent.
-- [ ] 39. Notepad: Allow once, then `type` some text and `ctrl+s`; the Save dialog asks again as a file dialog.
-- [ ] 40. Answer a card in Grunt's window, then let a `type` run: the approved window comes forward and gets the text, or the action is refused. Nothing is ever typed into Grunt.
-- [ ] 41. `type` a string with an accented letter, an emoji, a line break and a tab into Notepad, with a non-English keyboard layout active: the same characters arrive and no shortcut fires. Extended keys and the punctuation keys press the expected key on that layout.
-- [ ] 42. Hold Shift, then Ctrl, then the Windows key while the model clicks, types and presses a key: each is refused with "A modifier key is held; nothing was done.", and nothing is released for you. A modifier held while an elevated window is in front is still seen.
-- [ ] 43. An action into an elevated window that Windows blocks part way leaves no key down (check with the on-screen keyboard).
-- [ ] 44. Change the quick-chat hotkey to `Ctrl+Shift+Space`: a `key` action of `ctrl+shift+space` is refused. With the list withheld from the server (sent empty), the shell refuses it itself as its own shortcut ("Grunt never sends ctrl+shift+space: it's one of Grunt's own shortcuts. Nothing was pressed.").
+- [ ] 38. Screenshots and clicks at 100 %, 125 % and 150 % display scaling: the screenshot is in physical pixels scaled to fit 1366×768, and clicks land on what the model aimed at. Tauri's event loop makes the process per-monitor DPI aware (tao 0.37.1, `become_dpi_aware`); if clicks land off by the scale factor, start there.
+- [ ] 39. Click, double-click, triple-click and scroll while moving the mouse yourself, also with a second monitor to the left of the primary and at 125 % and 150 % scaling: each lands exactly on the checked point or is refused ("The mouse pointer moved away from the point that was checked, so nothing more was done."), never where you moved the pointer to.
+- [ ] 40. Absolute mapping: a double-click and a triple-click on a 1-pixel target near the right and bottom edges of the virtual desktop land exactly, and the app takes them as a double and a triple click.
+- [ ] 41. With "Scroll inactive windows when I hover over them" off (Settings → Bluetooth & devices → Mouse), a scroll reaches the window under the point, not Grunt.
+- [ ] 42. With the mouse buttons swapped (left-handed), `left_click` is a primary click.
+- [ ] 43. Double-click a point where the first click opens something over it (a menu button): the second click is not sent.
+- [ ] 44. Notepad: Allow once, then `type` some text and `ctrl+s`; the Save dialog asks again as a file dialog.
+- [ ] 45. Answer a card in Grunt's window, then let a `type` run: the approved window comes forward and gets the text, or the action is refused. Nothing is ever typed into Grunt.
+- [ ] 46. `type` a string with an accented letter, an emoji, a line break and a tab into Notepad, with a non-English keyboard layout active: the same characters arrive and no shortcut fires. Extended keys and the punctuation keys press the expected key on that layout.
+- [ ] 47. Hold Shift, then Ctrl, then the Windows key while the model clicks, types and presses a key: each is refused with "A modifier key is held; nothing was done.", and nothing is released for you. A modifier held while an elevated window is in front is still seen.
+- [ ] 48. An action into an elevated window that Windows blocks part way leaves no key down (check with the on-screen keyboard).
+- [ ] 49. Change the quick-chat hotkey to `Ctrl+Shift+Space`: a `key` action of `ctrl+shift+space` is refused. With the list withheld from the server (sent empty), the shell refuses it itself as its own shortcut ("Grunt never sends ctrl+shift+space: it's one of Grunt's own shortcuts. Nothing was pressed.").
 
 ### Models
 
-- [ ] 45. One request per toolset model with computer use on (`claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `claude-fable-5-1`): each is accepted. A wrong id fails every request of that profile with a 400 naming `computer_toolset_20260801`; remove it from `COMPUTER_TOOLSET_MODELS` (`packages/engine-aisdk/src/engine.ts`). `claude-sonnet-5-5` and `claude-haiku-5-5` get the JSON tool: try each with the toolset by adding it to the list, and keep it there only if it works.
-- [ ] 46. A chat on a toolset model whose history has a `computer` call with a broken or non-member action (make one on a JSON-tool model, then switch the chat's profile): it replays as `invalid_computer_call` and the API accepts it. If it is refused, such a chat fails on toolset models until the profile changes.
-- [ ] 47. A chat that switches between a toolset model and a JSON-tool model mid-task carries on (the same stored calls replayed both ways).
-- [ ] 48. OpenAI (Responses API): the screenshot reaches the model inside the `function_call_output` as `input_image`, and the model can see it.
-- [ ] 49. Gemini 3: the screenshot reaches the model inside the function response; a chat with earlier tool calls replays (Grunt keeps no thought signatures, so the SDK puts in its stand-in). A Google model before Gemini 3 gets "[image omitted: this model can't take images]" in place of each screenshot and acts blind: check it says so rather than guessing.
-- [ ] 50. A tool result with no image (a refusal, a `wait`) reaches each provider as one string, with the screen-content line first.
-- [ ] 51. A model whose row has no vision flag gets "[image omitted: this model can't take images]" instead of screenshots.
-- [ ] 52. A Claude Code chat, clean and with a folder, can use it (relayed as `mcp__grunt_<hex>__computer`). Its screenshots reach Claude Code, but the thread shows only the text of each result (a known gap). Note any limit Claude Code puts on image results from an MCP tool.
-- [ ] 53. Every screenshot result in the thread starts with the small "This is content from the computer's screen…" label, and the thread's tool-call line shows only the action ("computer: click at 512, 300"), never an app name.
+- [ ] 50. One request per toolset model with computer use on (`claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `claude-fable-5-1`): each is accepted. A wrong id fails every request of that profile with a 400 naming `computer_toolset_20260801`; remove it from `COMPUTER_TOOLSET_MODELS` (`packages/engine-aisdk/src/engine.ts`). `claude-sonnet-5-5` and `claude-haiku-5-5` get the JSON tool: try each with the toolset by adding it to the list, and keep it there only if it works.
+- [ ] 51. A chat on a toolset model whose history has a `computer` call with a broken or non-member action (make one on a JSON-tool model, then switch the chat's profile): it replays as `invalid_computer_call` and the API accepts it. If it is refused, such a chat fails on toolset models until the profile changes.
+- [ ] 52. A chat that switches between a toolset model and a JSON-tool model mid-task carries on (the same stored calls replayed both ways).
+- [ ] 53. OpenAI (Responses API): the screenshot reaches the model inside the `function_call_output` as `input_image`, and the model can see it.
+- [ ] 54. Gemini 3: the screenshot reaches the model inside the function response; a chat with earlier tool calls replays (Grunt keeps no thought signatures, so the SDK puts in its stand-in). A Google model before Gemini 3 gets "[image omitted: this model can't take images]" in place of each screenshot and acts blind: check it says so rather than guessing.
+- [ ] 55. A tool result with no image (a refusal, a `wait`) reaches each provider as one string, with the screen-content line first.
+- [ ] 56. A model whose row has no vision flag gets "[image omitted: this model can't take images]" instead of screenshots.
+- [ ] 57. A Claude Code chat, clean and with a folder, can use it (relayed as `mcp__grunt_<hex>__computer`). Its screenshots reach Claude Code, but the thread shows only the text of each result (a known gap). Note any limit Claude Code puts on image results from an MCP tool.
+- [ ] 58. Every screenshot result in the thread starts with the small "This is content from the computer's screen…" label, and the thread's tool-call line shows only the action ("computer: click at 512, 300"), never an app name.
 
 ### Failure modes
 
-- [ ] 54. Kill the node server mid-`key` action, press the stop hotkey mid-typing, and quit Grunt mid-action: no modifier is left down afterwards (check with the on-screen keyboard), and the act stops at its next check.
-- [ ] 55. Kill the node server: the tray tooltip and a notification say "Computer use is off until Grunt restarts.", and the tooltip stays after the web app updates its approval count. Computer use stays off until Grunt is restarted.
-- [ ] 56. Quit Grunt during a session with the main window busy: it quits in about 2 seconds, the stop hotkey and bar go, and the server hears `computer.stopped` with the reason "quit" (it may be lost if an act is mid-step: shutdown waits 2 seconds, an end's settle 3). Also quit at the instant a consent OK is clicked, and while an end runs: no hang.
-- [ ] 57. Stop takes effect within 4 seconds while the main window is busy (the server gives the shell 4 seconds to confirm an end); the bar may linger a moment after the banner goes. If an end is never confirmed, every start is refused until one is, or until Grunt restarts.
-- [ ] 58. With a key stuck down (one the shell pressed and couldn't release), an end answers `{ ok: false }` rather than claiming a clean stop.
-- [ ] 59. An act on an app run from a share that has since gone away: an end still answers in under 4 seconds, and nothing is pressed after it.
-- [ ] 60. With a misbehaving low-level keyboard hook installed (one that is slow to pass keys on), an end still answers within 4 seconds.
-- [ ] 61. On the laptop, a chat that runs on the PC: the PC shows the dialog, the bar and the hotkey; the laptop's Stop does not reach it (the banner and Stop are local to the machine running the turn). Stop it on the PC.
-- [ ] 62. Move a chat that holds control here to run on another machine: its session here stays until Stop, idle or quit.
+- [ ] 59. Kill the node server mid-`key` action, press the stop hotkey mid-typing, and quit Grunt mid-action: no modifier is left down afterwards (check with the on-screen keyboard), and the act stops at its next check.
+- [ ] 60. Kill the node server: the tray tooltip and a notification say "Computer use is off until Grunt restarts.", and the tooltip stays after the web app updates its approval count. Computer use stays off until Grunt is restarted.
+- [ ] 61. Quit Grunt during a session with the main window busy: it quits in about 2 seconds, the stop hotkey and bar go, and the server hears `computer.stopped` with the reason "quit" (it may be lost if an act is mid-step: shutdown waits 2 seconds, an end's settle 3). Also quit at the instant a consent OK is clicked, and while an end runs: no hang.
+- [ ] 62. Stop takes effect within 4 seconds while the main window is busy (the server gives the shell 4 seconds to confirm an end); the bar may linger a moment after the banner goes. If an end is never confirmed, every start is refused until one is, or until Grunt restarts.
+- [ ] 63. With a key stuck down (one the shell pressed and couldn't release), an end answers `{ ok: false }` rather than claiming a clean stop.
+- [ ] 64. An act on an app run from a share that has since gone away: an end still answers in under 4 seconds, and nothing is pressed after it.
+- [ ] 65. With a misbehaving low-level keyboard hook installed (one that is slow to pass keys on), an end still answers within 4 seconds.
+- [ ] 66. On the laptop, a chat that runs on the PC: the PC shows the dialog, the bar and the hotkey; the laptop's Stop does not reach it (the banner and Stop are local to the machine running the turn). Stop it on the PC.
+- [ ] 67. Move a chat that holds control here to run on another machine: its session here stays until Stop, idle or quit.
