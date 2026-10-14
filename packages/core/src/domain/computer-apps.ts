@@ -70,6 +70,15 @@ export const COMPUTER_GRUNT_UI_REASON = "That window is showing Grunt's own page
  * itself refused, which is safe.
  */
 export const GRUNT_UI_TITLE_MARKER = '[grunt-ui]';
+/**
+ * Why the server refused a change (a card's answer, a message, a setting)
+ * while computer use may be in control of this machine and the change didn't
+ * come from the desktop app's own window. The web shows these words as they
+ * are when it gets them back.
+ */
+export const COMPUTER_DESKTOP_ONLY_REASON =
+  'Grunt is controlling this computer, so until that ends it only takes answers and changes from the Grunt app on this computer. Answer there, or stop computer use first.';
+
 /** The title of every page of Grunt's web UI. */
 export const GRUNT_UI_TITLE = `Grunt ${GRUNT_UI_TITLE_MARKER}`;
 
