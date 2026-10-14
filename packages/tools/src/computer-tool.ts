@@ -63,7 +63,7 @@ import type { DescribedCall, ToolContext, ToolSpec } from '@grunt/core/ports/too
 export const COMPUTER_TOOL_DESCRIPTION = [
   'See and use the apps on this computer: take a screenshot, move and click the mouse, scroll, type and press keys.',
   "Coordinates are in the last screenshot's pixels: take a screenshot first, and again whenever the screen may have changed.",
-  "Each app needs the user's approval before you can use it. Some are asked about for every single action: terminals, browsers, code editors, File Explorer, Settings, and any Open or Save dialog.",
+  "Each app needs the user's approval before you can use it. Some are asked about for every single action: terminals, File Explorer, Settings, and any Open or Save dialog.",
   'A key action presses one key combination, such as "ctrl+s" or "Return": send each combination as its own action.',
   'Combinations with the Windows key, alt+tab, alt+f4, ctrl+escape, ctrl+alt+anything and Print Screen are never sent.',
   `A type action types at most ${COMPUTER_LIMITS.typeTextLength} characters; the only control characters it types are line breaks and tabs.`,
