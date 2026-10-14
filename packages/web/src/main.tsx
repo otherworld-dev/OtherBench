@@ -3,12 +3,17 @@ import { createRoot } from 'react-dom/client';
 import { Root } from './Root.js';
 import { desktopBootstrap, isIndicatorView } from './desktop/bridge.js';
 import { configureTransport } from './state/transport.js';
+import { keepGruntTitle } from './lib/gruntTitle.js';
 import { initSidebarWidth } from './state/sidebarWidth.js';
 import { initTextSize } from './state/textSize.js';
 import './index.css';
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root element missing from index.html');
+
+// Computer use refuses any window whose title carries Grunt's marker, so a
+// browser showing this page can't be used to answer Grunt's own cards.
+keepGruntTitle();
 
 // Apply the saved text size and sidebar width before first paint.
 initTextSize();
