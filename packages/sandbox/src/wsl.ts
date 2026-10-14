@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import { win32 } from 'node:path';
+import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
 
 /**
  * A thin runner for `wsl.exe` (spec 2026-10-12-sandbox-design §2). Every
@@ -64,7 +65,8 @@ export function execArgs(user: WslUser, argv: string[]): string[] {
 
 export function createWslRunner(spawn: SpawnFn = nodeSpawn as SpawnFn, exe: string = wslExePath()): WslRunner {
   // WSL_UTF8 asks newer wsl.exe for UTF-8; decodeWslOutput copes either way.
-  const env = { ...process.env, WSL_UTF8: '1' };
+  // The server's own API token never reaches wsl.exe (core/domain/child-env.ts).
+  const env = { ...withoutServerSecrets(process.env), WSL_UTF8: '1' };
 
   const wsl = (args: string[], opts: WslRunOptions = {}): Promise<WslResult> =>
     new Promise((resolve) => {
