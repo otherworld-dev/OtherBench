@@ -207,7 +207,13 @@ function inTime(sec: number): string {
  * success. The wait (delay, token, check slot) comes after the body is read
  * and before the password file is read or scrypt runs, so a right password
  * waits as long as a wrong one and nothing is held meanwhile. A browser
- * with a valid remembered-device cookie skips the budget and the delay.
+ * with a valid remembered-device cookie skips the budget and the delay;
+ * its HMAC is checked here, before anything waits, and a forged or expired
+ * one counts as no cookie.
+ *
+ * The one place a password is verified: `/login` and `/password` both come
+ * through here, nothing else imports `verifyPassword`, and
+ * `test/remote/single-verifier.test.ts` fails if that changes.
  */
 async function checkPassword(c: Context, remote: RemoteAccess, address: string, password: string, wrongStatus: 401 | 403): Promise<PasswordRecord | Response> {
   const locked = lockedOut(c, remote, address);

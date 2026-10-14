@@ -3,7 +3,8 @@ import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { authGate } from '../../src/remote/auth.js';
-import { BUDGET_BURST, MAX_DELAYED, MAX_TRACKED, SLOW_MAX_MS } from '../../src/remote/limiter.js';
+import { DEVICE_MS } from '../../src/remote/devices.js';
+import { BUDGET_BURST, BUDGET_RESERVED, MAX_DELAYED, MAX_TRACKED, SLOW_MAX_MS } from '../../src/remote/limiter.js';
 import { PasswordFile } from '../../src/remote/password.js';
 import { SESSION_MS } from '../../src/remote/sessions.js';
 import { FAST, from, makeContainer, PASSWORD, remoteFixture, type RemoteFixture } from './helpers.js';
@@ -408,6 +409,141 @@ describe('the global limits', () => {
     expect(flood.filter((f) => f.res?.status === 401)).toHaveLength(admitted);
     expect(fx.remote.limiter.stats()).toMatchObject({ waiting: 0, queued: 0, running: 0 });
     expect(fx.remote.limiter.stats().tracked).toBeLessThanOrEqual(MAX_TRACKED);
+  });
+});
+
+describe('every way to a password check, and whose address it counts', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function turnsUntil(done: () => boolean): Promise<void> {
+    const until = performance.now() + 5000;
+    while (!done() && performance.now() < until) await new Promise((r) => setImmediate(r));
+  }
+
+  const budget = () => fx.remote.limiter.stats().budget;
+  const deviceCookieOf = (res: Response): string => res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_device='))!.split(';')[0]!;
+
+  /** Spends the 15 tokens any address may take, from addresses that have guessed wrong, leaving the 5 kept for clean ones. */
+  function floodFromGuessers(): void {
+    for (let i = 0; i < 30; i++) fx.remote.limiter.fail(`10.7.0.${i}`);
+    for (let i = 0; i < BUDGET_BURST - BUDGET_RESERVED; i++) {
+      void fx.remote.limiter.admit(`10.7.0.${i}`).then((a) => {
+        if (a.kind === 'go') a.release();
+      });
+    }
+    expect(budget()).toBe(BUDGET_RESERVED);
+  }
+
+  it('charges the budget for a sign-in and a password change, each a password check', async () => {
+    const cookie = cookieOf(await login());
+    expect(budget()).toBe(BUDGET_BURST - 1);
+    expect((await post('/api/auth/password', cookie, { current: 'not the password', next: 'a brand new password' })).status).toBe(403);
+    expect(budget()).toBe(BUDGET_BURST - 2);
+  });
+
+  it('refuses a password change from a locked address with 429, before checking anything', async () => {
+    const cookie = cookieOf(await login());
+    for (let i = 0; i < 5; i++) fx.remote.limiter.fail('10.0.0.7');
+    const before = budget();
+
+    const res = await post('/api/auth/password', cookie, { current: PASSWORD, next: 'a brand new password' });
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('900');
+    expect(budget()).toBe(before);
+  });
+
+  it('checks no password for a form body, HEAD, OPTIONS, GET or the sign-out routes', async () => {
+    const cookie = cookieOf(await login());
+    const before = budget();
+    const failures = fx.remote.limiter.globalFailures();
+    const form = { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie };
+
+    expect((await app.request('/api/auth/login', { method: 'POST', headers: form, body: `password=${encodeURIComponent(PASSWORD)}` }, from('10.0.0.20'))).status).toBe(415);
+    expect((await app.request('/api/auth/password', { method: 'POST', headers: form, body: 'current=x&next=y' }, from('10.0.0.20'))).status).toBe(415);
+    expect((await app.request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ password: PASSWORD }) }, from('10.0.0.20'))).status).toBe(415);
+    for (const method of ['HEAD', 'OPTIONS', 'GET', 'PUT']) {
+      for (const path of ['/api/auth/login', '/api/auth/password']) {
+        const res = await app.request(path, { method, headers: { ...json, Cookie: cookie } }, from('10.0.0.20'));
+        expect(res.status, `${method} ${path}`).not.toBe(200);
+        expect(res.status, `${method} ${path}`).not.toBe(401);
+      }
+    }
+    expect((await post('/api/auth/logout', cookie, { password: PASSWORD })).status).toBe(204);
+    expect((await post('/api/auth/logout-all', cookie, { password: PASSWORD })).status).toBe(401);
+
+    expect(budget()).toBe(before);
+    expect(fx.remote.limiter.globalFailures()).toBe(failures);
+  });
+
+  it("lets a clean address's correct sign-in through a flood from addresses that keep guessing", async () => {
+    floodFromGuessers();
+    const guesser = await login({ password: 'not the password', address: '10.7.0.29' });
+    expect(guesser.status).toBe(429);
+    expect(await guesser.json()).toMatchObject({ error: expect.stringMatching(/^Too many sign-in attempts/) });
+
+    const pending = login({ address: '192.168.1.50' });
+    await turnsUntil(() => vi.getTimerCount() > BUDGET_BURST - BUDGET_RESERVED);
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+    const res = await pending;
+    expect(res.status).toBe(200);
+  });
+
+  it('gives a forged or expired remembered-device cookie no priority', async () => {
+    const device = deviceCookieOf(await login({ address: '10.7.0.29' }));
+    floodFromGuessers();
+    const forged = device.slice(0, -2) + (device.endsWith('AA') ? 'BB' : 'AA');
+
+    expect((await login({ address: '10.7.0.29', headers: { Cookie: forged } })).status).toBe(429);
+    expect((await login({ address: '10.7.0.29', headers: { Cookie: '__Host-grunt_device=made.up.value' } })).status).toBe(429);
+    expect((await login({ address: '10.7.0.29', headers: { Cookie: device } })).status).toBe(200);
+
+    // 90 days on the cookie has expired; the same flood again, and it counts for nothing.
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+    fx.clock.now += DEVICE_MS;
+    floodFromGuessers();
+    expect((await login({ address: '10.7.0.29', headers: { Cookie: device } })).status).toBe(429);
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+  });
+
+  it('ignores X-Forwarded-For without a trusted proxy: the socket address is locked, the named ones are untouched', async () => {
+    for (let i = 0; i < 5; i++) {
+      const res = await login({ password: 'not the password', headers: { 'X-Forwarded-For': `198.51.100.${i}` } });
+      expect(res.status).toBe(401);
+    }
+
+    expect((await login({ headers: { 'X-Forwarded-For': '198.51.100.99' } })).status).toBe(429);
+    expect(fx.remote.limiter.check('10.0.0.7').ok).toBe(false);
+    for (let i = 0; i < 5; i++) {
+      expect(fx.remote.limiter.check(`198.51.100.${i}`)).toEqual({ ok: true });
+      expect(fx.remote.limiter.isClean(`198.51.100.${i}`)).toBe(true);
+    }
+  });
+});
+
+describe('behind a trusted proxy', () => {
+  it('counts only the right-most hop the proxy wrote, whatever the client puts to its left', async () => {
+    const proxied = await remoteFixture({ trustProxies: ['10.0.0.1'] });
+    try {
+      const proxiedApp = createApp(makeContainer(), { remote: proxied.remote });
+      const attempt = (password: string, forwarded: string) =>
+        proxiedApp.request('/api/auth/login', { method: 'POST', headers: { ...json, 'X-Forwarded-For': forwarded }, body: JSON.stringify({ password }) }, from('10.0.0.1'));
+
+      for (let i = 0; i < 5; i++) expect((await attempt('not the password', `192.0.2.${i}, 203.0.113.5`)).status).toBe(401);
+
+      expect((await attempt(PASSWORD, '192.0.2.200, 203.0.113.5')).status).toBe(429);
+      expect(proxied.remote.limiter.check('203.0.113.5').ok).toBe(false);
+      expect(proxied.remote.limiter.check('192.0.2.0')).toEqual({ ok: true });
+      expect(proxied.remote.limiter.check('10.0.0.1')).toEqual({ ok: true });
+      expect((await attempt(PASSWORD, '203.0.113.5, 203.0.113.6')).status).toBe(200);
+    } finally {
+      proxied.cleanup();
+    }
   });
 });
 
