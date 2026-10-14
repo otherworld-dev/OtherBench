@@ -123,7 +123,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
       {key !== null && !onceOnly && kind === 'browser' && (
         <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
           <bdi>{name}</bdi> is a web browser. Allowing it for this chat or always lets the model go to any site this browser can reach, signed in
-          as you, and type and click there without asking again.
+          as you and Grunt's own pages included, and type and click there without asking again.
         </p>
       )}
       {key !== null && !onceOnly && kind === 'ide' && (
