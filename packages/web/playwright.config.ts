@@ -66,7 +66,9 @@ export default defineConfig({
   // the already-built server, it doesn't build it.
   webServer: [
     {
-      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}"`,
+      // `--cors-origin` with the server's own address: this browser stands in for the desktop app's window, the one
+      // place that may answer cards while computer use is in control (computer.spec.ts checks that nothing else may).
+      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}" --cors-origin ${BASE_URL}`,
       url: `${BASE_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 15_000,

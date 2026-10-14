@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { COMPUTER_DESKTOP_ONLY_REASON } from '@grunt/core/domain/computer-apps.js';
 import { BASE_URL } from '../playwright.config.js';
 
 /**
@@ -111,6 +112,17 @@ test('computer use turned on for a profile: looks with no card, asks per action 
   await expect(card.getByRole('button', { name: 'Always allow FakeApp.exe' })).toBeVisible();
   await expect(banner).toContainText('Grunt is controlling this computer.');
   await expect(banner.getByTestId('computer-banner-last')).toHaveCount(0);
+
+  // While the computer is in control, an answer from anywhere but the desktop app's window (this browser stands in
+  // for it: playwright.config.ts) is refused, so a model using a browser can't answer Grunt's cards in it.
+  const requestId = ((await card.getAttribute('data-testid')) ?? '').replace('approval-prompt-', '');
+  const elsewhere = await request.post(`${BASE_URL}/api/approvals/${requestId}/resolve`, { data: { choice: 'once' } });
+  expect(elsewhere.status()).toBe(403);
+  expect(((await elsewhere.json()) as { error?: string }).error).toBe(COMPUTER_DESKTOP_ONLY_REASON);
+  await expect(card).toHaveCount(1);
+  await expect(banner.getByTestId('computer-banner-last')).toHaveCount(0);
+  // Outside the desktop app the card says where to answer.
+  await expect(card.getByTestId('desktop-only-note')).toBeVisible();
 
   // Allow once: the fake carries the click out (the banner's last action changes only on an action carried out).
   await card.getByRole('button', { name: 'Allow once' }).click();
