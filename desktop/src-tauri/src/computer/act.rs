@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::facts::{shows_grunt_ui, Expect};
+use super::facts::{is_dev_tools, shows_grunt_ui, Expect};
 use super::image::Shot;
 use super::keys::{self, Combo};
 use super::session::Live;
@@ -28,6 +28,7 @@ pub const WINDOW_CHANGED: &str =
 pub const WINDOW_UNREADABLE: &str = "Grunt couldn't tell which window is there now, so nothing more was done.";
 pub const STOPPED: &str = "Control of this computer ended, so nothing more was done.";
 pub const GRUNT_UI: &str = "That window is showing Grunt's own pages now, so nothing more was done. Grunt never controls itself.";
+pub const DEV_TOOLS: &str = "That window is a browser's developer tools now, so nothing more was done.";
 pub const TOO_LONG: &str = "The action took too long and was stopped part way.";
 pub const SCREEN_CHANGED: &str = "The screen changed size since the last screenshot; take another. Nothing more was done.";
 pub const NO_SCREENSHOT: &str = "Take a screenshot first; nothing was done.";
@@ -283,6 +284,9 @@ impl Checks<'_> {
         // never acted in, and never brought forward to be.
         if shows_grunt_ui(&now.title) {
             return Err(GRUNT_UI.into());
+        }
+        if is_dev_tools(&now.title) {
+            return Err(DEV_TOOLS.into());
         }
         if self.expect.matches(&now) {
             return Ok(());

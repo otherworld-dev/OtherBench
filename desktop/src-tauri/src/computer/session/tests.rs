@@ -794,6 +794,15 @@ fn nothing_more_is_done_once_the_approved_window_shows_grunts_own_ui() {
     assert_eq!(h.act("a", &t, json!({ "action": "left_click", "coordinate": [10, 10] })), json!({ "ok": false, "reason": act::GRUNT_UI }));
     assert!(h.fake.sent().is_empty());
     assert!(h.fake.activated.lock().unwrap().is_empty(), "never brought forward either");
+    // The browser's undocked developer tools, the same way.
+    let mut dev_tools = app();
+    dev_tools.title = "DevTools - example.com/".into();
+    let h = H::new();
+    h.hello();
+    let t = h.start("a");
+    *h.fake.change_after.lock().unwrap() = Some((0, dev_tools));
+    assert_eq!(h.act("a", &t, json!({ "action": "key", "text": "return" })), json!({ "ok": false, "reason": act::DEV_TOOLS }));
+    assert!(h.fake.sent().is_empty());
 }
 
 #[test]

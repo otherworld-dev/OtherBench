@@ -26,6 +26,19 @@ pub fn shows_grunt_ui(title: &str) -> bool {
     title.to_ascii_lowercase().contains(GRUNT_UI_TITLE_MARKER)
 }
 
+/// The titles a browser's undocked developer tools window starts with
+/// (Chrome and Edge, Firefox), lower case. Core's `DEVTOOLS_TITLE_PREFIXES`
+/// is the same list: such a window is a console for any page, Grunt's own
+/// included, and belongs to the browser's process, so a browser grant would
+/// otherwise reach it.
+pub const DEVTOOLS_TITLE_PREFIXES: [&str; 2] = ["devtools - ", "developer tools - "];
+
+/// Whether a window title is that of an undocked developer tools window.
+pub fn is_dev_tools(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    DEVTOOLS_TITLE_PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
+}
+
 /// What an action is checked against before every step: who owns the
 /// window, which window it is, and its title now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +156,7 @@ impl Expect {
             && self.pid == id.pid
             && self.started_at == id.started_at
             && !shows_grunt_ui(&id.title)
+            && !is_dev_tools(&id.title)
     }
 }
 
@@ -334,6 +348,23 @@ mod tests {
             assert!(e.matches(&now), "{title}");
         }
         assert_eq!(GRUNT_UI_TITLE_MARKER, "[grunt-ui]", "core's GRUNT_UI_TITLE_MARKER is the same string");
+    }
+
+    #[test]
+    fn never_matches_a_browsers_undocked_developer_tools() {
+        let e = Expect::parse(Some(&json!({ "app": id().path, "shellView": false, "windowId": "1234", "pid": 42, "startedAt": "133000000000000000" }))).unwrap();
+        for title in ["DevTools - example.com/", "devtools - x", "Developer Tools - Inbox - https://mail.example.com/"] {
+            let mut now = id();
+            now.title = title.into();
+            assert!(!e.matches(&now), "{title}");
+            assert!(is_dev_tools(title), "{title}");
+        }
+        for title in ["Chrome DevTools docs - Google Chrome", "DevTools", " DevTools - x"] {
+            let mut now = id();
+            now.title = title.into();
+            assert!(e.matches(&now), "{title}");
+        }
+        assert_eq!(DEVTOOLS_TITLE_PREFIXES, ["devtools - ", "developer tools - "], "core's DEVTOOLS_TITLE_PREFIXES are the same");
     }
 
     #[test]
