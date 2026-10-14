@@ -180,15 +180,15 @@ test('(g) under a flood of wrong passwords a clean address still signs in, a new
   const remembered = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   const stranger = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
   let next = 0;
-  const attempt = async (ctx: APIRequestContext, password: string, address?: string): Promise<{ status: number; retryAfter: number; ms: number }> => {
+  const attempt = async (ctx: APIRequestContext, password: string, address?: string, remember = false): Promise<{ status: number; retryAfter: number; ms: number }> => {
     next += 1;
     const started = Date.now();
-    const res = await ctx.post('/api/auth/login', { data: { password }, headers: { 'X-Forwarded-For': address ?? `203.0.113.${next}` } });
+    const res = await ctx.post('/api/auth/login', { data: { password, remember }, headers: { 'X-Forwarded-For': address ?? `203.0.113.${next}` } });
     return { status: res.status(), retryAfter: Number(res.headers()['retry-after'] ?? 0), ms: Date.now() - started };
   };
   try {
-    // A sign-in leaves a remembered-device cookie in this context's jar.
-    expect((await attempt(remembered, PASSWORD)).status).toBe(200);
+    // A sign-in with "Keep me signed in" leaves a remembered-device cookie in this context's jar.
+    expect((await attempt(remembered, PASSWORD, undefined, true)).status).toBe(200);
     const jar = await remembered.storageState();
     expect(jar.cookies.some((c) => c.name === '__Host-grunt_device' && c.httpOnly && c.secure && c.sameSite === 'Strict')).toBeTruthy();
 
