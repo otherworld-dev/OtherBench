@@ -1,4 +1,5 @@
 import type { Connection } from '@grunt/core/types/config.js';
+import { isServerOnlyEnvVar } from '@grunt/core/domain/child-env.js';
 
 /** The `EngineMeta.backend` value for the Claude login (no base URL). */
 export const CLAUDE_BACKEND = 'claude';
@@ -39,7 +40,8 @@ export function backendOf(conn: Connection): string {
 export function buildChildEnv(base: NodeJS.ProcessEnv, conn: Connection, token: string | null, modelId: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(base)) {
-    if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key)) env[key] = value;
+    // The server's own API token (GRUNT_TOKEN) never reaches Claude Code or its Bash (core/domain/child-env.ts).
+    if (value !== undefined && !CREDENTIAL_VARS.test(key) && !PARENT_SESSION_VARS.test(key) && !ADDED_DIR_CONFIG_VARS.test(key) && !isServerOnlyEnvVar(key)) env[key] = value;
   }
   if (conn.baseUrl) {
     env['ANTHROPIC_BASE_URL'] = trimTrailingSlash(conn.baseUrl);
