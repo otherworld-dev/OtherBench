@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyTarget, GRUNT_UI_TITLE, showsGruntUi } from '@grunt/core/domain/computer-apps.js';
+import { classifyTarget, COMPUTER_GRUNT_UI_REASON, GRUNT_UI_TITLE, showsGruntUi } from '@grunt/core/domain/computer-apps.js';
 import indexHtml from '../../index.html?raw';
 import { keepGruntTitle, markedTitle } from './gruntTitle.js';
 
@@ -37,8 +37,8 @@ describe("the marker in Grunt's page title", () => {
   it("makes a browser window showing it one computer use refuses", () => {
     document.title = 'Grunt';
     stop = keepGruntTitle();
-    const classified = classifyTarget({
-      path: 'C:\Program Files\Google\Chrome\Application\chrome.exe',
+    const facts = (title: string) => ({
+      path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       originalName: 'chrome.exe',
       signer: 'Google LLC',
       console: false,
@@ -47,12 +47,14 @@ describe("the marker in Grunt's page title", () => {
       uiAccess: false,
       grunt: false,
       shellView: false,
-      title: `${document.title} - Google Chrome`,
+      title,
       windowId: 'hwnd-1',
       pid: 4242,
       startedAt: 't0',
     });
-    expect(classified.kind).toBe('refuse');
+    expect(classifyTarget(facts(`${document.title} - Google Chrome`))).toEqual({ kind: 'refuse', reason: COMPUTER_GRUNT_UI_REASON });
+    // The same browser on any other page is an app like any other.
+    expect(classifyTarget(facts('Inbox - Google Chrome')).kind).toBe('app');
   });
 
   it('adds the marker only once, and gives an empty title the whole one', () => {

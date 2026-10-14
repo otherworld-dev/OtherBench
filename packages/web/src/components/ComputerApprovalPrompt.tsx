@@ -3,6 +3,7 @@ import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import { actionSummary, describeApp, isHighRiskApp, typedTextForCard, windowTitleForCard } from '@grunt/core/domain/computer-apps.js';
 import type { ApprovalPromptProps } from './ApprovalPrompt.js';
 import { oneLine, revealHidden } from '../viewer/browser.js';
+import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
 
 /**
  * The approval card for computer use (spec 2026-10-12-computer-use-design
@@ -50,7 +51,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
     } catch (err) {
       console.error(`[grunt-web] failed to resolve approval ${request.id}:`, err);
       setPending(false);
-      setError('Could not send that decision -- please try again.');
+      setError(answerErrorText(err, 'Could not send that decision -- please try again.'));
     }
   }
 
@@ -163,6 +164,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
           {'"Always allow"'} lets the model use <bdi>{name}</bdi> in any chat on this profile.
         </p>
       )}
+      <DesktopOnlyNote />
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
