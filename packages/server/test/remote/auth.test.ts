@@ -470,8 +470,7 @@ describe('every way to a password check, and whose address it counts', () => {
     for (const method of ['HEAD', 'OPTIONS', 'GET', 'PUT']) {
       for (const path of ['/api/auth/login', '/api/auth/password']) {
         const res = await app.request(path, { method, headers: { ...json, Cookie: cookie } }, from('10.0.0.20'));
-        expect(res.status, `${method} ${path}`).not.toBe(200);
-        expect(res.status, `${method} ${path}`).not.toBe(401);
+        expect(res.status, `${method} ${path}`).toBe(404);
       }
     }
     expect((await post('/api/auth/logout', cookie, { password: PASSWORD })).status).toBe(204);
