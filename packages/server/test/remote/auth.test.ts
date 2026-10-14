@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../src/app.js';
 import { authGate } from '../../src/remote/auth.js';
 import { DEVICE_MS } from '../../src/remote/devices.js';
-import { BUDGET_BURST, BUDGET_RESERVED, MAX_DELAYED, MAX_TRACKED, SLOW_MAX_MS } from '../../src/remote/limiter.js';
+import { BUDGET_BURST, BUDGET_RESERVED, DEVICE_REFILL_MS, MAX_DELAYED, MAX_TRACKED, SLOW_MAX_MS } from '../../src/remote/limiter.js';
 import { PasswordFile } from '../../src/remote/password.js';
 import { SESSION_MS } from '../../src/remote/sessions.js';
-import { FAST, from, makeContainer, PASSWORD, remoteFixture, type RemoteFixture } from './helpers.js';
+import { FAST, from, granted, makeContainer, PASSWORD, remoteFixture, type RemoteFixture } from './helpers.js';
 
 let fx: RemoteFixture;
 let app: Hono;
@@ -31,6 +31,9 @@ function login(opts: { password?: string; remember?: boolean; address?: string; 
 /** The session's Set-Cookie line (a sign-in also sets the remembered-device cookie). */
 const sessionSetCookie = (res: Response): string | undefined => res.headers.getSetCookie().find((c) => c.startsWith('__Host-grunt_session='));
 const cookieOf = (res: Response): string => sessionSetCookie(res)!.split(';')[0]!;
+
+/** Fake timers held by waiting sign-in attempts: all of them but the log summary's. */
+const attemptTimers = (): number => vi.getTimerCount() - (fx.remote.limiter.stats().summarising ? 1 : 0);
 
 async function signIn(remember = false, address = '10.0.0.7'): Promise<string> {
   const res = await login({ remember, address });
@@ -214,8 +217,8 @@ describe('the global limits', () => {
 
   /** Lets a login run up to its timer: until `n` fake timers are pending. */
   async function untilWaiting(n = 1): Promise<void> {
-    await turnsUntil(() => vi.getTimerCount() >= n);
-    expect(vi.getTimerCount()).toBe(n);
+    await turnsUntil(() => attemptTimers() >= n);
+    expect(attemptTimers()).toBe(n);
   }
 
   function settled(p: Promise<Response>): { res: Response | null } {
@@ -269,8 +272,9 @@ describe('the global limits', () => {
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
   });
 
-  it('sets a remembered-device cookie on sign-in that lets this browser skip the budget and the delay', async () => {
-    const first = await login();
+  it('sets a remembered-device cookie only with "Keep me signed in", and it lets this browser skip the budget and the delay', async () => {
+    expect((await login()).headers.getSetCookie().some((c) => c.startsWith('__Host-grunt_device='))).toBe(false);
+    const first = await login({ remember: true });
     const device = deviceCookieOf(first);
     for (const part of ['Path=/', 'HttpOnly', 'Secure', 'SameSite=Strict', 'Max-Age=7776000']) expect(rawDeviceCookie(first)).toContain(part);
     failures(5000);
@@ -280,8 +284,8 @@ describe('the global limits', () => {
     const res = await login({ address: '10.0.0.70', headers: { Cookie: device } });
 
     expect(res.status).toBe(200);
-    // The 19 tokens the first sign-in left are still waiting out their delay; this one didn't.
-    expect(vi.getTimerCount()).toBe(BUDGET_BURST - 1);
+    // The 18 tokens the two sign-ins left are still waiting out their delay; this one didn't.
+    expect(attemptTimers()).toBe(BUDGET_BURST - 2);
     // It is not a session: on its own it opens nothing.
     expect((await get('/api/chats', device)).status).toBe(401);
     // A tampered one is ignored.
@@ -290,20 +294,37 @@ describe('the global limits', () => {
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
   });
 
-  it('still keeps a remembered device to the per-address lockout', async () => {
-    const device = deviceCookieOf(await login());
-    for (let i = 0; i < 5; i++) fx.remote.limiter.fail('10.0.0.80');
+  it("locks a remembered device by its own id, not by its address's lock", async () => {
+    const device = deviceCookieOf(await login({ remember: true }));
+    // Someone else behind the same address guesses it into a lock; the remembered browser still gets in.
+    for (let i = 0; i < 5; i++) fx.remote.limiter.fail('10.0.0.7');
+    expect((await login()).status).toBe(429);
+    expect((await login({ headers: { Cookie: device } })).status).toBe(200);
 
-    const res = await login({ address: '10.0.0.80', headers: { Cookie: device } });
+    // Five wrong passwords with the cookie lock its id for a day; it then counts as no cookie, and the address is locked.
+    for (let i = 0; i < 5; i++) {
+      fx.clock.now += DEVICE_REFILL_MS;
+      expect((await login({ password: 'not the password', address: '10.0.0.81', headers: { Cookie: device } })).status).toBe(401);
+    }
+    fx.clock.now += DEVICE_REFILL_MS;
+    for (let i = 0; i < 5; i++) fx.remote.limiter.fail('10.0.0.7');
+    expect((await login({ address: '10.0.0.7', headers: { Cookie: device } })).status).toBe(429);
+    expect(fx.remote.limiter.checkDevice(fx.remote.devices.idOf(device.slice(device.indexOf('=') + 1), fx.remote.passwords.epoch())!).ok).toBe(false);
+    expect(fx.remote.limiter.check('10.0.0.81')).toEqual({ ok: true });
+  });
 
-    expect(res.status).toBe(429);
-    expect(res.headers.get('retry-after')).toBe('900');
+  it('clears the remembered-device cookie on sign-out', async () => {
+    const signedIn = await login({ remember: true });
+    const out = await post('/api/auth/logout', `${cookieOf(signedIn)}; ${deviceCookieOf(signedIn)}`);
+
+    expect(out.status).toBe(204);
+    expect(out.headers.getSetCookie().some((c) => c.startsWith('__Host-grunt_device=;') && c.includes('Max-Age=0'))).toBe(true);
   });
 
   it('forgets every remembered device on a password change and on "Sign out everywhere"', async () => {
     const signedIn = await login({ remember: true });
     const device = deviceCookieOf(signedIn);
-    const other = deviceCookieOf(await login({ address: '10.0.0.8' }));
+    const other = deviceCookieOf(await login({ remember: true, address: '10.0.0.8' }));
     expect(deviceValid(device)).toBe(true);
 
     const changed = await post('/api/auth/password', cookieOf(signedIn), { current: PASSWORD, next: 'a brand new password' });
@@ -330,7 +351,9 @@ describe('the global limits', () => {
     await turnsUntil(() => leaving.res !== null);
     expect(leaving.res?.status).toBe(408);
     expect(fx.remote.limiter.stats()).toMatchObject({ waiting: 0, running: 0 });
-    expect(vi.getTimerCount()).toBe(0);
+    // Walking away after taking a token counts as a failure, so the address is no longer clean.
+    expect(fx.remote.limiter.isClean('10.0.0.50')).toBe(false);
+    expect(attemptTimers()).toBe(0);
   });
 
   it('keeps the per-address lockout as it was, and checks it again after the wait', async () => {
@@ -350,7 +373,7 @@ describe('the global limits', () => {
     // Locked, it is refused at once without waiting.
     const locked = await login({ address: '10.0.0.60' });
     expect(locked.status).toBe(429);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(attemptTimers()).toBe(0);
   });
 
   it('slows a password change down too, and refuses it if the session ended while it waited', async () => {
@@ -374,21 +397,21 @@ describe('the global limits', () => {
     // The password is still the first change's.
     const record = fx.remote.passwords.read();
     const { verifyPassword } = await import('../../src/remote/password.js');
-    expect(await verifyPassword('a brand new password', record!)).toBe(true);
+    expect(await verifyPassword('a brand new password', record!, await granted())).toBe(true);
   });
 
   it('holds 500 wrong passwords sent at once within every cap, and still lets a remembered device in at once', async () => {
-    const device = deviceCookieOf(await login({ address: '10.0.0.99' }));
+    const device = deviceCookieOf(await login({ remember: true, address: '10.0.0.99' }));
     failures(100);
     const flood = Array.from({ length: 500 }, (_, i) => settled(login({ password: 'not the password', address: `10.50.${Math.floor(i / 250)}.${i % 250}` })));
     const admitted = BUDGET_BURST - 1;
-    await turnsUntil(() => flood.filter((f) => f.res !== null).length >= 500 - admitted && vi.getTimerCount() >= admitted);
+    await turnsUntil(() => flood.filter((f) => f.res !== null).length >= 500 - admitted && attemptTimers() >= admitted);
 
     const stats = fx.remote.limiter.stats();
     expect(stats.waiting).toBe(admitted);
     expect(stats.waiting).toBeLessThanOrEqual(MAX_DELAYED);
     expect(stats.waitingAddresses).toBeLessThanOrEqual(MAX_DELAYED);
-    expect(vi.getTimerCount()).toBe(admitted);
+    expect(attemptTimers()).toBe(admitted);
     const refused = flood.filter((f) => f.res !== null).map((f) => f.res as Response);
     expect(refused).toHaveLength(500 - admitted);
     for (const res of refused) {
@@ -433,7 +456,7 @@ describe('every way to a password check, and whose address it counts', () => {
     for (let i = 0; i < 30; i++) fx.remote.limiter.fail(`10.7.0.${i}`);
     for (let i = 0; i < BUDGET_BURST - BUDGET_RESERVED; i++) {
       void fx.remote.limiter.admit(`10.7.0.${i}`).then((a) => {
-        if (a.kind === 'go') a.release();
+        if (a.kind === 'go') a.granted.release('wrong');
       });
     }
     expect(budget()).toBe(BUDGET_RESERVED);
@@ -487,14 +510,14 @@ describe('every way to a password check, and whose address it counts', () => {
     expect(await guesser.json()).toMatchObject({ error: expect.stringMatching(/^Too many sign-in attempts/) });
 
     const pending = login({ address: '192.168.1.50' });
-    await turnsUntil(() => vi.getTimerCount() > BUDGET_BURST - BUDGET_RESERVED);
+    await turnsUntil(() => attemptTimers() > BUDGET_BURST - BUDGET_RESERVED);
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
     const res = await pending;
     expect(res.status).toBe(200);
   });
 
   it('gives a forged or expired remembered-device cookie no priority', async () => {
-    const device = deviceCookieOf(await login({ address: '10.7.0.29' }));
+    const device = deviceCookieOf(await login({ remember: true, address: '10.7.0.29' }));
     floodFromGuessers();
     const forged = device.slice(0, -2) + (device.endsWith('AA') ? 'BB' : 'AA');
 

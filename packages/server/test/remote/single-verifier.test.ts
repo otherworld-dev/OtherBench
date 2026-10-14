@@ -18,9 +18,11 @@ function functionBody(text: string, name: string): string {
 }
 
 describe('one way to check the sign-in password', () => {
+  // The type checker is the first line: verifyPassword wants the Granted only LoginLimiter.admit makes. This backs it up.
   it('has verifyPassword used only by checkPassword in remote/auth.ts, which takes the limiter first', () => {
     const users = sources(src)
-      .filter((file) => /\bverifyPassword\b/.test(readFileSync(file, 'utf8')))
+      // A call or an import; a mention in a comment doesn't count.
+      .filter((file) => /\bverifyPassword\(|import[^;]*\bverifyPassword\b/.test(readFileSync(file, 'utf8')))
       .map((file) => relative(src, file).replaceAll('\\', '/'))
       .sort();
     expect(users).toEqual(['remote/auth.ts', 'remote/password.ts']);

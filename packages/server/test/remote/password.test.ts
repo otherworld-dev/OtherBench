@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LoginFileError } from '../../src/remote/errors.js';
 import { hashPassword, passwordProblem, PasswordFile, verifyPassword } from '../../src/remote/password.js';
-import { FAST } from './helpers.js';
+import { FAST, granted } from './helpers.js';
 
 // Passes through to the real readFileSync; one test makes a single call fail.
 vi.mock('node:fs', async (importOriginal) => {
@@ -28,20 +28,31 @@ describe('hashPassword and verifyPassword', () => {
     expect(record.salt).toMatch(/^[0-9a-f]{32}$/);
     expect(record.hash).toMatch(/^[0-9a-f]{64}$/);
     expect(record.epoch).toMatch(/^[0-9a-f]{16}$/);
-    expect(await verifyPassword('correct horse battery', record)).toBe(true);
-    expect(await verifyPassword('correct horse batterY', record)).toBe(false);
+    expect(await verifyPassword('correct horse battery', record, await granted())).toBe(true);
+    expect(await verifyPassword('correct horse batterY', record, await granted())).toBe(false);
   });
 
   it("read scrypt's parameters from the record, so they can rise later", async () => {
     const record = await hashPassword('correct horse battery', FAST);
 
-    expect(await verifyPassword('correct horse battery', { ...record, scrypt: { ...FAST, N: 2 ** 11 } })).toBe(false);
+    expect(await verifyPassword('correct horse battery', { ...record, scrypt: { ...FAST, N: 2 ** 11 } }, await granted())).toBe(false);
   });
 
   it('match the same accented password typed composed (Windows) or decomposed (iPhone)', async () => {
     const record = await hashPassword('caf\u00e9 au lait 99', FAST);
 
-    expect(await verifyPassword('cafe\u0301 au lait 99', record)).toBe(true);
+    expect(await verifyPassword('cafe\u0301 au lait 99', record, await granted())).toBe(true);
+  });
+
+  it('check one password per check the limiter granted, and none once it is released', async () => {
+    const record = await hashPassword('correct horse battery', FAST);
+    const once = await granted();
+
+    expect(await verifyPassword('correct horse battery', record, once)).toBe(true);
+    await expect(verifyPassword('correct horse battery', record, once)).rejects.toThrow(/already used/);
+    const released = await granted();
+    released.release('unavailable');
+    await expect(verifyPassword('correct horse battery', record, released)).rejects.toThrow(/already used/);
   });
 });
 
@@ -64,7 +75,7 @@ describe('PasswordFile', () => {
 
     expect(file.read()).toEqual(written);
     expect(JSON.parse(readFileSync(join(dir, 'login.json'), 'utf8'))).toEqual(written);
-    expect(await verifyPassword('correct horse battery', file.read()!)).toBe(true);
+    expect(await verifyPassword('correct horse battery', file.read()!, await granted())).toBe(true);
   });
 
   it('refuses to write a short password', async () => {

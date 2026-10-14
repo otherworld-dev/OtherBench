@@ -5,14 +5,25 @@ import {
   BUDGET_REFILL_MS,
   BUDGET_RESERVED,
   CLEAN_WINDOW_MS,
+  DEVICE_BURST,
+  DEVICE_MAX_FAILURES,
+  DEVICE_REFILL_MS,
+  DEVICE_WINDOW_MS,
   FAILURE_WINDOW_MS,
   GLOBAL_BUCKET_MS,
   GLOBAL_WINDOW_MS,
+  Granted,
   LOCK_MS,
   LoginLimiter,
+  type LogReason,
   MAX_CONCURRENT_CHECKS,
   MAX_DELAYED,
   MAX_DELAYED_PER_ADDRESS,
+  MAX_FAILURES,
+  MAX_SUMMARY_ADDRESSES,
+  MAX_TRACKED,
+  monotonicNow,
+  type Outcome,
   SLOW_BASE_MS,
   SLOW_MAX_MS,
   slowDownMs,
@@ -149,6 +160,49 @@ describe('slowDownMs', () => {
   });
 });
 
+/** Waits for real event-loop turns (setImmediate isn't faked) and says whether `p` has settled. */
+async function settledYet<T>(p: Promise<T>): Promise<T | 'waiting'> {
+  return Promise.race([p, new Promise<'waiting'>((r) => setImmediate(() => r('waiting')))]);
+}
+
+function track(p: Promise<Admission>): { result: Admission | null } {
+  const box: { result: Admission | null } = { result: null };
+  void p.then((r) => {
+    box.result = r;
+  });
+  return box;
+}
+
+/** Releases a granted check with `outcome`; other admissions are left alone. */
+const finish =
+  (outcome: Outcome = 'right') =>
+  (a: Admission): Admission => {
+    if (a.kind === 'go') a.granted.release(outcome);
+    return a;
+  };
+
+/** Takes both check slots with clean addresses and returns their releases. */
+async function holdSlots(l: LoginLimiter): Promise<Array<() => void>> {
+  const held: Array<() => void> = [];
+  for (let i = 0; i < MAX_CONCURRENT_CHECKS; i++) {
+    const a = await l.admit(`192.0.2.${i}`);
+    if (a.kind !== 'go') throw new Error('expected a slot');
+    held.push(() => a.granted.release('right'));
+  }
+  return held;
+}
+
+/** The most checks in any hour-long stretch of `times`. */
+function worstHour(times: number[]): number {
+  const sorted = [...times].sort((a, b) => a - b);
+  let worst = 0;
+  for (let i = 0, j = 0; j < sorted.length; j++) {
+    while (sorted[j]! - sorted[i]! >= GLOBAL_WINDOW_MS) i++;
+    worst = Math.max(worst, j - i + 1);
+  }
+  return worst;
+}
+
 describe('LoginLimiter.admit', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -158,29 +212,12 @@ describe('LoginLimiter.admit', () => {
   });
 
   /** A limiter with `failures` wrong passwords in the window, none from one address more than 4 times. */
-  function slowed(failures: number) {
-    const fx = limiter();
-    for (let i = 0; i < failures; i++) fx.limiter.fail(spread(i));
-    return fx;
-  }
-
-  function track(p: Promise<Admission>): { result: Admission | null } {
-    const box: { result: Admission | null } = { result: null };
-    void p.then((r) => {
-      box.result = r;
-    });
-    return box;
-  }
-
-  /** Takes both check slots and returns their releases. */
-  async function holdSlots(l: LoginLimiter): Promise<Array<() => void>> {
-    const held: Array<() => void> = [];
-    for (let i = 0; i < MAX_CONCURRENT_CHECKS; i++) {
-      const a = await l.admit(`192.0.2.${i}`, { device: true });
-      if (a.kind !== 'go') throw new Error('expected a slot');
-      held.push(a.release);
-    }
-    return held;
+  function slowed(failures: number, opts: { maxDelayed?: number } = {}) {
+    const clock = { now: 1_000_000_000 };
+    const log = vi.fn();
+    const l = new LoginLimiter({ now: () => clock.now, log, ...opts });
+    for (let i = 0; i < failures; i++) l.fail(spread(i));
+    return { clock, log, limiter: l };
   }
 
   it('lets an attempt straight into a check slot with fewer than 20 failures', async () => {
@@ -190,7 +227,7 @@ describe('LoginLimiter.admit', () => {
     expect(a).toMatchObject({ kind: 'go', waitedMs: 0 });
     expect(vi.getTimerCount()).toBe(0);
     expect(l.stats().running).toBe(1);
-    if (a.kind === 'go') a.release();
+    finish()(a);
     expect(l.stats().running).toBe(0);
   });
 
@@ -217,43 +254,54 @@ describe('LoginLimiter.admit', () => {
   });
 
   it('spends one token of the budget per check: 20 at hand, then one every 45 s, waiting up to 10 s for it', async () => {
-    const { clock, limiter: l } = limiter();
+    const { clock, limiter: l } = slowed(0);
     for (let i = 0; i < BUDGET_BURST; i++) {
-      const a = await l.admit(`10.0.0.${i}`);
+      const a = finish()(await l.admit(`10.0.0.${i}`));
       expect(a).toMatchObject({ kind: 'go', waitedMs: 0 });
-      if (a.kind === 'go') a.release();
     }
 
     expect(await l.admit('10.0.1.1')).toEqual({ kind: 'busy', retryAfterSec: BUDGET_REFILL_MS / 1000, why: 'budget' });
-    expect(vi.getTimerCount()).toBe(0);
+    // No timer for the refusal; the one there is the log summary's.
+    expect(vi.getTimerCount()).toBe(1);
 
     clock.now += BUDGET_REFILL_MS - SLOW_MAX_MS;
     const waiting = track(l.admit('10.0.1.1'));
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(2);
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
     expect(waiting.result?.kind).toBe('go');
     // That token was 10 s off and is spent; the next comes 45 s after it.
     expect(await l.admit('10.0.1.2')).toEqual({ kind: 'busy', retryAfterSec: (SLOW_MAX_MS + BUDGET_REFILL_MS) / 1000, why: 'budget' });
   });
 
-  it('lets a remembered device skip the budget and the delay', async () => {
+  it('lets a remembered device skip the budget and the delay, spending a device token instead', async () => {
     const { limiter: l } = slowed(5000);
     for (let i = 0; i < BUDGET_BURST; i++) void l.admit(`10.200.0.${i}`);
     expect((await l.admit('10.200.1.1')).kind).toBe('busy');
-    expect(l.stats().waiting).toBe(BUDGET_BURST);
 
-    const device = await l.admit('10.200.1.1', { device: true });
+    const device = await l.admit('10.200.1.1', { device: 'device-a' });
     expect(device).toMatchObject({ kind: 'go', waitedMs: 0 });
-    if (device.kind === 'go') device.release();
+    expect(l.stats().deviceBudget).toBe(DEVICE_BURST - 1);
+    finish()(device);
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
   });
 
+  it('gives remembered devices a budget of their own: 5 at hand, then one every 4 minutes', async () => {
+    const { clock, limiter: l } = slowed(0);
+    for (let i = 0; i < DEVICE_BURST; i++) expect(finish()(await l.admit('10.0.0.1', { device: `device-${i}` })).kind).toBe('go');
+
+    expect(await l.admit('10.0.0.1', { device: 'device-9' })).toEqual({ kind: 'busy', retryAfterSec: DEVICE_REFILL_MS / 1000, why: 'budget' });
+    clock.now += DEVICE_REFILL_MS;
+    expect(finish()(await l.admit('10.0.0.1', { device: 'device-9' })).kind).toBe('go');
+    // The ordinary budget is untouched.
+    expect(l.stats().budget).toBe(BUDGET_BURST);
+  });
+
   it('queues for a check slot instead of refusing, first come first served, with remembered devices ahead', async () => {
-    const { limiter: l } = limiter();
+    const { limiter: l } = slowed(0);
     const [first, second] = await holdSlots(l);
     const a = track(l.admit('10.0.0.1'));
     const b = track(l.admit('10.0.0.2'));
-    const device = track(l.admit('10.0.0.3', { device: true }));
+    const device = track(l.admit('10.0.0.3', { device: 'device-a' }));
     await Promise.resolve();
     expect(l.stats()).toMatchObject({ waiting: 3, queued: 3, running: 2 });
     expect(vi.getTimerCount()).toBe(0);
@@ -266,24 +314,28 @@ describe('LoginLimiter.admit', () => {
     await Promise.resolve();
     expect(a.result?.kind).toBe('go');
     expect(b.result).toBeNull();
-    if (device.result?.kind === 'go') device.result.release();
+    finish()(device.result!);
     await Promise.resolve();
     expect(b.result?.kind).toBe('go');
     expect(l.stats()).toMatchObject({ waiting: 0, queued: 0, running: 2 });
   });
 
-  it('refuses past 50 waiting at once, and past 2 from one address (one IPv6 /64), at once and with no timer', async () => {
-    const { limiter: l } = limiter();
+  it('refuses past the waiting cap (5 of it kept for clean addresses and devices) and past 2 from one address (one IPv6 /64), at once and with no timer', async () => {
+    const { limiter: l } = slowed(0, { maxDelayed: 8 });
     await holdSlots(l);
-    for (let i = 0; i < MAX_DELAYED_PER_ADDRESS; i++) void l.admit('2001:db8:0:1::1', { device: true });
-    expect(await l.admit('2001:db8:0:1::2', { device: true })).toEqual({ kind: 'busy', retryAfterSec: 1, why: 'places' });
-    void l.admit('2001:db8:0:2::1', { device: true });
+    for (let i = 0; i < MAX_DELAYED_PER_ADDRESS; i++) void l.admit('2001:db8:0:1::1');
+    expect(await l.admit('2001:db8:0:1::2')).toEqual({ kind: 'busy', retryAfterSec: 1, why: 'places' });
+    void l.admit('2001:db8:0:2::1');
     expect(l.stats()).toMatchObject({ waiting: 3, waitingAddresses: 2 });
 
-    for (let i = 0; l.stats().waiting < MAX_DELAYED; i++) void l.admit(`10.1.0.${i}`, { device: true });
-    expect(l.stats().waiting).toBe(MAX_DELAYED);
-    expect(await l.admit('10.2.0.1', { device: true })).toEqual({ kind: 'busy', retryAfterSec: 1, why: 'places' });
-    expect(vi.getTimerCount()).toBe(0);
+    // An address that has failed may not take the 5 kept places: 3 are taken.
+    l.fail('10.3.0.1');
+    expect(await l.admit('10.3.0.1')).toEqual({ kind: 'busy', retryAfterSec: 1, why: 'places' });
+    for (let i = 0; l.stats().waiting < 8; i++) void l.admit(`10.1.0.${i}`);
+    expect(await l.admit('10.2.0.1')).toEqual({ kind: 'busy', retryAfterSec: 1, why: 'places' });
+    expect(await l.admit('10.2.0.2', { device: 'device-a' })).toEqual({ kind: 'busy', retryAfterSec: 1, why: 'places' });
+    // Only the log summary's.
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('frees the place and clears the timer of an attempt whose client disconnects while it waits', async () => {
@@ -297,11 +349,12 @@ describe('LoginLimiter.admit', () => {
     await Promise.resolve();
     expect(leaving.result).toEqual({ kind: 'gone' });
     expect(l.stats()).toMatchObject({ waiting: 0, waitingAddresses: 0 });
-    expect(vi.getTimerCount()).toBe(0);
+    // Only the log summary's, which counts it as left before its check.
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('takes an attempt that disconnects out of the queue for a slot', async () => {
-    const { limiter: l } = limiter();
+    const { limiter: l } = slowed(0);
     const [first] = await holdSlots(l);
     const gone = new AbortController();
     const leaving = track(l.admit('10.0.0.1', { signal: gone.signal }));
@@ -318,14 +371,107 @@ describe('LoginLimiter.admit', () => {
     expect(next.result?.kind).toBe('go');
   });
 
-  it("doesn't wait at all for a client that has already gone", async () => {
+  it("doesn't wait at all, or charge anything, for a client that has already gone", async () => {
     const { limiter: l } = slowed(100);
     const gone = new AbortController();
     gone.abort();
 
-    expect(await l.admit('10.0.0.1', { signal: gone.signal })).toEqual({ kind: 'gone' });
+    expect(await l.admit('192.168.9.9', { signal: gone.signal })).toEqual({ kind: 'gone' });
     expect(vi.getTimerCount()).toBe(0);
     expect(l.stats().waiting).toBe(0);
+    expect(l.isClean('192.168.9.9')).toBe(true);
+  });
+
+  it('charges a failure to an address whose admitted attempt leaves or ends unchecked', async () => {
+    const { limiter: l } = slowed(20);
+    const before = l.globalFailures();
+    for (let i = 0; i < 4; i++) {
+      const gone = new AbortController();
+      const leaving = l.admit('192.168.9.1', { signal: gone.signal });
+      gone.abort();
+      expect(await leaving).toEqual({ kind: 'gone' });
+    }
+    expect(l.isClean('192.168.9.1')).toBe(false);
+    expect(l.check('192.168.9.1')).toEqual({ ok: true });
+    const fifth = l.admit('192.168.9.1');
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+    finish('unchecked')(await fifth);
+
+    expect(l.check('192.168.9.1').ok).toBe(false);
+    expect(l.globalFailures()).toBe(before + 5);
+    // No password file to check against isn't the client's doing.
+    const unavailable = l.admit('192.168.9.2');
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+    finish('unavailable')(await unavailable);
+    expect(l.isClean('192.168.9.2')).toBe(true);
+  });
+
+  it('locks a remembered device by its id after 5 wrong passwords, for a day, leaving its address alone', async () => {
+    const { clock, limiter: l } = slowed(0);
+    for (let i = 0; i < DEVICE_MAX_FAILURES; i++) {
+      clock.now += DEVICE_REFILL_MS;
+      finish('wrong')(await l.admit('10.0.0.1', { device: 'device-a' }));
+    }
+
+    expect(l.checkDevice('device-a').ok).toBe(false);
+    expect(l.checkDevice('device-b')).toEqual({ ok: true });
+    expect(l.check('10.0.0.1')).toEqual({ ok: true });
+    expect(l.isClean('10.0.0.1')).toBe(true);
+    clock.now += DEVICE_WINDOW_MS;
+    expect(l.checkDevice('device-a')).toEqual({ ok: true });
+  });
+
+  it('clears a device id on a right password, and a locked address does not lock the device', async () => {
+    const { clock, limiter: l } = slowed(0);
+    for (let i = 0; i < DEVICE_MAX_FAILURES - 1; i++) finish('wrong')(await l.admit('10.0.0.1', { device: 'device-a' }));
+    clock.now += DEVICE_REFILL_MS;
+    finish('right')(await l.admit('10.0.0.1', { device: 'device-a' }));
+    clock.now += DEVICE_REFILL_MS;
+    finish('wrong')(await l.admit('10.0.0.1', { device: 'device-a' }));
+    expect(l.checkDevice('device-a')).toEqual({ ok: true });
+
+    for (let i = 0; i < MAX_FAILURES; i++) l.fail('10.0.0.1');
+    expect(l.check('10.0.0.1').ok).toBe(false);
+    expect(l.checkDevice('device-a')).toEqual({ ok: true });
+  });
+});
+
+describe('Granted', () => {
+  it('is good for one password check, not after it is released, and only the limiter makes one', async () => {
+    const l = new LoginLimiter({ log: () => {} });
+    const a = await l.admit('10.0.0.1');
+    if (a.kind !== 'go') throw new Error('expected a check');
+
+    expect(a.granted.spend()).toBe(true);
+    expect(a.granted.spend()).toBe(false);
+    a.granted.release('right');
+    a.granted.release('wrong');
+    expect(l.isClean('10.0.0.1')).toBe(true);
+    expect(l.stats().running).toBe(0);
+
+    const b = await l.admit('10.0.0.2');
+    if (b.kind !== 'go') throw new Error('expected a check');
+    b.granted.release('right');
+    expect(b.granted.spend()).toBe(false);
+
+    const Forge = Granted as unknown as new (issuer: symbol, settle: () => void) => Granted;
+    expect(() => new Forge(Symbol('LoginLimiter'), () => {})).toThrow(/Only the sign-in limiter/);
+  });
+});
+
+describe('LoginLimiter clock', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps a lock when the system clock jumps, by default', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const l = new LoginLimiter({ log: () => {} });
+    for (let i = 0; i < MAX_FAILURES; i++) l.fail('10.0.0.1');
+
+    vi.setSystemTime(Date.now() + 2 * LOCK_MS);
+    expect(l.check('10.0.0.1').ok).toBe(false);
+    expect(monotonicNow()).toBeLessThan(Date.now());
   });
 });
 
@@ -338,7 +484,7 @@ describe('LoginLimiter under an hour-long flood from many addresses', () => {
   });
 
   it('runs at most 100 password checks in any hour, keeps every wait and map within its cap, and lets a remembered device in at once', async () => {
-    const l = new LoginLimiter({ log: () => {} });
+    const l = new LoginLimiter({ now: () => Date.now(), log: () => {} });
     const start = Date.now();
     const checks: number[] = [];
     let busy = 0;
@@ -350,35 +496,30 @@ describe('LoginLimiter under an hour-long flood from many addresses', () => {
       void l.admit(address).then((a) => {
         if (a.kind === 'busy') {
           busy += 1;
-          retryAfter = [Math.min(retryAfter[0], a.retryAfterSec), Math.max(retryAfter[1], a.retryAfterSec)];
+          retryAfter = [Math.min(retryAfter[0]!, a.retryAfterSec), Math.max(retryAfter[1]!, a.retryAfterSec)];
           return;
         }
         if (a.kind !== 'go') return;
         checks.push(Date.now());
-        l.fail(address);
-        a.release();
+        a.granted.release('wrong');
       });
 
     // Two hours of 10 new addresses a second, every one a wrong password.
     for (let second = 0; second < 2 * 3600; second++) {
       for (let i = 0; i < 10; i++) attempt(`10.${(next >> 16) & 255}.${(next >> 8) & 255}.${next++ & 255}`);
       maxWaiting = Math.max(maxWaiting, l.stats().waiting);
-      maxTimers = Math.max(maxTimers, vi.getTimerCount());
+      // One timer may be the log summary's.
+      maxTimers = Math.max(maxTimers, vi.getTimerCount() - 1);
       if (second === 5400) {
         // Mid-flood, a remembered device goes straight to a check.
-        const device = await l.admit('192.168.1.50', { device: true });
+        const device = finish()(await l.admit('192.168.1.50', { device: 'device-a' }));
         expect(device).toMatchObject({ kind: 'go', waitedMs: 0 });
-        if (device.kind === 'go') device.release();
       }
       await vi.advanceTimersByTimeAsync(1000);
     }
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
 
-    let worst = 0;
-    for (let i = 0, j = 0; j < checks.length; j++) {
-      while (checks[j]! - checks[i]! >= GLOBAL_WINDOW_MS) i++;
-      worst = Math.max(worst, j - i + 1);
-    }
+    const worst = worstHour(checks);
     expect(worst).toBeLessThanOrEqual(100);
     expect(worst).toBeGreaterThanOrEqual(95);
     expect(checks.length).toBeLessThanOrEqual(100 + 80 + 1);
@@ -394,6 +535,37 @@ describe('LoginLimiter under an hour-long flood from many addresses', () => {
     // eslint-disable-next-line no-console
     console.log(`flood: ${checks.length} checks in 2 hours, at most ${worst} in any hour; ${busy} refused at once`);
   });
+
+  it('runs at most 100 + 20 checks in any hour when device cookies are replayed too', async () => {
+    const l = new LoginLimiter({ now: () => Date.now(), log: () => {} });
+    const plain: number[] = [];
+    const device: number[] = [];
+    let next = 0;
+    const attempt = (into: number[], address: string, deviceId?: string) =>
+      void l.admit(address, deviceId ? { device: deviceId } : {}).then((a) => {
+        if (a.kind !== 'go') return;
+        into.push(Date.now());
+        a.granted.release('wrong');
+      });
+
+    // Two hours: 10 new addresses a second, and 10 attempts a second with ever new (as if stolen) device cookies.
+    for (let second = 0; second < 2 * 3600; second++) {
+      for (let i = 0; i < 10; i++) {
+        attempt(plain, `10.${(next >> 16) & 255}.${(next >> 8) & 255}.${next & 255}`);
+        attempt(device, `172.16.${(next >> 8) & 255}.${next & 255}`, `stolen-${next}`);
+        next += 1;
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+
+    expect(worstHour(plain)).toBeLessThanOrEqual(100);
+    expect(worstHour(device)).toBeLessThanOrEqual(20);
+    expect(worstHour([...plain, ...device])).toBeLessThanOrEqual(120);
+    expect(l.stats().trackedDevices).toBeLessThanOrEqual(MAX_TRACKED);
+    // eslint-disable-next-line no-console
+    console.log(`with devices: at most ${worstHour(plain)} + ${worstHour(device)} = ${worstHour([...plain, ...device])} checks in any hour`);
+  });
 });
 
 describe('LoginLimiter: the reserve for clean addresses', () => {
@@ -404,7 +576,7 @@ describe('LoginLimiter: the reserve for clean addresses', () => {
     vi.useRealTimers();
   });
 
-  it('calls an address clean until it guesses wrong, its /64 included, for a day or until it signs in', () => {
+  it('calls an address clean until it fails, its /64 included, for a day or until it signs in', () => {
     const { clock, limiter: l } = limiter();
     expect(l.isClean('10.0.0.1')).toBe(true);
     l.fail('10.0.0.1');
@@ -423,7 +595,7 @@ describe('LoginLimiter: the reserve for clean addresses', () => {
     expect(l.isClean('10.0.0.4')).toBe(true);
   });
 
-  it('remembers a bounded number of wrong-password addresses for the reserve', () => {
+  it('remembers a bounded number of failed addresses for the reserve', () => {
     const { limiter: l } = limiter(2);
     l.fail('10.0.0.1');
     l.fail('10.0.0.2');
@@ -433,15 +605,15 @@ describe('LoginLimiter: the reserve for clean addresses', () => {
     expect(l.isClean('10.0.0.3')).toBe(false);
   });
 
-  it('keeps 5 of the 20 tokens from addresses that have guessed wrong, for a clean one', async () => {
+  it('keeps 5 of the 20 tokens from addresses that have failed, for a clean one', async () => {
     const { limiter: l } = limiter();
     for (let i = 0; i < 30; i++) l.fail(`10.7.0.${i}`);
     for (let i = 0; i < BUDGET_BURST - BUDGET_RESERVED; i++) void l.admit(`10.7.0.${i}`);
     expect(await l.admit('10.7.0.20')).toMatchObject({ kind: 'busy', why: 'budget' });
     expect(l.stats().budget).toBe(BUDGET_RESERVED);
 
-    const clean = await Promise.race([l.admit('192.168.1.50'), new Promise<null>((r) => setImmediate(() => r(null)))]);
-    expect(clean?.kind ?? 'waiting').not.toBe('busy');
+    const clean = await settledYet(l.admit('192.168.1.50'));
+    expect(clean === 'waiting' ? 'waiting' : clean.kind).not.toBe('busy');
     expect(l.stats().budget).toBe(BUDGET_RESERVED - 1);
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
   });
@@ -453,7 +625,8 @@ describe('LoginLimiter: the reserve for clean addresses', () => {
 
     const grabbed: string[] = [];
     for (const fresh of ['203.0.113.1', '203.0.113.1', '203.0.113.1', '203.0.113.2', '203.0.113.2', '203.0.113.3']) {
-      grabbed.push(await Promise.race([l.admit(fresh).then((a) => a.kind), new Promise<string>((r) => setImmediate(() => r('waiting')))]));
+      const a = await settledYet(l.admit(fresh));
+      grabbed.push(a === 'waiting' ? a : a.kind);
     }
     // Each waits out the delay on a token; the third from .1 is over its 2 places; .3 takes the last token.
     expect(grabbed).toEqual(['waiting', 'waiting', 'busy', 'waiting', 'waiting', 'waiting']);
@@ -466,20 +639,16 @@ describe('LoginLimiter: the reserve for clean addresses', () => {
 
   it('serves a clean address ahead of the rest in the queue for a check slot, after remembered devices', async () => {
     const { limiter: l } = limiter();
-    const held: Array<() => void> = [];
-    for (let i = 0; i < MAX_CONCURRENT_CHECKS; i++) {
-      const a = await l.admit(`192.0.2.${i}`, { device: true });
-      if (a.kind === 'go') held.push(a.release);
-    }
+    const held = await holdSlots(l);
     l.fail('10.0.0.1');
     const order: string[] = [];
     const note = (name: string) => (a: Admission) => {
       order.push(name);
-      if (a.kind === 'go') a.release();
+      finish()(a);
     };
     void l.admit('10.0.0.1').then(note('dirty'));
     void l.admit('10.0.0.2').then(note('clean'));
-    void l.admit('10.0.0.3', { device: true }).then(note('device'));
+    void l.admit('10.0.0.3', { device: 'device-a' }).then(note('device'));
     await Promise.resolve();
 
     held[0]!();
@@ -488,7 +657,7 @@ describe('LoginLimiter: the reserve for clean addresses', () => {
   });
 });
 
-describe('LoginLimiter under an hour-long flood from addresses that keep guessing', () => {
+describe('LoginLimiter under an hour-long flood that tries to spend the reserve', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   });
@@ -496,60 +665,83 @@ describe('LoginLimiter under an hour-long flood from addresses that keep guessin
     vi.useRealTimers();
   });
 
-  it('admits a clean address every time within its 10 s wait, and still runs at most 100 checks in any hour', async () => {
-    const l = new LoginLimiter({ log: () => {} });
+  /** Every five minutes someone signs in correctly from a clean address of their own; how long each waited, or -1 when refused. */
+  function cleanSignIns(l: LoginLimiter, second: number, waits: number[]): void {
+    if (second % 300 !== 150) return;
+    const started = Date.now();
+    void l.admit(`192.168.${second % 256}.${Math.floor(second / 256)}`).then((a) => {
+      if (a.kind !== 'go') {
+        waits.push(-1);
+        return;
+      }
+      waits.push(Date.now() - started);
+      a.granted.release('right');
+    });
+  }
+
+  it('admits a clean address every time within its 10 s wait while addresses that have failed flood, and runs at most 100 checks in any hour', async () => {
+    const l = new LoginLimiter({ now: () => Date.now(), log: () => {} });
     // 4000 addresses that have each guessed wrong once (as many as 4 per address go before a lock).
     const pool = Array.from({ length: 4000 }, (_, i) => `10.${(i >> 8) & 255}.${i & 255}.1`);
     for (const address of pool) l.fail(address);
     const checks: number[] = [];
-    const cleanWaits: number[] = [];
+    const waits: number[] = [];
     let next = 0;
-    let refusedClean = 0;
     const attacker = () => {
       const address = pool[next++ % pool.length]!;
       if (!l.check(address).ok) return;
       void l.admit(address).then((a) => {
         if (a.kind !== 'go') return;
         checks.push(Date.now());
-        l.fail(address);
-        a.release();
+        a.granted.release('wrong');
       });
     };
 
     for (let second = 0; second < 3600; second++) {
       for (let i = 0; i < 10; i++) attacker();
-      if (second % 300 === 150) {
-        // Every five minutes, someone signs in correctly from a clean address of their own.
-        const started = Date.now();
-        void l.admit(`192.168.${second % 256}.${Math.floor(second / 256)}`).then((a) => {
-          if (a.kind !== 'go') {
-            refusedClean += 1;
-            return;
-          }
-          checks.push(Date.now());
-          cleanWaits.push(Date.now() - started);
-          a.release();
-        });
-      }
+      cleanSignIns(l, second, waits);
       await vi.advanceTimersByTimeAsync(1000);
     }
     await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
 
-    expect(refusedClean).toBe(0);
-    expect(cleanWaits).toHaveLength(12);
-    expect(Math.max(...cleanWaits)).toBeLessThanOrEqual(SLOW_MAX_MS + 1000);
-    let worst = 0;
-    for (let i = 0, j = 0; j < checks.length; j++) {
-      while (checks[j]! - checks[i]! >= GLOBAL_WINDOW_MS) i++;
-      worst = Math.max(worst, j - i + 1);
-    }
-    expect(worst).toBeLessThanOrEqual(100);
+    expect(waits).toHaveLength(12);
+    expect(Math.min(...waits)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(SLOW_MAX_MS + 1000);
+    expect(worstHour(checks)).toBeLessThanOrEqual(100);
     // eslint-disable-next-line no-console
-    console.log(`dirty flood: ${checks.length} checks in the hour, at most ${worst} in any hour; clean sign-ins waited at most ${Math.max(...cleanWaits)} ms`);
+    console.log(`dirty flood: ${checks.length} checks in the hour; clean sign-ins waited at most ${Math.max(...waits)} ms`);
+  });
+
+  it('keeps a clean address that leaves every attempt from keeping a second clean address out', async () => {
+    const l = new LoginLimiter({ now: () => Date.now(), log: () => {} });
+    // Enough failures elsewhere that every attempt waits, so it can walk away mid-wait.
+    for (let i = 0; i < 20; i++) l.fail(spread(i));
+    const waits: number[] = [];
+    let polls = 0;
+
+    for (let second = 0; second < 3600; second++) {
+      // The poller: once a second, from one address, takes a place and leaves before its check.
+      if (l.check('203.0.113.7').ok) {
+        const gone = new AbortController();
+        void l.admit('203.0.113.7', { signal: gone.signal }).then((a) => finish('wrong')(a));
+        polls += 1;
+        gone.abort();
+      }
+      cleanSignIns(l, second, waits);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    await vi.advanceTimersByTimeAsync(SLOW_MAX_MS);
+
+    expect(waits).toHaveLength(12);
+    expect(Math.min(...waits)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...waits)).toBeLessThanOrEqual(SLOW_MAX_MS + 1000);
+    // Five walk-aways lock it; it gets about 5 tries per lock, not one a second.
+    expect(polls).toBeLessThanOrEqual(5 * Math.ceil(3600_000 / LOCK_MS) + 5);
+    expect(l.isClean('203.0.113.7')).toBe(false);
   });
 });
 
-describe('LoginLimiter.noteWrong', () => {
+describe('LoginLimiter.note', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   });
@@ -560,18 +752,45 @@ describe('LoginLimiter.noteWrong', () => {
   it('logs each wrong password until the slow-down starts, then a count a minute', async () => {
     const { clock, log, limiter: l } = limiter();
     clock.now = 10 * GLOBAL_BUCKET_MS;
-    l.noteWrong('10.0.0.1');
+    l.note('wrong', '10.0.0.1');
     expect(log).toHaveBeenLastCalledWith('[grunt-server] wrong password from 10.0.0.1');
 
     for (let i = 0; i < 20; i++) l.fail(spread(i));
     log.mockClear();
-    for (let i = 0; i < 30; i++) l.noteWrong(`10.0.0.${i % 3}`);
+    for (let i = 0; i < 30; i++) l.note('wrong', `10.0.0.${i % 3}`);
     expect(log).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(GLOBAL_BUCKET_MS);
-    expect(log.mock.calls).toEqual([['[grunt-server] 30 wrong passwords in the last minute from 3 addresses']]);
+    expect(log.mock.calls).toEqual([['[grunt-server] sign-in in the last minute: 30 wrong passwords, from 3 addresses']]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('folds a flood of refusals into one line a minute, with a count per reason and a capped count of addresses', async () => {
+    const { clock, log, limiter: l } = limiter();
+    clock.now = 10 * GLOBAL_BUCKET_MS;
+    const reasons: LogReason[] = ['budget', 'places', 'locked', 'abandoned', 'no-password-file'];
+    for (let i = 0; i < 50_000; i++) l.note(reasons[i % reasons.length]!, `10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}`);
+    expect(log).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(GLOBAL_BUCKET_MS);
+    expect(log.mock.calls).toEqual([
+      [
+        `[grunt-server] sign-in in the last minute: 10000 told to wait (budget spent), 10000 told to wait (too many waiting), 10000 refused while locked, 10000 left before their check, 10000 refused (no password file), from at least ${MAX_SUMMARY_ADDRESSES} addresses`,
+      ],
+    ]);
+  });
+
+  it('writes the summary out a minute at a time across a long flood', async () => {
+    const { clock, log, limiter: l } = limiter();
+    for (let minute = 0; minute < 60; minute++) {
+      for (let i = 0; i < 100; i++) l.note('budget', `10.0.0.${i}`);
+      clock.now += GLOBAL_BUCKET_MS;
+      await vi.advanceTimersByTimeAsync(GLOBAL_BUCKET_MS);
+    }
+
+    expect(log.mock.calls.length).toBeLessThanOrEqual(60);
   });
 });
 

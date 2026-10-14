@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { main } from '../../src/cli.js';
 import { PasswordCommandError, runPasswordCommand } from '../../src/remote/password-command.js';
 import { PasswordFile, verifyPassword } from '../../src/remote/password.js';
-import { FAST } from './helpers.js';
+import { FAST, granted } from './helpers.js';
 
 let dir: string;
 beforeEach(() => {
@@ -31,8 +31,8 @@ describe('grunt password', () => {
     await runPasswordCommand(path, io, FAST);
 
     const record = new PasswordFile(path).read()!;
-    expect(await verifyPassword(' pässwörd with spaces ', record)).toBe(true);
-    expect(await verifyPassword(' pässwörd with spaces \r', record)).toBe(false);
+    expect(await verifyPassword(' pässwörd with spaces ', record, await granted())).toBe(true);
+    expect(await verifyPassword(' pässwörd with spaces \r', record, await granted())).toBe(false);
     expect(out.join('')).toBe('Password set. Devices signed in to this server are signed out.\n');
   });
 
@@ -61,7 +61,7 @@ describe('grunt password', () => {
     expect(ok.stdin.setRawMode).toHaveBeenCalledWith(true);
     expect(ok.stdin.setRawMode).toHaveBeenLastCalledWith(false);
     expect(ok.out.join('')).not.toContain('typed password1');
-    expect(await verifyPassword('typed password1', new PasswordFile(path).read()!)).toBe(true);
+    expect(await verifyPassword('typed password1', new PasswordFile(path).read()!, await granted())).toBe(true);
 
     const bad = make();
     const refused = runPasswordCommand(path, bad.io, FAST);
@@ -104,8 +104,8 @@ describe('grunt password', () => {
       await run;
 
       const record = new PasswordFile(path).read()!;
-      expect(await verifyPassword('typed password1', record)).toBe(true);
-      expect(await verifyPassword('typed passwordX1', record)).toBe(false);
+      expect(await verifyPassword('typed password1', record, await granted())).toBe(true);
+      expect(await verifyPassword('typed passwordX1', record, await granted())).toBe(false);
     });
 
     it('ignores arrow keys, Delete and control characters, even when an escape sequence is split across chunks', async () => {
@@ -119,7 +119,7 @@ describe('grunt password', () => {
       t.stdin.write('typed pass\u001bOCword1typed\r');
       await run;
 
-      expect(await verifyPassword('typed password1typed', new PasswordFile(path).read()!)).toBe(true);
+      expect(await verifyPassword('typed password1typed', new PasswordFile(path).read()!, await granted())).toBe(true);
     });
 
     it('rejects when stdin ends mid-prompt, with raw mode off and no listeners', async () => {

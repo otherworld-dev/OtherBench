@@ -60,7 +60,8 @@ export function createRemoteAccess(o: RemoteAccessOptions): RemoteAccess {
   const passwords = new PasswordFile(o.loginPath, now, o.scrypt);
   const sessions = new SessionStore({ now });
   sessions.startSweeping(() => passwords.epoch());
-  const limiter = new LoginLimiter({ now, log });
+  // The limiter keeps its own monotonic clock unless a test hands it one.
+  const limiter = new LoginLimiter({ ...(o.now ? { now: o.now } : {}), log });
   return {
     publicOrigins: unique(parsed.map((p) => p.origin)),
     publicHosts: unique(parsed.map((p) => p.host)),
