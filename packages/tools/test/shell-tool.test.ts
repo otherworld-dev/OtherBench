@@ -103,6 +103,23 @@ describe('run_command', () => {
     expect(result.output).toContain('hello-grunt');
   });
 
+  it("never lets a command see the server's API token", async () => {
+    const before = process.env['GRUNT_TOKEN'];
+    process.env['GRUNT_TOKEN'] = 'leaked-token-value';
+    try {
+      const result = (await runCommandTool.execute(
+        { command: `node -e "process.stdout.write('[' + (process.env.GRUNT_TOKEN ?? 'none') + ']')"` },
+        ctx()
+      )) as Record<string, unknown>;
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain('[none]');
+      expect(result.output).not.toContain('leaked-token-value');
+    } finally {
+      if (before === undefined) delete process.env['GRUNT_TOKEN'];
+      else process.env['GRUNT_TOKEN'] = before;
+    }
+  });
+
   it('runs with cwd forced to the workspace root', async () => {
     const result = (await runCommandTool.execute(
       { command: `node -e "process.stdout.write(process.cwd())"` },

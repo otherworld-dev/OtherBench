@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
+import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -250,6 +251,8 @@ function runCommand(command: string, cwd: string, timeoutMsUsed: number, ctx: To
         cwd,
         windowsHide: true,
         windowsVerbatimArguments: verbatim,
+        // The server's own API token never reaches a command (core/domain/child-env.ts).
+        env: withoutServerSecrets(process.env),
         // detached so POSIX can kill the whole process group (see
         // terminate()); harmless on Windows, where detached only affects
         // console signal delivery and taskkill is used for cleanup instead.
