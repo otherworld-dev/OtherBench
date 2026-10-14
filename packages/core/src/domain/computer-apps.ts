@@ -56,6 +56,27 @@ export const COMPUTER_OFF_REASON = 'Computer use is turned off for this profile.
 export const COMPUTER_UNATTENDED_REASON = 'Computer use needs someone at the machine; it never runs unattended.';
 export const COMPUTER_NO_APP_REASON = "Grunt couldn't tell which app this action would use, so it didn't run it.";
 export const COMPUTER_GRUNT_REASON = "That's Grunt's own window. Grunt never controls itself.";
+export const COMPUTER_GRUNT_UI_REASON = "That window is showing Grunt's own pages. Grunt never controls itself, in a browser or anywhere else.";
+
+/**
+ * The marker every page of Grunt's web UI carries in its title, so a browser
+ * window that is showing Grunt is refused like Grunt's own window. Without it
+ * a model holding a lasting grant for a browser could open Grunt there and
+ * answer its own approval cards. Grunt's UI sets `GRUNT_UI_TITLE` and keeps
+ * it (packages/web/src/title.ts); the desktop shell refuses a window whose
+ * title holds the marker before every step of an action too
+ * (desktop/src-tauri/src/computer/facts.rs, `GRUNT_UI_TITLE_MARKER`, which
+ * must stay this exact string). A page that copies the marker only gets
+ * itself refused, which is safe.
+ */
+export const GRUNT_UI_TITLE_MARKER = '[grunt-ui]';
+/** The title of every page of Grunt's web UI. */
+export const GRUNT_UI_TITLE = `Grunt ${GRUNT_UI_TITLE_MARKER}`;
+
+/** Whether a window title shows Grunt's own UI: it holds `GRUNT_UI_TITLE_MARKER`, in any letter case. */
+export function showsGruntUi(title: unknown): boolean {
+  return typeof title === 'string' && asciiLower(title).includes(GRUNT_UI_TITLE_MARKER);
+}
 export const COMPUTER_UNCHECKED_REASON = "Grunt couldn't check what kind of window that is, so it didn't use it.";
 export const COMPUTER_NO_WINDOW_REASON = "Grunt couldn't pin down which window that is, so it didn't use it.";
 export const COMPUTER_BAD_ACTION_REASON = "Grunt can't carry out that action as it was sent, so it didn't run it.";
@@ -545,7 +566,8 @@ export type ClassifiedTarget = Readonly<{ kind: 'refuse'; reason: string }> | De
  * that is decided, and it fails closed: a missing or wrong-typed fact is a
  * refusal or high risk, never an ordinary app.
  *
- * Refused: no valid path; a Grunt window or program; an elevated process;
+ * Refused: no valid path; a Grunt window or program; a window whose title shows Grunt's UI
+ * (`showsGruntUi`, a browser tab of Grunt, say); an elevated process;
  * one with UI access; a flag for any of those that isn't a boolean; no
  * window, pid or start time to bind the action to.
  *
@@ -584,6 +606,8 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   const byOriginalName = t['originalName'] === undefined ? 'high' : originalNameRisk(t['originalName'], keyStem);
 
   if (t['grunt'] === true || byKey === 'grunt' || byOriginalName === 'grunt') return refuse(COMPUTER_GRUNT_REASON);
+  // Grunt's UI in any window (a browser tab, say), by the whole title as the shell read it, before it is cut for the card.
+  if (showsGruntUi(t['title'])) return refuse(COMPUTER_GRUNT_UI_REASON);
   if (t['grunt'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
   if (t['elevated'] === true) return refuse(`${said} is running as administrator, so Grunt can't control it.`);
   if (t['elevated'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);

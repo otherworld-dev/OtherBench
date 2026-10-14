@@ -7,6 +7,7 @@ import {
   actionSummary,
   appKey,
   COMPUTER_BAD_ACTION_REASON,
+  COMPUTER_GRUNT_UI_REASON,
   COMPUTER_NO_APP_REASON,
   COMPUTER_NO_WINDOW_REASON,
   COMPUTER_OFF_REASON,
@@ -18,6 +19,7 @@ import {
   isReadAction,
   isUnattendedRun,
   parseAction,
+  showsGruntUi,
 } from './computer-apps.js';
 import { canonicalHost, isLocalOrPrivateHost } from './network-hosts.js';
 import { containPathIn } from './paths.js';
@@ -364,6 +366,10 @@ export class PermissionBroker {
       // could land anywhere, so it is refused.
       if (expectationOf(args) === null) return { kind: 'deny', reason: COMPUTER_NO_WINDOW_REASON };
       if (!valid) return { kind: 'deny', reason: COMPUTER_BAD_ACTION_REASON };
+      // A window showing Grunt's own UI (a browser tab of it) is refused before
+      // any grant is looked at: `classifyTarget` refuses it first, and this is
+      // the backstop, so no grant for the browser ever reaches Grunt's cards.
+      if (showsGruntUi(rawField(args, 'appTitle'))) return { kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON };
     }
 
     // Recall (spec 2026-10-09-recall-design) gets no shortcut: it reads the

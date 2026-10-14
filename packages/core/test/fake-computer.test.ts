@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appArgs, classifyTarget, expectationOf } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_GRUNT_UI_REASON, expectationOf, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
 import type { ComputerAction, ComputerExpectation } from '../src/ports/computer.js';
 import {
   FAKE_COMPUTER_APP,
@@ -147,6 +147,19 @@ describe('FakeComputerDriver', () => {
     driver.pointTarget = FAKE_COMPUTER_APP;
     expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: true });
     expect(driver.actions).toHaveLength(1);
+  });
+
+  it("does nothing in the approved window once it shows Grunt's own UI, as the shell checks before every step", async () => {
+    const driver = await started();
+    const click: ComputerAction = { action: 'left_click', coordinate: [5, 5] };
+    // The same window, process and run: only its title changed (the browser went to Grunt after the card).
+    driver.pointTarget = fakeComputerTarget({ title: `${GRUNT_UI_TITLE} - Google Chrome` });
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: false, reason: COMPUTER_GRUNT_UI_REASON });
+    driver.changeForeground(fakeComputerTarget({ title: GRUNT_UI_TITLE }));
+    expect(await driver.act('c1', { action: 'type', text: 'hi' }, EXPECT)).toEqual({ ok: false, reason: COMPUTER_GRUNT_UI_REASON });
+    expect(driver.actions).toEqual([]);
+    driver.pointTarget = FAKE_COMPUTER_APP;
+    expect(await driver.act('c1', click, EXPECT)).toEqual({ ok: true });
   });
 
   it('does nothing when the approved window has become a file view, or a file dialog of the same app is now there', async () => {

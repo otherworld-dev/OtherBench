@@ -10,12 +10,15 @@ import {
   classifyTarget,
   COMPUTER_ACTIONS,
   COMPUTER_LIMITS,
+  COMPUTER_GRUNT_UI_REASON,
   COMPUTER_SCREEN_ABOUT,
   coordinateOf,
   describeApp,
   describedCallArgs,
   desktopTextForResult,
   expectationOf,
+  GRUNT_UI_TITLE,
+  GRUNT_UI_TITLE_MARKER,
   HIGH_RISK_FAMILIES,
   HIGH_RISK_STEMS,
   IDE_STEMS,
@@ -29,6 +32,7 @@ import {
   READ_ACTIONS,
   screenContentError,
   screenContentResult,
+  showsGruntUi,
   typedTextForCard,
   windowTitleForCard,
   type ClassifiedTarget,
@@ -1300,5 +1304,43 @@ describe("browsers and IDEs may have lasting grants (Adam's ruling, 2026-10-14)"
       expect(app(classifyTarget(target({ path, originalName: name, signer: 'Microsoft Windows' }))).risk, path).toBe('high');
       expect(isHighRiskApp({ app: path, appRisk: 'normal', appShellView: false }), path).toBe(true);
     }
+  });
+});
+
+describe("a window showing Grunt's own UI is refused, a browser tab included", () => {
+  const CHROME = { path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', originalName: 'chrome.exe', signer: 'Google LLC' };
+
+  it('has one fixed marker, plain ASCII, in the title of every page of the UI', () => {
+    expect(GRUNT_UI_TITLE_MARKER).toBe('[grunt-ui]');
+    expect(GRUNT_UI_TITLE).toBe('Grunt [grunt-ui]');
+    expect(/^[\x20-\x7e]+$/.test(GRUNT_UI_TITLE)).toBe(true);
+    expect(showsGruntUi(GRUNT_UI_TITLE)).toBe(true);
+  });
+
+  it("refuses the browser window with no card, however the browser dresses the page's title", () => {
+    for (const title of [
+      `${GRUNT_UI_TITLE} - Google Chrome`,
+      `${GRUNT_UI_TITLE} and 3 more pages - Profile 1 - Microsoft\u200b Edge`,
+      `${GRUNT_UI_TITLE} \u2014 Mozilla Firefox`,
+      'GRUNT [GRUNT-UI] - Google Chrome',
+      // Past the 80 characters a card shows: the whole title as the shell read it is looked at.
+      `${'x'.repeat(200)} ${GRUNT_UI_TITLE}`,
+    ]) {
+      expect(classifyTarget(target({ ...CHROME, title })), title).toEqual({ kind: 'refuse', reason: COMPUTER_GRUNT_UI_REASON });
+    }
+  });
+
+  it('refuses it in any app, ordinary or once-only, whatever else the shell reported', () => {
+    for (const over of [{}, CHROME, { path: 'C:\\Windows\\System32\\cmd.exe', originalName: 'Cmd.Exe' }, { shellView: true }, { signer: null }]) {
+      expect(refusal(classifyTarget(target({ ...over, title: `${GRUNT_UI_TITLE} - Google Chrome` }))), JSON.stringify(over)).toBe(COMPUTER_GRUNT_UI_REASON);
+    }
+  });
+
+  it('leaves a title without the marker alone', () => {
+    for (const title of ['Grunt', 'Grunt docs - Google Chrome', 'grunt-ui', '[grunt ui]', '']) {
+      expect(classifyTarget(target({ ...CHROME, title })).kind, title).toBe('app');
+      expect(showsGruntUi(title), title).toBe(false);
+    }
+    for (const notText of [undefined, null, 42, ['[grunt-ui]']]) expect(showsGruntUi(notText)).toBe(false);
   });
 });

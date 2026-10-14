@@ -4,7 +4,7 @@ import type { Grant } from '../src/ports/store.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
-import { appArgs, classifyTarget } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_GRUNT_UI_REASON, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
 import { fakeComputerTarget } from '../src/testing/fake-computer.js';
 
 // App keys are the paths the shell resolved, compared exactly: on-disk case and all.
@@ -409,6 +409,19 @@ describe('PermissionBroker and computer use', () => {
     const unsigned = classify({ path: CHROME, originalName: 'chrome.exe', signer: null });
     expect(broker.decide(COMPUTER, unsigned, policy(), ctx()).kind).toBe('ask');
     expect(store.grants.list()).toHaveLength(2);
+  });
+
+  it("refuses a call whose window shows Grunt's own UI, with no card, even with chat and always grants for the browser", () => {
+    const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    grant(CHROME);
+    grant(CHROME, { chatId: 'chat-1', scope: 'chat' });
+    for (const action of [{}, { action: 'type', text: 'hi' }, { action: 'key', text: 'Return' }]) {
+      const args = click(CHROME, { appTitle: `${GRUNT_UI_TITLE} - Google Chrome`, ...action });
+      expect(broker.decide(COMPUTER, args, policy(), ctx()), JSON.stringify(action)).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
+      expect(broker.decide(COMPUTER, args, policy({ approvalMode: 'always_ask' }), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
+    }
+    // The same browser on another page is covered by its grant.
+    expect(broker.decide(COMPUTER, click(CHROME, { appTitle: 'Inbox - Google Chrome' }), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
   it('treats an app as high-risk unless the call is provably ordinary', () => {
