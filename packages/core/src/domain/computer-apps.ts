@@ -78,6 +78,13 @@ export const GRUNT_UI_TITLE_MARKER = '[grunt-ui]';
  */
 export const COMPUTER_DESKTOP_ONLY_REASON =
   'Grunt is controlling this computer, so until that ends it only takes answers and changes from the Grunt app on this computer. Answer there, or stop computer use first.';
+/**
+ * The same refusal when no chat holds the computer but the desktop app hasn't
+ * confirmed that the last session ended (an end in flight, or one it never
+ * answered, which lasts until it does or Grunt is restarted).
+ */
+export const COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON =
+  "Grunt hasn't had the desktop app confirm that computer use ended, so until it does it only takes answers and changes from the Grunt app on this computer. If this doesn't clear in a few seconds, restart Grunt.";
 
 /** The title of every page of Grunt's web UI. */
 export const GRUNT_UI_TITLE = `Grunt ${GRUNT_UI_TITLE_MARKER}`;
