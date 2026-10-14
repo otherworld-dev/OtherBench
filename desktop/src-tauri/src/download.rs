@@ -17,12 +17,22 @@ use std::path::{Path, PathBuf};
 /// The largest download accepted.
 pub const MAX_BYTES: usize = 100 * 1024 * 1024;
 
-/// Extensions Windows runs, installs or follows on a double-click. Grunt never makes these; refusing them here
-/// is a second wall behind the viewer's own extension list.
-const BLOCKED_EXTENSIONS: &[&str] = &[
-    "exe", "com", "bat", "cmd", "ps1", "psm1", "psd1", "vbs", "vbe", "jse", "wsf", "wsh", "hta", "lnk", "scr", "msi", "msp", "cpl", "pif",
-    "reg", "dll", "appref-ms", "url", "library-ms", "settingcontent-ms", "application", "gadget", "inf", "scf",
+/// The extensions Grunt makes: chat exports (.md, .json) and artifact files, by kind and by code language
+/// (`KIND_EXT` and `LANGUAGE_EXT` in packages/core/src/domain/artifacts.ts, less `ps1`). Any other extension,
+/// or none, gets `.txt` added (`script.ps1.txt`, `report.pdf.exe.txt`), so whatever comes this way opens in a
+/// text editor rather than running. An allowlist rather than a list of what to refuse, since such a list is
+/// never complete; a language added in TypeScript later falls back to `.txt`, which is safe.
+const ALLOWED_EXTENSIONS: &[&str] = &[
+    "md", "json", "txt", "html", "mmd", "svg", "docx", "xlsx", "pptx", "csv", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "go",
+    "java", "kt", "rb", "php", "cs", "cpp", "c", "h", "hpp", "swift", "scala", "dart", "lua", "r", "sh", "sql", "yml", "toml", "ini", "xml",
+    "css", "scss",
 ];
+
+/// Characters that change how a name displays without being seen (direction overrides, zero-width and other
+/// format characters), which can make a `.exe` name read as a `.xlsx` one.
+fn is_invisible(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+}
 
 /// Names Windows treats as devices, whatever the extension.
 const DEVICE_NAMES: &[&str] = &[
@@ -30,13 +40,14 @@ const DEVICE_NAMES: &[&str] = &[
     "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-/// `name` as a file name to save under, or why it can't be one.
+/// `name` as a file name to save under (with `.txt` added when its extension isn't one Grunt makes), or why it
+/// can't be one.
 pub fn safe_name(name: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 200 {
         return Err("The file name is empty or too long.".into());
     }
-    if name.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')) {
+    if name.chars().any(|c| c.is_control() || is_invisible(c) || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')) {
         return Err(format!("\"{name}\" isn't a file name Windows allows."));
     }
     if name.ends_with('.') || name.ends_with(' ') || name == "." || name == ".." {
@@ -46,12 +57,8 @@ pub fn safe_name(name: &str) -> Result<String, String> {
     if DEVICE_NAMES.contains(&stem.as_str()) {
         return Err(format!("\"{name}\" is a name Windows keeps for a device."));
     }
-    if let Some((_, ext)) = name.rsplit_once('.') {
-        if BLOCKED_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()) {
-            return Err(format!("Grunt doesn't save .{ext} files: Windows would run them."));
-        }
-    }
-    Ok(name.to_string())
+    let allowed = name.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && ALLOWED_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()));
+    Ok(if allowed { name.to_string() } else { format!("{name}.txt") })
 }
 
 /// Opens a new file in `dir` named `name`, or `stem (1).ext`, `stem (2).ext`, ... when that is taken. The file is
@@ -136,12 +143,39 @@ mod tests {
 
     #[test]
     fn keeps_ordinary_names() {
-        for ok in ["expenses.xlsx", "Trip plans.md", "report.final.docx", "notes", "café menu.pptx", "main.js", "script.py"] {
+        for ok in ["expenses.xlsx", "Trip plans.md", "report.final.docx", "café menu.pptx", "main.js", "script.py", "a.MD", "b.Json", "f.svg", "g.mmd", "h.html", "k.sh", "l.csv"] {
             assert_eq!(safe_name(ok).unwrap(), ok);
         }
         // Surrounding spaces are trimmed (Windows would drop a trailing one anyway); a trailing dot is refused.
         assert_eq!(safe_name("  padded.txt  ").unwrap(), "padded.txt");
-        assert_eq!(safe_name("trailing ").unwrap(), "trailing");
+        assert_eq!(safe_name("trailing.md ").unwrap(), "trailing.md");
+    }
+
+    #[test]
+    fn adds_txt_to_anything_grunt_does_not_make() {
+        for (given, saved) in [
+            ("setup.exe", "setup.exe.txt"),
+            ("run.BAT", "run.BAT.txt"),
+            ("go.ps1", "go.ps1.txt"),
+            ("page.hta", "page.hta.txt"),
+            ("short.lnk", "short.lnk.txt"),
+            ("report.pdf.exe", "report.pdf.exe.txt"),
+            ("tool.jar", "tool.jar.txt"),
+            ("help.chm", "help.chm.txt"),
+            ("snap.msc", "snap.msc.txt"),
+            ("add.xll", "add.xll.txt"),
+            ("noext", "noext.txt"),
+            (".md", ".md.txt"),
+        ] {
+            assert_eq!(safe_name(given).unwrap(), saved, "{given}");
+        }
+    }
+
+    #[test]
+    fn refuses_invisible_characters_that_disguise_a_name() {
+        for bad in ["evil\u{202E}xslx.exe", "a\u{200B}b.md", "x\u{FEFF}.md", "y\u{2066}z.md", "soft\u{00AD}hy.md"] {
+            assert!(safe_name(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
@@ -150,14 +184,6 @@ mod tests {
             assert!(safe_name(bad).is_err(), "{bad:?} should be refused");
         }
         assert!(safe_name(&"a".repeat(201)).is_err());
-    }
-
-    #[test]
-    fn refuses_what_windows_would_run() {
-        for bad in ["setup.exe", "run.BAT", "x.cmd", "go.ps1", "a.vbs", "page.hta", "short.lnk", "s.scr", "i.msi", "k.reg", "l.url", "x.tar.exe"] {
-            let err = safe_name(bad).unwrap_err();
-            assert!(err.contains("Windows would run"), "{bad}: {err}");
-        }
     }
 
     #[test]
@@ -173,7 +199,10 @@ mod tests {
         assert_eq!(std::fs::read(&third).unwrap(), b"three");
         let plain = save(&dir, "notes", b"x").unwrap();
         let plain2 = save(&dir, "notes", b"y").unwrap();
-        assert_eq!(plain2.file_name().unwrap(), "notes (1)");
+        assert_eq!(plain.file_name().unwrap(), "notes.txt");
+        assert_eq!(plain2.file_name().unwrap(), "notes (1).txt");
+        // A name Grunt doesn't make is saved as text, never as something Windows would run.
+        assert_eq!(save(&dir, "run.exe", b"x").unwrap().file_name().unwrap(), "run.exe.txt");
         assert_eq!(std::fs::read(&plain).unwrap(), b"x");
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -182,7 +211,7 @@ mod tests {
     fn refuses_a_bad_name_or_a_too_large_file_without_writing() {
         let dir = temp();
         assert!(save(&dir, "../escape.txt", b"x").is_err());
-        assert!(save(&dir, "run.exe", b"x").is_err());
+        assert!(save(&dir, "evil\u{202E}xslx.exe", b"x").is_err());
         assert!(save(&dir, "big.bin", &vec![0u8; MAX_BYTES + 1]).is_err());
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
