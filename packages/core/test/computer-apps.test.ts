@@ -5,6 +5,7 @@ import {
   APP_ARG_FIELDS,
   appArgs,
   appKey,
+  BROWSER_STEMS,
   chatTitleForDialog,
   classifyTarget,
   COMPUTER_ACTIONS,
@@ -17,6 +18,7 @@ import {
   expectationOf,
   HIGH_RISK_FAMILIES,
   HIGH_RISK_STEMS,
+  IDE_STEMS,
   isComputerAction,
   isHighRiskApp,
   isHighRiskProgramName,
@@ -150,9 +152,9 @@ describe('the app key', () => {
 
 describe('what a card says about an app', () => {
   it('takes the name and the path from the key, and nothing else', () => {
-    expect(describeApp(EXCEL)).toEqual({ key: EXCEL, name: 'EXCEL.EXE', path: EXCEL, unusual: false });
-    expect(describeApp(DOWNLOADED_EXCEL)).toEqual({ key: DOWNLOADED_EXCEL, name: 'EXCEL.EXE', path: DOWNLOADED_EXCEL, unusual: false });
-    expect(describeApp('\\\\server\\share\\App.exe')).toEqual({ key: '\\\\server\\share\\App.exe', name: 'App.exe', path: '\\\\server\\share\\App.exe', unusual: false });
+    expect(describeApp(EXCEL)).toEqual({ key: EXCEL, name: 'EXCEL.EXE', path: EXCEL, unusual: false, kind: null });
+    expect(describeApp(DOWNLOADED_EXCEL)).toEqual({ key: DOWNLOADED_EXCEL, name: 'EXCEL.EXE', path: DOWNLOADED_EXCEL, unusual: false, kind: null });
+    expect(describeApp('\\\\server\\share\\App.exe')).toEqual({ key: '\\\\server\\share\\App.exe', name: 'App.exe', path: '\\\\server\\share\\App.exe', unusual: false, kind: null });
     for (const bad of ['EXCEL', 'C:/x.exe', '', null, 42, undefined]) expect(describeApp(bad)).toBeNull();
   });
 
@@ -325,22 +327,21 @@ describe('classifying a target', () => {
 });
 
 describe('the high-risk list', () => {
-  it('holds shells, script hosts, shell surfaces, admin tools, remote clients, password managers, browsers and IDEs', () => {
+  it('holds shells, script hosts, shell surfaces, admin tools, remote clients and password managers', () => {
     const names = [
       // The original list.
       'cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'wt.exe', 'conhost.exe', 'openconsole.exe', 'wsl.exe', 'wslhost.exe',
       'bash.exe', 'mintty.exe', 'explorer.exe', 'systemsettings.exe', 'regedit.exe', 'mmc.exe', 'taskmgr.exe', 'control.exe', 'rundll32.exe',
       // What the name-only list let through.
-      'powershell_ise.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe', 'msiexec.exe', 'mstsc.exe', 'git-bash.exe', 'alacritty.exe', 'code.exe',
+      'powershell_ise.exe', 'wscript.exe', 'cscript.exe', 'mshta.exe', 'msiexec.exe', 'mstsc.exe', 'git-bash.exe', 'alacritty.exe',
       'dllhost.exe', 'consent.exe', 'CredentialUIBroker.exe', 'LogonUI.exe', 'perfmon.exe', 'SystemPropertiesAdvanced.exe', 'osk.exe',
       'ApplicationFrameHost.exe', 'StartMenuExperienceHost.exe', 'SearchHost.exe', 'python.exe', 'node.exe', 'ssh.exe', 'ftp.exe',
       // Families.
       'python3.12.exe', 'pythonw.exe', 'ubuntu2204.exe', 'conemu64.exe', 'ConEmuC.exe', 'SystemPropertiesProtection.exe',
       // Remote and VM clients, password managers.
       'msrdc.exe', 'vmconnect.exe', 'VirtualBoxVM.exe', 'AnyDesk.exe', 'TeamViewer.exe', '1Password.exe', 'KeePassXC.exe', 'Bitwarden.exe',
-      // Browsers and IDEs with terminals.
-      'chrome.exe', 'msedge.exe', 'firefox.exe', 'brave.exe', 'opera.exe', 'vivaldi.exe', 'Arc.exe', 'Code.exe', 'Cursor.exe', 'devenv.exe',
-      'idea64.exe', 'pycharm64.exe', 'webstorm64.exe', 'rider64.exe', 'clion64.exe', 'goland64.exe', 'idea.exe', 'studio64.exe',
+      // Internet Explorer, the editors that are not IDEs and JetBrains Gateway stay once-only.
+      'iexplore.exe', 'notepad++.exe', 'sublime_text.exe', 'gateway64.exe',
       // Grunt itself.
       'grunt-desktop.exe', 'Grunt.exe',
     ];
@@ -389,7 +390,9 @@ describe('the high-risk list', () => {
       { app: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE', appRisk: 'normal', appShellView: false },
       { app: 'C:\\PROGRA~1\\App\\app.exe', appRisk: 'normal', appShellView: false },
       { app: 'C:\\Programs\\Microsoft VS Code\\C\u043ede.exe', appRisk: 'normal', appShellView: false },
-      { app: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', appRisk: 'normal', appShellView: false },
+      { app: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', appRisk: 'high', appShellView: false },
+      { app: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', appRisk: 'normal', appShellView: true },
+      { app: 'C:\\Program Files\\Internet Explorer\\iexplore.exe', appRisk: 'normal', appShellView: false },
       { app: 'C:\\Tools\\thing.scr', appRisk: 'normal', appShellView: false },
       { app: [NOTEPAD], appRisk: 'normal', appShellView: false },
     ];
@@ -879,8 +882,8 @@ describe('round 2: file dialogs, shares, look-alike folders and the longer list'
   it('holds the remote-help tools, file managers, scriptable editors and automation hosts', () => {
     const names = [
       'quickassist.exe', 'msra.exe', 'WindowsSandbox.exe', 'WindowsSandboxClient.exe', 'mRemoteNG.exe', 'RDCMan.exe', 'TOTALCMD.EXE', 'TOTALCMD64.EXE',
-      'doublecmd.exe', 'dopus.exe', 'notepad++.exe', 'sublime_text.exe', 'Zed.exe', 'AutoHotkey.exe', 'AutoHotkey64.exe', 'AutoHotkeyU64.exe', 'OpenWith.exe',
-      'gateway64.exe', 'gateway.exe', 'mps64.exe', 'mps.exe',
+      'doublecmd.exe', 'dopus.exe', 'notepad++.exe', 'sublime_text.exe', 'AutoHotkey.exe', 'AutoHotkey64.exe', 'AutoHotkeyU64.exe', 'OpenWith.exe',
+      'gateway64.exe', 'gateway.exe',
     ];
     for (const name of names) expect(isHighRiskProgramName(name), name).toBe(true);
     for (const family of ['windowssandbox', 'totalcmd', 'autohotkey']) expect(HIGH_RISK_FAMILIES).toContain(family);
@@ -894,6 +897,9 @@ describe('round 2: file dialogs, shares, look-alike folders and the longer list'
       expect(app(classifyTarget(target({ ...fresh, signer }))).risk, signer).toBe('high');
     }
     expect(app(classifyTarget(target({ ...fresh, signer: 'Some Other Software Ltd' }))).risk).toBe('normal');
+    // JetBrains Gateway, a client for another machine, is still asked about every time.
+    const gateway = { path: 'C:\\Program Files\\JetBrains\\JetBrains Gateway 2026.2\\bin\\gateway64.exe', originalName: 'gateway64.exe', signer: 'JetBrains s.r.o.' };
+    expect(app(classifyTarget(target(gateway))).risk).toBe('high');
   });
 });
 
@@ -1166,5 +1172,133 @@ describe("words that are not Grunt's own, on their way to a person or a model", 
     }
     expect(isHighRiskProgramName('notepad.exe')).toBe(false);
     expect(isHighRiskApp({ app: NOTEPAD, appRisk: 'normal', appShellView: false })).toBe(false);
+  });
+});
+
+describe("browsers and IDEs may have lasting grants (Adam's ruling, 2026-10-14)", () => {
+  const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+  const BRAVE = 'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe';
+  const VSCODE = 'C:\\Users\\a\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe';
+  const CURSOR = 'C:\\Users\\a\\AppData\\Local\\Programs\\cursor\\Cursor.exe';
+  const VISUAL_STUDIO = 'C:\\Program Files\\Microsoft Visual Studio\\2026\\Community\\Common7\\IDE\\devenv.exe';
+  const IDEA = 'C:\\Program Files\\JetBrains\\IntelliJ IDEA 2026.2\\bin\\idea64.exe';
+
+  /** A signed, fixed-disk, plain-ASCII main window of each: everything ordinary but the program. */
+  const ordinary: [string, Record<string, unknown>, 'browser' | 'ide'][] = [
+    ['Chrome', { path: CHROME, originalName: 'chrome.exe', signer: 'Google LLC' }, 'browser'],
+    ['Edge', { path: EDGE, originalName: 'msedge.exe', signer: 'Microsoft Corporation' }, 'browser'],
+    ['Firefox', { path: 'C:\\Program Files\\Mozilla Firefox\\firefox.exe', originalName: 'firefox.exe', signer: 'Mozilla Corporation' }, 'browser'],
+    ['Brave, built as chrome.exe', { path: BRAVE, originalName: 'chrome.exe', signer: 'Brave Software, Inc.' }, 'browser'],
+    ['VS Code, built as electron.exe', { path: VSCODE, originalName: 'electron.exe', signer: 'Microsoft Corporation' }, 'ide'],
+    ['Cursor, built as electron.exe', { path: CURSOR, originalName: 'electron.exe', signer: 'Anysphere, Inc.' }, 'ide'],
+    ['Visual Studio', { path: VISUAL_STUDIO, originalName: 'devenv.exe', signer: 'Microsoft Corporation' }, 'ide'],
+    ['IntelliJ IDEA, signed by JetBrains', { path: IDEA, originalName: 'idea64.exe', signer: 'JetBrains s.r.o.' }, 'ide'],
+    ['Android Studio, signed by Google', { path: 'C:\\Program Files\\Android\\Android Studio\\bin\\studio64.exe', originalName: null, signer: 'Google LLC' }, 'ide'],
+  ];
+
+  it('finds the main window of a signed browser or IDE ordinary, so the card may offer this chat and always', () => {
+    for (const [what, over, kind] of ordinary) {
+      const classified = app(classifyTarget(target({ ...over, title: what })));
+      expect(classified.risk, what).toBe('normal');
+      expect(isHighRiskApp({ action: 'left_click', coordinate: [1, 2], ...appArgs(classified) }), what).toBe(false);
+      expect(describeApp(classified.key)?.kind, what).toBe(kind);
+    }
+  });
+
+  it('says which kind a program is from the key alone, and nothing for any other program', () => {
+    expect(describeApp(CHROME)?.kind).toBe('browser');
+    expect(describeApp('C:\\Apps\\CHROME.EXE')?.kind).toBe('browser');
+    expect(describeApp(VSCODE)?.kind).toBe('ide');
+    expect(describeApp('C:\\Program Files\\Microsoft VS Code Insiders\\Code - Insiders.exe')?.kind).toBe('ide');
+    expect(describeApp(IDEA)?.kind).toBe('ide');
+    for (const key of [EXCEL, NOTEPAD, 'C:\\Windows\\System32\\cmd.exe', 'C:\\Program Files\\Internet Explorer\\iexplore.exe', 'C:\\Tools\\notepad++.exe', 'C:\\Tools\\gateway64.exe', 'C:\\Tools\\chrome.scr', 'C:\\Tools\\chrome']) {
+      expect(describeApp(key)?.kind, key).toBeNull();
+    }
+    for (const stem of [...BROWSER_STEMS, ...IDE_STEMS]) expect(isHighRiskProgramName(`${stem}.exe`), stem).toBe(false);
+  });
+
+  it('keeps the browser and IDE lists apart from the high-risk list, and nobody can change them', () => {
+    const highRisk = new Set(HIGH_RISK_STEMS);
+    for (const stem of [...BROWSER_STEMS, ...IDE_STEMS]) {
+      expect(highRisk.has(stem), stem).toBe(false);
+      expect(HIGH_RISK_FAMILIES.some((family) => stem.startsWith(family)), stem).toBe(false);
+    }
+    expect(Object.isFrozen(BROWSER_STEMS)).toBe(true);
+    expect(Object.isFrozen(IDE_STEMS)).toBe(true);
+    expect(() => (BROWSER_STEMS as string[]).push('cmd')).toThrow();
+    expect(() => (IDE_STEMS as string[]).push('powershell')).toThrow();
+    expect(new Set([...BROWSER_STEMS, ...IDE_STEMS]).size).toBe(BROWSER_STEMS.length + IDE_STEMS.length);
+    expect(IDE_STEMS).toEqual(expect.arrayContaining(['code', 'devenv', 'idea64', 'pycharm64', 'rider64', 'studio64']));
+    expect(BROWSER_STEMS).toEqual(expect.arrayContaining(['chrome', 'msedge', 'firefox']));
+  });
+
+  it('still asks every time for a browser or IDE that any other rule catches', () => {
+    const [, chrome] = ordinary[0]!;
+    const [, code] = ordinary[4]!;
+    const cases: [string, Record<string, unknown>][] = [
+      ['catalog-signed or unsigned', { ...chrome, signer: null }],
+      ['an empty signer', { ...code, signer: '' }],
+      ['its Save As dialog', { ...chrome, shellView: true }],
+      ['not told whether it is a file view', { ...code, shellView: undefined }],
+      ['a console program', { ...code, console: true }],
+      ['off a fixed disk', { ...chrome, location: 'removable' }],
+      ['on a share', { ...chrome, path: '\\\\server\\apps\\Chrome\\chrome.exe' }],
+      ['an 8.3 path', { ...chrome, path: 'C:\\PROGRA~1\\Google\\Chrome\\APPLIC~1\\chrome.exe' }],
+      ['a user folder with an accented letter', { ...code, path: 'C:\\Users\\Jos\u00e9\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe' }],
+      ['a look-alike letter in the file name', { ...chrome, path: 'C:\\Program Files\\Google\\Chrome\\Application\\chr\u043eme.exe' }],
+      ['no built name reported', { ...chrome, originalName: undefined }],
+      ['a shell renamed chrome.exe', { ...chrome, originalName: 'cmd.exe' }],
+      ['PowerShell renamed Code.exe', { ...code, originalName: 'pwsh.exe' }],
+      ['an IDE renamed chrome.exe', { ...chrome, originalName: 'Code.exe' }],
+      ['a browser renamed Code.exe', { ...code, originalName: 'msedge.exe' }],
+      ['an Electron app renamed chrome.exe', { ...chrome, originalName: 'electron.exe' }],
+      ['an Electron app renamed devenv.exe', { path: VISUAL_STUDIO, originalName: 'electron.exe', signer: 'Someone' }],
+      ['a JetBrains-signed program named as another IDE', { ...code, signer: 'JetBrains s.r.o.' }],
+      ['a JetBrains-signed program named as a browser', { ...chrome, signer: 'JetBrains s.r.o.' }],
+    ];
+    for (const [what, over] of cases) {
+      const classified = classifyTarget(target(over));
+      expect(classified.kind === 'app' && classified.risk === 'normal', what).toBe(false);
+    }
+  });
+
+  it('asks every time for a browser or IDE renamed to look like an ordinary program', () => {
+    for (const originalName of ['chrome.exe', 'msedge.exe', 'Code.exe', 'idea64.exe', 'devenv.exe']) {
+      expect(app(classifyTarget(target({ path: 'C:\\Users\\a\\Desktop\\notes.exe', originalName }))).risk, originalName).toBe('high');
+    }
+    // An ordinary program renamed as a browser is no more than ordinary: the card says what a browser grant could do.
+    expect(app(classifyTarget(target({ path: CHROME, originalName: 'NOTEPAD.EXE' }))).risk).toBe('normal');
+  });
+
+  it('keeps every other once-only program once-only, signed, on a fixed disk and in its main window', () => {
+    const once = [
+      'C:\\Windows\\System32\\cmd.exe',
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      'C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.23.0.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe',
+      'C:\\Program Files\\Git\\git-bash.exe',
+      'C:\\Windows\\explorer.exe',
+      'C:\\Windows\\ImmersiveControlPanel\\SystemSettings.exe',
+      'C:\\Windows\\regedit.exe',
+      'C:\\Windows\\System32\\mmc.exe',
+      'C:\\Windows\\System32\\Taskmgr.exe',
+      'C:\\Windows\\System32\\control.exe',
+      'C:\\Windows\\System32\\rundll32.exe',
+      'C:\\Windows\\System32\\wscript.exe',
+      'C:\\Windows\\System32\\cscript.exe',
+      'C:\\Windows\\System32\\mshta.exe',
+      'C:\\Windows\\System32\\msiexec.exe',
+      'C:\\Program Files\\Internet Explorer\\iexplore.exe',
+      'C:\\Program Files\\Notepad++\\notepad++.exe',
+      'C:\\Program Files\\Sublime Text\\sublime_text.exe',
+      'C:\\Program Files\\Microsoft\\EdgeWebView\\Application\\msedgewebview2.exe',
+      'C:\\Tools\\electron.exe',
+    ];
+    for (const path of once) {
+      const name = path.slice(path.lastIndexOf('\\') + 1);
+      expect(app(classifyTarget(target({ path, originalName: name, signer: 'Microsoft Windows' }))).risk, path).toBe('high');
+      expect(isHighRiskApp({ app: path, appRisk: 'normal', appShellView: false }), path).toBe(true);
+    }
   });
 });

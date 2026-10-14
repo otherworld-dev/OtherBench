@@ -7,7 +7,8 @@
  *   - `appKey` checks the one string that names an app (it never repairs one);
  *   - `classifyTarget` turns the facts the shell reports into "refuse" or an
  *     app with a risk;
- *   - `describeApp` is the only source of the name and path a card shows;
+ *   - `describeApp` is the only source of the name and path a card shows,
+ *     and of the kind (a browser or an IDE) whose lasting grant it explains;
  *   - `parseAction` checks a whole action against every rule and cap and
  *     builds the one that is carried out, and `actionSummary` describes
  *     exactly that;
@@ -16,6 +17,13 @@
  *   - `expectationOf` is what the shell must still find true when it acts.
  * The shell sends facts and presses what it is told. It has no copy of any
  * of these rules.
+ *
+ * Lasting grants ("this chat", "always") are for an app `classifyTarget`
+ * finds ordinary, and only ever for its exact key. Browsers and IDEs may be
+ * ordinary (Adam's ruling, 2026-10-14); terminals and shells, Explorer and
+ * the other shell surfaces, Settings and the admin tools, script hosts and
+ * installers, a path with anything outside plain ASCII, a catalog-signed or
+ * unsigned program and anything Grunt can't identify are never ordinary.
  */
 import { asciiLower, cardLine, hasHiddenCharacter, isWellFormedText, revealAllHidden, revealHidden } from './card-text.js';
 import { KEY_LIMITS, parseKeys } from './computer-keys.js';
@@ -244,6 +252,13 @@ export interface AppDescription {
    * app is asked about every time.
    */
   unusual: boolean;
+  /**
+   * A browser or an IDE, by the key's file name (`BROWSER_STEMS`,
+   * `IDE_STEMS`), or `null`. Display only: it tells the card what a lasting
+   * grant would let the model do there. Whether one is offered is
+   * `isHighRiskApp`'s alone.
+   */
+  kind: AppKind | null;
 }
 
 /**
@@ -260,7 +275,8 @@ export interface AppDescription {
 export function describeApp(key: unknown): AppDescription | null {
   const valid = appKey(key);
   if (valid === null) return null;
-  return { key: valid, name: shown(fileNameOf(valid)), path: shown(valid), unusual: !PRINTABLE_ASCII.test(valid) };
+  const stem = exeStem(fileNameOf(valid));
+  return { key: valid, name: shown(fileNameOf(valid)), path: shown(valid), unusual: !PRINTABLE_ASCII.test(valid), kind: stem === null ? null : kindOfStem(stem) };
 }
 /**
  * A path that did NOT come out of `describeApp` (a stored grant's, say), for
@@ -282,14 +298,45 @@ export function windowTitleForCard(title: unknown): string {
 // ---------------------------------------------------------------------------
 // Risk
 
-const JETBRAINS = ['idea', 'pycharm', 'webstorm', 'phpstorm', 'clion', 'goland', 'rider', 'rubymine', 'datagrip', 'dataspell', 'rustrover', 'studio', 'aqua', 'fleet', 'writerside', 'gateway', 'mps'];
+/** JetBrains IDEs, by launcher name; each launcher comes with and without "64". */
+const JETBRAINS_IDES = ['idea', 'pycharm', 'webstorm', 'phpstorm', 'clion', 'goland', 'rider', 'rubymine', 'datagrip', 'dataspell', 'rustrover', 'studio', 'aqua', 'fleet', 'writerside', 'mps'];
+const withAndWithout64 = (stems: readonly string[]): string[] => stems.flatMap((stem) => [stem, `${stem}64`]);
+
+/**
+ * Web browsers, by file name without `.exe`, lower case. Adam's ruling
+ * (2026-10-14): a browser may have "this chat" and "always" grants, pinned to
+ * its exact program path like any app's. Such a grant is broad, and the card
+ * says so: the model can go to any site the browser reaches, signed in as the
+ * person, devtools and Grunt's own pages in a tab included. Internet Explorer
+ * (`iexplore`) is not here: it runs ActiveX and is on the high-risk list.
+ */
+export const BROWSER_STEMS: readonly string[] = Object.freeze(['chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'chromium']);
+
+/**
+ * IDEs, by file name without `.exe`, lower case, terminals inside them and
+ * all. Adam's ruling (2026-10-14): an IDE may have "this chat" and "always"
+ * grants, pinned to its exact program path; the card says that lets the model
+ * edit and run code there and type into its terminal. Not here, so still
+ * asked about every time: editors that are not IDEs (`notepad++`,
+ * `sublime_text`) and JetBrains Gateway (`gateway`), a client for another
+ * machine.
+ */
+export const IDE_STEMS: readonly string[] = Object.freeze(['code', 'code - insiders', 'vscodium', 'cursor', 'windsurf', 'devenv', 'zed', ...withAndWithout64(JETBRAINS_IDES)]);
+
+/**
+ * IDEs built on Electron. Their program is a renamed `electron.exe` and keeps
+ * that as the name it was built with, which on any other program is a reason
+ * to ask every time (`electron` is on the high-risk list).
+ */
+const ELECTRON_IDE_STEMS: ReadonlySet<string> = new Set(['code', 'code - insiders', 'vscodium', 'cursor', 'windsurf']);
 
 /**
  * Programs Grunt asks about every time ("Allow once" only: no grant is stored
  * for them and none is matched), by file name without `.exe`, lower case.
  * They can run commands, change the system, hold credentials, reach another
  * machine, or host content and terminals Grunt can't see into. The list
- * lives here and nowhere else.
+ * lives here and nowhere else. Browsers and IDEs are not on it: they are in
+ * `BROWSER_STEMS` and `IDE_STEMS`, which may have lasting grants.
  */
 export const HIGH_RISK_STEMS: readonly string[] = Object.freeze([
   // Shells and terminals.
@@ -316,13 +363,12 @@ export const HIGH_RISK_STEMS: readonly string[] = Object.freeze([
   'doublecmd', 'dopus', 'openwith',
   // Password managers.
   '1password', 'keepass', 'keepassxc', 'bitwarden', 'lastpass', 'dashlane',
-  // Browsers: devtools, javascript: addresses, and Grunt's own pages in a tab. Grunt has its own browser for the web.
-  'chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc', 'chromium', 'iexplore',
-  // Editors and IDEs with a terminal inside. JetBrains launchers are named per product, with and without "64".
-  'code', 'code - insiders', 'vscodium', 'cursor', 'windsurf', 'devenv', 'zed',
-  // Editors that run plugins, macros or build commands.
+  // Internet Explorer, which runs ActiveX. Every other browser is in BROWSER_STEMS.
+  'iexplore',
+  // Editors that run plugins, macros or build commands, and are not IDEs. IDEs are in IDE_STEMS.
   'notepad++', 'sublime_text',
-  ...JETBRAINS.flatMap((product) => [product, `${product}64`]),
+  // JetBrains Gateway: a client for an IDE on another machine.
+  ...withAndWithout64(['gateway']),
 ]);
 
 /**
@@ -335,17 +381,34 @@ export const HIGH_RISK_FAMILIES: readonly string[] = Object.freeze(['python', 'u
 
 /**
  * Publishers whose every program is asked about each time, by a word in the
- * verified signer (any letter case). JetBrains: all its IDEs have a terminal,
- * and a product that is on no list yet is covered the day it ships.
+ * verified signer (any letter case), except the IDEs of their own on
+ * `IDE_STEMS` (`SIGNER_OWN_IDES`). JetBrains: a product that is on no list
+ * yet is asked about every time the day it ships, and so are its other tools
+ * (Gateway, Toolbox).
  */
 const HIGH_RISK_SIGNERS: readonly string[] = Object.freeze(['jetbrains']);
+/** The IDEs a word in `HIGH_RISK_SIGNERS` does not count against, when it is the program's own publisher. */
+const SIGNER_OWN_IDES: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({ jetbrains: new Set(withAndWithout64(JETBRAINS_IDES)) });
 
 const HIGH_RISK_STEM_SET: ReadonlySet<string> = new Set(HIGH_RISK_STEMS);
+const BROWSER_STEM_SET: ReadonlySet<string> = new Set(BROWSER_STEMS);
+const IDE_STEM_SET: ReadonlySet<string> = new Set(IDE_STEMS);
 /** Grunt's own programs. A window of one is refused outright, whatever the shell said about whose it is. */
 const GRUNT_STEMS: ReadonlySet<string> = new Set(['grunt', 'grunt-desktop']);
 
 function isListedStem(stem: string): boolean {
   return HIGH_RISK_STEM_SET.has(stem) || HIGH_RISK_FAMILIES.some((family) => stem.startsWith(family));
+}
+
+/** A browser or an IDE: the two kinds of program that may have a lasting grant although they can do a great deal. */
+export type AppKind = 'browser' | 'ide';
+
+/** What kind of program a stem names, or `null` for any other (a listed one included). */
+function kindOfStem(stem: string): AppKind | null {
+  if (isListedStem(stem)) return null;
+  if (BROWSER_STEM_SET.has(stem)) return 'browser';
+  if (IDE_STEM_SET.has(stem)) return 'ide';
+  return null;
 }
 
 /**
@@ -397,8 +460,16 @@ function keyRisk(key: string): Risk {
  * What the name the program was BUILT with says (VERSIONINFO
  * OriginalFilename): a renamed copy of a shell still carries it. `null`
  * (the image has none) says nothing; anything that isn't text is high.
+ *
+ * `keyStem` is the stem of the key's own file name (`null` when it can't be
+ * vouched for). A browser's or an IDE's built name must be of the same kind
+ * as the key's file name (Brave built as `chrome.exe` is still a browser), so
+ * a browser renamed to `notes.exe`, or an IDE to `chrome.exe`, is asked about
+ * every time and the card never shows the wrong kind's words. The one listed
+ * name allowed is `electron`, and only for an Electron IDE (`code.exe` built
+ * as `electron.exe`).
  */
-function originalNameRisk(original: unknown): Risk {
+function originalNameRisk(original: unknown, keyStem: string | null): Risk {
   if (original === null) return 'normal';
   if (typeof original !== 'string' || !PRINTABLE_ASCII.test(original)) return 'high';
   let stem = asciiLower(original).trim();
@@ -406,14 +477,21 @@ function originalNameRisk(original: unknown): Risk {
   if (stem.endsWith('.exe')) stem = stem.slice(0, -4);
   if (stem === '') return 'high';
   if (GRUNT_STEMS.has(stem)) return 'grunt';
-  return isListedStem(stem) ? 'high' : 'normal';
+  if (isListedStem(stem)) return stem === 'electron' && keyStem !== null && ELECTRON_IDE_STEMS.has(keyStem) && kindOfStem(keyStem) === 'ide' ? 'normal' : 'high';
+  const kind = kindOfStem(stem);
+  if (kind === null) return 'normal';
+  return keyStem !== null && kindOfStem(keyStem) === kind ? 'normal' : 'high';
 }
 
-/** A verified signer that says nothing against the program: a non-empty name with no word from `HIGH_RISK_SIGNERS` in it. */
-function isTrustedSigner(signer: unknown): boolean {
+/**
+ * A verified signer that says nothing against the program: a non-empty name
+ * with no word from `HIGH_RISK_SIGNERS` in it, unless the key's file name is
+ * one of that publisher's own IDEs (`SIGNER_OWN_IDES`).
+ */
+function isTrustedSigner(signer: unknown, keyStem: string | null): boolean {
   if (typeof signer !== 'string' || signer.trim() === '') return false;
   const lower = asciiLower(signer);
-  return !HIGH_RISK_SIGNERS.some((word) => lower.includes(word));
+  return !HIGH_RISK_SIGNERS.some((word) => lower.includes(word) && !(keyStem !== null && SIGNER_OWN_IDES[word]?.has(keyStem) === true));
 }
 
 function isOpaqueId(value: unknown, max: number): value is string {
@@ -476,10 +554,19 @@ export type ClassifiedTarget = Readonly<{ kind: 'refuse'; reason: string }> | De
  * vouched for; a short (8.3) segment, or any character outside plain ASCII,
  * anywhere in the path;
  * a path on a share; a console program; a program not on a fixed disk; an
- * unsigned one, or one signed by a publisher in `HIGH_RISK_SIGNERS`; a file
- * dialog or shell file view (`shellView`), which belongs to an ordinary app's
- * process and can open or run any file; any other fact missing or of the
- * wrong type.
+ * unsigned one (a catalog-signed one has no signer, so counts as unsigned),
+ * or one signed by a publisher in `HIGH_RISK_SIGNERS` (bar that publisher's
+ * own IDEs); a file dialog or shell file view (`shellView`), which belongs to
+ * an ordinary app's process and can open or run any file; a browser or IDE
+ * built under a name that is not of its own kind (`originalNameRisk`); any
+ * other fact missing or of the wrong type.
+ *
+ * A browser or an IDE (`BROWSER_STEMS`, `IDE_STEMS`) is on neither list, so
+ * it is judged by every rule above like any other app: signed, on a fixed
+ * disk, not a console, a plain-ASCII path off a share and not a file view,
+ * it is `'normal'` and may have a lasting grant for its exact path. Which
+ * kind it is comes from the key's file name alone (`describeApp(key).kind`),
+ * which is what the card's warning reads.
  */
 export function classifyTarget(target: unknown): ClassifiedTarget {
   const refuse = (reason: string): ClassifiedTarget => Object.freeze({ kind: 'refuse', reason });
@@ -493,7 +580,8 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   const name = shown(fileNameOf(key));
   const said = cardLine(name, 80);
   const byKey = keyRisk(key);
-  const byOriginalName = t['originalName'] === undefined ? 'high' : originalNameRisk(t['originalName']);
+  const keyStem = exeStem(fileNameOf(key));
+  const byOriginalName = t['originalName'] === undefined ? 'high' : originalNameRisk(t['originalName'], keyStem);
 
   if (t['grunt'] === true || byKey === 'grunt' || byOriginalName === 'grunt') return refuse(COMPUTER_GRUNT_REASON);
   if (t['grunt'] !== false) return refuse(COMPUTER_UNCHECKED_REASON);
@@ -512,7 +600,7 @@ export function classifyTarget(target: unknown): ClassifiedTarget {
   const ordinary =
     byKey === 'normal' &&
     byOriginalName === 'normal' &&
-    isTrustedSigner(t['signer']) &&
+    isTrustedSigner(t['signer'], keyStem) &&
     t['console'] === false &&
     !shellView &&
     t['location'] === 'fixed' &&

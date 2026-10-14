@@ -172,9 +172,12 @@ function isShellTool(tool: ToolSpec): boolean {
  * app, named by its key (`appKey`: the program path the shell resolved,
  * compared with `===` and never repaired or folded here), and a call with no
  * valid key is refused. Its grants are always pinned to one key. An app that
- * isn't provably ordinary (`isHighRiskApp`: a shell, Explorer, a browser, or
- * anything unknown) is asked about every time: no grant is stored for it and
- * none is matched. The card's line names the app from the key alone. Its
+ * isn't provably ordinary (`isHighRiskApp`: a shell, Explorer, a script host,
+ * a path outside plain ASCII, or anything unknown) is asked about every time:
+ * no grant is stored for it and none is matched. A browser or an IDE that
+ * passes every other rule is ordinary here and may have a grant, still
+ * pinned to its one key (Adam's ruling, 2026-10-14). The card's line names
+ * the app from the key alone. Its
  * grants follow the same rules as the host-keyed ones: an "always" is
  * exactly `{ app }`, the card's own (`alwaysConstraintFor`), every key must
  * match, and an `app` grant only ever covers a computer call. In Plan mode
@@ -542,7 +545,7 @@ export class PermissionBroker {
     if (isProtectedAgentWrite(pending.tool, pending.args)) return;
 
     // Computer use of an app that isn't provably ordinary (a shell, Explorer,
-    // a browser, anything unknown) is only ever allowed once. Its card offers
+    // a script host, anything unknown) is only ever allowed once. Its card offers
     // nothing else, so a 'chat' or 'always' answer for one is refused out
     // loud and stores nothing; decide() never matches a grant for one either.
     if (pending.tool.source === 'computer') {
