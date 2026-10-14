@@ -63,7 +63,7 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
     timeoutMs: 120_000,
     workspaceRoot: join(dir, 'ws'),
     folders: [{ root: join(dir, 'refs'), access: 'read' }],
-    writable: true,
+    fs: 'readwrite',
     allowedHosts: ['registry.npmjs.org'],
     signal: new AbortController().signal,
     askHost: async (host) => {
@@ -273,6 +273,53 @@ describe.skipIf(!live)('the sandbox on this machine (live)', () => {
   it('keeps the chat home between commands', async () => {
     await sandbox.run(req('echo kept > ~/kept.txt'));
     expect((await sandbox.run(req('cat ~/kept.txt'))).output).toContain('kept');
+  }, 120_000);
+
+  it("with file access off sees none of the chat's folders, even one an earlier command of the chat mounted, and starts in a writable home", async () => {
+    const chatId = 'live-off-chat';
+    const home = `/home/grunt/chats/${chatId}`;
+    // A workspace of this chat's alone, so the only mount of it is the one this chat's read run asks for.
+    mkdirSync(join(dir, 'offws'));
+    writeFileSync(join(dir, 'offws', 'seen.txt'), 'x\n');
+    const workspaceRoot = join(dir, 'offws');
+    const ws = toSandboxPath(workspaceRoot);
+    // A read run of the chat first: the workspace is mounted in the VM, and that command sees it.
+    const reading = await sandbox.run(req(`ls '${ws}' >/dev/null && echo SAW-WS`, { chatId, fs: 'read', workspaceRoot }));
+    expect(reading.exitCode, reading.output).toBe(0);
+    expect(reading.output).toContain('SAW-WS');
+    const mounted = async (): Promise<boolean> => (await runner.exec('root', ['/usr/bin/findmnt', '-n', '--mountpoint', ws])).code === 0;
+    expect(await mounted()).toBe(true);
+    // Then the profile's file access is off. The request still names the workspace and the folder; they are ignored.
+    const off = await sandbox.run(
+      req(
+        [
+          'pwd',
+          `ls '${ws}' && echo SAW-WS`,
+          `ls '${refs()}' && echo SAW-REFS`,
+          'echo "mnt:[$(ls -A /mnt)]"',
+          // Nor through another process's root: the command has its own process space, so no /proc/<pid>/root leads to the VM's /mnt.
+          'echo "proc-mnt:[$(ls -d /proc/[0-9]*/root/mnt/*/ 2>/dev/null | wc -l)]"',
+          `echo no > '${ws}/off.txt' && echo WROTE-WS`,
+          'echo home-ok > ~/off-home.txt && cat ~/off-home.txt',
+        ].join('; '),
+        { chatId, fs: 'off', workspaceRoot }
+      )
+    );
+    console.log(`[sandbox-live] files off: ${off.output.trim()}`);
+    expect(off).toMatchObject({ exitCode: 0, cwd: home });
+    expect(off.output).toContain(home);
+    expect(off.output).not.toContain('SAW-WS');
+    expect(off.output).not.toContain('SAW-REFS');
+    expect(off.output).not.toContain('WROTE-WS');
+    // /mnt is an empty tmpfs in the command's view: no bind of the chat's folders is there.
+    expect(off.output).toContain('mnt:[]');
+    expect(off.output).toContain('proc-mnt:[0]');
+    expect(off.output).toContain('home-ok');
+    expect(existsSync(join(workspaceRoot, 'off.txt'))).toBe(false);
+    // The earlier command's mount is still in the VM: only the command's own view leaves it out.
+    expect(await mounted()).toBe(true);
+    await sandbox.release(chatId);
+    expect(await mounted()).toBe(false);
   }, 120_000);
 
   it('kills a command at its timeout, with what it started', async () => {

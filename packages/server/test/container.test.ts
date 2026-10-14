@@ -843,6 +843,10 @@ describe('computer use wiring', () => {
     return { container, cancel: vi.spyOn(container.turnRunner, 'cancel') };
   }
 
+  /** A DELETE from the desktop app's own window: while the computer is in control, the only place changes come from. */
+  const fromDesktop = (container: Container, path: string) =>
+    createApp(container, { corsOrigins: ['http://tauri.localhost'] }).request(path, { method: 'DELETE', headers: { Origin: 'http://tauri.localhost' } });
+
   /** The session ended on the driver, the reply was cancelled, and another chat can start with a dialog of its own. */
   async function expectStoppedAndFree(container: Container, driver: FakeComputerDriver, cancel: ReturnType<typeof vi.spyOn>): Promise<void> {
     expect(container.store.chats.get('c1')).toBeNull();
@@ -859,7 +863,7 @@ describe('computer use wiring', () => {
     const driver = new FakeComputerDriver();
     const { container, cancel } = await inControl(driver);
     try {
-      expect((await createApp(container).request('/api/profiles/prof1', { method: 'DELETE' })).status).toBe(204);
+      expect((await fromDesktop(container, '/api/profiles/prof1')).status).toBe(204);
       await expectStoppedAndFree(container, driver, cancel);
     } finally {
       container.close();
@@ -870,7 +874,7 @@ describe('computer use wiring', () => {
     const driver = new FakeComputerDriver();
     const { container, cancel } = await inControl(driver);
     try {
-      expect((await createApp(container).request('/api/connections/conn1', { method: 'DELETE' })).status).toBe(204);
+      expect((await fromDesktop(container, '/api/connections/conn1')).status).toBe(204);
       await expectStoppedAndFree(container, driver, cancel);
     } finally {
       container.close();
@@ -881,8 +885,8 @@ describe('computer use wiring', () => {
     const driver = new FakeComputerDriver();
     const { container, cancel } = await inControl(driver);
     try {
-      expect((await createApp(container).request('/api/profiles/prof2', { method: 'DELETE' })).status).toBe(204);
-      expect((await createApp(container).request('/api/connections/conn2', { method: 'DELETE' })).status).toBe(204);
+      expect((await fromDesktop(container, '/api/profiles/prof2')).status).toBe(204);
+      expect((await fromDesktop(container, '/api/connections/conn2')).status).toBe(204);
       expect(container.computer!.activeChat()).toBe('c1');
       expect(driver.ended).toEqual([]);
       expect(cancel).not.toHaveBeenCalled();

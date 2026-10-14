@@ -175,7 +175,10 @@ export interface FakeSandboxOptions {
 
 export const FAKE_SANDBOX_VERSIONS: SandboxVersions = { distro: 'Fake Linux 1.0', runtime: '0.0.79', node: 'v24.21.0' };
 
-function fakeSandboxCwd(root: string): string {
+/** Where a fake run starts: the workspace's sandbox path, or with no folders (fs 'off') the chat's home. */
+function fakeSandboxCwd(req: SandboxRunRequest): string {
+  const root = req.workspaceRoot;
+  if (req.fs === 'off' || root === null) return `/home/grunt/chats/${req.chatId.replace(/[^A-Za-z0-9_-]/g, '_')}`;
   try {
     return toSandboxPath(normaliseWindowsPath(root));
   } catch {
@@ -236,7 +239,7 @@ export class FakeSandbox implements Sandbox {
       timeoutMsUsed: req.timeoutMs,
       output: `fake sandbox ran: ${req.command}\n`,
       sandbox: true,
-      cwd: fakeSandboxCwd(req.workspaceRoot),
+      cwd: fakeSandboxCwd(req),
       ...this.options.result?.(req),
     };
   }

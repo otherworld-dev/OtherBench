@@ -396,7 +396,7 @@ fn owner(window: HWND) -> Result<Process, String> {
 
 pub fn identity(window: HWND) -> Result<Identity, String> {
     let owner = owner(window)?;
-    Ok(Identity { path: owner.path, shell_view: is_shell_view(window), window_id: window_id(window), pid: owner.pid, started_at: owner.started.to_string() })
+    Ok(Identity { path: owner.path, shell_view: is_shell_view(window), window_id: window_id(window), pid: owner.pid, started_at: owner.started.to_string(), title: title(window) })
 }
 
 /// Elevation and UI access from the process token; None when it can't be read.
@@ -599,10 +599,16 @@ pub fn facts(window: HWND) -> Result<Facts, String> {
         location: location(&owner.path),
         original_name: original_name(&owner.path),
         signer: signer(&owner.path),
-        title: title(window),
         elevated,
         ui_access,
-        id: Identity { shell_view: is_shell_view(window), window_id: window_id(window), pid: owner.pid, started_at: owner.started.to_string(), path: owner.path },
+        id: Identity {
+            shell_view: is_shell_view(window),
+            window_id: window_id(window),
+            pid: owner.pid,
+            started_at: owner.started.to_string(),
+            title: title(window),
+            path: owner.path,
+        },
     })
 }
 

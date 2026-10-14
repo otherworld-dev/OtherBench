@@ -7,6 +7,7 @@ import { isSignInRequired, SIGN_IN_REQUIRED_MESSAGE } from './oauth-provider.js'
 import { looksSecret, redactMessage } from './redact.js';
 import { sameOrigin } from './url.js';
 import { resolveExecutable } from './spawn.js';
+import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
 
 export type McpTransportConfig =
   | { transport: 'stdio'; command: string; args: string[]; env: Record<string, string> }
@@ -262,7 +263,8 @@ export class McpClient {
         // rather than fighting it.
         command: resolveExecutable(this.config.command),
         args: this.config.args,
-        env: this.config.env,
+        // The SDK adds only a short list of safe variables to this; the server's API token is never one, nor set here.
+        env: withoutServerSecrets(this.config.env),
         stderr: 'pipe',
       };
       return new StdioClientTransport(params);

@@ -66,7 +66,11 @@ export default defineConfig({
   // the already-built server, it doesn't build it.
   webServer: [
     {
-      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}"`,
+      // `--cors-origin` with the server's own address: this same-origin test browser counts as the desktop app's
+      // window, the one place that may change anything while computer use is in control (computer.spec.ts checks that
+      // a request with no Origin is refused). It is NOT what a real Grunt tab looks like to the desktop server: the
+      // refusal of a same-origin tab is covered by the server's unit tests (test/routes/computer.test.ts).
+      command: `node ../server/dist/cli.js serve --port ${PORT} --db "${join(dbDir, 'grunt.db')}" --cors-origin ${BASE_URL}`,
       url: `${BASE_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 15_000,

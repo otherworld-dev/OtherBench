@@ -5,6 +5,7 @@ import { TurnRunner } from '@grunt/core/domain/turn.js';
 import { FakeChatEngine, FakeSecretStore, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { Container } from '../../src/container.js';
 import { createRemoteAccess, type RemoteAccess, type RemoteTls } from '../../src/remote/index.js';
+import { type Granted, LoginLimiter } from '../../src/remote/limiter.js';
 import { PasswordFile, type ScryptParams } from '../../src/remote/password.js';
 import { StreamRegistry } from '../../src/stream/registry.js';
 
@@ -67,4 +68,11 @@ export async function remoteFixture(opts: { tls?: RemoteTls; trustProxies?: stri
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+/** A one-use password check from a limiter of its own, for tests that call `verifyPassword` directly. */
+export async function granted(): Promise<Granted> {
+  const a = await new LoginLimiter({ log: () => {} }).admit('192.0.2.1');
+  if (a.kind !== 'go') throw new Error('expected a password check');
+  return a.granted;
 }

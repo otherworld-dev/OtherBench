@@ -72,13 +72,15 @@ describe('runSetup', () => {
     expect(c.some((line) => line === 'root: /bin/rm -rf /opt/grunt-sandbox')).toBe(false);
     expect(c.some((line) => line.includes('chown'))).toBe(false);
     expect(c.some((line) => line.includes('/tmp/grunt'))).toBe(false);
-    // The resource folder is mounted before it is read and unmounted after, by each of the two steps that copy from it.
+    // The resource folder is mounted before it is read and unmounted after, each time it is used: for wsl.conf,
+    // for the interop check after the restart, and for the install.
     const mounts = c.flatMap((line, i) => (line === `root: /bin/mount -t drvfs ${RESOURCES} /mnt/grunt-setup -o ro` ? [i] : []));
     const unmounts = c.flatMap((line, i) => (line === 'root: /bin/umount /mnt/grunt-setup' ? [i] : []));
-    expect(mounts).toHaveLength(2);
+    expect(mounts).toHaveLength(3);
     for (const m of mounts) expect(unmounts.some((u) => u > m)).toBe(true);
     expect(unmounts.filter((u) => u < mounts[0]!).length).toBeGreaterThan(0);
-    expect(unmounts.at(-1)).toBeGreaterThan(mounts[1]!);
+    expect(unmounts.at(-1)).toBeGreaterThan(mounts.at(-1)!);
+    at(`root: /usr/bin/install -o root -g root -m 0644 /mnt/grunt-setup/interop-check.sh ${tree}/interop-check.sh`);
     expect(selfTest).toHaveBeenCalledTimes(1);
     expect(log).toEqual(expect.arrayContaining(['▶ Check WSL', '✔ Check WSL', '▶ Self-test', '✔ Self-test']));
     // Nothing is ever run through a Linux shell.
@@ -124,7 +126,7 @@ describe('runSetup', () => {
     const { outcome, log } = await setUp(wsl);
     expect(outcome.ok).toBe(true);
     const at = wsl.commands.indexOf(DRIVES);
-    expect(at).toBeGreaterThan(wsl.commands.lastIndexOf('root: /usr/bin/test -e /proc/sys/fs/binfmt_misc/WSLInterop-late'));
+    expect(at).toBeGreaterThan(wsl.commands.indexOf('root: /bin/sh /mnt/grunt-setup/interop-check.sh'));
     expect(at).toBeLessThan(wsl.commands.findIndex((line) => line.includes('apt-get update')));
     expect(log).toContain("Made /mnt/c, /mnt/e writable by root only (left by WSL's first start).");
     // Nothing to close: nothing said.
@@ -137,17 +139,63 @@ describe('runSetup', () => {
     expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('Operation not permitted') });
   });
 
-  it('stops when Windows interop is still on after the restart', async () => {
-    const { outcome } = await failing((c) => (isProgram(c, '/usr/bin/test') ? { code: 0 } : undefined));
-    expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('interop') });
+  const interopCheck = (c: WslCall): boolean => isProgram(c, '/bin/sh', '/mnt/grunt-setup/interop-check.sh');
+
+  it('tries to start a Windows program after the restart, as root, from the mounted resources', async () => {
+    const wsl = happyWsl();
+    const { outcome } = await setUp(wsl);
+    expect(outcome.ok).toBe(true);
+    const c = wsl.commands;
+    const check = c.indexOf('root: /bin/sh /mnt/grunt-setup/interop-check.sh');
+    expect(check).toBeGreaterThan(c.indexOf('wsl --terminate grunt-sandbox'));
+    // The resources are mounted again after the restart (the restart drops the earlier mount) and unmounted after.
+    const mounted = c.lastIndexOf(`root: /bin/mount -t drvfs ${RESOURCES} /mnt/grunt-setup -o ro`, check);
+    expect(mounted).toBeGreaterThan(c.indexOf('wsl --terminate grunt-sandbox'));
+    expect(c.indexOf('root: /bin/umount /mnt/grunt-setup', check)).toBeGreaterThan(check);
+    // The registration is no longer what decides.
+    expect(c.some((line) => line.includes('/proc/sys/fs/binfmt_misc'))).toBe(false);
   });
 
-  it('stops when the late interop entry is on, or when the check itself did not give a clear "not there"', async () => {
-    const late = await failing((c) => (isProgram(c, '/usr/bin/test') && c.kind === 'exec' && c.argv.includes('/proc/sys/fs/binfmt_misc/WSLInterop-late') ? { code: 0 } : undefined));
-    expect(late).toMatchObject({ outcome: { ok: false, step: 'Configure the distro', message: expect.stringContaining('interop') } });
-    for (const odd of [{ code: 2 }, { code: null, timedOut: true }, { code: 127 }]) {
-      const { outcome } = await failing((c) => (isProgram(c, '/usr/bin/test') ? odd : undefined));
-      expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining("Couldn't confirm") });
+  it('passes with another distro\'s WSLInterop registration visible when nothing can reach Windows, and says so', async () => {
+    const { outcome, log } = await failing((c) =>
+      interopCheck(c) ? { stdout: 'note: a WSLInterop registration is visible (WSL distros share one kernel, so it can be another distro\'s)\ninterop-off\n' } : undefined
+    );
+    expect(outcome.ok).toBe(true);
+    expect(log.some((line) => line.includes('registration from another distro is visible'))).toBe(true);
+  });
+
+  it('stops when Windows answered: interop is still on after the restart', async () => {
+    const { outcome } = await failing((c) =>
+      interopCheck(c) ? { code: 3, stdout: 'INTEROP-REACHED: running a Windows program with WSL_INTEROP=/run/WSL/2_interop gave exit 1: probe.exe: Invalid argument\n' } : undefined
+    );
+    expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining('interop is still on') });
+    expect(outcome).toMatchObject({ message: expect.stringContaining('Invalid argument') });
+  });
+
+  it('says when the check could only see the kernel refuse a Windows program (no interop handler active)', async () => {
+    const { outcome, log } = await failing((c) => (interopCheck(c) ? { stdout: 'note: no-registration (an attempt was refused by the kernel, before any interop handler)\ninterop-off\n' } : undefined));
+    expect(outcome.ok).toBe(true);
+    expect(log.some((line) => line.includes('No interop handler was active'))).toBe(true);
+  });
+
+  it('says it could not confirm (not "still on") when the check could not tell', async () => {
+    const { outcome } = await failing((c) => (interopCheck(c) ? { code: 4, stdout: 'INTEROP-UNKNOWN: running a Windows program gave exit 2: something new\n' } : undefined));
+    expect(outcome).toMatchObject({ ok: false, step: 'Configure the distro', message: expect.stringContaining("Couldn't confirm") });
+    expect(outcome).toMatchObject({ message: expect.stringContaining('something new') });
+  });
+
+  it('fails closed: anything but a clear "interop-off" is not proof that interop is off', async () => {
+    const odd: Partial<WslResult>[] = [
+      { code: 0, stdout: '' }, // exit 0 without the verdict
+      { code: 0, stdout: 'interop-offish\n' }, // the verdict must be the whole line
+      { code: 0, stdout: 'interop-off\n', timedOut: true },
+      { code: null, timedOut: true },
+      { code: 2, stdout: 'sh: 1: cannot open' },
+      { code: 127 },
+    ];
+    for (const o of odd) {
+      const { outcome } = await failing((c) => (interopCheck(c) ? o : undefined));
+      expect(outcome, JSON.stringify(o)).toMatchObject({ ok: false, step: 'Configure the distro' });
     }
   });
 

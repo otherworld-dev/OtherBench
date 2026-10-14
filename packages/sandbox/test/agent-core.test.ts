@@ -947,6 +947,32 @@ describe('the sandbox agent, protected files', () => {
     expect(noteOf(h, 1)).toBe('');
   });
 
+  it('runs a command with no folders at all (file access off) in its home, guarding only the home', async () => {
+    const h = harness();
+    await h.init();
+    mkdirSync(join(h.home, '.vscode'));
+    await h.run(1, doing(['fs.writeFileSync(".bashrc", "evil");', 'fs.writeFileSync(".VSCode/tasks.json", "{}");', 'fs.writeFileSync("notes.txt", "kept");']), {
+      cwd: h.home,
+      readPaths: [],
+      writePaths: [],
+      denyWritePaths: [],
+    });
+    expect(h.done(1)).toMatchObject({ exitCode: 0, unguarded: [] });
+    expect(h.cwdAtWrap).toEqual([h.home]);
+    const custom = h.runtime.wrapWithSandboxArgv.mock.calls[0]![2] as { filesystem: { allowRead: string[]; allowWrite: string[]; denyWrite: string[]; denyRead: string[] } };
+    const tmp = `${h.tmpRoot}/1`;
+    expect(custom.filesystem).toEqual({
+      denyRead: DENY_READ,
+      allowRead: [h.home, h.rt, tmp],
+      allowWrite: [h.home, tmp],
+      denyWrite: PROTECTED_PATHS.filter((p) => !p.startsWith('.git/')).map((p) => `${h.home}/${p}`),
+    });
+    expect(existsSync(join(h.home, '.bashrc'))).toBe(false);
+    expect(readdirSync(join(h.home, '.vscode'))).toEqual([]);
+    expect(readFileSync(join(h.home, 'notes.txt'), 'utf8')).toBe('kept');
+    expect(noteOf(h, 1)).toBe('The sandbox undid changes to ~/.bashrc, ~/.vscode/tasks.json (protected files).');
+  });
+
   it('puts them back after a timeout too', async () => {
     const h = harness();
     await h.init();

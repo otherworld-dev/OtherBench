@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Locator, type Page } from 'playwright-core';
 import { siteOf } from '@grunt/core/domain/browser-hosts.js';
+import { withoutServerSecrets } from '@grunt/core/domain/child-env.js';
 import { pageText } from './snapshot.js';
 import { BrowserUnavailableError, PageMovedError, StaleRefError, type ActionGuard, type BrowserSession, type ProxyCredentials, type SessionFactory } from './session.js';
 
@@ -155,6 +156,8 @@ export class ChromiumSessions implements SessionFactory {
       handleSIGINT: false,
       handleSIGTERM: false,
       handleSIGHUP: false,
+      // Playwright passes the server's environment to the browser by default; never its API token (core/domain/child-env.ts).
+      env: withoutServerSecrets(this.env),
     };
     const launch = this.options.launch ?? ((o: LaunchOptions) => chromium.launch(o));
     const attempts = browserAttempts(this.env);

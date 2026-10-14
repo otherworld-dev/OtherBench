@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adoptIntoLocation, classifyPath, inferLocationMapping, joinSubpath, mergeFolders, parseFolders, relativeSegments, resolveFolders, resolveWorkspace, sameWorkspace } from '../src/domain/workspace.js';
+import { adoptIntoLocation, canReachFolders, classifyPath, extraFoldersPrompt, inferLocationMapping, joinSubpath, mergeFolders, parseFolders, relativeSegments, resolveFolders, resolveWorkspace, sameWorkspace } from '../src/domain/workspace.js';
 import type { ExtraFolder, LocationPath } from '../src/types/workspace.js';
 
 const PC = 'node-pc';
@@ -161,5 +161,40 @@ describe('extra folders', () => {
     ]);
     expect(parseFolders(null)).toEqual([]);
     expect(parseFolders(Array.from({ length: 15 }, (_, i) => ({ workspace: nc(`f${i}`), access: 'read' })))).toHaveLength(10);
+  });
+});
+
+describe('extraFoldersPrompt and canReachFolders', () => {
+  const folders = [
+    { root: '/refs', access: 'read' as const },
+    { root: '/out', access: 'readwrite' as const },
+  ];
+
+  it('says how to use the folders when a tool can reach them', () => {
+    const text = extraFoldersPrompt(folders);
+    expect(text).toContain('you can use these folders');
+    expect(text).toContain('- /refs (read-only)');
+    expect(text).toContain('- /out (read and write)');
+  });
+
+  it('names them for reference only, saying file access is off, when none can', () => {
+    const text = extraFoldersPrompt(folders, false);
+    expect(text).toContain('named for reference only');
+    expect(text).toContain('file access is off');
+    expect(text).toContain('- /refs');
+    expect(text).not.toMatch(/read-only|read and write|you can use/);
+  });
+
+  it('counts file access, a shell on this machine or computer use as reaching them, and nothing else', () => {
+    const base = { shell: false, mcpServerIds: [], approvalMode: 'ask_on_mutate' as const };
+    expect(canReachFolders({ ...base, fs: 'read' })).toBe(true);
+    expect(canReachFolders({ ...base, fs: 'readwrite' })).toBe(true);
+    expect(canReachFolders({ ...base, fs: 'off' })).toBe(false);
+    expect(canReachFolders({ ...base, fs: 'off', shell: true })).toBe(true);
+    expect(canReachFolders({ ...base, fs: 'off', shell: true, shellRuns: 'host' })).toBe(true);
+    expect(canReachFolders({ ...base, fs: 'off', shell: true, shellRuns: 'sandbox' })).toBe(false);
+    expect(canReachFolders({ ...base, fs: 'off', shell: false, shellRuns: 'sandbox', computer: true })).toBe(true);
+    // A value this version doesn't know counts as off.
+    expect(canReachFolders({ ...base, fs: 'everything' as never, shell: true, shellRuns: 'sandbox' })).toBe(false);
   });
 });

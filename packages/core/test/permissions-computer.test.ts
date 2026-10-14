@@ -4,7 +4,7 @@ import type { Grant } from '../src/ports/store.js';
 import type { ToolContext, ToolSpec } from '../src/ports/tool-provider.js';
 import type { ToolPolicy } from '../src/types/config.js';
 import { InMemoryStore } from '../src/testing/fakes.js';
-import { appArgs, classifyTarget } from '../src/domain/computer-apps.js';
+import { appArgs, classifyTarget, COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, GRUNT_UI_TITLE } from '../src/domain/computer-apps.js';
 import { fakeComputerTarget } from '../src/testing/fake-computer.js';
 
 // App keys are the paths the shell resolved, compared exactly: on-disk case and all.
@@ -360,7 +360,7 @@ describe('PermissionBroker and computer use', () => {
   });
 
   it('never matches a stored grant for a high-risk app', () => {
-    for (const app of [CMD, 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Users\\a\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe', 'C:\\Python312\\python3.12.exe', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE']) {
+    for (const app of [CMD, 'C:\\Program Files\\Internet Explorer\\iexplore.exe', 'C:\\Windows\\explorer.exe', 'C:\\Python312\\python3.12.exe', 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\POWERS~1.EXE']) {
       grant(app);
       grant(app, { chatId: 'chat-1', scope: 'chat' });
       // Whatever the call claims about its own risk.
@@ -368,6 +368,64 @@ describe('PermissionBroker and computer use', () => {
         expect(broker.decide(COMPUTER, click(app, { appRisk }), policy(), ctx()).kind, `${app} ${String(appRisk)}`).toBe('ask');
       }
     }
+  });
+
+  it('stores and matches chat and always grants for a browser or an IDE, each pinned to its own program path', () => {
+    const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    const VSCODE = 'C:\\Users\\a\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe';
+    const classify = (over: Parameters<typeof fakeComputerTarget>[0]): Record<string, unknown> => {
+      const classified = classifyTarget(fakeComputerTarget(over));
+      if (classified.kind !== 'app') throw new Error(classified.reason);
+      return { action: 'left_click', coordinate: [512, 300], ...appArgs(classified) };
+    };
+    const chrome = classify({ path: CHROME, originalName: 'chrome.exe', signer: 'Google LLC', title: 'New Tab - Google Chrome' });
+    const code = classify({ path: VSCODE, originalName: 'electron.exe', signer: 'Microsoft Corporation', title: 'main.ts - Visual Studio Code' });
+    expect(chrome['appRisk']).toBe('normal');
+    expect(code['appRisk']).toBe('normal');
+
+    // A chat answer for Chrome stores { app } for exactly Chrome's path, and it covers the next click there.
+    const chatAsk = expectAsk(broker.decide(COMPUTER, chrome, policy(), ctx()));
+    expect(chatAsk.request.summary).toBe('Use chrome.exe: click at 512, 300');
+    broker.resolve(chatAsk.request.id, { choice: 'chat' });
+    expect(store.grants.list()).toMatchObject([{ scope: 'chat', chatId: 'chat-1', constraint: { app: CHROME } }]);
+    expect(broker.decide(COMPUTER, chrome, policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+    // ...in this chat only, and never for another browser or another copy of Chrome.
+    expect(broker.decide(COMPUTER, chrome, policy(), ctx({ chatId: 'chat-2' })).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, classify({ path: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', originalName: 'msedge.exe', signer: 'Microsoft Corporation' }), policy(), ctx()).kind).toBe('ask');
+    expect(broker.decide(COMPUTER, classify({ path: 'C:\\Users\\a\\Downloads\\chrome.exe', originalName: 'chrome.exe', signer: 'Google LLC' }), policy(), ctx()).kind).toBe('ask');
+
+    // An always answer for VS Code stores exactly { app } and covers it in every chat on the profile.
+    const alwaysAsk = expectAsk(broker.decide(COMPUTER, code, policy(), ctx()));
+    broker.resolve(alwaysAsk.request.id, { choice: 'always', constraint: { app: VSCODE } });
+    expect(store.grants.list().find((g) => g.scope === 'always')).toMatchObject({ chatId: null, profileId: 'profile-1', constraint: { app: VSCODE } });
+    expect(broker.decide(COMPUTER, code, policy(), ctx({ chatId: 'chat-2' }))).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
+
+    // The grant never reaches the browser's file dialog, and no answer for one stores anything.
+    const dialog = classify({ path: CHROME, originalName: 'chrome.exe', signer: 'Google LLC', shellView: true, title: 'Save As', windowId: 'hwnd-dialog' });
+    expect(broker.decide(COMPUTER, dialog, policy(), ctx()).kind).toBe('ask');
+    const dialogAsk = expectAsk(broker.decide(COMPUTER, dialog, policy(), ctx()));
+    expect(() => broker.resolve(dialogAsk.request.id, { choice: 'chat' })).toThrow(/asks every time/);
+    // Nor an unsigned or catalog-signed copy, whose described arguments are high-risk.
+    const unsigned = classify({ path: CHROME, originalName: 'chrome.exe', signer: null });
+    expect(broker.decide(COMPUTER, unsigned, policy(), ctx()).kind).toBe('ask');
+    expect(store.grants.list()).toHaveLength(2);
+  });
+
+  it("refuses a call whose window shows Grunt's own UI, with no card, even with chat and always grants for the browser", () => {
+    const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+    grant(CHROME);
+    grant(CHROME, { chatId: 'chat-1', scope: 'chat' });
+    for (const action of [{}, { action: 'type', text: 'hi' }, { action: 'key', text: 'Return' }]) {
+      const args = click(CHROME, { appTitle: `${GRUNT_UI_TITLE} - Google Chrome`, ...action });
+      expect(broker.decide(COMPUTER, args, policy(), ctx()), JSON.stringify(action)).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
+      expect(broker.decide(COMPUTER, args, policy({ approvalMode: 'always_ask' }), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_GRUNT_UI_REASON });
+    }
+    // Its undocked developer tools: the same program, refused the same way.
+    for (const appTitle of ['DevTools - example.com/', 'Developer Tools - Inbox']) {
+      expect(broker.decide(COMPUTER, click(CHROME, { appTitle }), policy(), ctx())).toEqual({ kind: 'deny', reason: COMPUTER_DEVTOOLS_REASON });
+    }
+    // The same browser on another page is covered by its grant.
+    expect(broker.decide(COMPUTER, click(CHROME, { appTitle: 'Inbox - Google Chrome' }), policy(), ctx())).toMatchObject({ kind: 'allow', grantedBy: 'grant' });
   });
 
   it('treats an app as high-risk unless the call is provably ordinary', () => {

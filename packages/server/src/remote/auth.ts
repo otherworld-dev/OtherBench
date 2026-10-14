@@ -3,6 +3,7 @@ import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
+import { DEVICE_COOKIE } from './devices.js';
 import type { RemoteAccess, RemoteTls } from './index.js';
 import { tooManyMessage } from './limiter.js';
 import { MAX_PASSWORD_LENGTH, passwordProblem, verifyPassword, type PasswordRecord } from './password.js';
@@ -73,6 +74,29 @@ function setSessionCookie(c: Context, id: string, remember: boolean): void {
 
 function clearSessionCookie(c: Context): void {
   deleteCookie(c, SESSION_COOKIE, { prefix: 'host', path: '/', secure: true });
+}
+
+/** A remembered-device cookie for a browser that just proved the password under `epoch` (see `devices.ts`). */
+function setDeviceCookie(c: Context, remote: RemoteAccess, epoch: string): void {
+  const { value, maxAgeSec } = remote.devices.issue(epoch);
+  setCookie(c, DEVICE_COOKIE, value, { prefix: 'host', path: '/', secure: true, httpOnly: true, sameSite: 'Strict', maxAge: maxAgeSec });
+}
+
+function clearDeviceCookie(c: Context): void {
+  deleteCookie(c, DEVICE_COOKIE, { prefix: 'host', path: '/', secure: true });
+}
+
+/**
+ * The id of this request's remembered-device cookie when it is valid (its
+ * HMAC, expiry and password epoch checked, judged same-origin only like the
+ * session cookie) and the limiter hasn't locked that id; else null, and the
+ * attempt is an ordinary one.
+ */
+function rememberedDevice(c: Context, remote: RemoteAccess): string | null {
+  if (!cookieSiteAllowed(c)) return null;
+  const id = remote.devices.idOf(getCookie(c, DEVICE_COOKIE, 'host'), remote.passwords.epoch());
+  if (id === null || !remote.limiter.checkDevice(id).ok) return null;
+  return id;
 }
 
 /**
@@ -172,20 +196,59 @@ function tooMany(c: Context, retryAfterSec: number, message: string): Response {
   return c.json({ error: message }, 429, { 'Retry-After': String(retryAfterSec) });
 }
 
+/** 429 when this attempt's lock is on: its device id's for a remembered device, else its address's. */
+function lockedOut(c: Context, remote: RemoteAccess, address: string, device: string | null): Response | null {
+  const limited = device !== null ? remote.limiter.checkDevice(device) : remote.limiter.check(address);
+  if (limited.ok) return null;
+  remote.limiter.note('locked', address);
+  return tooMany(c, limited.retryAfterSec, tooManyMessage(limited.retryAfterSec));
+}
+
+/** "in 5 seconds", "in a minute", "in 3 minutes". */
+function inTime(sec: number): string {
+  if (sec <= 1) return 'in a second';
+  if (sec < 60) return `in ${sec} seconds`;
+  const minutes = Math.ceil(sec / 60);
+  return minutes === 1 ? 'in a minute' : `in ${minutes} minutes`;
+}
+
 /**
- * Runs one password check under the limiter: 429 while locked or busy, 503
- * when there's no password file, `wrongStatus` for a wrong password. The
- * record on success.
+ * Runs one password check under the limiter (`limiter.ts`): 429 while
+ * locked, refused by the budget or with too many waiting; 503 when there's
+ * no password file; `wrongStatus` for a wrong password. The record on
+ * success. The wait (delay, token, check slot) comes after the body is read
+ * and before the password file is read or scrypt runs, so a right password
+ * waits as long as a wrong one and nothing is held meanwhile. A browser
+ * with a valid remembered-device cookie spends a device token instead and
+ * skips the delay, and is locked by its cookie's id instead of its address;
+ * its HMAC is checked here, before anything waits, and a forged, expired
+ * or locked one counts as no cookie.
+ *
+ * The one place a password is verified: `/login` and `/password` both come
+ * through here, `verifyPassword` needs the `Granted` only `admit` returns,
+ * and `test/remote/single-verifier.test.ts` backs that up. Every granted
+ * check is released with its outcome, so one that ends without a password
+ * check (locked while waiting) is charged as a failure.
  */
 async function checkPassword(c: Context, remote: RemoteAccess, address: string, password: string, wrongStatus: 401 | 403): Promise<PasswordRecord | Response> {
-  const limited = remote.limiter.check(address);
-  if (!limited.ok) {
-    remote.log(`[grunt-server] sign-in refused for ${address}: too many tries`);
-    return tooMany(c, limited.retryAfterSec, tooManyMessage(limited.retryAfterSec));
+  const device = rememberedDevice(c, remote);
+  const locked = lockedOut(c, remote, address, device);
+  if (locked) return locked;
+  const admitted = await remote.limiter.admit(address, { device, signal: c.req.raw.signal });
+  if (admitted.kind === 'busy') {
+    const message =
+      admitted.why === 'budget'
+        ? `Too many sign-in attempts on this server right now. Try again ${inTime(admitted.retryAfterSec)}.`
+        : 'Sign-in is busy. Try again in a few seconds.';
+    return tooMany(c, admitted.retryAfterSec, message);
   }
-  const release = remote.limiter.acquire();
-  if (!release) return tooMany(c, 1, 'Busy checking another sign-in. Try again in a moment.');
+  // Nobody reads this: the client has gone.
+  if (admitted.kind === 'gone') return c.body(null, 408);
+  const { granted } = admitted;
   try {
+    // Other attempts with this address or device may have locked it while this one waited.
+    const lockedSince = lockedOut(c, remote, address, device);
+    if (lockedSince) return lockedSince;
     let record: PasswordRecord | null;
     try {
       record = remote.passwords.read();
@@ -193,18 +256,19 @@ async function checkPassword(c: Context, remote: RemoteAccess, address: string, 
       record = null;
     }
     if (!record) {
-      remote.log(`[grunt-server] sign-in from ${address} refused: no usable password file at ${remote.passwords.path}`);
+      granted.release('unavailable');
+      remote.limiter.note('no-password-file', address);
       return c.json({ error: 'No password is set on this server. Run "grunt password" on it.' }, 503);
     }
-    if (await verifyPassword(password, record)) {
-      remote.limiter.succeed(address);
+    if (await verifyPassword(password, record, granted)) {
+      granted.release('right');
       return record;
     }
-    remote.limiter.fail(address);
-    remote.log(`[grunt-server] wrong password from ${address}`);
+    granted.release('wrong');
     return c.json({ error: wrongStatus === 401 ? 'Wrong password.' : 'The current password is wrong.' }, wrongStatus);
   } finally {
-    release();
+    // Anything that didn't say otherwise above ended without a password check.
+    granted.release('unchecked');
   }
 }
 
@@ -251,6 +315,8 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     if (checked instanceof Response) return checked;
     const { id, session } = remote.sessions.create({ remember, epoch: checked.epoch, address, userAgent: userAgentOf(c) });
     setSessionCookie(c, id, remember);
+    // "Keep me signed in on this device" is also what makes it a remembered device.
+    if (remember) setDeviceCookie(c, remote, checked.epoch);
     remote.log(`[grunt-server] signed in from ${address}${remember ? ' (kept signed in for 30 days)' : ''}`);
     return c.json({ expiresAt: session.expiresAt });
   });
@@ -259,6 +325,7 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     const id = getCookie(c, SESSION_COOKIE, 'host');
     if (id) remote.sessions.end(id);
     clearSessionCookie(c);
+    clearDeviceCookie(c);
     return c.body(null, 204);
   });
 
@@ -266,7 +333,10 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     const bearer = token !== null && tokenMatches(c.req.header('Authorization'), token);
     if (!bearer && !sessionFromCookie(c, remote)) return c.json({ error: SIGN_IN }, 401);
     remote.sessions.endAll();
+    // Every remembered device is forgotten too, this one included.
+    remote.devices.rotate();
     clearSessionCookie(c);
+    clearDeviceCookie(c);
     remote.log(`[grunt-server] every device signed out by ${remote.clientAddress(c) ?? 'unknown'}`);
     return c.body(null, 204);
   });
@@ -285,10 +355,13 @@ export function authRoutes({ token, remote }: AuthOptions): Hono {
     // 403, not 401: a 401 tells the web app the session is gone.
     const checked = await checkPassword(c, remote, address, current, 403);
     if (checked instanceof Response) return checked;
+    // The session may have ended (signed out everywhere, password changed) while this waited.
+    if (!sessionFromCookie(c, remote)) return c.json({ error: SIGN_IN }, 401);
     const record = await remote.passwords.write(next);
     remote.sessions.endAll();
     const { id, session } = remote.sessions.create({ remember: found.session.remember, epoch: record.epoch, address, userAgent: userAgentOf(c) });
     setSessionCookie(c, id, found.session.remember);
+    if (found.session.remember) setDeviceCookie(c, remote, record.epoch);
     remote.log(`[grunt-server] password changed from ${address}; every other device is signed out`);
     return c.json({ expiresAt: session.expiresAt });
   });

@@ -11,6 +11,10 @@ describe('env', () => {
   });
   it('strips API credentials in any case for the Claude login', () => {
     const env = buildChildEnv({ PATH: '/bin', ANTHROPIC_API_KEY: 'k', anthropic_auth_token: 't', Anthropic_Base_Url: 'x' }, conn(null), null, 'sonnet');
+    // The server's own API token never reaches Claude Code or its Bash, in any letter case.
+    for (const name of ['GRUNT_TOKEN', 'grunt_token']) {
+      expect(Object.keys(buildChildEnv({ PATH: '/bin', [name]: 'secret' }, conn(null), null, 'sonnet'))).not.toContain(name);
+    }
     expect(env).toEqual({ PATH: '/bin', CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' });
   });
   it.each([null, 'http://localhost:11434'])('drops parent Claude Code session variables in any case (base URL %s)', (baseUrl) => {

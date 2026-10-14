@@ -67,7 +67,7 @@ const request = (over: Partial<SandboxRunRequest> = {}): SandboxRunRequest => ({
   timeoutMs: 120_000,
   workspaceRoot: 'E:\\Git\\Grunt',
   folders: [{ root: 'D:\\Refs', access: 'read' }],
-  writable: true,
+  fs: 'readwrite',
   allowedHosts: ['pypi.org'],
   signal: new AbortController().signal,
   askHost: async () => false,
@@ -108,9 +108,85 @@ describe('WslSandbox.run', () => {
 
   it('with the profile reading files only, nothing is writable and the workspace is mounted read-only', async () => {
     const { sandbox, channels, mounts } = make();
-    await sandbox.run(request({ writable: false, folders: [] }));
+    await sandbox.run(request({ fs: 'read', folders: [] }));
     expect(mounts).toEqual(['mount ro E:\\Git\\Grunt /mnt/e/Git/Grunt']);
     expect(channels[0]!.channel.runs()[0]).toMatchObject({ writePaths: [], denyWritePaths: ['/mnt/e/Git/Grunt'] });
+  });
+
+  it("with file access off, the command gets none of the chat's folders: nothing mounted, nothing allowed, and it starts in its home", async () => {
+    const { sandbox, channels, mounts } = make();
+    // The workspace and folders a caller names anyway are ignored, not mounted.
+    const result = await sandbox.run(request({ fs: 'off' }));
+    expect(mounts).toEqual([]);
+    expect(channels[0]!.channel.runs()[0]).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+    expect(result.cwd).toBe('/home/grunt/chats/chat-1');
+  });
+
+  it('with file access off, ignores a workspace that is missing or could never be mounted', async () => {
+    const { sandbox, mounts } = make();
+    await expect(sandbox.run(request({ fs: 'off', workspaceRoot: null, folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ fs: 'off', workspaceRoot: '\\\\nas\\share', folders: [{ root: 'Z:\\bad|name', access: 'readwrite' }] }))).resolves.toMatchObject({ exitCode: 0 });
+    expect(mounts).toEqual([]);
+  });
+
+  it("treats a file access it doesn't know (a newer peer's synced profile) as off: nothing mounted, nothing allowed", async () => {
+    const { sandbox, channels, mounts } = make();
+    for (const fs of ['everything', 'READWRITE', '', undefined, null]) {
+      await expect(sandbox.run(request({ fs: fs as never }))).resolves.toMatchObject({ cwd: '/home/grunt/chats/chat-1' });
+    }
+    expect(mounts).toEqual([]);
+    for (const run of channels[0]!.channel.runs()) expect(run).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+  });
+
+  it('refuses a command with file access and no workspace, mounting nothing', async () => {
+    const { sandbox, channels, mounts } = make();
+    await expect(sandbox.run(request({ fs: 'read', workspaceRoot: null }))).rejects.toMatchObject({ code: 'bad_folder' });
+    expect(mounts).toEqual([]);
+    expect(channels).toHaveLength(0);
+  });
+
+  it("with file access off after a read run in the same chat, mounts nothing (not even the chat's earlier folders) and allows none of them", async () => {
+    const mounted: string[] = [];
+    let failMounts = false;
+    const { sandbox, channels } = make({
+      mountRunner: {
+        mount: async (m: PlannedMount) => {
+          if (failMounts) throw new Error('drvfs is not answering');
+          mounted.push(`mount ${m.mode} ${m.linuxPath}`);
+        },
+        unmount: async (m: PlannedMount) => void mounted.push(`unmount ${m.linuxPath}`),
+      },
+    });
+    await sandbox.run(request({ fs: 'read', folders: [] }));
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt']);
+    await sandbox.run(request({ fs: 'off' }));
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt']);
+    expect(channels[0]!.channel.runs()[1]).toMatchObject({ cwd: '/home/grunt/chats/chat-1', readPaths: [], writePaths: [], denyWritePaths: [] });
+    // Another chat's agent dies, so every mount may be gone (wsl --shutdown) and the next change of the chat's
+    // mounts would mount its earlier folders again; here that remount fails, so the doubt stays.
+    await sandbox.run(request({ chatId: 'chat-2', fs: 'off' }));
+    failMounts = true;
+    channels[1]!.channel.emitExit(1, 'wsl shut down');
+    await tick();
+    failMounts = false;
+    // The chat's next files-off command doesn't put its earlier folder back: it touches no mount at all.
+    await sandbox.run(request({ fs: 'off' }));
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt']);
+    expect(channels[0]!.channel.runs()[2]).toMatchObject({ readPaths: [], writePaths: [], denyWritePaths: [] });
+    // A later read run of the chat does.
+    await sandbox.run(request({ fs: 'read', folders: [] }));
+    expect(mounted).toEqual(['mount ro /mnt/e/Git/Grunt', 'mount ro /mnt/e/Git/Grunt']);
+  });
+
+  it("with file access off, runs alongside another chat's command writing the workspace: it holds no folder", async () => {
+    const { held, onRun } = holding();
+    const { sandbox } = make({}, onRun);
+    const writing = sandbox.run(request({ chatId: 'a', folders: [] }));
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const off = sandbox.run(request({ chatId: 'b', fs: 'off' }));
+    await vi.waitFor(() => expect(held).toHaveLength(2));
+    for (const { m, ch } of held) ch.finish(m.id);
+    await Promise.all([writing, off]);
   });
 
   it("refuses when the sandbox isn't set up, naming this machine", async () => {
@@ -164,7 +240,7 @@ describe('WslSandbox.run', () => {
 
   it('allows a read-only folder inside another read-only one, a sibling with a shared prefix, and a writable folder inside a read-only one', async () => {
     const { sandbox } = make();
-    await expect(sandbox.run(request({ writable: false, folders: [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ fs: 'read', folders: [{ root: 'E:\\Git\\Grunt\\vendor', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
     await expect(sandbox.run(request({ chatId: 'b', folders: [{ root: 'E:\\Git\\Grunt-refs', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
     await expect(sandbox.run(request({ chatId: 'c', folders: [{ root: 'E:\\Git', access: 'read' }] }))).resolves.toMatchObject({ exitCode: 0 });
   });
@@ -197,7 +273,7 @@ describe('WslSandbox.run', () => {
     const { held, onRun } = holding();
     const { sandbox, mounts } = make({}, onRun);
     const writing = sandbox.run(request({ folders: [] }));
-    const reading = sandbox.run(request({ writable: false, folders: [] }));
+    const reading = sandbox.run(request({ fs: 'read', folders: [] }));
     await vi.waitFor(() => expect(held).toHaveLength(1));
     expect(mounts).toEqual(['mount rw E:\\Git\\Grunt /mnt/e/Git/Grunt']);
     held[0]!.ch.finish(held[0]!.m.id, 'w\n');
@@ -213,7 +289,7 @@ describe('WslSandbox.run', () => {
   it("widens a chat's folder only once its command in that folder has finished", async () => {
     const { held, onRun } = holding();
     const { sandbox, mounts } = make({}, onRun);
-    const reading = sandbox.run(request({ writable: false, folders: [] }));
+    const reading = sandbox.run(request({ fs: 'read', folders: [] }));
     await vi.waitFor(() => expect(held).toHaveLength(1));
     const writing = sandbox.run(request({ folders: [] }));
     await tick();
@@ -247,7 +323,7 @@ describe('WslSandbox.run', () => {
     const same = sandbox.run(request({ chatId: 'b', workspaceRoot: 'e:\\git\\grunt', folders: [] }));
     const inside = sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\Grunt\\packages', folders: [] }));
     // Reading the folder, or writing another one, doesn't wait.
-    const reading = sandbox.run(request({ chatId: 'd', writable: false, folders: [] }));
+    const reading = sandbox.run(request({ chatId: 'd', fs: 'read', folders: [] }));
     const elsewhere = sandbox.run(request({ chatId: 'e', workspaceRoot: 'E:\\Git\\Other', folders: [] }));
     await vi.waitFor(() => expect(held).toHaveLength(3));
     for (let i = 0; i < 5; i += 1) await tick();
@@ -291,11 +367,11 @@ describe('WslSandbox.run', () => {
     expect((await sandbox.run(request({ chatId: 'a', folders: [] }))).exitCode).toBe(0);
     unguarded = false;
     const refusal = { code: 'agent_failed', message: expect.stringContaining("The sandbox couldn't confirm it undid changes to protected files in E:\\Git\\Grunt") };
-    await expect(sandbox.run(request({ chatId: 'a', writable: false, folders: [] }))).rejects.toMatchObject(refusal);
+    await expect(sandbox.run(request({ chatId: 'a', fs: 'read', folders: [] }))).rejects.toMatchObject(refusal);
     await expect(sandbox.run(request({ chatId: 'b', folders: [] }))).rejects.toMatchObject(refusal);
     await expect(sandbox.run(request({ chatId: 'c', workspaceRoot: 'E:\\Git\\Grunt\\packages', folders: [] }))).rejects.toMatchObject(refusal);
     // Reading it, or writing somewhere else, goes ahead.
-    await expect(sandbox.run(request({ chatId: 'd', writable: false, folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
+    await expect(sandbox.run(request({ chatId: 'd', fs: 'read', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
     await expect(sandbox.run(request({ chatId: 'e', workspaceRoot: 'E:\\Git\\Other', folders: [] }))).resolves.toMatchObject({ exitCode: 0 });
     // Refused before anything was sent to an agent for them.
     expect(channels.filter((c) => ['b', 'c'].includes(c.chatId))).toEqual([]);
@@ -480,12 +556,12 @@ describe('WslSandbox.run', () => {
     });
     // The first command writes; its agent goes idle and closes while the second (read-only) one mounts D:\Refs.
     await sandbox.run(request({ folders: [] }));
-    const second = sandbox.run(request({ writable: false, folders: [{ root: 'D:\\Refs', access: 'read' }] }));
+    const second = sandbox.run(request({ fs: 'read', folders: [{ root: 'D:\\Refs', access: 'read' }] }));
     await vi.waitFor(() => expect(channels[0]!.channel.sent.at(-1)).toEqual({ type: 'close' }));
     releaseMount();
     await second;
     mounts.length = 0;
-    await sandbox.run(request({ writable: false, folders: [] }));
+    await sandbox.run(request({ fs: 'read', folders: [] }));
     // The new agent's commands have only ever asked for read-only: the workspace is no longer kept read-write.
     expect(mounts).toContain('mount ro /mnt/e/Git/Grunt');
   });
@@ -652,6 +728,7 @@ describe('WslSandbox setup and status', () => {
       (m, ch) =>
         queueMicrotask(() => {
           if (m.command.includes('/.GIT/hooks/x')) ch.finish(m.id, `\n\n${undone}`, 0);
+          else if (m.command.endsWith('/interop-check.sh')) ch.finish(m.id, 'interop-off\n', 0);
           else if (works.test(m.command)) ch.finish(m.id, '', 0);
           else ch.finish(m.id, 'bash: Read-only file system\nhttp_code=000', 1);
         }),

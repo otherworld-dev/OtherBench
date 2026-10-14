@@ -9,11 +9,15 @@ import { expect, request as playwrightRequest, test, type APIRequestContext, typ
  * Remote access (spec 2026-10-12-remote-access §10): a server in sign-in mode
  * with its own certificate, used from a browser that ignores the certificate
  * warning (the CA isn't installed). Started here, not by the config's
- * webServer, which keeps serving every other spec in open mode.
+ * webServer, which keeps serving every other spec in open mode. It trusts
+ * 127.0.0.1 as a proxy so (g) can sign in from many addresses with
+ * `X-Forwarded-For`; the browser sends none, so it is still 127.0.0.1.
+ * (a)-(f) spend 11 of the budget's 20 password checks; (g) spends the rest.
  */
 
 const webDir = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = 4781;
+/** Its own port; GRUNT_E2E_REMOTE_PORT moves it when 4781 is taken. */
+const PORT = Number(process.env.GRUNT_E2E_REMOTE_PORT ?? 4781);
 const BASE = `https://127.0.0.1:${PORT}`;
 const PASSWORD = 'e2e remote password';
 const TOKEN = 'e2e-remote-token';
@@ -39,7 +43,7 @@ function run(args: string[], stdin?: string): Promise<number> {
 test.beforeAll(async () => {
   test.setTimeout(60_000);
   expect(await run(['password', '--db', db], `${PASSWORD}\n`)).toBe(0);
-  server = spawn(process.execPath, ['../server/dist/cli.js', 'serve', '--port', String(PORT), '--db', db, '--public-url', BASE, '--tls', 'auto'], {
+  server = spawn(process.execPath, ['../server/dist/cli.js', 'serve', '--port', String(PORT), '--db', db, '--public-url', BASE, '--tls', 'auto', '--trust-proxy', '127.0.0.1'], {
     cwd: webDir,
     stdio: 'ignore',
     env: { ...process.env, GRUNT_TOKEN: TOKEN },
@@ -168,4 +172,65 @@ test('(f) six wrong passwords lock this address out', async ({ page }) => {
   }
   await signIn(page, 'wrong password number 6');
   await expect(page.getByRole('alert')).toHaveText(/^Too many tries\. Try again in 15 minutes\.$/);
+});
+
+test('(g) under a flood of wrong passwords a clean address still signs in, a new device is told when to come back once fresh addresses spend the reserve, and a remembered one gets straight in', async () => {
+  test.setTimeout(90_000);
+  // No bearer token: these are sign-ins, each from its own forwarded address (127.0.0.1 is locked by (f)).
+  const remembered = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  const stranger = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+  let next = 0;
+  const attempt = async (ctx: APIRequestContext, password: string, address?: string, remember = false): Promise<{ status: number; retryAfter: number; ms: number }> => {
+    next += 1;
+    const started = Date.now();
+    const res = await ctx.post('/api/auth/login', { data: { password, remember }, headers: { 'X-Forwarded-For': address ?? `203.0.113.${next}` } });
+    return { status: res.status(), retryAfter: Number(res.headers()['retry-after'] ?? 0), ms: Date.now() - started };
+  };
+  try {
+    // A sign-in with "Keep me signed in" leaves a remembered-device cookie in this context's jar.
+    expect((await attempt(remembered, PASSWORD, undefined, true)).status).toBe(200);
+    const jar = await remembered.storageState();
+    expect(jar.cookies.some((c) => c.name === '__Host-grunt_device' && c.httpOnly && c.secure && c.sameSite === 'Strict')).toBeTruthy();
+
+    // Addresses that keep guessing (4 tries each, short of a lock) spend what any address may and are then refused...
+    let guessersRefused = false;
+    for (let g = 0; g < 4 && !guessersRefused; g++) {
+      for (let i = 0; i < 4 && !guessersRefused; i++) {
+        const r = await attempt(stranger, `a guess ${g}.${i}`, `198.51.100.${g + 1}`);
+        if (r.status === 429) guessersRefused = true;
+        else expect(r.status).toBe(401);
+      }
+    }
+    expect(guessersRefused).toBeTruthy();
+    // ...but not the 5 checks kept for addresses that haven't guessed wrong: a new device on a clean address signs in.
+    const cleanDevice = await playwrightRequest.newContext({ baseURL: BASE, ignoreHTTPSErrors: true });
+    try {
+      expect((await attempt(cleanDevice, PASSWORD)).status).toBe(200);
+    } finally {
+      await cleanDevice.dispose();
+    }
+
+    // Wrong passwords from ever new addresses, each clean, spend even those (401) until the budget runs out, then are refused at once (429).
+    let refused: { status: number; retryAfter: number } | null = null;
+    for (let i = 0; i < 40 && refused === null; i++) {
+      const r = await attempt(stranger, `wrong password from afar ${i}`);
+      if (r.status === 429) refused = r;
+      else expect(r.status).toBe(401);
+    }
+    expect(refused).not.toBeNull();
+    expect(refused!.retryAfter).toBeGreaterThanOrEqual(1);
+    expect(refused!.retryAfter).toBeLessThanOrEqual(55);
+
+    // The right password from a new device is told when to come back, never locked out...
+    const fresh = await attempt(stranger, PASSWORD);
+    expect(fresh.status).toBe(429);
+    expect(fresh.retryAfter).toBeGreaterThanOrEqual(1);
+    // ...while the remembered device skips the queue and signs in at once.
+    const back = await attempt(remembered, PASSWORD);
+    expect(back.status).toBe(200);
+    expect(back.ms).toBeLessThan(5000);
+  } finally {
+    await remembered.dispose();
+    await stranger.dispose();
+  }
 });

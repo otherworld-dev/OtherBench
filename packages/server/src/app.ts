@@ -16,6 +16,7 @@ import { healthRoutes } from './routes/health.js';
 import { importRoutes } from './routes/import.js';
 import { locationsRoutes, nodeRoutes } from './routes/locations.js';
 import { forwardingRoutes } from './peer/forward.js';
+import { changesOnlyFromTheDesktopApp } from './computer/desktop-only.js';
 import { peersRoutes } from './routes/peers.js';
 import { modelsRoutes } from './routes/models.js';
 import { profilesRoutes } from './routes/profiles.js';
@@ -111,6 +112,9 @@ export function createApp(container: Container, options: AppOptions = {}): Hono 
   const authed = new Hono();
   // Open mode (no token, no sign-in) mounts no gate, as before.
   if (token || remote) authed.use('*', authGate({ token, remote }));
+  // While computer use may be in control of this machine, changes come only from the desktop app's own window
+  // (its --cors-origin), never from a browser tab of Grunt that a model with a browser grant could be using.
+  authed.use('*', changesOnlyFromTheDesktopApp(container.computer, options.corsOrigins ?? []));
   authed.route('/connections', connectionsRoutes(container));
   authed.route('/models', modelsRoutes(container));
   authed.route('/profiles', profilesRoutes(container));

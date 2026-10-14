@@ -156,7 +156,7 @@ describe('FakeSandbox', () => {
     timeoutMs: 120_000,
     workspaceRoot: 'E:\\Git\\Grunt',
     folders: [],
-    writable: true,
+    fs: 'readwrite',
     allowedHosts: [],
     signal: new AbortController().signal,
     askHost: async () => true,

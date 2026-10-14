@@ -12,7 +12,7 @@ import { FakeSandbox, InMemoryStore } from '@grunt/core/testing/fakes.js';
 import type { ToolApprovalEvent, ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import { DEFAULT_SANDBOX_HOSTS, type Connection, type ResolvedProfile, type ToolPolicy } from '@grunt/core/types/config.js';
 import { GruntToolProvider } from '../src/provider.js';
-import { SANDBOX_RUN_COMMAND_DESCRIPTION } from '../src/sandbox-tool.js';
+import { SANDBOX_RUN_COMMAND_DESCRIPTION, SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION } from '../src/sandbox-tool.js';
 
 const emptyMcp = { listFor: () => [], refresh: async () => {}, shutdown: async () => {} };
 let ws: string;
@@ -82,7 +82,7 @@ describe('GruntToolProvider and the sandbox', () => {
     const folders = [{ root: 'D:\\Refs', access: 'read' as const }];
     const result = await (await runCommand(provider, policy())).execute({ command: 'pytest -q', timeoutMs: 900_000 }, ctx({ folders }));
     expect(result).toMatchObject({ command: 'pytest -q', exitCode: 0, sandbox: true });
-    expect(sandbox.requests[0]).toMatchObject({ chatId: 'chat-1', command: 'pytest -q', timeoutMs: 600_000, workspaceRoot: ws, folders, writable: true, allowedHosts: [...DEFAULT_SANDBOX_HOSTS] });
+    expect(sandbox.requests[0]).toMatchObject({ chatId: 'chat-1', command: 'pytest -q', timeoutMs: 600_000, workspaceRoot: ws, folders, fs: 'readwrite', allowedHosts: [...DEFAULT_SANDBOX_HOSTS] });
     expect(events).toEqual([]);
     expect(store.audit.list('chat-1')).toEqual([expect.objectContaining({ toolName: 'run_command', grantedBy: 'sandbox' })]);
   });
@@ -91,7 +91,30 @@ describe('GruntToolProvider and the sandbox', () => {
     const sandbox = new FakeSandbox({ ready: true });
     const { provider } = setup(sandbox);
     await (await runCommand(provider, policy({ fs: 'read', sandboxHosts: ['example.org'] }))).execute({ command: 'ls' }, ctx());
-    expect(sandbox.requests[0]).toMatchObject({ writable: false, allowedHosts: ['example.org'], timeoutMs: 120_000 });
+    expect(sandbox.requests[0]).toMatchObject({ fs: 'read', allowedHosts: ['example.org'], timeoutMs: 120_000 });
+  });
+
+  it("with file access off, hands the sandbox none of the chat's folders, and tells the model the command runs in its home with none", async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { provider } = setup(sandbox);
+    const tool = await runCommand(provider, policy({ fs: 'off' }));
+    expect(tool.description).toBe(SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION);
+    expect(tool.description).toMatch(/starting in its own home folder/);
+    expect(tool.description).not.toMatch(/\/mnt/);
+    const result = await tool.execute({ command: 'ls' }, ctx({ folders: [{ root: 'D:\\Refs', access: 'readwrite' }] }));
+    expect(sandbox.requests[0]).toMatchObject({ fs: 'off', workspaceRoot: null, folders: [] });
+    expect(result).toMatchObject({ exitCode: 0, cwd: '/home/grunt/chats/chat-1' });
+    // With file access the description is the one that names the folders.
+    expect((await runCommand(provider, policy({ fs: 'read' }))).description).toBe(SANDBOX_RUN_COMMAND_DESCRIPTION);
+  });
+
+  it("treats a file access it doesn't know (a newer peer's synced profile) as off", async () => {
+    const sandbox = new FakeSandbox({ ready: true });
+    const { provider } = setup(sandbox);
+    const tool = await runCommand(provider, policy({ fs: 'everything' as never }));
+    expect(tool.description).toBe(SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION);
+    await tool.execute({ command: 'ls' }, ctx({ folders: [{ root: 'D:\\Refs', access: 'readwrite' }] }));
+    expect(sandbox.requests[0]).toMatchObject({ fs: 'off', workspaceRoot: null, folders: [] });
   });
 
   it('asks under always_ask, as source "sandbox"', async () => {

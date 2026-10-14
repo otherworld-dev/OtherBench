@@ -3,6 +3,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { LoginFileError } from './errors.js';
+import type { Granted } from './limiter.js';
 
 /** spec 2026-10-12-remote-access, "Setting the password". */
 export const MIN_PASSWORD_LENGTH = 12;
@@ -57,8 +58,14 @@ export async function hashPassword(pw: string, params: ScryptParams = DEFAULT_SC
   return { version: 1, scrypt: { ...params }, salt: salt.toString('hex'), hash: hash.toString('hex'), epoch: randomBytes(8).toString('hex'), setAt: now };
 }
 
-/** Uses the record's own parameters, so they can be raised later without breaking old files. */
-export async function verifyPassword(pw: string, record: PasswordRecord): Promise<boolean> {
+/**
+ * Uses the record's own parameters, so they can be raised later without
+ * breaking old files. `granted` is the check slot the sign-in limiter
+ * handed out (`LoginLimiter.admit`); only it makes one, so a password can't
+ * be checked around the limiter, and each is good for one check.
+ */
+export async function verifyPassword(pw: string, record: PasswordRecord, granted: Granted): Promise<boolean> {
+  if (!granted.spend()) throw new Error('This password check was already used.');
   const expected = Buffer.from(record.hash, 'hex');
   if (expected.length === 0) return false;
   const actual = await derive(pw, Buffer.from(record.salt, 'hex'), record.scrypt, expected.length);

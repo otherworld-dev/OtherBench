@@ -11,8 +11,36 @@ use serde_json::{json, Map, Value};
 /// The longest window title reported, in UTF-16 units (cut, not refused).
 pub const MAX_TITLE_UNITS: usize = 1024;
 
+/// The marker every page of Grunt's web UI carries in its title. Core's
+/// `GRUNT_UI_TITLE_MARKER` (packages/core/src/domain/computer-apps.ts) is the
+/// same string, and core refuses such a window before any card; this is the
+/// one rule the shell holds besides its own shortcuts, because a browser's
+/// window can turn into Grunt's page between the card and the action (the
+/// same window, process and run). A page that copies the marker only gets
+/// itself refused.
+pub const GRUNT_UI_TITLE_MARKER: &str = "[grunt-ui]";
+
+/// Whether a window title shows Grunt's own UI: it holds the marker, in any
+/// letter case.
+pub fn shows_grunt_ui(title: &str) -> bool {
+    title.to_ascii_lowercase().contains(GRUNT_UI_TITLE_MARKER)
+}
+
+/// The titles a browser's undocked developer tools window starts with
+/// (Chrome and Edge, Firefox), lower case. Core's `DEVTOOLS_TITLE_PREFIXES`
+/// is the same list: such a window is a console for any page, Grunt's own
+/// included, and belongs to the browser's process, so a browser grant would
+/// otherwise reach it.
+pub const DEVTOOLS_TITLE_PREFIXES: [&str; 2] = ["devtools - ", "developer tools - "];
+
+/// Whether a window title is that of an undocked developer tools window.
+pub fn is_dev_tools(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    DEVTOOLS_TITLE_PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
+}
+
 /// What an action is checked against before every step: who owns the
-/// window, and which window it is.
+/// window, which window it is, and its title now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub path: String,
@@ -20,6 +48,9 @@ pub struct Identity {
     pub window_id: String,
     pub pid: u32,
     pub started_at: String,
+    /// The window's title as it is now: never compared with the card's, only
+    /// checked for Grunt's marker (`shows_grunt_ui`).
+    pub title: String,
 }
 
 /// Every `ComputerTarget` fact (packages/core/src/ports/computer.ts).
@@ -35,7 +66,6 @@ pub struct Facts {
     pub elevated: bool,
     pub ui_access: bool,
     pub grunt: Option<bool>,
-    pub title: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,7 +116,7 @@ impl Facts {
             m.insert("grunt".into(), json!(grunt));
         }
         m.insert("shellView".into(), json!(self.id.shell_view));
-        m.insert("title".into(), json!(self.title));
+        m.insert("title".into(), json!(self.id.title));
         m.insert("windowId".into(), json!(self.id.window_id));
         m.insert("pid".into(), json!(self.id.pid));
         m.insert("startedAt".into(), json!(self.id.started_at));
@@ -117,13 +147,16 @@ impl Expect {
         })
     }
 
-    /// All five equal, the path byte for byte (no case folding, no trimming).
+    /// All five equal, the path byte for byte (no case folding, no trimming),
+    /// and the window not showing Grunt's own UI.
     pub fn matches(&self, id: &Identity) -> bool {
         self.app.as_bytes() == id.path.as_bytes()
             && self.shell_view == id.shell_view
             && self.window_id == id.window_id
             && self.pid == id.pid
             && self.started_at == id.started_at
+            && !shows_grunt_ui(&id.title)
+            && !is_dev_tools(&id.title)
     }
 }
 
@@ -255,7 +288,14 @@ mod tests {
     use super::*;
 
     fn id() -> Identity {
-        Identity { path: "C:\\Program Files\\Fake App\\FakeApp.exe".into(), shell_view: false, window_id: "1234".into(), pid: 42, started_at: "133000000000000000".into() }
+        Identity {
+            path: "C:\\Program Files\\Fake App\\FakeApp.exe".into(),
+            shell_view: false,
+            window_id: "1234".into(),
+            pid: 42,
+            started_at: "133000000000000000".into(),
+            title: "Fake App".into(),
+        }
     }
 
     #[test]
@@ -269,7 +309,6 @@ mod tests {
             elevated: false,
             ui_access: false,
             grunt: Some(false),
-            title: "Fake App".into(),
         };
         assert_eq!(
             f.to_json(),
@@ -291,6 +330,41 @@ mod tests {
             assert!(j.get(left_out).is_none(), "{left_out}");
         }
         assert!(j["pid"].is_u64());
+    }
+
+    #[test]
+    fn never_matches_a_window_showing_grunts_own_ui() {
+        let e = Expect::parse(Some(&json!({ "app": id().path, "shellView": false, "windowId": "1234", "pid": 42, "startedAt": "133000000000000000" }))).unwrap();
+        // The same window, process and run, now titled as Grunt's page: a browser that went to Grunt.
+        for title in ["Grunt [grunt-ui] - Google Chrome", "GRUNT [GRUNT-UI]", "x [grunt-ui]"] {
+            let mut now = id();
+            now.title = title.into();
+            assert!(!e.matches(&now), "{title}");
+            assert!(shows_grunt_ui(title), "{title}");
+        }
+        for title in ["Grunt", "grunt-ui", "[grunt ui]", ""] {
+            let mut now = id();
+            now.title = title.into();
+            assert!(e.matches(&now), "{title}");
+        }
+        assert_eq!(GRUNT_UI_TITLE_MARKER, "[grunt-ui]", "core's GRUNT_UI_TITLE_MARKER is the same string");
+    }
+
+    #[test]
+    fn never_matches_a_browsers_undocked_developer_tools() {
+        let e = Expect::parse(Some(&json!({ "app": id().path, "shellView": false, "windowId": "1234", "pid": 42, "startedAt": "133000000000000000" }))).unwrap();
+        for title in ["DevTools - example.com/", "devtools - x", "Developer Tools - Inbox - https://mail.example.com/"] {
+            let mut now = id();
+            now.title = title.into();
+            assert!(!e.matches(&now), "{title}");
+            assert!(is_dev_tools(title), "{title}");
+        }
+        for title in ["Chrome DevTools docs - Google Chrome", "DevTools", " DevTools - x"] {
+            let mut now = id();
+            now.title = title.into();
+            assert!(e.matches(&now), "{title}");
+        }
+        assert_eq!(DEVTOOLS_TITLE_PREFIXES, ["devtools - ", "developer tools - "], "core's DEVTOOLS_TITLE_PREFIXES are the same");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normaliseWindowsPath, planMounts, SandboxPathError, sandboxFoldersPrompt, toSandboxPath } from '../src/domain/sandbox-paths.js';
+import { normaliseWindowsPath, planMounts, SANDBOX_NO_FILES_PROMPT, SandboxPathError, sandboxFoldersPrompt, sandboxPrompt, toSandboxPath } from '../src/domain/sandbox-paths.js';
 
 describe('toSandboxPath', () => {
   it.each([
@@ -141,5 +141,26 @@ describe('sandboxFoldersPrompt', () => {
 
   it('says when a folder cannot be used there, and why', () => {
     expect(sandboxFoldersPrompt('\\\\nas\\share', [])).toMatch(/not available in the sandbox \(network/);
+  });
+});
+
+describe('sandboxPrompt', () => {
+  const folders = [{ root: 'D:\\Refs', access: 'read' as const }];
+
+  it('with file access off, names no folder: the command runs in its own home with none of them', () => {
+    const text = sandboxPrompt('off', 'E:\\Git\\Grunt', folders);
+    expect(text).toBe(SANDBOX_NO_FILES_PROMPT);
+    expect(text).toContain('# Sandbox');
+    expect(text).toMatch(/File access is off/);
+    expect(text).toMatch(/starts in its own home folder/);
+    expect(text).not.toMatch(/\/mnt|Grunt|Refs/);
+  });
+
+  it("treats a file access it doesn't know as off", () => {
+    expect(sandboxPrompt('everything' as never, 'E:\\Git\\Grunt', folders)).toBe(SANDBOX_NO_FILES_PROMPT);
+  });
+
+  it('with file access, is the folders block', () => {
+    for (const fs of ['read', 'readwrite'] as const) expect(sandboxPrompt(fs, 'E:\\Git\\Grunt', folders)).toBe(sandboxFoldersPrompt('E:\\Git\\Grunt', folders));
   });
 });

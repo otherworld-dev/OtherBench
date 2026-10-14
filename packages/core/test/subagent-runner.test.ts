@@ -11,6 +11,7 @@ import { toolContextFor } from '../src/domain/tool-context.js';
 import { IMAGE_NOT_KEPT, keepToolImages } from '../src/domain/tool-images.js';
 import { FAKE_PNG } from '../src/testing/fake-computer.js';
 import { SUBAGENT_NO_SHELL_NOTE, SUBAGENT_PLAN_NOTE, SUBAGENT_RESULT_COPY_MAX_CHARS, SubagentRunner, type SubagentRunnerDeps } from '../src/domain/subagent.js';
+import { SANDBOX_NO_FILES_PROMPT } from '../src/domain/sandbox-paths.js';
 
 const USAGE: Usage = { tokensIn: 40, tokensOut: 8, tokensCached: 0, tokensReasoning: 0 };
 const finish = (finishReason = 'stop'): EngineEvent => ({ type: 'finish', usage: USAGE, finishReason });
@@ -154,6 +155,36 @@ describe('SubagentRunner', () => {
     expect(engine.requests[0]!.profile.toolPolicy).toEqual(listed[0]);
     expect(engine.requests[0]!.profile.toolPolicy).not.toEqual(store.profiles.get('p-cheap')!.toolPolicy);
     expect(engine.requests[1]!.profile.toolPolicy).toEqual(listed[1]);
+  });
+
+  it("a sandboxed sub-agent whose file access comes out off lists its tools with fs off and is told the sandbox has none of the chat's folders", async () => {
+    const store = seeded();
+    store.profiles.update('p-main', { toolPolicy: policy({ fs: 'readwrite', shell: true, shellRuns: 'sandbox' }) });
+    store.profiles.update('p-cheap', { toolPolicy: policy({ fs: 'off', shell: true, shellRuns: 'sandbox' }) });
+    const provider = new FakeToolProvider();
+    const listed: ToolPolicy[] = [];
+    const listTools = provider.listTools.bind(provider);
+    provider.listTools = async (p) => {
+      listed.push(p);
+      return listTools(p);
+    };
+    const engine = childEngine(() => answer('ok'));
+    const h = harness(engine, { store, folders: [{ root: '/refs', access: 'read' }] }, provider);
+
+    await h.runner.run({ description: 'As Cheap', prompt: 'Run it.', profile: 'Cheap' }, h.ctx('call-1'));
+    await h.runner.run({ description: 'As me', prompt: 'Run it.' }, h.ctx('call-2'));
+
+    // The lower file access wins: the sandboxed run_command it is offered is built for fs off, so it hands the sandbox no folders.
+    expect(listed.map((p) => p.fs)).toEqual(['off', 'readwrite']);
+    expect(engine.requests.map((req) => req.tools.filter((t) => t.name === 'run_command').map((t) => t.source))).toEqual([['sandbox'], ['sandbox']]);
+    expect(engine.requests[0]!.profile.systemPrompt).toContain(SANDBOX_NO_FILES_PROMPT);
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('The workspace /ws');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('The workspace /ws');
+    expect(engine.requests[1]!.profile.systemPrompt).not.toContain(SANDBOX_NO_FILES_PROMPT);
+    // Its folders note doesn't contradict that: they are named for reference only, while the parent's own profile is told how to use them.
+    expect(engine.requests[0]!.profile.systemPrompt).toContain('named for reference only: file access is off');
+    expect(engine.requests[0]!.profile.systemPrompt).not.toContain('/refs (read-only)');
+    expect(engine.requests[1]!.profile.systemPrompt).toContain('/refs (read-only)');
   });
 
   it("a host-shell parent's sub-agent run as a sandboxed profile gets no run_command at all, sandboxed or not", async () => {

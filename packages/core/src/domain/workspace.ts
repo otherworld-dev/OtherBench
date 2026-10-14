@@ -1,4 +1,5 @@
 import type { ExtraFolder, LocationPath, ResolvedFolder, Workspace, WorkspaceStatus } from '../types/workspace.js';
+import type { ToolPolicy } from '../types/config.js';
 
 /** The fields a chat or project carries for its folder: the stored one and the API-only view of it. */
 interface WorkspaceFields {
@@ -250,8 +251,30 @@ export function parseFolders(value: unknown): ExtraFolder[] {
   return out;
 }
 
-/** The system-prompt block naming a turn's extra folders, so the model knows it may use them and how. */
-export function extraFoldersPrompt(folders: readonly ResolvedFolder[]): string {
+/**
+ * Whether a profile's tools can reach the chat's folders at all: with file access ('read' or 'readwrite'), or,
+ * with it off (or a value this version doesn't know), through a shell on this machine (either engine's) or
+ * computer use. A sandboxed shell with file access off gets none of them (SandboxRunRequest.fs), and Claude
+ * Code's own file tools are taken away with it (agentDisallowedTools).
+ */
+export function canReachFolders(policy: Pick<ToolPolicy, 'fs' | 'shell' | 'shellRuns' | 'computer'>): boolean {
+  if (policy.fs === 'read' || policy.fs === 'readwrite') return true;
+  return (policy.shell && policy.shellRuns !== 'sandbox') || policy.computer === true;
+}
+
+/**
+ * The system-prompt block naming a turn's extra folders, so the model knows it may use them and how. With
+ * `reachable` false (canReachFolders), it names them for reference only and says file access is off, so the
+ * model doesn't try to open them.
+ */
+export function extraFoldersPrompt(folders: readonly ResolvedFolder[], reachable = true): string {
+  if (!reachable) {
+    return [
+      '# Other folders',
+      "This chat also has these folders, named for reference only: file access is off for this profile, so none of your tools can open, list or change anything in them (or in the workspace).",
+      ...folders.map((f) => `- ${f.root}`),
+    ].join('\n');
+  }
   return [
     '# Other folders',
     'Besides the workspace folder, you can use these folders. Refer to anything in them by its absolute path; a relative path always means the workspace.',

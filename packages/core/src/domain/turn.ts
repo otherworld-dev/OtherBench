@@ -17,10 +17,10 @@ import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
 import { availableToolsPrompt, namesItsTools } from './tools-prompt.js';
 import { ARTIFACTS_GUIDANCE, artifactsListNote, artifactsOnBranch, branchOf } from './artifacts.js';
-import { sandboxFoldersPrompt } from './sandbox-paths.js';
+import { sandboxPrompt } from './sandbox-paths.js';
 import { LIVE_ARTIFACTS_GUIDANCE } from './live-artifacts.js';
 import { PLAN_MODE_NOTE, PLAN_TOOL, createPlanGate } from './thread-tools.js';
-import { extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
+import { canReachFolders, extraFoldersPrompt, mergeFolders, resolveFolders, resolveWorkspace } from './workspace.js';
 import { appendDelta } from './parts.js';
 import type { SubagentEvent } from './parts.js';
 import { SubagentRunner } from './subagent.js';
@@ -1056,22 +1056,26 @@ export class TurnRunner {
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
-  /** The profile with a note naming the turn's extra folders appended to its system prompt (spec 2026-10-07-extra-folders). */
+  /**
+   * The profile with a note naming the turn's extra folders appended to its system prompt (spec
+   * 2026-10-07-extra-folders); for reference only when none of its tools can reach them (canReachFolders).
+   */
   private withFolders(profile: ResolvedProfile, folders: ResolvedFolder[]): ResolvedProfile {
     if (folders.length === 0) return profile;
-    const block = extraFoldersPrompt(folders);
+    const block = extraFoldersPrompt(folders, canReachFolders(profile.toolPolicy));
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 
   /**
    * The profile with the "# Sandbox" block (spec 2026-10-12-sandbox-design,
    * "Model guidance") when its shell runs in the sandbox: what run_command is
-   * and where the workspace and each extra folder are in it. A chat with no
-   * workspace can't run sandboxed commands at all, so it gets none.
+   * and where the workspace and each extra folder are in it, or, with file
+   * access off, that it has none of them and runs in its own home. A chat
+   * with no workspace can't run sandboxed commands at all, so it gets none.
    */
   private withSandbox(profile: ResolvedProfile, workspaceRoot: string | null, folders: ResolvedFolder[]): ResolvedProfile {
     if (workspaceRoot === null || !runsShellInSandbox(profile.toolPolicy)) return profile;
-    const block = sandboxFoldersPrompt(workspaceRoot, folders, this.canonicalPath);
+    const block = sandboxPrompt(profile.toolPolicy.fs, workspaceRoot, folders, this.canonicalPath);
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 

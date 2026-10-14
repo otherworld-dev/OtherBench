@@ -5,6 +5,7 @@ import { normaliseHost } from '@grunt/core/domain/browser-hosts.js';
 import { canonicalHost } from '@grunt/core/domain/network-hosts.js';
 import { oneLine, revealHidden } from '../viewer/browser.js';
 import { ComputerApprovalPrompt } from './ComputerApprovalPrompt.js';
+import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
 
 export interface ApprovalPromptProps {
   request: ApprovalRequest;
@@ -145,7 +146,7 @@ function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JS
     } catch (err) {
       console.error(`[grunt-web] failed to resolve approval ${request.id}:`, err);
       setPending(false);
-      setError('Could not send that decision -- please try again.');
+      setError(answerErrorText(err, 'Could not send that decision -- please try again.'));
     }
   }
 
@@ -257,6 +258,7 @@ function StandardApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JS
           {labels.always}
         </button>
       </div>
+      <DesktopOnlyNote />
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );

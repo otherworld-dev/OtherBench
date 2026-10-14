@@ -1,4 +1,4 @@
-import { isSandboxError, type Sandbox } from '@grunt/core/ports/sandbox.js';
+import { isSandboxError, sandboxFileAccess, type Sandbox } from '@grunt/core/ports/sandbox.js';
 import type { ToolContext, ToolSpec } from '@grunt/core/ports/tool-provider.js';
 import { sandboxHostsOf, type ToolPolicy } from '@grunt/core/types/config.js';
 import { parseRunCommandArgs, RUN_COMMAND_PARAMETERS, toolError } from './shell-tool.js';
@@ -21,10 +21,18 @@ export const SANDBOX_NETWORK_SPEC: ToolSpec = {
   },
 };
 
-export const SANDBOX_RUN_COMMAND_DESCRIPTION =
-  "Runs a command with bash in a Linux sandbox (not on this machine), starting in the workspace folder. The chat's folders appear there under /mnt/<drive>/... (E:\\Git\\x is /mnt/e/Git/x); nothing else from this machine is there, and Windows programs (cmd.exe, PowerShell, .exe files) aren't available. " +
+const SANDBOX_COMMON =
   'Default timeout 120s (hard cap 600s); combined stdout+stderr is captured up to 100KB. A timeout or a cancel kills the command and everything it started. ' +
   "Network access is limited to an allowlist; reaching any other host asks the user first. Things installed under the home folder (pip install --user, a venv, npm's cache) stay for the rest of the chat.";
+
+export const SANDBOX_RUN_COMMAND_DESCRIPTION =
+  "Runs a command with bash in a Linux sandbox (not on this machine), starting in the workspace folder. The chat's folders appear there under /mnt/<drive>/... (E:\\Git\\x is /mnt/e/Git/x); nothing else from this machine is there, and Windows programs (cmd.exe, PowerShell, .exe files) aren't available. " +
+  SANDBOX_COMMON;
+
+/** The description when the profile's file access is off: the command gets no folders from this machine at all. */
+export const SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION =
+  "Runs a command with bash in a Linux sandbox (not on this machine), starting in its own home folder. File access is off for this profile, so none of the chat's folders (not the workspace, not the extra folders) are there, nor anything else from this machine; Windows programs (cmd.exe, PowerShell, .exe files) aren't available. Work in the home folder or $TMPDIR. " +
+  SANDBOX_COMMON;
 
 /**
  * Raises the sandbox_network card for one host and resolves whether the
@@ -36,16 +44,21 @@ export type AskHost = (host: string, port: number | undefined, ctx: ToolContext,
 /**
  * `run_command` when the profile's shell runs in the sandbox: the same name
  * and arguments as the host tool, source 'sandbox'. Built per listing because
- * it needs the policy (the allowlist, whether files are writable) and the
- * provider's way of raising a network card.
+ * it needs the policy (the allowlist, the file access) and the provider's way
+ * of raising a network card. With file access off it hands the sandbox none
+ * of the chat's folders, and says so in its description; the sandbox keeps
+ * such a command away from them again on its side.
  *
  * It never runs anything on this machine: with no sandbox, one that isn't set
  * up, or one that fails, the call is refused, never handed to the host shell.
  */
 export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolicy, askHost: AskHost): ToolSpec {
+  // Fails closed: any value but 'read' or 'readwrite' (a newer peer's synced profile, say) is off.
+  const fs = sandboxFileAccess(policy.fs);
+  const filesOff = fs === 'off';
   return {
     name: 'run_command',
-    description: SANDBOX_RUN_COMMAND_DESCRIPTION,
+    description: filesOff ? SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION : SANDBOX_RUN_COMMAND_DESCRIPTION,
     parameters: RUN_COMMAND_PARAMETERS,
     risk: 'execute',
     source: 'sandbox',
@@ -60,9 +73,10 @@ export function sandboxRunCommandTool(sandbox: Sandbox | null, policy: ToolPolic
           chatId: ctx.chatId,
           command: parsed.command,
           timeoutMs: parsed.timeoutMsUsed,
-          workspaceRoot: ctx.workspaceRoot,
-          folders: ctx.folders ?? [],
-          writable: policy.fs === 'readwrite',
+          // File access off: none of the chat's folders go to the sandbox at all.
+          fs,
+          workspaceRoot: filesOff ? null : ctx.workspaceRoot,
+          folders: filesOff ? [] : (ctx.folders ?? []),
           allowedHosts: sandboxHostsOf(policy),
           signal: ctx.signal,
           askHost: (host, port, signal) => askHost(host, port, ctx, signal),

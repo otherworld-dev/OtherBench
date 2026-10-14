@@ -3,6 +3,7 @@ import type { ApprovalChoice } from '@grunt/core/ports/tool-provider.js';
 import { actionSummary, describeApp, isHighRiskApp, typedTextForCard, windowTitleForCard } from '@grunt/core/domain/computer-apps.js';
 import type { ApprovalPromptProps } from './ApprovalPrompt.js';
 import { oneLine, revealHidden } from '../viewer/browser.js';
+import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
 
 /**
  * The approval card for computer use (spec 2026-10-12-computer-use-design
@@ -19,9 +20,20 @@ import { oneLine, revealHidden } from '../viewer/browser.js';
  *   - the summary is `actionSummary`, which never holds typed text; a `type`
  *     call's text is only in its own scrolling box (`typedTextForCard`);
  *   - `isHighRiskApp` decides the once-only case: then only Allow once and
- *     Deny (a chat or always answer would be refused by the broker anyway).
+ *     Deny (a chat or always answer would be refused by the broker anyway);
+ *   - for a browser or an IDE that may have a lasting grant
+ *     (`describeApp(args.app).kind`), a line says plainly what one lets the
+ *     model do there: any site the browser reaches, or code and the terminal
+ *     in the IDE.
  * "Always allow" sends the key exactly as it came, as `{ app }` and nothing else.
  */
+/** What a lasting grant for a browser lets the model do there, said plainly. */
+const BROWSER_GRANT_WORDS =
+  "Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't.";
+/** What a lasting grant for an IDE lets the model do there: as much as running any program. */
+const IDE_GRANT_WORDS =
+  'Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included.';
+
 export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptProps): JSX.Element {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +44,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
   const key = app !== null ? app.key : null;
   const name = app !== null ? oneLine(app.name) : '';
   const onceOnly = isHighRiskApp(request.args);
+  const kind = app !== null ? app.kind : null;
   const title = oneLine(windowTitleForCard(args['appTitle']));
   const typed = typedTextForCard(request.args);
   const summary = oneLine(actionSummary(request.args));
@@ -45,7 +58,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
     } catch (err) {
       console.error(`[grunt-web] failed to resolve approval ${request.id}:`, err);
       setPending(false);
-      setError('Could not send that decision -- please try again.');
+      setError(answerErrorText(err, 'Could not send that decision -- please try again.'));
     }
   }
 
@@ -110,7 +123,19 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
           Grunt asks every time here.{' '}
           {args['appShellView'] === true
             ? 'This is a file dialog or file view, where any file can be opened or run.'
-            : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
+            : kind !== null
+              ? "Browsers and IDEs can be allowed for longer, but Grunt couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
+              : "This app can run commands or change system settings, or Grunt couldn't fully identify it."}
+        </p>
+      )}
+      {key !== null && !onceOnly && kind === 'browser' && (
+        <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
+          <bdi>{name}</bdi> is a web browser. {BROWSER_GRANT_WORDS}
+        </p>
+      )}
+      {key !== null && !onceOnly && kind === 'ide' && (
+        <p data-testid="computer-app-kind" className="text-xs text-[var(--warn)]">
+          <bdi>{name}</bdi> is a code editor (IDE). {IDE_GRANT_WORDS}
         </p>
       )}
       <div className="flex flex-wrap gap-2">
@@ -144,6 +169,7 @@ export function ComputerApprovalPrompt({ request, onResolve }: ApprovalPromptPro
           {'"Always allow"'} lets the model use <bdi>{name}</bdi> in any chat on this profile.
         </p>
       )}
+      <DesktopOnlyNote />
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );

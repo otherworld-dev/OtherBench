@@ -4,7 +4,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { sandboxHostProblem } from '@grunt/core/domain/network-hosts.js';
 import { normaliseWindowsPath, SandboxPathError, toSandboxPath, type MountNeed } from '@grunt/core/domain/sandbox-paths.js';
-import { SandboxError, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@grunt/core/ports/sandbox.js';
+import { SandboxError, sandboxFileAccess, type Sandbox, type SandboxRunRequest, type SandboxRunResult, type SandboxStatus, type StoredSandboxState } from '@grunt/core/ports/sandbox.js';
+import type { FsMode } from '@grunt/core/types/config.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
 import { channelFromProcess } from './agent-channel.js';
 import { AgentClient, type AgentOutcome } from './agent-client.js';
@@ -283,7 +284,7 @@ export class WslSandbox implements Sandbox {
     this.refuseIfBusy();
     if (this.stored().state !== 'ready') throw new SandboxError('not_set_up', `The sandbox isn't set up on ${this.opts.machineName()}. Set it up in Settings > Sandbox.`);
     if (req.signal.aborted) throw new SandboxError('aborted', NOT_STARTED);
-    const places = this.places(req.workspaceRoot, req.folders, req.writable);
+    const places = this.places(req.chatId, req.fs, req.workspaceRoot, req.folders);
     // Up front too, so a refused command mounts nothing and starts no agent.
     this.refuseIfUnguarded(req.chatId, places);
     return this.runIn(req.chatId, places, req);
@@ -422,14 +423,23 @@ export class WslSandbox implements Sandbox {
   }
 
   /**
-   * The workspace first (the command's cwd), then each extra folder, as canonical Windows paths (real path,
-   * then tidied) and their Linux paths. A folder that can't be mounted refuses this command before anything
-   * is mounted. So does a read-only folder inside a writable one (or the same folder): the runtime's
+   * With file access off, none: no folder of the chat's is mounted for the command or allowed to it, whatever
+   * the request names, and it starts in the chat's home. This is where that rule is kept, so no caller can
+   * hand such a command a folder.
+   *
+   * Otherwise the workspace first (the command's cwd), then each extra folder, as canonical Windows paths (real
+   * path, then tidied) and their Linux paths, writable only with fs 'readwrite'. A folder that can't be mounted
+   * refuses this command before anything is mounted. So does a read-only folder inside a writable one (or the same folder): the runtime's
    * read-only bind sits on its exact spelling, and Windows folders in the VM ignore case, so `RO/x` would
    * reach it through the writable parent. A writable folder inside a read-only one ends up read-only (the
    * runtime binds the read-only parent over the writable child), which is narrower, not wider.
    */
-  private places(workspaceRoot: string, folders: readonly ResolvedFolder[], writable: boolean): Places {
+  private places(chatId: string, requested: FsMode, workspaceRoot: string | null, folders: readonly ResolvedFolder[]): Places {
+    // Fails closed: any value but 'read' or 'readwrite' (a newer peer's, say) is off.
+    const fs = sandboxFileAccess(requested);
+    if (fs === 'off') return { cwd: chatHome(chatId), needs: [], read: [], write: [], denyWrite: [] };
+    if (workspaceRoot === null) throw new SandboxError('bad_folder', 'A sandboxed command with file access needs a workspace folder, and none was given.');
+    const writable = fs === 'readwrite';
     const entries = [{ root: workspaceRoot, writable }, ...folders.map((f) => ({ root: f.root, writable: writable && f.access === 'readwrite' }))];
     const places: Places = { cwd: '', needs: [], read: [], write: [], denyWrite: [] };
     const resolved = entries.map((entry) => {
@@ -475,12 +485,17 @@ export class WslSandbox implements Sandbox {
     try {
       await untilTurn(previous, input.signal);
       this.refuseIfStale(chatId, mine, selfTest);
-      const epoch = mine.epoch;
-      const needs = unionOf(mine.granted, places.needs);
-      await this.mounts.set(chatId, needs);
-      // The agent went while mounting: the next one starts from this command's folders alone.
-      mine.granted = mine.epoch === epoch ? needs : places.needs;
-      this.refuseIfStale(chatId, mine, selfTest);
+      // A command with no folders (file access off) mounts nothing, not even what the chat's earlier commands
+      // had mounted: what is still there from them stays out of its view (the runtime hides /mnt but for the
+      // paths a command may read, and it may read none).
+      if (places.needs.length > 0) {
+        const epoch = mine.epoch;
+        const needs = unionOf(mine.granted, places.needs);
+        await this.mounts.set(chatId, needs);
+        // The agent went while mounting: the next one starts from this command's folders alone.
+        mine.granted = mine.epoch === epoch ? needs : places.needs;
+        this.refuseIfStale(chatId, mine, selfTest);
+      }
       const writing = await this.writeTurn(places, input.signal);
       try {
         this.refuseIfStale(chatId, mine, selfTest);
@@ -558,7 +573,7 @@ export class WslSandbox implements Sandbox {
     if (gateway === null || gruntPort === null) {
       log(`(skipping the check on Grunt's own port: ${gateway === null ? 'the distro has no default route' : "Grunt's port isn't known"})`);
     }
-    const places = this.places(rw, [{ root: ro, access: 'read' }], true);
+    const places = this.places(SELF_TEST_CHAT, 'readwrite', rw, [{ root: ro, access: 'read' }]);
     const [rwLinux, roLinux] = places.read as [string, string];
     const cases = selfTestCases({ rwLinux, roLinux, gateway, gruntPort });
     try {
@@ -567,7 +582,7 @@ export class WslSandbox implements Sandbox {
         (c) =>
           this.runIn(SELF_TEST_CHAT, places, {
             command: c.command,
-            timeoutMs: 60_000,
+            timeoutMs: c.timeoutMs ?? 60_000,
             allowedHosts: c.allowedHosts,
             signal: new AbortController().signal,
             askHost: async (host) => {

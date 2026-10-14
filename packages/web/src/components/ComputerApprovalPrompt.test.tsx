@@ -6,6 +6,9 @@ import { ApprovalPrompt } from './ApprovalPrompt.js';
 
 const EXCEL = 'C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE';
 const CMD = 'C:\\Windows\\System32\\cmd.exe';
+const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const VSCODE = 'C:\\Users\\a\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe';
+const TERMINAL = 'C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.23.0.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe';
 /** A path with Hebrew letters in it: valid in a key (they are not hidden characters), and right-to-left. */
 const RTL_PATH = 'C:\\Program Files\\\u05d0\u05d1\u05d2\\App.exe';
 
@@ -55,6 +58,7 @@ describe('the computer-use approval card', () => {
     expect(card()).toHaveTextContent('"Always allow" lets the model use EXCEL.EXE in any chat on this profile.');
     expect(screen.queryByTestId('computer-high-risk')).toBeNull();
     expect(screen.queryByTestId('computer-app-unusual')).toBeNull();
+    expect(screen.queryByTestId('computer-app-kind')).toBeNull();
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow EXCEL.EXE']);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Allow for this chat' }));
     expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'chat' });
@@ -109,6 +113,59 @@ describe('the computer-use approval card', () => {
     expect(line).toHaveTextContent("This app can run commands or change system settings, or Grunt couldn't fully identify it.");
     expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
     expect(card()).not.toHaveTextContent('"Always allow"');
+  });
+
+  it('offers all four answers for a browser, and says plainly what a lasting grant lets the model do there', async () => {
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalPrompt request={request(described(CHROME, { appName: 'chrome.exe', appTitle: 'New Tab - Google Chrome' }))} onResolve={onResolve} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow chrome.exe']);
+    expect(screen.getByTestId('computer-app-kind')).toHaveTextContent(
+      "chrome.exe is a web browser. Allowing it for this chat or always lets the model, without asking again: go to any site the browser can reach, signed in as you; download and open files, which can run programs; and open other apps from links. Grunt's own app is refused here, but another Grunt this browser can reach isn't."
+    );
+    expect(screen.getByTestId('computer-app-kind').querySelector('bdi')?.textContent).toBe('chrome.exe');
+    expect(screen.queryByTestId('computer-high-risk')).toBeNull();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Always allow chrome.exe' }));
+    expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'always', constraint: { app: CHROME } });
+  });
+
+  it('offers all four answers for an IDE, and says it lets the model edit and run code and use its terminal', async () => {
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(<ApprovalPrompt request={request(described(VSCODE, { appName: 'Code.exe', appTitle: 'main.ts - Visual Studio Code' }))} onResolve={onResolve} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once', 'Allow for this chat', 'Always allow Code.exe']);
+    expect(screen.getByTestId('computer-app-kind')).toHaveTextContent(
+      "Code.exe is a code editor (IDE). Allowing it for this chat or always lets the model edit and run code in it and type commands into its terminal, without asking again. That is as good as letting it run any program as you, Grunt included."
+    );
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Allow for this chat' }));
+    expect(onResolve).toHaveBeenCalledWith('req-1', { choice: 'chat' });
+  });
+
+  it("keeps a browser or IDE once-only when it wasn't found ordinary, with no lasting-grant line", () => {
+    render(<ApprovalPrompt request={request(described(CHROME, { appName: 'chrome.exe', appRisk: 'high' }))} onResolve={vi.fn()} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
+    expect(screen.queryByTestId('computer-app-kind')).toBeNull();
+    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent(
+      "Grunt asks every time here. Browsers and IDEs can be allowed for longer, but Grunt couldn't fully identify this one (its signature, where it runs from, or the name it was built with)."
+    );
+    cleanup();
+    // Its Save As dialog.
+    render(<ApprovalPrompt request={request(described(VSCODE, { appName: 'Code.exe', appRisk: 'high', appShellView: true }))} onResolve={vi.fn()} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
+    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent('This is a file dialog or file view, where any file can be opened or run.');
+    expect(screen.queryByTestId('computer-app-kind')).toBeNull();
+    cleanup();
+    // Installed under a user folder with an accented letter.
+    const accented = 'C:\\Users\\Jos\u00e9\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe';
+    render(<ApprovalPrompt request={request(described(accented, { appName: 'Code.exe', appRisk: 'normal', appShellView: false }))} onResolve={vi.fn()} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
+    expect(screen.getByTestId('computer-app-unusual')).toBeInTheDocument();
+    expect(screen.queryByTestId('computer-app-kind')).toBeNull();
+  });
+
+  it('keeps a terminal once-only even when the arguments claim it is ordinary', () => {
+    render(<ApprovalPrompt request={request(described(TERMINAL, { appName: 'WindowsTerminal.exe', appRisk: 'normal', appShellView: false }))} onResolve={vi.fn()} />);
+    expect(buttons().map((b) => b.textContent)).toEqual(['Deny', 'Allow once']);
+    expect(screen.getByTestId('computer-high-risk')).toHaveTextContent("This app can run commands or change system settings, or Grunt couldn't fully identify it.");
+    expect(screen.queryByTestId('computer-app-kind')).toBeNull();
   });
 
   it('treats a listed program as once-only even when the arguments claim it is ordinary', () => {

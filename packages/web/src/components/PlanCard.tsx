@@ -3,6 +3,7 @@ import { CHANGES_MAX_CHARS } from '@grunt/core/domain/thread-tools.js';
 import type { AskReply, UserAsk } from '@grunt/core/types/thread.js';
 import { ApiError } from '../state/api.js';
 import { MarkdownBody } from './MarkdownBody.js';
+import { answerErrorText, DesktopOnlyNote } from '../lib/desktopOnly.js';
 
 export interface PlanCardProps {
   ask: Extract<UserAsk, { kind: 'plan' }>;
@@ -39,7 +40,7 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
       console.error(`[grunt-web] failed to answer plan ${ask.id}:`, err);
       setPending(false);
       // A 400 carries the server's reason (e.g. an answer over the length limit), so show that.
-      setError(err instanceof ApiError && err.status === 400 ? err.message : 'Could not send that answer. Please try again.');
+      setError(err instanceof ApiError && err.status === 400 ? err.message : answerErrorText(err, 'Could not send that answer. Please try again.'));
     }
   }
 
@@ -81,6 +82,7 @@ export function PlanCard({ ask, profileName, onAnswer }: PlanCardProps): JSX.Ele
           </button>
         </div>
       )}
+      <DesktopOnlyNote />
       {error && <p className="text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );

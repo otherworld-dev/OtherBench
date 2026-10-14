@@ -31,6 +31,18 @@ describe('selfTestCases', () => {
     expect(cases.find((c) => c.command.includes('example.com'))?.allowedHosts).toEqual([]);
   });
 
+  it('tries to start a Windows program inside the runtime, and only a clear "interop-off" passes', async () => {
+    const check = selfTestCases(places).find((c) => c.command === '/bin/sh /opt/grunt-sandbox/interop-check.sh');
+    expect(check).toMatchObject({ expect: 'ok', allowedHosts: [] });
+    const pass = (r: SandboxRunResult) => runSelfTest([check!], async () => r, () => {});
+    await expect(pass(result(0, 'note: a WSLInterop registration is visible\ninterop-off\n'))).resolves.toBeUndefined();
+    // Windows answered, a verdict that isn't the whole line, or an exit 0 with nothing to show for it: all fail.
+    await expect(pass(result(3, 'INTEROP-REACHED: ... Invalid argument\n'))).rejects.toThrow(/Windows programs can't be started/);
+    await expect(pass(result(0, 'interop-offish\n'))).rejects.toThrow();
+    await expect(pass(result(0, ''))).rejects.toThrow();
+    await expect(pass(result(1, 'interop-off\n'))).rejects.toThrow();
+  });
+
   it("checks that a command's own home and temp folder are writable", () => {
     const ok = selfTestCases(places).filter((c) => c.expect === 'ok').map((c) => c.command);
     expect(ok).toEqual(expect.arrayContaining(['echo ok > "$HOME/written.txt"', 'echo ok > "$TMPDIR/written.txt"']));

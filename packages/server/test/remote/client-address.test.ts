@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vitest';
-import { clientAddress, normalizeIp } from '../../src/remote/client-address.js';
+import { clientAddress, limitKey, normalizeIp } from '../../src/remote/client-address.js';
 import { from } from './helpers.js';
 
 function app(trusted: string[]) {
@@ -55,5 +55,24 @@ describe('normalizeIp', () => {
     expect(normalizeIp('10.0.0.0/8')).toBeNull();
     expect(normalizeIp('grunt.lan')).toBeNull();
     expect(normalizeIp(undefined)).toBeNull();
+  });
+});
+
+describe('limitKey', () => {
+  it('keeps IPv4 and anything else as it is', () => {
+    expect(limitKey('10.0.0.1')).toBe('10.0.0.1');
+    expect(limitKey('unknown')).toBe('unknown');
+  });
+
+  it('counts an IPv6 address as its /64, however it is written', () => {
+    const key = '2001:db8:0:1::/64';
+    expect(limitKey('2001:db8:0:1::1')).toBe(key);
+    expect(limitKey('2001:0db8:0000:0001:ffff:ffff:ffff:ffff')).toBe(key);
+    expect(limitKey('2001:DB8:0:1:a:b:c:d')).toBe(key);
+    expect(limitKey('2001:db8:0:1::1.2.3.4')).toBe(key);
+    expect(limitKey('2001:db8:0:2::1')).toBe('2001:db8:0:2::/64');
+    expect(limitKey('::1')).toBe('0:0:0:0::/64');
+    expect(limitKey('fe80::1%eth0')).toBe('fe80:0:0:0::/64');
+    expect(limitKey('2001:db8::')).toBe('2001:db8:0:0::/64');
   });
 });

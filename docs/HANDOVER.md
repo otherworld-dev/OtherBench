@@ -24,7 +24,10 @@ v2 (plan *Products/Grunt/Design/Plans/2026-10-02-grunt-v2*, spec
 desktop app and lets two machines share chats. Built so far:
 
 - **Desktop shell** (`desktop/`, Tauri v2): bundled UI, the server as a
-  sidecar on a random loopback port with a per-launch token, tray, single
+  sidecar on a random loopback port with a per-launch token (handed over as
+  `GRUNT_TOKEN`, which `grunt serve` deletes from its environment once read;
+  every process it starts also leaves it out: `withoutServerSecrets` in
+  `core/domain/child-env.ts`), tray, single
   instance, start at login, a global hotkey with a quick-chat window,
   native notifications, native file and folder pickers, drag and drop, and
   `--open-folder` / `--send` arguments. Installers and a bundled Node
@@ -269,6 +272,144 @@ of work landed after that plan closed out:
   (or `--tls-cert/--tls-key`, or `--trust-proxy`) runs Grunt for other
   devices' browsers behind a password set with `grunt password`; see the
   README's *Use it from another device*.
+  - **Sign-in limits** (`packages/server/src/remote/limiter.ts`, used by
+    `checkPassword` in `remote/auth.ts` for `/api/auth/login` and
+    `/api/auth/password`; change 8 and its fix rounds 1-3, 2026-10-14).
+    Everything here is in memory: **a restart resets the counts, locks and
+    budgets.** The limiter reads a monotonic clock
+    (`performance.timeOrigin + performance.now()`), so a change of the
+    system clock doesn't move a lock.
+    - **Worst case: at most 120 password checks in any hour**: at most 100
+      without a remembered-device cookie and at most 20 with one.
+      `limiter.test.ts` floods both paths for two hours and counts at most
+      99 + 19 = 118. Without device cookies (an attacker has none unless it
+      stole one) it is 100, the old lockout's number per hour, and below
+      the up to 200 its fixed window let through across an hour's boundary.
+    - **Per address**, as built: 5 failures in 15 minutes lock it for 15
+      minutes (429 with `Retry-After`, even for the right password). A
+      failure is a wrong password, or an attempt that took a token and ended
+      without a password check: its client went away while it waited, or
+      its address was locked meanwhile (fix round 3). An IPv6 address counts
+      as its /64 (`limitKey` in `client-address.ts`), here and for the
+      waiting cap below, since one home or host usually holds a whole /64.
+      Up to 10,000 addresses are remembered; past that the oldest-used
+      unlocked one is dropped, never a lock still running (and never the
+      address just counted), unless every one is locked, when the lock that
+      ends soonest goes.
+    - **Globally sign-in never closes** (Adam: no lockout for everyone).
+      For attempts without a device cookie:
+      - a **budget of password checks**: a token bucket of 20 that refills
+        one every 45 s (GCRA), so at most 100 in any hour. It applies
+        whatever the failure count, because attempts sent together all see
+        the same low count; the 20 at hand mean ordinary sign-ins never
+        notice it.
+      - a **slow-down**: failures from anywhere in the last hour (counted
+        per minute) make every attempt wait before its password is read,
+        right or wrong, so the timing says nothing: none under 20; 625 ms at
+        20, doubling with each further 20 (1.25 s at 40, 2.5 s at 60, 5 s at
+        80) to 10 s from 100 on.
+    - **Waiting.** An attempt waits for the later of its delay and its
+      token, never more than 10 s, on one timer; a token further off than
+      that gets 429 at once (`Too many sign-in attempts on this server right
+      now. Try again in ...`, `Retry-After` until the token, at most 55 s)
+      and spends nothing. After the wait it queues (FIFO) for one of the two
+      scrypt slots instead of being refused. At most 50 attempts wait or
+      queue at once and at most 2 per address; more get 429 at once
+      (`Sign-in is busy. Try again in a few seconds.`) and make no timer.
+      Everything is decided after the body is read and before the password
+      file is read or scrypt runs; no lock or database is held. An attempt
+      whose client disconnects leaves at once, clearing its timer or its
+      queue entry, and is charged a failure (the request's abort signal,
+      which `@hono/node-server` 2.1.3 fires on close; if it ever stopped,
+      the 10 s cap and the bounded queue still bound the damage). The lock
+      is checked again after the wait, and `/api/auth/password` checks its
+      session again before writing the new password.
+    - **Remembered devices** (`remote/devices.ts`). A successful sign-in
+      with *Keep me signed in on this device* (or a password change from a
+      session made that way) sets `__Host-grunt_device`: a random id and an
+      expiry (90 days), HMAC-SHA256-signed with a key in `device-key.json`
+      beside `login.json` and bound to the password's epoch; `HttpOnly;
+      Secure; SameSite=Strict`, judged same-origin only like the session
+      cookie. Without *Keep me signed in* no device cookie is set. It is not
+      a session and opens nothing by itself. Its HMAC is checked in
+      `checkPassword` before the attempt waits for anything; a forged,
+      expired or old-password one counts as no cookie. A valid one:
+      - skips the budget and the slow-down, spending a token from a bucket
+        of its own instead: 5, one more every 4 minutes, so at most 20
+        device-cookie checks in any hour, however many addresses replay a
+        stolen cookie;
+      - is locked by its **id, not its address**: 5 wrong passwords with it
+        in a day and the id counts as no cookie for a day (a capped map, as
+        for addresses). So someone guessing behind the same NAT or /64
+        can't lock Adam's remembered browser out, and the address's lock
+        doesn't apply to it;
+      - still waits for a check slot (ahead of everyone else) and within
+        the waiting caps.
+      *Sign out* clears this browser's device cookie; a password change
+      (new epoch) or *Sign out everywhere* (a new key) forgets every one.
+      Nothing is kept per device. If the new key can't be saved on *Sign
+      out everywhere*, the old file is deleted so a restart can't bring the
+      revoked cookies back; if that fails too, the log says so loudly.
+    - **The reserve for clean addresses** (fix round 2). An address (an
+      IPv6 /64) with no failure in the last 24 hours and no running lock is
+      clean (`isClean`). 5 of the budget's 20 tokens and 5 of the 50
+      waiting places are kept for clean addresses and remembered devices,
+      and clean addresses queue for a check slot ahead of the rest (devices
+      first). They are the same tokens, so the 100-an-hour bound holds. A
+      refused attempt checks no password, spends no token and doesn't make
+      its address unclean; a failure (including walking away after taking a
+      token) does, for a day; a correct sign-in makes it clean again. The
+      last-failure memory is capped at 10,000 addresses, more than the
+      ~2,400 failures the budget allows in a day. **What is guaranteed:**
+      addresses that have failed can't spend the reserve however hard they
+      flood, so a correct sign-in from a clean address gets a token within
+      its 10 s wait while the reserve has one. The hour-long flood tests in
+      `limiter.test.ts` let one clean sign-in in every five minutes, against
+      4,000 guessing addresses and against one address that takes a place
+      and leaves once a second; all 12 get in each time, none waiting more
+      than 10 s. **What isn't:** every address is clean until its first
+      failure, so an attacker can spend the reserve with fresh addresses
+      (IPv4 addresses or IPv6 /64s). Each takes at most 2 tokens (the
+      per-address waiting cap) and is then unclean for a day, and the
+      reserve refills by at most one token every 45 s, so keeping it empty
+      takes about 1,900 fresh addresses a day (plus 5 to empty it). An
+      attacker with that many can make a brand-new device wait its turn
+      (Retry-After up to 55 s) for as long as it keeps going; only a
+      remembered device is admitted whatever the flood.
+    - **Whose address.** The key is the socket's address, or with
+      `--trust-proxy` the right-most `X-Forwarded-For` hop that isn't a
+      trusted proxy; nothing the client sends (a header, a cookie) chooses
+      it, so one address can't lock out or unclean another. Within an
+      IPv6 /64 they share one count by design. Walking away mid-wait counts
+      like a wrong password, so a neighbour sharing the address or the /64
+      can lock it out that way too.
+    - **One verifier.** `verifyPassword` needs a `Granted`, which only
+      `LoginLimiter.admit` hands out (its constructor wants a symbol
+      `limiter.ts` keeps), and each is good for one check, so the type
+      checker won't let a password be checked around the limiter.
+      `checkPassword` in `remote/auth.ts` is the only caller, takes its
+      `Granted` before reading the password file or running scrypt, and
+      releases it with the outcome; `/login` and `/password` are its only
+      callers (`test/remote/single-verifier.test.ts` reads the source as a
+      backstop). A form or text body gets 415 and HEAD, OPTIONS, GET and
+      PUT on those routes 404 before any check; sign-out and *Sign out
+      everywhere* take no password. The device cookie's check reads the
+      password epoch, which looks at `login.json` at most once a second, as
+      every signed-in request already does.
+    - **Logs.** `SIGN-IN IS SLOWED DOWN FOR EVERYONE` each time the delay
+      grows. A wrong password gets a line of its own only while sign-in
+      isn't slowed down (fewer than 20 an hour). Everything else (told to
+      wait, refused while locked, left before the check, no password file)
+      and wrong passwords once slowed go into one line a minute with a count
+      per reason and the number of addresses (counted up to 1,000), so a
+      flood can't flood the log.
+    - Tests: `server/test/remote/limiter.test.ts`, `auth.test.ts` (fake
+      timers, including 500 wrong passwords at once, every path to a
+      check, the device lock and both proxy cases), `devices.test.ts`,
+      `password.test.ts` and `single-verifier.test.ts`;
+      `web/e2e/remote-access.spec.ts` (g), whose server trusts 127.0.0.1 as
+      a proxy so it can sign in from many forwarded addresses; its port is
+      `GRUNT_E2E_REMOTE_PORT` (default 4781).
 
 ### The model's browser (Deck #926)
 
@@ -318,8 +459,9 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 - **Per app, keyed by the exact program path.** The shell resolves the path (long names, on-disk case, links and subst drives resolved, the `\\?\` prefix stripped) and core compares it byte for byte: no lower-casing and no trimming anywhere. A computer grant is exactly `{ app }`; a grant with any other key beside it never matches (and a browser grant is now exactly `{ host }`). The card takes the app's name and full path from `describeApp` only, shows the window title on its own line labelled "Window title (set by the app):", and shows typed text in full in its own box.
 - **Typed text** never appears in the audit, the app events, the banner, the bar or any summary (they say `type 312 characters (3 lines)`). Besides the card, it is shown in full only behind the thread's "Show typed text" toggle. It is kept in the stored call, so it is in the chat's JSON export (which is the data and keeps every call whole) and is synced to paired machines; the Markdown export shows a computer call's summary instead of its arguments (`core/src/domain/export.ts`).
 - `screenshot`, `cursor_position` and `wait` need no card. Every other action needs a grant for the app or a card.
-- **Once-only apps** get "Allow once" and "Deny" and nothing is stored or matched for them. They are: the programs listed in `HIGH_RISK_STEMS` and `HIGH_RISK_FAMILIES` (`packages/core/src/domain/computer-apps.ts`: shells and terminals, script hosts, interpreters, Explorer and the other shell surfaces, Settings and admin tools, on-screen keyboards, credential prompts, remote desktop and VM clients, file managers, password managers, browsers, editors and IDEs, and anything JetBrains signs); an ordinary app's Open or Save dialog, or any window hosting a shell file view, or a menu owned by one (`shellView`); and anything Grunt can't vouch for: no verified embedded signature (so Notepad and Calculator, which are catalog-signed), a console program, a program on a share or off a fixed disk, an 8.3 short name, any character outside plain ASCII anywhere in the path, or a fact the shell didn't report. These can start other programs or open any file, or Grunt can't tell what they are, so a lasting grant is never offered. A chat or always answer for one (only a forged answer can send it) denies the call, audited `deny:policy`, instead of running it once as other tools do.
-- **Refused outright, with no card:** Grunt's own windows, its child processes (the WebView2 dropdowns, context menus and devtools are windows of their own) and windows it owns, a second Grunt; anything running as administrator or with UI access; a path with a character from the hidden-character table (a zero-width non-joiner, say) or one that isn't a valid key; a point outside the last screenshot, and any click before the chat's first screenshot.
+- **Once-only apps** get "Allow once" and "Deny" and nothing is stored or matched for them. They are: the programs listed in `HIGH_RISK_STEMS` and `HIGH_RISK_FAMILIES` (`packages/core/src/domain/computer-apps.ts`: shells and terminals, script hosts, interpreters, Explorer and the other shell surfaces, Settings and admin tools, on-screen keyboards, credential prompts, remote desktop and VM clients, file managers, password managers, Internet Explorer, the editors that aren't IDEs (Notepad++, Sublime Text), JetBrains Gateway, and anything else JetBrains signs); an ordinary app's Open or Save dialog, or any window hosting a shell file view, or a menu owned by one (`shellView`); and anything Grunt can't vouch for: no verified embedded signature (so Notepad and Calculator, which are catalog-signed), a console program, a program on a share or off a fixed disk, an 8.3 short name, any character outside plain ASCII anywhere in the path, or a fact the shell didn't report. These can start other programs or open any file, or Grunt can't tell what they are, so a lasting grant is never offered. A chat or always answer for one (only a forged answer can send it) denies the call, audited `deny:policy`, instead of running it once as other tools do.
+- **Browsers and IDEs may have lasting grants** (Adam's ruling, 2026-10-14). The browsers in `BROWSER_STEMS` (Chrome, Edge, Firefox, Brave, Opera, Vivaldi, Arc, Chromium) and the IDEs in `IDE_STEMS` (VS Code, VS Code Insiders, VSCodium, Cursor, Windsurf, Visual Studio, Zed and the JetBrains IDEs, terminals inside them and all) are on no once-only list, so every other rule above still applies to them: a signed main window on a fixed disk, not a console, with a plain-ASCII path off a share, gets all four answers, and its grant is still exactly `{ app }`, the exact program path. Edge and Chrome at another path, or a second copy of VS Code, are other keys and ask again. The card says what a lasting grant lets the model do there (`computer-app-kind`): in a browser, go to any site the browser can reach signed in as the person, download and open files (which can run programs) and open other apps from links, with the caveat that Grunt's own app is refused there but another Grunt the browser can reach isn't; in an IDE, edit and run code and type commands into its terminal, which is as good as running any program as the person, Grunt included. Which kind it is comes from the key's file name (`describeApp(key).kind`). A browser or IDE built under a name of another kind (VERSIONINFO `OriginalFilename`: a browser renamed `notes.exe`, Code renamed `chrome.exe`) stays once-only; the one listed built name allowed is `electron.exe`, for an Electron IDE (VS Code and its forks are built that way). JetBrains' signature no longer counts against its own IDEs. Their file dialogs, a copy under an accented user folder, and an unsigned or catalog-signed copy stay once-only, and the card says Grunt couldn't fully identify it.
+- **Refused outright, with no card:** Grunt's own windows, its child processes (the WebView2 dropdowns, context menus and devtools are windows of their own) and windows it owns, a second Grunt; any window whose title holds `[grunt-ui]`, which every page of Grunt's web UI carries (`GRUNT_UI_TITLE` in index.html, kept by `web/src/lib/gruntTitle.ts`), so a browser tab of Grunt, checked by `classifyTarget` on the whole title and by the shell again before every step, since a browser can go to Grunt's page between the card and the action in the same window; a browser's undocked developer tools (a title starting `DevTools - ` or `Developer Tools - `, `isDevToolsTitle`), a console for any page that belongs to the browser's own process, checked the same way; anything running as administrator or with UI access; a path with a character from the hidden-character table (a zero-width non-joiner, say) or one that isn't a valid key; a point outside the last screenshot, and any click before the chat's first screenshot.
 - **Keys** go through an allowlist, one combination per `key` action. Refused: the Windows key, `ctrl+escape`, `ctrl+shift+escape`, the `alt+tab` family, `alt+escape`, `alt+space`, alt with a function key (so `alt+f4`), every `ctrl+alt` combination, Print Screen, Caps Lock, F13-F24, a modifier on its own, and Grunt's own shortcuts. Until the shell has reported its shortcut list no `key` action is sent at all, a bare key included, since the quick-chat hotkey can be a single key. `type` takes at most 4000 characters with line breaks and tabs only, and the shell sends it as Unicode characters, never as key chords. Every action, mouse ones included, is refused while a modifier is held.
 - **Never unattended.** A run with `ctx.unattended` set to anything but `undefined` or `false` is refused by the provider (audited `deny:unattended`), the tool and the broker, before any dialog. On the integration branch the scheduled runs set it (one field, `ToolContext.unattended`, through `toolContextFor` on both engines), and a sub-agent never has computer use at all. See *Integration*.
 - **Never while a plan waits.** In a Plan-mode chat every computer action is refused until the plan is approved, the looks included (`allowedWhilePlanning`), and the provider refuses it before `describeCall`, so no start dialog comes up for it.
@@ -347,7 +489,9 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 | Spec or plan said | Built | Why |
 | --- | --- | --- |
 | Grants keyed by the lower-cased full program path | The path the shell resolved, compared exactly | Lower-casing made different files one key (measured here: the Kelvin sign and `k`, a trailing no-break space) |
-| High-risk: terminals, Explorer, Settings, Registry Editor, MMC, Task Manager | A much longer list, including browsers and editors with terminals, plus anything not provably ordinary | Devtools, `javascript:` addresses, Grunt's own UI in a tab and IDE terminals are all within reach; Grunt has its own browser for the web. Remove a name from `HIGH_RISK_STEMS` to allow lasting grants for it |
+| High-risk: terminals, Explorer, Settings, Registry Editor, MMC, Task Manager | A much longer list, plus anything not provably ordinary. Browsers and IDEs were on it at first and came off on Adam's ruling (2026-10-14): they may have "this chat" and "always" grants for their exact path, and the card says what such a grant lets the model do. Internet Explorer, Notepad++, Sublime Text and JetBrains Gateway stayed on it | Shells, script hosts, admin tools, remote clients and password managers can start or reach anything. With a lasting browser grant, devtools, `javascript:` addresses and Grunt's own UI in a tab are in reach without a card, and with an IDE grant so is its terminal; Adam accepted that. Remove a name from `HIGH_RISK_STEMS` to allow lasting grants for it; `BROWSER_STEMS` and `IDE_STEMS` hold the ones that may have them |
+| (nothing) | Any window whose title carries `[grunt-ui]` (every page of Grunt's UI) is refused before any card, and the shell stops an action once its window shows it; while the computer may be in control the API takes changes only from the desktop app's window, and a paired machine changes nothing | With lasting browser grants a model could open Grunt in the browser and answer its own cards. The second wall also ends "cards answered from a paired machine keep a session going" |
+| (nothing) | A browser or IDE whose built name (`OriginalFilename`) is of another kind, or is on the high-risk list, is once-only; an Electron IDE built as `electron.exe` is the one exception | The card's warning comes from the key's file name, so a program that is something else under that name must not get the wrong warning with a lasting grant |
 | (nothing) | Any character outside plain ASCII in the path makes the app once-only, with a warning on the card | No list of look-alike characters is ever complete. A user whose profile folder is `C:\Users\José\...` gets "Allow once" only for everything installed per user (most Electron and Squirrel apps) |
 | (nothing) | Catalog-signed apps (Notepad, Calculator) are once-only | The signer is read only from an embedded Authenticode signature that `WinVerifyTrust` verified; no revocation check is made |
 | (nothing) | An ordinary app's file dialog asks every time, even with a chat grant | An Open or Save dialog's context menu can start any program |
@@ -380,10 +524,13 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 - **Claude Code turns' screenshots are not stored or shown.** Relayed results are screened and reach Claude Code, but Grunt's transcript keeps only their text (`engine-claude-code/src/events.ts`, `resultText`), so there are no thumbnails and nothing to replay. Spec phase 2.
 - **Relayed MCP tools have no ticket.** Claude Code runs them with its own input after the hook; binding them needs a live check that Claude Code never changes an MCP tool's input between hook and call.
 - **A chat that runs on a paired machine:** the banner, Stop, the session and the thumbnails are local to the machine running the turn, so Stop on the laptop does not reach a chat running on the PC. A chat moved to run elsewhere while it holds control here keeps its session until Stop, idle or quit.
-- **Cards can be answered from a paired machine.** The native dialog is the only consent that needs someone at this computer, and once a session is live, cards answered elsewhere can keep it going until it ends.
+- **Only the desktop app's window changes anything while the computer may be in control** (a chat holds it, its start dialog may be up, or an end isn't confirmed: `ComputerSessions.mayBeInControl`). `changesOnlyFromTheDesktopApp` (`server/src/computer/desktop-only.ts`) refuses every write on the API that doesn't carry one of the shell's `--cors-origin`s as its `Origin` with 403 and "Grunt is controlling this computer, so until that ends it only takes answers and changes from the Grunt app on this computer..." (`COMPUTER_DESKTOP_ONLY_REASON`): a card's, a question's or a plan's answer, a message, a profile, an MCP server, a setting. When no chat holds the computer but its last end was never confirmed (after a channel fault, until the desktop app answers or Grunt restarts), the refusal says so and that a restart clears it (`COMPUTER_DESKTOP_ONLY_UNCONFIRMED_REASON`); the web's note only knows of sessions in control, so it doesn't show in that state or while a start dialog is up. On the desktop server the per-launch API token is the real barrier against a browser tab, or any other program, driving the API: a tab doesn't have it, and since this round no child process inherits it. The Origin gate is defence in depth: it stops a browser that somehow had the token. Reads and the two Stops (the banner's and a reply's) always pass. A paired machine changes nothing here meanwhile (the peer listener's forwarded API has the same gate with no origin allowed), so cards can no longer be answered from a paired machine while a session is live, which closes the old gap that they could keep it going. Outside the desktop app a card says to answer in the Grunt app (`desktop-only-note`) and shows the server's reason when an answer is refused; its buttons stay, since the server decides.
+- **Peer sync is an ungated write path during a session.** Sync isn't a request to this machine's API: changes pulled from a paired machine are applied whatever the computer is doing, so a profile (its tool policy), its system prompt and global memory can change here mid-session. Grants and MCP servers don't sync, so no approval and no new command arrives that way.
+- **Follow-up: `GRUNT_SECRETS_PASSPHRASE` is still inherited by child processes.** When an operator sets it, every process the server starts (a shell command, Claude Code, an MCP server, `wsl.exe`, the model's browser) inherits it, unlike `GRUNT_TOKEN`. It is older than this branch. The fix is to read it before scrubbing it (in `parseServeArgs`, say), pass it down to where the secret store opens, and add it to `SERVER_ONLY_ENV_VARS`.
+- **Follow-up: tie the kind to the built name.** A browser's or IDE's kind, and so its lasting grant and its card's words, comes from the key's file name; a program with no built name at all (`OriginalFilename` missing) under a browser's or IDE's file name gets it too. Requiring a non-null built name of the same kind would close that, but needs a live look at what real browsers and IDEs report first (checklist items 33 and 34), or it would turn some into Allow once.
 - **Start timing.** `computer.start` waits 2 minutes for the dialog. When nobody has answered by then, the server ends that chat's start (which also dismisses a dialog still up) and the model is told nothing was started; an OK within the next 10 minutes is ended at once. If the desktop app doesn't confirm an end, every start for every chat is refused until it does, or until Grunt restarts.
-- **The once-only card can't always say why.** It says so for a file dialog and an unusual path; every other reason (a listed program, unsigned, a console, a share, not fully identified) shares one line. The described target has no `reason` field.
-- **Residuals.** Versioned install paths (Squirrel `app-1.2.3`, MSIX `WindowsApps\<package>_<version>_...`) make "Always allow" lapse on update and leave stale grants. `ctrl+v` pastes whatever was last copied and `ctrl+c` overwrites it. Plain-ASCII look-alikes (`C:\Program Files\Slack1\slack.exe`) are told apart only by reading the path. A signed GUI program that hosts a shell and is on no list is ordinary. File dialogs are detected by window class, so an app's own file picker, an embedded file list, drag and drop and recent-file lists aren't. `signer` and `originalName` are read from the file at the path, not the running image. The window title is shown, not checked. A held Shift or Ctrl refuses every action. A window that changes between an ordinary view and a file view mid-action is refused. A shell that never reports its shortcuts leaves every `key` action refused.
+- **The once-only card can't always say why.** It says so for a file dialog and an unusual path, and says a browser or IDE that is once-only couldn't be fully identified; every other reason (a listed program, unsigned, a console, a share, not fully identified) shares one line. The described target has no `reason` field.
+- **Residuals.** Versioned install paths (Squirrel `app-1.2.3`, MSIX `WindowsApps\<package>_<version>_...`) make "Always allow" lapse on update and leave stale grants. `ctrl+v` pastes whatever was last copied and `ctrl+c` overwrites it. Plain-ASCII look-alikes (`C:\Program Files\Slack1\slack.exe`) are told apart only by reading the path. A signed GUI program that hosts a shell and is on no list is ordinary, and an IDE's built-in terminal is part of the IDE's window, so an IDE grant covers it. A browser's own pages (settings, extensions, docked developer tools) are part of the browser's window, so a browser grant covers them; undocked developer tools are a window of their own and are refused. File dialogs are detected by window class, so an app's own file picker, an embedded file list, drag and drop and recent-file lists aren't. `signer` and `originalName` are read from the file at the path, not the running image. The window title is shown, and checked only for Grunt's `[grunt-ui]` marker and the developer tools prefixes (`DevTools - `, `Developer Tools - `). A held Shift or Ctrl refuses every action. A window that changes between an ordinary view and a file view mid-action is refused. A shell that never reports its shortcuts leaves every `key` action refused.
 - **Audit.** A toolset member with a field the tool doesn't declare is refused by the engine and not audited (a declared field the action doesn't use, such as `text` on a click, and any unknown field sent to the JSON tool, is refused at the gate and audited `deny:policy`); a relayed call with no ticket leaves no audit row; on Claude Code's path an approved call has two rows (handed over, then the outcome). `lastAction` changes only for an action that was carried out, so a session that has only taken screenshots shows none.
 - **Several computer calls in one model step run in the order they are approved.** The AI SDK runs a step's tool calls at once, so each is described and gets its own card straight away, and the cards are answered independently. The driver runs one action at a time per chat, first come first served, and the shell one at a time overall, so two actions never interleave, but each runs when its card is answered: approve the second card first and the second action goes first. Each is still checked against its own expectation (app, file-view fact, window, process and start time), so an action taken out of order can't land in another window, though it can land in the wrong place in the approved one (text typed before the click that would have put the cursor in the right field). A lock around the tool's `execute` wouldn't change this, as the driver's queue already does that much; running them in the model's order means holding back the second call's description and card until the first has run, which is a per-chat queue around the whole decide-and-run path in `provider.ts` (and the Claude Code hook and relay), and wasn't done here. Whether Claude Code runs a step's MCP calls at once is unverified.
 - **Typed text may hold bidi or zero-width characters.** Core refuses only control characters; the card spells them out.
@@ -394,7 +541,12 @@ Spec: `docs/superpowers/specs/2026-10-12-computer-use-design.md`; plan: `docs/su
 
 - **Input runs as the user inside an approved app.** Whatever the model types into an app runs with the user's rights there: Office macros, an app's own command box, its own file picker. An "Always allow" is broad, and the once-only list is a list.
 - **Prompt injection through the screen.** Text on screen reaches the model as an image and can steer it. The screen-content line tells the model it isn't from the user, and the per-app cards bound where it acts, not what it does there.
-- **Grunt's browser-mode UI in an approved browser** can't be told apart from any other page, so a model could click Grunt's own approval cards there. Browsers are once-only now, so each action in one asks; still, don't use the browser-mode UI on a machine where a chat has computer use on.
+- **Grunt's UI in an approved browser.** With a lasting browser grant a model acts in that browser with no card, so it could open Grunt there and answer its own cards. On the desktop server a browser tab can't drive the API at all without the per-launch token, which no child process inherits. Besides that, computer use refuses any window whose title carries Grunt's `[grunt-ui]` marker, and a browser's undocked developer tools, before any card or grant and again before every step of an action (core, the shell and the fake driver alike); and while the computer may be in control the desktop server takes changes only from its own window. What is left:
+  - **Another Grunt reachable in that browser**: an open-mode dev instance (`npm run serve`), or a paired machine's or a remote server's Grunt with a sign-in cookie the browser remembers. Its pages carry the marker if it is this build, but an older build's don't, and the desktop-only gate doesn't apply there: that server has no computer session of its own. Its cards are its own chats', so a model could approve those (a shell command there, say). The card's browser line says so ("another Grunt this browser can reach isn't" refused).
+  - **Edge and Chrome split view**: two pages share one window, and the window title is the focused pane's, so Grunt can sit in the unfocused pane of a window whose title doesn't show the marker.
+  - **Keystrokes in the same burst as the navigation**, before the new page's title shows (a `type` of an address, Enter and Tabs is sent 20 characters at a time, and Grunt's page must load and render before a Tab could reach a button).
+  - **A browser that doesn't put the page's title in its window title.**
+  Keep other Grunts closed in, or signed out of, a browser that has a lasting grant.
 - **Presence.** The dialog shows someone was there at the start, not that they still are; the 10-minute idle end counts only Grunt's actions.
 
 ## Settings UI
@@ -659,8 +811,17 @@ the database) and a session cookie (`__Host-`, `HttpOnly; Secure;
 SameSite=Strict`, counted only when `Sec-Fetch-Site` says same-origin);
 HTTPS only (no plain-HTTP sign-in, no HSTS, no redirect); a Host check
 against the public URLs; the cross-site write check; 5 wrong passwords lock
-an address out for 15 minutes and 100 in an hour close sign-in for everyone,
-which trades guessing for denial of service; `/view/` links work only from
+an address (an IPv6 /64) out for 15 minutes; globally, at most 120
+password checks run in any hour (100 without a remembered-device cookie,
+the old lockout's number, plus 20 with one), and every attempt is slowed
+down once wrong passwords pile up, but sign-in never closes for everyone:
+a browser kept signed in before (a signed remembered-device cookie, which
+is not a session, locked by its own id) skips the budget and the delay, a
+clean address (no failure in a day) has 5 checks kept for it, and a new
+device can still be told to come back during a flood by an attacker with
+about 1,900 fresh addresses a day; the limits live in memory, so a restart
+resets them (see "Sign-in limits" under Remote access); `/view/` links work
+only from
 the address that made them (weak behind shared NAT, nothing behind a proxy
 that sends no `X-Forwarded-For`); and `frame-ancestors 'none'` on the UI in
 every mode. With `--tls auto` the first visit is trust-on-first-use: only
@@ -677,7 +838,7 @@ The *only* control on it is the approval gate — every call needs a human
 decision unless a grant already covers it — so the gate has to be right,
 because it's the entire defense, not one layer of several.
 
-**The sandboxed shell has two walls, and a break-out of the inner one reaches more than its own chat.** With `shellRuns: 'sandbox'`, `run_command` runs in the `grunt-sandbox` WSL2 distro (interop and automount off) under the sandbox runtime (bubblewrap, a filtering proxy). The runtime keeps a command to its chat's folders, its home `/home/grunt/chats/<chat>` and its own temp folder, and off the network except allowlisted hosts. A command that broke out of the runtime would reach everything in the distro, every folder mounted for any chat with a running agent (read-write where some chat has it writable), and the VM's network; with WSL's `networkingMode=mirrored` that includes services on this machine that only listen locally, Grunt's own API among them, which is why Settings > Sandbox warns about it. In remote access's sign-in mode (`--public-url`) Grunt listens on a non-loopback address, so even in WSL's default NAT mode a break-out could reach Grunt's port over the VM's virtual network; there it would find only the password-protected HTTPS sign-in (and the OAuth callback, which needs a pending flow's 256-bit `state`), and Settings > Sandbox doesn't warn about this case. A break-out of the VM reaches Windows (Hyper-V's boundary, as with Cowork). drvfs mounts carry the Windows user's own rights, so read-only is enforced by the runtime (`denyWrite`) and, when no running chat needs a folder writable, by a read-only mount as well. drvfs folders also ignore case while the runtime's binds and guards hold one spelling, so a read-only folder nested in a writable one is refused and the agent puts back the files that make code run on Windows (git hooks and config, `.vscode`, Claude Code's settings and hooks, ...) after every command; a planted file exists until the command ends (see "The sandbox" below). The runtime is beta (0.0.x) and pinned; setup's self-test runs again on every Repair and any surprise marks the sandbox failed. Antivirus can't see inside the VM.
+**The sandboxed shell has two walls, and a break-out of the inner one reaches more than its own chat.** With `shellRuns: 'sandbox'`, `run_command` runs in the `grunt-sandbox` WSL2 distro (interop and automount off) under the sandbox runtime (bubblewrap, a filtering proxy). The runtime keeps a command to its chat's folders (none of them when the profile's file access is off), its home `/home/grunt/chats/<chat>` and its own temp folder, and off the network except allowlisted hosts. A command that broke out of the runtime would reach everything in the distro, every folder mounted for any chat with a running agent (read-write where some chat has it writable), and the VM's network; with WSL's `networkingMode=mirrored` that includes services on this machine that only listen locally, Grunt's own API among them, which is why Settings > Sandbox warns about it. In remote access's sign-in mode (`--public-url`) Grunt listens on a non-loopback address, so even in WSL's default NAT mode a break-out could reach Grunt's port over the VM's virtual network; there it would find only the password-protected HTTPS sign-in (and the OAuth callback, which needs a pending flow's 256-bit `state`), and Settings > Sandbox doesn't warn about this case. A break-out of the VM reaches Windows (Hyper-V's boundary, as with Cowork). drvfs mounts carry the Windows user's own rights, so read-only is enforced by the runtime (`denyWrite`) and, when no running chat needs a folder writable, by a read-only mount as well. drvfs folders also ignore case while the runtime's binds and guards hold one spelling, so a read-only folder nested in a writable one is refused and the agent puts back the files that make code run on Windows (git hooks and config, `.vscode`, Claude Code's settings and hooks, ...) after every command; a planted file exists until the command ends (see "The sandbox" below). The runtime is beta (0.0.x) and pinned; setup's self-test runs again on every Repair and any surprise marks the sandbox failed. Antivirus can't see inside the VM.
 
 The temp folders are part of the inner wall. `/tmp` is unreadable inside a command, so each run gets its own folder under `/tmp/grunt-chats/<chat>/<run>`, and the runtime's sockets live in `/tmp/grunt-chats/<chat>/rt`. The runtime sets `TMPDIR` itself inside bubblewrap from `CLAUDE_CODE_TMPDIR`, which is why the agent points that at the per-run folder before each wrap (a `TMPDIR` in the spawn environment is ignored, and with `/tmp` denied and the sockets left in it every connection fails).
 
@@ -1182,6 +1343,7 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
 ### The sandbox (spec 2026-10-12-sandbox-design)
 
 - **Policy.** `ToolPolicy.shellRuns` (`host` | `sandbox`, absent = host) and `sandboxHosts` (absent = `DEFAULT_SANDBOX_HOSTS`: `registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, no GitHub; a profile's own list is kept as saved, and no migration rewrites stored profiles). The provider lists one `run_command` or the other, never both; the sandboxed one has source `sandbox`. Broker: `sandbox` is allowed with no card under ask on mutate (`grantedBy: 'sandbox'`) and asks under always ask (chat grants pinned to the exact command); `network` (`sandbox_network`) always asks, its grants pinned to one host; `shell` is denied when the shell runs in the sandbox, and so are Claude Code's Bash, PowerShell, BashOutput, KillShell and Monitor.
+- **File access off means no folders.** With the profile's file access (`ToolPolicy.fs`) off, a sandboxed command gets none of the chat's folders, neither the workspace nor the extra folders: nothing is mounted for it, its run carries no read, write or deny path, and it starts in its home, `/home/grunt/chats/<chat>`. It sees only that and its own temp folder. With `read` every folder is read-only; `readwrite` is as before. The rule is kept in `WslSandbox.places`, from `SandboxRunRequest.fs` (which replaced `writable`), so no caller can get round it, and the port's contract says so; the tool also hands over no workspace and no folders then. Both read the value through `sandboxFileAccess`, which fails closed: anything but `read` or `readwrite` (a value from a newer peer's synced profile, say) is off. A files-off command doesn't call `MountManager.set` at all, so the union of the chat's earlier needs (`ChatState.granted`) isn't mounted again for it either. What an earlier read or read-write command of the same chat mounted stays mounted in the VM, but not in this command's view: `/mnt` is a tmpfs there with only the paths a run may read bound back, and this one may read none (the live test checks it with `findmnt` outside and `ls` inside). The agent then guards the home alone. The model is told too: `run_command`'s description (`SANDBOX_RUN_COMMAND_NO_FILES_DESCRIPTION`) and the "# Sandbox" block (`SANDBOX_NO_FILES_PROMPT`, chosen by `sandboxPrompt`) name no folder and say commands start in their own home. The general "# Other folders" note agrees: when none of the profile's tools can reach the folders (`canReachFolders`: no file access, no shell on this machine, no computer use; Claude Code's own file tools go with file access), it names them for reference only and says file access is off, for turns and sub-agents alike. A sub-agent gets the lower file access of its parent's and its profile's (`subagentPolicy`), so one that comes out with it off gets the same. Still no card under "Ask on changes". A chat with no workspace still can't run sandboxed commands: the broker refuses them first.
 - **Backend.** `packages/sandbox`: `wsl.ts` runs everything as `wsl.exe -d grunt-sandbox -u <user> --exec ...` (never `--`, which mangles Windows paths); `mounts.ts` mounts only the folders of chats with a running agent, through the root-only `mount.sh`; `agent-pool.ts` keeps one agent per chat (15 minutes idle, at most 6, 30 s wait when all are busy); `agent-client.ts` runs one command at a time per chat so a network question always belongs to the command that is running; `setup.ts` creates or repairs the distro (Node v24.21.0 by SHA-256, the runtime by `npm ci` from a committed lockfile) and runs the self-test.
 - **Network.** An allowlist plus cards. A host that isn't on the profile's list raises a `sandbox_network` card, but the broker refuses local, private, reserved and single-label hosts (`localhost`, `*.local`, `*.internal`, `*.home.arpa`, IP literals in those ranges) before any card is shown, so there is nothing to approve. That check only sees the name, so a second guard works on the resolved address at connect time: the runtime always denies loopback, link-local and cloud metadata addresses, and Grunt adds everything else that isn't the public internet through the runtime's `deniedResolvedAddresses` (`DENIED_RESOLVED_ADDRESSES` in `agent-core.mjs`). "Public" is one rule, core's `isPublicAddress` (`browser-hosts.ts`), the same one the browser's proxy uses: the IPv4 table `V4_NOT_PUBLIC` (RFC 1918, CGNAT, loopback, link-local, 0/8, the TEST-NETs, 192.0.0.0/24, 192.88.99.0/24, benchmarking, multicast, reserved), and in IPv6 only global unicast (`2000::/3`) less `V6_GLOBAL_NOT_PUBLIC` (`2001::/23`, `2001:db8::/32`, `3fff::/20`), with a v4-mapped, NAT64 (`64:ff9b::/96`) or 6to4 address judged by the IPv4 address it carries. The agent can't import core, so it keeps a copy of the two tables and of the reading of an address (`isPrivateAddress`), and builds the ranges from them: the IPv4 table, all of IPv6 outside `2000::/3` (about 180 ranges, because it has to go round `::ffff:0:0/96` and `64:ff9b::/96`: Node's `BlockList` matches an IPv4 address against an IPv6 range through its v4-mapped form, so a plain `::/3` would refuse every IPv4 address), the special blocks, and each IPv4 range again inside NAT64 and 6to4. The v4-mapped form has no ranges of its own: the runtime reads one as the IPv4 range and matches a v4-mapped address against the IPv4 ranges. `packages/sandbox/test/agent-addresses.test.ts` holds the copy to core (equal tables, `isPrivateAddress` equal to `!isPublicAddress` over range edges, sweeps, a seeded sample and malformed text, and the ranges covering exactly what `isPrivateAddress` refuses), `SHARED_ADDRESS_VECTORS` names the cases, and the live test runs the real runtime's schema and guard over the same sample in the distro. Change a range in core and in the agent together. Before a card is raised, the agent itself resolves the host (5 s at most) and answers no without asking when the name doesn't resolve or any of its addresses is one of those; that is an early refusal, the runtime's connect-time check is the enforcement. The result is that a LAN or intranet host can't be reached from the sandbox even when it is on the allowlist; a package mirror on the local network would need that changed deliberately. **Literal IPs are judged by Grunt only, never by the runtime:** the runtime's resolved-address guard skips a destination that is already an address, and lets an allowlisted literal straight through. So the allowlist never holds one: the routes refuse IP literals (v4, v6, bracketed, with or without a port) and `localhost`/`*.localhost` (`sandboxHostProblem`, in core), and `WslSandbox` drops any such entry again before every run, because a profile synced from a peer never went through the routes. A literal that isn't on the allowlist goes through the agent's ask-time lookup, which refuses a private one without a card (the live test dials 127.0.0.1, the VM's own address, 10.0.0.1 and 169.254.169.254 through the proxy and sees 403 for each).
 - **Protected files and Windows' case-insensitive folders.** Windows folders in the VM are case-insensitive (drvfs; `case=force` would need a registry change, `DrvFsAllowForceCaseSensitivity`, and without it WSL falls back to `case=dir`, so it isn't used), while the runtime's read-only binds and its guards on dangerous files sit on one exact spelling. Found live in the final review: `.GIT/hooks/pre-commit`, `.Git/CONFIG`, `.BashRC`, `.VSCode/tasks.json` and `.Claude/settings.local.json` all landed on disk past the runtime, and `RO/x` landed in a read-only folder nested in a writable one. Three things close it. (1) A read-only folder inside a writable one of the same run (or the same folder) is refused (`bad_folder`, "... is read-only but sits inside the writable ..."); folders read-only because nothing writes them are a separate read-only bind, and in a command's view `/mnt` is a tmpfs holding only its own folders, so another spelling of those doesn't resolve at all. (2) The agent moves into the command's folder while the runtime wraps it (the runtime takes its guarded paths from its own `process.cwd()`) and also hands the runtime exact-spelling write denies for the protected paths of every writable folder and the home (the `.git` ones only when `.git` is a folder, as the runtime does, so `git init` still works). (3) The agent, outside the inner sandbox, copies the protected paths of each writable folder and the chat's home before every command and puts them back after it, whatever its outcome (done, timeout, cancel, failure, and on close): changed files get their old bytes, new files and folders go, deleted files come back; links are never followed (a protected path swapped for a link is removed, and nothing is written through it). The list is `PROTECTED_PATHS` in `agent-core.mjs`: `.git/hooks`, `.git/config`, `.gitmodules`, `.gitconfig`, shell rc and profile files, `.ripgreprc`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`, `.vscode`, `.idea` (its top level), and Claude Code's `.claude/settings.json`, `settings.local.json`, `hooks`, `commands`, `agents` and `skills`. A changed file is removed and made afresh (exclusive create, no link followed), so a file the command made read-only (on a Windows folder, `chmod 444` sets the read-only attribute) or hard-linked elsewhere is still put back; a changed mode alone is put back too. The agent tells Grunt when the restore starts (`restoring`), and a cancel or a close then gives it up to 60 s instead of 5 s. It fails closed: when the agent says it couldn't put something back, or dies or is stopped after a command was sent and before it reported it, that chat and any chat that could write those folders are refused ("The sandbox couldn't confirm it undid changes to protected files in ...") until the chat is released (deleted) or the sandbox is repaired; this is kept in memory, so restarting Grunt also lifts it. Another chat's hold on a folder lasts until the agent has reported the run, restore included, or is gone. The command's result then ends "The sandbox undid changes to ... (protected files)." (Live, a protected file that doesn't exist yet can't be written in any spelling, because the runtime's empty placeholder for it comes out read-only on a Windows folder; the spelling trick works on existing files and on new files in a guarded folder such as `.git/hooks`, which is what the self-test exercises.) A protected file over 1 MB, or over 8 MB of them, refuses the run rather than skip the guard. Commands of different chats that can write the same folder (or one inside the other) run one after another, so one agent never copies, and later puts back, what another chat's command planted. The self-test and the live test write the protected files in both spellings and a sibling read-only folder in both spellings.
@@ -1199,10 +1361,16 @@ These follow spec 2026-10-11-claude-code-clean-chat-and-mcp-design. They replace
   - A command whose agent dies mid-run fails; the next command for that chat gets a new agent.
   - Switching a folder from read-only to read-write while another chat still has it mounted can fail with "target is busy". It fails closed, so the command reports a mount failure.
   - A chat deleted by peer sync (not through this machine's routes) is never released here: its agent closes when idle and its folders are unmounted then, but its home and temp folders in the VM stay until the sandbox is removed (Settings > Sandbox > Remove). Deleting a chat, a profile or a connection here releases them.
-  - Under ask on mutate a sandboxed command runs with no card even when the profile's file access is off or read-only, and the default allowlist includes a write-capable host (`registry.npmjs.org`). A command can therefore push data out to an account the attacker controls. GitHub was taken off the default list for that reason (a profile can still name it in its own list, and then the same applies).
+  - The home folder `~` is the chat's, not the profile's. In a compare turn, or after the chat's profile is switched, a files-off command and a read or read-write command of the same chat share it, so files can pass between them through it. A files-off command (no card under "Ask on changes") can also leave config there that a later command with folder access runs, such as `~/.config/git/config` (a git alias or `core.fsmonitor`), a Python `usercustomize` in the user site, or npm's `~/.npmrc`; only the protected paths in the home (`.gitconfig`, the shell rc files, ...) are put back after each command.
+  - Under ask on mutate a sandboxed command runs with no card even when the profile's file access is off or read-only (off, it sees none of the chat's folders, but it still has the network), and the default allowlist includes a write-capable host (`registry.npmjs.org`). A command can therefore push data out to an account the attacker controls. GitHub was taken off the default list for that reason (a profile can still name it in its own list, and then the same applies).
   - The host-name check can't see DNS that points a public name at a private address (`127.0.0.1.nip.io`, rebinding). The connect-time guard covers that (checked live). It doesn't judge a literal-IP dial at all: that rests on the allowlist never holding a literal and on the agent's ask-time lookup (checked live too).
 - **Scheduled runs and Plan mode.** A scheduled run sets `ToolContext.unattended` (the one flag thread cards added); a sandboxed command runs with no card under "Ask on changes", and its `sandbox_network` question is refused without a card unless a host grant already covers it (`approval_unavailable`, audited `deny:unattended`). Under "Ask before every call" the command itself is refused. In Plan mode, until the plan is approved, the broker refuses both `sandbox` and `network` calls like the host shell, before the sandbox's no-card pass and before any host grant.
 - **Self-test and sign-in mode.** In sign-in mode (`--public-url`) Grunt's port speaks HTTPS only, so a plain-HTTP probe of it gets no status even when it connects. The self-test probes Grunt's port over both HTTP and HTTPS (`-k`) and needs both to fail to connect.
+- **Windows interop is tested by trying it.** WSL distros share one kernel, so another distro's `WSLInterop` registration (Docker Desktop's, Ubuntu's) shows inside grunt-sandbox although grunt-sandbox can't use it, and a check for the registration failed Repair whenever such a distro ran. `resources/interop-check.sh` decides instead, run by setup ("Configure the distro", as root) and by the self-test (as grunt, inside the runtime, with 180 s as each attempt can take 10 s). The barrier itself is `/etc/wsl.conf` (`[interop] enabled=false`), which only root can change; the check is evidence that it holds, taken at setup and on every Repair, not a guard that runs later.
+  - **What it tries.** It refuses Windows folders on PATH and a set `WSL_INTEROP` (exit 3). Then it tries to start a Windows program (a file starting `MZ`, stdin closed), once as it is and once pointed at each socket under `/run/WSL` (at most 8), since a command can set `WSL_INTEROP` itself.
+  - **What counts as off.** Only two outcomes, as seen on WSL 2.7.3 on 2026-10-14: the shell's own refusal (`<script>: <line>: <program>: Exec format error`, exit 126), meaning no interop handler was active, or WSL's `UtilAcceptVsock ... accept4 failed` (exit 1, about 10 s), meaning a handler waited for Windows and nothing answered for this distro. Windows answering ("<program>: Invalid argument"), a success, or Windows folders on PATH is exit 3 ("still on"); anything else is exit 4 and Repair says it couldn't confirm. A changed text after a WSL update fails closed that way, so re-check the texts then.
+  - **Limits, stated plainly.** With no handler active (the common case when no other distro runs), every attempt is the kernel's refusal, which exercises nothing beyond the kernel; the check says so ("No interop handler was active" in setup's log). The 10 s vsock failure is a timeout, and an interop-on distro can produce it too when it tries with no `WSL_INTEROP`; the attempts through each socket are what tell on from off (on Ubuntu, interop on, they reach Windows at once). Running `/init` directly is not tried: it exits 1 silently with interop on or off, so it starts nothing and shows nothing. Another distro changing the shared binfmt registrations (Wine, say) changes what the check sees.
+  - **Checked live 2026-10-14.** grunt-sandbox passes as root and grunt with no handler active, and with Ubuntu running (handler visible, both attempts the 10 s vsock failure). Ubuntu (interop on) is caught by its PATH, and with a clean PATH by the attempt through its own socket. The live sandbox test passes 12/12 with docker-desktop running.
 - **Not built.** Background processes in the sandbox; a Linux backend (phase 2); macOS.
 
 ### Sign-in for HTTP MCP servers
@@ -1348,7 +1516,7 @@ These follow spec 2026-10-12-api-subagents-design (Deck #930).
     - A sandboxed parent's sub-agent runs in the sandbox, whatever the chosen profile's shell runs on.
     - A host-shell parent's sub-agent gets the host shell (a card for each command, as the parent's) only as a profile that runs on this machine too.
     - A host-shell parent's sub-agent run as a sandboxed profile gets **no shell**. A sandboxed command needs no card under "Ask on changes" and every command of the parent's does, so offering it would let text injected into the parent's chat run commands, with the chat's folders and the allowlisted hosts, that the parent's policy never allows without a card.
-    - A sandboxed sub-agent may reach only the hosts on both allowlists (`sandboxHostsOf`, so an absent list counts as the defaults). Entries are compared whole, ignoring case: `*.example.com` on one side and `api.example.com` on the other share nothing, so that host raises a card. A sandboxed sub-agent's prompt gets the same "# Sandbox" note as a parent's.
+    - A sandboxed sub-agent may reach only the hosts on both allowlists (`sandboxHostsOf`, so an absent list counts as the defaults). Entries are compared whole, ignoring case: `*.example.com` on one side and `api.example.com` on the other share nothing, so that host raises a card. A sandboxed sub-agent's prompt gets the same "# Sandbox" note as a parent's, the one that names no folder when its narrowed file access is off (its `run_command` then hands the sandbox no folders).
   - **Every field has a rule.** `SUBAGENT_POLICY_RULES` (in `domain/subagent.ts`) has one rule per `ToolPolicy` field, and its type makes it exhaustive: a field added to `ToolPolicy` without a rule fails typecheck. The narrowed policy writes every field out, so nothing falls back to a default. A new field with no obvious way to combine two policies takes its most restrictive value, as `artifacts`, `subagents`, `agentWeb` and `agentMcp` do (all off). A value a rule doesn't know (a profile synced from a newer peer) fails closed: no files, always ask. `core/test/subagent-policy-property.test.ts` checks 400 random pairs of policies against the real broker: any call the sub-agent's policy allows without a card, the parent's policy allows without a card too, with every kind of grant held by the chosen profile and never counting.
   - **Auto mode.** A sub-agent's request always has `autoMode` off: it hands approvals to Claude Code's classifier, and a sub-agent is never Claude Code.
   - **Its request carries the narrowed policy.** `SubagentRunner.requestFor` sets `profile.toolPolicy` to the narrowed policy, so nothing that reads the request's profile sees the chosen profile's wider one.
@@ -1613,9 +1781,13 @@ stopped:
 ### Computer use beside the rest
 
 How computer use (Deck #927) meets the other features here. Its own rulings
-(once-only browsers, IDEs and non-ASCII paths; off after any channel fault
-until restart; the toolset model list; the 20-attachment cap) are as it built
-them.
+(once-only terminals, shells, shell surfaces, admin tools, script hosts,
+installers and non-ASCII paths; off after any channel fault until restart;
+the toolset model list; the 20-attachment cap) are as it built them, but for
+one change Adam asked for on 2026-10-14: browsers and IDEs, terminals inside
+IDEs included, may have "this chat" and "always" grants, still pinned to the
+exact program path, with a card that says what such a grant lets the model
+do (see *Computer use*).
 
 - **Scheduled runs never use the computer.** There is one
   `ToolContext.unattended`, set from `TurnInput.unattended` and carried by
@@ -1644,7 +1816,9 @@ them.
   (on `GET /api/events`) are behind sign-in mode, the Host check and the
   cross-site check, and not on the peer listener; `/peer/events` never
   carries a computer session. A signed-in remote client can turn computer use
-  on and answer cards; the native dialog on this machine stays the only local
+  on, and answer cards while no session is live; while one may be in control,
+  only the desktop app's own window can answer or change anything (see
+  *Computer use*). The native dialog on this machine stays the only local
   consent.
 - **Images.** A sub-agent's tool images are now kept like the parent's
   (stored against the parent reply, under its one budget), so no base64 goes
@@ -1657,9 +1831,11 @@ them.
 - **The sandbox and the browser** share nothing with it at run time. Computer
   use acts on this machine's desktop whatever the shell runs on, so a
   sandboxed profile with computer use on can still reach a host terminal
-  through the GUI; terminals are once-only, so each action there asks.
-  The browser and computer use have separate grants (`host` and `app`) and
-  separate stops (the viewer's close and the banner's Stop).
+  through the GUI; terminals are once-only, so each action there asks, but
+  an IDE's built-in terminal is part of the IDE's window, so a lasting IDE
+  grant reaches it with no card. The browser and computer use have separate
+  grants (`host` and `app`) and separate stops (the viewer's close and the
+  banner's Stop).
 
 ### Confirmed by Adam (2026-10-14)
 
@@ -1739,6 +1915,7 @@ surprise.
 | Spec: files are made in the server's thread | Made in a `worker_threads` Worker: 512 MB heap, 20 s limit, two at a time | The pre-checks could be bypassed (wide tables, pipe-free GFM rows, nested lists); only a limit that can stop the work closes that class. Costs a worker start per download and a second bundle entry |
 | The plan: `pptx.write()` | `pptx.stream()` with compression | `write()` ignores compression in pptxgenjs 4.0.1 (a 274 KB spec made a 99-113 MB file); the biggest allowed deck is now under 5 MB |
 | Spec: test ZIPs built with `fflate` | The existing `makeZip` test helper | The same fixtures from XML strings without a new dev dependency |
+| Remote access spec: 100 wrong passwords in an hour close sign-in for everyone for the rest of the hour | No global lockout. At most 120 password checks in any hour: a budget of 100 without a device cookie (a bucket of 20, one more every 45 s) plus 20 with one (a bucket of 5, one more every 4 minutes), and a slow-down from 20 failures in the last hour (625 ms, doubling per 20, up to 10 s); an attempt whose token is more than 10 s off gets 429 with `Retry-After`. A signed remembered-device cookie (only with Keep me signed in) lets a browser skip the budget and the slow-down and is locked by its id; 5 tokens and 5 waiting places are kept for addresses with no failure in a day; an attempt that walks away after taking a token counts as a failure. Per-address lockout unchanged, with IPv6 counted per /64; at most 50 attempts wait at once, 2 per address | Adam's decision (2026-10-14): a spread-out attack could lock him out of his own server for an hour at a time. The reviews of change 8 then required guessing to stay no faster than under the old lockout, hence the budget and the remembered device. See "Sign-in limits" under Remote access |
 
 ## Deviations from the original spec
 

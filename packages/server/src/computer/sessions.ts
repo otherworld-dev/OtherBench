@@ -238,6 +238,16 @@ export class ComputerSessions implements ComputerDriver {
     return this.starting !== null ? this.starting.chatId : this.active;
   }
 
+  /**
+   * Whether the desktop app may be controlling this machine for some chat
+   * now: a chat holds it, its start dialog may be up, or an end hasn't been
+   * confirmed. While it may, the API takes changes only from the desktop
+   * app's own window (`changesOnlyFromTheDesktopApp`).
+   */
+  mayBeInControl(): boolean {
+    return this.holder() !== null || this.ending.size > 0 || this.unconfirmed.size > 0;
+  }
+
   ensureSession(chatId: string, chatTitle: string): Promise<ComputerAnswer> {
     if (this.disposed) return Promise.resolve({ ok: false, reason: COMPUTER_SHUTTING_DOWN_REASON });
     this.dropGoneHolder();

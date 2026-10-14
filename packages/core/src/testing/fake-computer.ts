@@ -8,7 +8,7 @@ import type {
   ComputerStopReason,
   ComputerTarget,
 } from '../ports/computer.js';
-import { expectationOf, isReadAction, KEY_MODIFIERS, parseAction } from '../domain/computer-apps.js';
+import { COMPUTER_DEVTOOLS_REASON, COMPUTER_GRUNT_UI_REASON, expectationOf, isDevToolsTitle, isReadAction, KEY_MODIFIERS, parseAction, showsGruntUi } from '../domain/computer-apps.js';
 
 /** A 1×1 PNG: every screenshot the fake driver takes. */
 export const FAKE_PNG = Buffer.from(
@@ -192,6 +192,15 @@ export class FakeComputerDriver implements ComputerDriver {
     if ('refuse' in now) {
       this.refused.push({ chatId, action, expect });
       return { ok: false, reason: now.refuse };
+    }
+    // A window showing Grunt's own UI is never acted in, whatever was approved (the shell does the same before every step).
+    if (showsGruntUi(now.title)) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: COMPUTER_GRUNT_UI_REASON };
+    }
+    if (isDevToolsTitle(now.title)) {
+      this.refused.push({ chatId, action, expect });
+      return { ok: false, reason: COMPUTER_DEVTOOLS_REASON };
     }
     // The live facts against the approved ones. Not knowing whether the window is a file view counts as its being one.
     const changed = now.path !== expect.app || (now.shellView !== false) !== expect.shellView || now.windowId !== expect.windowId || now.pid !== expect.pid || now.startedAt !== expect.startedAt;
