@@ -40,9 +40,11 @@ fi
 
 reached=''
 unknown=''
+attempts=0
 refused_by_kernel=0
 try() {
   # $1: the WSL_INTEROP value to try, or empty for none.
+  attempts=$((attempts + 1))
   if [ -n "$1" ]; then out=$(WSL_INTEROP="$1" "$probe" </dev/null 2>&1); else out=$("$probe" </dev/null 2>&1); fi
   code=$?
   how="running a Windows program${1:+ with WSL_INTEROP=$1}"
@@ -69,7 +71,7 @@ rm -rf "$dir"
 if [ -e /proc/sys/fs/binfmt_misc/WSLInterop ] || [ -e /proc/sys/fs/binfmt_misc/WSLInterop-late ]; then
   echo "note: a WSLInterop registration is visible (WSL distros share one kernel, so it can be another distro's)"
 fi
-[ "$refused_by_kernel" -gt 0 ] && echo "note: no-registration (an attempt was refused by the kernel, before any interop handler)"
+[ "$refused_by_kernel" -eq "$attempts" ] && echo "note: no-registration (every attempt was refused by the kernel, before any interop handler)"
 
 if [ -n "$reached" ]; then echo "INTEROP-REACHED: $reached"; exit 3; fi
 if [ -n "$unknown" ]; then echo "INTEROP-UNKNOWN: $unknown"; exit 4; fi
