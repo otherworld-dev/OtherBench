@@ -1,6 +1,7 @@
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { MenuItem } from '../../components/Menu.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
+import type { GroupSort } from '../../state/sidebarSort.js';
 
 export interface ChatMenuHandlers {
   /** Opens the chat as a tab (or goes to its tab) (#824). */
@@ -98,15 +99,25 @@ export interface ProjectMenuHandlers {
   /** Opens the Scheduled overlay's editor for a new schedule that makes chats in this project. */
   schedule(): void;
   move(dir: -1 | 1): void;
+  /** Sets the group's sort to the given one (the opposite of the sort the menu was built with). */
+  setSort(sort: GroupSort): void;
   requestDelete(): void;
 }
 
+/** The item that switches a group between hand order and last-activity order; No project's menu is only this. */
+export function groupSortItem(sort: GroupSort, setSort: (sort: GroupSort) => void): MenuItem {
+  return sort === 'recent'
+    ? { id: 'sort', label: 'Sort manually', onSelect: () => setSort('manual') }
+    : { id: 'sort', label: 'Sort by recent activity', onSelect: () => setSort('recent') };
+}
+
 /** A project heading's ⋯ menu (spec §3). `index` of `count` is its display position; Move up/down disable at the ends. */
-export function projectMenuItems(index: number, count: number, h: ProjectMenuHandlers): MenuItem[] {
+export function projectMenuItems(index: number, count: number, sort: GroupSort, h: ProjectMenuHandlers): MenuItem[] {
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'settings', label: 'Project settings…', onSelect: h.settings },
     { id: 'schedule', label: 'Schedule…', onSelect: h.schedule },
+    groupSortItem(sort, h.setSort),
     { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
     { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },

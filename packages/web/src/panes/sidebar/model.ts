@@ -1,12 +1,15 @@
 import { compareProjects } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
+import type { GroupSort } from '../../state/sidebarSort.js';
 
 export interface SidebarGroup {
   /** The project's id, or `NO_PROJECT_KEY`. Also the group's collapse-state key. */
   key: string;
   /** Null for No project. */
   project: Project | null;
+  /** `recent`: both lists below are ordered by last activity, not by hand. */
+  sort: GroupSort;
   /**
    * Chats pinned in this project (`projectPinned`, spec 2026-10-11-sidebar-layout-design §5), shown first, in
    * sidebar order; only search matches while searching. Always empty for No project, where the flag means nothing.
@@ -26,8 +29,66 @@ export interface SidebarModel {
 }
 
 const byActivity = (a: Chat, b: Chat): number => b.updatedAt - a.updatedAt;
+const byId = (a: Chat, b: Chat): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 /** Sidebar order (#823): `sortOrder`, highest first; activity, then id, only break ties. */
-export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder || byActivity(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder || byActivity(a, b) || byId(a, b);
+/** A `recent` group's order: last activity first; id breaks ties so the order is stable. */
+const byRecent = (a: Chat, b: Chat): number => byActivity(a, b) || byId(a, b);
+
+/** How many of a group's (unpinned-in-project) chats show before its "Show N more". */
+export const GROUP_ROW_CAP = 10;
+
+/**
+ * The rows a capped group shows: the first `cap` of `chats`, plus `keepId`'s
+ * chat wherever it falls past them (the active chat never hides behind
+ * "Show more"). `hidden` is how many stay folded away.
+ */
+export function capRows(chats: Chat[], cap: number, keepId: string | null): { visible: Chat[]; hidden: number } {
+  if (chats.length <= cap) return { visible: chats, hidden: 0 };
+  const visible = chats.filter((c, i) => i < cap || c.id === keepId);
+  return { visible, hidden: chats.length - visible.length };
+}
+
+/** A `recent` group's date headings, by last activity: since local midnight, then the 7 and 30 days before now. */
+export type AgeBucket = 'today' | 'week' | 'month' | 'older';
+
+export const AGE_BUCKET_LABELS: Record<AgeBucket, string> = {
+  today: 'Today',
+  week: 'Previous 7 days',
+  month: 'Previous 30 days',
+  older: 'Older',
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function ageBucket(at: number, now: number): AgeBucket {
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  if (at >= midnight.getTime()) return 'today';
+  if (at >= now - 7 * DAY_MS) return 'week';
+  if (at >= now - 30 * DAY_MS) return 'month';
+  return 'older';
+}
+
+/** Splits chats in last-activity order into consecutive runs by `ageBucket`, for the date headings between them. */
+export function bucketRuns(chats: Chat[], now: number): { bucket: AgeBucket; chats: Chat[] }[] {
+  const runs: { bucket: AgeBucket; chats: Chat[] }[] = [];
+  for (const chat of chats) {
+    const bucket = ageBucket(chat.updatedAt, now);
+    const last = runs[runs.length - 1];
+    if (last && last.bucket === bucket) last.chats.push(chat);
+    else runs.push({ bucket, chats: [chat] });
+  }
+  return runs;
+}
+
+/** Every word of `query` (split on whitespace, any case) appears in `title`. False for a blank query. */
+export function titleMatches(title: string, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false;
+  const lower = title.toLowerCase();
+  return words.every((w) => lower.includes(w));
+}
 
 /**
  * The sidebar's layout (spec 2026-10-03-projects-design §3): Pinned, each
@@ -36,9 +97,15 @@ export const byOrder = (a: Chat, b: Chat): number => b.sortOrder - a.sortOrder |
  * appear only under Pinned (but count towards their project). A chat whose
  * project isn't loaded falls under No project. While searching (`matches`
  * set), every list is filtered to those chat ids and groups left with no
- * match are dropped.
+ * match are dropped. `sortOf` says how each group orders its chats
+ * (default: all `manual`; the app passes the saved sorts).
  */
-export function buildSidebar(chats: Chat[], projects: Project[], matches: ReadonlySet<string> | null): SidebarModel {
+export function buildSidebar(
+  chats: Chat[],
+  projects: Project[],
+  matches: ReadonlySet<string> | null,
+  sortOf: (key: string) => GroupSort = () => 'manual'
+): SidebarModel {
   const live = chats.filter((c) => c.archivedAt === null);
   const known = new Set(projects.map((p) => p.id));
   const keyOf = (c: Chat): string => (c.projectId !== null && known.has(c.projectId) ? c.projectId : NO_PROJECT_KEY);
@@ -49,11 +116,12 @@ export function buildSidebar(chats: Chat[], projects: Project[], matches: Readon
     { key: NO_PROJECT_KEY, project: null },
   ];
   const groups = slots.map(({ key, project }) => {
+    const sort = sortOf(key);
     const members = live.filter((c) => keyOf(c) === key);
-    const listed = members.filter((c) => !c.pinned && shown(c)).sort(byOrder);
+    const listed = members.filter((c) => !c.pinned && shown(c)).sort(sort === 'recent' ? byRecent : byOrder);
     // A chat whose project was deleted keeps the flag (the foreign key clears projectId only); in No project it means nothing.
     const pinnedHere = (c: Chat): boolean => project !== null && c.projectPinned;
-    return { key, project, total: members.length, pinnedChats: listed.filter(pinnedHere), chats: listed.filter((c) => !pinnedHere(c)) };
+    return { key, project, sort, total: members.length, pinnedChats: listed.filter(pinnedHere), chats: listed.filter((c) => !pinnedHere(c)) };
   });
 
   return {

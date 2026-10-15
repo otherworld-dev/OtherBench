@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
-import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './model.js';
+import { ageBucket, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -185,5 +185,97 @@ describe('moveTarget', () => {
     expect(moveTarget(section, 'a', -1)).toBeUndefined();
     expect(moveTarget(section, 'c', 1)).toBeUndefined();
     expect(moveTarget(section, 'z', 1)).toBeUndefined();
+  });
+});
+
+describe('buildSidebar sorts', () => {
+  const chats = [
+    chat('old-high', { sortOrder: 9, updatedAt: 1 }),
+    chat('new-low', { sortOrder: 1, updatedAt: 50 }),
+    chat('mid', { sortOrder: 5, updatedAt: 20 }),
+    chat('a-old-kept', { projectId: 'a', projectPinned: true, sortOrder: 9, updatedAt: 1 }),
+    chat('a-new-kept', { projectId: 'a', projectPinned: true, sortOrder: 1, updatedAt: 9 }),
+  ];
+
+  it('orders every group by hand when no sort is given', () => {
+    const model = buildSidebar(chats, [project('a', 'Alpha')], null);
+    expect(model.groups.map((g) => g.sort)).toEqual(['manual', 'manual']);
+    expect(ids(model.groups.at(-1)!.chats)).toEqual(['old-high', 'mid', 'new-low']);
+  });
+
+  it('orders a recent group, its pinned-in-project chats included, by last activity', () => {
+    const model = buildSidebar(chats, [project('a', 'Alpha')], null, () => 'recent');
+    expect(model.groups.map((g) => g.sort)).toEqual(['recent', 'recent']);
+    expect(ids(model.groups.at(-1)!.chats)).toEqual(['new-low', 'mid', 'old-high']);
+    expect(ids(model.groups[0]!.pinnedChats)).toEqual(['a-new-kept', 'a-old-kept']);
+  });
+
+  it('sorts each group by its own setting', () => {
+    const model = buildSidebar(chats, [project('a', 'Alpha')], null, (key) => (key === NO_PROJECT_KEY ? 'recent' : 'manual'));
+    expect(ids(model.groups[0]!.pinnedChats)).toEqual(['a-old-kept', 'a-new-kept']);
+    expect(ids(model.groups.at(-1)!.chats)).toEqual(['new-low', 'mid', 'old-high']);
+  });
+});
+
+describe('capRows', () => {
+  const twelve = Array.from({ length: 12 }, (_, i) => chat(`c${i}`));
+
+  it('shows everything at or under the cap', () => {
+    expect(capRows(twelve.slice(0, 10), 10, null)).toEqual({ visible: twelve.slice(0, 10), hidden: 0 });
+  });
+
+  it('shows the first `cap` and counts the rest', () => {
+    const { visible, hidden } = capRows(twelve, 10, null);
+    expect(ids(visible)).toEqual(ids(twelve.slice(0, 10)));
+    expect(hidden).toBe(2);
+  });
+
+  it('keeps the active chat in view past the cap, in its place', () => {
+    const { visible, hidden } = capRows(twelve, 10, 'c11');
+    expect(ids(visible)).toEqual([...ids(twelve.slice(0, 10)), 'c11']);
+    expect(hidden).toBe(1);
+    expect(capRows(twelve, 10, 'c3').hidden).toBe(2);
+  });
+});
+
+describe('ageBucket and bucketRuns', () => {
+  // 15:00 local time, so "today" and "7 days ago" are well apart.
+  const now = new Date(2026, 9, 15, 15, 0, 0).getTime();
+  const day = 24 * 3_600_000;
+  const midnight = new Date(2026, 9, 15, 0, 0, 0).getTime();
+
+  it('splits at local midnight, then 7 and 30 days back', () => {
+    expect(ageBucket(midnight, now)).toBe('today');
+    expect(ageBucket(midnight - 1, now)).toBe('week');
+    expect(ageBucket(now - 7 * day, now)).toBe('week');
+    expect(ageBucket(now - 7 * day - 1, now)).toBe('month');
+    expect(ageBucket(now - 30 * day, now)).toBe('month');
+    expect(ageBucket(now - 30 * day - 1, now)).toBe('older');
+    expect(ageBucket(now + 5_000, now)).toBe('today');
+  });
+
+  it('groups consecutive chats under one heading each', () => {
+    const runs = bucketRuns(
+      [chat('a', { updatedAt: now - 1 }), chat('b', { updatedAt: midnight + 1 }), chat('c', { updatedAt: now - 2 * day }), chat('d', { updatedAt: now - 90 * day })],
+      now
+    );
+    expect(runs.map((r) => [r.bucket, ids(r.chats)])).toEqual([
+      ['today', ['a', 'b']],
+      ['week', ['c']],
+      ['older', ['d']],
+    ]);
+    expect(bucketRuns([], now)).toEqual([]);
+  });
+});
+
+describe('titleMatches', () => {
+  it('needs every word, in any order and case', () => {
+    expect(titleMatches('Fix the Sidebar overflow', 'sidebar fix')).toBe(true);
+    expect(titleMatches('Fix the Sidebar overflow', 'sidebar  FIX ')).toBe(true);
+    expect(titleMatches('Fix the Sidebar overflow', 'sidebar tabs')).toBe(false);
+  });
+
+  it('matches nothing for a blank query', () => {
+    expect(titleMatches('Anything', '   ')).toBe(false);
   });
 });

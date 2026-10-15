@@ -561,6 +561,8 @@ export const api = {
 
   search: (q: string, limit?: number) =>
     request<SearchResult[]>(`/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ''}`),
+  /** The chats with a message matching `q`, each once, best match first (the sidebar's search). */
+  searchChats: (q: string) => request<{ chatId: string }[]>(`/search?scope=chats&q=${encodeURIComponent(q)}`),
 
   usage: {
     /** Omit `chatId` for the global (every-chat) rollup the usage/pricing settings view shows. */

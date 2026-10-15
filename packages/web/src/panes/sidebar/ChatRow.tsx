@@ -3,6 +3,7 @@ import type { Chat } from '@grunt/core/ports/store.js';
 import { PinIcon } from '../../components/icons.js';
 import { InlineNameInput } from '../../components/InlineNameInput.js';
 import { StatusDot } from '../../components/StatusDot.js';
+import { formatAge, formatRelativeTime } from '../../lib/relativeTime.js';
 import type { ChatStatus } from '../../state/chatStatus.js';
 
 /** `dataTransfer` type a dragged chat row carries; its value is the chat id. */
@@ -64,6 +65,8 @@ export interface ChatRowProps {
   onDragStart?: () => void;
   /** The dot at the end of the row; a reply ready also makes the title bold. */
   status?: ChatStatus | null;
+  /** The current time: shows the chat's age ("3h") from its last activity at the end of the row. */
+  now?: number;
 }
 
 /**
@@ -75,7 +78,7 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null } = props;
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null, now } = props;
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -181,6 +184,16 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
         )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
+      {now !== undefined && (
+        <span
+          data-testid="row-age"
+          title={`Last active ${new Date(chat.updatedAt).toLocaleString()}`}
+          className="shrink-0 pr-1.5 pl-1 text-xs tabular-nums text-[var(--text-faint)]"
+        >
+          <span aria-hidden="true">{formatAge(chat.updatedAt, now)}</span>
+          <span className="sr-only">Last active {formatRelativeTime(chat.updatedAt, now)}</span>
+        </span>
+      )}
       {status && <StatusDot status={status} testId={`chat-status-${chat.id}`} className="mx-1.5" />}
       {chat.memoryExcluded && (
         <span

@@ -106,7 +106,14 @@ of work landed after that plan closed out:
   Chats keep a manual order (`chat.sort_order`, highest first; activity no
   longer reorders them): drag a chat onto the top or bottom half of another
   row to place it there, filing, pinning or unpinning it to match that
-  section, or use Move up / Move down in its menu. The desktop window sets
+  section, or use Move up / Move down in its menu. A group can instead sort
+  by recent activity, under Today / Previous 7 days / Previous 30 days /
+  Older headings (its menu's sort item; No project starts that way), where
+  rows don't reorder. Each group shows 10 chats, then "Show N more"; every
+  row shows its age ("3h", "2w"). Search matches titles and message text
+  (`GET /api/search?scope=chats`, one hit per chat), and the chips under it
+  keep only chats with a status dot, or that run on one machine (shown only
+  with a peer paired). The desktop window sets
   `dragDropEnabled: false`, without which WebView2 on Windows swallows HTML5
   drag-and-drop (chat rows and files dropped on the composer alike).
   Deleting a project moves its chats to No project. Archive is reversible:
@@ -695,7 +702,9 @@ as regression tests.
   the **⋯** button, or Shift+F10 / the ContextMenu key on a focused row.
   Collapse state is per device, in `localStorage` key
   `grunt.collapsedGroups`; whether the archived section is open is in
-  `grunt.showArchived`. Archive sets `archivedAt` and is reversible from the
+  `grunt.showArchived`; each group's sort, where it differs from the default,
+  is in `grunt.groupSort` (`state/sidebarSort.ts`). "Show N more" and the
+  filter chips last only for the session. Archive sets `archivedAt` and is reversible from the
   archived section (Unarchive sends `PATCH /chats/:id { "archivedAt": null }`).
   The Inspector's "Project" line links to the sidebar group.
 - **Gaps.** Reordering projects sends one PATCH per project that moves, not

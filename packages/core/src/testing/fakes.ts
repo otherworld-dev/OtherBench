@@ -1150,6 +1150,15 @@ class InMemoryMessageRepo implements MessageRepo {
     }
     return results.slice(offset);
   }
+
+  searchChats(query: string, limit: number): string[] {
+    const chatIds = new Set<string>();
+    for (const r of this.searchText(query, Number.MAX_SAFE_INTEGER)) {
+      chatIds.add(r.chatId);
+      if (chatIds.size >= limit) break;
+    }
+    return [...chatIds];
+  }
 }
 
 class InMemoryArtifactRepo implements ArtifactRepo {

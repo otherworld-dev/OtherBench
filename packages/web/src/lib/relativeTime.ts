@@ -8,3 +8,20 @@ export function formatRelativeTime(at: number, now: number = Date.now()): string
   if (hours < 24) return `${hours} h ago`;
   return new Date(at).toLocaleString();
 }
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** A sidebar row's age, as short as it gets: "now", "5m", "3h", "2d", "5w", "4mo", "2y". */
+export function formatAge(at: number, now: number = Date.now()): string {
+  const ms = Math.max(0, now - at);
+  if (ms < MINUTE) return 'now';
+  if (ms < HOUR) return `${Math.floor(ms / MINUTE)}m`;
+  if (ms < DAY) return `${Math.floor(ms / HOUR)}h`;
+  const days = Math.floor(ms / DAY);
+  if (days < 7) return `${days}d`;
+  if (days < 30) return `${Math.floor(days / 7)}w`;
+  if (days < 365) return `${Math.floor(days / 30)}mo`;
+  return `${Math.floor(days / 365)}y`;
+}

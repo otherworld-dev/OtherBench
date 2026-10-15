@@ -43,6 +43,8 @@ const NON_ACTIVITY_KEYS: ReadonlySet<string> = new Set(['autoMode', 'planMode', 
 
 const DEFAULT_TITLE = 'New Chat';
 const DEFAULT_SEARCH_LIMIT = 50;
+/** `scope=chats`: chats, not messages, so this bounds how many chats the sidebar's search can show. */
+const DEFAULT_CHAT_SEARCH_LIMIT = 200;
 
 function getChatOrThrow(container: Container, id: string): Chat {
   const chat = container.store.chats.get(id);
@@ -301,7 +303,11 @@ export function chatsRoutes(container: Container): Hono {
   return app;
 }
 
-/** `GET /api/search` -- mounted separately (at the app's own root) since it isn't chat-scoped by id. */
+/**
+ * `GET /api/search` -- mounted separately (at the app's own root) since it
+ * isn't chat-scoped by id. Matching messages by default; `scope=chats` returns
+ * `{ chatId }` once per matching chat instead (the sidebar's search).
+ */
 export function searchRoutes(container: Container): Hono {
   const app = new Hono();
 
@@ -310,8 +316,12 @@ export function searchRoutes(container: Container): Hono {
     if (!q || q.trim().length === 0) {
       throw new HTTPException(400, { message: '"q" query parameter is required and must be non-empty.' });
     }
+    const scope = c.req.query('scope') ?? 'messages';
+    if (scope !== 'messages' && scope !== 'chats') {
+      throw new HTTPException(400, { message: '"scope" must be "messages" or "chats".' });
+    }
     const limitParam = c.req.query('limit');
-    let limit = DEFAULT_SEARCH_LIMIT;
+    let limit = scope === 'chats' ? DEFAULT_CHAT_SEARCH_LIMIT : DEFAULT_SEARCH_LIMIT;
     if (limitParam !== undefined) {
       const parsed = Number(limitParam);
       if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -319,6 +329,7 @@ export function searchRoutes(container: Container): Hono {
       }
       limit = parsed;
     }
+    if (scope === 'chats') return c.json(container.store.messages.searchChats(q, limit).map((chatId) => ({ chatId })));
     return c.json(container.store.messages.searchText(q, limit));
   });
 

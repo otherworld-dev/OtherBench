@@ -1160,6 +1160,24 @@ export function runStoreContract(
         expect([...first, ...rest].sort()).toEqual(['msg-page-0', 'msg-page-1', 'msg-page-2', 'msg-page-3', 'msg-page-4']);
       });
 
+      it('searchChats lists each matching chat once, however many of its messages match', () => {
+        const { chat: busy } = seedChat(store, 'chat-busy');
+        const { chat: quiet } = seedChat(store, 'chat-quiet');
+        seedChat(store, 'chat-none');
+        for (let i = 0; i < 5; i++) {
+          store.messages.create(makeMessageInput({ id: `msg-busy-${i}`, chatId: busy.id, parts: [{ type: 'text', text: `kumquat ledger ${i}` }] }));
+        }
+        store.messages.create(makeMessageInput({ id: 'msg-quiet', chatId: quiet.id, parts: [{ type: 'text', text: 'one kumquat' }] }));
+        store.messages.create(makeMessageInput({ id: 'msg-none', chatId: 'chat-none', parts: [{ type: 'text', text: 'nothing here' }] }));
+
+        expect(store.messages.searchChats('kumquat', 10).sort()).toEqual([busy.id, quiet.id]);
+        // A limit of 2 still reaches the second chat: the busy chat's five hits count once.
+        expect(store.messages.searchChats('kumquat', 2)).toHaveLength(2);
+        expect(store.messages.searchChats('kumquat', 1)).toHaveLength(1);
+        expect(store.messages.searchChats('   ', 10)).toEqual([]);
+        expect(() => store.messages.searchChats('"', 10)).not.toThrow();
+      });
+
       it('create throws on a duplicate id', () => {
         const { chat } = seedChat(store, 'chat-a');
         store.messages.create(makeMessageInput({ id: 'msg-a', chatId: chat.id }));

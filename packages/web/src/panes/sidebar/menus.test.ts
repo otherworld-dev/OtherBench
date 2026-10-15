@@ -139,28 +139,38 @@ describe('chatMenuItems', () => {
 });
 
 describe('projectMenuItems', () => {
-  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), schedule: vi.fn(), move: vi.fn(), requestDelete: vi.fn() });
+  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), schedule: vi.fn(), move: vi.fn(), setSort: vi.fn(), requestDelete: vi.fn() });
 
   it('offers the project actions, with Move up disabled first and Move down disabled last', () => {
-    const first = projectMenuItems(0, 3, h());
-    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'Schedule…', 'Move up', 'Move down', 'Delete…']);
+    const first = projectMenuItems(0, 3, 'manual', h());
+    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'Schedule…', 'Sort by recent activity', 'Move up', 'Move down', 'Delete…']);
     expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
-    expect(projectMenuItems(2, 3, h()).find((i) => i.id === 'down')!.disabled).toBe(true);
+    expect(projectMenuItems(2, 3, 'manual', h()).find((i) => i.id === 'down')!.disabled).toBe(true);
   });
 
   it('offers Schedule…, which calls schedule', () => {
     const handlers = h();
-    projectMenuItems(0, 1, handlers).find((i) => i.id === 'schedule')!.onSelect!();
+    projectMenuItems(0, 1, 'manual', handlers).find((i) => i.id === 'schedule')!.onSelect!();
     expect(handlers.schedule).toHaveBeenCalled();
   });
 
   it('Move up and Move down call move with the direction', () => {
     const handlers = h();
-    const items = projectMenuItems(1, 3, handlers);
+    const items = projectMenuItems(1, 3, 'manual', handlers);
     items.find((i) => i.id === 'up')!.onSelect!();
     items.find((i) => i.id === 'down')!.onSelect!();
     expect(handlers.move).toHaveBeenNthCalledWith(1, -1);
     expect(handlers.move).toHaveBeenNthCalledWith(2, 1);
+  });
+
+  it('switches the sort to the other one', () => {
+    const handlers = h();
+    projectMenuItems(0, 1, 'manual', handlers).find((i) => i.id === 'sort')!.onSelect!();
+    const recent = projectMenuItems(0, 1, 'recent', handlers).find((i) => i.id === 'sort')!;
+    expect(recent.label).toBe('Sort manually');
+    recent.onSelect!();
+    expect(handlers.setSort).toHaveBeenNthCalledWith(1, 'recent');
+    expect(handlers.setSort).toHaveBeenNthCalledWith(2, 'manual');
   });
 });

@@ -703,6 +703,25 @@ describe('GET /api/search', () => {
     const res = await app().request('/api/search');
     expect(res.status).toBe(400);
   });
+
+  it('with scope=chats, lists a matching chat once however many of its messages match', async () => {
+    const created = await createChat();
+    const chatId = created['id'] as string;
+    for (const prompt of ['okapi one', 'okapi two', 'okapi three']) {
+      const { assistantMessageIds } = await postTurn(chatId, ['profile-1'], prompt);
+      push(assistantMessageIds[0] as string, FINISH);
+      await flush();
+    }
+
+    const res = await app().request('/api/search?q=okapi&scope=chats');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([{ chatId }]);
+  });
+
+  it('400s on an unknown scope', async () => {
+    const res = await app().request('/api/search?q=x&scope=everything');
+    expect(res.status).toBe(400);
+  });
 });
 
 // ---------------------------------------------------------------------------
