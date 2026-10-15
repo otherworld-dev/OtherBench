@@ -199,6 +199,12 @@ export interface Project {
   folderViews?: FolderView[];
   /** Cleared (null) when that profile is archived (by the profiles route) or deleted (by the foreign key's ON DELETE SET NULL). */
   defaultProfileId: string | null;
+  /**
+   * The project this one is a sub-project of (spec 2026-10-15-sub-projects-design); absent or null for a top-level
+   * project. The store always fills it. Not trusted on read: a synced row can name a missing or nested parent, so
+   * read it through `projectParentOf` (domain/projects.ts).
+   */
+  parentId?: string | null;
   /** Ascending; ties break by name (ASCII case-insensitive), then id -- see `compareProjects`. */
   sortOrder: number;
   createdAt: number;

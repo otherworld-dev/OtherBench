@@ -1014,6 +1014,15 @@ describe('chats in projects', () => {
     expect(await json(await post({ projectId: 'proj-1' }))).toMatchObject({ profileId: 'profile-app-default' });
   });
 
+  it("a chat in a sub-project with no folder or default profile of its own takes its parent's", async () => {
+    container.store.projects.create({ id: 'sub', name: 'Desktop', workspaceRoot: null, defaultProfileId: null, parentId: 'proj-1' });
+    expect(await json(await post({ projectId: 'sub' }))).toMatchObject({ projectId: 'sub', workspaceRoot: PROJECT_ROOT, profileId: 'profile-coder' });
+
+    // Its own win over the parent's.
+    container.store.projects.update('sub', { workspaceRoot: OTHER_ROOT, defaultProfileId: 'profile-1' });
+    expect(await json(await post({ projectId: 'sub' }))).toMatchObject({ workspaceRoot: OTHER_ROOT, profileId: 'profile-1' });
+  });
+
   it('still creates the chat when the project folder no longer exists on disk', async () => {
     const missing = join(dataDir, 'deleted-folder');
     container.store.projects.update('proj-1', { workspaceRoot: missing });

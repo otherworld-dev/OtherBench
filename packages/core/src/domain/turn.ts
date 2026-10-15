@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import type { ChatEngine, EngineEvent, EngineRequest, ToolImageLoader, ToolImageSizer } from '../ports/chat-engine.js';
-import type { Chat, Store } from '../ports/store.js';
+import type { Chat, Project, Store } from '../ports/store.js';
 import type { ApprovalChoice, ApprovalRequest, ToolProvider, ToolSpec, UserAsk } from '../ports/tool-provider.js';
 import type { CanonMessage, MessageStatus, Part, SerializedError } from '../types/messages.js';
 import { runsShellInSandbox, type ResolvedProfile } from '../types/config.js';
@@ -11,7 +11,7 @@ import { estimateCost } from '../types/usage.js';
 import { classifyProviderError } from '../types/errors.js';
 import { isCompareSet } from './tree.js';
 import { MEMORY_QUIET_MS, hasMemoryContent, projectMemoryPrompt } from './memory.js';
-import { projectInstructionsPrompt } from './projects.js';
+import { projectDisplayName, projectInstructionsPrompt, projectParentOf } from './projects.js';
 import { PROJECT_INDEX_MAX, aboutUserPrompt, currentFocusLine, defuse, globalMemoryPrompt, projectIndexPrompt } from './global-memory.js';
 import { RECALL_GUIDANCE } from './recall.js';
 import { translateForNode } from './path-translate.js';
@@ -619,11 +619,11 @@ export class TurnRunner {
         throw new WorkspaceUnresolvedError(workspace);
       }
       const workspaceRoot = workspace.status === 'ok' ? workspace.root : null;
-      // Extra folders: the project's and the chat's, each resolved here; one
-      // not on this machine is left out, and none apply without a workspace
-      // (spec 2026-10-07-extra-folders).
-      const project = chat?.projectId ? this.store.projects.get(chat.projectId) : null;
-      const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
+      // Extra folders: a parent project's, the project's and the chat's, each
+      // resolved here; one not on this machine is left out, and none apply
+      // without a workspace (spec 2026-10-07-extra-folders).
+      const projectFolders = this.projectChain(chat).map((p) => p.folders);
+      const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(...projectFolders, chat?.folders), selfNodeId, locationPaths, this.pathExists, workspaceRoot);
       const autoMode = chat?.autoMode ?? false;
       const effort = chat?.effort ?? null;
       const planMode = chat?.planMode === true;
@@ -1004,12 +1004,13 @@ export class TurnRunner {
       kept.at = now;
       return kept.block;
     }
+    const lookup = (id: string): Project | null => this.store.projects.get(id);
     const index = projectIndexPrompt(
       this.store.projects
         .list()
         .slice(0, PROJECT_INDEX_MAX)
         .map((p) => ({
-          name: p.name,
+          name: projectDisplayName(p, lookup),
           description: p.description,
           currentFocus: currentFocusLine(this.store.projectMemory.get(p.id)?.body ?? ''),
           current: p.id === chat?.projectId,
@@ -1030,11 +1031,25 @@ export class TurnRunner {
    * the result, as for memory.
    */
   private withProjectInstructions(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
-    if (!chat?.projectId) return profile;
-    const project = this.store.projects.get(chat.projectId);
-    const block = project ? projectInstructionsPrompt(project.name, project.instructions) : null;
-    if (!block) return profile;
+    // A sub-project's chats get the parent's instructions first, then the sub-project's own.
+    const blocks = this.projectChain(chat)
+      .map((p) => projectInstructionsPrompt(p.name, p.instructions))
+      .filter((b): b is string => b !== null);
+    if (blocks.length === 0) return profile;
+    const block = blocks.join('\n\n');
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
+  }
+
+  /**
+   * The chat's project and, for a sub-project, its parent first (spec
+   * 2026-10-15-sub-projects-design §3): what instructions, memory and extra
+   * folders are read from, top down. Empty outside a project.
+   */
+  private projectChain(chat: Chat | null): Project[] {
+    const project = chat?.projectId ? this.store.projects.get(chat.projectId) : null;
+    if (!project) return [];
+    const parent = projectParentOf(project, (id) => this.store.projects.get(id));
+    return parent ? [parent, project] : [project];
   }
 
   /**
@@ -1048,11 +1063,13 @@ export class TurnRunner {
    * contributing.
    */
   private withProjectMemory(profile: ResolvedProfile, chat: Chat | null): ResolvedProfile {
-    if (!chat?.projectId) return profile;
-    const project = this.store.projects.get(chat.projectId);
-    const memory = this.store.projectMemory.get(chat.projectId);
-    if (!project || !memory || !hasMemoryContent(memory.body)) return profile;
-    const block = projectMemoryPrompt(project.name, memory.body);
+    // A sub-project's chats read the parent's note first, then their own; only their own is written (memory service).
+    const blocks = this.projectChain(chat).flatMap((p) => {
+      const memory = this.store.projectMemory.get(p.id);
+      return memory && hasMemoryContent(memory.body) ? [projectMemoryPrompt(p.name, memory.body)] : [];
+    });
+    if (blocks.length === 0) return profile;
+    const block = blocks.join('\n\n');
     return { ...profile, systemPrompt: profile.systemPrompt ? `${profile.systemPrompt}\n\n${block}` : block };
   }
 

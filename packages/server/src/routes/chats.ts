@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { chatToJson, chatToMarkdown, exportFilename } from '@grunt/core/domain/export.js';
+import { projectParentOf } from '@grunt/core/domain/projects.js';
 import type { TurnEvent } from '@grunt/core/domain/turn.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { Store } from '@grunt/core/ports/store.js';
@@ -66,8 +67,12 @@ function requireExistingProject(container: Container, value: unknown): Project {
   return project;
 }
 
-/** The profile a chat created in `project` starts with when the request names none (spec §2, §5). */
-function inheritedProfileId(container: Container, project: Project): string {
+/**
+ * The profile a chat created in `project` starts with when the request names
+ * none (spec §2, §5): the project's default, else its parent's for a
+ * sub-project (spec 2026-10-15-sub-projects-design §3), else the app default.
+ */
+function inheritedProfileId(container: Container, project: Project, parent: Project | null): string {
   const usable = (id: string | null): string | null => {
     if (id === null) return null;
     const profile = container.store.profiles.get(id);
@@ -76,7 +81,7 @@ function inheritedProfileId(container: Container, project: Project): string {
   // The project's default, unless it was archived or deleted; then the app
   // default the web client also uses (the default profile, else the first).
   const appDefault = appDefaultProfileId(container.store);
-  const chosen = usable(project.defaultProfileId) ?? appDefault;
+  const chosen = usable(project.defaultProfileId) ?? usable(parent?.defaultProfileId ?? null) ?? appDefault;
   if (!chosen) throw new HTTPException(400, { message: 'There is no profile to start this chat with -- create one in Settings first.' });
   return chosen;
 }
@@ -114,10 +119,11 @@ export function chatsRoutes(container: Container): Hono {
   app.post('/', async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as ChatBody;
     const project = body.projectId === undefined || body.projectId === null ? null : requireExistingProject(container, body.projectId);
+    const parent = project ? projectParentOf(project, (id) => container.store.projects.get(id)) : null;
 
     let profileId: string;
     if (body.profileId === undefined && project) {
-      profileId = inheritedProfileId(container, project);
+      profileId = inheritedProfileId(container, project, parent);
     } else {
       profileId = requireNonEmptyString(body.profileId, 'profileId');
       requireExistingProfile(container, profileId);
@@ -127,9 +133,10 @@ export function chatsRoutes(container: Container): Hono {
     // The project's folder only when the request names no folder at all: an
     // explicit null means "no folder". It's copied as stored, so a project
     // folder in a location resolves on whichever machine the chat is used on.
-    // Not checked on disk here: the chat shows where it doesn't resolve.
+    // Not checked on disk here: the chat shows where it doesn't resolve. A
+    // sub-project without a folder falls back to its parent's.
     const requested = parseWorkspaceBody(container, body);
-    const workspace = requested !== undefined ? requested : (project?.workspace ?? null);
+    const workspace = requested !== undefined ? requested : (project?.workspace ?? parent?.workspace ?? null);
 
     const created = container.store.chats.create({
       id: randomUUID(),

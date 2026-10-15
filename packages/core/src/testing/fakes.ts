@@ -767,6 +767,7 @@ class InMemoryProjectRepo implements ProjectRepo {
       workspace: fields.workspace ?? null,
       description: p.description ?? '',
       instructions: p.instructions ?? '',
+      parentId: p.parentId ?? null,
       sortOrder: p.sortOrder ?? 0,
       createdAt: p.createdAt ?? now,
       updatedAt: p.updatedAt ?? now,
@@ -795,6 +796,10 @@ class InMemoryProjectRepo implements ProjectRepo {
     }
     // Mirrors project_memory's and project_memory_version's ON DELETE CASCADE (migration 008).
     this.onDelete(id);
+    // Its sub-projects become top level, as SqliteProjectRepo.delete does (parent_id has no foreign key).
+    for (const p of this.repo.list()) {
+      if (p.parentId === id) this.repo.update(p.id, { parentId: null });
+    }
     this.repo.delete(id);
   }
 }

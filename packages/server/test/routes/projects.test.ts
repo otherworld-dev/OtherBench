@@ -286,3 +286,53 @@ describe('the project page fields', () => {
     expect(container.store.projects.get('p1')).toEqual(before);
   });
 });
+
+describe('sub-projects (spec 2026-10-15-sub-projects-design §2)', () => {
+  const nest = (id: string, parentId: string) => container.store.projects.create({ id, name: id, workspaceRoot: null, defaultProfileId: null, parentId });
+
+  it('creates a project under a top-level parent, and moves one under and back out', async () => {
+    newProject('top');
+    newProject('loose');
+    const created = await send('POST', '/api/projects', { name: 'Desktop', parentId: 'top' });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toMatchObject({ name: 'Desktop', parentId: 'top' });
+
+    const moved = await send('PATCH', '/api/projects/loose', { parentId: 'top' });
+    expect(moved.status).toBe(200);
+    expect(container.store.projects.get('loose')?.parentId).toBe('top');
+    expect((await send('PATCH', '/api/projects/loose', { parentId: null })).status).toBe(200);
+    expect(container.store.projects.get('loose')?.parentId).toBeNull();
+  });
+
+  it.each([
+    ['an unknown parent', 'nope', /not found/],
+    ['a sub-project as parent', 'sub', /can't have sub-projects/],
+  ])('refuses %s on create', async (_label, parentId, message) => {
+    newProject('top');
+    nest('sub', 'top');
+    const res = await send('POST', '/api/projects', { name: 'X', parentId });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(message);
+    expect(container.store.projects.list()).toHaveLength(2);
+  });
+
+  it('refuses a project as its own parent, and moving a project that has sub-projects', async () => {
+    newProject('top');
+    newProject('other');
+    nest('sub', 'top');
+    const self = await send('PATCH', '/api/projects/other', { parentId: 'other' });
+    expect(self.status).toBe(400);
+    expect(((await self.json()) as { error: string }).error).toMatch(/its own parent/);
+    const withChildren = await send('PATCH', '/api/projects/top', { parentId: 'other' });
+    expect(withChildren.status).toBe(400);
+    expect(((await withChildren.json()) as { error: string }).error).toMatch(/has sub-projects|with sub-projects/);
+    expect(container.store.projects.get('top')?.parentId).toBeNull();
+  });
+
+  it('deleting a parent leaves its sub-projects at the top level', async () => {
+    newProject('top');
+    nest('sub', 'top');
+    expect((await send('DELETE', '/api/projects/top')).status).toBe(204);
+    expect(container.store.projects.get('sub')?.parentId).toBeNull();
+  });
+});

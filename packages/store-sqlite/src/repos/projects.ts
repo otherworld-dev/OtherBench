@@ -9,8 +9,8 @@ import { clockOf, type SyncClock } from './clock.js';
 function projectMapping(selfId: () => string): CrudMapping<Project> {
   return {
     table: 'project',
-    columns: ['id', 'name', 'description', 'instructions', ...WORKSPACE_COLUMNS, 'folders', 'default_profile_id', 'sort_order', 'created_at', 'updated_at'],
-    toRow: (p) => [p.id, p.name, p.description, p.instructions, ...workspaceToRow(p.workspace), foldersToRow(p.folders), p.defaultProfileId, p.sortOrder, p.createdAt, p.updatedAt],
+    columns: ['id', 'name', 'description', 'instructions', ...WORKSPACE_COLUMNS, 'folders', 'default_profile_id', 'parent_id', 'sort_order', 'created_at', 'updated_at'],
+    toRow: (p) => [p.id, p.name, p.description, p.instructions, ...workspaceToRow(p.workspace), foldersToRow(p.folders), p.defaultProfileId, p.parentId ?? null, p.sortOrder, p.createdAt, p.updatedAt],
     fromRow: (row) => ({
       id: row.id as string,
       name: row.name as string,
@@ -19,6 +19,7 @@ function projectMapping(selfId: () => string): CrudMapping<Project> {
       workspace: workspaceFromRow(row, selfId),
       ...foldersFromRow(row),
       defaultProfileId: row.default_profile_id as string | null,
+      parentId: (row.parent_id as string | null) ?? null,
       sortOrder: row.sort_order as number,
       createdAt: row.created_at as number,
       updatedAt: row.updated_at as number,
@@ -47,6 +48,7 @@ export class SqliteProjectRepo implements ProjectRepo {
       workspace: fields.workspace ?? null,
       description: p.description ?? '',
       instructions: p.instructions ?? '',
+      parentId: p.parentId ?? null,
       sortOrder: p.sortOrder ?? 0,
       createdAt: p.createdAt ?? now,
       updatedAt: p.updatedAt ?? now,
@@ -72,10 +74,14 @@ export class SqliteProjectRepo implements ProjectRepo {
   /**
    * Its chats keep existing: chat.project_id is ON DELETE SET NULL (migration
    * 007), and their memory cursors are cleared here to match ChatRepo.update.
-   * Its memory note and versions cascade away (migration 008).
+   * Its memory note and versions cascade away (migration 008). Its
+   * sub-projects become top level: `parent_id` has no foreign key (migration
+   * 027), so they are cleared here, through `update` so the change syncs.
    */
   delete(id: string): void {
     this.db.prepare('UPDATE chat SET memory_cursor = NULL WHERE project_id = ?').run(id);
+    const children = this.db.prepare('SELECT id FROM project WHERE parent_id = ?').all(id) as { id: string }[];
+    for (const child of children) this.crud.update(child.id, { parentId: null });
     this.crud.delete(id);
   }
 }
