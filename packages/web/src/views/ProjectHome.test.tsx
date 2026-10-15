@@ -143,7 +143,14 @@ describe('ProjectHome', () => {
     expect(screen.getByRole('heading', { name: 'Goals' })).toBeInTheDocument();
   });
 
+  it("says Loading, not deleted, while the project list hasn't arrived", () => {
+    render(<ProjectHome projectId="p1" />);
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.queryByText(/This project no longer exists/)).toBeNull();
+  });
+
   it('says a missing project no longer exists, and Close closes its tab', async () => {
+    useGruntStore.getState().setProjects([]);
     render(<ProjectHome projectId="p1" />);
     expect(screen.getByText(/This project no longer exists/)).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));

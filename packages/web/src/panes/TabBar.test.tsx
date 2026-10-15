@@ -147,9 +147,16 @@ describe('TabBar (#824)', () => {
     expect(screen.getByRole('tab', { name: 'notes.md' })).toBeInTheDocument();
   });
 
+  it('labels a project tab Loading… until the project list arrives', () => {
+    useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1')], panes: [projectTabId('p1')] }, activeChatId: projectTabId('p1') });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByRole('tab', { name: /Loading…/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Missing project/ })).toBeNull();
+  });
+
   it('labels a project tab with the project name, or Missing project, with no status dot', () => {
+    useGruntStore.getState().setProjects([{ id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
     useGruntStore.setState({
-      projects: [{ id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
       paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1'), projectTabId('gone')], panes: [projectTabId('p1')] },
       activeChatId: projectTabId('p1'),
       appRunningTurns: { m1: projectTabId('p1') },

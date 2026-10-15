@@ -46,6 +46,7 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
 export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const chats = useGruntStore((s) => s.chats);
   const projects = useGruntStore((s) => s.projects);
+  const projectsLoaded = useGruntStore((s) => s.projectsLoaded);
   const paneState = useGruntStore((s) => s.paneState);
   const activeChatId = useGruntStore((s) => s.activeChatId);
   const { waiting, working } = useChatActivity();
@@ -66,13 +67,13 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
       paneState.tabs.flatMap((id) => {
         const view = parseViewTab(id);
         if (view) return [{ id, title: itemName(view.item) }];
-        // Projects load with the app, so one that isn't here is really gone: keep its tab, closable.
+        // Once the project list has arrived, a project that isn't in it is really gone: keep its tab, closable.
         const projectId = parseProjectTab(id);
-        if (projectId !== null) return [{ id, title: projects.find((p) => p.id === projectId)?.name ?? 'Missing project' }];
+        if (projectId !== null) return [{ id, title: projects.find((p) => p.id === projectId)?.name ?? (projectsLoaded ? 'Missing project' : 'Loading…') }];
         const chat = chats.find((c) => c.id === id);
         return chat ? [{ id: chat.id, title: chat.title }] : [];
       }),
-    [paneState.tabs, chats, projects]
+    [paneState.tabs, chats, projects, projectsLoaded]
   );
   const multi = !narrow && paneState.panes.length > 1;
   const paneOf = (chatId: string): number => (paneState.focusedPane >= 0 && chatId === activeChatId ? paneState.focusedPane : paneState.panes.indexOf(chatId));

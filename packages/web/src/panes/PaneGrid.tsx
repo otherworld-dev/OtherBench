@@ -25,7 +25,9 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
   // A viewer item popped out into its own tab (Deck #826), or a project's home page, holds the pane instead of a chat.
   const view = isViewTab(chatId) ? parseViewTab(chatId) : null;
   const projectId = parseProjectTab(chatId);
-  const projectName = useGruntStore((s) => (projectId === null ? null : (s.projects.find((p) => p.id === projectId)?.name ?? 'Missing project')));
+  const projectName = useGruntStore((s) =>
+    projectId === null ? null : (s.projects.find((p) => p.id === projectId)?.name ?? (s.projectsLoaded ? 'Missing project' : 'Loading…'))
+  );
   const chat = useGruntStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useGruntStore((s) => s.focusPane);
   const setActiveChatId = useGruntStore((s) => s.setActiveChatId);

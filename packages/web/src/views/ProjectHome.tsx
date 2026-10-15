@@ -28,7 +28,10 @@ const CLAMP_CHARS = 600;
  */
 export function ProjectHome({ projectId }: { projectId: string }): JSX.Element {
   const project = useGruntStore((s) => s.projects.find((p) => p.id === projectId) ?? null);
+  const projectsLoaded = useGruntStore((s) => s.projectsLoaded);
   const closeTab = useGruntStore((s) => s.closeTab);
+  // A restored tab renders before the project list arrives: that isn't a deleted project.
+  if (!project && !projectsLoaded) return <p className={`p-6 ${EMPTY}`}>Loading…</p>;
   if (!project) {
     return (
       <div data-testid="project-home" className="h-full min-h-0 overflow-y-auto bg-[var(--bg)] p-6">
