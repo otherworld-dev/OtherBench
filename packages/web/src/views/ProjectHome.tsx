@@ -69,13 +69,36 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
   );
 }
 
+/**
+ * Per project, the chat a start whose message didn't send made: the retry
+ * sends into it rather than making another. Outside the component so it
+ * survives the page being left and reopened.
+ */
+const pendingStarts = new Map<string, string>();
+
+export function resetPendingStartsForTests(): void {
+  pendingStarts.clear();
+}
+
+/**
+ * The pending chat as it is now, if it can still take a first message: not
+ * deleted, archived or moved to another project, and still empty. Otherwise
+ * it's forgotten and the next send makes a new chat.
+ */
+function pendingStart(projectId: string): Chat | undefined {
+  const id = pendingStarts.get(projectId);
+  if (id === undefined) return undefined;
+  const chat = useGruntStore.getState().chats.find((c) => c.id === id);
+  if (chat && chat.projectId === projectId && chat.archivedAt === null && chat.headMessageId === null) return chat;
+  pendingStarts.delete(projectId);
+  return undefined;
+}
+
 function StartBox({ project }: { project: Project }): JSX.Element {
   const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A chat made by a try whose message didn't send: the retry sends into it.
-  const [pending, setPending] = useState<Chat | null>(null);
 
   async function send(): Promise<void> {
     const body = text.trim();
@@ -83,12 +106,13 @@ function StartBox({ project }: { project: Project }): JSX.Element {
     setSending(true);
     setError(null);
     try {
+      const pending = pendingStart(project.id);
       const chat = await startChat({ projectId: project.id, ...(pending ? { chat: pending } : {}), text: body });
-      setPending(null);
+      pendingStarts.delete(project.id);
       setText('');
       setActiveChatId(chat.id); // this pane has focus (the user typed here), so the chat replaces the page in it
     } catch (err) {
-      if (err instanceof StartChatError) setPending(err.chat);
+      if (err instanceof StartChatError) pendingStarts.set(project.id, err.chat.id);
       const cause = err instanceof StartChatError ? err.cause : err;
       console.error(`[grunt-web] failed to start a chat in project ${project.id}:`, cause);
       setError(cause instanceof ApiError ? cause.message : "Couldn't start the chat. Please try again.");

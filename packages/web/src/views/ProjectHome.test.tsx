@@ -18,7 +18,7 @@ import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { projectTabId } from '../state/projectTab.js';
 import { StartChatError, startChat } from '../state/startChat.js';
 import { useGruntStore } from '../state/store.js';
-import { ProjectHome } from './ProjectHome.js';
+import { ProjectHome, resetPendingStartsForTests } from './ProjectHome.js';
 
 const project = (over: Partial<Project> = {}): Project => ({
   id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over,
@@ -34,6 +34,7 @@ const profile = (id: string, name: string): Profile => ({
 const emptyMemory = { memory: { projectId: 'p1', body: '', updatedAt: 0, updatedBy: 'user' as const, sourceChatId: null }, lastError: null };
 
 beforeEach(() => {
+  resetPendingStartsForTests();
   window.localStorage.clear();
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1')], panes: [projectTabId('p1')] }, activeChatId: projectTabId('p1') });
@@ -179,7 +180,7 @@ describe('ProjectHome', () => {
 
     it('keeps the text and shows the error on failure, and a retry sends into the chat already made', async () => {
       const user = userEvent.setup();
-      useGruntStore.setState({ projects: [project()] });
+      useGruntStore.setState({ projects: [project()], chats: [chat('c9')] }); // startChat adds the chat it made
       vi.mocked(startChat).mockRejectedValueOnce(new StartChatError(chat('c9'), new ApiError(500, 'The model is unavailable.'))).mockResolvedValueOnce(chat('c9'));
       render(<ProjectHome projectId="p1" />);
 
@@ -190,6 +191,38 @@ describe('ProjectHome', () => {
       await user.type(box(), '{Enter}');
       expect(startChat).toHaveBeenLastCalledWith({ projectId: 'p1', chat: expect.objectContaining({ id: 'c9' }), text: 'hello' });
       await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('c9'));
+    });
+
+    it('still retries into the chat already made after the page was left and reopened', async () => {
+      const user = userEvent.setup();
+      useGruntStore.setState({ projects: [project()], chats: [chat('c9')] });
+      vi.mocked(startChat).mockRejectedValueOnce(new StartChatError(chat('c9'), new ApiError(500, 'The model is unavailable.'))).mockResolvedValueOnce(chat('c9'));
+      const { unmount } = render(<ProjectHome projectId="p1" />);
+      await user.type(box(), 'hello{Enter}');
+      await screen.findByRole('alert');
+      unmount();
+
+      render(<ProjectHome projectId="p1" />);
+      await user.type(box(), 'hello{Enter}');
+      expect(startChat).toHaveBeenLastCalledWith({ projectId: 'p1', chat: expect.objectContaining({ id: 'c9' }), text: 'hello' });
+    });
+
+    it('makes a new chat when the one a failed send made has since been deleted, moved or used', async () => {
+      const user = userEvent.setup();
+      useGruntStore.setState({ projects: [project()], chats: [chat('c9')] });
+      vi.mocked(startChat).mockRejectedValue(new StartChatError(chat('c9'), new ApiError(500, 'The model is unavailable.')));
+      render(<ProjectHome projectId="p1" />);
+      await user.type(box(), 'hello{Enter}');
+      await screen.findByRole('alert');
+
+      for (const after of [[], [chat('c9', { projectId: 'other' })], [chat('c9', { headMessageId: 'm1' })], [chat('c9', { archivedAt: 5 })]]) {
+        useGruntStore.setState({ chats: after });
+        await user.type(box(), '{Enter}');
+        expect(startChat).toHaveBeenLastCalledWith({ projectId: 'p1', text: 'hello' });
+        // The failed send that follows makes c9 pending again for the next case.
+        useGruntStore.setState({ chats: [chat('c9')] });
+        await waitFor(() => expect(screen.getByRole('textbox', { name: 'Start a chat in Alpha' })).not.toHaveAttribute('readonly'));
+      }
     });
   });
 });
