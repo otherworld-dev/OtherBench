@@ -7,6 +7,7 @@ import { useServerPlatform } from '../lib/workspaceRoot.js';
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore, type ProjectPageState } from '../state/store.js';
 import { FolderDraftList } from './project/FolderDraftList.js';
+import { awayFolderWhere } from './project/folders.js';
 import { createBody, draftFromProject, draftProblem, emptyDraft, isDirty, patchBody, type ProjectDraft } from './project/draft.js';
 
 const FIELD = 'w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm';
@@ -36,10 +37,8 @@ export function ProjectView({ page, onClose }: ProjectViewProps): JSX.Element {
  * doesn't read as "no folder", and what typing one would do.
  */
 function awayFolderNote(project: Project | null): string | null {
-  if (!project?.workspace || project.workspaceRoot) return null;
-  const status = project.workspaceStatus;
-  const where = status?.status === 'unresolved' && status.hint ? `Set on another machine: ${status.hint.path}.` : "Set to a location that isn't set up on this machine.";
-  return `${where} A path typed here replaces it for every machine.`;
+  const where = awayFolderWhere(project);
+  return where === null ? null : `${where} A path typed here replaces it for every machine.`;
 }
 
 function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
