@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
+import { openInspectorSection } from './inspector.js';
 
 /**
  * Project memory (spec docs/superpowers/specs/2026-10-03-project-memory-design.md §7):
@@ -32,6 +33,7 @@ test("a project's edited memory reaches the model in its system prompt", async (
   await expect(group.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
 
   // Edit the project's memory from the Inspector.
+  await openInspectorSection(page, 'Project memory');
   const memory = page.getByTestId('memory-section');
   await expect(memory.getByTestId('memory-updated')).toHaveText('Not saved yet');
   await memory.getByRole('button', { name: 'Edit' }).click();

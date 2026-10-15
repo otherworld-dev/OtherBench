@@ -14,6 +14,7 @@ import { useGruntStore } from '../state/store.js';
 import { ClaudeCodeSection } from './ClaudeCodeSection.js';
 import { InspectorMemory } from './InspectorMemory.js';
 import { InspectorProject } from './InspectorProject.js';
+import { Section, useSectionSummary, type SummaryTone } from './InspectorSection.js';
 import { FolderList } from '../components/FolderList.js';
 import { TodoChecklist } from '../components/TodoChecklist.js';
 import { isClaudeCodeProfile } from '../components/Composer.js';
@@ -25,15 +26,6 @@ export interface InspectorProps {
   onToggleCollapsed: () => void;
   /** The collapsed strip can't be expanded (no chat selected, so there is nothing to inspect). */
   disabled?: boolean;
-}
-
-function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
-  return (
-    <section className="border-b border-[var(--border)] px-4 py-3 last:border-b-0">
-      <h3 className="label-caps mb-2 text-[var(--text-muted)]">{title}</h3>
-      {children}
-    </section>
-  );
 }
 
 function EmptyState({ children }: { children: ReactNode }): JSX.Element {
@@ -55,7 +47,7 @@ function ProgressSection({ chatId }: { chatId: string }): JSX.Element | null {
   );
   if (running.length === 0) return null;
   return (
-    <Section title="Progress">
+    <Section title="Progress" collapsible={false}>
       <div className="space-y-2">
         {running.map((r) => (
           <div key={r.id}>
@@ -104,15 +96,20 @@ function workspaceConsequence(profile: Profile | null): string {
   const fs = profile?.toolPolicy.fs ?? 'off';
   const shell = profile?.toolPolicy.shell ?? false;
   if (fs === 'off' && !shell) {
-    return "This chat's profile currently has filesystem and shell access turned off by policy, so tools still won't run here -- enable them for this profile in Settings > Profiles.";
+    return "Files and shell are turned off by policy for this chat's profile, so tools won't run here (Settings > Profiles).";
   }
   const fsPart = fs === 'readwrite' ? 'read and write files' : fs === 'read' ? 'read files' : null;
   const parts = [fsPart, shell ? 'run shell commands' : null].filter((p): p is string => p !== null);
-  return `This chat's profile can ${parts.join(' and ')} under this folder, subject to approval for each call.`;
+  return `Can ${parts.join(' and ')} here, with approval for each call.`;
 }
 
-/** Where this chat's turns run (v2 spec §5): this machine or a paired one. Hidden until a machine is paired. */
-function RunsOnSection({ chat }: { chat: Chat }): JSX.Element | null {
+/** The last segment of a native path, for a section summary. */
+function folderName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** Where this chat's turns run (v2 spec §5): this machine or a paired one, atop the Workspace section. Hidden until a machine is paired. */
+function RunsOn({ chat }: { chat: Chat }): JSX.Element | null {
   const machines = useGruntStore((s) => s.machines);
   const upsertChat = useGruntStore((s) => s.upsertChat);
   const [error, setError] = useState<string | null>(null);
@@ -129,28 +126,31 @@ function RunsOnSection({ chat }: { chat: Chat }): JSX.Element | null {
   }
 
   return (
-    <Section title="Runs on">
-      <select
-        aria-label="Runs on"
-        value={chat.runsOn}
-        onChange={(e) => void choose(e.target.value)}
-        className="w-full rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-sm"
-      >
-        <option value={machines.self.id}>{machines.self.name} (this machine)</option>
-        {machines.peers.map((p) => (
-          <option key={p.nodeId} value={p.nodeId}>
-            {p.name} ({p.status === 'reachable' ? 'connected' : p.status === 'unreachable' ? 'unreachable' : 'checking'})
-          </option>
-        ))}
-        {!known && <option value={chat.runsOn}>A machine no longer paired</option>}
-      </select>
-      <p className="mt-1 text-xs text-[var(--text-muted)]">Its folder, tools and local models are those of the machine it runs on.</p>
+    <div className="mb-2">
+      <label className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+        <span className="shrink-0">Runs on</span>
+        <select
+          aria-label="Runs on"
+          title="Its folder, tools and local models are those of the machine it runs on."
+          value={chat.runsOn}
+          onChange={(e) => void choose(e.target.value)}
+          className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--bg-raised)] px-2 py-1 text-sm text-[var(--text)]"
+        >
+          <option value={machines.self.id}>{machines.self.name} (this machine)</option>
+          {machines.peers.map((p) => (
+            <option key={p.nodeId} value={p.nodeId}>
+              {p.name} ({p.status === 'reachable' ? 'connected' : p.status === 'unreachable' ? 'unreachable' : 'checking'})
+            </option>
+          ))}
+          {!known && <option value={chat.runsOn}>A machine no longer paired</option>}
+        </select>
+      </label>
       {error && (
         <p role="alert" className="mt-1 text-xs text-[var(--danger)]">
           {error}
         </p>
       )}
-    </Section>
+    </div>
   );
 }
 
@@ -166,11 +166,15 @@ function OtherFoldersSection({ chat }: { chat: Chat }): JSX.Element {
   const machines = useGruntStore((s) => s.machines);
   // The native picker chooses a folder on this machine: only offered when that's where the chat runs.
   const runsHere = !machines || chat.runsOn === machines.self.id;
+  const views = [...(project?.folderViews ?? []), ...(chat.folderViews ?? [])];
+  const away = views.filter((v) => v.status.status === 'unresolved').length;
+  useSectionSummary(
+    views.length === 0 ? 'none' : away > 0 ? `${views.length} · ${away} not found here` : String(views.length),
+    away > 0 ? 'warn' : 'normal'
+  );
   return (
     <div className="space-y-3">
-      <p className="text-xs text-[var(--text-muted)]">
-        Folders the model can also work in, by absolute path. {chat.workspace ? '' : 'They apply once the chat has a workspace folder.'}
-      </p>
+      {!chat.workspace && <p className="text-xs text-[var(--text-muted)]">They apply once the chat has a workspace folder.</p>}
       {project && (
         <div className="space-y-1">
           <h4 className="text-xs font-medium">Every chat in {project.name}</h4>
@@ -225,6 +229,20 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
   }, [chat.id]);
 
   const displayedWorkspaceRoot = localWorkspaceRoot !== undefined ? localWorkspaceRoot : chat.workspaceRoot;
+  // A folder that doesn't resolve here (v2 spec §6): say why rather than "no folder".
+  const status = localWorkspaceRoot === undefined ? chat.workspaceStatus : undefined;
+  const unresolved = status?.status === 'unresolved';
+  const [elsewhere] = activeElsewhere;
+  useSectionSummary(
+    unresolved
+      ? 'not found here'
+      : !displayedWorkspaceRoot
+        ? 'no folder'
+        : elsewhere
+          ? `${folderName(displayedWorkspaceRoot)} · also active on ${elsewhere.machine}`
+          : folderName(displayedWorkspaceRoot),
+    unresolved || (displayedWorkspaceRoot && elsewhere) ? 'warn' : 'normal'
+  );
 
   function openEdit(): void {
     setDraft(displayedWorkspaceRoot ?? '');
@@ -323,8 +341,6 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
     );
   }
 
-  // A folder that doesn't resolve here (v2 spec §6): say why rather than "no folder".
-  const status = localWorkspaceRoot === undefined ? chat.workspaceStatus : undefined;
   if (status?.status === 'unresolved') {
     const where =
       status.reason === 'other-machine'
@@ -366,7 +382,7 @@ function WorkspaceSection({ chat, profile }: { chat: Chat; profile: Profile | nu
           {profile && isClaudeCodeProfile(profile, connections)
             ? // A clean chat (spec 2026-10-11-claude-code-clean-chat-and-mcp-design §1).
               'No folder: a plain chat. Web and MCP tools only; set a folder to let Claude Code use your files.'
-            : 'No workspace folder is set. Filesystem and shell tools are unavailable in this chat until one is.'}
+            : 'No workspace folder is set, so filesystem and shell tools are unavailable.'}
         </p>
         <button type="button" onClick={openEdit} className="btn px-2 py-1">
           Set workspace…
@@ -426,6 +442,24 @@ function StatusDot({ status }: { status: McpServerHealth['status'] }): JSX.Eleme
 }
 
 /**
+ * The MCP section's header line. With a profile, only the servers it has on
+ * count towards a problem: one failing that this chat can't use shouldn't
+ * flag every chat.
+ */
+function mcpSummary(servers: McpServerHealth[] | null, failed: boolean, onIds: string[] | null): { text: string | null; tone: SummaryTone } {
+  if (failed) return { text: "couldn't load", tone: 'warn' };
+  if (servers === null) return { text: null, tone: 'normal' };
+  if (servers.length === 0) return { text: 'none', tone: 'normal' };
+  const relevant = onIds ? servers.filter((s) => onIds.includes(s.id)) : servers;
+  const failing = relevant.filter((s) => s.enabled && s.status === 'error').length;
+  const signIn = relevant.filter((s) => s.enabled && s.status === 'needs_auth').length;
+  const parts = [onIds ? `${relevant.length} of ${servers.length} on` : String(servers.length)];
+  if (failing > 0) parts.push(`${failing} failing`);
+  if (signIn > 0) parts.push(`${signIn} need${signIn === 1 ? 's' : ''} sign-in`);
+  return { text: parts.join(' · '), tone: failing > 0 ? 'danger' : signIn > 0 ? 'warn' : 'normal' };
+}
+
+/**
  * "MCP servers" -- every configured server (enabled or not), its live
  * connection status, tool count, and a manual refresh action (`POST
  * /api/mcp-servers/:id/refresh`, task 25's reconnect-with-backoff still runs
@@ -450,6 +484,8 @@ function McpServersSection({ profile }: { profile: Profile | null }): JSX.Elemen
     setSaveError(null);
   }, [profileKey]);
   const onIds = localIds ?? profileIds;
+  const summary = mcpSummary(servers, failed, profile ? onIds : null);
+  useSectionSummary(summary.text, summary.tone);
 
   async function toggleOn(id: string): Promise<void> {
     if (!profile) return;
@@ -561,6 +597,7 @@ function GrantsSection({ chatId }: { chatId: string }): JSX.Element {
 
   useEffect(() => setLocalGrants(null), [chatId]);
   const shown = localGrants ?? grants;
+  useSectionSummary(failed ? "couldn't load" : shown === null ? null : shown.length === 0 ? 'none' : `${shown.length} active`);
 
   async function revoke(id: string): Promise<void> {
     setRevoking((s) => new Set(s).add(id));
@@ -668,6 +705,9 @@ function ShowAllToggle({ total, limit, expanded, onToggle }: { total: number; li
 function AuditSection({ chatId }: { chatId: string }): JSX.Element {
   const { data: entries, failed } = usePolled(() => api.audit.list(chatId), [chatId]);
   const [expanded, setExpanded] = useState(false);
+  useSectionSummary(
+    failed ? "couldn't load" : entries === null ? null : entries.length === 0 ? 'none' : `${entries.length} call${entries.length === 1 ? '' : 's'}`
+  );
 
   if (failed) return <EmptyState>Couldn&rsquo;t load the audit trail for this chat.</EmptyState>;
   if (entries === null) return <EmptyState>Loading…</EmptyState>;
@@ -698,7 +738,7 @@ function AuditSection({ chatId }: { chatId: string }): JSX.Element {
 }
 
 /**
- * The "Running session spend" section's body -- fetches task 28's usage
+ * The "Spend" section's body -- fetches task 28's usage
  * rollup scoped to this one chat (`GET /api/usage?chatId=`). Refetches
  * whenever the chat changes OR whenever any message in this chat reaches a
  * terminal status (complete/error/cancelled) -- a usage row is written
@@ -760,9 +800,12 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- statusSignal is the deliberate re-fetch trigger described above.
   }, [chatId, statusSignal]);
 
+  const empty = rollup !== null && rollup.profiles.length === 0 && rollup.totalCancelledCount === 0 && rollup.totalUnmeasuredErrorCount === 0;
+  useSectionSummary(failed ? "couldn't load" : rollup === null ? null : empty ? 'none' : formatCost(rollup.totalMeasuredCost));
+
   if (failed) return <EmptyState>Couldn&rsquo;t load spend for this chat.</EmptyState>;
   if (!rollup) return <EmptyState>Loading…</EmptyState>;
-  if (rollup.profiles.length === 0 && rollup.totalCancelledCount === 0 && rollup.totalUnmeasuredErrorCount === 0) {
+  if (empty) {
     return <EmptyState>No usage recorded in this chat yet.</EmptyState>;
   }
 
@@ -792,12 +835,43 @@ function SessionSpend({ chatId }: { chatId: string }): JSX.Element {
   );
 }
 
-function fmtParam(label: string, value: number | undefined): JSX.Element | null {
-  if (value === undefined) return null;
+function Row({ label, children, testId }: { label: string; children: ReactNode; testId?: string }): JSX.Element {
   return (
-    <div key={label} className="flex justify-between text-sm">
-      <span className="text-[var(--text-muted)]">{label}</span>
-      <span>{value}</span>
+    <>
+      <dt className="text-[var(--text-muted)]">{label}</dt>
+      <dd data-testid={testId} className="min-w-0 break-words">
+        {children}
+      </dd>
+    </>
+  );
+}
+
+/** The chat's profile: name and model, then its parameters and tool policy as a compact grid. */
+function ProfileSection({ profile }: { profile: Profile | null }): JSX.Element {
+  useSectionSummary(profile ? profile.name : 'not loaded', profile ? 'normal' : 'warn');
+  if (!profile) return <EmptyState>This chat's profile could not be loaded.</EmptyState>;
+  const { temperature, topP, maxOutputTokens, thinkingBudgetTokens } = profile.params;
+  return (
+    <div className="space-y-1.5">
+      <div className="min-w-0 text-sm">
+        <span className="font-medium">{profile.name}</span> <span className="text-xs break-all text-[var(--text-muted)]">{profile.modelId}</span>
+      </div>
+      {profile.description && (
+        <p title={profile.description} className="line-clamp-2 text-xs text-[var(--text-muted)]">
+          {profile.description}
+        </p>
+      )}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+        {temperature !== undefined && <Row label="Temperature">{temperature}</Row>}
+        {topP !== undefined && <Row label="Top P">{topP}</Row>}
+        {maxOutputTokens !== undefined && <Row label="Max output tokens">{maxOutputTokens}</Row>}
+        {thinkingBudgetTokens !== undefined && <Row label="Thinking budget">{thinkingBudgetTokens}</Row>}
+        <Row label="Filesystem">{profile.toolPolicy.fs}</Row>
+        <Row label="Shell">{profile.toolPolicy.shell ? 'on' : 'off'}</Row>
+        <Row label="Global memory" testId="profile-global-memory">
+          {profile.useGlobalMemory === false ? 'off' : 'on'}
+        </Row>
+      </dl>
     </div>
   );
 }
@@ -816,9 +890,9 @@ function ClaudeCodeInspectorSection({ chatId }: { chatId: string }): JSX.Element
  * The right pane. Exists specifically to surface the facts that cause harm
  * when hidden -- "this MCP server is down", "this chat can write to disk" --
  * so every section renders even when there is nothing to show yet, with an
- * honest empty state rather than being omitted. Tool grants, MCP health,
- * and spend all land in later tasks; this task wires the pane and its
- * collapse behaviour, not those features.
+ * honest empty state rather than being omitted. Most sections start closed
+ * to keep the pane short, but each header carries a one-line summary and a
+ * problem colours it and opens it (see InspectorSection).
  */
 export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disabled = false }: InspectorProps): JSX.Element {
   // The chat's project, when it's loaded: the memory section needs both.
@@ -844,7 +918,7 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
       aria-label="Inspector"
       className="flex h-full w-full flex-col overflow-y-auto border-l border-[var(--border)] bg-[var(--bg-raised)]"
     >
-      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3">
+      <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2">
         <h2 className="label-caps text-base">Inspector</h2>
         <button
           type="button"
@@ -857,61 +931,30 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
         </button>
       </div>
 
-      <Section title="Project">
+      <Section title="Project" collapsible={false}>
         {chat ? <InspectorProject chat={chat} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
       {chat && <ProgressSection chatId={chat.id} />}
 
-      {chat && memoryProject && (
-        <Section title="Project memory">
-          {/* Keyed by project so a response still in flight for the previous project can never land in this one. */}
-          <InspectorMemory key={memoryProject.id} chat={chat} project={memoryProject} />
-        </Section>
-      )}
-
-      {chat && <RunsOnSection chat={chat} />}
-      <Section title="Workspace">
-        {chat ? <WorkspaceSection chat={chat} profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}
+      <Section title="Workspace" defaultOpen>
+        {chat ? (
+          <>
+            <RunsOn chat={chat} />
+            <WorkspaceSection chat={chat} profile={profile} />
+          </>
+        ) : (
+          <EmptyState>No chat selected.</EmptyState>
+        )}
       </Section>
 
       {chat && (
-        <Section title="Other folders">
+        <Section title="Other folders" hint="Folders the model can also work in besides the workspace, by absolute path.">
           <OtherFoldersSection chat={chat} />
         </Section>
       )}
 
-      <Section title="Profile parameters">
-        {!chat ? (
-          <EmptyState>No chat selected.</EmptyState>
-        ) : !profile ? (
-          <EmptyState>This chat's profile could not be loaded.</EmptyState>
-        ) : (
-          <div className="space-y-2">
-            <div className="text-sm font-medium">{profile.name}</div>
-            <div className="text-xs text-[var(--text-muted)]">{profile.modelId}</div>
-            {profile.description && <p className="text-sm text-[var(--text-muted)]">{profile.description}</p>}
-            <div className="space-y-1 pt-1">
-              {fmtParam('Temperature', profile.params.temperature)}
-              {fmtParam('Top P', profile.params.topP)}
-              {fmtParam('Max output tokens', profile.params.maxOutputTokens)}
-              {fmtParam('Thinking budget', profile.params.thinkingBudgetTokens)}
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-muted)]">Filesystem</span>
-              <span>{profile.toolPolicy.fs}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-muted)]">Shell</span>
-              <span>{profile.toolPolicy.shell ? 'on' : 'off'}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-[var(--text-muted)]">Global memory</span>
-              <span data-testid="profile-global-memory">{profile.useGlobalMemory === false ? 'off' : 'on'}</span>
-            </div>
-          </div>
-        )}
-      </Section>
+      <Section title="Profile">{chat ? <ProfileSection profile={profile} /> : <EmptyState>No chat selected.</EmptyState>}</Section>
 
       {chat && <ClaudeCodeInspectorSection chatId={chat.id} />}
 
@@ -927,7 +970,14 @@ export function Inspector({ chat, profile, collapsed, onToggleCollapsed, disable
         {chat ? <AuditSection chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
 
-      <Section title="Running session spend">
+      {chat && memoryProject && (
+        <Section title="Project memory">
+          {/* Keyed by project so a response still in flight for the previous project can never land in this one. */}
+          <InspectorMemory key={memoryProject.id} chat={chat} project={memoryProject} />
+        </Section>
+      )}
+
+      <Section title="Spend">
         {chat ? <SessionSpend chatId={chat.id} /> : <EmptyState>No chat selected.</EmptyState>}
       </Section>
     </aside>

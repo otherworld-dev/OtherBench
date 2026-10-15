@@ -9,6 +9,7 @@ import type { Profile } from '@grunt/core/types/config.js';
 import { Inspector } from './Inspector.js';
 import { useGruntStore } from '../state/store.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, groupDomId, resetSidebarGroupsForTests } from '../state/sidebarGroups.js';
+import { INSPECTOR_SECTIONS_STORAGE_KEY, resetInspectorSectionsForTests } from '../state/inspectorSections.js';
 
 vi.mock('../desktop/bridge.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../desktop/bridge.js')>()),
@@ -137,11 +138,25 @@ function makeMessage(id: string, overrides: Partial<CanonMessage> = {}): CanonMe
   };
 }
 
+const SECTION_TITLES = ['Workspace', 'Other folders', 'Profile', 'Claude Code session', 'Tool grants', 'MCP servers', 'Audit trail', 'Project memory', 'Spend'];
+
+/** Opens every collapsible section, as if by hand, so a test can reach into any of them. */
+function openAllSections(): void {
+  window.localStorage.setItem(INSPECTOR_SECTIONS_STORAGE_KEY, JSON.stringify(Object.fromEntries(SECTION_TITLES.map((t) => [t, true]))));
+  resetInspectorSectionsForTests();
+}
+
+/** A section by its title; its heading also carries the section's summary. */
+function sectionNamed(title: string): HTMLElement {
+  return screen.getByRole('heading', { name: new RegExp(`^${title}\\b`) }).closest('section')!;
+}
+
 // Applies to every test in this file: the three new honest-state sections
 // (MCP health, grants, audit) mount unconditionally alongside session spend,
 // so every test needs SOME resolved value for them, not just the ones that
 // specifically exercise those sections below.
 beforeEach(() => {
+  openAllSections();
   mockedMcpList.mockReset().mockResolvedValue([]);
   mockedMcpRefresh.mockReset().mockResolvedValue(undefined);
   mockedGrantsList.mockReset().mockResolvedValue([]);
@@ -176,7 +191,7 @@ describe('Inspector session spend', () => {
 
   it('shows "No chat selected" when there is no active chat', () => {
     render(<Inspector chat={null} profile={null} collapsed={false} onToggleCollapsed={vi.fn()} />);
-    const spendSection = screen.getByRole('heading', { name: 'Running session spend' }).closest('section')!;
+    const spendSection = sectionNamed('Spend');
     expect(within(spendSection).getByText('No chat selected.')).toBeInTheDocument();
     expect(mockedUsageGet).not.toHaveBeenCalled();
   });
@@ -258,21 +273,11 @@ describe('Inspector session spend', () => {
   });
 });
 
-function mcpHealthSection(): HTMLElement {
-  return screen.getByRole('heading', { name: 'MCP servers' }).closest('section')!;
-}
-function grantsSection(): HTMLElement {
-  return screen.getByRole('heading', { name: 'Tool grants' }).closest('section')!;
-}
-function auditSection(): HTMLElement {
-  return screen.getByRole('heading', { name: 'Audit trail' }).closest('section')!;
-}
-function workspaceSection(): HTMLElement {
-  return screen.getByRole('heading', { name: 'Workspace' }).closest('section')!;
-}
-function foldersSection(): HTMLElement {
-  return screen.getByRole('heading', { name: 'Other folders' }).closest('section')!;
-}
+const mcpHealthSection = (): HTMLElement => sectionNamed('MCP servers');
+const grantsSection = (): HTMLElement => sectionNamed('Tool grants');
+const auditSection = (): HTMLElement => sectionNamed('Audit trail');
+const workspaceSection = (): HTMLElement => sectionNamed('Workspace');
+const foldersSection = (): HTMLElement => sectionNamed('Other folders');
 
 describe('Inspector runs on', () => {
   afterEach(cleanup);
@@ -771,12 +776,12 @@ describe('Inspector project', () => {
   it('shows a Project memory section only for a chat in a loaded project', () => {
     useGruntStore.setState({ projects: [{ id: 'p-w', name: 'Website', description: '', instructions: '', workspace: null, workspaceRoot: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }] });
     render(<Inspector chat={makeChat({ projectId: 'p-w' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
-    expect(screen.getByRole('heading', { name: 'Project memory' })).toBeInTheDocument();
+    expect(sectionNamed('Project memory')).toBeInTheDocument();
     expect(screen.getByTestId('inspector-memory')).toHaveTextContent('memory for p-w');
     cleanup();
 
     render(<Inspector chat={makeChat({ projectId: null })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
-    expect(screen.queryByRole('heading', { name: 'Project memory' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /^Project memory/ })).toBeNull();
     cleanup();
 
     render(<Inspector chat={makeChat({ projectId: 'deleted' })} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
@@ -935,5 +940,82 @@ describe('Inspector Progress', () => {
     mockedAuditList.mockResolvedValue([{ id: 'x', chatId: 'chat-1', messageId: 'm', toolName: 'write_file', argsRedacted: {}, resultSummary: 'error: plan_mode', durationMs: 1, grantedBy: 'deny:plan', createdAt: Date.now() }] as never);
     render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={() => {}} />);
     expect(await screen.findByText('refused: no plan approved yet')).toBeInTheDocument();
+  });
+});
+
+describe('Inspector condensed sections', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetInspectorSectionsForTests();
+    useGruntStore.setState(useGruntStore.getInitialState(), true);
+    mockedUsageGet.mockReset().mockResolvedValue(makeRollup());
+  });
+  afterEach(cleanup);
+
+  const toggle = (title: string): HTMLElement => within(sectionNamed(title)).getByRole('button', { name: new RegExp(`^${title}`) });
+
+  it('opens only Workspace by default; the rest are closed but say what they hold', async () => {
+    mockedGrantsList.mockResolvedValue([{ id: 'g1', chatId: 'chat-1', profileId: null, toolName: 'write_file', source: 'fs', scope: 'chat', constraint: null, expiresAt: null }]);
+    mockedAuditList.mockResolvedValue([{ id: 'a1', chatId: 'chat-1', messageId: 'm1', toolName: 't', argsRedacted: {}, resultSummary: 'ok', durationMs: 1, grantedBy: 'policy', createdAt: 1 }]);
+    mockedUsageGet.mockResolvedValue(
+      makeRollup({
+        totalMeasuredCost: 4.5,
+        profiles: [{ profileId: 'p1', profileName: 'Alpha', modelId: 'model-x', currency: 'USD', measuredCost: 4.5, tokensIn: 1, tokensOut: 1, tokensCached: 0, tokensReasoning: 0, completeCount: 1, cancelledCount: 0, unmeasuredErrorCount: 0, subagentCount: 0 }],
+      })
+    );
+    render(<Inspector chat={makeChat({ workspaceRoot: 'E:\\Git\\Grunt' })} profile={makeProfile({ name: 'Sonnet' })} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    expect(toggle('Workspace')).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle('Workspace')).toHaveAccessibleName('Workspace Grunt');
+    await waitFor(() => expect(toggle('Tool grants')).toHaveAccessibleName('Tool grants 1 active'));
+    await waitFor(() => expect(toggle('Audit trail')).toHaveAccessibleName('Audit trail 1 call'));
+    await waitFor(() => expect(toggle('Spend')).toHaveAccessibleName('Spend $4.50'));
+    expect(toggle('Profile')).toHaveAccessibleName('Profile Sonnet');
+    for (const title of ['Other folders', 'Profile', 'Tool grants', 'MCP servers', 'Audit trail', 'Spend']) {
+      expect(toggle(title)).toHaveAttribute('aria-expanded', 'false');
+    }
+    expect(within(grantsSection()).getByTestId('grant-g1')).not.toBeVisible();
+
+    await userEvent.setup().click(toggle('Tool grants'));
+    expect(within(grantsSection()).getByTestId('grant-g1')).toBeVisible();
+  });
+
+  it("opens MCP servers by itself when a server the profile uses needs sign-in, but not for one it doesn't use", async () => {
+    mockedMcpList.mockResolvedValue([
+      { id: 'srv-1', name: 'Hosted Docs', transport: 'http', enabled: true, status: 'needs_auth', lastError: null, toolCount: 0, auth: null },
+      { id: 'srv-2', name: 'Broken', transport: 'stdio', enabled: true, status: 'error', lastError: 'boom', toolCount: 0, auth: null },
+    ]);
+    const profile = makeProfile({ toolPolicy: { fs: 'off', shell: false, mcpServerIds: ['srv-1'], approvalMode: 'always_ask' } });
+    render(<Inspector chat={makeChat()} profile={profile} collapsed={false} onToggleCollapsed={vi.fn()} />);
+
+    await waitFor(() => expect(toggle('MCP servers')).toHaveAccessibleName('MCP servers 1 of 2 on · 1 needs sign-in'));
+    expect(toggle('MCP servers')).toHaveAttribute('aria-expanded', 'true');
+    expect(within(mcpHealthSection()).getByRole('checkbox', { name: 'Use Hosted Docs in Default' })).toBeVisible();
+  });
+
+  it('flags a workspace folder that is not found on this machine', () => {
+    render(
+      <Inspector
+        chat={makeChat({ workspaceRoot: null, workspaceStatus: { status: 'unresolved', reason: 'other-machine', hint: { nodeId: 'node-pc', path: 'D:\\Work' } } })}
+        profile={makeProfile()}
+        collapsed={false}
+        onToggleCollapsed={vi.fn()}
+      />
+    );
+    expect(toggle('Workspace')).toHaveAccessibleName('Workspace not found here');
+    expect(within(sectionNamed('Workspace')).getByText('not found here')).toHaveAttribute('data-tone', 'warn');
+  });
+
+  it('puts Runs on inside the Workspace section once a machine is paired', () => {
+    useGruntStore.setState({
+      machines: {
+        self: { id: 'node-self', name: 'Laptop', fingerprint: 'A' },
+        listening: { running: true, addresses: [] },
+        peers: [{ nodeId: 'node-pc', name: 'PC', fingerprint: 'f', addresses: [], platform: 'win32', lastSeenAt: null, lastSyncSeq: 0, pairedAt: 1, status: 'reachable', since: 0, lastSyncedAt: null, syncError: null }],
+      },
+    });
+    render(<Inspector chat={makeChat()} profile={makeProfile()} collapsed={false} onToggleCollapsed={vi.fn()} />);
+    expect(within(workspaceSection()).getByRole('combobox', { name: 'Runs on' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: /^Runs on/ })).toBeNull();
   });
 });

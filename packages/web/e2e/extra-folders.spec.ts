@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { BASE_URL } from '../playwright.config.js';
+import { openInspectorSection } from './inspector.js';
 
 /**
  * Extra folders (spec 2026-10-07-extra-folders): a file outside the workspace
@@ -61,7 +62,7 @@ test('a file in another folder is out of reach until that folder is added to the
   await expect(page.getByLabel('streaming')).toHaveCount(0);
 
   // Add the folder, read-only, from the Inspector.
-  const folders = page.getByRole('heading', { name: 'Other folders' }).locator('xpath=ancestor::section[1]');
+  const folders = await openInspectorSection(page, 'Other folders');
   await folders.getByRole('textbox', { name: 'Add a folder for this chat' }).fill(otherFolder);
   await folders.getByRole('button', { name: 'Add' }).click();
   await expect(folders.getByTestId('extra-folder')).toContainText(otherFolder);
