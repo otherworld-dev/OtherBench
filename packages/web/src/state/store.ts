@@ -478,7 +478,13 @@ export const useGruntStore = create<GruntState>()((set) => ({
 
   projects: [],
   projectsLoaded: false,
-  setProjects: (projects) => set({ projects, projectsLoaded: true }),
+  setProjects: (projects) =>
+    set((state) => {
+      // A project deleted elsewhere (another tab or machine) arrives as a list without it: its page closes too.
+      const kept = new Set(projects.map((p) => p.id));
+      const paneState = state.projects.filter((p) => !kept.has(p.id)).reduce((panes, p) => forgetProject(panes, p.id), synced(state));
+      return { projects, projectsLoaded: true, ...withPanes(paneState) };
+    }),
   upsertProject: (project) =>
     set((state) => {
       const idx = state.projects.findIndex((p) => p.id === project.id);

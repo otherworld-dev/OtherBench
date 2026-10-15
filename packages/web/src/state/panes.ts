@@ -165,10 +165,11 @@ export function openTab(state: PaneState, chatId: string): PaneState {
  * goes with its tab: its pane is emptied.
  */
 export function closeTab(state: PaneState, chatId: string): PaneState {
+  // A project page goes even without a tab (an old saved layout), or its pane would be stuck on it.
+  if (parseProjectTab(chatId) !== null) return forgetProject(state, parseProjectTab(chatId)!);
   if (!state.tabs.includes(chatId)) return state;
   const tabs = state.tabs.filter((id) => id !== chatId);
   if (!state.panes.includes(chatId)) return { ...state, tabs };
-  if (parseProjectTab(chatId) !== null) return { ...state, tabs, panes: state.panes.map((id) => (id === chatId ? null : id)) };
   const view = parseViewTab(chatId);
   if (!view) return { ...state, tabs };
   const instead = state.panes.includes(view.chatId) ? null : view.chatId;

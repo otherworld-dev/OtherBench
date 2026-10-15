@@ -62,6 +62,21 @@ describe('startChat', () => {
     expect(useGruntStore.getState().chats.map((c) => c.id)).toEqual(['c1']);
   });
 
+  it("still returns the chat when the message went but its local stubs couldn't be added, so a retry doesn't send it twice", async () => {
+    vi.mocked(api.chats.create).mockResolvedValue(chat('c1'));
+    vi.mocked(api.turns.create).mockResolvedValue({ userMessageId: 'u1', assistantMessageIds: ['a1'] });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    useGruntStore.setState({
+      registerMessage: () => {
+        throw new Error('stub trouble');
+      },
+    });
+
+    await expect(startChat({ projectId: 'proj', text: 'hello' })).resolves.toMatchObject({ id: 'c1' });
+    expect(api.turns.create).toHaveBeenCalledTimes(1);
+    errors.mockRestore();
+  });
+
   it('rethrows a failed create as it is, with no chat to carry', async () => {
     const cause = new Error('no profile');
     vi.mocked(api.chats.create).mockRejectedValue(cause);
