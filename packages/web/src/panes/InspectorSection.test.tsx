@@ -51,6 +51,26 @@ describe('Inspector Section', () => {
     expect(screen.getByText('1 needs sign-in')).toHaveAttribute('data-tone', 'warn');
   });
 
+  it('stays open once the problem that opened it clears, until closed by hand', async () => {
+    // Unticking a failing MCP server clears the problem from inside the open section: it mustn't shut under the pointer.
+    const { rerender } = render(
+      <Section title="MCP servers">
+        <Body text="1 of 1 on · 1 failing" tone="danger" />
+      </Section>
+    );
+    rerender(
+      <Section title="MCP servers">
+        <Body text="0 of 1 on" tone="normal" />
+      </Section>
+    );
+    const toggle = screen.getByRole('button', { name: 'MCP servers 0 of 1 on' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('body text')).toBeVisible();
+
+    await userEvent.setup().click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('remembers an explicit choice, over the default, across mounts', async () => {
     const { unmount } = render(
       <Section title="Workspace" defaultOpen>
