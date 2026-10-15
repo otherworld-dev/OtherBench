@@ -11,6 +11,7 @@ import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { chatStatus, groupStatus, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
+import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
@@ -442,6 +443,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   function projectGroupProps(project: Project): Partial<ProjectGroupProps> {
     return {
       onNewChat: () => void createChat(project.id),
+      onOpen: () => openTab(projectTabId(project.id)),
+      active: activeChatId === projectTabId(project.id),
       newChatDisabled: creating || profiles.length === 0,
       menuOpen: projectMenu?.projectId === project.id,
       renaming: renamingProjectId === project.id,
