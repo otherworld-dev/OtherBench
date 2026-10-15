@@ -22,6 +22,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
 });
 
 import { api } from '../state/api.js';
+import { setSectionOpen } from '../state/inspectorSections.js';
 import { useGruntStore } from '../state/store.js';
 import { Inspector } from './Inspector.js';
 
@@ -70,6 +71,7 @@ const viewFor = (projectId: string, name: string): ProjectMemoryView => ({
 beforeEach(() => {
   useGruntStore.setState(useGruntStore.getInitialState(), true);
   useGruntStore.setState({ projects: [project('A', 'Alpha'), project('B', 'Beta')] });
+  setSectionOpen('Project memory', true);
   vi.mocked(api.usage.get).mockReset().mockResolvedValue({ profiles: [], chats: [], buckets: [], totalMeasuredCost: 0, totalCancelledCount: 0, totalUnmeasuredErrorCount: 0 });
   vi.mocked(api.mcpServers.list).mockReset().mockResolvedValue([]);
   vi.mocked(api.grants.list).mockReset().mockResolvedValue([]);

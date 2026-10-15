@@ -1,6 +1,7 @@
 import { useMemo, useState, type JSX } from 'react';
 import type { EngineMeta } from '@grunt/core/types/messages.js';
 import { useGruntStore } from '../state/store.js';
+import { useSectionSummary } from './InspectorSection.js';
 
 export function resumeCommand(meta: EngineMeta): string {
   return `cd "${meta.cwd}" && claude --resume ${meta.sessionId}`;
@@ -61,6 +62,8 @@ export function ClaudeCodeSection({ chatId }: { chatId: string }): JSX.Element |
     withMeta.sort((a, b) => b.createdAt - a.createdAt);
     return withMeta[0]?.engineMeta ?? null;
   }, [messages, chatId]);
+  const toolCount = meta?.tools?.length ?? 0;
+  useSectionSummary(meta ? `${toolCount} tool${toolCount === 1 ? '' : 's'}` : null);
   if (!meta) return null;
   const { builtIn, servers, empty } = groupTools(meta);
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { BASE_URL, DESKTOP_SERVERS } from '../playwright.config.js';
+import { openInspectorSection } from './inspector.js';
 
 /**
  * Settings > MCP servers > Import from Claude Desktop (spec
@@ -36,7 +37,7 @@ test('imports an MCP server from Claude Desktop for a profile, without showing i
   // The chat's Inspector shows it on for the profile, and turning it off saves to the profile.
   await page.getByRole('button', { name: 'Close settings' }).click();
   await page.getByRole('navigation', { name: 'Chats' }).getByTestId(`chat-row-${chat.id}`).click();
-  const mcp = page.getByRole('heading', { name: 'MCP servers' }).locator('xpath=ancestor::section[1]');
+  const mcp = await openInspectorSection(page, 'MCP servers');
   await expect(mcp).toContainText(`Ticked servers are on for ${profileName}`);
   const box = mcp.getByRole('checkbox', { name: `Use E2E Desktop Notes in ${profileName}` });
   await expect(box).toBeChecked();

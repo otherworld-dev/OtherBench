@@ -7,6 +7,7 @@ import { formatRelativeTime } from '../lib/relativeTime.js';
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
 import { useProjectMemory } from '../state/useProjectMemory.js';
+import { useSectionSummary } from './InspectorSection.js';
 
 export { MEMORY_POLL_MS } from '../state/useProjectMemory.js';
 
@@ -45,6 +46,20 @@ export function InspectorMemory({ chat, project }: { chat: Chat; project: Projec
   const [refresh, setRefresh] = useState(0);
 
   useEffect(() => setNotice(null), [chat.id]);
+  useSectionSummary(
+    !view
+      ? loadFailed
+        ? "couldn't load"
+        : null
+      : view.lastError
+        ? 'last update failed'
+        : !hasMemoryContent(view.memory.body)
+          ? 'empty'
+          : view.memory.updatedAt > 0
+            ? `updated ${formatRelativeTime(view.memory.updatedAt)}`
+            : null,
+    view?.lastError ? 'danger' : 'normal'
+  );
 
   function chatTitle(id: string | null): string {
     if (id === null) return 'a chat';

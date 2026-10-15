@@ -22,24 +22,31 @@ export function InspectorProject({ chat }: { chat: Chat }): JSX.Element {
     );
   }
   return (
-    <div className="space-y-1.5">
-      <button
-        type="button"
-        data-testid="inspector-project"
-        onClick={() => revealSidebarGroup(project.id)}
-        title="Show in the sidebar"
-        className="block max-w-full truncate text-left text-sm text-[var(--accent)] underline-offset-2 hover:underline"
-      >
-        {project.name}
-      </button>
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          data-testid="inspector-project"
+          onClick={() => revealSidebarGroup(project.id)}
+          title="Show in the sidebar"
+          className="min-w-0 flex-1 truncate text-left text-sm text-[var(--accent)] underline-offset-2 hover:underline"
+        >
+          {project.name}
+        </button>
+        <button
+          type="button"
+          aria-label="Project settings…"
+          onClick={() => openProjectPage({ mode: 'edit', projectId: project.id })}
+          className="btn shrink-0 px-2 py-0.5"
+        >
+          Settings…
+        </button>
+      </div>
       {project.description && (
-        <p data-testid="inspector-project-description" className="text-xs text-[var(--text-muted)]">
+        <p data-testid="inspector-project-description" title={project.description} className="line-clamp-2 text-xs text-[var(--text-muted)]">
           {project.description}
         </p>
       )}
-      <button type="button" onClick={() => openProjectPage({ mode: 'edit', projectId: project.id })} className="btn px-2 py-0.5">
-        Project settings…
-      </button>
     </div>
   );
 }
