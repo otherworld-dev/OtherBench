@@ -25,8 +25,10 @@ export interface ProjectGroupProps {
   newChatDisabled?: boolean;
   menuOpen?: boolean;
   renaming?: boolean;
-  /** Projects only: the ⋯ button, a right-click or Shift+F10 on the heading. */
+  /** The ⋯ button, a right-click or Shift+F10 on the heading. */
   onOpenMenu?: (position: { x: number; y: number }, source: MenuSource) => void;
+  /** The ⋯ button's name. */
+  menuLabel?: string;
   onRename?: (name: string) => void;
   onRenameCancel?: () => void;
   /** The most urgent status among the group's chats, shown on the heading whether it's open or collapsed. */
@@ -45,6 +47,7 @@ function carriesChat(e: DragEvent): boolean {
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
   const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, onOpen, active = false } = props;
+  const { menuLabel = 'Project actions' } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -150,10 +153,10 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         {onOpenMenu && (
           <button
             type="button"
-            aria-label="Project actions"
+            aria-label={menuLabel}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            title="Project actions"
+            title={menuLabel}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();

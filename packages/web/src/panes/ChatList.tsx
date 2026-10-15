@@ -8,15 +8,27 @@ import { Menu } from '../components/Menu.js';
 import { onDesktopEvent } from '../desktop/bridge.js';
 import { saveFile } from '../lib/saveFile.js';
 import { NARROW_BREAKPOINT, useMediaQuery } from '../lib/useMediaQuery.js';
+import { useNow } from '../lib/useNow.js';
 import { ApiError, api, type ChatPatchBody, type CreateChatBody } from '../state/api.js';
 import { setChatPinned } from '../state/chatActions.js';
 import { chatStatus, groupStatus, useChatActivity, useReadingChatIds, type ChatStatus } from '../state/chatStatus.js';
 import { projectTabId } from '../state/projectTab.js';
 import { NO_PROJECT_KEY, setGroupCollapsed, useCollapsedGroups } from '../state/sidebarGroups.js';
+import { groupSortOf, setGroupSort, useGroupSorts } from '../state/sidebarSort.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME, ChatRow, type DropPosition, type MenuSource } from './sidebar/ChatRow.js';
-import { chatMenuItems, projectMenuItems } from './sidebar/menus.js';
-import { buildSidebar, moveProjectPatches, moveTarget, placeChatPatches } from './sidebar/model.js';
+import { chatMenuItems, groupSortItem, projectMenuItems } from './sidebar/menus.js';
+import {
+  AGE_BUCKET_LABELS,
+  bucketRuns,
+  buildSidebar,
+  capRows,
+  GROUP_ROW_CAP,
+  moveProjectPatches,
+  moveTarget,
+  placeChatPatches,
+  titleMatches,
+} from './sidebar/model.js';
 import { ProjectGroup, type ProjectGroupProps } from './sidebar/ProjectGroup.js';
 
 /** A sidebar error line: the server's own message when there is one. */
@@ -62,6 +74,15 @@ interface Section {
   pinned: boolean;
   projectPinned: boolean;
   projectId: string | null;
+  /** In a group sorted by recent activity: its order isn't the user's to change. */
+  recent: boolean;
+}
+
+/** A filter chip under the search box, on or off. */
+function chipClass(on: boolean): string {
+  return `rounded-full border px-2 py-0.5 text-xs ${
+    on ? 'border-[var(--accent)] bg-[var(--bg-sunken)] text-[var(--text)]' : 'border-[var(--border-strong)] text-[var(--text-muted)] hover:text-[var(--text)]'
+  }`;
 }
 
 function headingSelector(projectId: string): string {
@@ -71,9 +92,13 @@ function headingSelector(projectId: string): string {
 /**
  * Left pane (spec 2026-10-03-projects-design §3): search, then Pinned, each
  * project, and No project, with "+ New chat" and "+ New project" at the
- * bottom. Search hits `GET /api/search` (FTS over message text) and filters
- * every group to the matching chats; groups with no match hide, and
- * collapsed groups show expanded, while a search is active.
+ * bottom. Search matches chat titles here and message text through
+ * `GET /api/search?scope=chats`, and the chips under it keep only chats with
+ * a status, or that run on one machine. Any of those filters every group to
+ * the matching chats; groups with no match hide, and collapsed or capped
+ * groups show in full, while one is active. A group shows its first
+ * `GROUP_ROW_CAP` chats until "Show N more", and orders them by hand or, with
+ * date headings, by recent activity (its menu's sort item).
  *
  * `footer` renders at the end of the New chat / New project row, for
  * app-level controls the caller owns (Settings, Usage). `wrapFooter` lets
@@ -96,13 +121,23 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const openTab = useGruntStore((s) => s.openTab);
   const openSchedules = useGruntStore((s) => s.openSchedules);
   const paneTabs = useGruntStore((s) => s.paneState.tabs);
+  const machines = useGruntStore((s) => s.machines);
   const collapsedGroups = useCollapsedGroups();
+  const groupSorts = useGroupSorts();
+  const now = useNow(60_000);
   const { waiting, working } = useChatActivity();
   const reading = useReadingChatIds(useMediaQuery(NARROW_BREAKPOINT));
 
   const [query, setQuery] = useState('');
+  /** The server's message-text hits for the query; a previous query's stay until the new answer, so rows don't blink while typing. */
   const [searchChatIds, setSearchChatIds] = useState<ReadonlySet<string> | null>(null);
   const searchSeq = useRef(0);
+  const [statusOnly, setStatusOnly] = useState(false);
+  /** The Machine chip: only chats that run on this node id; null = any. */
+  const [machine, setMachine] = useState<string | null>(null);
+  /** Groups opened past their cap with "Show N more", this session only. */
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set());
+  const [noProjectMenu, setNoProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const [creating, setCreating] = useState(false);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [rowDrop, setRowDrop] = useState<{ chatId: string; position: DropPosition } | null>(null);
@@ -119,8 +154,22 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(loadShowArchived);
 
-  const searching = searchChatIds !== null;
-  const sidebar = useMemo(() => buildSidebar(chats, projects, searchChatIds), [chats, projects, searchChatIds]);
+  const trimmedQuery = query.trim();
+  // A chip left on for a machine since unpaired would hide everything, with no chip shown to turn it off.
+  const machineFilter = machines?.peers.length ? machine : null;
+  const searching = trimmedQuery !== '' || statusOnly || machineFilter !== null;
+  const matches = useMemo(() => {
+    if (!searching) return null;
+    return new Set(
+      chats
+        .filter((c) => trimmedQuery === '' || titleMatches(c.title, trimmedQuery) || searchChatIds?.has(c.id) === true)
+        // The chips never hide the open chat: reading a reply clears its dot, and a new chat runs here.
+        .filter((c) => c.id === activeChatId || !statusOnly || chatStatus(c, waiting, working) !== null)
+        .filter((c) => c.id === activeChatId || machineFilter === null || c.runsOn === machineFilter)
+        .map((c) => c.id)
+    );
+  }, [searching, chats, trimmedQuery, searchChatIds, statusOnly, machineFilter, activeChatId, waiting, working]);
+  const sidebar = useMemo(() => buildSidebar(chats, projects, matches, (key) => groupSortOf(groupSorts, key)), [chats, projects, matches, groupSorts]);
   const orderedProjects = useMemo(() => [...projects].sort(compareProjects), [projects]);
   // Looked up on every render, so the menu and dialog act on the chat as it is now.
   const menuChat = chatMenu ? (chats.find((c) => c.id === chatMenu.chatId) ?? null) : null;
@@ -144,7 +193,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       return;
     }
     try {
-      const results = await api.search(q);
+      const results = await api.searchChats(q);
       // A newer keystroke, or clearing the box, supersedes this response.
       if (seq !== searchSeq.current) return;
       setSearchChatIds(new Set(results.map((r) => r.chatId)));
@@ -256,18 +305,20 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
   /** The section the sidebar shows `chat` in, or null when it isn't shown in one (archived). */
   function sectionOf(chat: Chat): Section | null {
     if (chat.archivedAt !== null) return null;
-    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null };
+    if (chat.pinned) return { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false };
     for (const group of sidebar.groups) {
       const projectId = group.project?.id ?? null;
-      if (group.pinnedChats.some((c) => c.id === chat.id)) return { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId };
-      if (group.chats.some((c) => c.id === chat.id)) return { chats: group.chats, pinned: false, projectPinned: false, projectId };
+      const recent = group.sort === 'recent';
+      if (group.pinnedChats.some((c) => c.id === chat.id)) return { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId, recent };
+      if (group.chats.some((c) => c.id === chat.id)) return { chats: group.chats, pinned: false, projectPinned: false, projectId, recent };
     }
     return null;
   }
 
-  /** The chat's place in its section, for the menu's Move up / Move down; null while searching or when archived. */
+  /** The chat's place in its section, for the menu's Move up / Move down; null while searching, when archived, or in a recent group. */
   function menuPosition(chat: Chat): { index: number; count: number } | null {
     const section = searching ? null : sectionOf(chat);
+    if (section?.recent) return null;
     return section ? { index: section.chats.findIndex((c) => c.id === chat.id), count: section.chats.length } : null;
   }
 
@@ -302,6 +353,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   function openChatMenu(chatId: string, position: { x: number; y: number }, source: MenuSource): void {
     setProjectMenu(null);
+    setNoProjectMenu(null);
     if (source === 'button' && chatMenu?.chatId === chatId) {
       setChatMenu(null);
       focusLater(chatRowSelector(chatId), LIST_SELECTOR);
@@ -377,6 +429,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
 
   function openProjectMenu(projectId: string, position: { x: number; y: number }, source: MenuSource): void {
     setChatMenu(null);
+    setNoProjectMenu(null);
     if (source === 'button' && projectMenu?.projectId === projectId) {
       setProjectMenu(null);
       focusLater(headingSelector(projectId), LIST_SELECTOR);
@@ -414,6 +467,28 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
       }
     }
     focusLater(headingSelector(projectId), LIST_SELECTOR);
+  }
+
+  function openNoProjectMenu(position: { x: number; y: number }, source: MenuSource): void {
+    setChatMenu(null);
+    setProjectMenu(null);
+    if (source === 'button' && noProjectMenu !== null) {
+      setNoProjectMenu(null);
+      focusLater(headingSelector(NO_PROJECT_KEY), LIST_SELECTOR);
+      return;
+    }
+    setNoProjectMenu(position);
+  }
+
+  /** Opens a capped group in full (focus goes to the first chat it revealed), or caps it again. */
+  function setGroupExpanded(key: string, expanded: boolean, firstRevealedId?: string): void {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (expanded) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+    if (firstRevealedId) focusLater(chatRowSelector(firstRevealedId));
   }
 
   /** The heading to focus once `projectId`'s is gone: the next one, else the previous one. */
@@ -507,8 +582,8 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           setPinZoneActive(false);
         }}
         reorder={
-          // Reordering against a filtered list would place chats relative to ones the user can't see.
-          section && !searching
+          // Reordering against a filtered list would place chats relative to ones the user can't see; a recent group orders itself.
+          section && !searching && !section.recent
             ? {
                 indicator: rowDrop?.chatId === chat.id ? rowDrop.position : null,
                 onOver: (position) => setRowDrop({ chatId: chat.id, position }),
@@ -527,6 +602,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         showPinMarker={!section?.pinned}
         projectPinMarker={section?.projectPinned === true}
         projectName={section?.pinned && chat.projectId ? projects.find((p) => p.id === chat.projectId)?.name : undefined}
+        now={now}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
@@ -560,7 +636,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               setDraggingChatId(null);
               if (!chatId) return;
               e.preventDefault();
-              void placeChat(chatId, { chats: [], pinned: true, projectPinned: false, projectId: null }, null);
+              void placeChat(chatId, { chats: [], pinned: true, projectPinned: false, projectId: null, recent: false }, null);
             }}
             // Same box as the search field it stands in for, so nothing below it moves.
             className={`flex w-full items-center gap-1.5 rounded-sm border border-dashed px-2 py-1.5 text-sm text-[var(--text-muted)] ${
@@ -580,6 +656,27 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
             className="w-full rounded-sm border border-[var(--border-strong)] bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)] focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
           />
         )}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1" data-testid="chat-filters">
+          <button type="button" aria-pressed={statusOnly} onClick={() => setStatusOnly((on) => !on)} className={chipClass(statusOnly)}>
+            Unread / working
+          </button>
+          {machines && machines.peers.length > 0 && (
+            <select
+              aria-label="Machine"
+              value={machineFilter ?? ''}
+              onChange={(e) => setMachine(e.target.value === '' ? null : e.target.value)}
+              className={`${chipClass(machineFilter !== null)} bg-[var(--bg-raised)]`}
+            >
+              <option value="">Any machine</option>
+              <option value={machines.self.id}>{machines.self.name} (this machine)</option>
+              {machines.peers.map((p) => (
+                <option key={p.nodeId} value={p.nodeId}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       {/* relative: the group headings' screen-reader text is absolutely positioned, and without a positioned
@@ -589,16 +686,22 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         {sidebar.pinned.length > 0 && (
           <div className="mb-1.5" data-testid="group-pinned">
             <h2 className="label-caps px-2 pb-1 text-[var(--text-muted)]">Pinned</h2>
-            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null }))}</ul>
+            <ul>{sidebar.pinned.map((c) => renderRow(c, { chats: sidebar.pinned, pinned: true, projectPinned: false, projectId: null, recent: false }))}</ul>
           </div>
         )}
 
         {searching && sidebar.pinned.length === 0 && sidebar.groups.length === 0 && sidebar.archived.length === 0 && (
-          <p className="px-2 py-4 text-sm text-[var(--text-faint)]">No chats match your search.</p>
+          <p className="px-2 py-4 text-sm text-[var(--text-faint)]">{trimmedQuery === '' ? 'No chats match these filters.' : 'No chats match your search.'}</p>
         )}
 
         {sidebar.groups.map((group) => {
           const project = group.project;
+          const projectId = project?.id ?? null;
+          const recent = group.sort === 'recent';
+          const rest: Section = { chats: group.chats, pinned: false, projectPinned: false, projectId, recent };
+          const expanded = searching || expandedGroups.has(group.key);
+          const { visible, hidden } = expanded ? { visible: group.chats, hidden: 0 } : capRows(group.chats, GROUP_ROW_CAP, activeChatId);
+          const firstHidden = hidden > 0 ? group.chats.find((c) => !visible.includes(c)) : undefined;
           return (
             <ProjectGroup
               key={group.key}
@@ -611,11 +714,42 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
               dropActive={dropTarget === group.key}
               onToggle={() => setGroupCollapsed(group.key, !collapsedGroups.has(group.key))}
               onDragTarget={(on) => setDropTarget((current) => (on ? group.key : current === group.key ? null : current))}
-              onDropChat={(chatId) => void moveChat(chatId, project?.id ?? null)}
-              {...(project ? projectGroupProps(project) : {})}
+              onDropChat={(chatId) => void moveChat(chatId, projectId)}
+              {...(project
+                ? projectGroupProps(project)
+                : {
+                    menuOpen: noProjectMenu !== null,
+                    menuLabel: 'No project actions',
+                    onOpenMenu: openNoProjectMenu,
+                  })}
             >
-              {group.pinnedChats.map((c) => renderRow(c, { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId: project?.id ?? null }))}
-              {group.chats.map((c) => renderRow(c, { chats: group.chats, pinned: false, projectPinned: false, projectId: project?.id ?? null }))}
+              {group.pinnedChats.map((c) => renderRow(c, { chats: group.pinnedChats, pinned: false, projectPinned: true, projectId, recent }))}
+              {recent
+                ? bucketRuns(visible, now).flatMap((run) => [
+                    <li
+                      key={`bucket-${run.bucket}`}
+                      role="presentation"
+                      data-testid={`bucket-${group.key}-${run.bucket}`}
+                      className="px-2 pt-1.5 pb-0.5 text-[11px] text-[var(--text-faint)]"
+                    >
+                      {AGE_BUCKET_LABELS[run.bucket]}
+                    </li>,
+                    ...run.chats.map((c) => renderRow(c, rest)),
+                  ])
+                : visible.map((c) => renderRow(c, rest))}
+              {(hidden > 0 || (!searching && expandedGroups.has(group.key) && group.chats.length > GROUP_ROW_CAP)) && (
+                // One key for both labels: React keeps the button, so focus stays on it when "Show fewer" folds the group.
+                <li key="row-cap-toggle">
+                  <button
+                    type="button"
+                    data-testid={`group-more-${group.key}`}
+                    onClick={() => setGroupExpanded(group.key, hidden > 0, firstHidden?.id)}
+                    className="w-full rounded-sm px-2 py-[3px] text-left text-xs text-[var(--text-muted)] hover:bg-[var(--bg-sunken)] hover:text-[var(--text)]"
+                  >
+                    {hidden > 0 ? `Show ${hidden} more` : 'Show fewer'}
+                  </button>
+                </li>
+              )}
             </ProjectGroup>
           );
         })}
@@ -712,17 +846,40 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
           items={projectMenuItems(
             orderedProjects.findIndex((p) => p.id === menuProject.id),
             orderedProjects.length,
+            groupSortOf(groupSorts, menuProject.id),
             {
               rename: () => setRenamingProjectId(menuProject.id),
               settings: () => openProjectPage({ mode: 'edit', projectId: menuProject.id, returnFocus: headingSelector(menuProject.id) }),
               schedule: () => openSchedules({ kind: 'project', projectId: menuProject.id }),
               move: (dir) => void moveProject(menuProject.id, dir),
+              setSort: (sort) => {
+                setGroupSort(menuProject.id, sort);
+                focusLater(headingSelector(menuProject.id), LIST_SELECTOR);
+              },
               requestDelete: () => setDeletingProjectId(menuProject.id),
             }
           )}
           onClose={(reason) => {
             setProjectMenu(null);
             if (reason === 'dismiss') focusLater(headingSelector(menuProject.id), LIST_SELECTOR);
+          }}
+        />
+      )}
+
+      {noProjectMenu && (
+        <Menu
+          key="no-project"
+          label="No project actions"
+          position={noProjectMenu}
+          items={[
+            groupSortItem(groupSortOf(groupSorts, NO_PROJECT_KEY), (sort) => {
+              setGroupSort(NO_PROJECT_KEY, sort);
+              focusLater(headingSelector(NO_PROJECT_KEY), LIST_SELECTOR);
+            }),
+          ]}
+          onClose={(reason) => {
+            setNoProjectMenu(null);
+            if (reason === 'dismiss') focusLater(headingSelector(NO_PROJECT_KEY), LIST_SELECTOR);
           }}
         />
       )}

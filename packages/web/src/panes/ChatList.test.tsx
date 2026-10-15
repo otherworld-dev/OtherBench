@@ -21,7 +21,7 @@ vi.mock('../state/api.js', async (importOriginal) => {
       ...actual.api,
       chats: { ...actual.api.chats, list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn(), export: vi.fn() },
       projects: { list: vi.fn(), create: vi.fn(), patch: vi.fn(), delete: vi.fn() },
-      search: vi.fn(),
+      searchChats: vi.fn(),
       health: vi.fn(),
     },
   };
@@ -30,8 +30,9 @@ vi.mock('../state/api.js', async (importOriginal) => {
 vi.mock('../lib/saveFile.js', () => ({ saveFile: vi.fn() }));
 
 import { saveFile } from '../lib/saveFile.js';
-import { ApiError, api, type SearchResult } from '../state/api.js';
+import { ApiError, api } from '../state/api.js';
 import { COLLAPSED_GROUPS_STORAGE_KEY, NO_PROJECT_KEY, resetSidebarGroupsForTests, setGroupCollapsed } from '../state/sidebarGroups.js';
+import { resetGroupSortsForTests, setGroupSort } from '../state/sidebarSort.js';
 import { useGruntStore } from '../state/store.js';
 import { ChatList } from './ChatList.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
@@ -46,7 +47,7 @@ const mockedProjectList = vi.mocked(api.projects.list);
 const mockedProjectCreate = vi.mocked(api.projects.create);
 const mockedProjectPatch = vi.mocked(api.projects.patch);
 const mockedProjectDelete = vi.mocked(api.projects.delete);
-const mockedSearch = vi.mocked(api.search);
+const mockedSearch = vi.mocked(api.searchChats);
 const mockedHealth = vi.mocked(api.health);
 
 const profile: Profile = {
@@ -120,6 +121,7 @@ beforeEach(() => {
   desktopListeners.clear();
   window.localStorage.clear();
   resetSidebarGroupsForTests();
+  resetGroupSortsForTests();
   mockedHealth.mockResolvedValue({ status: 'ok', time: '', platform: 'linux' });
   // Like the server: PATCH returns the stored row with the body applied.
   // (These tests never patch folders, whose entries a server would store in another shape.)
@@ -277,7 +279,7 @@ describe('ChatList groups', () => {
       chats: [makeChat({ id: 'c1', projectId: 'p-a' }), makeChat({ id: 'c2', projectId: 'p-b' }), makeChat({ id: 'c3' })],
     });
     window.localStorage.setItem(COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(['p-b']));
-    mockedSearch.mockResolvedValue([{ messageId: 'm1', chatId: 'c2', snippet: 'x' }]);
+    mockedSearch.mockResolvedValue([{ chatId: 'c2' }]);
     render(<ChatList />);
     const box = screen.getByRole('searchbox', { name: 'Search chats' });
 
@@ -295,14 +297,14 @@ describe('ChatList groups', () => {
   it('clearing the search while a search is in flight shows the full list (review focus 2)', async () => {
     const user = userEvent.setup();
     useGruntStore.setState({ chats: [makeChat({ id: 'c1' }), makeChat({ id: 'c2' })] });
-    let resolveSearch!: (results: SearchResult[]) => void;
+    let resolveSearch!: (results: { chatId: string }[]) => void;
     mockedSearch.mockImplementation(() => new Promise((resolve) => (resolveSearch = resolve)));
     render(<ChatList />);
     const box = screen.getByRole('searchbox', { name: 'Search chats' });
 
     await user.type(box, 'x');
     await user.clear(box);
-    await act(async () => resolveSearch([{ messageId: 'm', chatId: 'c1', snippet: '' }]));
+    await act(async () => resolveSearch([{ chatId: 'c1' }]));
 
     expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['c1', 'c2']);
   });
@@ -416,7 +418,8 @@ describe('ChatList drag and drop', () => {
     await waitFor(() => expect(rowIds('group-p-a')).toEqual(['c1', 'c2']));
   });
 
-  it('dropping on No project moves the chat out of its project', async () => {
+  it('dropping on No project moves the chat out of its project, to the top while No project is sorted by hand', async () => {
+    setGroupSort(NO_PROJECT_KEY, 'manual');
     render(<ChatList />);
     fireEvent.drop(screen.getByTestId(`group-heading-${NO_PROJECT_KEY}`), { dataTransfer: dataTransfer('c2') });
     expect(mockedPatch).toHaveBeenCalledWith('c2', { projectId: null, sortOrder: 1 });
@@ -478,7 +481,7 @@ describe('ChatList drag and drop', () => {
   });
 
   it('has no drop zone while searching', async () => {
-    mockedSearch.mockResolvedValue([{ messageId: 'm', chatId: 'c1', snippet: 'x' }]);
+    mockedSearch.mockResolvedValue([{ chatId: 'c1' }]);
     render(<ChatList />);
     await userEvent.setup().type(screen.getByRole('searchbox', { name: 'Search chats' }), 'x');
     await waitFor(() => expect(screen.queryByTestId('group-p-a')).toBeNull());
@@ -1004,7 +1007,7 @@ describe('ChatList archived section', () => {
 
   it('a search filters the archived list too', async () => {
     const user = setup();
-    mockedSearch.mockResolvedValue([{ messageId: 'm1', chatId: 'c3', snippet: 'x' }]);
+    mockedSearch.mockResolvedValue([{ chatId: 'c3' }]);
     await user.click(toggle());
     await user.type(screen.getByRole('searchbox', { name: 'Search chats' }), 'x');
 
@@ -1015,6 +1018,8 @@ describe('ChatList archived section', () => {
 
 describe('ChatList reordering (#823)', () => {
   beforeEach(() => {
+    // No project starts sorted by recent activity, where rows don't reorder.
+    setGroupSort(NO_PROJECT_KEY, 'manual');
     useGruntStore.setState({
       projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
       chats: [
@@ -1105,7 +1110,7 @@ describe('ChatList reordering (#823)', () => {
   });
 
   it('rows are not drop targets while searching or in Show archived', async () => {
-    mockedSearch.mockResolvedValue([{ messageId: 'm', chatId: 'a', snippet: 'a' }, { messageId: 'n', chatId: 'b', snippet: 'b' }]);
+    mockedSearch.mockResolvedValue([{ chatId: 'a' }, { chatId: 'b' }]);
     render(<ChatList />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'q' } });
     await waitFor(() => expect(screen.queryByTestId('chat-row-c')).not.toBeInTheDocument());
@@ -1185,5 +1190,177 @@ describe('ChatList footer row', () => {
   it('can wrap onto a second line, so a fourth button stays reachable at phone width', () => {
     render(<ChatList wrapFooter footer={<button type="button">Extra</button>} />);
     expect(actionsRow()).toHaveClass('flex-wrap');
+  });
+});
+
+describe('ChatList long groups', () => {
+  /** Twelve chats in project Alpha, c0 at the top by hand. */
+  function seedAlpha(extra: Partial<Chat> = {}): void {
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: Array.from({ length: 12 }, (_, i) => makeChat({ id: `c${i}`, projectId: 'p-a', sortOrder: 100 - i, ...extra })),
+    });
+  }
+
+  it('shows the first 10 chats and a Show more for the rest; Show fewer folds them again', async () => {
+    const user = userEvent.setup();
+    seedAlpha();
+    render(<ChatList />);
+    expect(rowIds('group-p-a')).toHaveLength(10);
+    expect(screen.getByTestId('group-count-p-a')).toHaveTextContent('12');
+
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    expect(rowIds('group-p-a')).toHaveLength(12);
+    // Focus moves to the first chat it revealed.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('chat-row-c10').querySelector('[data-row-main]')));
+
+    await user.click(screen.getByRole('button', { name: 'Show fewer' }));
+    expect(rowIds('group-p-a')).toHaveLength(10);
+  });
+
+  it('keeps the open chat in view past the cap', () => {
+    seedAlpha();
+    useGruntStore.setState({ activeChatId: 'c11' });
+    render(<ChatList />);
+    expect(rowIds('group-p-a')).toEqual([...Array.from({ length: 10 }, (_, i) => `c${i}`), 'c11']);
+    expect(screen.getByRole('button', { name: 'Show 1 more' })).toBeInTheDocument();
+  });
+
+  it('shows every match while searching, with no Show more', async () => {
+    seedAlpha();
+    mockedSearch.mockResolvedValue(Array.from({ length: 12 }, (_, i) => ({ chatId: `c${i}` })));
+    render(<ChatList />);
+    await userEvent.setup().type(screen.getByRole('searchbox', { name: 'Search chats' }), 'zz');
+    await waitFor(() => expect(rowIds('group-p-a')).toHaveLength(12));
+    expect(screen.queryByTestId('group-more-p-a')).toBeNull();
+  });
+});
+
+describe('ChatList sorting by recent activity', () => {
+  const hour = 3_600_000;
+
+  beforeEach(() => {
+    const now = Date.now();
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [
+        makeChat({ id: 'old', projectId: 'p-a', sortOrder: 30, updatedAt: now - 40 * 24 * hour }),
+        makeChat({ id: 'new', projectId: 'p-a', sortOrder: 10, updatedAt: now - 60_000 }),
+        makeChat({ id: 'loose-old', sortOrder: 30, updatedAt: now - 40 * 24 * hour }),
+        makeChat({ id: 'loose-new', sortOrder: 10, updatedAt: now - 60_000 }),
+      ],
+    });
+  });
+
+  it('No project starts by recent activity under date headings; projects start by hand', () => {
+    render(<ChatList />);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['loose-new', 'loose-old']);
+    expect(screen.getByTestId(`bucket-${NO_PROJECT_KEY}-today`)).toHaveTextContent('Today');
+    expect(screen.getByTestId(`bucket-${NO_PROJECT_KEY}-older`)).toHaveTextContent('Older');
+    expect(rowIds('group-p-a')).toEqual(['old', 'new']);
+    expect(screen.queryByTestId('bucket-p-a-today')).toBeNull();
+  });
+
+  it("a project's menu switches it to recent activity and back, remembered on this device", async () => {
+    const user = userEvent.setup();
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('group-heading-p-a')).getByRole('button', { name: 'Project actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Sort by recent activity' }));
+    expect(rowIds('group-p-a')).toEqual(['new', 'old']);
+    expect(window.localStorage.getItem('grunt.groupSort')).toBe(JSON.stringify({ 'p-a': 'recent' }));
+
+    await user.click(within(screen.getByTestId('group-heading-p-a')).getByRole('button', { name: 'Project actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Sort manually' }));
+    expect(rowIds('group-p-a')).toEqual(['old', 'new']);
+  });
+
+  it("No project's own menu switches it to manual", async () => {
+    const user = userEvent.setup();
+    render(<ChatList />);
+    await user.click(screen.getByRole('button', { name: 'No project actions' }));
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+    await user.click(screen.getByRole('menuitem', { name: 'Sort manually' }));
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['loose-old', 'loose-new']);
+    expect(screen.queryByTestId(`bucket-${NO_PROJECT_KEY}-today`)).toBeNull();
+  });
+
+  it('a recent group has no Move up / Move down and its rows are not drop targets', () => {
+    render(<ChatList />);
+    fireEvent.contextMenu(screen.getByTestId('chat-row-loose-new').querySelector('[data-row-main]')!);
+    expect(screen.queryByRole('menuitem', { name: 'Move up' })).toBeNull();
+    const row = screen.getByTestId('chat-row-loose-old');
+    fireEvent.dragOver(row, { dataTransfer: dataTransfer('loose-new') });
+    expect(row).not.toHaveAttribute('data-drop-position');
+  });
+
+  it("shows each row's age", () => {
+    render(<ChatList />);
+    expect(within(screen.getByTestId('chat-row-loose-new')).getByTestId('row-age')).toHaveTextContent('1m');
+    expect(within(screen.getByTestId('chat-row-old')).getByTestId('row-age')).toHaveTextContent('1mo');
+  });
+});
+
+describe('ChatList search and filter chips', () => {
+  it('finds a chat by its title at once, and adds message-text hits when the server answers', async () => {
+    let resolveSearch!: (results: { chatId: string }[]) => void;
+    mockedSearch.mockImplementation(() => new Promise((resolve) => (resolveSearch = resolve)));
+    useGruntStore.setState({ chats: [makeChat({ id: 'c1', title: 'Sidebar overflow' }), makeChat({ id: 'c2', title: 'Other' }), makeChat({ id: 'c3', title: 'Third' })] });
+    render(<ChatList />);
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'OVERFLOW side' } });
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
+    expect(mockedSearch).toHaveBeenCalledWith('OVERFLOW side');
+
+    await act(async () => resolveSearch([{ chatId: 'c3' }]));
+    expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['c1', 'c3']);
+  });
+
+  it('Unread / working keeps only chats with a status, and the open chat', async () => {
+    const user = userEvent.setup();
+    useGruntStore.setState({
+      chats: [makeChat({ id: 'ready', unread: true }), makeChat({ id: 'quiet' }), makeChat({ id: 'open' })],
+      activeChatId: 'open',
+    });
+    render(<ChatList />);
+    const chip = screen.getByRole('button', { name: 'Unread / working' });
+    expect(chip).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(chip);
+    expect(chip).toHaveAttribute('aria-pressed', 'true');
+    expect(rowIds(`group-${NO_PROJECT_KEY}`).sort()).toEqual(['open', 'ready']);
+
+    await user.click(chip);
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toHaveLength(3);
+  });
+
+  it('says so when the chips match nothing', async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'quiet' })] });
+    render(<ChatList />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Unread / working' }));
+    expect(screen.getByText('No chats match these filters.')).toBeInTheDocument();
+  });
+
+  it('offers the Machine chip only with a paired machine, and keeps the chats that run on the one picked', async () => {
+    const user = userEvent.setup();
+    useGruntStore.setState({ chats: [makeChat({ id: 'here', runsOn: 'node-self' }), makeChat({ id: 'there', runsOn: 'node-lap' })] });
+    render(<ChatList />);
+    expect(screen.queryByRole('combobox', { name: 'Machine' })).toBeNull();
+
+    act(() =>
+      useGruntStore.setState({
+        machines: {
+          self: { id: 'node-self', name: 'Desk', fingerprint: 'f' },
+          listening: { running: true, addresses: [] },
+          peers: [{ nodeId: 'node-lap', name: 'Laptop', status: 'reachable' }],
+        } as unknown as NonNullable<ReturnType<typeof useGruntStore.getState>['machines']>,
+      })
+    );
+    const select = screen.getByRole('combobox', { name: 'Machine' });
+    await user.selectOptions(select, 'Laptop');
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['there']);
+    await user.selectOptions(select, 'Desk (this machine)');
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['here']);
+    await user.selectOptions(select, 'Any machine');
+    expect(rowIds(`group-${NO_PROJECT_KEY}`)).toHaveLength(2);
   });
 });

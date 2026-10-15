@@ -36,6 +36,21 @@ describe('ChatRow', () => {
     expect(screen.queryByTestId('memory-excluded-marker')).toBeNull();
   });
 
+  it("shows the chat's age beside the button, with the date on hover, only when given the time", () => {
+    const now = 1 + 3 * 3_600_000;
+    renderRow({ now });
+    const age = screen.getByTestId('row-age');
+    expect(age).toHaveTextContent('3h');
+    expect(age).toHaveTextContent('Last active 3 h ago');
+    expect(age.title).toBe(`Last active ${new Date(1).toLocaleString()}`);
+    expect(age.closest('button')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    cleanup();
+
+    renderRow();
+    expect(screen.queryByTestId('row-age')).toBeNull();
+  });
+
   it('marks a reply ready in bold with a dot, announced beside the button; no status, no dot', () => {
     renderRow({ status: 'ready' });
     const dot = screen.getByRole('img', { name: 'reply ready' });
