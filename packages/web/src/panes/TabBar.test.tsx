@@ -147,6 +147,15 @@ describe('TabBar (#824)', () => {
     expect(screen.getByRole('tab', { name: 'notes.md' })).toBeInTheDocument();
   });
 
+  it('names the tab strip for any kind of tab, and says what closing each kind leaves behind', () => {
+    useGruntStore.getState().setProjects([{ id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
+    useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: ['a', projectTabId('p1')], panes: ['a'] }, activeChatId: 'a' });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByRole('tablist', { name: 'Open tabs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close tab Chat a' })).toHaveAttribute('title', 'Close tab (the chat stays in the sidebar)');
+    expect(screen.getByRole('button', { name: 'Close tab Alpha' })).toHaveAttribute('title', 'Close tab (the project stays in the sidebar)');
+  });
+
   it('labels a project tab Loading… until the project list arrives', () => {
     useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1')], panes: [projectTabId('p1')] }, activeChatId: projectTabId('p1') });
     render(<TabBar narrow={false} />);
