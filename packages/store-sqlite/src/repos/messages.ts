@@ -319,4 +319,29 @@ export class SqliteMessageRepo implements MessageRepo {
       snippet: r.snippet as string,
     }));
   }
+
+  searchChats(query: string, limit: number): string[] {
+    const match = toFtsMatchExpression(query);
+    if (match === null) return [];
+
+    let rows: Record<string, unknown>[];
+    try {
+      rows = this.db
+        .prepare(
+          `SELECT m.chat_id AS chat_id, MIN(f.rank) AS best
+             FROM message_fts f
+             JOIN message m ON m.rowid = f.rowid
+            WHERE message_fts MATCH ?
+            GROUP BY m.chat_id
+            ORDER BY best, m.chat_id
+            LIMIT ?`
+        )
+        .all(match, limit) as Record<string, unknown>[];
+    } catch (err) {
+      // Same guard as searchText.
+      if (isSqliteError(err)) return [];
+      throw err;
+    }
+    return rows.map((r) => r.chat_id as string);
+  }
 }

@@ -348,6 +348,12 @@ export interface MessageRepo {
   /** Messages with every word of `query` in their text, best match first; `offset` skips that many, to page through. */
   searchText(query: string, limit: number, offset?: number): { messageId: string; chatId: string; snippet: string }[];
   /**
+   * The chats with a message matching `query` (every word in one message, as
+   * `searchText`), each once, best match first. The sidebar's search: unlike
+   * `searchText`, one long chat can't use up the whole `limit`.
+   */
+  searchChats(query: string, limit: number): string[];
+  /**
    * Every message across every chat currently at `status`, in no particular
    * order. Exists for startup reconciliation (see
    * `domain/reconcile.ts`'s `reconcileInterruptedTurns`), which needs to
