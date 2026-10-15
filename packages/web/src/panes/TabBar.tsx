@@ -128,7 +128,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
       }}
       onDrop={(e) => onDrop(e, null)}
     >
-      <div role="tablist" aria-label="Open chats" className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
+      <div role="tablist" aria-label="Open tabs" className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto">
         {tabs.map((t, index) => {
           const pane = paneOf(t.id);
           const active = t.id === activeChatId;
@@ -176,7 +176,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
               <button
                 type="button"
                 aria-label={`Close tab ${t.title}`}
-                title="Close tab (the chat stays in the sidebar)"
+                title={parseProjectTab(t.id) === null ? 'Close tab (the chat stays in the sidebar)' : 'Close tab (the project stays in the sidebar)'}
                 onClick={() => closeTab(t.id)}
                 className="mr-1 shrink-0 rounded px-1 text-xs text-[var(--text-muted)] opacity-60 hover:bg-[var(--bg-sunken)] hover:opacity-100 focus-visible:opacity-100"
               >

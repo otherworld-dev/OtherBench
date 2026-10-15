@@ -15,7 +15,7 @@ vi.mock('./Thread.js', () => ({
 
 vi.mock('../views/ProjectHome.js', () => ({ ProjectHome: ({ projectId }: { projectId: string }) => <div data-testid="project-home-stub">{projectId}</div> }));
 
-vi.mock('../viewer/ItemView.js',() => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
+vi.mock('../viewer/ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
 
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
 import { projectTabId } from '../state/projectTab.js';

@@ -34,15 +34,21 @@ export async function startChat(opts: { projectId?: string; profileId?: string; 
     useGruntStore.getState().upsertChat(chat);
   }
   const parts: Part[] = [{ type: 'text', text: opts.text }];
+  let result: { userMessageId: string; assistantMessageIds: string[] };
   try {
-    const result = await api.turns.create(chat.id, { parentId: null, parts, profileIds: [chat.profileId] });
+    result = await api.turns.create(chat.id, { parentId: null, parts, profileIds: [chat.profileId] });
+  } catch (err) {
+    throw new StartChatError(chat, err);
+  }
+  // The message has gone: a problem from here on mustn't read as a failed send, or a retry would send it twice.
+  try {
     const { registerMessage, profiles } = useGruntStore.getState();
     registerMessage(buildUserStub(chat, result.userMessageId, null, parts));
     // Profiles are always loaded where a chat can be started. Without one the reply still arrives with the chat's sync.
     const profile = profiles.find((p) => p.id === chat.profileId);
     if (profile) for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
-    return chat;
   } catch (err) {
-    throw new StartChatError(chat, err);
+    console.error(`[grunt-web] sent the first message of chat ${chat.id} but couldn't show it yet; it arrives with the chat's sync:`, err);
   }
+  return chat;
 }

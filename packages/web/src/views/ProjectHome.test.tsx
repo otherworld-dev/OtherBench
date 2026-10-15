@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
@@ -108,12 +108,49 @@ describe('ProjectHome', () => {
     expect(screen.getByText('Everyday')).toBeInTheDocument();
   });
 
-  it('cuts long instructions with Show more / Show less', async () => {
+  /** jsdom has no layout: a cut block measures taller inside than it shows. */
+  function measureClamped(cut: boolean): () => void {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute('data-clamp') && cut ? 400 : 0;
+    });
+    const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute('data-clamp') ? 160 : 0;
+    });
+    return () => {
+      scroll.mockRestore();
+      client.mockRestore();
+    };
+  }
+
+  it('offers Show more / Show less only when the text is really cut, going by its rendered height', async () => {
     const user = userEvent.setup();
     useGruntStore.setState({ projects: [project({ instructions: Array.from({ length: 20 }, (_, i) => `Rule ${i}`).join('\n') })] });
+    let restore = measureClamped(false);
+    render(<ProjectHome projectId="p1" />);
+    expect(screen.queryByRole('button', { name: 'Show more' })).toBeNull();
+    restore();
+    cleanup();
+
+    restore = measureClamped(true);
+    useGruntStore.setState({ projects: [project({ instructions: 'Two lines\nthat wrap a lot in a narrow pane' })] });
     render(<ProjectHome projectId="p1" />);
     await user.click(screen.getByRole('button', { name: 'Show more' }));
     expect(screen.getByRole('button', { name: 'Show less' })).toBeInTheDocument();
+    restore();
+  });
+
+  it('opens cut text when focus moves into it, so a hidden link is never focused out of sight', async () => {
+    vi.mocked(api.memory.get).mockResolvedValueOnce({ ...emptyMemory, memory: { ...emptyMemory.memory, body: '## Goals\n\nSee [the notes](https://example.com/notes).\n', updatedAt: Date.now() } });
+    useGruntStore.setState({ projects: [project()] });
+    const restore = measureClamped(true);
+    render(<ProjectHome projectId="p1" />);
+    const link = await screen.findByRole('link', { name: 'the notes' });
+    expect(within(screen.getByRole('region', { name: 'Memory' })).getByRole('button', { name: 'Show more' })).toBeInTheDocument();
+
+    act(() => link.focus());
+
+    expect(within(screen.getByRole('region', { name: 'Memory' })).getByRole('button', { name: 'Show less' })).toBeInTheDocument();
+    restore();
   });
 
   it("shows the memory and who last changed it, or that it couldn't load", async () => {
@@ -191,6 +228,42 @@ describe('ProjectHome', () => {
       await user.type(box(), '{Enter}');
       expect(startChat).toHaveBeenLastCalledWith({ projectId: 'p1', chat: expect.objectContaining({ id: 'c9' }), text: 'hello' });
       await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('c9'));
+    });
+
+    it('puts the new chat in the pane the page was in, keeping focus where it went during a slow send', async () => {
+      const user = userEvent.setup();
+      let resolve!: (c: Chat) => void;
+      vi.mocked(startChat).mockImplementation(() => new Promise((r) => (resolve = r)));
+      useGruntStore.setState({
+        projects: [project()],
+        chats: [chat('b', { projectId: null })],
+        paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: [projectTabId('p1')], panes: [projectTabId('p1'), 'b'], focusedPane: 0 },
+        activeChatId: projectTabId('p1'),
+      });
+      render(<ProjectHome projectId="p1" />);
+
+      await user.type(box(), 'hello{Enter}');
+      act(() => useGruntStore.getState().focusPane(1));
+      await act(async () => resolve(chat('c9')));
+
+      const { paneState, activeChatId } = useGruntStore.getState();
+      expect(paneState.panes).toEqual(['c9', 'b']);
+      expect(activeChatId).toBe('b');
+    });
+
+    it("leaves a pane alone that moved on to something else while the send was going", async () => {
+      const user = userEvent.setup();
+      let resolve!: (c: Chat) => void;
+      vi.mocked(startChat).mockImplementation(() => new Promise((r) => (resolve = r)));
+      useGruntStore.setState({ projects: [project()], chats: [chat('b', { projectId: null })] });
+      render(<ProjectHome projectId="p1" />);
+
+      await user.type(box(), 'hello{Enter}');
+      act(() => useGruntStore.getState().setActiveChatId('b'));
+      await act(async () => resolve(chat('c9')));
+
+      expect(useGruntStore.getState().paneState.panes).toEqual(['b']);
+      expect(useGruntStore.getState().activeChatId).toBe('b');
     });
 
     it('still retries into the chat already made after the page was left and reopened', async () => {

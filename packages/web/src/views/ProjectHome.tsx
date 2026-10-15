@@ -1,4 +1,4 @@
-import { useMemo, useState, type JSX, type KeyboardEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import { hasMemoryContent } from '@grunt/core/domain/memory.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
@@ -16,9 +16,6 @@ import { awayFolderWhere } from './project/folders.js';
 
 const HEADING = 'label-caps mb-1.5 text-[var(--text-muted)]';
 const EMPTY = 'text-sm text-[var(--text-faint)]';
-/** Text longer than this is cut, with Show more. */
-const CLAMP_LINES = 8;
-const CLAMP_CHARS = 600;
 
 /**
  * A project's home page, open as a tab (spec 2026-10-15-project-home-design §3):
@@ -95,8 +92,22 @@ function pendingStart(projectId: string): Chat | undefined {
   return undefined;
 }
 
+/**
+ * Puts a chat started from a project page in the pane showing that page,
+ * leaving focus wherever the user went while it was sending. A pane that has
+ * moved on to something else is left alone: the chat waits in the sidebar.
+ */
+function showInPagePane(projectId: string, chatId: string): void {
+  const { paneState, focusPane, setActiveChatId } = useGruntStore.getState();
+  const at = paneState.panes.indexOf(projectTabId(projectId));
+  if (at === -1) return;
+  const back = paneState.focusedPane;
+  focusPane(at);
+  setActiveChatId(chatId);
+  focusPane(back);
+}
+
 function StartBox({ project }: { project: Project }): JSX.Element {
-  const setActiveChatId = useGruntStore((s) => s.setActiveChatId);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,7 +122,7 @@ function StartBox({ project }: { project: Project }): JSX.Element {
       const chat = await startChat({ projectId: project.id, ...(pending ? { chat: pending } : {}), text: body });
       pendingStarts.delete(project.id);
       setText('');
-      setActiveChatId(chat.id); // this pane has focus (the user typed here), so the chat replaces the page in it
+      showInPagePane(project.id, chat.id);
     } catch (err) {
       if (err instanceof StartChatError) pendingStarts.set(project.id, err.chat.id);
       const cause = err instanceof StartChatError ? err.cause : err;
@@ -241,22 +252,42 @@ function MemoryPanel({ projectId }: { projectId: string }): JSX.Element {
 }
 
 /**
- * Text cut to a few lines with Show more when it runs long: kept as written,
- * or rendered as Markdown (memory, as the Inspector shows it).
+ * Text cut to a few lines, kept as written or rendered as Markdown (memory,
+ * as the Inspector shows it). Show more appears only when the text really is
+ * cut, measured as rendered, since a narrow pane wraps short text long. Focus
+ * moving into the cut part (a link, by Tab) opens it, so nothing is focused
+ * out of sight.
  */
 function Clamped({ text, markdown = false }: { text: string; markdown?: boolean }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const long = text.split('\n').length > CLAMP_LINES || text.length > CLAMP_CHARS;
+  const [cut, setCut] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || open) return;
+    const measure = (): void => setCut(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, open]);
+
+  const clamp = open ? '' : markdown ? 'max-h-48 overflow-hidden' : 'line-clamp-8';
   return (
     <div>
-      {markdown ? (
-        <div className={`text-sm [overflow-wrap:anywhere] ${long && !open ? 'max-h-48 overflow-hidden' : ''}`}>
-          <MarkdownBody text={text} />
-        </div>
-      ) : (
-        <p className={`whitespace-pre-wrap text-sm [overflow-wrap:anywhere] ${long && !open ? 'line-clamp-8' : ''}`}>{text}</p>
-      )}
-      {long && (
+      <div
+        ref={box}
+        data-clamp=""
+        onFocus={() => {
+          if (cut && !open) setOpen(true);
+        }}
+        className={`text-sm [overflow-wrap:anywhere] ${markdown ? '' : 'whitespace-pre-wrap'} ${clamp}`}
+      >
+        {markdown ? <MarkdownBody text={text} /> : text}
+      </div>
+      {(cut || open) && (
         <button type="button" onClick={() => setOpen(!open)} className="mt-1 text-xs text-[var(--accent)] hover:underline">
           {open ? 'Show less' : 'Show more'}
         </button>

@@ -917,11 +917,12 @@ describe('ChatList project menu', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
   });
 
-  it('gives each project group heading an h3 around its arrow and name', () => {
+  it('gives each project group heading an h3 around its name, with the arrow just before it', () => {
     setup();
-    const h3 = within(screen.getByTestId('group-p-a')).getByRole('heading', { level: 3 });
-    expect(within(h3).getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
+    const group = within(screen.getByTestId('group-p-a'));
+    const h3 = group.getByRole('heading', { level: 3 });
     expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('data-heading-main');
+    expect(group.getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
   });
 });
 

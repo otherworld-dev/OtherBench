@@ -149,7 +149,7 @@ test('Open in new tab from any project, two side by side, and tabs and layout su
   // Opening another chat in a new tab keeps the one on show as a tab too, rather than replacing it.
   await nav.getByTestId(`chat-row-${inProject.id}`).locator('[data-row-main]').click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Open in new tab' }).click();
-  const tabs = page.getByRole('tablist', { name: 'Open chats' }).getByRole('tab');
+  const tabs = page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab');
   await expect(tabs).toHaveCount(2);
   await expect(tabs.nth(0)).toContainText(`Admin ${run}`);
   await nav.getByTestId(`chat-row-${loose.id}`).locator('[data-row-main]').click({ button: 'right' });

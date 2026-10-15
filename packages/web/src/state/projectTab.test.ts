@@ -38,6 +38,12 @@ describe('project tabs in the pane state', () => {
     expect(closeTab(state, 'c1')).toMatchObject({ tabs: [tab], panes: ['c1', tab] });
   });
 
+  it('closing a project page that has no tab still empties its pane', () => {
+    const tab = projectTabId('p1');
+    const state = { ...DEFAULT_PANE_STATE, layout: 'columns-2' as const, tabs: ['c1'], panes: ['c1', tab], focusedPane: 1 };
+    expect(closeTab(state, tab)).toMatchObject({ tabs: ['c1'], panes: ['c1', null] });
+  });
+
   it('forgetProject removes the tab and empties its panes, and is a no-op for a project with no tab', () => {
     const tab = projectTabId('p1');
     const state = { ...DEFAULT_PANE_STATE, layout: 'columns-2' as const, tabs: ['c1', tab], panes: [tab, 'c1'], focusedPane: 0 };
@@ -61,5 +67,16 @@ describe('removeProject', () => {
 
     expect(useGruntStore.getState().paneState.tabs).toEqual([]);
     expect(useGruntStore.getState().activeChatId).toBeNull();
+  });
+
+  it('closes the tab of a project deleted elsewhere when the new project list arrives', () => {
+    useGruntStore.getState().setProjects([project('p1'), project('p2')]);
+    useGruntStore.getState().openTab(projectTabId('p1'));
+    useGruntStore.getState().openTab(projectTabId('p2'));
+
+    useGruntStore.getState().setProjects([project('p2')]);
+
+    expect(useGruntStore.getState().paneState.tabs).toEqual([projectTabId('p2')]);
+    expect(useGruntStore.getState().activeChatId).toBe(projectTabId('p2'));
   });
 });

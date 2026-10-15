@@ -145,6 +145,14 @@ describe('ProjectGroup with a page to open', () => {
     expect(onOpenMenu).toHaveBeenCalledWith(expect.anything(), 'context');
   });
 
+  it('keeps the arrow out of the h3, so the heading reads as just the project, and says the name opens its page', () => {
+    renderGroup({ onOpen: vi.fn() });
+    const h3 = screen.getByRole('heading', { level: 3 });
+    expect(h3).toHaveAccessibleName(/^Alpha/);
+    expect(within(h3).queryByRole('button', { name: 'Collapse Alpha' })).toBeNull();
+    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAccessibleDescription('Open the project page');
+  });
+
   it('marks the name current while its page is the focused tab', () => {
     renderGroup({ onOpen: vi.fn(), active: true });
     expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
