@@ -31,6 +31,7 @@ describe('draftFromProject', () => {
       folder: '/srv/alpha',
       folders: [{ entry: { workspace: machine('/srv/notes'), access: 'readwrite' }, display: '/srv/notes', away: false }],
       defaultProfileId: 'profile-1',
+      parentId: '',
     });
   });
 
@@ -60,6 +61,7 @@ describe('createBody', () => {
       folder: ' /home/me/grunt ',
       folders: [{ entry: { path: '/home/me/notes', access: 'read' }, display: '/home/me/notes' }],
       defaultProfileId: '',
+      parentId: '',
     };
     expect(createBody(draft)).toEqual({
       name: 'Grunt',
@@ -70,6 +72,21 @@ describe('createBody', () => {
       folders: [{ path: '/home/me/notes', access: 'read' }],
     });
     expect(createBody({ ...draft, folder: '  ' }).workspaceRoot).toBeNull();
+  });
+
+  it('sends the parent only for a sub-project', () => {
+    expect(createBody({ ...emptyDraft('p-top'), name: 'Desktop' }).parentId).toBe('p-top');
+    expect(createBody({ ...emptyDraft(), name: 'Top' })).not.toHaveProperty('parentId');
+  });
+});
+
+describe('the parent in a patch (spec 2026-10-15-sub-projects-design §5)', () => {
+  it('reads the parent, and sends a change of it, null for top level', () => {
+    const initial = draftFromProject(project({ parentId: 'p-top' }));
+    expect(initial.parentId).toBe('p-top');
+    expect(patchBody(initial, { ...initial, parentId: '' })).toEqual({ parentId: null });
+    expect(patchBody(initial, { ...initial, parentId: 'p-other' })).toEqual({ parentId: 'p-other' });
+    expect(patchBody(initial, { ...initial })).toEqual({});
   });
 });
 

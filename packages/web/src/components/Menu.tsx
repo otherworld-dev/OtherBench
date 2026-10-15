@@ -10,6 +10,8 @@ export interface MenuItem {
   checked?: boolean;
   submenu?: MenuItem[];
   danger?: boolean;
+  /** Set one step in under the item above it: a sub-project under its parent. */
+  indent?: boolean;
 }
 
 /**
@@ -161,7 +163,7 @@ function MenuList({ label, items, isSubmenu, onChoose, onBack, onTab, className,
             }}
             className={`${ITEM_CLASS} ${item.danger ? 'text-[var(--danger)]' : ''}`}
           >
-            <span className="truncate">{item.label}</span>
+            <span className={`truncate${item.indent ? ' pl-3' : ''}`}>{item.label}</span>
             {item.checked && <span aria-hidden="true">✓</span>}
             {item.submenu && <span aria-hidden="true">▸</span>}
           </button>

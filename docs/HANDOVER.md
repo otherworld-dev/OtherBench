@@ -707,11 +707,27 @@ as regression tests.
   filter chips last only for the session. Archive sets `archivedAt` and is reversible from the
   archived section (Unarchive sends `PATCH /chats/:id { "archivedAt": null }`).
   The Inspector's "Project" line links to the sidebar group.
+- **Sub-projects** (spec `docs/superpowers/specs/2026-10-15-sub-projects-design.md`).
+  Migration `027-project-parent` adds `project.parent_id`, deliberately
+  without a foreign key so a sub-project that syncs in before its parent
+  still applies; `ProjectRepo.delete` clears its sub-projects' links instead.
+  One level only: `POST/PATCH /api/projects { parentId }` refuses a missing
+  parent, the project itself, a parent that is a sub-project, and moving a
+  project that has sub-projects. Nothing reads `parentId` directly:
+  `projectParentOf` (`core/domain/projects.ts`) treats a missing, nested or
+  cyclic parent as none, so a bad combination from two machines shows as top
+  level until the next edit. A sub-project's chats get the parent's
+  instructions, memory note (read only; the summariser writes the
+  sub-project's own) and extra folders first, then its own, every turn; a
+  new chat there falls back to the parent's folder and default profile. The
+  sidebar nests a sub-project's group inside its parent's (count and status
+  dot include it); its ⋯ menu has New sub-project… and Move under…, and the
+  project page a Parent select. Elsewhere a sub-project is named
+  "Parent / Child" (`projectDisplayName`).
 - **Gaps.** Reordering projects sends one PATCH per project that moves, not
   one atomic call; on a failure the sidebar reloads the server's order.
-  Projects aren't synced between machines (v2). Projects and chats aren't
-  refreshed across tabs or windows either: another tab's changes show up only
-  after a reload.
+  Projects and chats aren't refreshed across tabs or windows: another tab's
+  changes show up only after a reload.
 
 ## Project memory
 

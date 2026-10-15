@@ -1364,3 +1364,102 @@ describe('ChatList search and filter chips', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toHaveLength(2);
   });
 });
+
+describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', () => {
+  beforeEach(() => {
+    useGruntStore.setState({
+      projects: [
+        makeProject({ id: 'p-g', name: 'Grunt', sortOrder: 0 }),
+        makeProject({ id: 'p-d', name: 'Desktop', parentId: 'p-g', sortOrder: 0 }),
+        makeProject({ id: 'p-s', name: 'Sync', parentId: 'p-g', sortOrder: 1 }),
+        makeProject({ id: 'p-x', name: 'PhD', sortOrder: 1 }),
+      ],
+      chats: [makeChat({ id: 'g1', projectId: 'p-g' }), makeChat({ id: 'd1', projectId: 'p-d', unread: true }), makeChat({ id: 'd2', projectId: 'p-d' })],
+    });
+  });
+
+  it("shows sub-projects inside their parent's group, with the parent counting their chats and showing their status", () => {
+    render(<ChatList />);
+    expect(headingOrder()).toEqual(['p-g', 'p-d', 'p-s', 'p-x', NO_PROJECT_KEY]);
+    const desktop = screen.getByTestId('group-p-d');
+    expect(screen.getByTestId('group-p-g')).toContainElement(desktop);
+    expect(rowIds('group-p-d')).toEqual(['d1', 'd2']);
+    expect(screen.getByTestId('group-count-p-g')).toHaveTextContent('3');
+    expect(screen.getByTestId('group-count-p-d')).toHaveTextContent('2');
+    expect(screen.getByTestId('group-status-p-g')).toBeInTheDocument();
+    // An empty sub-project shows its own "No chats yet", not its parent's.
+    expect(within(screen.getByTestId('group-p-s')).getByText('No chats yet')).toBeInTheDocument();
+  });
+
+  it('collapsing the parent hides its sub-projects too', async () => {
+    render(<ChatList />);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Collapse Grunt' }));
+    expect(screen.queryByTestId('group-p-d')).toBeNull();
+    expect(screen.getByTestId('group-count-p-g')).toHaveTextContent('3');
+  });
+
+  it('dropping a chat on a sub-project heading files it there', async () => {
+    render(<ChatList />);
+    fireEvent.drop(screen.getByTestId('group-heading-p-s'), { dataTransfer: dataTransfer('g1') });
+    expect(mockedPatch).toHaveBeenCalledWith('g1', expect.objectContaining({ projectId: 'p-s' }));
+    await waitFor(() => expect(rowIds('group-p-s')).toEqual(['g1']));
+  });
+
+  it('New sub-project… opens the project page with the parent chosen; a sub-project has none', async () => {
+    const user = userEvent.setup();
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('group-heading-p-g')).getByRole('button', { name: 'Project actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'New sub-project…' }));
+    expect(useGruntStore.getState().projectPage).toMatchObject({ mode: 'create', parentId: 'p-g' });
+
+    await user.click(within(screen.getByTestId('group-heading-p-d')).getByRole('button', { name: 'Project actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'New sub-project…' })).toBeNull();
+  });
+
+  it('Move under… puts a project under another, opening that group; a project with sub-projects has no Move under…', async () => {
+    const user = userEvent.setup();
+    setGroupCollapsed('p-x', true);
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('group-heading-p-g')).getByRole('button', { name: 'Project actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'Move under…' })).toBeNull();
+    await user.keyboard('{Escape}');
+
+    await user.click(within(screen.getByTestId('group-heading-p-d')).getByRole('button', { name: 'Project actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Move under…' }));
+    await user.click(screen.getByRole('menuitemradio', { name: 'PhD' }));
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-d', { parentId: 'p-x' });
+    await waitFor(() => expect(screen.getByTestId('group-p-x')).toContainElement(screen.getByTestId('group-p-d')));
+  });
+
+  it("Move up / Move down move a sub-project among its parent's sub-projects only", async () => {
+    const user = userEvent.setup();
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('group-heading-p-s')).getByRole('button', { name: 'Project actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Move down' })).toBeDisabled();
+    await user.click(screen.getByRole('menuitem', { name: 'Move up' }));
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-s', { sortOrder: 0 });
+    expect(mockedProjectPatch).toHaveBeenCalledWith('p-d', { sortOrder: 1 });
+    expect(mockedProjectPatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('deleting a parent says what happens to its sub-projects', async () => {
+    const user = userEvent.setup();
+    render(<ChatList />);
+    await user.click(within(screen.getByTestId('group-heading-p-g')).getByRole('button', { name: 'Project actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Delete…' }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Its sub-projects become top-level projects.');
+  });
+
+  it("names a pinned chat's sub-project after its parent, and lists sub-projects indented in Move to project…", async () => {
+    useGruntStore.setState({ chats: [makeChat({ id: 'pin', projectId: 'p-d', pinned: true })] });
+    render(<ChatList />);
+    expect(within(screen.getByTestId('chat-row-pin')).getByTestId('row-project-name')).toHaveTextContent('Grunt / Desktop');
+
+    fireEvent.contextMenu(screen.getByTestId('chat-row-pin').querySelector('[data-row-main]')!);
+    await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Move to project…' }));
+    const items = screen.getAllByRole('menuitemradio');
+    expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['Grunt', 'Desktop', 'Sync', 'PhD', 'No project']);
+    // Sub-projects sit one step in.
+    expect(items.map((i) => i.querySelector('.pl-3') !== null)).toEqual([false, true, true, false, false]);
+  });
+});

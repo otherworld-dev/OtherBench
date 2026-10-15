@@ -139,25 +139,26 @@ describe('chatMenuItems', () => {
 });
 
 describe('projectMenuItems', () => {
-  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), schedule: vi.fn(), move: vi.fn(), setSort: vi.fn(), requestDelete: vi.fn() });
+  const h = (): ProjectMenuHandlers => ({ rename: vi.fn(), settings: vi.fn(), schedule: vi.fn(), move: vi.fn(), setSort: vi.fn(), newSubProject: vi.fn(), moveUnder: vi.fn(), requestDelete: vi.fn() });
+  const top = { parentId: null, candidates: [], hasChildren: false };
 
   it('offers the project actions, with Move up disabled first and Move down disabled last', () => {
-    const first = projectMenuItems(0, 3, 'manual', h());
-    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'Schedule…', 'Sort by recent activity', 'Move up', 'Move down', 'Delete…']);
+    const first = projectMenuItems(0, 3, 'manual', h(), top);
+    expect(first.map((i) => i.label)).toEqual(['Rename', 'Project settings…', 'New sub-project…', 'Schedule…', 'Sort by recent activity', 'Move under…', 'Move up', 'Move down', 'Delete…']);
     expect(first.find((i) => i.id === 'up')!.disabled).toBe(true);
     expect(first.find((i) => i.id === 'down')!.disabled).toBe(false);
-    expect(projectMenuItems(2, 3, 'manual', h()).find((i) => i.id === 'down')!.disabled).toBe(true);
+    expect(projectMenuItems(2, 3, 'manual', h(), top).find((i) => i.id === 'down')!.disabled).toBe(true);
   });
 
   it('offers Schedule…, which calls schedule', () => {
     const handlers = h();
-    projectMenuItems(0, 1, 'manual', handlers).find((i) => i.id === 'schedule')!.onSelect!();
+    projectMenuItems(0, 1, 'manual', handlers, top).find((i) => i.id === 'schedule')!.onSelect!();
     expect(handlers.schedule).toHaveBeenCalled();
   });
 
   it('Move up and Move down call move with the direction', () => {
     const handlers = h();
-    const items = projectMenuItems(1, 3, 'manual', handlers);
+    const items = projectMenuItems(1, 3, 'manual', handlers, top);
     items.find((i) => i.id === 'up')!.onSelect!();
     items.find((i) => i.id === 'down')!.onSelect!();
     expect(handlers.move).toHaveBeenNthCalledWith(1, -1);
@@ -166,11 +167,36 @@ describe('projectMenuItems', () => {
 
   it('switches the sort to the other one', () => {
     const handlers = h();
-    projectMenuItems(0, 1, 'manual', handlers).find((i) => i.id === 'sort')!.onSelect!();
-    const recent = projectMenuItems(0, 1, 'recent', handlers).find((i) => i.id === 'sort')!;
+    projectMenuItems(0, 1, 'manual', handlers, top).find((i) => i.id === 'sort')!.onSelect!();
+    const recent = projectMenuItems(0, 1, 'recent', handlers, top).find((i) => i.id === 'sort')!;
     expect(recent.label).toBe('Sort manually');
     recent.onSelect!();
     expect(handlers.setSort).toHaveBeenNthCalledWith(1, 'recent');
     expect(handlers.setSort).toHaveBeenNthCalledWith(2, 'manual');
+  });
+
+  it('offers Move under… with Top level and the other top-level projects, the current one checked', () => {
+    const handlers = h();
+    const items = projectMenuItems(0, 1, 'manual', handlers, { parentId: 'a', candidates: [project('a', 'Alpha'), project('b', 'Beta')], hasChildren: false });
+    const under = items.find((i) => i.id === 'move-under')!;
+    expect(under.submenu!.map((i) => [i.label, i.checked])).toEqual([
+      ['Top level', false],
+      ['Alpha', true],
+      ['Beta', false],
+    ]);
+    under.submenu![0]!.onSelect!();
+    under.submenu![2]!.onSelect!();
+    expect(handlers.moveUnder).toHaveBeenNthCalledWith(1, null);
+    expect(handlers.moveUnder).toHaveBeenNthCalledWith(2, 'b');
+    // A sub-project can't have sub-projects of its own.
+    expect(items.find((i) => i.id === 'new-sub')).toBeUndefined();
+  });
+
+  it('leaves Move under… out for a project with sub-projects, and New sub-project… opens the page', () => {
+    const handlers = h();
+    const items = projectMenuItems(0, 1, 'manual', handlers, { ...top, hasChildren: true });
+    expect(items.find((i) => i.id === 'move-under')).toBeUndefined();
+    items.find((i) => i.id === 'new-sub')!.onSelect!();
+    expect(handlers.newSubProject).toHaveBeenCalled();
   });
 });

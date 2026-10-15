@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
-import { ageBucket, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, titleMatches } from './model.js';
+import { ageBucket, allGroups, bucketRuns, buildSidebar, capRows, moveProjectPatches, moveTarget, placeChatPatches, projectSiblings, titleMatches } from './model.js';
 
 function chat(id: string, over: Partial<Chat> = {}): Chat {
   return { id, title: id, profileId: 'p', headMessageId: null, workspace: null, runsOn: 'node-self', workspaceRoot: null, pinned: false, projectPinned: false, unread: false, archivedAt: null, autoMode: false, projectId: null, memoryCursor: null, memoryExcluded: false, sortOrder: 0, createdAt: 1, updatedAt: 1, ...over };
@@ -277,5 +277,50 @@ describe('titleMatches', () => {
 
   it('matches nothing for a blank query', () => {
     expect(titleMatches('Anything', '   ')).toBe(false);
+  });
+});
+
+describe('buildSidebar with sub-projects (spec 2026-10-15-sub-projects-design §4)', () => {
+  const sub = (id: string, name: string, parentId: string, sortOrder = 0): Project => ({ ...project(id, name, sortOrder), parentId });
+  const projects = [project('g', 'Grunt', 0), sub('d', 'Desktop', 'g', 1), sub('s', 'Sync', 'g', 0), project('p', 'PhD', 1)];
+  const chats = [chat('g1', { projectId: 'g' }), chat('d1', { projectId: 'd' }), chat('d2', { projectId: 'd' }), chat('s1', { projectId: 's', pinned: true }), chat('loose')];
+
+  it('nests sub-projects inside their parent, in order, and counts their chats in the parent', () => {
+    const model = buildSidebar(chats, projects, null);
+    expect(model.groups.map((g) => g.key)).toEqual(['g', 'p', NO_PROJECT_KEY]);
+    const grunt = model.groups[0]!;
+    expect(grunt.children.map((c) => c.key)).toEqual(['s', 'd']);
+    expect(ids(grunt.chats)).toEqual(['g1']);
+    expect(ids(grunt.children[1]!.chats).sort()).toEqual(['d1', 'd2']);
+    // Its own chat, Desktop's two and Sync's pinned one.
+    expect(grunt.total).toBe(4);
+    expect(grunt.children[1]!.total).toBe(2);
+    expect(model.groups[1]!.children).toEqual([]);
+    expect(allGroups(model).map((g) => g.key)).toEqual(['g', 's', 'd', 'p', NO_PROJECT_KEY]);
+  });
+
+  it('shows a sub-project whose parent is missing or nested at the top level', () => {
+    const model = buildSidebar([], [project('a', 'A', 0), sub('orphan', 'Orphan', 'gone', 1), sub('mid', 'Mid', 'a', 0), sub('deep', 'Deep', 'mid', 2)], null);
+    expect(model.groups.map((g) => g.key)).toEqual(['a', 'orphan', 'deep', NO_PROJECT_KEY]);
+    expect(model.groups[0]!.children.map((c) => c.key)).toEqual(['mid']);
+  });
+
+  it('while searching keeps a parent for a match in a sub-project, and drops sub-projects without one', () => {
+    const model = buildSidebar(chats, projects, new Set(['d2']));
+    expect(model.groups.map((g) => g.key)).toEqual(['g']);
+    expect(ids(model.groups[0]!.chats)).toEqual([]);
+    expect(model.groups[0]!.children.map((c) => c.key)).toEqual(['d']);
+    expect(ids(model.groups[0]!.children[0]!.chats)).toEqual(['d2']);
+  });
+
+  it('projectSiblings: top-level projects together, a parent\'s sub-projects together', () => {
+    expect(projectSiblings(projects, 'p').map((p) => p.id)).toEqual(['g', 'p']);
+    expect(projectSiblings(projects, 'd').map((p) => p.id)).toEqual(['s', 'd']);
+    expect(projectSiblings(projects, 'nope')).toEqual([]);
+    // Move up/down among siblings only renumbers them.
+    expect(moveProjectPatches(projectSiblings(projects, 'd'), 'd', -1)).toEqual([
+      { id: 'd', sortOrder: 0 },
+      { id: 's', sortOrder: 1 },
+    ]);
   });
 });

@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type DragEvent, type JSX, type KeyboardEvent } from 'react';
+import { projectDisplayNameById } from '@grunt/core/domain/projects.js';
 import { Menu } from '../components/Menu.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { useChatActivity } from '../state/chatStatus.js';
@@ -69,7 +70,7 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
         if (view) return [{ id, title: itemName(view.item) }];
         // Once the project list has arrived, a project that isn't in it is really gone: keep its tab, closable.
         const projectId = parseProjectTab(id);
-        if (projectId !== null) return [{ id, title: projects.find((p) => p.id === projectId)?.name ?? (projectsLoaded ? 'Missing project' : 'Loading…') }];
+        if (projectId !== null) return [{ id, title: projectDisplayNameById(projects, projectId) ?? (projectsLoaded ? 'Missing project' : 'Loading…') }];
         const chat = chats.find((c) => c.id === id);
         return chat ? [{ id: chat.id, title: chat.title }] : [];
       }),

@@ -1,4 +1,4 @@
-import { compareProjects } from '@grunt/core/domain/projects.js';
+import { compareProjects, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
 import type { GroupSort } from '../../state/sidebarSort.js';
@@ -17,8 +17,30 @@ export interface SidebarGroup {
   pinnedChats: Chat[];
   /** The group's other unpinned chats in sidebar order (`sortOrder`, highest first); only search matches while searching. */
   chats: Chat[];
-  /** Every unarchived chat in the group, pinned ones included (they display under Pinned). */
+  /** Every unarchived chat in the group and its sub-projects, pinned ones included (they display under Pinned). */
   total: number;
+  /**
+   * Its sub-projects' groups, shown inside it after its pinned chats (spec 2026-10-15-sub-projects-design §4), in
+   * `compareProjects` order; while searching, only those with a match. Always empty for a sub-project and No project.
+   */
+  children: SidebarGroup[];
+}
+
+/** Every group, each top-level one followed by its sub-projects: for finding a group or a chat's section by key. */
+export function allGroups(model: SidebarModel): SidebarGroup[] {
+  return model.groups.flatMap((g) => [g, ...g.children]);
+}
+
+/**
+ * The projects that sit beside `projectId` in the sidebar, itself included, in display order: the top-level
+ * projects, or its parent's sub-projects. What Move up / Move down reorder among.
+ */
+export function projectSiblings(projects: Project[], projectId: string): Project[] {
+  const lookup = projectLookup(projects);
+  const self = lookup(projectId);
+  if (!self) return [];
+  const parentId = projectParentOf(self, lookup)?.id ?? null;
+  return [...projects].sort(compareProjects).filter((p) => (projectParentOf(p, lookup)?.id ?? null) === parentId);
 }
 
 export interface SidebarModel {
@@ -111,29 +133,42 @@ export function buildSidebar(
   const keyOf = (c: Chat): string => (c.projectId !== null && known.has(c.projectId) ? c.projectId : NO_PROJECT_KEY);
   const shown = (c: Chat): boolean => matches === null || matches.has(c.id);
 
-  const slots: { key: string; project: Project | null }[] = [
-    ...[...projects].sort(compareProjects).map((p) => ({ key: p.id, project: p })),
-    { key: NO_PROJECT_KEY, project: null },
-  ];
-  const groups = slots.map(({ key, project }) => {
+  const ordered = [...projects].sort(compareProjects);
+  const lookup = projectLookup(projects);
+  const parentOf = (p: Project): string | null => projectParentOf(p, lookup)?.id ?? null;
+  // While searching, a group stays when it or one of its sub-projects has a match.
+  const hasMatch = (g: SidebarGroup): boolean => g.pinnedChats.length + g.chats.length > 0 || g.children.length > 0;
+
+  const group = (key: string, project: Project | null): SidebarGroup => {
     const sort = sortOf(key);
     const members = live.filter((c) => keyOf(c) === key);
     const listed = members.filter((c) => !c.pinned && shown(c)).sort(sort === 'recent' ? byRecent : byOrder);
     // A chat whose project was deleted keeps the flag (the foreign key clears projectId only); in No project it means nothing.
     const pinnedHere = (c: Chat): boolean => project !== null && c.projectPinned;
-    return { key, project, sort, total: members.length, pinnedChats: listed.filter(pinnedHere), chats: listed.filter((c) => !pinnedHere(c)) };
-  });
+    const children = project === null || parentOf(project) !== null ? [] : ordered.filter((p) => parentOf(p) === project.id).map((p) => group(p.id, p));
+    const shownChildren = matches === null ? children : children.filter(hasMatch);
+    return {
+      key,
+      project,
+      sort,
+      total: members.length + children.reduce((sum, c) => sum + c.total, 0),
+      pinnedChats: listed.filter(pinnedHere),
+      chats: listed.filter((c) => !pinnedHere(c)),
+      children: shownChildren,
+    };
+  };
+  const groups = [...ordered.filter((p) => parentOf(p) === null).map((p) => group(p.id, p)), group(NO_PROJECT_KEY, null)];
 
   return {
     pinned: live.filter((c) => c.pinned && shown(c)).sort(byOrder),
-    groups: matches === null ? groups : groups.filter((g) => g.pinnedChats.length + g.chats.length > 0),
+    groups: matches === null ? groups : groups.filter(hasMatch),
     archived: chats.filter((c) => c.archivedAt !== null && shown(c)).sort(byActivity),
   };
 }
 
 /**
  * The `sortOrder` PATCHes that move project `id` one place up (-1) or down
- * (+1) in display order. Renumbers the whole list 0..n-1, so projects that
+ * (+1) among `projects` (its siblings: see `projectSiblings`). Renumbers the whole list 0..n-1, so projects that
  * share a sortOrder can't turn a move into a no-op, and returns only the
  * projects whose sortOrder actually changes, in display order. Empty at
  * either end or for an unknown id.

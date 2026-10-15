@@ -1,11 +1,12 @@
 import { useLayoutEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import { hasMemoryContent } from '@grunt/core/domain/memory.js';
+import { compareProjects, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { MarkdownBody } from '../components/MarkdownBody.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
-import { buildSidebar } from '../panes/sidebar/model.js';
+import { allGroups, buildSidebar } from '../panes/sidebar/model.js';
 import { ApiError } from '../state/api.js';
 import { chatStatus, useChatActivity } from '../state/chatStatus.js';
 import { projectTabId } from '../state/projectTab.js';
@@ -44,12 +45,23 @@ export function ProjectHome({ projectId }: { projectId: string }): JSX.Element {
 
 function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
   const openProjectPage = useGruntStore((s) => s.openProjectPage);
+  const openTab = useGruntStore((s) => s.openTab);
+  const projects = useGruntStore((s) => s.projects);
+  const parent = projectParentOf(project, projectLookup(projects));
   return (
     <div data-testid="project-home" className="@container h-full min-h-0 overflow-y-auto bg-[var(--bg)]">
       <div className="mx-auto max-w-4xl space-y-5 p-6">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-medium">{project.name}</h2>
+            {parent && (
+              <p className="mt-0.5 text-xs text-[var(--text-muted)]">
+                In{' '}
+                <button type="button" data-testid="home-parent" onClick={() => openTab(projectTabId(parent.id))} className="underline hover:text-[var(--text)]">
+                  {parent.name}
+                </button>
+              </p>
+            )}
             {project.description && <p className="mt-1 text-sm text-[var(--text-muted)] [overflow-wrap:anywhere]">{project.description}</p>}
           </div>
           <button type="button" onClick={() => openProjectPage({ mode: 'edit', projectId: project.id })} className="btn shrink-0 px-2.5 py-1">
@@ -57,6 +69,7 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
           </button>
         </div>
         <StartBox project={project} />
+        <SubProjects projectId={project.id} />
         {/* minmax(0, …) tracks and min-w-0 items: a long unbroken word wraps rather than widening the page. */}
         <div className="grid grid-cols-[minmax(0,1fr)] gap-6 @2xl:grid-cols-[minmax(0,1fr)_18rem]">
           <ProjectChats projectId={project.id} />
@@ -160,6 +173,40 @@ function StartBox({ project }: { project: Project }): JSX.Element {
   );
 }
 
+/** A parent project's sub-projects, each opening its own page (spec 2026-10-15-sub-projects-design §6); nothing for one without. */
+function SubProjects({ projectId }: { projectId: string }): JSX.Element | null {
+  const projects = useGruntStore((s) => s.projects);
+  const chats = useGruntStore((s) => s.chats);
+  const openTab = useGruntStore((s) => s.openTab);
+  const lookup = projectLookup(projects);
+  const subs = [...projects].sort(compareProjects).filter((p) => projectParentOf(p, lookup)?.id === projectId);
+  if (subs.length === 0) return null;
+  return (
+    <section data-testid="home-sub-projects" aria-label="Sub-projects" className="min-w-0">
+      <h3 className={HEADING}>Sub-projects</h3>
+      <ul className="flex flex-wrap gap-2">
+        {subs.map((p) => {
+          const count = chats.filter((c) => c.projectId === p.id && c.archivedAt === null).length;
+          return (
+            <li key={p.id}>
+              <button
+                type="button"
+                onClick={() => openTab(projectTabId(p.id))}
+                className="flex items-center gap-2 rounded-sm border border-[var(--border)] bg-[var(--bg-raised)] px-2.5 py-1.5 text-sm hover:bg-[var(--bg-sunken)]"
+              >
+                <span className="truncate">{p.name}</span>
+                <span className="text-xs text-[var(--text-faint)] tabular-nums">
+                  {count} {count === 1 ? 'chat' : 'chats'}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
   const projects = useGruntStore((s) => s.projects);
@@ -167,7 +214,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
   const { waiting, working } = useChatActivity();
   // The sidebar's own grouping, so the page and the sidebar always agree on order.
   const listed = useMemo(() => {
-    const group = buildSidebar(chats, projects, null).groups.find((g) => g.key === projectId);
+    const group = allGroups(buildSidebar(chats, projects, null)).find((g) => g.key === projectId);
     return group ? [...group.pinnedChats, ...group.chats] : [];
   }, [chats, projects, projectId]);
 

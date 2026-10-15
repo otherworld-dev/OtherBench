@@ -268,6 +268,8 @@ export interface CreateProjectBody {
   instructions?: string;
   /** Extra folders for every chat in the project, each new one by path. */
   folders?: FolderEntry[];
+  /** A top-level project to make this a sub-project of (spec 2026-10-15-sub-projects-design). */
+  parentId?: string | null;
 }
 
 export type PatchProjectBody = Partial<{
@@ -279,6 +281,8 @@ export type PatchProjectBody = Partial<{
   folders: FolderEntry[];
   description: string;
   instructions: string;
+  /** Moves it under a top-level project, or (null) back to the top level. */
+  parentId: string | null;
 }>;
 
 /**

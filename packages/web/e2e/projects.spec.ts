@@ -246,3 +246,50 @@ test("a project's instructions, set from Project settings…, reach the model in
   await expect(reply).toContainText(`Always mention ${rule}.`);
   await expect(page.getByLabel('streaming')).toHaveCount(0);
 });
+
+test("a sub-project made from its parent's menu nests in the sidebar, its chats get the parent's instructions, and it outlives its parent", async ({ page, request }) => {
+  const parentName = `E2E Parent ${randomUUID().slice(0, 8)}`;
+  const subName = `E2E Sub ${randomUUID().slice(0, 8)}`;
+  const rule = `rule-${randomUUID().slice(0, 8)}`;
+  const created = await request.post(`${BASE_URL}/api/projects`, { data: { name: parentName, instructions: `Always mention ${rule}.` } });
+  expect(created.ok()).toBeTruthy();
+
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  const parentGroup = nav.getByRole('group', { name: parentName });
+
+  // New sub-project… from the parent's ⋯ menu: the page opens with the parent chosen.
+  await parentGroup.getByRole('button', { name: 'Project actions' }).first().click();
+  await page.getByRole('menuitem', { name: 'New sub-project…' }).click();
+  const projectPage = page.getByTestId('project-view');
+  await expect(projectPage.getByRole('combobox', { name: 'Parent' })).toHaveValue(/.+/);
+  await expect(projectPage.getByTestId('inherited-instructions')).toContainText(rule);
+  await projectPage.getByRole('textbox', { name: 'Name' }).fill(subName);
+  await projectPage.getByRole('button', { name: 'Create project' }).click();
+  await expect(projectPage).toHaveCount(0);
+
+  // It sits inside the parent's group.
+  const subGroup = parentGroup.getByRole('group', { name: subName });
+  await expect(subGroup).toBeVisible();
+
+  // A chat in the sub-project: the mock model echoes its system prompt, which carries the parent's instructions.
+  await subGroup.getByRole('button', { name: `New chat in ${subName}` }).click();
+  await expect(subGroup.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
+  const textbox = page.getByRole('textbox', { name: /message/i });
+  await textbox.fill('#echo-system');
+  await textbox.press('Enter');
+  const reply = page.locator('article[data-role="assistant"] .markdown-body');
+  await expect(reply).toContainText(`Project instructions: ${parentName}`);
+  await expect(reply).toContainText(`Always mention ${rule}.`);
+  await expect(page.getByLabel('streaming')).toHaveCount(0);
+
+  // Deleting the parent leaves the sub-project, now at the top level, with its chat.
+  await parentGroup.getByRole('button', { name: 'Project actions' }).first().click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
+  await expect(page.getByRole('alertdialog')).toContainText('Its sub-projects become top-level projects.');
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
+  await expect(nav.getByRole('group', { name: parentName })).toHaveCount(0);
+  const topLevel = nav.getByRole('group', { name: subName });
+  await expect(topLevel).toBeVisible();
+  await expect(topLevel.locator('[data-testid^="chat-row-"]')).toHaveCount(1);
+});
