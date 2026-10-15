@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEv
 import type { Chat, PublicAttachment } from '@grunt/core/ports/store.js';
 import type { CanonMessage, Part } from '@grunt/core/types/messages.js';
 import { CLAUDE_EFFORTS, isClaudeEffort, type ClaudeEffort, type Connection, type Profile } from '@grunt/core/types/config.js';
+import { promptHistory } from '../lib/promptHistory.js';
 import { api, ApiError } from '../state/api.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
@@ -101,6 +102,10 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
   const storedChat = useGruntStore((s) => s.chats.find((c) => c.id === chat.id));
 
   const [text, setText] = useState('');
+  // Up and Down through this branch's earlier messages: which one is showing, and the draft to put back.
+  const history = useMemo(() => promptHistory(messages, parentId ?? (storedChat ?? chat).headMessageId), [messages, parentId, storedChat, chat]);
+  const [browsing, setBrowsing] = useState<{ index: number; draft: string } | null>(null);
+  const caretTo = useRef<'start' | 'end' | null>(null);
   const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [comparePickerOpen, setComparePickerOpen] = useState(false);
@@ -357,6 +362,7 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
       void api.turns.setHead(chat.id, result.userMessageId).catch((err: unknown) => console.error('[grunt-web] failed to persist head:', err));
 
       setText('');
+      setBrowsing(null);
       setAttachments([]);
       textareaRef.current?.focus();
     } catch (err) {
@@ -372,8 +378,55 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+    } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey && !e.nativeEvent.isComposing) {
+      stepHistory(e);
     }
   }
+
+  /**
+   * Up on the first line shows the previous message, Down on the last line
+   * the next, and Down past the newest puts the draft back. Anywhere else
+   * the keys move the caret as usual. The caret goes to the start after Up
+   * and the end after Down, so pressing again keeps stepping.
+   */
+  function stepHistory(e: KeyboardEvent<HTMLTextAreaElement>): void {
+    const el = e.currentTarget;
+    if (el.selectionStart !== el.selectionEnd) return;
+    if (e.key === 'ArrowUp') {
+      if (el.value.slice(0, el.selectionStart).includes('\n')) return;
+      const index = (browsing?.index ?? -1) + 1;
+      const recalled = history[index];
+      if (recalled === undefined) return;
+      e.preventDefault();
+      setBrowsing({ index, draft: browsing?.draft ?? text });
+      caretTo.current = 'start';
+      setText(recalled);
+    } else {
+      if (!browsing || el.value.slice(el.selectionEnd).includes('\n')) return;
+      e.preventDefault();
+      const index = browsing.index - 1;
+      caretTo.current = 'end';
+      if (index < 0) {
+        setBrowsing(null);
+        setText(browsing.draft);
+      } else {
+        setBrowsing({ ...browsing, index });
+        setText(history[index] ?? '');
+      }
+    }
+  }
+
+  // After a step through the history, put the caret where the next step expects it.
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el || caretTo.current === null) return;
+    const at = caretTo.current === 'start' ? 0 : el.value.length;
+    el.setSelectionRange(at, at);
+    caretTo.current = null;
+  }, [text]);
+
+  // Another chat (or branch) has its own history.
+  useEffect(() => setBrowsing(null), [chat.id, parentId]);
 
   function togglePickerProfile(id: string): void {
     setSelectedProfileIds((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]));
@@ -467,7 +520,10 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
         <textarea
           ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setBrowsing(null); // typing in a recalled message makes it the draft
+          }}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           aria-label="Message"
@@ -477,8 +533,13 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 pb-1 text-sm outline-none"
         />
 
-        {/* One line at any width: the profile name gives way first, everything else keeps its size. */}
-        <div className="flex flex-nowrap items-center gap-1.5 px-2 pb-1.5">
+        {/*
+          One line while it fits: the profile name gives way first, then the plan meter (by the box's width).
+          Past that, Send and the meter drop to a line of their own rather than out of the box, and in a
+          very narrow box the controls wrap too.
+        */}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-1.5">
+          <div className="flex flex-1 items-center gap-1.5 @max-xs:flex-wrap">
           <button
             type="button"
             aria-label="Attach files"
@@ -496,7 +557,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               aria-haspopup="listbox"
               aria-expanded={pickerOpen}
               title={primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : undefined}
-              className="block max-w-full truncate rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
+              // line-clamp with break-all, not truncate: it looks the same, but the name can shrink to a letter, so the
+              // toolbar wraps by its other controls' widths rather than the full name's.
+              className="max-w-full line-clamp-1 break-all rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
             >
               {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
             </button>
@@ -612,6 +675,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                   ))}
               </ul>
             )}
+          </div>
+
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-2">

@@ -58,9 +58,9 @@ describe('PlanUsageMeter', () => {
     render(<PlanUsageMeter busy={false} />);
     await settle();
     const label = screen.getByText('5h', { exact: false, selector: 'span span span' });
-    expect(label).toHaveClass('@max-md:hidden');
+    expect(label).toHaveClass('@max-lg:hidden');
     // In a very narrow composer there's no room for it at all.
-    expect(screen.getByTestId('plan-usage')).toHaveClass('@max-sm:hidden');
+    expect(screen.getByTestId('plan-usage')).toHaveClass('@max-md:hidden');
   });
 
   it('shows nothing when the login has no plan', async () => {
