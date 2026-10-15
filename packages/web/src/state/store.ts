@@ -10,6 +10,7 @@ import {
   closeTab as closePaneTab,
   focusPane as focusPaneIn,
   forgetChat,
+  forgetProject,
   loadPaneState,
   moveTab as movePaneTab,
   openTab as openPaneTab,
@@ -487,6 +488,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set((state) => ({
       projects: state.projects.filter((p) => p.id !== id),
       chats: state.chats.map((c) => (c.projectId === id ? { ...c, projectId: null } : c)),
+      ...withPanes(forgetProject(synced(state), id)),
     })),
 
   messages: {},

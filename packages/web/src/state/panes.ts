@@ -9,6 +9,7 @@
  */
 
 import { parseViewTab } from '../viewer/items.js';
+import { parseProjectTab, projectTabId } from './projectTab.js';
 
 export type Layout = 'single' | 'columns-2' | 'rows-2' | 'columns-3' | 'main-right-2' | 'grid-4';
 
@@ -160,13 +161,16 @@ export function openTab(state: PaneState, chatId: string): PaneState {
 /**
  * Removes the tab. Any pane showing a chat keeps showing it. A viewer tab
  * (Deck #826) has nowhere else to live, so its pane goes back to the file's
- * chat, or empty when another pane already shows that chat.
+ * chat, or empty when another pane already shows that chat. A project page
+ * goes with its tab: its pane is emptied.
  */
 export function closeTab(state: PaneState, chatId: string): PaneState {
   if (!state.tabs.includes(chatId)) return state;
   const tabs = state.tabs.filter((id) => id !== chatId);
+  if (!state.panes.includes(chatId)) return { ...state, tabs };
+  if (parseProjectTab(chatId) !== null) return { ...state, tabs, panes: state.panes.map((id) => (id === chatId ? null : id)) };
   const view = parseViewTab(chatId);
-  if (!view || !state.panes.includes(chatId)) return { ...state, tabs };
+  if (!view) return { ...state, tabs };
   const instead = state.panes.includes(view.chatId) ? null : view.chatId;
   return { ...state, tabs, panes: state.panes.map((id) => (id === chatId ? instead : id)) };
 }
@@ -176,6 +180,13 @@ export function forgetChat(state: PaneState, chatId: string): PaneState {
   const gone = (id: string | null): boolean => id === chatId || (id !== null && parseViewTab(id)?.chatId === chatId);
   if (!state.tabs.some(gone) && !state.panes.some(gone)) return state;
   return { ...state, tabs: state.tabs.filter((id) => !gone(id)), panes: state.panes.map((id) => (gone(id) ? null : id)) };
+}
+
+/** A deleted project's page leaves the tabs and every pane. */
+export function forgetProject(state: PaneState, projectId: string): PaneState {
+  const tab = projectTabId(projectId);
+  if (!state.tabs.includes(tab) && !state.panes.includes(tab)) return state;
+  return { ...state, tabs: state.tabs.filter((id) => id !== tab), panes: state.panes.map((id) => (id === tab ? null : id)) };
 }
 
 /** Moves the tab `chatId` so it sits before `beforeId` (null = the end). */
