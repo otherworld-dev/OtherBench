@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import { SCHEDULE_NAME_MAX, SCHEDULE_PROMPT_MAX, unattendedWarnings, type ScheduleTarget } from '@grunt/core/domain/schedule.js';
+import { projectDisplayNameById } from '@grunt/core/domain/projects.js';
 import type { ScheduleView } from '@grunt/core/ports/store.js';
 import { api } from '../../state/api.js';
 import { useGruntStore } from '../../state/store.js';
@@ -65,7 +66,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
   const targetText =
     draft.targetKind === 'chat'
       ? `Chat: ${chats.find((c) => c.id === draft.chatId)?.title ?? schedule?.targetName ?? ''}`
-      : `New chat each run in ${projects.find((p) => p.id === draft.projectId)?.name ?? schedule?.targetName ?? ''}`;
+      : `New chat each run in ${projectDisplayNameById(projects, draft.projectId) ?? schedule?.targetName ?? ''}`;
 
   async function save(): Promise<void> {
     const problem = draftProblem(draft);
@@ -244,7 +245,7 @@ export function ScheduleEditor({ schedule, prefill, onSaved, onCancel }: Schedul
                 <option value="">Choose a project…</option>
                 {projects.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name}
+                    {projectDisplayNameById(projects, p.id)}
                   </option>
                 ))}
               </select>

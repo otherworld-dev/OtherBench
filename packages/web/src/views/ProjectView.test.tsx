@@ -279,3 +279,40 @@ describe('ProjectView, editing', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ProjectView, sub-projects (spec 2026-10-15-sub-projects-design §5)', () => {
+  it("creates a sub-project with the parent New sub-project… chose, showing what it gets from the parent", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    useGruntStore.setState({
+      projects: [project({ id: 'p-top', name: 'Grunt', instructions: 'British English.', workspaceRoot: '/srv/grunt', defaultProfileId: 'profile-1' })],
+    });
+    vi.mocked(api.projects.create).mockResolvedValue(project({ id: 'p-sub', name: 'Desktop', parentId: 'p-top' }));
+    render(<ProjectView page={{ mode: 'create', parentId: 'p-top' }} onClose={onClose} />);
+
+    expect(screen.getByRole('combobox', { name: 'Parent' })).toHaveValue('p-top');
+    expect(screen.getByTestId('inherited-instructions')).toHaveTextContent('From Grunt, sent before these: British English.');
+    expect(screen.getByTestId('inherited-folder')).toHaveTextContent("Empty, so new chats start in Grunt's folder: /srv/grunt");
+    expect(screen.getByTestId('inherited-profile')).toHaveTextContent("Grunt's default: Everyday");
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Desktop');
+    await user.click(screen.getByRole('button', { name: 'Create project' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(api.projects.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Desktop', parentId: 'p-top' }));
+  });
+
+  it('offers only other top-level projects, and locks the parent of a project that has sub-projects', () => {
+    useGruntStore.setState({
+      projects: [project({ id: 'a', name: 'Alpha' }), project({ id: 'b', name: 'Beta' }), project({ id: 'a1', name: 'Alpha one', parentId: 'a' })],
+    });
+    render(<ProjectView page={{ mode: 'edit', projectId: 'b' }} onClose={vi.fn()} />);
+    const select = screen.getByRole('combobox', { name: 'Parent' });
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['None (top level)', 'Alpha']);
+    expect(select).toBeEnabled();
+    cleanup();
+
+    render(<ProjectView page={{ mode: 'edit', projectId: 'a' }} onClose={vi.fn()} />);
+    expect(screen.getByRole('combobox', { name: 'Parent' })).toBeDisabled();
+    expect(screen.getByText("This project has sub-projects, so it can't go under another one.")).toBeInTheDocument();
+  });
+});

@@ -625,6 +625,28 @@ describe("TurnRunner and the chat's folder (v2 spec §6)", () => {
   });
 });
 
+describe('TurnRunner with a sub-project (spec 2026-10-15-sub-projects-design §3)', () => {
+  it("hands the engine the parent project's extra folders too", async () => {
+    const store = new InMemoryStore('node-laptop');
+    store.locations.create({ id: 'nc', name: 'Nextcloud' });
+    store.locations.setPath({ locationId: 'nc', nodeId: 'node-laptop', path: '/home/adam/Nextcloud' });
+    const nc = (subpath: string) => ({ kind: 'location' as const, locationId: 'nc', subpath });
+    store.projects.create({ id: 'top', name: 'PhD', workspaceRoot: null, defaultProfileId: null, folders: [{ workspace: nc('refs'), access: 'read' }] });
+    store.projects.create({ id: 'sub', name: 'Chapter 2', workspaceRoot: null, defaultProfileId: null, parentId: 'top', folders: [{ workspace: nc('data'), access: 'read' }] });
+    store.chats.create({ id: 'chat-1', title: 'T', profileId: 'profile-1', headMessageId: null, workspace: nc('phd'), pinned: false, archivedAt: null, projectId: 'sub' });
+    const engine = new FakeChatEngine([{ type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' }]);
+    const runner = new TurnRunner(store, engine, { pathExists: () => true });
+
+    const result = await runner.run({ chatId: 'chat-1', parentId: null, userParts: [{ type: 'text', text: 'hi' }], profiles: [makeResolvedProfile()] });
+    await vi.waitFor(() => expect(store.messages.get(result.assistantMessageIds[0]!)!.status).toBe('complete'));
+
+    expect(engine.requests[0]!.folders).toEqual([
+      { root: '/home/adam/Nextcloud/refs', access: 'read' },
+      { root: '/home/adam/Nextcloud/data', access: 'read' },
+    ]);
+  });
+});
+
 describe('TurnRunner names the tools a turn can use', () => {
   const finish: EngineEvent = { type: 'finish', usage: { tokensIn: 0, tokensOut: 0, tokensCached: 0, tokensReasoning: 0 }, finishReason: 'stop' };
   const fs = (access: 'off' | 'read' | 'readwrite') => ({ fs: access, shell: false, mcpServerIds: [], approvalMode: 'always_ask' as const });
@@ -1806,6 +1828,36 @@ describe('project instructions in the system prompt', () => {
     await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
 
     expect(engine.requests[0]!.profile.systemPrompt!.startsWith(`You are helpful.\n\n${HEAD}\n\nBritish English.\nBe brief.\n\n# Project memory: Alpha`)).toBe(true);
+  });
+
+  it("gives a sub-project's chats the parent's instructions and memory first, then the sub-project's own", async () => {
+    const { store, engine, runner } = setup('Parent rule.');
+    store.projects.create({ id: 'sub', name: 'Desktop', workspaceRoot: null, defaultProfileId: null, parentId: 'proj', instructions: 'Child rule.' });
+    store.chats.update('chat-1', { projectId: 'sub' });
+    store.projectMemory.save('proj', NOTE, 'user', null);
+    store.projectMemory.save('sub', NOTE.replace('Use SQLite', 'Use Tauri'), 'user', null);
+
+    await turn(runner, null);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+
+    const prompt = engine.requests[0]!.profile.systemPrompt!;
+    const order = ['# Project instructions: Alpha', 'Parent rule.', '# Project instructions: Desktop', 'Child rule.', '# Project memory: Alpha', 'Use SQLite', '# Project memory: Desktop', 'Use Tauri'];
+    const at = order.map((text) => prompt.indexOf(text));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    // The project index names it after its parent.
+    expect(prompt).toContain('Alpha / Desktop');
+  });
+
+  it("treats a sub-project whose parent is missing as top level: only its own instructions", async () => {
+    const { store, engine, runner } = setup('Parent rule.');
+    store.projects.create({ id: 'sub', name: 'Desktop', workspaceRoot: null, defaultProfileId: null, parentId: 'gone', instructions: 'Child rule.' });
+    store.chats.update('chat-1', { projectId: 'sub' });
+    await turn(runner, null);
+    await vi.waitFor(() => expect(engine.requests).toHaveLength(1));
+    const prompt = engine.requests[0]!.profile.systemPrompt!;
+    expect(prompt).toContain('Child rule.');
+    expect(prompt).not.toContain('Parent rule.');
   });
 
   it('is the whole system prompt when the profile has none and the project has no memory', async () => {

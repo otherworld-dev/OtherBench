@@ -17,6 +17,7 @@ interface ProjectBody {
   folders?: unknown;
   description?: unknown;
   instructions?: unknown;
+  parentId?: unknown;
 }
 
 /** Spec §2: trimmed, 1-80 characters. */
@@ -48,6 +49,25 @@ function optionalDefaultProfileId(container: Container, value: unknown): string 
   if (!profile) throw new HTTPException(400, { message: `"defaultProfileId": profile "${parsed}" not found.` });
   if (profile.archivedAt !== null) {
     throw new HTTPException(400, { message: `"defaultProfileId": profile "${profile.name}" is archived.` });
+  }
+  return parsed;
+}
+
+/**
+ * Spec 2026-10-15-sub-projects-design §2: one level only. The parent must
+ * exist, not be the project itself and not be a sub-project, and a project
+ * that has sub-projects can't go under another. `projectId` is null for a
+ * project being created.
+ */
+function optionalParentId(container: Container, value: unknown, projectId: string | null): string | null | undefined {
+  const parsed = optionalNullableString(value, 'parentId');
+  if (parsed === undefined || parsed === null) return parsed;
+  if (parsed === projectId) throw new HTTPException(400, { message: "A project can't be its own parent." });
+  const parent = container.store.projects.get(parsed);
+  if (!parent) throw new HTTPException(400, { message: `"parentId": project "${parsed}" not found.` });
+  if ((parent.parentId ?? null) !== null) throw new HTTPException(400, { message: "Sub-projects can't have sub-projects of their own." });
+  if (projectId !== null && container.store.projects.list().some((p) => p.parentId === projectId)) {
+    throw new HTTPException(400, { message: "A project with sub-projects can't be moved under another one." });
   }
   return parsed;
 }
@@ -85,10 +105,11 @@ export function projectsRoutes(container: Container): Hono {
     const description = optionalProjectText(body.description, 'description', PROJECT_DESCRIPTION_MAX) ?? '';
     const instructions = optionalProjectText(body.instructions, 'instructions', PROJECT_INSTRUCTIONS_MAX) ?? '';
     const folders = parseFoldersBody(container, body.folders, [], workspace) ?? [];
+    const parentId = optionalParentId(container, body.parentId, null) ?? null;
     // New projects go to the bottom of the sidebar.
     const sortOrder = container.store.projects.list().reduce((max, p) => Math.max(max, p.sortOrder), -1) + 1;
 
-    const created = container.store.projects.create({ id: randomUUID(), name, description, instructions, workspace, folders, defaultProfileId, sortOrder });
+    const created = container.store.projects.create({ id: randomUUID(), name, description, instructions, workspace, folders, defaultProfileId, parentId, sortOrder });
     return c.json(projectView(container, created), 201);
   });
 
@@ -110,6 +131,7 @@ export function projectsRoutes(container: Container): Hono {
     if (description !== undefined) patch.description = description;
     const instructions = optionalProjectText(body.instructions, 'instructions', PROJECT_INSTRUCTIONS_MAX);
     if (instructions !== undefined) patch.instructions = instructions;
+    if (body.parentId !== undefined) patch.parentId = optionalParentId(container, body.parentId, id) ?? null;
     if (body.sortOrder !== undefined) {
       if (typeof body.sortOrder !== 'number' || !Number.isInteger(body.sortOrder)) {
         throw new HTTPException(400, { message: '"sortOrder" must be an integer.' });
@@ -125,7 +147,8 @@ export function projectsRoutes(container: Container): Hono {
     const id = c.req.param('id');
     getProjectOrThrow(container, id);
     // Its chats move to No project (chat.project_id ON DELETE SET NULL);
-    // streaming turns in them are unaffected. That happens inside the
+    // streaming turns in them are unaffected. Its sub-projects become top
+    // level (the project repo clears their parentId). That happens inside the
     // database, past the chat repo, so announce each moved chat here.
     const moved = container.store.chats.list().filter((chat) => chat.projectId === id).map((chat) => chat.id);
     container.store.projects.delete(id);

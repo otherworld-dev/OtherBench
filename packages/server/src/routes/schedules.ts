@@ -13,6 +13,7 @@ import {
   type ScheduleRule,
   type ScheduleTarget,
 } from '@grunt/core/domain/schedule.js';
+import { projectDisplayName } from '@grunt/core/domain/projects.js';
 import type { Schedule, SchedulePatch, ScheduleView } from '@grunt/core/ports/store.js';
 import type { Container } from '../container.js';
 import { ScheduleBusyError } from '../schedule/service.js';
@@ -95,7 +96,7 @@ export function scheduleView(container: Container, s: Schedule): ScheduleView {
   const hasFolder = (chat?.workspace ?? project?.workspace ?? null) !== null;
   return {
     ...s,
-    targetName: chat?.title ?? project?.name ?? '',
+    targetName: chat?.title ?? (project ? projectDisplayName(project, (id) => store.projects.get(id)) : null) ?? '',
     describe: describeRule(s.rule),
     running: container.schedules?.isRunning(s.id) ?? false,
     activeRun: container.schedules?.activeRun(s.id) ?? null,

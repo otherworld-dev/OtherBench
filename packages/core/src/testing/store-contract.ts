@@ -373,6 +373,27 @@ export function runStoreContract(
         expect(() => store.projects.delete('proj-a')).not.toThrow();
       });
 
+      it('parentId defaults to null, round-trips, and may name a project that is not here (no foreign key)', () => {
+        expect(store.projects.create(makeProjectInput({ id: 'top' })).parentId).toBeNull();
+        expect(store.projects.create(makeProjectInput({ id: 'child', parentId: 'top' })).parentId).toBe('top');
+        expect(store.projects.get('child')?.parentId).toBe('top');
+        // A synced sub-project can arrive before its parent.
+        expect(store.projects.create(makeProjectInput({ id: 'early', parentId: 'not-yet' })).parentId).toBe('not-yet');
+        expect(store.projects.update('child', { parentId: null }).parentId).toBeNull();
+      });
+
+      it("deleting a project makes its sub-projects top level and leaves other projects' alone", () => {
+        store.projects.create(makeProjectInput({ id: 'top' }));
+        store.projects.create(makeProjectInput({ id: 'other' }));
+        store.projects.create(makeProjectInput({ id: 'child', parentId: 'top' }));
+        store.projects.create(makeProjectInput({ id: 'cousin', parentId: 'other' }));
+
+        store.projects.delete('top');
+
+        expect(store.projects.get('child')?.parentId).toBeNull();
+        expect(store.projects.get('cousin')?.parentId).toBe('other');
+      });
+
       it('description and instructions default to empty and round-trip through create and update', () => {
         expect(store.projects.create(makeProjectInput({ id: 'proj-a' }))).toMatchObject({ description: '', instructions: '' });
 

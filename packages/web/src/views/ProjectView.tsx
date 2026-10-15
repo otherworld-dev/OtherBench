@@ -1,5 +1,6 @@
 import { useRef, useState, type JSX, type KeyboardEvent } from 'react';
-import { PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX } from '@grunt/core/domain/projects.js';
+import { compareProjects, PROJECT_DESCRIPTION_MAX, PROJECT_INSTRUCTIONS_MAX, PROJECT_NAME_MAX, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
+import { folderPath } from '../components/FolderList.js';
 import type { Project } from '@grunt/core/ports/store.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { isDesktop, pickFolder } from '../desktop/bridge.js';
@@ -28,7 +29,8 @@ export interface ProjectViewProps {
 export function ProjectView({ page, onClose }: ProjectViewProps): JSX.Element {
   const project = useGruntStore((s) => (page.mode === 'edit' ? (s.projects.find((p) => p.id === page.projectId) ?? null) : null));
   if (page.mode === 'edit' && !project) return <MissingProject onClose={onClose} />;
-  return <ProjectForm project={project} returnFocus={page.returnFocus} onClose={onClose} />;
+  const parentId = page.mode === 'create' ? page.parentId : undefined;
+  return <ProjectForm project={project} parentId={parentId} returnFocus={page.returnFocus} onClose={onClose} />;
 }
 
 /**
@@ -56,16 +58,26 @@ function MissingProject({ onClose }: { onClose: () => void }): JSX.Element {
   );
 }
 
+/** A value a sub-project's chats get from its parent, shown under the field it adds to or stands in for. */
+function Inherited({ testId, children }: { testId: string; children: string }): JSX.Element {
+  return (
+    <p data-testid={testId} className="mt-1 text-xs whitespace-pre-wrap text-[var(--text-faint)]">
+      {children}
+    </p>
+  );
+}
+
 /**
- * `project` null: creating one. The form starts from the project as the page
- * opened on it. `returnFocus` is where focus goes on close when the element
- * that opened the page is gone.
+ * `project` null: creating one, as a sub-project of `parentId` when given. The
+ * form starts from the project as the page opened on it. `returnFocus` is
+ * where focus goes on close when the element that opened the page is gone.
  */
-function ProjectForm({ project, returnFocus, onClose }: { project: Project | null; returnFocus?: string; onClose: () => void }): JSX.Element {
+function ProjectForm({ project, parentId, returnFocus, onClose }: { project: Project | null; parentId?: string | undefined; returnFocus?: string | undefined; onClose: () => void }): JSX.Element {
   const profiles = useGruntStore((s) => s.profiles);
+  const projects = useGruntStore((s) => s.projects);
   const upsertProject = useGruntStore((s) => s.upsertProject);
   const serverPlatform = useServerPlatform();
-  const [initial] = useState<ProjectDraft>(() => (project ? draftFromProject(project) : emptyDraft()));
+  const [initial] = useState<ProjectDraft>(() => (project ? draftFromProject(project) : emptyDraft(parentId)));
   const [draft, setDraft] = useState<ProjectDraft>(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +94,14 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
   const live = profiles.filter((p) => p.archivedAt === null);
   const instructionsOver = draft.instructions.length > PROJECT_INSTRUCTIONS_MAX;
   const awayNote = awayFolderNote(project);
+  // Spec 2026-10-15-sub-projects-design §5: any other top-level project can be the parent, and one with
+  // sub-projects of its own (as the server counts them) can't go under another.
+  const lookup = projectLookup(projects);
+  const candidates = [...projects].sort(compareProjects).filter((p) => p.id !== project?.id && projectParentOf(p, lookup) === null);
+  const hasChildren = project !== null && projects.some((p) => p.parentId === project.id);
+  const parent = candidates.find((p) => p.id === draft.parentId) ?? null;
+  const parentProfile = parent?.defaultProfileId ? live.find((p) => p.id === parent.defaultProfileId) : undefined;
+  const parentFolders = (parent?.folderViews ?? []).map(folderPath);
 
   function set<K extends keyof ProjectDraft>(key: K, value: ProjectDraft[K]): void {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -177,6 +197,30 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
               <input ref={nameInput} id="project-name" autoFocus value={draft.name} maxLength={PROJECT_NAME_MAX} onChange={(e) => set('name', e.target.value)} className={FIELD} />
             </div>
             <div>
+              <label htmlFor="project-parent" className={LABEL}>
+                Parent
+              </label>
+              <select
+                id="project-parent"
+                value={parent ? draft.parentId : ''}
+                disabled={hasChildren}
+                onChange={(e) => set('parentId', e.target.value)}
+                className={FIELD}
+              >
+                <option value="">None (top level)</option>
+                {candidates.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <p className={HINT}>
+                {hasChildren
+                  ? "This project has sub-projects, so it can't go under another one."
+                  : "A sub-project's chats also get its parent's instructions, folders and memory."}
+              </p>
+            </div>
+            <div>
               <label htmlFor="project-description" className={LABEL}>
                 Description
               </label>
@@ -208,6 +252,9 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
                   {draft.instructions.length.toLocaleString('en-US')} / {PROJECT_INSTRUCTIONS_MAX.toLocaleString('en-US')}
                 </span>
               </div>
+              {parent && parent.instructions.trim() !== '' && (
+                <Inherited testId="inherited-instructions">{`From ${parent.name}, sent before these:\n${parent.instructions.trim()}`}</Inherited>
+              )}
             </div>
           </div>
 
@@ -250,11 +297,15 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
                   </p>
                 )}
                 <p className={HINT}>New chats in this project start here. Existing chats keep theirs.</p>
+                {parent?.workspaceRoot && draft.folder.trim() === '' && (
+                  <Inherited testId="inherited-folder">{`Empty, so new chats start in ${parent.name}'s folder: ${parent.workspaceRoot}`}</Inherited>
+                )}
               </div>
               <div>
                 <span className={LABEL}>Other folders</span>
                 <FolderDraftList folders={draft.folders} onChange={(folders) => set('folders', folders)} canPick={canPick} />
                 <p className={HINT}>Every chat in this project can also use these.</p>
+                {parent && parentFolders.length > 0 && <Inherited testId="inherited-folders">{`Also from ${parent.name}: ${parentFolders.join(', ')}`}</Inherited>}
               </div>
             </div>
 
@@ -277,6 +328,9 @@ function ProjectForm({ project, returnFocus, onClose }: { project: Project | nul
                   ))}
                 </select>
                 <p className={HINT}>New chats in this project start with it.</p>
+                {parentProfile && draft.defaultProfileId === '' && parent && (
+                  <Inherited testId="inherited-profile">{`App default here means ${parent.name}'s default: ${parentProfile.name}`}</Inherited>
+                )}
               </div>
             </div>
           </div>

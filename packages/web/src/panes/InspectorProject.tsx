@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
+import { projectDisplayName, projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
 import type { Chat } from '@grunt/core/ports/store.js';
-import { revealSidebarGroup } from '../state/sidebarGroups.js';
+import { revealSidebarGroup, setGroupCollapsed } from '../state/sidebarGroups.js';
 import { useGruntStore } from '../state/store.js';
 
 /**
@@ -13,6 +14,7 @@ import { useGruntStore } from '../state/store.js';
 export function InspectorProject({ chat }: { chat: Chat }): JSX.Element {
   const project = useGruntStore((s) => (chat.projectId === null ? null : (s.projects.find((p) => p.id === chat.projectId) ?? null)));
   const openProjectPage = useGruntStore((s) => s.openProjectPage);
+  const projects = useGruntStore((s) => s.projects);
 
   if (!project) {
     return (
@@ -27,11 +29,16 @@ export function InspectorProject({ chat }: { chat: Chat }): JSX.Element {
         <button
           type="button"
           data-testid="inspector-project"
-          onClick={() => revealSidebarGroup(project.id)}
+          onClick={() => {
+            // A sub-project's group sits inside its parent's, which has to be open for it to show.
+            const parent = projectParentOf(project, projectLookup(projects));
+            if (parent) setGroupCollapsed(parent.id, false);
+            revealSidebarGroup(project.id);
+          }}
           title="Show in the sidebar"
           className="min-w-0 flex-1 truncate text-left text-sm text-[var(--accent)] underline-offset-2 hover:underline"
         >
-          {project.name}
+          {projectDisplayName(project, projectLookup(projects))}
         </button>
         <button
           type="button"

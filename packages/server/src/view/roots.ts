@@ -2,6 +2,7 @@ import { constants as fsConstants, existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { HTTPException } from 'hono/http-exception';
 import { containPath, containPathIn, PathEscapeError } from '@grunt/core/domain/paths.js';
+import { projectParentOf } from '@grunt/core/domain/projects.js';
 import { mergeFolders, resolveFolders, resolveWorkspace } from '@grunt/core/domain/workspace.js';
 import type { Chat } from '@grunt/core/ports/store.js';
 import type { ResolvedFolder } from '@grunt/core/types/workspace.js';
@@ -26,7 +27,9 @@ export function chatRoots(container: Container, chat: Chat): ChatRoots {
   const status = resolveWorkspace(chat.workspace, self, paths, exists);
   const workspaceRoot = status.status === 'ok' ? status.root : null;
   const project = chat.projectId ? container.store.projects.get(chat.projectId) : null;
-  const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(project?.folders, chat.folders), self, paths, exists, workspaceRoot);
+  // A sub-project's parent's folders open here too, as its chats' turns can use them (spec 2026-10-15-sub-projects-design §3).
+  const parent = project ? projectParentOf(project, (id) => container.store.projects.get(id)) : null;
+  const folders = workspaceRoot === null ? [] : resolveFolders(mergeFolders(parent?.folders, project?.folders, chat.folders), self, paths, exists, workspaceRoot);
   const nodeId = status.status === 'unresolved' && status.reason === 'other-machine' ? status.hint?.nodeId : undefined;
   const elsewhere = nodeId ? (container.store.peers.get(nodeId)?.name ?? 'another machine') : null;
   return { workspaceRoot, folders, elsewhere };

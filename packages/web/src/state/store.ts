@@ -39,7 +39,7 @@ export type StreamConnectionStatus = 'idle' | 'connecting' | 'open' | 'reconnect
  * `returnFocus` is a selector to focus on close when whatever opened the page
  * is gone by then (a menu item).
  */
-export type ProjectPageState = { mode: 'create'; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
+export type ProjectPageState = { mode: 'create'; parentId?: string; returnFocus?: string } | { mode: 'edit'; projectId: string; returnFocus?: string };
 
 /** The Scheduled overlay; `prefill` opens the editor for a new schedule on that chat or project. */
 export type SchedulesPageState = { prefill?: ScheduleTarget };
@@ -495,7 +495,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
     }),
   removeProject: (id) =>
     set((state) => ({
-      projects: state.projects.filter((p) => p.id !== id),
+      // Its sub-projects become top level, as on the server.
+      projects: state.projects.filter((p) => p.id !== id).map((p) => (p.parentId === id ? { ...p, parentId: null } : p)),
       chats: state.chats.map((c) => (c.projectId === id ? { ...c, projectId: null } : c)),
       ...withPanes(forgetProject(synced(state), id)),
     })),

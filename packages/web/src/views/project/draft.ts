@@ -26,10 +26,12 @@ export interface ProjectDraft {
   folders: DraftFolder[];
   /** '' is App default. */
   defaultProfileId: string;
+  /** The top-level project this is a sub-project of; '' is none (spec 2026-10-15-sub-projects-design §5). */
+  parentId: string;
 }
 
-export function emptyDraft(): ProjectDraft {
-  return { name: '', description: '', instructions: '', folder: '', folders: [], defaultProfileId: '' };
+export function emptyDraft(parentId = ''): ProjectDraft {
+  return { name: '', description: '', instructions: '', folder: '', folders: [], defaultProfileId: '', parentId };
 }
 
 export function draftFromProject(project: Project): ProjectDraft {
@@ -40,6 +42,7 @@ export function draftFromProject(project: Project): ProjectDraft {
     folder: project.workspaceRoot ?? '',
     folders: (project.folderViews ?? []).map((v) => ({ entry: { workspace: v.workspace, access: v.access }, display: folderPath(v), away: v.status.status !== 'ok' })),
     defaultProfileId: project.defaultProfileId ?? '',
+    parentId: project.parentId ?? '',
   };
 }
 
@@ -75,6 +78,7 @@ export function createBody(draft: ProjectDraft): CreateProjectBody {
     workspaceRoot: folderValue(draft.folder),
     defaultProfileId: draft.defaultProfileId === '' ? null : draft.defaultProfileId,
     folders: entries(draft.folders),
+    ...(draft.parentId === '' ? {} : { parentId: draft.parentId }),
   };
 }
 
@@ -87,5 +91,6 @@ export function patchBody(initial: ProjectDraft, draft: ProjectDraft): PatchProj
   if (folderValue(draft.folder) !== folderValue(initial.folder)) body.workspaceRoot = folderValue(draft.folder);
   if (draft.defaultProfileId !== initial.defaultProfileId) body.defaultProfileId = draft.defaultProfileId === '' ? null : draft.defaultProfileId;
   if (JSON.stringify(entries(draft.folders)) !== JSON.stringify(entries(initial.folders))) body.folders = entries(draft.folders);
+  if (draft.parentId !== initial.parentId) body.parentId = draft.parentId === '' ? null : draft.parentId;
   return body;
 }

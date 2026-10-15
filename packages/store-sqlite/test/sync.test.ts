@@ -337,6 +337,26 @@ describe('sync (Task 50)', () => {
     expect(b.store.chats.get('c')!.folders).toBeUndefined();
   });
 
+  it('a sub-project that arrives before its parent keeps its parent, and a deleted parent leaves it top level on both machines', () => {
+    const a = node('a');
+    const b = node('b');
+    a.store.projects.create({ id: 'top', name: 'Grunt', workspace: null, defaultProfileId: null });
+    a.store.projects.create({ id: 'sub', name: 'Desktop', workspace: null, defaultProfileId: null, parentId: 'top' });
+
+    // The child's row first: parent_id has no foreign key, so it applies and keeps the link.
+    const rows = a.store.sync.changesSince(0, 1000).rows.filter((r) => r.tbl === 'project');
+    b.store.sync.apply([...rows].reverse());
+    expect(b.store.projects.get('sub')?.parentId).toBe('top');
+    expect(b.store.projects.get('top')).not.toBeNull();
+
+    const s = pair(a, b);
+    s.both();
+    a.store.projects.delete('top');
+    s.both();
+    expect(b.store.projects.get('top')).toBeNull();
+    for (const n of [a, b]) expect(n.store.projects.get('sub')?.parentId).toBeNull();
+  });
+
   it('global memory travels: About you set on one machine and the note on the other both stand, and note history stays home', () => {
     const a = node('a');
     const b = node('b');

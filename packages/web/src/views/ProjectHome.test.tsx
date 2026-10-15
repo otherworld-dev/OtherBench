@@ -299,3 +299,33 @@ describe('ProjectHome', () => {
     });
   });
 });
+
+describe('ProjectHome with sub-projects (spec 2026-10-15-sub-projects-design §6)', () => {
+  it("a parent lists its sub-projects with their chat counts, each opening its page", async () => {
+    useGruntStore.setState({
+      projects: [project(), project({ id: 'p-sub', name: 'Desktop', parentId: 'p1' }), project({ id: 'p-other', name: 'Other' })],
+      chats: [chat('own'), chat('s1', { projectId: 'p-sub' }), chat('s2', { projectId: 'p-sub' })],
+    });
+    render(<ProjectHome projectId="p1" />);
+    const list = screen.getByRole('region', { name: 'Sub-projects' });
+    expect(within(list).getByRole('button', { name: /Desktop/ })).toHaveTextContent('2 chats');
+    expect(within(list).queryByText('Other')).toBeNull();
+    // Its own chats only: the sub-project's are on the sub-project's page.
+    expect(within(screen.getByTestId('home-chats')).getAllByRole('listitem')).toHaveLength(1);
+
+    await userEvent.setup().click(within(list).getByRole('button', { name: /Desktop/ }));
+    expect(useGruntStore.getState().paneState.tabs).toContain(projectTabId('p-sub'));
+  });
+
+  it("a sub-project's page lists its own chats and links to its parent; a project without sub-projects has no list", async () => {
+    useGruntStore.setState({
+      projects: [project(), project({ id: 'p-sub', name: 'Desktop', parentId: 'p1' })],
+      chats: [chat('s1', { projectId: 'p-sub' })],
+    });
+    render(<ProjectHome projectId="p-sub" />);
+    expect(screen.queryByRole('region', { name: 'Sub-projects' })).toBeNull();
+    expect(within(screen.getByTestId('home-chats')).getAllByRole('listitem')).toHaveLength(1);
+    await userEvent.setup().click(screen.getByTestId('home-parent'));
+    expect(useGruntStore.getState().paneState.tabs).toContain(projectTabId('p1'));
+  });
+});

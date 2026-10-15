@@ -25,6 +25,7 @@ import { MIGRATION_023_SCHEDULES } from './023-schedules.js';
 import { MIGRATION_024_ARTIFACT_VERSION_LIVE } from './024-artifact-version-live.js';
 import { MIGRATION_025_MCP_OAUTH } from './025-mcp-oauth.js';
 import { MIGRATION_026_USAGE_SUBAGENT } from './026-usage-subagent.js';
+import { MIGRATION_027_PROJECT_PARENT } from './027-project-parent.js';
 import type { Migration } from './types.js';
 
 export type { Migration } from './types.js';
@@ -56,6 +57,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 24, name: '024-artifact-version-live', sql: MIGRATION_024_ARTIFACT_VERSION_LIVE },
   MIGRATION_025_MCP_OAUTH,
   MIGRATION_026_USAGE_SUBAGENT,
+  MIGRATION_027_PROJECT_PARENT,
 ];
 
 /** The schema version a fully migrated database has: compared between machines before syncing. */

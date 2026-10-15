@@ -1,4 +1,5 @@
 import { Fragment, useState, type DragEvent, type JSX } from 'react';
+import { projectDisplayNameById } from '@grunt/core/domain/projects.js';
 import { defaultSizes, LAYOUT_TREES, splitKey, type Layout, type SplitNode } from '../state/panes.js';
 import { isChatTab, parseProjectTab } from '../state/projectTab.js';
 import { useGruntStore } from '../state/store.js';
@@ -26,7 +27,7 @@ function Pane({ index, chatId, focused, multi, maximised }: PaneProps): JSX.Elem
   const view = isViewTab(chatId) ? parseViewTab(chatId) : null;
   const projectId = parseProjectTab(chatId);
   const projectName = useGruntStore((s) =>
-    projectId === null ? null : (s.projects.find((p) => p.id === projectId)?.name ?? (s.projectsLoaded ? 'Missing project' : 'Loading…'))
+    projectId === null ? null : (projectDisplayNameById(s.projects, projectId) ?? (s.projectsLoaded ? 'Missing project' : 'Loading…'))
   );
   const chat = useGruntStore((s) => (isChatTab(chatId) ? (s.chats.find((c) => c.id === chatId) ?? null) : null));
   const focusPane = useGruntStore((s) => s.focusPane);

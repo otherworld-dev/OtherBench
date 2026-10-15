@@ -1,3 +1,4 @@
+import { projectLookup, projectParentOf } from '@grunt/core/domain/projects.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import type { MenuItem } from '../../components/Menu.js';
 import { NO_PROJECT_KEY } from '../../state/sidebarGroups.js';
@@ -29,7 +30,7 @@ export interface ChatMenuHandlers {
 
 /**
  * The chat row menu (spec §3 "Chat context menu", plus project memory's toggle). `orderedProjects` must be
- * in display order. A chat whose project isn't in the list counts as being in
+ * in display order, each sub-project after its parent, where it is listed indented. A chat whose project isn't in the list counts as being in
  * No project, matching where the sidebar shows it. An archived chat gets
  * "Unarchive" in place of "Archive" (controller ruling R2). `position` is the
  * chat's place in its sidebar section; without it (archived, or while
@@ -43,6 +44,7 @@ export function chatMenuItems(
   isTab = false
 ): MenuItem[] {
   const inListedProject = chat.projectId !== null && orderedProjects.some((p) => p.id === chat.projectId);
+  const lookup = projectLookup(orderedProjects);
   const archived = chat.archivedAt !== null;
   // Memory: every chat feeds the global note, and a chat in a project its project's note too
   // (spec 2026-10-08-global-memory-design); one switch covers both.
@@ -70,7 +72,13 @@ export function chatMenuItems(
       id: 'move',
       label: 'Move to project…',
       submenu: [
-        ...orderedProjects.map((p) => ({ id: p.id, label: p.name, checked: chat.projectId === p.id, onSelect: () => h.moveTo(p.id) })),
+        ...orderedProjects.map((p) => ({
+          id: p.id,
+          label: p.name,
+          checked: chat.projectId === p.id,
+          ...(projectParentOf(p, lookup) ? { indent: true } : {}),
+          onSelect: () => h.moveTo(p.id),
+        })),
         { id: NO_PROJECT_KEY, label: 'No project', checked: !inListedProject, onSelect: () => h.moveTo(null) },
         { id: 'new-project', label: 'New project…', onSelect: h.moveToNewProject },
       ],
@@ -101,7 +109,22 @@ export interface ProjectMenuHandlers {
   move(dir: -1 | 1): void;
   /** Sets the group's sort to the given one (the opposite of the sort the menu was built with). */
   setSort(sort: GroupSort): void;
+  /** Opens the project page to create a sub-project of this one. */
+  newSubProject(): void;
+  /** Puts the project under a top-level project, or (null) back at the top level. */
+  moveUnder(parentId: string | null): void;
   requestDelete(): void;
+}
+
+/**
+ * Where a project sits (spec 2026-10-15-sub-projects-design §5): `parentId` is its effective parent,
+ * `candidates` the top-level projects it could go under (itself left out), in display order, and
+ * `hasChildren` whether it has sub-projects (then it can't go under another, and Move under… is left out).
+ */
+export interface ProjectNesting {
+  parentId: string | null;
+  candidates: Project[];
+  hasChildren: boolean;
 }
 
 /** The item that switches a group between hand order and last-activity order; No project's menu is only this. */
@@ -111,13 +134,31 @@ export function groupSortItem(sort: GroupSort, setSort: (sort: GroupSort) => voi
     : { id: 'sort', label: 'Sort by recent activity', onSelect: () => setSort('recent') };
 }
 
-/** A project heading's ⋯ menu (spec §3). `index` of `count` is its display position; Move up/down disable at the ends. */
-export function projectMenuItems(index: number, count: number, sort: GroupSort, h: ProjectMenuHandlers): MenuItem[] {
+/**
+ * A project heading's ⋯ menu (spec §3). `index` of `count` is its position among its siblings; Move up/down
+ * disable at the ends. A top-level project offers New sub-project…; any project without sub-projects offers
+ * Move under….
+ */
+export function projectMenuItems(index: number, count: number, sort: GroupSort, h: ProjectMenuHandlers, nesting: ProjectNesting): MenuItem[] {
+  const moveUnder: MenuItem[] = nesting.hasChildren
+    ? []
+    : [
+        {
+          id: 'move-under',
+          label: 'Move under…',
+          submenu: [
+            { id: 'top-level', label: 'Top level', checked: nesting.parentId === null, onSelect: () => h.moveUnder(null) },
+            ...nesting.candidates.map((p) => ({ id: p.id, label: p.name, checked: nesting.parentId === p.id, onSelect: () => h.moveUnder(p.id) })),
+          ],
+        },
+      ];
   return [
     { id: 'rename', label: 'Rename', onSelect: h.rename },
     { id: 'settings', label: 'Project settings…', onSelect: h.settings },
+    ...(nesting.parentId === null ? [{ id: 'new-sub', label: 'New sub-project…', onSelect: h.newSubProject }] : []),
     { id: 'schedule', label: 'Schedule…', onSelect: h.schedule },
     groupSortItem(sort, h.setSort),
+    ...moveUnder,
     { id: 'up', label: 'Move up', disabled: index <= 0, onSelect: () => h.move(-1) },
     { id: 'down', label: 'Move down', disabled: index >= count - 1, onSelect: () => h.move(1) },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: h.requestDelete },
