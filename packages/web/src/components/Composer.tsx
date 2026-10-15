@@ -477,8 +477,13 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
           className="block max-h-48 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2 pb-1 text-sm outline-none"
         />
 
-        {/* One line at any width: the profile name gives way first, everything else keeps its size. */}
-        <div className="flex flex-nowrap items-center gap-1.5 px-2 pb-1.5">
+        {/*
+          One line while it fits: the profile name gives way first, then the plan meter (by the box's width).
+          Past that, Send and the meter drop to a line of their own rather than out of the box, and in a
+          very narrow box the controls wrap too.
+        */}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 px-2 pb-1.5">
+          <div className="flex flex-1 items-center gap-1.5 @max-xs:flex-wrap">
           <button
             type="button"
             aria-label="Attach files"
@@ -496,7 +501,9 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
               aria-haspopup="listbox"
               aria-expanded={pickerOpen}
               title={primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : undefined}
-              className="block max-w-full truncate rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
+              // line-clamp with break-all, not truncate: it looks the same, but the name can shrink to a letter, so the
+              // toolbar wraps by its other controls' widths rather than the full name's.
+              className="max-w-full line-clamp-1 break-all rounded-full border px-2 py-0.5 font-mono text-[0.6875rem] border-[var(--border-strong)] hover:bg-[var(--bg-sunken)]"
             >
               {primaryProfile ? `${primaryProfile.name} · ${primaryProfile.modelId}` : 'Choose a profile'}
             </button>
@@ -612,6 +619,8 @@ export function Composer({ chat, parentId, continuesFrom = null, onPrimaryProfil
                   ))}
               </ul>
             )}
+          </div>
+
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
