@@ -51,7 +51,11 @@ export function Section({ title, defaultOpen = false, collapsible = true, hint, 
   const [summary, setSummary] = useState<Summary | null>(null);
   const choice = useSectionChoice(title);
   const tone = summary?.tone ?? 'normal';
-  const open = !collapsible || (choice ?? (defaultOpen || tone !== 'normal'));
+  // Once a problem has opened it, it stays open when the problem clears, until closed by hand: clearing one is
+  // often done from inside the section (unticking a failing MCP server), which mustn't shut under the pointer.
+  const [raised, setRaised] = useState(false);
+  if (tone !== 'normal' && !raised) setRaised(true);
+  const open = !collapsible || (choice ?? (defaultOpen || tone !== 'normal' || raised));
 
   if (!collapsible) {
     return (

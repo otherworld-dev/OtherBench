@@ -224,9 +224,14 @@ export function Menu({ label, items, position, onClose }: MenuProps): JSX.Elemen
     // Scrolling inside the menu (a long submenu, or focus() scrolling an item
     // into view) must not close it; only scrolling something else does.
     document.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('scroll', onScroll, true); // capture: catches the sidebar's own scrolling too
+    // From the next frame: right-clicking a row half out of view scrolls the
+    // list to it, and the browser sends that scroll event a frame later, after
+    // the menu has opened. Scroll events are sent before a frame's animation
+    // callbacks, so listening from one catches only scrolls that come after.
+    const frame = requestAnimationFrame(() => window.addEventListener('scroll', onScroll, true)); // capture: catches the sidebar's own scrolling too
     return () => {
       document.removeEventListener('pointerdown', onPointerDown);
+      cancelAnimationFrame(frame);
       window.removeEventListener('scroll', onScroll, true);
     };
   }, []);

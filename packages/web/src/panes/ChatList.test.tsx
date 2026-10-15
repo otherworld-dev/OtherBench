@@ -558,6 +558,8 @@ describe('ChatList chat menu', () => {
     expect(search).toHaveFocus(); // a pointerdown-outside dismiss does not steal focus (R4)
 
     await user.click(more);
+    // The menu listens for scrolls from the frame after it opens (the opening click's own scroll comes a frame late).
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
     fireEvent.scroll(screen.getByTestId('chat-list-scroll'));
     expect(screen.queryByRole('menu')).toBeNull();
   });
