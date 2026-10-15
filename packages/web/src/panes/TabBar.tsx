@@ -3,6 +3,7 @@ import { Menu } from '../components/Menu.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { useChatActivity } from '../state/chatStatus.js';
 import { LAYOUTS, type Layout } from '../state/panes.js';
+import { isChatTab, parseProjectTab } from '../state/projectTab.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { itemName, parseViewTab } from '../viewer/items.js';
@@ -44,6 +45,7 @@ function LayoutIcon({ layout }: { layout: Layout }): JSX.Element {
  */
 export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
   const chats = useGruntStore((s) => s.chats);
+  const projects = useGruntStore((s) => s.projects);
   const paneState = useGruntStore((s) => s.paneState);
   const activeChatId = useGruntStore((s) => s.activeChatId);
   const { waiting, working } = useChatActivity();
@@ -64,10 +66,13 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
       paneState.tabs.flatMap((id) => {
         const view = parseViewTab(id);
         if (view) return [{ id, title: itemName(view.item) }];
+        // Projects load with the app, so one that isn't here is really gone: keep its tab, closable.
+        const projectId = parseProjectTab(id);
+        if (projectId !== null) return [{ id, title: projects.find((p) => p.id === projectId)?.name ?? 'Missing project' }];
         const chat = chats.find((c) => c.id === id);
         return chat ? [{ id: chat.id, title: chat.title }] : [];
       }),
-    [paneState.tabs, chats]
+    [paneState.tabs, chats, projects]
   );
   const multi = !narrow && paneState.panes.length > 1;
   const paneOf = (chatId: string): number => (paneState.focusedPane >= 0 && chatId === activeChatId ? paneState.focusedPane : paneState.panes.indexOf(chatId));
@@ -126,7 +131,8 @@ export function TabBar({ narrow }: { narrow: boolean }): JSX.Element | null {
         {tabs.map((t, index) => {
           const pane = paneOf(t.id);
           const active = t.id === activeChatId;
-          const status = waiting.has(t.id) ? 'waiting' : working.has(t.id) ? 'working' : null;
+          // Only a chat has a reply to wait on; a viewer or project tab never shows a dot.
+          const status = !isChatTab(t.id) ? null : waiting.has(t.id) ? 'waiting' : working.has(t.id) ? 'working' : null;
           return (
             <div
               key={t.id}

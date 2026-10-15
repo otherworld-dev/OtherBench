@@ -13,9 +13,12 @@ vi.mock('./Thread.js', () => ({
   Thread: ({ chat }: { chat: Chat | null }) => <div data-testid="thread">{chat?.title ?? 'no chat'}</div>,
 }));
 
-vi.mock('../viewer/ItemView.js', () => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
+vi.mock('../views/ProjectHome.js', () => ({ ProjectHome: ({ projectId }: { projectId: string }) => <div data-testid="project-home-stub">{projectId}</div> }));
+
+vi.mock('../viewer/ItemView.js',() => ({ ItemView: ({ item }: { item: { path: string } }) => <div data-testid="item-view">{item.path}</div> }));
 
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { projectTabId } from '../state/projectTab.js';
 import { viewTabId } from '../viewer/items.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
@@ -149,5 +152,18 @@ describe('PaneGrid (#824)', () => {
     render(<PaneGrid narrow={false} />);
     expect(screen.getByTestId('item-view')).toHaveTextContent('a.md');
     expect(synced.some((s) => s.chatId === view)).toBe(false);
+  });
+
+  it('shows a project tab as its home page, named in the pane header, with no chat sync', () => {
+    const tab = projectTabId('p1');
+    useGruntStore.setState({
+      projects: [{ id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }],
+      paneState: { ...DEFAULT_PANE_STATE, layout: 'columns-2', tabs: [tab, 'a'], panes: [tab, 'a'], focusedPane: 0 },
+      activeChatId: tab,
+    });
+    render(<PaneGrid narrow={false} />);
+    expect(screen.getByTestId('project-home-stub')).toHaveTextContent('p1');
+    expect(within(screen.getByTestId('pane-0')).getByText('Alpha')).toBeInTheDocument();
+    expect(synced.filter((s) => s.chatId === tab)).toEqual([]);
   });
 });
