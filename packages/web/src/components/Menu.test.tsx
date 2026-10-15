@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Menu, type MenuItem } from './Menu.js';
@@ -22,6 +22,11 @@ function items(calls: string[] = []): MenuItem[] {
     },
     { id: 'delete', label: 'Delete…', danger: true, onSelect: () => calls.push('delete') },
   ];
+}
+
+/** Waits for the next animation frame, when an open menu starts listening for scrolls. */
+function nextFrame(): Promise<void> {
+  return act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
 }
 
 describe('Menu', () => {
@@ -87,7 +92,7 @@ describe('Menu', () => {
     expect(onClose).toHaveBeenLastCalledWith('dismiss');
   });
 
-  it('a pointerdown outside (reason pointer) or a scroll dismisses; a pointerdown inside does not', () => {
+  it('a pointerdown outside (reason pointer) or a scroll dismisses; a pointerdown inside does not', async () => {
     const onClose = vi.fn();
     render(<Menu label="Chat actions" items={items()} position={{ x: 0, y: 0 }} onClose={onClose} />);
 
@@ -97,7 +102,20 @@ describe('Menu', () => {
     expect(onClose).toHaveBeenCalledWith('pointer');
 
     onClose.mockClear();
+    await nextFrame();
     fireEvent.scroll(window);
+    expect(onClose).toHaveBeenCalledWith('dismiss');
+  });
+
+  it("ignores the scroll left over from the click that opened it, which the browser sends a frame late", async () => {
+    // Right-clicking a row half out of view scrolls the list to it, and that scroll event arrives after the menu is open.
+    const onClose = vi.fn();
+    render(<Menu label="Chat actions" items={items()} position={{ x: 0, y: 0 }} onClose={onClose} />);
+    fireEvent.scroll(screen.getByRole('menuitem', { name: 'Rename' }).ownerDocument);
+    expect(onClose).not.toHaveBeenCalled();
+
+    await nextFrame();
+    fireEvent.scroll(document);
     expect(onClose).toHaveBeenCalledWith('dismiss');
   });
 
@@ -122,6 +140,7 @@ describe('Menu', () => {
     fireEvent.scroll(screen.getByRole('menu', { name: 'Chat actions' }));
     expect(onClose).not.toHaveBeenCalled();
 
+    await nextFrame();
     fireEvent.scroll(document);
     expect(onClose).toHaveBeenCalledWith('dismiss');
   });
