@@ -17,6 +17,25 @@ test.beforeEach(async ({ request }) => {
   expect(profile.ok()).toBeTruthy();
 });
 
+test("a project's page in a narrow split pane never scrolls sideways, even with a long unbroken URL", async ({ page, request }) => {
+  const projectName = `E2E Narrow ${randomUUID().slice(0, 8)}`;
+  const url = `https://example.com/${'averylongpathsegment'.repeat(10)}`; // no hyphens or slashes to break at
+  const created = await request.post(`${BASE_URL}/api/projects`, { data: { name: projectName, instructions: `See ${url}` } });
+  expect(created.ok()).toBeTruthy();
+
+  await page.setViewportSize({ width: 1150, height: 800 }); // the layout picker hides below 1100px
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Chats' });
+  await nav.getByRole('group', { name: projectName }).getByRole('button', { name: new RegExp(`^${projectName}`) }).click();
+  await page.getByRole('button', { name: /layout/i }).first().click();
+  await page.getByRole('menuitemradio', { name: 'Two side by side' }).click();
+
+  const home = page.getByTestId('project-home');
+  await expect(home.getByText(/averylongpathsegment/)).toBeVisible();
+  const { scrollWidth, clientWidth } = await home.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+});
+
 test("a project's name opens its page, and a chat started there opens in the pane", async ({ page }) => {
   const projectName = `E2E Home ${randomUUID().slice(0, 8)}`;
   await page.goto('/');

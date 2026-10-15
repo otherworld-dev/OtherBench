@@ -53,14 +53,15 @@ function ProjectHomeBody({ project }: { project: Project }): JSX.Element {
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-medium">{project.name}</h2>
-            {project.description && <p className="mt-1 text-sm text-[var(--text-muted)]">{project.description}</p>}
+            {project.description && <p className="mt-1 text-sm text-[var(--text-muted)] [overflow-wrap:anywhere]">{project.description}</p>}
           </div>
           <button type="button" onClick={() => openProjectPage({ mode: 'edit', projectId: project.id })} className="btn shrink-0 px-2.5 py-1">
             Settings…
           </button>
         </div>
         <StartBox project={project} />
-        <div className="grid gap-6 @2xl:grid-cols-[minmax(0,1fr)_18rem]">
+        {/* minmax(0, …) tracks and min-w-0 items: a long unbroken word wraps rather than widening the page. */}
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-6 @2xl:grid-cols-[minmax(0,1fr)_18rem]">
           <ProjectChats projectId={project.id} />
           <About project={project} />
         </div>
@@ -160,7 +161,7 @@ function ProjectChats({ projectId }: { projectId: string }): JSX.Element {
   }, [chats, projects, projectId]);
 
   return (
-    <section data-testid="home-chats" aria-label="Chats">
+    <section data-testid="home-chats" aria-label="Chats" className="min-w-0">
       <h3 className={HEADING}>Chats</h3>
       {listed.length === 0 ? (
         <p className={EMPTY}>No chats yet</p>
@@ -193,7 +194,7 @@ function About({ project }: { project: Project }): JSX.Element {
   const hasFolder = Boolean(project.workspaceRoot) || away !== null || extra.length > 0;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <section aria-label="Instructions">
         <h3 className={HEADING}>Instructions</h3>
         {project.instructions ? <Clamped text={project.instructions} /> : <p className={EMPTY}>No instructions</p>}
@@ -249,11 +250,11 @@ function Clamped({ text, markdown = false }: { text: string; markdown?: boolean 
   return (
     <div>
       {markdown ? (
-        <div className={`text-sm ${long && !open ? 'max-h-48 overflow-hidden' : ''}`}>
+        <div className={`text-sm [overflow-wrap:anywhere] ${long && !open ? 'max-h-48 overflow-hidden' : ''}`}>
           <MarkdownBody text={text} />
         </div>
       ) : (
-        <p className={`whitespace-pre-wrap text-sm ${long && !open ? 'line-clamp-8' : ''}`}>{text}</p>
+        <p className={`whitespace-pre-wrap text-sm [overflow-wrap:anywhere] ${long && !open ? 'line-clamp-8' : ''}`}>{text}</p>
       )}
       {long && (
         <button type="button" onClick={() => setOpen(!open)} className="mt-1 text-xs text-[var(--accent)] hover:underline">
