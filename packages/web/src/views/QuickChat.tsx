@@ -5,6 +5,7 @@ import { Message } from '../components/Message.js';
 import { hideQuick, onDesktopEvent, openChatInMain } from '../desktop/bridge.js';
 import { useWindowFocused } from '../lib/useWindowFocused.js';
 import { ApiError, api } from '../state/api.js';
+import { StartChatError, startChat } from '../state/startChat.js';
 import { buildAssistantStub, buildUserStub } from '../state/stubs.js';
 import { useGruntStore } from '../state/store.js';
 import { useChatSync } from '../state/useChatSync.js';
@@ -20,7 +21,6 @@ export function QuickChat(): JSX.Element {
   const setProfiles = useGruntStore((s) => s.setProfiles);
   const messages = useGruntStore((s) => s.messages);
   const registerMessage = useGruntStore((s) => s.registerMessage);
-  const upsertChat = useGruntStore((s) => s.upsertChat);
   const [chat, setChat] = useState<Chat | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -88,17 +88,22 @@ export function QuickChat(): JSX.Element {
     setSending(true);
     setError(null);
     try {
-      let current = chat;
-      if (!current) {
-        current = await api.chats.create({ profileId: profile.id });
-        upsertChat(current);
-        setChat(current);
-      }
       const parentId = thread.at(-1)?.id ?? null;
-      const parts: Part[] = [{ type: 'text', text: body }];
-      const result = await api.turns.create(current.id, { parentId, parts, profileIds: [profile.id] });
-      registerMessage(buildUserStub(current, result.userMessageId, parentId, parts));
-      for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(current, id, result.userMessageId, profile));
+      if (parentId === null) {
+        // The first message: the same create-and-send as a project page's start box.
+        try {
+          setChat(await startChat({ profileId: profile.id, ...(chat ? { chat } : {}), text: body }));
+        } catch (err) {
+          if (!(err instanceof StartChatError)) throw err;
+          setChat(err.chat); // a retry sends into this chat rather than making another
+          throw err.cause;
+        }
+      } else if (chat) {
+        const parts: Part[] = [{ type: 'text', text: body }];
+        const result = await api.turns.create(chat.id, { parentId, parts, profileIds: [profile.id] });
+        registerMessage(buildUserStub(chat, result.userMessageId, parentId, parts));
+        for (const id of result.assistantMessageIds) registerMessage(buildAssistantStub(chat, id, result.userMessageId, profile));
+      }
       setText('');
     } catch (err) {
       console.error('[grunt-web] quick chat failed to send:', err);
