@@ -74,7 +74,8 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         {renaming && onRename && onRenameCancel ? (
           <InlineNameInput initial={name} label="Project name" maxLength={PROJECT_NAME_MAX} onCommit={onRename} onCancel={onRenameCancel} />
         ) : (
-          <h3 className="m-0 flex min-w-0 flex-1 items-center text-xs font-normal">
+          <>
+          {/* Before the h3, not in it: inside, the heading would read "Collapse Alpha Alpha 1 chat". */}
           {onOpen && (
             <button
               type="button"
@@ -82,11 +83,12 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
               aria-expanded={!collapsed}
               aria-controls={collapsed || empty ? undefined : listId}
               onClick={onToggle}
-              className="shrink-0 rounded py-1 pr-0.5 pl-2 text-[var(--text-muted)] hover:text-[var(--text)]"
+              className="shrink-0 rounded py-1 pl-2 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
             >
               <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
             </button>
           )}
+          <h3 className="m-0 flex min-w-0 flex-1 items-center text-xs font-normal">
           <button
             type="button"
             data-heading-main=""
@@ -94,6 +96,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
             aria-expanded={onOpen ? undefined : !collapsed}
             aria-controls={onOpen || collapsed || empty ? undefined : listId}
             aria-current={active ? 'true' : undefined}
+            title={onOpen ? 'Open the project page' : undefined}
             onClick={onOpen ?? onToggle}
             onContextMenu={
               onOpenMenu
@@ -129,6 +132,7 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
             {status && <span className="sr-only">, {STATUS_LABELS[status]}</span>}
           </button>
           </h3>
+          </>
         )}
         {onNewChat && (
           <button
