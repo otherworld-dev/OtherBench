@@ -194,6 +194,23 @@ describe('ChatList groups', () => {
     expect(within(screen.getByTestId(`group-${NO_PROJECT_KEY}`)).queryByRole('button', { name: /^New chat in/ })).toBeNull();
   });
 
+  it("names a pinned chat's project in Pinned only, and none for a chat with no project", () => {
+    useGruntStore.setState({
+      projects: [makeProject({ id: 'p-a', name: 'Alpha' })],
+      chats: [
+        makeChat({ id: 'c1', projectId: 'p-a', pinned: true }),
+        makeChat({ id: 'c2', pinned: true }),
+        makeChat({ id: 'c3', projectId: 'p-a' }),
+      ],
+    });
+    render(<ChatList />);
+
+    expect(within(screen.getByTestId('chat-row-c1')).getByTestId('row-project-name')).toHaveTextContent('Alpha');
+    expect(screen.getByRole('button', { name: /, in Alpha$/ })).toBeInTheDocument();
+    expect(within(screen.getByTestId('chat-row-c2')).queryByTestId('row-project-name')).toBeNull();
+    expect(within(screen.getByTestId('chat-row-c3')).queryByTestId('row-project-name')).toBeNull();
+  });
+
   it('collapses a group from its heading, remembers it across a remount, and keeps aria-expanded in step', async () => {
     const user = userEvent.setup();
     useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });

@@ -145,7 +145,8 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         (empty ? (
           <p className="px-2 py-1 text-sm text-[var(--text-faint)]">No chats yet</p>
         ) : (
-          <ul id={listId}>
+          // The guide line sits under the heading's chevron, marking the chats as the group's.
+          <ul id={listId} className="ml-3 border-l border-[var(--border)] pl-1">
             {children}
           </ul>
         ))}

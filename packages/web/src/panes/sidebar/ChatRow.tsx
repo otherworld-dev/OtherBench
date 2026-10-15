@@ -58,6 +58,8 @@ export interface ChatRowProps {
   showPinMarker?: boolean;
   /** Shows an outline pin before the title: the chat is pinned at the top of its project. */
   projectPinMarker?: boolean;
+  /** Shown faint after the title: the chat's project, for rows in Pinned, which sits outside the project groups. */
+  projectName?: string;
   /** A drag of this row has started (ChatList shows the empty Pinned drop zone). */
   onDragStart?: () => void;
   /** The dot at the end of the row; a reply ready also makes the title bold. */
@@ -73,7 +75,7 @@ export interface ChatRowProps {
  */
 export function ChatRow(props: ChatRowProps): JSX.Element {
   const { chat, active, onSelect, onDragEnd, menuOpen = false, renaming = false, muted = false, onOpenMenu, onRename, onRenameCancel, reorder } = props;
-  const { onTogglePin, showPinMarker = false, projectPinMarker = false, onDragStart, status = null } = props;
+  const { onTogglePin, showPinMarker = false, projectPinMarker = false, projectName, onDragStart, status = null } = props;
   if (renaming && onRename && onRenameCancel) {
     return (
       <li data-testid={`chat-row-${chat.id}`} className="px-1 py-0.5">
@@ -172,6 +174,11 @@ export function ChatRow(props: ChatRowProps): JSX.Element {
           </span>
         )}
         <span className={`min-w-0 truncate ${status === 'ready' ? 'font-medium' : ''}`}>{chat.title}</span>
+        {projectName && (
+          <span data-testid="row-project-name" className="ml-auto max-w-[45%] shrink-0 truncate pl-2 text-xs text-[var(--text-faint)]">
+            <span className="sr-only">, in</span> {projectName}
+          </span>
+        )}
       </button>
       {/* Beside the button, not in it: a button's children are presentational, so a screen reader would skip them. */}
       {status && <StatusDot status={status} testId={`chat-status-${chat.id}`} className="mx-1.5" />}

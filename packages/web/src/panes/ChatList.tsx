@@ -523,6 +523,7 @@ export function ChatList({ footer, wrapFooter = false }: { footer?: ReactNode; w
         onTogglePin={chat.archivedAt === null ? () => void setPinned(chat, !chat.pinned, true) : undefined}
         showPinMarker={!section?.pinned}
         projectPinMarker={section?.projectPinned === true}
+        projectName={section?.pinned && chat.projectId ? projects.find((p) => p.id === chat.projectId)?.name : undefined}
         onOpenMenu={(position, source) => openChatMenu(chat.id, position, source)}
         onRename={(title) => void renameChat(chat, title)}
         onRenameCancel={() => {
