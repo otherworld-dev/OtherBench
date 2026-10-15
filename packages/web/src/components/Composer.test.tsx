@@ -883,3 +883,66 @@ describe('Composer plan mode pill', () => {
     expect(pill()).toHaveAttribute('aria-pressed', 'false');
   });
 });
+
+describe('Composer message history (Up and Down)', () => {
+  function said(id: string, parentId: string | null, role: 'user' | 'assistant', text: string): CanonMessage {
+    return { id, chatId: 'chat-1', parentId, role, parts: [{ type: 'text', text }], status: 'complete', error: null, producedBy: null, createdAt: 1 };
+  }
+  const box = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: /message/i });
+
+  beforeEach(() => {
+    reset();
+    useGruntStore.getState().setProfiles([makeProfile()]);
+    for (const m of [said('u1', null, 'user', 'first'), said('a1', 'u1', 'assistant', 'ok'), said('u2', 'a1', 'user', 'second'), said('a2', 'u2', 'assistant', 'ok')]) {
+      useGruntStore.getState().registerMessage(m);
+    }
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("Up steps back through this chat's messages, Down steps forward and then puts the draft back", async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ headMessageId: 'a2' })} />);
+    await user.type(box(), 'draft');
+
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('second');
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('first');
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('first'); // the oldest: Up has nothing further back
+
+    await user.keyboard('{ArrowDown}');
+    expect(box()).toHaveValue('second');
+    await user.keyboard('{ArrowDown}');
+    expect(box()).toHaveValue('draft');
+  });
+
+  it('only recalls from the first line, so Up still moves around a message of several lines', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ headMessageId: 'a2' })} />);
+    await user.type(box(), 'one{Shift>}{Enter}{/Shift}two');
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('one\ntwo');
+  });
+
+  it('typing in a recalled message makes it the draft, so Down no longer steps', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ headMessageId: 'a2' })} />);
+    await user.click(box());
+    await user.keyboard('{ArrowUp}');
+    await user.keyboard('again: '); // the caret is at the start of a message recalled by Up
+    expect(box()).toHaveValue('again: second');
+    await user.keyboard('{ArrowDown}');
+    expect(box()).toHaveValue('again: second');
+  });
+
+  it('does nothing in a chat with no earlier messages', async () => {
+    const user = userEvent.setup();
+    render(<Composer chat={makeChat({ id: 'chat-2' })} />);
+    await user.click(box());
+    await user.keyboard('{ArrowUp}');
+    expect(box()).toHaveValue('');
+  });
+});
