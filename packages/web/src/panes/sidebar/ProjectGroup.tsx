@@ -31,6 +31,10 @@ export interface ProjectGroupProps {
   onRenameCancel?: () => void;
   /** The most urgent status among the group's chats, shown on the heading whether it's open or collapsed. */
   status?: ChatStatus | null;
+  /** Projects only: the name opens the project's page, and the arrow alone collapses the group. */
+  onOpen?: () => void;
+  /** The project's page is the focused tab. */
+  active?: boolean;
 }
 
 function carriesChat(e: DragEvent): boolean {
@@ -40,7 +44,7 @@ function carriesChat(e: DragEvent): boolean {
 /** A collapsible sidebar group (a project, or No project) whose heading is also a drop target for chat rows. */
 export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
   const { groupKey, name, count, empty, collapsed, dropActive, onToggle, onDragTarget, onDropChat, children } = props;
-  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null } = props;
+  const { onNewChat, newChatDisabled = false, menuOpen = false, renaming = false, onOpenMenu, onRename, onRenameCancel, status = null, onOpen, active = false } = props;
   const listId = `${groupDomId(groupKey)}-list`;
 
   return (
@@ -70,13 +74,27 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
         {renaming && onRename && onRenameCancel ? (
           <InlineNameInput initial={name} label="Project name" maxLength={PROJECT_NAME_MAX} onCommit={onRename} onCancel={onRenameCancel} />
         ) : (
-          <h3 className="m-0 flex min-w-0 flex-1 text-xs font-normal">
+          <h3 className="m-0 flex min-w-0 flex-1 items-center text-xs font-normal">
+          {onOpen && (
+            <button
+              type="button"
+              aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
+              aria-expanded={!collapsed}
+              aria-controls={collapsed || empty ? undefined : listId}
+              onClick={onToggle}
+              className="shrink-0 rounded py-1 pr-0.5 pl-2 text-[var(--text-muted)] hover:text-[var(--text)]"
+            >
+              <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
+            </button>
+          )}
           <button
             type="button"
             data-heading-main=""
-            aria-expanded={!collapsed}
-            aria-controls={collapsed || empty ? undefined : listId}
-            onClick={onToggle}
+            // With a page to open, the arrow controls the list and this opens the page.
+            aria-expanded={onOpen ? undefined : !collapsed}
+            aria-controls={onOpen || collapsed || empty ? undefined : listId}
+            aria-current={active ? 'true' : undefined}
+            onClick={onOpen ?? onToggle}
             onContextMenu={
               onOpenMenu
                 ? (e) => {
@@ -95,9 +113,11 @@ export function ProjectGroup(props: ProjectGroupProps): JSX.Element {
                   }
                 : undefined
             }
-            className="label-caps flex min-w-0 flex-1 items-center gap-1 px-2 py-1 text-left text-[var(--text-muted)]"
+            className={`label-caps flex min-w-0 flex-1 items-center gap-1 rounded py-1 pr-2 text-left ${onOpen ? 'pl-1' : 'pl-2'} ${
+              active ? 'bg-[var(--bg)] text-[var(--text)] shadow-[inset_2px_0_0_var(--accent)]' : 'text-[var(--text-muted)]'
+            }`}
           >
-            <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
+            {!onOpen && <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>}
             <span className="truncate">{name}</span>{' '}
             <span className="ml-auto flex items-center gap-1.5 pl-1">
               {status && <StatusDot status={status} testId={`group-status-${groupKey}`} hidden />}

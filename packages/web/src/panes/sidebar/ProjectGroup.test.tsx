@@ -114,3 +114,39 @@ describe('ProjectGroup', () => {
     expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('Alpha');
   });
 });
+
+describe('ProjectGroup with a page to open', () => {
+  it('gives the arrow its own collapse button and makes the name open the page', async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const h = renderGroup({ onOpen });
+    const arrow = screen.getByRole('button', { name: 'Collapse Alpha' });
+    expect(arrow).toHaveAttribute('aria-expanded', 'true');
+    const name = screen.getByRole('button', { name: /^Alpha/ });
+    expect(name).not.toHaveAttribute('aria-expanded');
+    expect(name).toHaveAttribute('data-heading-main');
+
+    await user.click(name);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(h.onToggle).not.toHaveBeenCalled();
+    await user.click(arrow);
+    expect(h.onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the arrow Expand when collapsed', () => {
+    renderGroup({ onOpen: vi.fn(), collapsed: true });
+    expect(screen.getByRole('button', { name: 'Expand Alpha' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps the menu gestures on the name', () => {
+    const onOpenMenu = vi.fn();
+    renderGroup({ onOpen: vi.fn(), onOpenMenu });
+    fireEvent.contextMenu(screen.getByRole('button', { name: /^Alpha/ }));
+    expect(onOpenMenu).toHaveBeenCalledWith(expect.anything(), 'context');
+  });
+
+  it('marks the name current while its page is the focused tab', () => {
+    renderGroup({ onOpen: vi.fn(), active: true });
+    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
+  });
+});

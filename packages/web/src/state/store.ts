@@ -10,6 +10,7 @@ import {
   closeTab as closePaneTab,
   focusPane as focusPaneIn,
   forgetChat,
+  forgetProject,
   loadPaneState,
   moveTab as movePaneTab,
   openTab as openPaneTab,
@@ -124,6 +125,8 @@ export interface GruntState {
 
   // --- projects ---------------------------------------------------------------
   projects: Project[];
+  /** The project list has arrived from the server: until then a missing project may just not be loaded yet. */
+  projectsLoaded: boolean;
   setProjects(projects: Project[]): void;
   /** Inserts or replaces one project by id. */
   upsertProject(project: Project): void;
@@ -474,7 +477,8 @@ export const useGruntStore = create<GruntState>()((set) => ({
     }),
 
   projects: [],
-  setProjects: (projects) => set({ projects }),
+  projectsLoaded: false,
+  setProjects: (projects) => set({ projects, projectsLoaded: true }),
   upsertProject: (project) =>
     set((state) => {
       const idx = state.projects.findIndex((p) => p.id === project.id);
@@ -487,6 +491,7 @@ export const useGruntStore = create<GruntState>()((set) => ({
     set((state) => ({
       projects: state.projects.filter((p) => p.id !== id),
       chats: state.chats.map((c) => (c.projectId === id ? { ...c, projectId: null } : c)),
+      ...withPanes(forgetProject(synced(state), id)),
     })),
 
   messages: {},

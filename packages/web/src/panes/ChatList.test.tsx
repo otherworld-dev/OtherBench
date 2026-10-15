@@ -211,22 +211,36 @@ describe('ChatList groups', () => {
     expect(within(screen.getByTestId('chat-row-c3')).queryByTestId('row-project-name')).toBeNull();
   });
 
-  it('collapses a group from its heading, remembers it across a remount, and keeps aria-expanded in step', async () => {
+  it('collapses a group from its arrow, remembers it across a remount, and keeps aria-expanded in step', async () => {
     const user = userEvent.setup();
     useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
     const { unmount } = render(<ChatList />);
 
-    const heading = screen.getByRole('button', { name: /^Alpha/ });
-    expect(heading).toHaveAttribute('aria-expanded', 'true');
-    await user.click(heading);
-    expect(heading).toHaveAttribute('aria-expanded', 'false');
+    const arrow = screen.getByRole('button', { name: 'Collapse Alpha' });
+    expect(arrow).toHaveAttribute('aria-expanded', 'true');
+    await user.click(arrow);
+    expect(arrow).toHaveAttribute('aria-expanded', 'false');
+    expect(arrow).toHaveAccessibleName('Expand Alpha');
     expect(rowIds('group-p-a')).toEqual([]);
     expect(JSON.parse(window.localStorage.getItem(COLLAPSED_GROUPS_STORAGE_KEY)!)).toEqual(['p-a']);
 
     unmount();
     resetSidebarGroupsForTests();
     render(<ChatList />);
-    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('button', { name: 'Expand Alpha' })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it("opens a project's page as a tab from its name, leaving the group as it was", async () => {
+    const user = userEvent.setup();
+    useGruntStore.setState({ projects: [makeProject({ id: 'p-a', name: 'Alpha' })], chats: [makeChat({ id: 'c1', projectId: 'p-a' })] });
+    render(<ChatList />);
+
+    await user.click(screen.getByRole('button', { name: /^Alpha/ }));
+
+    expect(useGruntStore.getState().paneState.tabs).toContain('project:p-a');
+    expect(useGruntStore.getState().activeChatId).toBe('project:p-a');
+    expect(screen.getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
   });
 
   it("a project's + creates a chat with only its projectId, opens it, and expands the group if it was collapsed (review focus 1)", async () => {
@@ -240,7 +254,7 @@ describe('ChatList groups', () => {
 
     expect(mockedCreate).toHaveBeenCalledWith({ projectId: 'p-a' });
     await waitFor(() => expect(useGruntStore.getState().activeChatId).toBe('c-new'));
-    expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
     expect(rowIds('group-p-a')).toEqual(['c-new']);
   });
 
@@ -903,10 +917,11 @@ describe('ChatList project menu', () => {
     expect(rowIds(`group-${NO_PROJECT_KEY}`)).toEqual(['c1']);
   });
 
-  it('gives each project group heading an h3 around its toggle button', () => {
+  it('gives each project group heading an h3 around its arrow and name', () => {
     setup();
     const h3 = within(screen.getByTestId('group-p-a')).getByRole('heading', { level: 3 });
-    expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(h3).getByRole('button', { name: 'Collapse Alpha' })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(h3).getByRole('button', { name: /^Alpha/ })).toHaveAttribute('data-heading-main');
   });
 });
 

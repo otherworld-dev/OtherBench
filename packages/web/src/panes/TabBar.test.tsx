@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Chat } from '@grunt/core/ports/store.js';
 import { DEFAULT_PANE_STATE } from '../state/panes.js';
+import { projectTabId } from '../state/projectTab.js';
 import { useGruntStore } from '../state/store.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
 import { TAB_DRAG_MIME, TabBar } from './TabBar.js';
@@ -144,5 +145,25 @@ describe('TabBar (#824)', () => {
     useGruntStore.setState({ paneState: { ...useGruntStore.getState().paneState, tabs: [view] } });
     render(<TabBar narrow={false} />);
     expect(screen.getByRole('tab', { name: 'notes.md' })).toBeInTheDocument();
+  });
+
+  it('labels a project tab Loading… until the project list arrives', () => {
+    useGruntStore.setState({ paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1')], panes: [projectTabId('p1')] }, activeChatId: projectTabId('p1') });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByRole('tab', { name: /Loading…/ })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Missing project/ })).toBeNull();
+  });
+
+  it('labels a project tab with the project name, or Missing project, with no status dot', () => {
+    useGruntStore.getState().setProjects([{ id: 'p1', name: 'Alpha', description: '', instructions: '', workspace: null, defaultProfileId: null, sortOrder: 0, createdAt: 1, updatedAt: 1 }]);
+    useGruntStore.setState({
+      paneState: { ...DEFAULT_PANE_STATE, tabs: [projectTabId('p1'), projectTabId('gone')], panes: [projectTabId('p1')] },
+      activeChatId: projectTabId('p1'),
+      appRunningTurns: { m1: projectTabId('p1') },
+    });
+    render(<TabBar narrow={false} />);
+    expect(screen.getByRole('tab', { name: /Alpha/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Missing project/ })).toBeInTheDocument();
+    expect(screen.queryByTestId(`tab-status-${projectTabId('p1')}`)).toBeNull();
   });
 });

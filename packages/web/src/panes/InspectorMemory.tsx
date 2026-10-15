@@ -1,13 +1,14 @@
 import { useEffect, useState, type JSX } from 'react';
-import { hasMemoryContent, validateMemoryBody, type MemoryUpdateOutcome, type ProjectMemoryView } from '@grunt/core/domain/memory.js';
+import { hasMemoryContent, validateMemoryBody, type MemoryUpdateOutcome } from '@grunt/core/domain/memory.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
 import { MemoryNote } from '../components/MemoryNote.js';
+import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
 import { ApiError, api } from '../state/api.js';
 import { useGruntStore } from '../state/store.js';
+import { useProjectMemory } from '../state/useProjectMemory.js';
 
-/** How often the panel re-reads the note: the summariser changes it in the background. */
-export const MEMORY_POLL_MS = 15_000;
+export { MEMORY_POLL_MS } from '../state/useProjectMemory.js';
 
 const BUTTON = 'btn px-2 py-1';
 
@@ -37,37 +38,11 @@ function outcomeText(outcome: MemoryUpdateOutcome): string {
  */
 export function InspectorMemory({ chat, project }: { chat: Chat; project: Project }): JSX.Element {
   const chats = useGruntStore((s) => s.chats);
-  const [view, setView] = useState<ProjectMemoryView | null>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
+  // Loaded on a project switch, then polled. A poll never touches the edit draft.
+  const { view, loadFailed, setView } = useProjectMemory(project.id);
   const [updating, setUpdating] = useState(false);
   const [notice, setNotice] = useState<{ text: string; failed: boolean } | null>(null);
   const [refresh, setRefresh] = useState(0);
-
-  // Load on a project switch, then poll. A poll never touches the edit draft.
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    setView(null);
-    setLoadFailed(false);
-    async function tick(): Promise<void> {
-      try {
-        const next = await api.memory.get(project.id);
-        if (!cancelled) {
-          setView(next);
-          setLoadFailed(false);
-        }
-      } catch (err) {
-        console.error(`[grunt-web] failed to load memory for project ${project.id}:`, err);
-        if (!cancelled) setLoadFailed(true);
-      }
-      if (!cancelled) timer = setTimeout(() => void tick(), MEMORY_POLL_MS);
-    }
-    void tick();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [project.id]);
 
   useEffect(() => setNotice(null), [chat.id]);
 
@@ -96,12 +71,7 @@ export function InspectorMemory({ chat, project }: { chat: Chat; project: Projec
   }
 
   const { memory, lastError } = view;
-  const updatedLine =
-    memory.updatedAt === 0
-      ? 'Not saved yet'
-      : memory.updatedBy === 'user'
-        ? `Updated ${formatRelativeTime(memory.updatedAt)} by you`
-        : `Updated ${formatRelativeTime(memory.updatedAt)} from ${chatTitle(memory.sourceChatId)}`;
+  const updatedLine = memoryUpdatedLine(memory, chats);
 
   return (
     <MemoryNote
