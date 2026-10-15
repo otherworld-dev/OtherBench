@@ -1,5 +1,7 @@
 import { useMemo, useState, type JSX, type KeyboardEvent } from 'react';
+import { hasMemoryContent } from '@grunt/core/domain/memory.js';
 import type { Chat, Project } from '@grunt/core/ports/store.js';
+import { MarkdownBody } from '../components/MarkdownBody.js';
 import { StatusDot } from '../components/StatusDot.js';
 import { memoryUpdatedLine } from '../lib/memoryUpdated.js';
 import { formatRelativeTime } from '../lib/relativeTime.js';
@@ -203,19 +205,29 @@ function MemoryPanel({ projectId }: { projectId: string }): JSX.Element {
   if (!view) return <p className={EMPTY}>{loadFailed ? "Couldn't load project memory." : 'Loading…'}</p>;
   return (
     <div className="space-y-1">
-      {view.memory.body.trim() ? <Clamped text={view.memory.body} /> : <p className={EMPTY}>No memory yet</p>}
+      {/* An unsaved note is the template's empty headings, not blank. */}
+      {hasMemoryContent(view.memory.body) ? <Clamped text={view.memory.body} markdown /> : <p className={EMPTY}>No memory yet</p>}
       <p className="text-xs text-[var(--text-faint)]">{memoryUpdatedLine(view.memory, chats)}</p>
     </div>
   );
 }
 
-/** Text kept as written, cut to a few lines with Show more when it runs long. */
-function Clamped({ text }: { text: string }): JSX.Element {
+/**
+ * Text cut to a few lines with Show more when it runs long: kept as written,
+ * or rendered as Markdown (memory, as the Inspector shows it).
+ */
+function Clamped({ text, markdown = false }: { text: string; markdown?: boolean }): JSX.Element {
   const [open, setOpen] = useState(false);
   const long = text.split('\n').length > CLAMP_LINES || text.length > CLAMP_CHARS;
   return (
     <div>
-      <p className={`whitespace-pre-wrap text-sm ${long && !open ? 'line-clamp-8' : ''}`}>{text}</p>
+      {markdown ? (
+        <div className={`text-sm ${long && !open ? 'max-h-48 overflow-hidden' : ''}`}>
+          <MarkdownBody text={text} />
+        </div>
+      ) : (
+        <p className={`whitespace-pre-wrap text-sm ${long && !open ? 'line-clamp-8' : ''}`}>{text}</p>
+      )}
       {long && (
         <button type="button" onClick={() => setOpen(!open)} className="mt-1 text-xs text-[var(--accent)] hover:underline">
           {open ? 'Show less' : 'Show more'}

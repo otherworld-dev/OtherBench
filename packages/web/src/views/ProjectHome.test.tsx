@@ -128,6 +128,21 @@ describe('ProjectHome', () => {
     expect(await screen.findByText("Couldn't load project memory.")).toBeInTheDocument();
   });
 
+  it('counts a memory of only the template headings as empty, and shows real memory as formatted Markdown', async () => {
+    const template = '## Pinned\n\n## Goals\n\n## Decisions\n\n## Current focus\n\n## Open questions\n';
+    vi.mocked(api.memory.get).mockResolvedValueOnce({ ...emptyMemory, memory: { ...emptyMemory.memory, body: template } });
+    useGruntStore.setState({ projects: [project()] });
+    render(<ProjectHome projectId="p1" />);
+    expect(await screen.findByText('No memory yet')).toBeInTheDocument();
+    expect(screen.queryByText('## Goals')).toBeNull();
+    cleanup();
+
+    vi.mocked(api.memory.get).mockResolvedValueOnce({ ...emptyMemory, memory: { ...emptyMemory.memory, body: '## Pinned\n\n## Goals\n\nShip the project page.\n', updatedAt: Date.now() } });
+    render(<ProjectHome projectId="p1" />);
+    expect(await screen.findByText('Ship the project page.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Goals' })).toBeInTheDocument();
+  });
+
   it('says a missing project no longer exists, and Close closes its tab', async () => {
     render(<ProjectHome projectId="p1" />);
     expect(screen.getByText(/This project no longer exists/)).toBeInTheDocument();
