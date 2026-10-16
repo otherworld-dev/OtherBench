@@ -66,6 +66,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
     memoryModel: 'Claude Opus',
     memoryChat: { title: 'What claude.ai remembered', notes: 49, existing: false },
     filesNotIncluded: 672,
+    filesIncluded: 0,
     dropped: {},
     importFolder: '/data/otherbench.db.imported/claude',
     ...over,
@@ -74,7 +75,7 @@ function preview(over: Partial<ImportPreview> = {}): ImportPreview {
 
 function report(over: Partial<ImportReport> = {}): ImportReport {
   return {
-    chats: { imported: 440, existing: 2, updated: 0, newer: 0, filed: 0, messages: 6200, failed: [] },
+    chats: { imported: 440, existing: 2, updated: 0, newer: 0, filed: 0, messages: 6200, files: 0, failed: [] },
     cowork: null,
     emptyChats: 44,
     artifacts: { imported: 1, existing: 0, failed: [] },
@@ -182,7 +183,7 @@ describe('ImportPanel', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Importing chats… 10 of 451');
     expect(screen.queryByLabelText('Export folder')).toBeNull();
 
-    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, updated: 0, newer: 0, filed: 0, messages: 6200, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
+    status = { ...status, state: 'done', phase: null, done: 451, finishedAt: 2, report: report({ chats: { imported: 439, existing: 2, updated: 0, newer: 0, filed: 0, messages: 6200, files: 0, failed: [{ title: 'Clash', error: 'UNIQUE constraint failed' }] } }) };
     const reportView = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
     expect(reportView).toHaveTextContent('Import finished');
     expect(reportView).toHaveTextContent('Imported 439 chats (6,200 messages); 2 were already here');
@@ -322,7 +323,7 @@ describe("ImportPanel: claude.ai's chat list and Cowork", () => {
     render(<ImportPanel />);
     await screen.findByRole('status');
     expect(api.projects.list).not.toHaveBeenCalled();
-    status = { ...status, state: 'done', phase: null, done: 10, report: report({ chats: { imported: 2, existing: 0, updated: 0, newer: 0, filed: 1, messages: 4, failed: [] }, cowork: { imported: 29, existing: 0, updated: 0, filed: 12, messages: 728, images: 73, failed: [] } }) };
+    status = { ...status, state: 'done', phase: null, done: 10, report: report({ chats: { imported: 2, existing: 0, updated: 0, newer: 0, filed: 1, messages: 4, files: 0, failed: [] }, cowork: { imported: 29, existing: 0, updated: 0, filed: 12, messages: 728, images: 73, failed: [] } }) };
     const view = await screen.findByTestId('import-report', {}, { timeout: IMPORT_POLL_MS * 3 });
     expect(view).toHaveTextContent('Filed 1 chat into its project');
     expect(view).toHaveTextContent('Imported 29 Cowork sessions (728 messages, 73 images); 12 filed into projects');

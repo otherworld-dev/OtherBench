@@ -331,6 +331,48 @@ describe('planClaudeImport: content blocks', () => {
     expect(chat.title).toBe('A shed.');
   });
 
+  it("brings back the files saved from claude.ai: images as images, anything else as a file, the rest still notes", () => {
+    const shot = '4acc75d1-3be4-43cc-97df-2403031ae2c8';
+    const pdf = 'bc2bf0f2-7906-4f06-9a72-a82a7da01427';
+    const gone = '9c6b9ee7-1862-4f40-bf04-b402ce518229';
+    const reply = 'd6673f82-c0c2-417a-981d-362647cb6936';
+    const plan = planClaudeImport(
+      files({
+        conversations: [
+          conversation({
+            uuid: 'c1',
+            chat_messages: [
+              // claude.ai's own API names files in files_v2 as well as files.
+              message({ uuid: 'u1', content: [{ type: 'text', text: 'see these' }], files: [{ file_uuid: shot, file_name: 'shot.png' }], files_v2: [{ file_uuid: pdf, file_name: 'KUKA.pdf' }, { file_uuid: gone, file_name: 'lost.png' }] }),
+              message({ uuid: 'a1', sender: 'assistant', parent_message_uuid: 'u1', content: [{ type: 'text', text: 'Seen.' }], files: [{ file_uuid: reply, file_name: 'chart.png' }] }),
+            ],
+          }),
+        ],
+        downloaded: {
+          [shot]: { name: '1791336871164_image.png', mime: 'image/webp' },
+          [pdf]: { name: 'KUKA System Tech.pdf', mime: 'application/pdf' },
+          [reply]: { name: 'chart.png', mime: 'image/webp' },
+          'not-a-uuid': { name: 'x', mime: 'image/png' },
+        },
+      }),
+      PROFILE
+    );
+    const chat = plan.chats[0]!;
+    expect(partsOf(chat, 'u1')).toEqual([
+      { type: 'text', text: 'see these' },
+      { type: 'image', attachmentId: `u1:file:${shot}`, mime: 'image/webp' },
+      { type: 'file', attachmentId: `u1:file:${pdf}`, mime: 'application/pdf', filename: 'KUKA.pdf' },
+      { type: 'text', text: '[Not included in the claude.ai export: lost.png]' },
+    ]);
+    // Only the user's side shows files: a reply keeps its notice.
+    expect(partsOf(chat, 'a1')).toEqual([{ type: 'text', text: 'Seen.' }, { type: 'notice', text: 'Not included in the claude.ai export: chart.png' }]);
+    expect(chat.files).toEqual([
+      { attachmentId: `u1:file:${shot}`, messageId: 'u1', uuid: shot, mime: 'image/webp', filename: 'shot.png' },
+      { attachmentId: `u1:file:${pdf}`, messageId: 'u1', uuid: pdf, mime: 'application/pdf', filename: 'KUKA.pdf' },
+    ]);
+    expect(plan.stats).toMatchObject({ filesIncluded: 2, filesNotIncluded: 2 });
+  });
+
   it('reads an older export: text only in the top-level field, and no parent links', () => {
     const chat = planOne([
       { uuid: 'u1', sender: 'human', created_at: at(1), text: 'Old question', content: [] },

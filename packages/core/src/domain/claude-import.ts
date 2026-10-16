@@ -1,5 +1,6 @@
 import type { CanonMessage, Part, ProducedBy } from '../types/messages.js';
 import { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_TITLE, slugify } from './artifacts.js';
+import { isAttachmentId } from './attachment-binding.js';
 import { fenced } from './export.js';
 
 /**
@@ -49,6 +50,12 @@ export interface ClaudeExportFiles {
    * which project a chat was in, or which branch it showed, and this does.
    */
   conversationList?: unknown[];
+  /**
+   * `files/index.json`: the images and files claude.ai still serves, saved
+   * next to the conversations by file id (`{ "<uuid>": { name, mime } }`),
+   * since the export itself has none of them.
+   */
+  downloaded?: unknown;
 }
 
 /** The URL of claude.ai's chat list for an organisation: what the user saves as `chat_conversations.json`. */
@@ -85,6 +92,18 @@ export interface ImportedChat {
   projectId?: string | null;
   /** Only on a published artifact's chat. */
   artifact?: ImportedArtifact;
+  /** Files saved from claude.ai that the chat's parts name: the server stores each as the attachment `attachmentId`. */
+  files?: ImportedFile[];
+}
+
+/** A file saved from claude.ai (`ClaudeExportFiles.downloaded`) that a user message shows as an image or a file part. */
+export interface ImportedFile {
+  attachmentId: string;
+  messageId: string;
+  /** claude.ai's file id: the file's name in the saved folder. */
+  uuid: string;
+  mime: string;
+  filename: string;
 }
 
 export interface ImportedDoc {
@@ -129,6 +148,8 @@ export interface ImportStats {
   malformedMessages: number;
   /** Images and files named in a message whose bytes the export doesn't have. */
   filesNotIncluded: number;
+  /** Images and files brought back from the files saved from claude.ai. */
+  filesIncluded: number;
   /** Tool calls with no result, given an error result. */
   missingToolResults: number;
   /** Blocks left out, by claude.ai block type ("user tool_result" for a tool result in a user message). */
@@ -210,6 +231,7 @@ function emptyStats(): ImportStats {
     orphanMessages: 0,
     malformedMessages: 0,
     filesNotIncluded: 0,
+    filesIncluded: 0,
     missingToolResults: 0,
     dropped: {},
     projectsSkipped: 0,
@@ -248,6 +270,30 @@ const EMPTY_MESSAGE = 'Empty in the claude.ai export.';
 function notIncluded(role: 'user' | 'assistant', name: string | null): Part {
   return missing(role, `${NOT_INCLUDED}: ${name && name.trim() ? name.trim() : 'a file'}`);
 }
+
+/** The note a user message keeps for a file it names but couldn't be given: what the server puts back when a saved file can't be read. */
+export function fileNote(name: string | null): Part {
+  return notIncluded('user', name);
+}
+
+/** Images shown as images: the raster types OtherBench serves. Any other saved file is a file part. */
+const IMAGE_MIMES: ReadonlySet<string> = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+const FILE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The saved files by claude.ai file id, from `files/index.json`; entries without a usable id or type are left out. */
+function readDownloaded(raw: unknown): Map<string, { name: string | null; mime: string }> | null {
+  if (!isObj(raw)) return null;
+  const found = new Map<string, { name: string | null; mime: string }>();
+  for (const [uuid, entry] of Object.entries(raw)) {
+    if (!FILE_UUID.test(uuid) || !isObj(entry)) continue;
+    const mime = str(entry['mime'])?.split(';')[0]?.trim().toLowerCase();
+    if (!mime || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(mime)) continue;
+    found.set(uuid.toLowerCase(), { name: str(entry['name']), mime });
+  }
+  return found;
+}
+
+type Downloaded = ReturnType<typeof readDownloaded>;
 
 /** Whether a user-side text part is one of the import's own notes, not something the user wrote. */
 function isMissingNote(text: string): boolean {
@@ -312,16 +358,30 @@ interface PendingCall {
  * never sees a call without one. `content` says whether the message had
  * anything in it beyond notes about what the export lacks.
  */
-function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, stats: ImportStats): { parts: Part[]; content: boolean } {
+function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, stats: ImportStats, downloaded: Downloaded = null, files: ImportedFile[] = []): { parts: Part[]; content: boolean } {
   const parts: Part[] = [];
   const calls: PendingCall[] = [];
   let content = false;
   const fileNames = new Map<string, string | null>();
-  for (const f of list(raw['files'])) {
+  // claude.ai's own API lists a message's files in `files_v2` as well as (or instead of) `files`.
+  for (const f of [...list(raw['files']), ...list(raw['files_v2'])]) {
     if (!isObj(f)) continue;
-    const uuid = str(f['file_uuid']);
-    if (uuid) fileNames.set(uuid, str(f['file_name']));
+    const uuid = str(f['file_uuid']) ?? str(f['uuid']);
+    if (uuid && !fileNames.has(uuid)) fileNames.set(uuid, str(f['file_name']));
   }
+  /** A file the message names: its saved copy as an image or file part on the user's side, else a note. */
+  const fileOrNote = (uuid: string | null, name: string | null): Part => {
+    const saved = uuid && role === 'user' ? downloaded?.get(uuid.toLowerCase()) : undefined;
+    const attachmentId = `${messageId}:file:${uuid}`;
+    if (!saved || !isAttachmentId(attachmentId)) {
+      stats.filesNotIncluded++;
+      return notIncluded(role, name);
+    }
+    const filename = (name ?? saved.name ?? '').trim() || 'file';
+    files.push({ attachmentId, messageId, uuid: uuid!.toLowerCase(), mime: saved.mime, filename });
+    stats.filesIncluded++;
+    return IMAGE_MIMES.has(saved.mime) ? { type: 'image', attachmentId, mime: saved.mime } : { type: 'file', attachmentId, mime: saved.mime, filename };
+  };
   const named = new Set<string>();
   let generated = 0;
 
@@ -372,8 +432,7 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
     } else if (type === 'image' || type === 'document') {
       const uuid = str(block['file_uuid']);
       if (uuid) named.add(uuid);
-      parts.push(notIncluded(role, (uuid ? fileNames.get(uuid) : null) ?? str(block['title'])));
-      stats.filesNotIncluded++;
+      parts.push(fileOrNote(uuid, (uuid ? fileNames.get(uuid) : null) ?? str(block['title'])));
     } else {
       drop(stats, role === 'user' && (type === 'tool_result' || type === 'tool_use') ? `user ${type}` : type);
     }
@@ -400,8 +459,7 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
 
   for (const [uuid, name] of fileNames) {
     if (named.has(uuid)) continue;
-    parts.push(notIncluded(role, name));
-    stats.filesNotIncluded++;
+    parts.push(fileOrNote(uuid, name));
   }
 
   if (parts.length === 0) parts.push(missing(role, EMPTY_MESSAGE));
@@ -409,7 +467,8 @@ function messageParts(raw: Obj, role: 'user' | 'assistant', messageId: string, s
 }
 
 /** Builds one conversation's chat, or null when it has no messages (counted). `listed` is what claude.ai's chat list says about it, if anything. */
-function planConversation(raw: unknown, profile: ImportProfile, stats: ImportStats, listing: Map<string, Listed> | null): ImportedChat | null {
+function planConversation(raw: unknown, profile: ImportProfile, stats: ImportStats, listing: Map<string, Listed> | null, downloaded: Downloaded = null): ImportedChat | null {
+  const files: ImportedFile[] = [];
   stats.conversations++;
   if (!isObj(raw) || !str(raw['uuid']) || !Array.isArray(raw['chat_messages'])) {
     stats.malformedConversations++;
@@ -464,7 +523,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
     queue.push(...kids);
     const siblings = (children.get(m.parent) ?? []).filter((s) => s.role === 'assistant').sort(byTime);
     const regenerated = m.role === 'assistant' && siblings.length > 1 && siblings[0]!.id !== m.id;
-    const made = messageParts(m.raw, m.role, m.id, stats);
+    const made = messageParts(m.raw, m.role, m.id, stats, downloaded, files);
     content ||= made.content;
     messages.push({
       id: m.id,
@@ -506,6 +565,7 @@ function planConversation(raw: unknown, profile: ImportProfile, stats: ImportSta
     headMessageId: (listed?.leaf && messages.some((m) => m.id === listed.leaf) ? listed.leaf : null) ?? leaves.at(-1)?.id ?? null,
     projectId: listed?.projectId ?? null,
     latestMessageId: newest?.id ?? null,
+    ...(files.length > 0 ? { files } : {}),
   };
 }
 
@@ -803,8 +863,9 @@ export function planClaudeImport(files: ClaudeExportFiles, profile: ImportProfil
   }
   const stats = emptyStats();
   const listing = readChatList(files.conversationList);
+  const downloaded = readDownloaded(files.downloaded);
   const chats = firstOfEach(files.conversations, uuidOf, updatedAtOf)
-    .map((c) => planConversation(c, profile, stats, listing))
+    .map((c) => planConversation(c, profile, stats, listing, downloaded))
     .filter((c): c is ImportedChat => c !== null);
   const memory = readMemories(files.memories);
   const projects = firstOfEach(files.projects, uuidOf, updatedAtOf)

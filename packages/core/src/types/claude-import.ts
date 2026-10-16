@@ -43,6 +43,8 @@ export interface ImportPreview {
   /** The profile that would condense memory, or null when none can. */
   memoryModel: string | null;
   filesNotIncluded: number;
+  /** Images and files the folder of files saved from claude.ai brings back. */
+  filesIncluded: number;
   dropped: Record<string, number>;
   /** Where docs and claude.ai's memory files are written. */
   importFolder: string;
@@ -65,9 +67,9 @@ export interface ImportReport {
   /**
    * `updated`: already here, and given the messages they gained since or the images the last import left as notes.
    * `newer`: already here and carried on in OtherBench, with messages since that weren't added.
-   * `filed`: chats put in a project, new or already here. `messages` and `images` count what was added.
+   * `filed`: chats put in a project, new or already here. `messages`, `images` and `files` (saved from claude.ai) count what was added.
    */
-  chats: { imported: number; existing: number; updated: number; newer: number; filed: number; messages: number; failed: ImportFailure[] };
+  chats: { imported: number; existing: number; updated: number; newer: number; filed: number; messages: number; files: number; failed: ImportFailure[] };
   /** Null when Cowork wasn't imported. */
   cowork: { imported: number; existing: number; updated: number; filed: number; messages: number; images: number; failed: ImportFailure[] } | null;
   emptyChats: number;

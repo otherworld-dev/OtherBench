@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { basename, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { ClaudeExportError, type ClaudeExportFiles } from '@otherbench/core/domain/claude-import.js';
 import { containPath, PathEscapeError } from '@otherbench/core/domain/paths.js';
 import { listZipEntries, readZipEntry, ZipError } from './zip.js';
@@ -14,6 +14,11 @@ import { listZipEntries, readZipEntry, ZipError } from './zip.js';
  * ZIP is left alone). ZIPs are read in memory; nothing is written. Every path
  * is checked with `containPath`, so a link leading outside the folder is
  * never followed, and what is read is capped in size and number.
+ *
+ * The export has no images or files, only their names. A `files/index.json`
+ * in the folder (not in a ZIP) lists ones saved from claude.ai next to it,
+ * each named by its claude.ai file id; only the list is read here, and the
+ * import reads each file when it stores it (`filesDir`).
  */
 
 /** The largest single file read, extracted or in a ZIP. */
@@ -37,6 +42,8 @@ export interface ClaudeExportRead {
   organizationId: string | null;
   /** Whether the folder held a claude.ai export (its conversations) at all. */
   hasExport: boolean;
+  /** The folder holding the files saved from claude.ai (where `files/index.json` was), or null when there is none. */
+  filesDir?: string | null;
 }
 
 type Part =
@@ -46,7 +53,8 @@ type Part =
   | { kind: 'project' }
   | { kind: 'memory' }
   | { kind: 'artifact-meta'; artifact: string }
-  | { kind: 'artifact-html'; artifact: string; version: string };
+  | { kind: 'artifact-html'; artifact: string; version: string }
+  | { kind: 'file-index' };
 
 /** What an entry is, from its path inside the export (any leading folders ignored), or null for what the import doesn't use. */
 export function classifyExportPath(path: string): Part | null {
@@ -63,6 +71,7 @@ export function classifyExportPath(path: string): Part | null {
   if (meta) return { kind: 'artifact-meta', artifact: meta[2]! };
   const html = /(^|\/)artifacts\/([^/]+)\/versions\/([^/]+)\.html$/.exec(p);
   if (html) return { kind: 'artifact-html', artifact: html[2]!, version: html[3]! };
+  if (/(^|\/)files\/index\.json$/.test(p)) return { kind: 'file-index' };
   return null;
 }
 
@@ -75,6 +84,9 @@ class Collector {
   readonly artifactMeta = new Map<string, unknown>();
   readonly artifactHtml = new Map<string, Record<string, string>>();
   readonly sources: string[] = [];
+  /** `files/index.json`, and its folder relative to the export's: only one is used. */
+  downloaded: unknown = undefined;
+  filesRel: string | null = null;
   private bytes = 0;
   private parts = 0;
 
@@ -112,6 +124,11 @@ class Collector {
     } else if (part.kind === 'conversation-list') {
       this.conversationList.push(value);
       this.sources.push(source);
+    } else if (part.kind === 'file-index') {
+      if (this.filesRel !== null) return;
+      this.downloaded = value;
+      this.filesRel = dirname(source.replace(/\\/g, '/'));
+      this.sources.push(source);
     } else if (part.kind === 'manifest') {
       const link = JSON.stringify(value).match(/\/export\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/download\//i);
       this.organizationId ??= link?.[1] ?? null;
@@ -123,7 +140,7 @@ class Collector {
   result(): ClaudeExportRead {
     const artifacts = [...this.artifactMeta].map(([id, meta]) => ({ meta, html: this.artifactHtml.get(id) ?? {} }));
     return {
-      files: { conversations: this.conversations, projects: this.projects, memories: this.memories, artifacts, conversationList: this.conversationList },
+      files: { conversations: this.conversations, projects: this.projects, memories: this.memories, artifacts, conversationList: this.conversationList, ...(this.downloaded !== undefined ? { downloaded: this.downloaded } : {}) },
       sources: this.sources,
       organizationId: this.organizationId,
       hasExport: this.sources.some((s) => s.endsWith('conversations.json')),
@@ -211,6 +228,7 @@ export async function readClaudeExport(folder: string, { optional = false }: { o
   }
 
   const read = collector.result();
+  read.filesDir = collector.filesRel === null ? null : containPath(folder, collector.filesRel);
   if (!read.hasExport && !optional) {
     throw new ClaudeExportError(`There's no conversations.json in ${folder}. Put every file from the claude.ai export email in one folder (the ZIPs, or what's in them) and choose that.`);
   }
@@ -224,7 +242,8 @@ async function readZip(path: string, rel: string, collector: Collector): Promise
   try {
     for (const entry of listZipEntries(zip)) {
       const part = classifyExportPath(entry.name);
-      if (!part) continue;
+      // Saved files are read from the folder, never from a ZIP.
+      if (!part || part.kind === 'file-index') continue;
       collector.admit(entry.size);
       collector.add(part, `${rel}: ${entry.name}`, readZipEntry(zip, entry, MAX_EXPORT_FILE_BYTES));
     }

@@ -82,6 +82,24 @@ describe('readClaudeExport', () => {
     expect(read.sources).toContain('chat_conversations (1).json');
   });
 
+  it('reads the list of files saved from claude.ai and says where they are, but never from a ZIP', async () => {
+    await put('conversations.json', conversations);
+    await put('saved/files/index.json', JSON.stringify({ 'bc2bf0f2-7906-4f06-9a72-a82a7da01427': { name: 'a.pdf', mime: 'application/pdf' } }));
+    await put('saved/files/bc2bf0f2-7906-4f06-9a72-a82a7da01427', '%PDF-');
+    await put('conversations-001.zip', makeZip([{ name: 'files/index.json', content: '{"from":"zip"}' }]));
+    const read = await readClaudeExport(dir);
+    expect(read.files.downloaded).toEqual({ 'bc2bf0f2-7906-4f06-9a72-a82a7da01427': { name: 'a.pdf', mime: 'application/pdf' } });
+    expect(read.filesDir).toBe(join(dir, 'saved', 'files'));
+    expect(read.sources).toContain('saved/files/index.json');
+  });
+
+  it('has no saved files when the folder has no list of them', async () => {
+    await put('conversations.json', conversations);
+    const read = await readClaudeExport(dir);
+    expect(read.files.downloaded).toBeUndefined();
+    expect(read.filesDir).toBeNull();
+  });
+
   it("leaves alone ZIPs that aren't the export's, even unreadable ones", async () => {
     await put('conversations.json', conversations);
     await put('holiday-photos.zip', Buffer.from('not a zip'));
