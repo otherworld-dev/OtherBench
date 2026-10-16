@@ -33,7 +33,8 @@ function carriesChat(e: DragEvent): boolean {
   return Array.from(e.dataTransfer.types).includes(CHAT_DRAG_MIME);
 }
 
-function positionIn(e: DragEvent<HTMLElement>): DropPosition {
+/** Which half of the element under a drag the pointer is in: a drop there lands above (`before`) or below (`after`) it. */
+export function positionIn(e: DragEvent<HTMLElement>): DropPosition {
   const r = e.currentTarget.getBoundingClientRect();
   return e.clientY < r.top + r.height / 2 ? 'before' : 'after';
 }

@@ -36,6 +36,7 @@ import { resetGroupSortsForTests, setGroupSort } from '../state/sidebarSort.js';
 import { useGruntStore } from '../state/store.js';
 import { ChatList } from './ChatList.js';
 import { CHAT_DRAG_MIME } from './sidebar/ChatRow.js';
+import { PROJECT_DRAG_MIME } from './sidebar/ProjectGroup.js';
 
 const mockedCreate = vi.mocked(api.chats.create);
 const mockedPatch = vi.mocked(api.chats.patch);
@@ -1463,5 +1464,75 @@ describe('ChatList sub-projects (spec 2026-10-15-sub-projects-design §4-§5)', 
     expect(items.map((i) => i.textContent!.replace('✓', '').trim())).toEqual(['Grunt', 'Desktop', 'Sync', 'PhD', 'No project']);
     // Sub-projects sit one step in.
     expect(items.map((i) => i.querySelector('.pl-3') !== null)).toEqual([false, true, true, false, false]);
+  });
+});
+
+describe('ChatList dragging project headings', () => {
+  beforeEach(() => {
+    useGruntStore.setState({
+      projects: [
+        makeProject({ id: 'p-a', name: 'Alpha', sortOrder: 0 }),
+        makeProject({ id: 'p-b', name: 'Beta', sortOrder: 1 }),
+        makeProject({ id: 'p-c', name: 'Gamma', sortOrder: 2 }),
+        makeProject({ id: 'p-a1', name: 'Alpha one', parentId: 'p-a', sortOrder: 0 }),
+        makeProject({ id: 'p-a2', name: 'Alpha two', parentId: 'p-a', sortOrder: 1 }),
+      ],
+    });
+  });
+
+  const projectTransfer = (id: string) => ({ types: [PROJECT_DRAG_MIME], getData: (t: string) => (t === PROJECT_DRAG_MIME ? id : ''), setData: vi.fn(), dropEffect: 'none', effectAllowed: 'all' });
+  const nameOf = (id: string) => screen.getByTestId(`group-heading-${id}`).querySelector<HTMLElement>('[data-heading-main]')!;
+
+  /** Drags project `id`'s heading onto the top or bottom half of `targetId`'s heading and drops it. */
+  function dragHeading(id: string, targetId: string, half: 'top' | 'bottom'): HTMLElement {
+    fireEvent.dragStart(nameOf(id), { dataTransfer: projectTransfer(id) });
+    const target = screen.getByTestId(`group-heading-${targetId}`);
+    target.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+    const at = (event: Event): Event => Object.defineProperty(event, 'clientY', { value: half === 'top' ? 105 : 115 });
+    fireEvent(target, at(createEvent.dragOver(target, { dataTransfer: projectTransfer(id) })));
+    return target;
+  }
+
+  it('dropping a heading on the top half of another puts it above, and saves the new order', async () => {
+    render(<ChatList />);
+    const target = dragHeading('p-c', 'p-a', 'top');
+    expect(target).toHaveAttribute('data-drop-position', 'before');
+    fireEvent(target, Object.defineProperty(createEvent.drop(target, { dataTransfer: projectTransfer('p-c') }), 'clientY', { value: 105 }));
+
+    await waitFor(() => expect(headingOrder().filter((k) => ['p-a', 'p-b', 'p-c'].includes(k))).toEqual(['p-c', 'p-a', 'p-b']));
+    expect(mockedProjectPatch.mock.calls).toEqual([
+      ['p-c', { sortOrder: 0 }],
+      ['p-a', { sortOrder: 1 }],
+      ['p-b', { sortOrder: 2 }],
+    ]);
+    expect(target).not.toHaveAttribute('data-drop-position');
+  });
+
+  it('reorders sub-projects among themselves, and a heading from another level is not a target', async () => {
+    render(<ChatList />);
+    const sibling = dragHeading('p-a2', 'p-a1', 'top');
+    expect(sibling).toHaveAttribute('data-drop-position', 'before');
+    fireEvent(sibling, Object.defineProperty(createEvent.drop(sibling, { dataTransfer: projectTransfer('p-a2') }), 'clientY', { value: 105 }));
+    await waitFor(() => expect(mockedProjectPatch).toHaveBeenCalledWith('p-a2', { sortOrder: 0 }));
+
+    mockedProjectPatch.mockClear();
+    const otherLevel = dragHeading('p-a1', 'p-b', 'bottom');
+    expect(otherLevel).not.toHaveAttribute('data-drop-position');
+    fireEvent.drop(otherLevel, { dataTransfer: projectTransfer('p-a1') });
+    expect(mockedProjectPatch).not.toHaveBeenCalled();
+  });
+
+  it('a drop where the project already is sends nothing, and headings are not draggable while searching', async () => {
+    render(<ChatList />);
+    const target = dragHeading('p-a', 'p-b', 'top');
+    fireEvent(target, Object.defineProperty(createEvent.drop(target, { dataTransfer: projectTransfer('p-a') }), 'clientY', { value: 105 }));
+    expect(mockedProjectPatch).not.toHaveBeenCalled();
+
+    expect(nameOf('p-a')).toHaveAttribute('draggable', 'true');
+    // A search hides groups without a match, so give Alpha one.
+    act(() => useGruntStore.setState({ chats: [makeChat({ id: 'c-alpha', title: 'Alpha notes', projectId: 'p-a' })] }));
+    mockedSearch.mockResolvedValue([]);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search chats' }), { target: { value: 'Alpha' } });
+    await waitFor(() => expect(nameOf('p-a')).toHaveAttribute('draggable', 'false'));
   });
 });

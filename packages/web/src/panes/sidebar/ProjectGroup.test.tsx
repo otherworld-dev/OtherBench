@@ -1,8 +1,8 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CHAT_DRAG_MIME } from './ChatRow.js';
-import { ProjectGroup, type ProjectGroupProps } from './ProjectGroup.js';
+import { PROJECT_DRAG_MIME, ProjectGroup, type ProjectGroupProps, type ProjectReorder } from './ProjectGroup.js';
 
 afterEach(cleanup);
 
@@ -156,5 +156,61 @@ describe('ProjectGroup with a page to open', () => {
   it('marks the name current while its page is the focused tab', () => {
     renderGroup({ onOpen: vi.fn(), active: true });
     expect(screen.getByRole('button', { name: /^Alpha/ })).toHaveAttribute('aria-current', 'true');
+  });
+
+  describe('dragging headings to reorder projects', () => {
+    function reorder(over: Partial<ProjectReorder> = {}): ProjectReorder {
+      return { draggable: true, onDragStart: vi.fn(), onDragEnd: vi.fn(), target: false, indicator: null, onOver: vi.fn(), onLeave: vi.fn(), onDrop: vi.fn(), ...over };
+    }
+    /** jsdom headings have no size: stub one, and put clientY on the event by hand (jsdom has no DragEvent). */
+    function dragAt(kind: 'dragOver' | 'drop', el: HTMLElement, types: string[], half: 'top' | 'bottom'): void {
+      el.getBoundingClientRect = () => ({ top: 100, height: 20, bottom: 120, left: 0, right: 100, width: 100, x: 0, y: 100, toJSON: () => ({}) });
+      const event = (kind === 'dragOver' ? createEvent.dragOver : createEvent.drop)(el, { dataTransfer: dataTransfer(types) });
+      Object.defineProperty(event, 'clientY', { value: half === 'top' ? 105 : 115 });
+      fireEvent(el, event);
+    }
+
+    it('lets the name be dragged, carrying the project id, only when asked', () => {
+      const r = reorder();
+      renderGroup({ onOpen: vi.fn(), reorder: r });
+      const name = screen.getByTestId('group-heading-p-a').querySelector<HTMLElement>('[data-heading-main]')!;
+      expect(name).toHaveAttribute('draggable', 'true');
+      const setData = vi.fn();
+      fireEvent.dragStart(name, { dataTransfer: { setData, effectAllowed: 'all' } });
+      expect(setData).toHaveBeenCalledWith(PROJECT_DRAG_MIME, 'p-a');
+      expect(r.onDragStart).toHaveBeenCalled();
+      fireEvent.dragEnd(name);
+      expect(r.onDragEnd).toHaveBeenCalled();
+      cleanup();
+
+      renderGroup({ onOpen: vi.fn(), reorder: reorder({ draggable: false }) });
+      expect(screen.getByTestId('group-heading-p-a').querySelector('[data-heading-main]')).toHaveAttribute('draggable', 'false');
+    });
+
+    it('as a target, reports which half a dragged project is over and where it was dropped, and shows the line', () => {
+      const r = reorder({ target: true });
+      renderGroup({ reorder: r });
+      const heading = screen.getByTestId('group-heading-p-a');
+      dragAt('dragOver', heading, [PROJECT_DRAG_MIME], 'top');
+      expect(r.onOver).toHaveBeenCalledWith('before');
+      dragAt('drop', heading, [PROJECT_DRAG_MIME], 'bottom');
+      expect(r.onDrop).toHaveBeenCalledWith('after');
+      cleanup();
+
+      renderGroup({ reorder: reorder({ target: true, indicator: 'after' }) });
+      expect(screen.getByTestId('group-heading-p-a')).toHaveAttribute('data-drop-position', 'after');
+    });
+
+    it('ignores a project drag when it is not a target (not a sibling), and never takes it as a chat', () => {
+      const r = reorder({ target: false });
+      const h = renderGroup({ reorder: r });
+      const heading = screen.getByTestId('group-heading-p-a');
+      dragAt('dragOver', heading, [PROJECT_DRAG_MIME], 'top');
+      dragAt('drop', heading, [PROJECT_DRAG_MIME], 'top');
+      expect(r.onOver).not.toHaveBeenCalled();
+      expect(r.onDrop).not.toHaveBeenCalled();
+      expect(h.onDragTarget).not.toHaveBeenCalledWith(true);
+      expect(h.onDropChat).not.toHaveBeenCalled();
+    });
   });
 });

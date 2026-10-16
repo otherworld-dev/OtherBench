@@ -184,6 +184,24 @@ export function moveProjectPatches(projects: Project[], id: string, dir: -1 | 1)
   return ordered.flatMap((p, index) => (p.sortOrder === index ? [] : [{ id: p.id, sortOrder: index }]));
 }
 
+/**
+ * The `sortOrder` PATCHes that put project `movingId` just above `beforeId`
+ * (null = the end) among `siblings` (see `projectSiblings`), for dragging a
+ * heading. Renumbers the siblings 0..n-1 in their new order and returns only
+ * the projects whose sortOrder changes, in display order. Empty when the
+ * project or `beforeId` isn't among them.
+ */
+export function placeProjectPatches(siblings: Project[], movingId: string, beforeId: string | null): { id: string; sortOrder: number }[] {
+  const ordered = [...siblings].sort(compareProjects);
+  const moving = ordered.find((p) => p.id === movingId);
+  if (!moving) return [];
+  const rest = ordered.filter((p) => p.id !== movingId);
+  const at = beforeId === null ? rest.length : rest.findIndex((p) => p.id === beforeId);
+  if (at === -1) return [];
+  const placed = [...rest.slice(0, at), moving, ...rest.slice(at)];
+  return placed.flatMap((p, index) => (p.sortOrder === index ? [] : [{ id: p.id, sortOrder: index }]));
+}
+
 /** Gap below which a new sortOrder can't sit strictly between two neighbours, so the section is renumbered. */
 const MIN_GAP = 1e-6;
 
